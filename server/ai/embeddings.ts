@@ -40,9 +40,11 @@ async function getEmbeddingModel() {
     }
 
     case 'ollama': {
-      // For Ollama, we'll use OpenAI-compatible embeddings if available
-      // Otherwise fall back to a simple approach
-      throw new Error('Ollama embeddings not yet supported. Use OpenAI or Gemini for RAG.');
+      const ollama = createOpenAI({
+        baseURL: `${config.ollamaUrl}/v1`,
+        apiKey: 'ollama',
+      });
+      return ollama.embedding(config.ollamaModel || EMBEDDING_MODELS.ollama);
     }
 
     default:
@@ -140,7 +142,7 @@ export async function isEmbeddingsConfigured(): Promise<boolean> {
       case 'gemini':
         return !!config.googleApiKey;
       case 'ollama':
-        return false; // Not yet supported
+        return !!config.ollamaUrl;
       default:
         return false;
     }

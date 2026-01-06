@@ -1,185 +1,133 @@
 # Lunaschal
 
-A privacy-first, self-hosted personal AI knowledge assistant with journaling, calendar, flashcards, and conversational AI.
+A self-hosted personal knowledge management app with local AI. Journal, calendar, flashcards, and an AI chat that understands your notes — all running on your own machine.
 
 ## Features
 
-- **Conversational AI** - Chat with an AI that understands your personal context
-- **Smart Journal** - Write entries naturally, with full-text and semantic search
-- **Activity Calendar** - Track events and link them to journal entries
-- **Flashcards** - AI-generated flashcards with spaced repetition (SM-2 algorithm)
-- **Knowledge Base** - RAG-powered semantic search across all your content
-- **Privacy-First** - All data stored locally in SQLite, self-hosted
+- **AI Chat** — Streaming chat with your choice of LLM. The assistant automatically detects when you're writing a journal entry or logging an event and offers to save it for you. Ask "quiz me on X" to get flashcards on any topic.
+- **Journal** — Write and search personal entries. Full-text search powered by SQLite FTS5.
+- **Calendar** — Activity log for events and appointments, linked to journal entries.
+- **Flashcards** — Spaced repetition (SM-2 algorithm) with AI-generated cards from your journal entries or any topic.
+- **RAG** — The chat retrieves semantically relevant journal entries as context for each message using local vector embeddings.
+- **Voice Input** — Global speech-to-text shortcut (Right Ctrl) powered by faster-whisper on your GPU. Works system-wide, types transcribed text at your cursor.
+- **Voice Assistant** — Right Alt triggers a voice conversation: speech → AI chat → spoken reply via Kokoro TTS (CPU, ~80 MB).
+- **Morning Check-in** — On wake-from-sleep between 8–11 AM, a voice conversation prompts you to rubber-duck your plans for the day.
 
-## Requirements
+## Stack
 
-- Node.js 20+
-- npm
+| Layer | Tech |
+|---|---|
+| Frontend | React 19, Vite, Tailwind CSS v4 |
+| Backend | Hono (Node.js), tRPC v11 |
+| Database | SQLite (better-sqlite3, Drizzle ORM, FTS5, sqlite-vec) |
+| AI / LLM | Vercel AI SDK — OpenAI, Google Gemini, or Ollama |
+| STT | faster-whisper (`large-v3-turbo`) via Python/FastAPI |
 
-## Installation
+## Getting Started
+
+### Prerequisites
+
+- Node.js 18+ and npm
+- An AI provider: OpenAI API key, Google Gemini API key, or [Ollama](https://ollama.com) running locally
+
+### Install and run
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/lunaschal.git
-cd lunaschal
-
-# Install dependencies
 npm install
-
-# Run database migrations
-npm run db:generate
-npm run db:migrate
-
-# Start development server
 npm run dev
 ```
 
-The app will be available at `http://localhost:5173` (frontend) and `http://localhost:3000` (API).
+The server runs on `http://localhost:3000`. In dev mode, Vite runs on `http://localhost:5173` and proxies API requests to the server.
 
-## Initial Setup
+On first launch you'll be prompted to set a password and configure your AI provider.
 
-1. Open the app in your browser
-2. Create a password for your account
-3. Go to **Settings** and configure an AI provider:
-   - **OpenAI**: Enter your API key (recommended for best experience)
-   - **Google Gemini**: Enter your Google AI API key
-   - **Ollama**: Configure local URL and model (for fully offline use)
-
-## Usage Guide
-
-### Chat
-
-The chat interface is your primary way to interact with Lunaschal. You can:
-
-- **Have conversations** - Ask questions, discuss ideas, get help
-- **Write journal entries** - Just describe your day naturally
-  - Example: "Today I learned about React hooks and built a custom useAuth hook"
-  - The AI will detect this and offer to save it as a journal entry
-- **Log activities** - Mention events and appointments
-  - Example: "I have a dentist appointment next Tuesday at 2pm"
-  - The AI will offer to save it to your calendar
-- **Quiz yourself** - Request flashcards on any topic
-  - Example: "Quiz me on JavaScript promises"
-  - The AI will generate flashcards and start an in-chat review session
-
-When the AI detects a journal entry, calendar event, or quiz request, a confirmation bar appears at the bottom. Click **Save** to confirm or **Dismiss** to skip.
-
-### Journal
-
-The Journal section stores your thoughts, learnings, and reflections.
-
-**Creating entries:**
-- Click **+ New Entry** to write directly
-- Or describe your day in chat and save from there
-
-**Searching:**
-- Use the search bar for keyword search (FTS5 full-text search)
-- Semantic search is automatic when chatting - the AI finds relevant entries
-
-**Generating flashcards:**
-- Click **Flashcards** on any entry to generate study cards from that content
-
-### Calendar
-
-The Calendar tracks your activities and events.
-
-**Views:**
-- **Month view** - See the full month with event dots
-- **Week view** - Detailed daily view with times
-
-**Creating events:**
-- Click any date to add an event
-- Or mention events in chat (e.g., "meeting with John tomorrow at 3pm")
-
-**Linking journals:**
-- Open an event to see or link related journal entries
-- Great for connecting reflections to specific activities
-
-### Flashcards
-
-Flashcards use the SM-2 spaced repetition algorithm for efficient learning.
-
-**Modes:**
-- **Browse** - View all your cards with status indicators
-- **Review** - Study cards that are due
-- **Create** - Add cards manually
-
-**Card status:**
-- **Due** (orange) - Ready for review
-- **Learning** (blue) - Still being learned
-- **Mastered** (green) - Interval of 21+ days
-
-**Generating cards:**
-- From journal entries: Click **Flashcards** on any entry
-- From chat: Say "Quiz me on [topic]"
-- The AI creates 3-8 cards based on content
-
-**Reviewing:**
-- Click **Show Answer** to reveal the back
-- Rate your recall: Again, Hard, Good, or Easy
-- The algorithm adjusts the next review date accordingly
-
-### Settings
-
-**AI Provider:**
-- Select OpenAI, Google Gemini, or Ollama
-- Enter API keys as needed
-- Ollama runs locally for complete privacy
-
-**Knowledge Base:**
-- Shows total journal entries and indexing status
-- Click **Rebuild Knowledge Base** after changing AI providers
-- New entries are automatically indexed
-
-**Password:**
-- Change your account password
-
-## Knowledge Base (RAG)
-
-Lunaschal uses RAG (Retrieval-Augmented Generation) to give the AI context from your personal knowledge base.
-
-**How it works:**
-1. Journal entries are split into chunks and embedded
-2. When you chat, relevant chunks are retrieved
-3. The AI sees this context and gives personalized responses
-
-**Example:**
-- You wrote about learning React hooks last week
-- You ask "How did I implement the useAuth hook?"
-- The AI retrieves that journal entry and answers with your specific implementation
-
-**Indicator:**
-- When context is used, you'll see "Using X sources from your knowledge base"
-- This appears above the AI's response while streaming
-
-## Data Storage
-
-All data is stored locally:
-- **Database**: `./data/lunaschal.db` (SQLite)
-- **Embeddings**: Stored in the same database using sqlite-vec
-
-No data is sent to external servers except:
-- AI API calls (to your configured provider)
-- Embedding generation (same provider)
-
-## Scripts
+### Production
 
 ```bash
-npm run dev        # Start development servers
-npm run build      # Build for production
-npm run preview    # Preview production build
-npm run db:generate # Generate migrations from schema
-npm run db:migrate  # Run migrations
+npm run build
+npm run start
 ```
 
-## Tech Stack
+The server serves the built frontend from `dist/` and listens on port 3000 (override with `PORT` env var).
 
-- **Frontend**: React 19, Vite, Tailwind CSS v4
-- **Backend**: Hono, tRPC v11, Node.js
-- **Database**: SQLite with Drizzle ORM, FTS5, sqlite-vec
-- **AI**: Vercel AI SDK (OpenAI, Google, Ollama)
-- **Auth**: bcrypt + JWT
+## AI Providers
 
-## License
+Configure your provider in the Settings page or via environment variables:
 
-MIT
+| Provider | Env var | Default model |
+|---|---|---|
+| OpenAI | `OPENAI_API_KEY` | `gpt-4o` |
+| Google Gemini | `GOOGLE_API_KEY` | `gemini-2.0-flash` |
+| Ollama | — (set URL in Settings) | `llama3.2` |
+
+> RAG (vector embeddings) requires OpenAI or Gemini. Ollama embeddings are not yet supported.
+
+## Voice Input (STT)
+
+Local speech-to-text using `faster-whisper` with the `large-v3-turbo` model (~1.5 GB VRAM). Requires an NVIDIA GPU.
+
+**System packages** (Arch Linux):
+```bash
+sudo pacman -S wtype portaudio
+```
+
+**Setup** (one time):
+```bash
+bash stt/setup.sh
+```
+
+**Run:**
+```bash
+# Terminal 1 — transcription service (downloads model ~1.5 GB on first run)
+./stt/run_service.sh
+
+# Terminal 2 — global keyboard listener
+./stt/run_listener.sh
+```
+
+**Shortcuts:**
+- **Right Ctrl** — record → transcribe → paste at cursor
+- **Right Alt** — record → AI chat → spoken reply (voice assistant)
+
+The STT service also exposes `POST /api/transcribe` on the main server (proxied from `http://127.0.0.1:8765`).
+
+### Morning Check-in
+
+```bash
+# Run as a background daemon (detects wake-from-sleep automatically)
+./stt/run_morning_checkin.sh
+
+# Run immediately (for testing)
+./stt/run_morning_checkin.sh --now
+```
+
+When the computer wakes from sleep between 8 AM and 11 AM, the daemon starts a short voice conversation asking what you plan to work on. Runs once per day (tracks via a flag in `$XDG_RUNTIME_DIR`).
+
+Environment variables: `MORNING_START_HOUR` (default `8`), `MORNING_END_HOUR` (default `11`), `STT_URL`, `LUNASCHAL_URL`.
+
+## Database
+
+SQLite database stored at `./data/lunaschal.db`. Migrations run automatically on server start.
+
+```bash
+npm run db:generate   # generate migration after schema changes
+npm run db:migrate    # apply migrations manually
+npm run db:studio     # open Drizzle Studio in the browser
+```
+
+## Auth
+
+Single-user, password-protected. Uses a bcrypt-hashed password stored in the database and a 7-day JWT cookie.
+
+Auth is skipped for localhost in development (`NODE_ENV !== 'production'`). Set `JWT_SECRET` in production.
+
+## Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `3000` | Server port |
+| `DATABASE_URL` | `./data/lunaschal.db` | SQLite file path |
+| `JWT_SECRET` | dev default | Change in production |
+| `OPENAI_API_KEY` | — | Fallback if not set in Settings |
+| `GOOGLE_API_KEY` | — | Fallback if not set in Settings |
+| `STT_SERVICE_URL` | `http://127.0.0.1:8765` | STT service URL |

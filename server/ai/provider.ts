@@ -1,8 +1,6 @@
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createOllama } from 'ollama-ai-provider';
 import { getSettings } from '../auth.js';
-// Using ReturnType to infer model type from providers
 
 export type AIProvider = 'openai' | 'gemini' | 'ollama';
 
@@ -55,7 +53,13 @@ export async function getModel() {
     }
 
     case 'ollama': {
-      const ollama = createOllama({ baseURL: config.ollamaUrl });
+      // Ollama exposes an OpenAI-compatible API at /v1 — use @ai-sdk/openai
+      // directly rather than the ollama-ai-provider package (which lags behind
+      // the AI SDK spec version).
+      const ollama = createOpenAI({
+        baseURL: `${config.ollamaUrl}/v1`,
+        apiKey: 'ollama', // required by the client but not validated by Ollama
+      });
       return ollama(config.ollamaModel || config.model || DEFAULT_MODELS.ollama);
     }
 
