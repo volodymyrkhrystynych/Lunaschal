@@ -4,6 +4,7 @@ import { journalRouter } from './journal.js';
 import { calendarRouter } from './calendar.js';
 import { flashcardRouter } from './flashcard.js';
 import { settingsRouter } from './settings.js';
+import { ragRouter } from './rag.js';
 
 export type { TRPCContext } from './trpc.js';
 
@@ -13,6 +14,7 @@ export const appRouter = router({
   calendar: calendarRouter,
   flashcard: flashcardRouter,
   settings: settingsRouter,
+  rag: ragRouter,
 });
 
 export type AppRouter = typeof appRouter;

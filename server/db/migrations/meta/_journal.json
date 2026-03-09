@@ -8,6 +8,13 @@
       "when": 1770388479743,
       "tag": "0000_sturdy_blindfold",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1773025342768,
+      "tag": "0001_clean_xorn",
+      "breakpoints": true
     }
   ]
 }

@@ -17,7 +17,21 @@ export const calendarEvents = sqliteTable('calendar_events', {
   description: text('description'),
   date: text('date').notNull(), // ISO date YYYY-MM-DD
   time: text('time'), // Optional HH:MM
+  endTime: text('end_time'), // Optional HH:MM for event duration
   tags: text('tags'), // JSON array
+  journalId: text('journal_id').references(() => journalEntries.id), // Link to related journal entry
+  createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
+});
+
+// Many-to-many: Calendar events can be linked to multiple journal entries
+export const calendarJournalLinks = sqliteTable('calendar_journal_links', {
+  id: text('id').primaryKey(),
+  calendarEventId: text('calendar_event_id')
+    .notNull()
+    .references(() => calendarEvents.id, { onDelete: 'cascade' }),
+  journalEntryId: text('journal_entry_id')
+    .notNull()
+    .references(() => journalEntries.id, { onDelete: 'cascade' }),
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
 });
 
@@ -90,3 +104,4 @@ export type NewConversation = typeof conversations.$inferInsert;
 export type Message = typeof messages.$inferSelect;
 export type NewMessage = typeof messages.$inferInsert;
 export type Settings = typeof settings.$inferSelect;
+export type CalendarJournalLink = typeof calendarJournalLinks.$inferSelect;

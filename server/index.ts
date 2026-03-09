@@ -40,7 +40,10 @@ app.post('/api/chat/stream', async (c) => {
   }
 
   const body = await c.req.json();
-  const { messages } = body as { messages: Array<{ role: 'user' | 'assistant'; content: string }> };
+  const { messages, ragContext } = body as {
+    messages: Array<{ role: 'user' | 'assistant'; content: string }>;
+    ragContext?: string;
+  };
 
   if (!messages || !Array.isArray(messages)) {
     return c.json({ error: 'Messages array required' }, 400);
@@ -54,7 +57,7 @@ app.post('/api/chat/stream', async (c) => {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        for await (const chunk of chatStream(messages)) {
+        for await (const chunk of chatStream(messages, { ragContext })) {
           const data = JSON.stringify({ content: chunk });
           controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
         }

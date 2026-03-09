@@ -7,6 +7,8 @@ export function Journal() {
   const [editContent, setEditContent] = useState('');
   const [newEntry, setNewEntry] = useState('');
   const [showNewEntry, setShowNewEntry] = useState(false);
+  const [generatingFor, setGeneratingFor] = useState<string | null>(null);
+  const [generationResult, setGenerationResult] = useState<{ id: string; count: number } | null>(null);
 
   const utils = trpc.useUtils();
 
@@ -34,6 +36,19 @@ export function Journal() {
     onSuccess: () => {
       utils.journal.list.invalidate();
       utils.journal.search.invalidate();
+    },
+  });
+
+  const generateFlashcards = trpc.flashcard.generateFromJournal.useMutation({
+    onSuccess: (result, variables) => {
+      setGeneratingFor(null);
+      setGenerationResult({ id: variables.journalId, count: result.count });
+      utils.flashcard.list.invalidate();
+      utils.flashcard.getStats.invalidate();
+      setTimeout(() => setGenerationResult(null), 5000);
+    },
+    onError: () => {
+      setGeneratingFor(null);
     },
   });
 
@@ -131,6 +146,16 @@ export function Journal() {
               </span>
               <div className="flex gap-2">
                 <button
+                  onClick={() => {
+                    setGeneratingFor(entry.id);
+                    generateFlashcards.mutate({ journalId: entry.id });
+                  }}
+                  disabled={generatingFor === entry.id}
+                  className="text-sm text-[var(--color-primary)] hover:text-[var(--color-primary)]/80 disabled:opacity-50"
+                >
+                  {generatingFor === entry.id ? 'Generating...' : 'Flashcards'}
+                </button>
+                <button
                   onClick={() => startEdit(entry.id, entry.content)}
                   className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                 >
@@ -144,6 +169,12 @@ export function Journal() {
                 </button>
               </div>
             </div>
+
+            {generationResult?.id === entry.id && (
+              <div className="mb-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded text-sm text-green-400">
+                Created {generationResult.count} flashcards from this entry!
+              </div>
+            )}
 
             {editingId === entry.id ? (
               <div>
