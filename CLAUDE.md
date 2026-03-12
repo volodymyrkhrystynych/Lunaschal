@@ -17,9 +17,13 @@ bash stt/setup.sh
 ./stt/run_listener.sh
 ```
 
-Shortcut: **Right Ctrl** — toggles recording. On stop, audio is transcribed and typed at the cursor via `wtype`.
+Shortcuts:
+- **Right Ctrl** — record → transcribe → paste text at cursor via `wtype`
+- **Right Alt** — record → transcribe → AI chat (Lunaschal `/api/chat/stream`) → TTS reply spoken aloud
 
 The Node.js server exposes `POST /api/transcribe` (multipart `audio` field) which proxies to the Python STT service. The STT service URL can be overridden with `STT_SERVICE_URL` env var (default: `http://127.0.0.1:8765`).
+
+TTS uses **Kokoro-ONNX** (`kokoro-onnx` package, ONNX Runtime, CPU-only, ~80 MB model downloaded to `~/.cache/lunaschal/tts/` on first run). The service also exposes `POST /tts` (form field `text`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:3000`).
 
 ## Commands
 
