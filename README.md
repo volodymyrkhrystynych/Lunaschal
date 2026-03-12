@@ -10,6 +10,8 @@ A self-hosted personal knowledge management app with local AI. Journal, calendar
 - **Flashcards** — Spaced repetition (SM-2 algorithm) with AI-generated cards from your journal entries or any topic.
 - **RAG** — The chat retrieves semantically relevant journal entries as context for each message using local vector embeddings.
 - **Voice Input** — Global speech-to-text shortcut (Right Ctrl) powered by faster-whisper on your GPU. Works system-wide, types transcribed text at your cursor.
+- **Voice Assistant** — Right Alt triggers a voice conversation: speech → AI chat → spoken reply via Kokoro TTS (CPU, ~80 MB).
+- **Morning Check-in** — On wake-from-sleep between 8–11 AM, a voice conversation prompts you to rubber-duck your plans for the day.
 
 ## Stack
 
@@ -83,9 +85,25 @@ bash stt/setup.sh
 ./stt/run_listener.sh
 ```
 
-**Shortcut:** Press **Right Ctrl** to start recording, press again to stop. The transcription is typed at your cursor.
+**Shortcuts:**
+- **Right Ctrl** — record → transcribe → paste at cursor
+- **Right Alt** — record → AI chat → spoken reply (voice assistant)
 
 The STT service also exposes `POST /api/transcribe` on the main server (proxied from `http://127.0.0.1:8765`).
+
+### Morning Check-in
+
+```bash
+# Run as a background daemon (detects wake-from-sleep automatically)
+./stt/run_morning_checkin.sh
+
+# Run immediately (for testing)
+./stt/run_morning_checkin.sh --now
+```
+
+When the computer wakes from sleep between 8 AM and 11 AM, the daemon starts a short voice conversation asking what you plan to work on. Runs once per day (tracks via a flag in `$XDG_RUNTIME_DIR`).
+
+Environment variables: `MORNING_START_HOUR` (default `8`), `MORNING_END_HOUR` (default `11`), `STT_URL`, `LUNASCHAL_URL`.
 
 ## Database
 

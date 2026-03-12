@@ -10,11 +10,17 @@ Local Whisper transcription via `faster-whisper` (`large-v3-turbo`, ~1.5 GB VRAM
 # One-time setup (creates stt/.venv and installs Python deps)
 bash stt/setup.sh
 
-# Terminal 1 — transcription service (port 8765, downloads model on first run)
+# Terminal 1 — transcription + TTS service (port 8765, downloads models on first run)
 ./stt/run_service.sh
 
 # Terminal 2 — global voice input listener (runs in background)
 ./stt/run_listener.sh
+
+# Terminal 3 (optional) — morning check-in daemon
+./stt/run_morning_checkin.sh
+
+# Test morning check-in immediately (skips wake detection)
+./stt/run_morning_checkin.sh --now
 ```
 
 Shortcuts:
@@ -24,6 +30,12 @@ Shortcuts:
 The Node.js server exposes `POST /api/transcribe` (multipart `audio` field) which proxies to the Python STT service. The STT service URL can be overridden with `STT_SERVICE_URL` env var (default: `http://127.0.0.1:8765`).
 
 TTS uses **Kokoro-ONNX** (`kokoro-onnx` package, ONNX Runtime, CPU-only, ~80 MB model downloaded to `~/.cache/lunaschal/tts/` on first run). The service also exposes `POST /tts` (form field `text`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:3000`).
+
+### Morning Check-in (`stt/morning_checkin.py`)
+
+Daemon that monitors for wake-from-sleep events via a time-jump trick (sleeps 10 s; if the wall clock advanced >30 s, the system was suspended). When the machine wakes between `MORNING_START_HOUR` (default 8) and `MORNING_END_HOUR` (default 11), it starts a voice conversation that helps the user rubber-duck their plans for the day. A flag file in `$XDG_RUNTIME_DIR` prevents duplicate check-ins within the same calendar day.
+
+Env vars: `STT_URL`, `LUNASCHAL_URL`, `MORNING_START_HOUR`, `MORNING_END_HOUR`.
 
 ## Commands
 
