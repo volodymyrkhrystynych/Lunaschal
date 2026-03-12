@@ -82,6 +82,36 @@ app.post('/api/chat/stream', async (c) => {
   });
 });
 
+// Transcription endpoint — proxies to the local faster-whisper STT service
+app.post('/api/transcribe', async (c) => {
+  const sttUrl = process.env.STT_SERVICE_URL || 'http://127.0.0.1:8765';
+
+  try {
+    const formData = await c.req.formData();
+
+    const response = await fetch(`${sttUrl}/transcribe`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const detail = await response.text();
+      return c.json({ error: detail }, response.status as 400 | 500 | 503);
+    }
+
+    return c.json(await response.json());
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    if (msg.includes('ECONNREFUSED') || msg.includes('fetch failed')) {
+      return c.json(
+        { error: 'STT service not running. Start it with: ./stt/run_service.sh' },
+        503
+      );
+    }
+    return c.json({ error: msg }, 500);
+  }
+});
+
 // Health check
 app.get('/api/health', (c) => {
   return c.json({ status: 'ok', timestamp: new Date().toISOString() });
