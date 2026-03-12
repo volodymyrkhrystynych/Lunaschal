@@ -22,6 +22,7 @@ Environment variables:
 import io
 import json
 import os
+import re
 import sys
 import time
 import logging
@@ -189,7 +190,7 @@ def _transcribe_and_chat() -> None:
     _status(f"🔊 {preview}")
     logger.info('AI reply: "%s"', reply[:120])
 
-    _speak(reply)
+    _speak(_strip_emojis(reply))
 
 
 def _chat(user_text: str) -> str | None:
@@ -233,6 +234,11 @@ def _chat(user_text: str) -> str | None:
         _status(f"✗ Chat error: {e}")
         logger.error("Chat error: %s", e)
         return None
+
+
+def _strip_emojis(text: str) -> str:
+    # Remove emoji and other pictographic/symbol characters
+    return re.sub(r'[\U00010000-\U0010FFFF\U00002600-\U000027BF\U0001F000-\U0001FFFF]', '', text).strip()
 
 
 def _speak(text: str) -> None:
