@@ -79,12 +79,32 @@ async def lifespan(app: FastAPI):
     stt_model = WhisperModel(MODEL_NAME, device=DEVICE, compute_type=COMPUTE_TYPE)
     logger.info("STT model ready.")
 
+    # Warmup: run one silent pass so CUDA kernels are compiled before the
+    # first real request arrives.
+    try:
+        silence = np.zeros(16000, dtype=np.float32)  # 1 s of silence
+        buf = io.BytesIO()
+        sf.write(buf, silence, 16000, format="WAV")
+        buf.seek(0)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(buf.read())
+            warmup_path = f.name
+        list(stt_model.transcribe(warmup_path, vad_filter=True)[0])
+        os.unlink(warmup_path)
+        logger.info("STT warmup complete.")
+    except Exception as e:
+        logger.warning("STT warmup failed (non-fatal): %s", e)
+
     # --- Kokoro TTS ---
     try:
         from kokoro_onnx import Kokoro
         model_path, voices_path = _download_tts_models()
         tts_kokoro = Kokoro(model_path, voices_path)
         logger.info("TTS ready (Kokoro, voice=%s).", TTS_VOICE)
+
+        # Warmup: one short synthesis to compile the ONNX session.
+        tts_kokoro.create("Hello.", voice=TTS_VOICE, lang="en-us")
+        logger.info("TTS warmup complete.")
     except Exception as e:
         logger.warning("TTS unavailable: %s", e)
 

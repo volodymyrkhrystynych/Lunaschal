@@ -123,6 +123,41 @@ if (process.env.NODE_ENV === 'production') {
   app.get('*', serveStatic({ path: './dist/index.html' }));
 }
 
+// Preload the Ollama model and keep it alive indefinitely so there is no
+// cold-start lag on the first chat request.
+async function keepOllamaAlive() {
+  const { getProviderConfig } = await import('./ai/provider.js');
+  const config = await getProviderConfig();
+  if (config.provider !== 'ollama') return;
+
+  const model = config.ollamaModel || 'llama3.2';
+  const base  = config.ollamaUrl   || 'http://localhost:11434';
+
+  try {
+    // keep_alive: -1 tells Ollama to never unload this model from VRAM
+    await fetch(`${base}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, keep_alive: -1, stream: false }),
+    });
+    console.log(`Ollama: model '${model}' loaded and kept alive.`);
+  } catch {
+    console.warn(`Ollama: could not preload '${model}' — is Ollama running?`);
+  }
+
+  // Re-ping every 4 minutes so the model stays resident even if Ollama's
+  // default keep_alive timer fires before the next real request.
+  setInterval(async () => {
+    try {
+      await fetch(`${base}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, keep_alive: -1, stream: false }),
+      });
+    } catch { /* ignore — Ollama may be restarting */ }
+  }, 4 * 60 * 1000);
+}
+
 // Initialize database and start server
 async function main() {
   console.log('Running database migrations...');
@@ -136,6 +171,9 @@ async function main() {
     fetch: app.fetch,
     port,
   });
+
+  // Fire-and-forget — don't block server startup
+  keepOllamaAlive();
 }
 
 main().catch((err) => {
