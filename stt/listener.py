@@ -190,7 +190,7 @@ def _transcribe_and_chat() -> None:
     _status(f"🔊 {preview}")
     logger.info('AI reply: "%s"', reply[:120])
 
-    _speak(_strip_emojis(reply))
+    _speak(_clean_for_tts(reply))
 
 
 def _chat(user_text: str) -> str | None:
@@ -236,9 +236,35 @@ def _chat(user_text: str) -> str | None:
         return None
 
 
-def _strip_emojis(text: str) -> str:
-    # Remove emoji and other pictographic/symbol characters
-    return re.sub(r'[\U00010000-\U0010FFFF\U00002600-\U000027BF\U0001F000-\U0001FFFF]', '', text).strip()
+def _clean_for_tts(text: str) -> str:
+    """Remove markdown formatting and emojis so TTS reads clean prose."""
+    # Code blocks (``` ... ```) — drop the fences, keep the content
+    text = re.sub(r'```[^\n]*\n?', '', text)
+    # Inline code
+    text = re.sub(r'`([^`]*)`', r'\1', text)
+    # Bold/italic: ***x***, **x**, *x*, ___x___, __x__, _x_
+    text = re.sub(r'\*{1,3}([^*]*)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,3}([^_]*)_{1,3}', r'\1', text)
+    # ATX headings: # ## ###
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    # Blockquotes
+    text = re.sub(r'^>\s?', '', text, flags=re.MULTILINE)
+    # Unordered list markers (-, *, +) at line start
+    text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)
+    # Horizontal rules
+    text = re.sub(r'^[-*_]{3,}\s*$', '', text, flags=re.MULTILINE)
+    # Links: [text](url) → text
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    # Images: ![alt](url) → alt
+    text = re.sub(r'!\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    # Table pipes and separator rows
+    text = re.sub(r'\|', ' ', text)
+    text = re.sub(r'^[\s:-]+$', '', text, flags=re.MULTILINE)
+    # Emojis and pictographic symbols
+    text = re.sub(r'[\U00010000-\U0010FFFF\U00002600-\U000027BF\U0001F000-\U0001FFFF]', '', text)
+    # Collapse multiple blank lines into one
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
 
 
 def _speak(text: str) -> None:
