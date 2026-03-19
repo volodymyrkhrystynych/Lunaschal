@@ -46,21 +46,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 STT_URL       = os.environ.get("STT_URL",       "http://127.0.0.1:8765")
-LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:3000")
+LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:7842")
 
 SAMPLE_RATE     = 16000
 CHANNELS        = 1
 TOGGLE_COOLDOWN = 0.5      # seconds — prevents double-fire on key hold
 KEY_RELEASE_TIMEOUT = 3.0  # seconds to wait for trigger key release before typing
 
+# Wake word detection (openwakeword)
+WAKE_WORD_MODEL     = os.environ.get("WAKE_WORD_MODEL", "")      # path to .onnx model file
+WAKE_WORD_THRESHOLD = float(os.environ.get("WAKE_WORD_THRESHOLD", "0.5"))
+WAKE_SILENCE_RMS    = float(os.environ.get("WAKE_SILENCE_RMS",   "0.015"))  # energy threshold
+WAKE_SILENCE_SECS   = float(os.environ.get("WAKE_SILENCE_SECS",  "1.5"))    # silence → auto-stop
+WAKE_MIN_SPEECH_SECS = 0.5   # minimum speech before checking for silence
+WAKEWORD_CHUNK      = 1280   # 80 ms at 16 kHz (openwakeword requirement)
+
 # --- Voice assistant conversation history (in-memory) ---
 _voice_history: list[dict] = [
     {
         "role": "system",
         "content": (
-            "You are a helpful voice assistant. "
-            "Keep responses concise and conversational — "
-            "your reply will be spoken aloud."
+            "You are a Socratic thinking partner. "
+            "Your only job is to ask one short, open-ended question that helps the user "
+            "think more clearly about what they just said. "
+            "Never give advice, explanations, or answers — only questions. "
+            "Keep each question to one sentence. "
+            "Your reply will be spoken aloud, so no markdown."
         ),
     }
 ]
@@ -71,6 +82,7 @@ _current_mode   = "paste"   # "paste" | "voice"
 _stream: Optional[sd.InputStream] = None
 _audio_chunks: list[np.ndarray]   = []
 _last_toggle    = 0.0
+_wake_triggered = False      # True when the current recording was started by wake word
 
 # Key-release events (so we wait for the trigger key to be up before typing/speaking)
 _ctrl_released = threading.Event()
@@ -175,8 +187,9 @@ def _transcribe_and_chat() -> None:
     _status(f"💬 You: {text[:60]}")
     logger.info('Voice input: "%s"', text)
 
-    # Wait for Right Alt to be released before speaking
-    _alt_released.wait(timeout=KEY_RELEASE_TIMEOUT)
+    # Wait for Right Alt to be released before speaking (skip for wake-word triggers)
+    if not _wake_triggered:
+        _alt_released.wait(timeout=KEY_RELEASE_TIMEOUT)
 
     _voice_history.append({"role": "user", "content": text})
     reply = _chat(text)
@@ -195,12 +208,16 @@ def _transcribe_and_chat() -> None:
 
 def _chat(user_text: str) -> str | None:
     """Send conversation history to Lunaschal's streaming chat endpoint, return full reply."""
-    # Send only role/content (strip system message which Lunaschal's endpoint doesn't expect)
+    # Separate system message and send it as a dedicated field
+    system_msg = next((m["content"] for m in _voice_history if m["role"] == "system"), None)
     messages = [m for m in _voice_history if m["role"] != "system"]
+    payload: dict = {"messages": messages}
+    if system_msg:
+        payload["systemPrompt"] = system_msg
     try:
         with requests.post(
             f"{LUNASCHAL_URL}/api/chat/stream",
-            json={"messages": messages},
+            json=payload,
             stream=True,
             timeout=60,
         ) as resp:
@@ -342,6 +359,90 @@ def _transcribe(audio: np.ndarray) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Wake word detection (openwakeword)
+# ---------------------------------------------------------------------------
+
+def _wake_record_and_chat() -> None:
+    """Record audio until silence, then process as a voice chat turn."""
+    global _recording, _audio_chunks, _current_mode, _wake_triggered
+
+    _audio_chunks = []
+    _current_mode = "voice"
+    _wake_triggered = True
+    _recording = True
+
+    min_frames = int(WAKE_MIN_SPEECH_SECS * SAMPLE_RATE)
+    silence_frames = 0
+    total_frames = 0
+
+    try:
+        with sd.InputStream(
+            samplerate=SAMPLE_RATE, channels=CHANNELS, dtype="float32", blocksize=1024
+        ) as stream:
+            _status("🎤 Listening… (stops on silence)")
+            while True:
+                chunk, _ = stream.read(1024)
+                flat = chunk.flatten()
+                _audio_chunks.append(flat.reshape(-1, 1))
+                total_frames += len(flat)
+
+                if total_frames > min_frames:
+                    energy = float(np.abs(flat).mean())
+                    if energy < WAKE_SILENCE_RMS:
+                        silence_frames += len(flat)
+                        if silence_frames / SAMPLE_RATE >= WAKE_SILENCE_SECS:
+                            break
+                    else:
+                        silence_frames = 0
+    finally:
+        _recording = False
+        _wake_triggered = False
+
+    threading.Thread(target=_transcribe_and_chat, daemon=True).start()
+
+
+def _wake_word_loop() -> None:
+    """Background thread: listen for the wake word, then trigger voice mode."""
+    if not WAKE_WORD_MODEL:
+        logger.info("WAKE_WORD_MODEL not set — wake word detection disabled")
+        return
+
+    try:
+        from openwakeword.model import Model as _OWWModel  # type: ignore
+        oww = _OWWModel(wakeword_models=[WAKE_WORD_MODEL], inference_framework="onnx")
+        model_name = os.path.splitext(os.path.basename(WAKE_WORD_MODEL))[0]
+        logger.info("Wake word model loaded: %s (threshold=%.2f)", model_name, WAKE_WORD_THRESHOLD)
+        print(f"  Wake word  : \"Hey Luna\"  [{model_name}, threshold={WAKE_WORD_THRESHOLD}]\n")
+    except Exception as e:
+        logger.error("Cannot load wake word model '%s': %s", WAKE_WORD_MODEL, e)
+        return
+
+    while True:
+        if _recording:
+            time.sleep(0.1)
+            continue
+
+        try:
+            with sd.InputStream(
+                samplerate=SAMPLE_RATE, channels=1, dtype="int16", blocksize=WAKEWORD_CHUNK
+            ) as stream:
+                oww.reset()
+                while not _recording:
+                    chunk, _ = stream.read(WAKEWORD_CHUNK)
+                    prediction = oww.predict(chunk.flatten())
+                    score = prediction.get(model_name, max(prediction.values(), default=0))
+                    if score >= WAKE_WORD_THRESHOLD:
+                        logger.info("Wake word detected (score=%.2f)", score)
+                        # Brief pause so the wake phrase itself isn't captured
+                        time.sleep(0.25)
+                        _wake_record_and_chat()
+                        break
+        except Exception as e:
+            logger.error("Wake word loop error: %s", e)
+            time.sleep(1)
+
+
+# ---------------------------------------------------------------------------
 # Keyboard monitoring (evdev)
 # ---------------------------------------------------------------------------
 
@@ -427,6 +528,10 @@ def main() -> None:
     print(f"  Lunaschal server: {LUNASCHAL_URL}")
     print("  Right Ctrl      : record → paste transcription at cursor")
     print("  Right Alt       : record → AI chat → speak reply")
+    if WAKE_WORD_MODEL:
+        print(f"  Wake word       : \"Hey Luna\"  (WAKE_WORD_MODEL={WAKE_WORD_MODEL})")
+    else:
+        print("  Wake word       : disabled  (set WAKE_WORD_MODEL=/path/to/hey_luna.onnx)")
     print("  Exit            : Ctrl+C\n")
 
     keyboards = _find_keyboards()
@@ -451,6 +556,8 @@ def main() -> None:
         print("    Start it: ./stt/run_service.sh")
 
     print("\nWaiting for shortcut…\n")
+
+    threading.Thread(target=_wake_word_loop, daemon=True).start()
 
     for kb in keyboards:
         threading.Thread(target=_monitor_device, args=(kb,), daemon=True).start()

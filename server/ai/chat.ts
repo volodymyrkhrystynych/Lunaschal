@@ -21,15 +21,16 @@ export interface ChatMessage {
 
 export interface ChatOptions {
   ragContext?: string;
+  systemPrompt?: string;
 }
 
 export async function chat(messages: ChatMessage[], options?: ChatOptions): Promise<string> {
   const model = await getModel();
 
   // Build system prompt with optional RAG context
-  let systemContent = SYSTEM_PROMPT;
+  let systemContent = options?.systemPrompt ?? SYSTEM_PROMPT;
   if (options?.ragContext) {
-    systemContent = `${SYSTEM_PROMPT}\n\n${options.ragContext}`;
+    systemContent = `${systemContent}\n\n${options.ragContext}`;
   }
 
   const allMessages = [
@@ -52,9 +53,9 @@ export async function* chatStream(messages: ChatMessage[], options?: ChatOptions
   const model = await getModel();
 
   // Build system prompt with optional RAG context
-  let systemContent = SYSTEM_PROMPT;
+  let systemContent = options?.systemPrompt ?? SYSTEM_PROMPT;
   if (options?.ragContext) {
-    systemContent = `${SYSTEM_PROMPT}\n\n${options.ragContext}`;
+    systemContent = `${systemContent}\n\n${options.ragContext}`;
   }
 
   const allMessages = [
