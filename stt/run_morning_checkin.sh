@@ -8,7 +8,7 @@
 #
 # Options via environment:
 #   STT_URL=http://127.0.0.1:8765       (default)
-#   LUNASCHAL_URL=http://127.0.0.1:3000 (default)
+#   LUNASCHAL_URL=http://127.0.0.1:7842 (default)
 #   MORNING_START_HOUR=8                (default)
 #   MORNING_END_HOUR=11                 (default)
 

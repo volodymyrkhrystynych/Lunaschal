@@ -10,7 +10,7 @@ A self-hosted personal knowledge management app with local AI. Journal, calendar
 - **Flashcards** — Spaced repetition (SM-2 algorithm) with AI-generated cards from your journal entries or any topic.
 - **RAG** — The chat retrieves semantically relevant journal entries as context for each message using local vector embeddings.
 - **Voice Input** — Global speech-to-text shortcut (Right Ctrl) powered by faster-whisper on your GPU. Works system-wide, types transcribed text at your cursor.
-- **Voice Assistant** — Right Alt triggers a voice conversation: speech → AI chat → spoken reply via Kokoro TTS (CPU, ~80 MB).
+- **Voice Assistant** — Right Alt triggers a voice conversation: speech → AI chat → spoken reply via Kokoro TTS (CPU, ~80 MB). Also activatable by saying "Hey Luna" (wake word, requires one-time model generation).
 - **Morning Check-in** — On wake-from-sleep between 8–11 AM, a voice conversation prompts you to rubber-duck your plans for the day.
 
 ## Stack
@@ -37,7 +37,7 @@ npm install
 npm run dev
 ```
 
-The server runs on `http://localhost:3000`. In dev mode, Vite runs on `http://localhost:5173` and proxies API requests to the server.
+The server runs on `http://localhost:7842`. In dev mode, Vite runs on `http://localhost:5173` and proxies API requests to the server.
 
 On first launch you'll be prompted to set a password and configure your AI provider.
 
@@ -78,18 +78,47 @@ bash stt/setup.sh
 
 **Run:**
 ```bash
-# Terminal 1 — transcription service (downloads model ~1.5 GB on first run)
+# Terminal 1 — transcription + TTS service (downloads model ~1.5 GB on first run)
 ./stt/run_service.sh
 
-# Terminal 2 — global keyboard listener
+# Terminal 2 — global keyboard listener (and wake word, if configured)
 ./stt/run_listener.sh
+
+# Or start both together:
+npm run stt
 ```
 
 **Shortcuts:**
 - **Right Ctrl** — record → transcribe → paste at cursor
 - **Right Alt** — record → AI chat → spoken reply (voice assistant)
+- **"Hey Luna"** — wake word → record → AI chat → spoken reply (see below)
 
 The STT service also exposes `POST /api/transcribe` on the main server (proxied from `http://127.0.0.1:8765`).
+
+### Wake Word ("Hey Luna")
+
+Say "Hey Luna" to start a voice conversation without touching the keyboard. The listener records until you stop speaking (1.5 s of silence), then responds.
+
+**One-time model generation** (~5–10 min, downloads TTS models):
+```bash
+./stt/.venv/bin/python stt/generate_wake_word.py
+```
+
+This writes `stt/models/hey_luna.onnx`. Then enable it by setting `WAKE_WORD_MODEL`:
+```bash
+WAKE_WORD_MODEL=stt/models/hey_luna.onnx ./stt/run_listener.sh
+```
+
+Add the variable to your shell config or a `.env` file to make it permanent.
+
+Environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `WAKE_WORD_MODEL` | — | Path to `.onnx` wake word model; detection disabled if unset |
+| `WAKE_WORD_THRESHOLD` | `0.5` | Detection confidence threshold (0–1) |
+| `WAKE_SILENCE_RMS` | `0.015` | RMS energy below this is considered silence |
+| `WAKE_SILENCE_SECS` | `1.5` | Seconds of silence before auto-stopping the recording |
 
 ### Morning Check-in
 
@@ -131,3 +160,7 @@ Auth is skipped for localhost in development (`NODE_ENV !== 'production'`). Set 
 | `OPENAI_API_KEY` | — | Fallback if not set in Settings |
 | `GOOGLE_API_KEY` | — | Fallback if not set in Settings |
 | `STT_SERVICE_URL` | `http://127.0.0.1:8765` | STT service URL |
+| `WAKE_WORD_MODEL` | — | Path to wake word `.onnx` model (wake word disabled if unset) |
+| `WAKE_WORD_THRESHOLD` | `0.5` | Wake word detection confidence threshold |
+| `WAKE_SILENCE_RMS` | `0.015` | Silence energy threshold for auto-stop |
+| `WAKE_SILENCE_SECS` | `1.5` | Seconds of silence before recording stops |

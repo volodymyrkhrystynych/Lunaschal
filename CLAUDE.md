@@ -29,7 +29,7 @@ Shortcuts:
 
 The Node.js server exposes `POST /api/transcribe` (multipart `audio` field) which proxies to the Python STT service. The STT service URL can be overridden with `STT_SERVICE_URL` env var (default: `http://127.0.0.1:8765`).
 
-TTS uses **Kokoro-ONNX** (`kokoro-onnx` package, ONNX Runtime, CPU-only, ~80 MB model downloaded to `~/.cache/lunaschal/tts/` on first run). The service also exposes `POST /tts` (form field `text`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:3000`).
+TTS uses **Kokoro-ONNX** (`kokoro-onnx` package, ONNX Runtime, CPU-only, ~80 MB model downloaded to `~/.cache/lunaschal/tts/` on first run). The service also exposes `POST /tts` (form field `text`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:7842`).
 
 ### Morning Check-in (`stt/morning_checkin.py`)
 
@@ -40,7 +40,7 @@ Env vars: `STT_URL`, `LUNASCHAL_URL`, `MORNING_START_HOUR`, `MORNING_END_HOUR`.
 ## Commands
 
 ```bash
-# Development (runs server on :3000 and Vite client on :5173 concurrently)
+# Development (runs server on :7842 and Vite client on :5173 concurrently)
 npm run dev
 
 # Run only the backend server (tsx watch)

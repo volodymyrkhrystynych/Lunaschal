@@ -11,7 +11,8 @@
     "start": "NODE_ENV=production tsx server/index.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "stt": "concurrently \"./stt/run_service.sh\" \"./stt/run_listener.sh\""
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.20",
