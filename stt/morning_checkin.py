@@ -40,7 +40,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 STT_URL       = os.environ.get("STT_URL",             "http://127.0.0.1:8765")
-LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL",        "http://127.0.0.1:3000")
+LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL",        "http://127.0.0.1:7842")
 MORNING_START = int(os.environ.get("MORNING_START_HOUR", "8"))
 MORNING_END   = int(os.environ.get("MORNING_END_HOUR",   "11"))
 

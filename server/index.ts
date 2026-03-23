@@ -16,7 +16,7 @@ app.use('*', logger());
 app.use(
   '/api/*',
   cors({
-    origin: ['http://localhost:5173', 'http://localhost:3000'],
+    origin: ['http://localhost:5173', 'http://localhost:7842'],
     credentials: true,
   })
 );
@@ -40,9 +40,10 @@ app.post('/api/chat/stream', async (c) => {
   }
 
   const body = await c.req.json();
-  const { messages, ragContext } = body as {
+  const { messages, ragContext, systemPrompt } = body as {
     messages: Array<{ role: 'user' | 'assistant'; content: string }>;
     ragContext?: string;
+    systemPrompt?: string;
   };
 
   if (!messages || !Array.isArray(messages)) {
@@ -57,7 +58,7 @@ app.post('/api/chat/stream', async (c) => {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        for await (const chunk of chatStream(messages, { ragContext })) {
+        for await (const chunk of chatStream(messages, { ragContext, systemPrompt })) {
           const data = JSON.stringify({ content: chunk });
           controller.enqueue(new TextEncoder().encode(`data: ${data}\n\n`));
         }
@@ -164,7 +165,7 @@ async function main() {
   runMigrations();
   console.log('Migrations complete.');
 
-  const port = Number(process.env.PORT) || 3000;
+  const port = Number(process.env.PORT) || 7842;
   console.log(`Server starting on http://localhost:${port}`);
 
   serve({
