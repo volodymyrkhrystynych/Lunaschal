@@ -4,13 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## STT (Speech-to-Text)
 
-Local Whisper transcription via `faster-whisper` (`large-v3-turbo`, ~1.5 GB VRAM on CUDA).
+Supports two backends — local (faster-whisper + kokoro-onnx, needs GPU) or OpenAI API (cloud, no local models).
 
 ```bash
-# One-time setup (creates stt/.venv and installs Python deps)
-bash stt/setup.sh
+# --- Local setup (GPU machine) ---
+bash stt/setup.sh           # installs faster-whisper, kokoro-onnx, openwakeword
 
-# Terminal 1 — transcription + TTS service (port 8765, downloads models on first run)
+# --- API setup (low-power machine) ---
+bash stt/setup.sh --api     # installs only openai client, skips ~2 GB of local models
+export OPENAI_API_KEY=sk-...
+export STT_BACKEND=openai
+export TTS_BACKEND=openai
+
+# Terminal 1 — transcription + TTS service (port 8765)
 ./stt/run_service.sh
 
 # Terminal 2 — global voice input listener (runs in background)
@@ -29,7 +35,18 @@ Shortcuts:
 
 The Node.js server exposes `POST /api/transcribe` (multipart `audio` field) which proxies to the Python STT service. The STT service URL can be overridden with `STT_SERVICE_URL` env var (default: `http://127.0.0.1:8765`).
 
-TTS uses **Kokoro-ONNX** (`kokoro-onnx` package, ONNX Runtime, CPU-only, ~80 MB model downloaded to `~/.cache/lunaschal/tts/` on first run). The service also exposes `POST /tts` (form field `text`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:7842`).
+**Local TTS**: Kokoro-ONNX (~80 MB model cached to `~/.cache/lunaschal/tts/` on first run). **API TTS**: OpenAI (`tts-1`, voice configurable via `OPENAI_TTS_VOICE`, default `nova`). The service exposes `POST /tts` (form field `text`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:7842`).
+
+Service env vars summary:
+
+| Var | Default | Notes |
+|-----|---------|-------|
+| `STT_BACKEND` | `local` | `local` or `openai` |
+| `TTS_BACKEND` | `local` | `local` or `openai` |
+| `OPENAI_API_KEY` | — | Required for openai backends |
+| `OPENAI_TTS_VOICE` | `nova` | alloy / echo / fable / onyx / nova / shimmer |
+| `WHISPER_MODEL` | `large-v3-turbo` | Local STT only |
+| `WHISPER_DEVICE` | `cuda` | Local STT only (`cuda` or `cpu`) |
 
 ### Morning Check-in (`stt/morning_checkin.py`)
 

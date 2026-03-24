@@ -1,15 +1,29 @@
 #!/usr/bin/env python3
 """
 Lunaschal STT + TTS Service
-  POST /transcribe  — speech-to-text (faster-whisper)
-  POST /tts         — text-to-speech  (kokoro-onnx)
+  POST /transcribe  — speech-to-text
+  POST /tts         — text-to-speech
   GET  /health      — readiness check
 
 Environment variables:
+  STT_BACKEND          local or openai (default: local)
+  TTS_BACKEND          local or openai (default: local)
+
+  --- Local STT (faster-whisper) ---
   WHISPER_MODEL        Model name (default: large-v3-turbo)
   WHISPER_DEVICE       cuda or cpu (default: cuda)
   WHISPER_COMPUTE_TYPE Quantisation (default: int8_float16)
+
+  --- Local TTS (kokoro-onnx) ---
   TTS_VOICE            Kokoro voice (default: af_heart)
+
+  --- OpenAI API ---
+  OPENAI_API_KEY       Required when STT_BACKEND=openai or TTS_BACKEND=openai
+  OPENAI_STT_MODEL     Whisper model (default: whisper-1)
+  OPENAI_TTS_MODEL     TTS model (default: tts-1)
+  OPENAI_TTS_VOICE     Voice (default: nova)  alloy/echo/fable/onyx/nova/shimmer
+
+  --- Server ---
   STT_PORT             Port (default: 8765)
   STT_HOST             Bind address (default: 127.0.0.1)
 """
@@ -27,7 +41,6 @@ import soundfile as sf
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
-from faster_whisper import WhisperModel
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,12 +48,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+STT_BACKEND   = os.environ.get("STT_BACKEND", "local").lower()
+TTS_BACKEND   = os.environ.get("TTS_BACKEND", "local").lower()
+
+# Local STT config
 MODEL_NAME    = os.environ.get("WHISPER_MODEL",        "large-v3-turbo")
 DEVICE        = os.environ.get("WHISPER_DEVICE",        "cuda")
 COMPUTE_TYPE  = os.environ.get("WHISPER_COMPUTE_TYPE",  "int8_float16")
+
+# Local TTS config
 TTS_VOICE     = os.environ.get("TTS_VOICE",             "af_heart")
-PORT          = int(os.environ.get("STT_PORT",           "8765"))
-HOST          = os.environ.get("STT_HOST",               "127.0.0.1")
+
+# OpenAI config
+OPENAI_STT_MODEL = os.environ.get("OPENAI_STT_MODEL", "whisper-1")
+OPENAI_TTS_MODEL = os.environ.get("OPENAI_TTS_MODEL", "tts-1")
+OPENAI_TTS_VOICE = os.environ.get("OPENAI_TTS_VOICE", "nova")
+
+PORT = int(os.environ.get("STT_PORT", "8765"))
+HOST = os.environ.get("STT_HOST", "127.0.0.1")
 
 # Kokoro ONNX model files — downloaded once to ~/.cache/lunaschal/tts/
 _TTS_CACHE    = Path.home() / ".cache" / "lunaschal" / "tts"
@@ -48,8 +73,9 @@ _KOKORO_MODEL = "kokoro-v1.0.onnx"
 _KOKORO_VOICES = "voices-v1.0.bin"
 _KOKORO_BASE  = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
 
-stt_model: WhisperModel | None = None
-tts_kokoro = None
+stt_model = None      # WhisperModel instance (local mode)
+tts_kokoro = None     # Kokoro instance (local mode)
+openai_client = None  # openai.OpenAI instance (api mode)
 
 
 def _download_tts_models() -> tuple[str, str]:
@@ -71,59 +97,87 @@ def _download_tts_models() -> tuple[str, str]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global stt_model, tts_kokoro
+    global stt_model, tts_kokoro, openai_client
 
-    # --- Whisper STT ---
-    logger.info("Loading %s on %s (%s)…", MODEL_NAME, DEVICE, COMPUTE_TYPE)
-    logger.info("First run downloads the model (~1.5 GB) — please wait.")
-    stt_model = WhisperModel(MODEL_NAME, device=DEVICE, compute_type=COMPUTE_TYPE)
-    logger.info("STT model ready.")
+    if STT_BACKEND == "openai" or TTS_BACKEND == "openai":
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is required when STT_BACKEND=openai or TTS_BACKEND=openai")
+        from openai import OpenAI
+        openai_client = OpenAI(api_key=api_key)
+        logger.info("OpenAI client ready.")
 
-    # Warmup: run one silent pass so CUDA kernels are compiled before the
-    # first real request arrives.
-    try:
-        silence = np.zeros(16000, dtype=np.float32)  # 1 s of silence
-        buf = io.BytesIO()
-        sf.write(buf, silence, 16000, format="WAV")
-        buf.seek(0)
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            f.write(buf.read())
-            warmup_path = f.name
-        list(stt_model.transcribe(warmup_path, vad_filter=True)[0])
-        os.unlink(warmup_path)
-        logger.info("STT warmup complete.")
-    except Exception as e:
-        logger.warning("STT warmup failed (non-fatal): %s", e)
+    if STT_BACKEND == "local":
+        logger.info("Loading %s on %s (%s)…", MODEL_NAME, DEVICE, COMPUTE_TYPE)
+        logger.info("First run downloads the model (~1.5 GB) — please wait.")
+        from faster_whisper import WhisperModel
+        stt_model = WhisperModel(MODEL_NAME, device=DEVICE, compute_type=COMPUTE_TYPE)
+        logger.info("STT model ready.")
 
-    # --- Kokoro TTS ---
-    try:
-        from kokoro_onnx import Kokoro
-        model_path, voices_path = _download_tts_models()
-        tts_kokoro = Kokoro(model_path, voices_path)
-        logger.info("TTS ready (Kokoro, voice=%s).", TTS_VOICE)
+        # Warmup: run one silent pass so CUDA kernels are compiled before the
+        # first real request arrives.
+        try:
+            silence = np.zeros(16000, dtype=np.float32)  # 1 s of silence
+            buf = io.BytesIO()
+            sf.write(buf, silence, 16000, format="WAV")
+            buf.seek(0)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                f.write(buf.read())
+                warmup_path = f.name
+            list(stt_model.transcribe(warmup_path, vad_filter=True)[0])
+            os.unlink(warmup_path)
+            logger.info("STT warmup complete.")
+        except Exception as e:
+            logger.warning("STT warmup failed (non-fatal): %s", e)
+    else:
+        logger.info("STT backend: OpenAI API (model=%s)", OPENAI_STT_MODEL)
 
-        # Warmup: one short synthesis to compile the ONNX session.
-        tts_kokoro.create("Hello.", voice=TTS_VOICE, lang="en-us")
-        logger.info("TTS warmup complete.")
-    except Exception as e:
-        logger.warning("TTS unavailable: %s", e)
+    if TTS_BACKEND == "local":
+        try:
+            from kokoro_onnx import Kokoro
+            model_path, voices_path = _download_tts_models()
+            tts_kokoro = Kokoro(model_path, voices_path)
+            logger.info("TTS ready (Kokoro, voice=%s).", TTS_VOICE)
+
+            # Warmup: one short synthesis to compile the ONNX session.
+            tts_kokoro.create("Hello.", voice=TTS_VOICE, lang="en-us")
+            logger.info("TTS warmup complete.")
+        except Exception as e:
+            logger.warning("TTS unavailable: %s", e)
+    else:
+        logger.info("TTS backend: OpenAI API (model=%s, voice=%s)", OPENAI_TTS_MODEL, OPENAI_TTS_VOICE)
 
     yield
 
     stt_model = None
     tts_kokoro = None
+    openai_client = None
 
 
-app = FastAPI(title="Lunaschal STT+TTS Service", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Lunaschal STT+TTS Service", version="2.1.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health():
+    if STT_BACKEND == "openai":
+        stt_ready = openai_client is not None
+        stt_info = f"openai/{OPENAI_STT_MODEL}"
+    else:
+        stt_ready = stt_model is not None
+        stt_info = MODEL_NAME
+
+    if TTS_BACKEND == "openai":
+        tts_ready = openai_client is not None
+    else:
+        tts_ready = tts_kokoro is not None
+
     return {
         "status": "ok",
-        "stt_model": MODEL_NAME,
-        "stt_ready": stt_model is not None,
-        "tts_ready": tts_kokoro is not None,
+        "stt_model": stt_info,
+        "stt_backend": STT_BACKEND,
+        "stt_ready": stt_ready,
+        "tts_backend": TTS_BACKEND,
+        "tts_ready": tts_ready,
     }
 
 
@@ -132,60 +186,102 @@ async def transcribe(
     audio: UploadFile = File(...),
     language: str | None = Form(None),
 ):
-    if stt_model is None:
-        raise HTTPException(status_code=503, detail="STT model not loaded yet")
-
     content = await audio.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty audio file")
 
-    suffix = os.path.splitext(audio.filename or ".wav")[1] or ".wav"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
-        segments, info = stt_model.transcribe(
-            tmp_path,
-            language=language or None,
-            vad_filter=True,
-            vad_parameters={"min_silence_duration_ms": 300},
-            beam_size=5,
-        )
-        text = " ".join(seg.text.strip() for seg in segments).strip()
-        return {
-            "text": text,
-            "language": info.language,
-            "language_probability": round(info.language_probability, 3),
-        }
-    except Exception as e:
-        logger.error("Transcription error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        os.unlink(tmp_path)
+    if STT_BACKEND == "openai":
+        if openai_client is None:
+            raise HTTPException(status_code=503, detail="OpenAI client not initialized")
+        suffix = os.path.splitext(audio.filename or ".wav")[1] or ".wav"
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            with open(tmp_path, "rb") as f:
+                result = openai_client.audio.transcriptions.create(
+                    model=OPENAI_STT_MODEL,
+                    file=(audio.filename or f"audio{suffix}", f),
+                    language=language or None,
+                    response_format="verbose_json",
+                )
+            return {
+                "text": result.text.strip(),
+                "language": result.language or language or "en",
+                "language_probability": 1.0,
+            }
+        except Exception as e:
+            logger.error("OpenAI transcription error: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            os.unlink(tmp_path)
+    else:
+        if stt_model is None:
+            raise HTTPException(status_code=503, detail="STT model not loaded yet")
+        suffix = os.path.splitext(audio.filename or ".wav")[1] or ".wav"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = tmp.name
+        try:
+            segments, info = stt_model.transcribe(
+                tmp_path,
+                language=language or None,
+                vad_filter=True,
+                vad_parameters={"min_silence_duration_ms": 300},
+                beam_size=5,
+            )
+            text = " ".join(seg.text.strip() for seg in segments).strip()
+            return {
+                "text": text,
+                "language": info.language,
+                "language_probability": round(info.language_probability, 3),
+            }
+        except Exception as e:
+            logger.error("Transcription error: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
+        finally:
+            os.unlink(tmp_path)
 
 
 @app.post("/tts")
 async def tts(
     text: str = Form(...),
-    voice: str = Form(TTS_VOICE),
+    voice: str = Form(None),
     speed: float = Form(1.0),
 ):
-    if tts_kokoro is None:
-        raise HTTPException(status_code=503, detail="TTS not available")
     if not text.strip():
         raise HTTPException(status_code=400, detail="Empty text")
 
-    try:
-        samples, sample_rate = tts_kokoro.create(text, voice=voice, speed=speed, lang="en-us")
-    except Exception as e:
-        logger.error("TTS error: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+    if TTS_BACKEND == "openai":
+        if openai_client is None:
+            raise HTTPException(status_code=503, detail="OpenAI client not initialized")
+        resolved_voice = voice or OPENAI_TTS_VOICE
+        try:
+            response = openai_client.audio.speech.create(
+                model=OPENAI_TTS_MODEL,
+                voice=resolved_voice,
+                input=text,
+                response_format="wav",
+                speed=max(0.25, min(4.0, speed)),
+            )
+            return Response(content=response.content, media_type="audio/wav")
+        except Exception as e:
+            logger.error("OpenAI TTS error: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
+    else:
+        if tts_kokoro is None:
+            raise HTTPException(status_code=503, detail="TTS not available")
+        resolved_voice = voice or TTS_VOICE
+        try:
+            samples, sample_rate = tts_kokoro.create(text, voice=resolved_voice, speed=speed, lang="en-us")
+        except Exception as e:
+            logger.error("TTS error: %s", e)
+            raise HTTPException(status_code=500, detail=str(e))
 
-    buf = io.BytesIO()
-    sf.write(buf, samples, sample_rate, format="WAV")
-    buf.seek(0)
-    return Response(content=buf.read(), media_type="audio/wav")
+        buf = io.BytesIO()
+        sf.write(buf, samples, sample_rate, format="WAV")
+        buf.seek(0)
+        return Response(content=buf.read(), media_type="audio/wav")
 
 
 if __name__ == "__main__":

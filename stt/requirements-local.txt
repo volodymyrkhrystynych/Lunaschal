@@ -1,0 +1,5 @@
+# Local AI dependencies — only needed when STT_BACKEND=local or TTS_BACKEND=local
+# Install alongside requirements.txt:  pip install -r requirements-local.txt
+faster-whisper>=1.1.0
+kokoro-onnx>=0.4.0
+openwakeword>=0.6.0
