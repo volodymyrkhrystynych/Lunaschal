@@ -2,4 +2,7 @@
 # Install alongside requirements.txt:  pip install -r requirements-local.txt
 faster-whisper>=1.1.0
 kokoro-onnx>=0.4.0
-openwakeword>=0.6.0
+# openwakeword is installed via setup.sh with --no-deps to skip tflite-runtime
+# (no Python 3.14 wheel exists); onnxruntime (from faster-whisper) covers the
+# only backend actually used (inference_framework="onnx").
+tqdm>=4.0.0

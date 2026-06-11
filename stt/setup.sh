@@ -27,6 +27,10 @@ echo "Installing base Python dependencies..."
 if [ "$MODE" = "local" ]; then
     echo "Installing local AI dependencies (faster-whisper, kokoro-onnx, openwakeword)..."
     "$VENV/bin/pip" install -r "$SCRIPT_DIR/requirements-local.txt"
+    # openwakeword declares tflite-runtime as a dependency but no wheel exists for
+    # Python >=3.14. We only use the onnxruntime backend (inference_framework="onnx"),
+    # so install without deps — onnxruntime is already present via faster-whisper.
+    "$VENV/bin/pip" install --no-deps openwakeword
 
     # Create CUDA compatibility symlinks.
     # ctranslate2 wheels are built against CUDA 12 (libcublas.so.12) but Arch

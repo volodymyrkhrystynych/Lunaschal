@@ -30,8 +30,8 @@ export TTS_BACKEND=openai
 ```
 
 Shortcuts:
-- **Right Ctrl** — record → transcribe → paste text at cursor via `wtype`
-- **Right Alt** — record → transcribe → AI chat (Lunaschal `/api/chat/stream`) → TTS reply spoken aloud
+- **F1** (`STT_PASTE_KEY`) — record → transcribe → paste text at cursor via `wtype`
+- **Right Alt** (`STT_VOICE_KEY`) — record → transcribe → AI chat (Lunaschal `/api/chat/stream`) → TTS reply spoken aloud
 
 The Node.js server exposes `POST /api/transcribe` (multipart `audio` field) which proxies to the Python STT service. The STT service URL can be overridden with `STT_SERVICE_URL` env var (default: `http://127.0.0.1:8765`).
 

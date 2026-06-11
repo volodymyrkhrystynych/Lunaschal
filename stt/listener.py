@@ -2,8 +2,8 @@
 """
 Lunaschal Voice Input Listener
 
-  Right Ctrl  — record → transcribe → paste text at cursor
-  Right Alt   — record → transcribe → AI chat → speak reply
+  F1 (STT_PASTE_KEY)     — record → transcribe → paste text at cursor
+  Right Alt (STT_VOICE_KEY) — record → transcribe → AI chat → speak reply
 
 Uses evdev (reads /dev/input/event* directly) so both shortcuts work globally
 on Wayland regardless of which window has focus.
@@ -47,6 +47,9 @@ logger = logging.getLogger(__name__)
 
 STT_URL       = os.environ.get("STT_URL",       "http://127.0.0.1:8765")
 LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:7842")
+
+PASTE_KEY     = os.environ.get("STT_PASTE_KEY", "KEY_F1")   # evdev keycode for record→paste
+VOICE_KEY     = os.environ.get("STT_VOICE_KEY", "KEY_RIGHTALT")  # evdev keycode for record→AI chat
 
 SAMPLE_RATE     = 16000
 CHANNELS        = 1
@@ -122,7 +125,7 @@ def _start_recording(mode: str) -> None:
     _stream.start()
     _recording = True
     icon = "🎙️ " if mode == "paste" else "🎤"
-    stop_key = "Right Ctrl" if mode == "paste" else "Right Alt"
+    stop_key = PASTE_KEY if mode == "paste" else VOICE_KEY
     _status(f"{icon} Recording… ({stop_key} to stop)")
     logger.info("Recording started (mode=%s)", mode)
 
@@ -149,8 +152,8 @@ def _transcribe_and_paste() -> None:
     _status(f"✓ {preview}")
     logger.info('Transcribed: "%s"', text)
 
-    # Wait for Right Ctrl to be released so the compositor doesn't
-    # apply Ctrl as a modifier to the pasted characters.
+    # Wait for F1 to be released so the compositor doesn't
+    # apply it as a modifier to the pasted characters.
     _ctrl_released.wait(timeout=KEY_RELEASE_TIMEOUT)
     _paste_text(text)
 
@@ -476,14 +479,14 @@ def _monitor_device(device: InputDevice) -> None:
             if isinstance(keycode, list):
                 keycode = keycode[0]
 
-            if keycode == "KEY_RIGHTCTRL":
+            if keycode == PASTE_KEY:
                 if key_event.keystate == 1:    # down
                     _ctrl_released.clear()
                     _trigger("paste")
                 elif key_event.keystate == 0:  # up
                     _ctrl_released.set()
 
-            elif keycode == "KEY_RIGHTALT":
+            elif keycode == VOICE_KEY:
                 if key_event.keystate == 1:    # down
                     _alt_released.clear()
                     _trigger("voice")
@@ -503,7 +506,9 @@ def _find_keyboards() -> list[InputDevice]:
             if ecodes.EV_KEY not in caps:
                 continue
             keys = caps[ecodes.EV_KEY]
-            if ecodes.KEY_A in keys and ecodes.KEY_RIGHTCTRL in keys:
+            paste_ec = getattr(ecodes, PASTE_KEY, None)
+            voice_ec = getattr(ecodes, VOICE_KEY, None)
+            if ecodes.KEY_A in keys and (paste_ec in keys or voice_ec in keys):
                 found.append(dev)
         except PermissionError:
             permission_errors.append(path)
@@ -526,8 +531,8 @@ def main() -> None:
     print("Lunaschal Voice Input")
     print(f"  STT/TTS service : {STT_URL}")
     print(f"  Lunaschal server: {LUNASCHAL_URL}")
-    print("  Right Ctrl      : record → paste transcription at cursor")
-    print("  Right Alt       : record → AI chat → speak reply")
+    print(f"  {PASTE_KEY:<16}: record → paste transcription at cursor")
+    print(f"  {VOICE_KEY:<16}: record → AI chat → speak reply")
     if WAKE_WORD_MODEL:
         print(f"  Wake word       : \"Hey Luna\"  (WAKE_WORD_MODEL={WAKE_WORD_MODEL})")
     else:
