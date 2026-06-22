@@ -1,16 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
-import { trpc } from '../hooks/trpc';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api, type Flashcard } from '../hooks/api';
 
 interface ChatProps {
   conversationId: string | null;
   onConversationChange: (id: string) => void;
-}
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  metadata?: string | null;
 }
 
 interface PendingSave {
@@ -31,82 +25,95 @@ interface PendingQuiz {
   messageId: string;
 }
 
+interface ClassifyResult {
+  intent: 'journal' | 'calendar' | 'flashcard_request' | 'question' | 'conversation';
+  confidence: number;
+  journalEntry?: { title: string; content: string; tags: string[] };
+  calendarEvent?: { title: string; description?: string; date?: string; time?: string; tags: string[] };
+  flashcardRequest?: { topic: string };
+}
+
 export function Chat({ conversationId, onConversationChange }: ChatProps) {
   const [input, setInput] = useState('');
   const [streamingContent, setStreamingContent] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
-  const [quizCards, setQuizCards] = useState<Array<{ id: string; front: string; back: string }>>([]);
+  const [quizCards, setQuizCards] = useState<Flashcard[]>([]);
   const [quizIndex, setQuizIndex] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
-  const [ragContextUsed, setRagContextUsed] = useState<number>(0);
+  const [ragContextUsed, setRagContextUsed] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
 
-  const utils = trpc.useUtils();
+  const { data: conversation } = useQuery({
+    queryKey: ['chat', 'conversation', conversationId],
+    queryFn: () => api.chat.getConversation(conversationId!),
+    enabled: !!conversationId,
+  });
 
-  const { data: conversation } = trpc.chat.getConversation.useQuery(
-    { id: conversationId! },
-    { enabled: !!conversationId }
-  );
+  const { data: settings } = useQuery({
+    queryKey: ['settings'],
+    queryFn: api.settings.get,
+  });
 
-  const { data: settings } = trpc.settings.get.useQuery();
-
-  const createConversation = trpc.chat.createConversation.useMutation({
+  const createConversation = useMutation({
+    mutationFn: api.chat.createConversation,
     onSuccess: (data) => {
-      utils.chat.listConversations.invalidate();
+      queryClient.invalidateQueries({ queryKey: ['chat', 'conversations'] });
       onConversationChange(data.id);
     },
   });
 
-  const addMessage = trpc.chat.addMessage.useMutation({
-    onSuccess: () => {
-      utils.chat.getConversation.invalidate({ id: conversationId! });
-    },
+  const addMessage = useMutation({
+    mutationFn: ({ convId, role, content }: { convId: string; role: string; content: string }) =>
+      api.chat.addMessage(convId, { role, content }),
+    onSuccess: (_, vars) =>
+      queryClient.invalidateQueries({ queryKey: ['chat', 'conversation', vars.convId] }),
   });
 
-  const classifyMessage = trpc.chat.classifyMessage.useMutation();
+  const classifyMessage = useMutation({
+    mutationFn: (message: string) => api.chat.classify(message),
+  });
 
-  const saveJournal = trpc.chat.saveJournalFromChat.useMutation({
-    onSuccess: () => {
-      utils.chat.getConversation.invalidate({ id: conversationId! });
-      utils.journal.list.invalidate();
+  const saveJournal = useMutation({
+    mutationFn: api.chat.saveJournal,
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['chat', 'conversation', vars.conversationId] });
+      queryClient.invalidateQueries({ queryKey: ['journal'] });
       setPendingSave(null);
     },
   });
 
-  const saveCalendar = trpc.chat.saveCalendarFromChat.useMutation({
-    onSuccess: () => {
-      utils.chat.getConversation.invalidate({ id: conversationId! });
-      utils.calendar.listByRange.invalidate();
+  const saveCalendar = useMutation({
+    mutationFn: api.chat.saveCalendar,
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['chat', 'conversation', vars.conversationId] });
+      queryClient.invalidateQueries({ queryKey: ['calendar'] });
       setPendingSave(null);
     },
   });
 
-  const generateForTopic = trpc.flashcard.generateForTopic.useMutation({
+  const generateForTopic = useMutation({
+    mutationFn: (topic: string) => api.flashcard.generateForTopic(topic),
     onSuccess: async (result) => {
-      // Fetch the generated cards
-      const cards = await Promise.all(
-        result.ids.map(async (id) => {
-          const card = await utils.flashcard.get.fetch({ id });
-          return card;
-        })
-      );
-      setQuizCards(cards.filter((c): c is NonNullable<typeof c> => c !== null));
+      const cards = await Promise.all(result.ids.map((id) => api.flashcard.get(id)));
+      setQuizCards(cards.filter((c): c is Flashcard => !!c));
       setQuizIndex(0);
       setShowAnswer(false);
       setPendingQuiz(null);
     },
   });
 
-  const reviewCard = trpc.flashcard.review.useMutation({
+  const reviewCard = useMutation({
+    mutationFn: ({ id, grade }: { id: string; grade: number }) => api.flashcard.review(id, grade),
     onSuccess: () => {
-      utils.flashcard.getDue.invalidate();
-      utils.flashcard.getStats.invalidate();
+      queryClient.invalidateQueries({ queryKey: ['flashcard', 'due'] });
+      queryClient.invalidateQueries({ queryKey: ['flashcard', 'stats'] });
     },
   });
 
-  const messages: Message[] = conversation?.messages || [];
+  const messages = conversation?.messages || [];
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -120,86 +127,61 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
 
     let convId = conversationId;
 
-    // Create conversation if needed
     if (!convId) {
-      const result = await createConversation.mutateAsync({
-        title: userMessage.slice(0, 50),
-      });
+      const result = await createConversation.mutateAsync({ title: userMessage.slice(0, 50) });
       convId = result.id;
     }
 
-    // Add user message
-    const userMsgResult = await addMessage.mutateAsync({
-      conversationId: convId,
-      role: 'user',
-      content: userMessage,
+    const userMsgResult = await addMessage.mutateAsync({ convId, role: 'user', content: userMessage });
+
+    classifyMessage.mutate(userMessage, {
+      onSuccess: (result) => {
+        const r = result as ClassifyResult;
+        if (r.confidence >= 0.7) {
+          if (r.intent === 'journal' && r.journalEntry) {
+            setPendingSave({
+              type: 'journal',
+              messageId: userMsgResult.id,
+              data: { title: r.journalEntry.title, content: r.journalEntry.content, tags: r.journalEntry.tags },
+            });
+          } else if (r.intent === 'calendar' && r.calendarEvent) {
+            setPendingSave({
+              type: 'calendar',
+              messageId: userMsgResult.id,
+              data: {
+                title: r.calendarEvent.title,
+                description: r.calendarEvent.description,
+                date: r.calendarEvent.date,
+                time: r.calendarEvent.time,
+                tags: r.calendarEvent.tags,
+              },
+            });
+          } else if (r.intent === 'flashcard_request' && r.flashcardRequest) {
+            setPendingQuiz({ topic: r.flashcardRequest.topic, messageId: userMsgResult.id });
+          }
+        }
+      },
     });
 
-    // Classify the message in the background
-    classifyMessage.mutate(
-      { message: userMessage },
-      {
-        onSuccess: (result) => {
-          if (result.confidence >= 0.7) {
-            if (result.intent === 'journal' && result.journalEntry) {
-              setPendingSave({
-                type: 'journal',
-                messageId: userMsgResult.id,
-                data: {
-                  title: result.journalEntry.title,
-                  content: result.journalEntry.content,
-                  tags: result.journalEntry.tags,
-                },
-              });
-            } else if (result.intent === 'calendar' && result.calendarEvent) {
-              setPendingSave({
-                type: 'calendar',
-                messageId: userMsgResult.id,
-                data: {
-                  title: result.calendarEvent.title,
-                  description: result.calendarEvent.description,
-                  date: result.calendarEvent.date,
-                  time: result.calendarEvent.time,
-                  tags: result.calendarEvent.tags,
-                },
-              });
-            } else if (result.intent === 'flashcard_request' && result.flashcardRequest) {
-              setPendingQuiz({
-                topic: result.flashcardRequest.topic,
-                messageId: userMsgResult.id,
-              });
-            }
-          }
-        },
-      }
-    );
-
-    // Prepare messages for API
     const chatMessages = [
       ...messages.map((m) => ({ role: m.role, content: m.content })),
       { role: 'user' as const, content: userMessage },
     ];
 
-    // Start streaming
     setIsStreaming(true);
     setStreamingContent('');
     setRagContextUsed(0);
 
     try {
-      // Fetch RAG context for the message
       let ragContext: string | undefined;
       try {
-        const ragResult = await utils.chat.getRAGContext.fetch({
-          message: userMessage,
-          limit: 3,
-        });
+        const ragResult = await api.chat.ragContext(userMessage, 3);
         if (ragResult.isConfigured && ragResult.context) {
           ragContext = ragResult.context;
           setRagContextUsed(ragResult.results.length);
         }
-      } catch (ragError) {
-        // RAG is optional, continue without it
-        console.warn('RAG context fetch failed:', ragError);
+      } catch {
+        // RAG is optional
       }
 
       const response = await fetch('/api/chat/stream', {
@@ -224,41 +206,23 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
-
+        const lines = decoder.decode(value).split('\n');
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const data = line.slice(6);
             if (data === '[DONE]') continue;
-
             try {
               const parsed = JSON.parse(data);
-              if (parsed.content) {
-                fullContent += parsed.content;
-                setStreamingContent(fullContent);
-              }
-              if (parsed.error) {
-                throw new Error(parsed.error);
-              }
-            } catch {
-              // Ignore JSON parse errors for incomplete chunks
-            }
+              if (parsed.content) { fullContent += parsed.content; setStreamingContent(fullContent); }
+              if (parsed.error) throw new Error(parsed.error);
+            } catch { /* ignore parse errors */ }
           }
         }
       }
 
-      // Save assistant message
-      await addMessage.mutateAsync({
-        conversationId: convId,
-        role: 'assistant',
-        content: fullContent,
-      });
+      await addMessage.mutateAsync({ convId: convId!, role: 'assistant', content: fullContent });
     } catch (error) {
-      console.error('Chat error:', error);
-      setStreamingContent(
-        `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`
-      );
+      setStreamingContent(`Error: ${error instanceof Error ? error.message : 'Failed to get response'}`);
     } finally {
       setIsStreaming(false);
       setStreamingContent('');
@@ -267,7 +231,6 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
 
   const handleSave = () => {
     if (!pendingSave || !conversationId) return;
-
     if (pendingSave.type === 'journal') {
       saveJournal.mutate({
         conversationId,
@@ -289,47 +252,29 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
     }
   };
 
-  const handleStartQuiz = () => {
-    if (!pendingQuiz) return;
-    generateForTopic.mutate({ topic: pendingQuiz.topic });
-  };
-
   const handleReview = (grade: number) => {
     const card = quizCards[quizIndex];
     if (!card) return;
-
-    reviewCard.mutate(
-      { id: card.id, grade },
-      {
-        onSuccess: () => {
-          if (quizIndex < quizCards.length - 1) {
-            setQuizIndex(quizIndex + 1);
-            setShowAnswer(false);
-          } else {
-            // Quiz complete
-            setQuizCards([]);
-            setQuizIndex(0);
-          }
-        },
-      }
-    );
+    reviewCard.mutate({ id: card.id, grade }, {
+      onSuccess: () => {
+        if (quizIndex < quizCards.length - 1) {
+          setQuizIndex(quizIndex + 1);
+          setShowAnswer(false);
+        } else {
+          setQuizCards([]);
+          setQuizIndex(0);
+        }
+      },
+    });
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
-  const isConfigured =
-    settings?.hasOpenaiKey || settings?.hasGoogleKey || settings?.aiProvider === 'ollama';
-
+  const isConfigured = settings?.hasOpenaiKey || settings?.hasGoogleKey || settings?.aiProvider === 'ollama';
   const isSaving = saveJournal.isPending || saveCalendar.isPending;
-  const isGenerating = generateForTopic.isPending;
-
   const currentCard = quizCards[quizIndex];
-
   const grades = [
     { value: 0, label: 'Again', color: 'bg-red-500' },
     { value: 1, label: 'Hard', color: 'bg-orange-500' },
@@ -339,41 +284,26 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
 
   return (
     <div className="flex-1 flex flex-col">
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {!isConfigured && (
           <div className="bg-yellow-900/30 border border-yellow-600/50 rounded-lg p-4 text-yellow-200">
             Please configure an AI provider in Settings to start chatting.
           </div>
         )}
-
         {messages.length === 0 && isConfigured && (
           <div className="text-center text-[var(--color-text-muted)] py-12">
             <h2 className="text-xl mb-2">Welcome to Lunaschal</h2>
             <p>Start a conversation, write in your journal, or ask me anything.</p>
-            <p className="text-sm mt-4">
-              Try: "Today I learned...", "Quiz me on React hooks", or "I went to the dentist"
-            </p>
+            <p className="text-sm mt-4">Try: "Today I learned...", "Quiz me on React hooks", or "I went to the dentist"</p>
           </div>
         )}
-
         {messages.map((message) => {
           const metadata = message.metadata ? JSON.parse(message.metadata) : null;
           const hasSaved = metadata?.savedAsJournal || metadata?.savedAsCalendar;
-
           return (
-            <div
-              key={message.id}
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
+            <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className="max-w-[80%]">
-                <div
-                  className={`rounded-lg px-4 py-2 ${
-                    message.role === 'user'
-                      ? 'bg-[var(--color-primary)] text-white'
-                      : 'bg-[var(--color-surface)] text-[var(--color-text)]'
-                  }`}
-                >
+                <div className={`rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-surface)] text-[var(--color-text)]'}`}>
                   <div className="whitespace-pre-wrap">{message.content}</div>
                 </div>
                 {hasSaved && (
@@ -385,7 +315,6 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
             </div>
           );
         })}
-
         {isStreaming && streamingContent && (
           <div className="flex justify-start">
             <div className="max-w-[80%]">
@@ -401,7 +330,6 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
             </div>
           </div>
         )}
-
         {isStreaming && !streamingContent && (
           <div className="flex justify-start">
             <div className="bg-[var(--color-surface)] rounded-lg px-4 py-2 text-[var(--color-text-muted)]">
@@ -409,135 +337,77 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
             </div>
           </div>
         )}
-
         <div ref={messagesEndRef} />
       </div>
 
-      {/* In-chat Quiz Mode */}
       {currentCard && (
         <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]">
           <div className="max-w-lg mx-auto">
-            <div className="text-center mb-2 text-sm text-[var(--color-text-muted)]">
-              Card {quizIndex + 1} of {quizCards.length}
-            </div>
+            <div className="text-center mb-2 text-sm text-[var(--color-text-muted)]">Card {quizIndex + 1} of {quizCards.length}</div>
             <div className="bg-white/5 rounded-lg p-6 min-h-[120px] flex items-center justify-center">
-              <div className="text-lg text-[var(--color-text)] text-center">
-                {showAnswer ? currentCard.back : currentCard.front}
-              </div>
+              <div className="text-lg text-[var(--color-text)] text-center">{showAnswer ? currentCard.back : currentCard.front}</div>
             </div>
             {!showAnswer ? (
-              <button
-                onClick={() => setShowAnswer(true)}
-                className="w-full mt-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80"
-              >
+              <button onClick={() => setShowAnswer(true)} className="w-full mt-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80">
                 Show Answer
               </button>
             ) : (
               <div className="mt-4">
-                <div className="text-center text-sm text-[var(--color-text-muted)] mb-2">
-                  How well did you know this?
-                </div>
+                <div className="text-center text-sm text-[var(--color-text-muted)] mb-2">How well did you know this?</div>
                 <div className="grid grid-cols-4 gap-2">
-                  {grades.map((grade) => (
-                    <button
-                      key={grade.value}
-                      onClick={() => handleReview(grade.value)}
-                      disabled={reviewCard.isPending}
-                      className={`py-2 ${grade.color} text-white rounded hover:opacity-80 disabled:opacity-50`}
-                    >
-                      {grade.label}
-                    </button>
+                  {grades.map((g) => (
+                    <button key={g.value} onClick={() => handleReview(g.value)} disabled={reviewCard.isPending}
+                      className={`py-2 ${g.color} text-white rounded hover:opacity-80 disabled:opacity-50`}>{g.label}</button>
                   ))}
                 </div>
               </div>
             )}
-            <button
-              onClick={() => {
-                setQuizCards([]);
-                setQuizIndex(0);
-              }}
-              className="w-full mt-2 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-            >
-              End Quiz
-            </button>
+            <button onClick={() => { setQuizCards([]); setQuizIndex(0); }} className="w-full mt-2 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">End Quiz</button>
           </div>
         </div>
       )}
 
-      {/* Pending Quiz Generation */}
       {pendingQuiz && !currentCard && (
         <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
           <div className="flex items-start gap-3">
             <div className="flex-1">
-              <div className="text-sm font-medium text-[var(--color-text)]">
-                Generate flashcards for "{pendingQuiz.topic}"?
-              </div>
-              <div className="text-sm text-[var(--color-text-muted)] mt-1">
-                I'll create flashcards to help you learn about this topic.
-              </div>
+              <div className="text-sm font-medium text-[var(--color-text)]">Generate flashcards for "{pendingQuiz.topic}"?</div>
+              <div className="text-sm text-[var(--color-text-muted)] mt-1">I'll create flashcards to help you learn about this topic.</div>
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={() => setPendingQuiz(null)}
-                disabled={isGenerating}
-                className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={handleStartQuiz}
-                disabled={isGenerating}
-                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-              >
-                {isGenerating ? 'Generating...' : 'Start Quiz'}
+              <button onClick={() => setPendingQuiz(null)} disabled={generateForTopic.isPending} className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">Dismiss</button>
+              <button onClick={() => generateForTopic.mutate(pendingQuiz.topic)} disabled={generateForTopic.isPending}
+                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
+                {generateForTopic.isPending ? 'Generating...' : 'Start Quiz'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Pending Save Confirmation */}
       {pendingSave && !currentCard && (
         <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
           <div className="flex items-start gap-3">
             <div className="flex-1">
               <div className="text-sm font-medium text-[var(--color-text)]">
-                {pendingSave.type === 'journal'
-                  ? 'Save as journal entry?'
-                  : 'Save as calendar event?'}
+                {pendingSave.type === 'journal' ? 'Save as journal entry?' : 'Save as calendar event?'}
               </div>
               <div className="text-sm text-[var(--color-text-muted)] mt-1">
                 <span className="font-medium">{pendingSave.data.title}</span>
-                {pendingSave.type === 'calendar' && pendingSave.data.date && (
-                  <span className="ml-2">({pendingSave.data.date})</span>
-                )}
+                {pendingSave.type === 'calendar' && pendingSave.data.date && <span className="ml-2">({pendingSave.data.date})</span>}
               </div>
               {pendingSave.data.tags.length > 0 && (
                 <div className="flex gap-1 mt-2">
                   {pendingSave.data.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="px-2 py-0.5 text-xs bg-white/10 rounded text-[var(--color-text-muted)]"
-                    >
-                      {tag}
-                    </span>
+                    <span key={tag} className="px-2 py-0.5 text-xs bg-white/10 rounded text-[var(--color-text-muted)]">{tag}</span>
                   ))}
                 </div>
               )}
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={() => setPendingSave(null)}
-                disabled={isSaving}
-                className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-              >
+              <button onClick={() => setPendingSave(null)} disabled={isSaving} className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">Dismiss</button>
+              <button onClick={handleSave} disabled={isSaving}
+                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
                 {isSaving ? 'Saving...' : 'Save'}
               </button>
             </div>
@@ -545,24 +415,15 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
         </div>
       )}
 
-      {/* Input */}
       {!currentCard && (
         <div className="border-t border-white/10 p-4">
           <div className="flex gap-2">
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
+            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
               placeholder={isConfigured ? 'Type a message...' : 'Configure AI provider first...'}
-              disabled={!isConfigured || isStreaming}
-              rows={1}
-              className="flex-1 bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-50"
-            />
-            <button
-              onClick={sendMessage}
-              disabled={!input.trim() || !isConfigured || isStreaming}
-              className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
+              disabled={!isConfigured || isStreaming} rows={1}
+              className="flex-1 bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-50" />
+            <button onClick={sendMessage} disabled={!input.trim() || !isConfigured || isStreaming}
+              className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
               Send
             </button>
           </div>

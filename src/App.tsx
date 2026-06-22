@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import { trpc } from './hooks/trpc';
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from './hooks/api';
 import { Sidebar } from './components/Sidebar';
 import { Chat } from './components/Chat';
 import { Journal } from './components/Journal';
@@ -7,7 +8,6 @@ import { Calendar } from './components/Calendar';
 import { Flashcards } from './components/Flashcards';
 import { Settings } from './components/Settings';
 import { Setup } from './components/Setup';
-import { Login } from './components/Login';
 
 type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings';
 
@@ -16,7 +16,10 @@ export default function App() {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  const { data: isSetupComplete, isLoading } = trpc.settings.isSetupComplete.useQuery();
+  const { data, isLoading } = useQuery({
+    queryKey: ['settings', 'isSetupComplete'],
+    queryFn: api.settings.isSetupComplete,
+  });
 
   if (isLoading) {
     return (
@@ -26,7 +29,7 @@ export default function App() {
     );
   }
 
-  if (isSetupComplete === false) {
+  if (!data?.complete) {
     return <Setup />;
   }
 
