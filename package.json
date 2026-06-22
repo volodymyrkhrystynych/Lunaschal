@@ -7,6 +7,8 @@
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "tsx watch server/index.ts",
     "dev:client": "vite",
+    "dev:flask": "flask --app backend.app run --port 5000 --debug",
+    "dev:desktop": "python main.py --dev",
     "build": "vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
     "db:generate": "drizzle-kit generate",
