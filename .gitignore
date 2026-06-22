@@ -3,6 +3,8 @@ dist/
 data/
 .env
 .venv/
+__pycache__/
+*.pyc
 stt/.venv/
 stt/lib/
 *.db
