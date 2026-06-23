@@ -56,7 +56,6 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY DEFAULT 1,
-    password_hash TEXT,
     ai_provider TEXT DEFAULT 'openai',
     ai_model TEXT,
     openai_api_key TEXT,

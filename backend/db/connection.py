@@ -46,6 +46,11 @@ def init_db() -> None:
     schema = (Path(__file__).parent / 'schema.sql').read_text()
     db.executescript(schema)
     db.commit()
+    # Drop password_hash if it exists from an older schema
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'password_hash' in cols:
+        db.execute('ALTER TABLE settings DROP COLUMN password_hash')
+        db.commit()
     _init_fts(db)
     _init_vectors(db)
 
