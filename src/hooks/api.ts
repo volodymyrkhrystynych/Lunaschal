@@ -70,6 +70,14 @@ export interface AppSettings {
   ollamaModel: string | null;
 }
 
+export interface FileEntry {
+  name: string;
+  path: string;
+  isDir: boolean;
+  size: number | null;
+  modified: number;
+}
+
 export interface RAGResult {
   sourceId: string;
   sourceType: string;
@@ -202,6 +210,19 @@ export const api = {
     }) => post<{ id: string }>('/api/chat/save-calendar', data),
     ragContext: (message: string, limit?: number) =>
       post<RAGContext>('/api/chat/rag-context', { message, limit: limit ?? 3 }),
+  },
+
+  files: {
+    list: (path?: string) =>
+      get<FileEntry[]>(`/api/files?${path ? `path=${encodeURIComponent(path)}` : ''}`),
+    read: (path: string) =>
+      get<{ content: string }>(`/api/files/read?path=${encodeURIComponent(path)}`),
+    write: (path: string, content: string) =>
+      post<{ success: boolean }>('/api/files/write', { path, content }),
+    rename: (from: string, to: string) =>
+      post<{ success: boolean }>('/api/files/rename', { from, to }),
+    delete: (path: string) =>
+      del<{ success: boolean }>(`/api/files?path=${encodeURIComponent(path)}`),
   },
 
   rag: {

@@ -11,8 +11,8 @@ def create_app():
     from backend.db.connection import init_db
     init_db()
 
-    from backend.routes import journal, calendar, flashcard, settings, rag, chat
-    for bp in (journal.bp, calendar.bp, flashcard.bp, settings.bp, rag.bp, chat.bp):
+    from backend.routes import journal, calendar, flashcard, settings, rag, chat, files
+    for bp in (journal.bp, calendar.bp, flashcard.bp, settings.bp, rag.bp, chat.bp, files.bp):
         app.register_blueprint(bp)
 
     @app.get('/api/health')
