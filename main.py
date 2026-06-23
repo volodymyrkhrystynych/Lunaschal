@@ -32,17 +32,32 @@ def _wait_for_flask(timeout: float = 10.0) -> bool:
     return False
 
 
-def main():
+def _parse_args():
     dev = '--dev' in sys.argv
+    server_url = None
+    for i, arg in enumerate(sys.argv[1:], 1):
+        if arg == '--server-url' and i + 1 < len(sys.argv):
+            server_url = sys.argv[i + 1]
+        elif arg.startswith('--server-url='):
+            server_url = arg.split('=', 1)[1]
+    return dev, server_url
 
-    thread = threading.Thread(target=_run_flask, daemon=True)
-    thread.start()
 
-    if not _wait_for_flask():
-        print('error: Flask did not start in time', file=sys.stderr)
-        sys.exit(1)
+def main():
+    dev, server_url = _parse_args()
 
-    url = DEV_URL if dev else PROD_URL
+    if server_url:
+        url = server_url
+    else:
+        thread = threading.Thread(target=_run_flask, daemon=True)
+        thread.start()
+
+        if not _wait_for_flask():
+            print('error: Flask did not start in time', file=sys.stderr)
+            sys.exit(1)
+
+        url = DEV_URL if dev else PROD_URL
+
     webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600))
     webview.start()
 
