@@ -33,9 +33,9 @@ Shortcuts:
 - **F1** (`STT_PASTE_KEY`) — record → transcribe → paste text at cursor via `wtype`
 - **Right Alt** (`STT_VOICE_KEY`) — record → transcribe → AI chat (Lunaschal `/api/chat/stream`) → TTS reply spoken aloud
 
-The Node.js server exposes `POST /api/transcribe` (multipart `audio` field) which proxies to the Python STT service. The STT service URL can be overridden with `STT_SERVICE_URL` env var (default: `http://127.0.0.1:8765`).
+The Flask backend exposes `POST /api/transcribe` (multipart `audio` field) which proxies to the Python STT service. The STT service URL can be overridden with `STT_SERVICE_URL` env var (default: `http://127.0.0.1:8765`).
 
-**Local TTS**: Kokoro-ONNX (~80 MB model cached to `~/.cache/lunaschal/tts/` on first run). **API TTS**: OpenAI (`tts-1`, voice configurable via `OPENAI_TTS_VOICE`, default `nova`). The service exposes `POST /tts` (form field `text`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:7842`).
+**Local TTS**: Kokoro-ONNX (~80 MB model cached to `~/.cache/lunaschal/tts/` on first run). **API TTS**: OpenAI (`tts-1`, voice configurable via `OPENAI_TTS_VOICE`, default `nova`). The service exposes `POST /tts` (form field `text`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:5000`).
 
 Service env vars summary:
 
@@ -57,70 +57,88 @@ Env vars: `STT_URL`, `LUNASCHAL_URL`, `MORNING_START_HOUR`, `MORNING_END_HOUR`.
 ## Commands
 
 ```bash
-# Development (runs server on :7842 and Vite client on :5173 concurrently)
+# Development (Flask backend on :5000 + Vite client on :5173)
 npm run dev
 
-# Run only the backend server (tsx watch)
-npm run dev:server
+# Run only the backend
+npm run dev:flask        # flask --app backend.app run --port 5000 --debug
 
-# Run only the frontend (Vite)
-npm run dev:client
+# Run only the frontend
+npm run dev:client       # vite
 
-# Production build + start
+# Open as a desktop window (PyWebView loads the Vite dev server)
+python main.py --dev
+
+# Production build + open desktop window
 npm run build
-npm run start
+python main.py
 
-# Database migrations
-npm run db:generate   # generate migration files from schema changes
-npm run db:migrate    # apply pending migrations
-npm run db:studio     # open Drizzle Studio GUI
+# Run STT service + listener together
+npm run stt
 ```
 
 There are no tests or linting scripts configured.
 
 ## Architecture
 
-Lunaschal is a single-user personal knowledge management app with AI integration. It combines a journal, calendar, flashcard system (spaced repetition), and AI chat with RAG.
+Lunaschal is a single-user personal knowledge management desktop app with AI integration. It combines a journal, calendar, flashcard system (spaced repetition), creative writing workspace, file editor, and AI chat with RAG. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
 
 ### Stack
+- **Desktop shell**: PyWebView — `main.py` starts Flask in a background thread then opens a `webview.create_window`
 - **Frontend**: React 19 + Vite + Tailwind CSS v4 — in `src/`
-- **Backend**: Hono on Node.js — in `server/`
-- **API layer**: tRPC v11 with React Query — routers in `server/router/`, client hook in `src/hooks/trpc.ts`
-- **Database**: SQLite via `better-sqlite3` + Drizzle ORM; stored at `./data/lunaschal.db`
-- **AI**: Vercel AI SDK (`ai` package) supporting OpenAI, Google Gemini, and Ollama
+- **Backend**: Flask (Python) — in `backend/`
+- **API layer**: REST JSON + React Query; typed client in `src/hooks/api.ts`
+- **Database**: SQLite via Python's built-in `sqlite3`; stored at `./data/lunaschal.db`
+- **AI**: `openai`, `google-generativeai`, and `ollama` Python SDKs
 
-### Server Structure
+### Entry Points
 
-`server/index.ts` bootstraps Hono, runs DB migrations on startup, mounts tRPC at `/api/trpc/*`, and exposes a streaming SSE endpoint at `POST /api/chat/stream` (kept outside tRPC because tRPC doesn't support streaming responses).
+- **`main.py`** — PyWebView desktop launcher. Starts Flask in a daemon thread, waits for `/api/health`, then opens the window. Pass `--dev` to point the window at the Vite dev server instead of the built `dist/`.
+- **`backend/app.py`** — Flask app factory (`create_app`). Runs DB init, registers all blueprints, mounts auth middleware, and serves the built `dist/` as static files in production.
 
-tRPC routers (`server/router/`): `chat`, `journal`, `calendar`, `flashcard`, `settings`, `rag`.
+### Backend Structure (`backend/`)
 
-### Database Layer (`server/db/`)
-- `schema.ts` — Drizzle table definitions; all IDs are ULIDs
-- `index.ts` — initializes SQLite, runs Drizzle migrations, then initializes FTS5 and the vector store
-- `fts.ts` — SQLite FTS5 virtual table for full-text journal search
-- `vectors.ts` — `sqlite-vec` extension for vector similarity search (RAG)
-- Migrations are in `server/db/migrations/` and run automatically on server start
+Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `flashcard`, `settings`, `rag`, `chat`, `files`, `writing`.
 
-### AI Layer (`server/ai/`)
-- `provider.ts` — resolves the active AI provider and model from DB settings (or env vars `OPENAI_API_KEY`, `GOOGLE_API_KEY`); supports `openai`, `gemini`, `ollama`
-- `classifier.ts` — uses `generateObject` to classify chat messages into intents: `journal | calendar | question | flashcard_request | conversation`. When a message matches `journal` or `calendar`, the classifier also extracts structured data (title, tags, date, etc.) to auto-create entries.
-- `embeddings.ts` — generates text embeddings for RAG; OpenAI (`text-embedding-3-small`) and Gemini (`text-embedding-004`) are supported; Ollama embeddings are not yet implemented
-- `rag.ts` — syncs journal entries to embeddings, performs semantic search, formats retrieved context for the LLM
-- `flashcards.ts` — AI-assisted flashcard generation
-- `chat.ts` — streaming chat using the AI SDK
+The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` using Flask's `Response(stream_with_context(...))`.
 
-### Auth (`server/auth.ts`)
-Single-user, password-based auth with bcrypt + JWT cookie (`lunaschal_token`, 7-day expiry). **Auth is bypassed for localhost in non-production mode** — the `requireAuth` middleware skips when `NODE_ENV !== 'production'` and the host is localhost. First-run setup flow sets the password via `settings.setupPassword` tRPC mutation.
+### Database Layer (`backend/db/`)
+- `schema.sql` — raw SQL `CREATE TABLE IF NOT EXISTS` statements; all IDs are ULIDs
+- `connection.py` — opens a single WAL-mode SQLite connection (`get_db()`), runs `schema.sql` on startup, initializes FTS5 triggers and the sqlite-vec virtual table, ensures the network code exists, and safely adds `writing_project_id` to `conversations` via ALTER TABLE migration
+- FTS5 virtual table (`journal_fts`) is maintained by SQL triggers defined in `connection.py`
+- `sqlite-vec` extension for vector similarity search (RAG); silently skipped if not installed
+
+### AI Layer (`backend/ai/`)
+- `provider.py` — resolves the active AI provider and model from DB settings (or env vars `OPENAI_API_KEY`, `GOOGLE_API_KEY`); supports `openai`, `gemini`, `ollama`
+- `classifier.py` — classifies chat messages into intents: `journal | calendar | question | flashcard_request | conversation`; extracts structured data when saving entries
+- `embeddings.py` — generates text embeddings for RAG; OpenAI (`text-embedding-3-small`) and Gemini (`text-embedding-004`) supported; Ollama embeddings not yet implemented
+- `rag.py` — syncs journal entries to embeddings, performs semantic search, formats retrieved context for the LLM
+- `flashcards.py` — AI-assisted flashcard generation
+- `chat.py` — streaming chat generator consumed by the `/api/chat/stream` route
+
+### Auth (`backend/auth.py`)
+Single-user auth via JWT cookie (`lunaschal_token`, 30-day expiry). **Auth is only enforced in network mode** (`NETWORK_MODE=1`) and only for non-localhost requests — the `check_auth` middleware in `app.py` returns early when `is_localhost(request)` is true. Network mode login requires both the password and a rotating 6-digit display code (pseudo-2FA); the code is stored in the `settings` table and can be regenerated from the Settings page.
 
 ### Frontend Structure (`src/`)
-- `App.tsx` — top-level view router; renders `Setup` if no password set, otherwise shows a sidebar + main view (chat/journal/calendar/flashcards/settings)
-- `src/components/` — one file per view/feature
+- `App.tsx` — top-level view router; checks auth status on load, shows `Login` if unauthenticated in network mode, otherwise shows a sidebar + main view (chat/journal/writing/calendar/flashcards/files/settings)
+- `src/components/` — one file per view/feature; `Editor/` subdirectory for the file editor and STT panel; `Writing/` subdirectory for the writing workspace
+- `src/hooks/api.ts` — typed REST client (`api.*` namespaces) using plain `fetch`; no tRPC
 - `@` path alias resolves to `./src/`
 - CSS custom properties (e.g. `var(--color-bg)`) are used for theming throughout
 
+### Writing Module (`src/components/Writing/`, `backend/routes/writing.py`)
+Three-panel layout: left nav (project list + chapter list) | center prose editor | right AI chat sidebar.
+
+**DB tables**: `writing_projects`, `writing_chapters` (ordered by `position`), `writing_context_docs` (typed: `character | outline | worldbuilding | note`). Writing conversations reuse the existing `conversations` + `messages` tables; `conversations.writing_project_id` scopes them to a project.
+
+**Chapter editor**: plain `<textarea>` (not CodeMirror — prose, not code) with 1.5 s debounced auto-save and live word count.
+
+**Writing chat**: reuses `/api/chat/stream` unchanged. The frontend assembles a `systemPrompt` from the project title/description and any context docs the user has checked, then passes it as the existing `systemPrompt` field. No journal/calendar classification — pure story chat.
+
 ### Key Behaviors
-- **Flashcards** use the SM-2 spaced repetition algorithm via the `supermemo` npm package
+- **Flashcards** use the SM-2 spaced repetition algorithm (implemented in `backend/routes/flashcard.py`)
 - **RAG** is optional — silently disabled when embeddings aren't configured (Ollama provider, or missing API key)
 - **DB path** defaults to `./data/lunaschal.db`; override with `DATABASE_URL` env var
 - **JWT secret** defaults to a hardcoded dev string; set `JWT_SECRET` env var in production
+- **Flask port** is always 5000; Vite dev server is 5173 and proxies `/api` to Flask
+- **Network mode**: set `NETWORK_MODE=1` and `LUNASCHAL_PASSWORD=...` to bind `0.0.0.0` and enforce auth for LAN access

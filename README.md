@@ -1,6 +1,6 @@
 # Lunaschal
 
-A self-hosted personal knowledge management desktop app with local AI. Journal, calendar, flashcards, file editor, and an AI chat that understands your notes — all running on your own machine as a native desktop window.
+A self-hosted personal knowledge management desktop app with local AI. Journal, calendar, flashcards, file editor, creative writing workspace, and an AI chat that understands your notes — all running on your own machine as a native desktop window.
 
 ## Features
 
@@ -9,6 +9,7 @@ A self-hosted personal knowledge management desktop app with local AI. Journal, 
 - **Calendar** — Activity log for events and appointments, linked to journal entries.
 - **Flashcards** — Spaced repetition (SM-2 algorithm) with AI-generated cards from your journal entries or any topic.
 - **RAG** — The chat retrieves semantically relevant journal entries as context for each message using vector embeddings.
+- **Writing** — Creative writing workspace with projects, ordered chapters, and a context document library (character sheets, outlines, world-building notes, etc.). A scoped AI chat sidebar lets you discuss plot and story; you choose which context docs the AI can see via checkboxes.
 - **File Editor** — Browse, create, edit, and rename files under a configurable root directory (`~/notes` by default). CodeMirror 6 editor with syntax highlighting for Markdown, JavaScript/TypeScript, and Python. Auto-saves after 1.5 s of inactivity.
 - **Voice Input** — Record audio from the browser mic and transcribe it into the active editor or clipboard via the persistent bottom bar. Global keyboard shortcuts (F1, Right Alt) work system-wide via the background listener.
 - **Voice Assistant** — Right Alt triggers a voice conversation: speech → AI chat → spoken reply. TTS via Kokoro (local, CPU, ~80 MB) or OpenAI API. Also activatable by saying "Hey Luna" (wake word).
