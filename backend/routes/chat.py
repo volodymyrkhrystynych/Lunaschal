@@ -3,7 +3,6 @@ import json
 from flask import Blueprint, jsonify, request, Response, stream_with_context
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
-from backend.auth import require_auth
 from backend.ai.provider import is_ai_configured
 from backend.ai.chat import chat_stream
 from backend.ai.classifier import classify_intent, should_classify
@@ -14,14 +13,12 @@ bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 
 
 @bp.get('/conversations')
-@require_auth
 def list_conversations():
     rows = get_db().execute('SELECT * FROM conversations ORDER BY updated_at DESC').fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
 
 @bp.get('/conversations/<id>')
-@require_auth
 def get_conversation(id):
     db = get_db()
     row = db.execute('SELECT * FROM conversations WHERE id=?', (id,)).fetchone()
@@ -36,7 +33,6 @@ def get_conversation(id):
 
 
 @bp.post('/conversations')
-@require_auth
 def create_conversation():
     body = request.json or {}
     now = int(time.time())
@@ -50,7 +46,6 @@ def create_conversation():
 
 
 @bp.patch('/conversations/<id>/title')
-@require_auth
 def update_title(id):
     body = request.json or {}
     title = body.get('title', '')
@@ -63,7 +58,6 @@ def update_title(id):
 
 
 @bp.delete('/conversations/<id>')
-@require_auth
 def delete_conversation(id):
     get_db().execute('DELETE FROM conversations WHERE id=?', (id,))
     get_db().commit()
@@ -71,7 +65,6 @@ def delete_conversation(id):
 
 
 @bp.post('/conversations/<id>/messages')
-@require_auth
 def add_message(id):
     body = request.json or {}
     msg_id = str(ULID())
@@ -87,7 +80,6 @@ def add_message(id):
 
 
 @bp.post('/classify')
-@require_auth
 def classify():
     body = request.json or {}
     message = body.get('message', '')
@@ -97,7 +89,6 @@ def classify():
 
 
 @bp.post('/save-journal')
-@require_auth
 def save_journal():
     body = request.json or {}
     now = int(time.time())
@@ -115,7 +106,6 @@ def save_journal():
 
 
 @bp.post('/save-calendar')
-@require_auth
 def save_calendar():
     body = request.json or {}
     now = int(time.time())
@@ -134,7 +124,6 @@ def save_calendar():
 
 
 @bp.post('/rag-context')
-@require_auth
 def rag_context():
     body = request.json or {}
     message = body.get('message', '')
@@ -160,7 +149,6 @@ def rag_context():
 
 
 @bp.post('/stream')
-@require_auth
 def stream():
     if not is_ai_configured():
         return jsonify({'error': 'AI provider not configured'}), 400

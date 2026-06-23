@@ -2,7 +2,6 @@ import time
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict, search_journal_fts
-from backend.auth import require_auth
 from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.rag import sync_journal_embeddings, delete_journal_embeddings, search_for_context
 
@@ -10,7 +9,6 @@ bp = Blueprint('journal', __name__, url_prefix='/api/journal')
 
 
 @bp.get('')
-@require_auth
 def list_entries():
     limit = min(int(request.args.get('limit', 50)), 100)
     offset = int(request.args.get('offset', 0))
@@ -23,7 +21,6 @@ def list_entries():
 
 
 @bp.get('/search')
-@require_auth
 def search():
     query = request.args.get('query', '').strip()
     limit = min(int(request.args.get('limit', 50)), 100)
@@ -44,7 +41,6 @@ def search():
 
 
 @bp.get('/semantic-search')
-@require_auth
 def semantic_search():
     query = request.args.get('query', '').strip()
     limit = min(int(request.args.get('limit', 5)), 20)
@@ -56,7 +52,6 @@ def semantic_search():
 
 
 @bp.get('/<id>')
-@require_auth
 def get_entry(id):
     row = get_db().execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
     if not row:
@@ -65,7 +60,6 @@ def get_entry(id):
 
 
 @bp.post('')
-@require_auth
 def create_entry():
     body = request.json or {}
     content = body.get('content', '').strip()
@@ -85,7 +79,6 @@ def create_entry():
 
 
 @bp.patch('/<id>')
-@require_auth
 def update_entry(id):
     body = request.json or {}
     import json
@@ -108,7 +101,6 @@ def update_entry(id):
 
 
 @bp.delete('/<id>')
-@require_auth
 def delete_entry(id):
     delete_journal_embeddings(id)
     get_db().execute('DELETE FROM journal_entries WHERE id=?', (id,))

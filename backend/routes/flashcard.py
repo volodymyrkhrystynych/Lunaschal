@@ -3,7 +3,6 @@ from datetime import datetime, timezone, timedelta
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
-from backend.auth import require_auth
 
 bp = Blueprint('flashcard', __name__, url_prefix='/api/flashcards')
 
@@ -25,7 +24,6 @@ def _sm2(interval: int, repetitions: int, efactor: float, grade: int) -> tuple[i
 
 
 @bp.get('')
-@require_auth
 def list_cards():
     limit = min(int(request.args.get('limit', 50)), 100)
     offset = int(request.args.get('offset', 0))
@@ -36,7 +34,6 @@ def list_cards():
 
 
 @bp.get('/due')
-@require_auth
 def get_due():
     now = int(time.time())
     rows = get_db().execute(
@@ -46,7 +43,6 @@ def get_due():
 
 
 @bp.get('/stats')
-@require_auth
 def get_stats():
     db = get_db()
     now = int(time.time())
@@ -57,7 +53,6 @@ def get_stats():
 
 
 @bp.get('/by-source/<source_id>')
-@require_auth
 def get_by_source(source_id):
     rows = get_db().execute(
         'SELECT * FROM flashcards WHERE source_id=? ORDER BY created_at DESC', (source_id,)
@@ -66,7 +61,6 @@ def get_by_source(source_id):
 
 
 @bp.get('/<id>')
-@require_auth
 def get_card(id):
     row = get_db().execute('SELECT * FROM flashcards WHERE id=?', (id,)).fetchone()
     if not row:
@@ -75,7 +69,6 @@ def get_card(id):
 
 
 @bp.post('')
-@require_auth
 def create_card():
     body = request.json or {}
     if not body.get('front') or not body.get('back'):
@@ -91,7 +84,6 @@ def create_card():
 
 
 @bp.post('/<id>/review')
-@require_auth
 def review_card(id):
     body = request.json or {}
     grade = int(body.get('grade', 0))
@@ -116,7 +108,6 @@ def review_card(id):
 
 
 @bp.patch('/<id>')
-@require_auth
 def update_card(id):
     body = request.json or {}
     updates: dict = {}
@@ -133,7 +124,6 @@ def update_card(id):
 
 
 @bp.delete('/<id>')
-@require_auth
 def delete_card(id):
     get_db().execute('DELETE FROM flashcards WHERE id=?', (id,))
     get_db().commit()
@@ -141,7 +131,6 @@ def delete_card(id):
 
 
 @bp.post('/generate-from-journal')
-@require_auth
 def generate_from_journal():
     from backend.ai.flashcards import generate_flashcards_from_content
     body = request.json or {}
@@ -167,7 +156,6 @@ def generate_from_journal():
 
 
 @bp.post('/generate-for-topic')
-@require_auth
 def generate_for_topic():
     from backend.ai.flashcards import generate_flashcards_for_topic
     body = request.json or {}

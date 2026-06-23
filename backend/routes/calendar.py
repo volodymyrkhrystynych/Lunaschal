@@ -3,13 +3,11 @@ import json
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
-from backend.auth import require_auth
 
 bp = Blueprint('calendar', __name__, url_prefix='/api/calendar')
 
 
 @bp.get('')
-@require_auth
 def list_by_range():
     start = request.args.get('start', '')
     end = request.args.get('end', '')
@@ -22,7 +20,6 @@ def list_by_range():
 
 
 @bp.get('/date/<date>')
-@require_auth
 def list_by_date(date):
     rows = get_db().execute(
         'SELECT * FROM calendar_events WHERE date=? ORDER BY time',
@@ -32,7 +29,6 @@ def list_by_date(date):
 
 
 @bp.get('/week/<date>')
-@require_auth
 def list_by_week(date):
     from datetime import date as dt, timedelta
     d = dt.fromisoformat(date)
@@ -49,7 +45,6 @@ def list_by_week(date):
 
 
 @bp.get('/related-journals/<date>')
-@require_auth
 def related_journals(date):
     import time as t
     from datetime import datetime, timezone
@@ -63,7 +58,6 @@ def related_journals(date):
 
 
 @bp.get('/<id>')
-@require_auth
 def get_event(id):
     db = get_db()
     row = db.execute('SELECT * FROM calendar_events WHERE id=?', (id,)).fetchone()
@@ -92,7 +86,6 @@ def get_event(id):
 
 
 @bp.post('')
-@require_auth
 def create_event():
     body = request.json or {}
     if not body.get('title') or not body.get('date'):
@@ -110,7 +103,6 @@ def create_event():
 
 
 @bp.patch('/<id>')
-@require_auth
 def update_event(id):
     body = request.json or {}
     field_map = {
@@ -132,7 +124,6 @@ def update_event(id):
 
 
 @bp.delete('/<id>')
-@require_auth
 def delete_event(id):
     get_db().execute('DELETE FROM calendar_events WHERE id=?', (id,))
     get_db().commit()
@@ -140,7 +131,6 @@ def delete_event(id):
 
 
 @bp.post('/<id>/link')
-@require_auth
 def link_journal(id):
     body = request.json or {}
     journal_id = body.get('journalEntryId')
@@ -163,7 +153,6 @@ def link_journal(id):
 
 
 @bp.delete('/<id>/link/<journal_id>')
-@require_auth
 def unlink_journal(id, journal_id):
     get_db().execute(
         'DELETE FROM calendar_journal_links WHERE calendar_event_id=? AND journal_entry_id=?',
