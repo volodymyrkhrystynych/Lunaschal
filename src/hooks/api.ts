@@ -99,6 +99,40 @@ export interface RAGContext {
   isConfigured: boolean;
 }
 
+export interface WritingProject {
+  id: string;
+  title: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WritingChapterSummary {
+  id: string;
+  projectId: string;
+  title: string;
+  position: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WritingChapter extends WritingChapterSummary {
+  content: string;
+}
+
+export interface WritingContextDocSummary {
+  id: string;
+  projectId: string;
+  title: string;
+  docType: 'character' | 'outline' | 'worldbuilding' | 'note';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WritingContextDoc extends WritingContextDocSummary {
+  content: string;
+}
+
 // --- fetch helpers ---
 
 async function get<T>(url: string): Promise<T> {
@@ -247,5 +281,38 @@ export const api = {
     syncAll: () => post<{ synced: number; chunks: number }>('/api/rag/sync-all'),
     search: (query: string, limit?: number) =>
       get<RAGResult[]>(`/api/rag/search?query=${encodeURIComponent(query)}&limit=${limit ?? 5}`),
+  },
+
+  writing: {
+    listProjects: () => get<WritingProject[]>('/api/writing/projects'),
+    createProject: (data: { title: string; description?: string }) =>
+      post<{ id: string }>('/api/writing/projects', data),
+    getProject: (id: string) => get<WritingProject>(`/api/writing/projects/${id}`),
+    updateProject: (id: string, data: { title?: string; description?: string }) =>
+      patch<{ success: boolean }>(`/api/writing/projects/${id}`, data),
+    deleteProject: (id: string) => del<{ success: boolean }>(`/api/writing/projects/${id}`),
+
+    listChapters: (projectId: string) =>
+      get<WritingChapterSummary[]>(`/api/writing/projects/${projectId}/chapters`),
+    createChapter: (projectId: string, data: { title: string }) =>
+      post<{ id: string }>(`/api/writing/projects/${projectId}/chapters`, data),
+    getChapter: (chapterId: string) => get<WritingChapter>(`/api/writing/chapters/${chapterId}`),
+    updateChapter: (chapterId: string, data: { title?: string; content?: string }) =>
+      patch<{ success: boolean }>(`/api/writing/chapters/${chapterId}`, data),
+    deleteChapter: (chapterId: string) => del<{ success: boolean }>(`/api/writing/chapters/${chapterId}`),
+
+    listContextDocs: (projectId: string) =>
+      get<WritingContextDocSummary[]>(`/api/writing/projects/${projectId}/context-docs`),
+    createContextDoc: (projectId: string, data: { title: string; content: string; docType: string }) =>
+      post<{ id: string }>(`/api/writing/projects/${projectId}/context-docs`, data),
+    getContextDoc: (docId: string) => get<WritingContextDoc>(`/api/writing/context-docs/${docId}`),
+    updateContextDoc: (docId: string, data: { title?: string; content?: string; docType?: string }) =>
+      patch<{ success: boolean }>(`/api/writing/context-docs/${docId}`, data),
+    deleteContextDoc: (docId: string) => del<{ success: boolean }>(`/api/writing/context-docs/${docId}`),
+
+    listProjectConversations: (projectId: string) =>
+      get<Conversation[]>(`/api/writing/projects/${projectId}/conversations`),
+    createProjectConversation: (projectId: string, data?: { title?: string }) =>
+      post<{ id: string }>(`/api/writing/projects/${projectId}/conversations`, data ?? {}),
   },
 };

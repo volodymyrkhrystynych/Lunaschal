@@ -81,3 +81,34 @@ CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(date);
 CREATE INDEX IF NOT EXISTS idx_flashcard_next_review ON flashcards(next_review);
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_embedding_source ON embedding_metadata(source_type, source_id);
+
+CREATE TABLE IF NOT EXISTS writing_projects (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS writing_chapters (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES writing_projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS writing_context_docs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES writing_projects(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    doc_type TEXT NOT NULL DEFAULT 'note',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_writing_chapters_project ON writing_chapters(project_id, position);
+CREATE INDEX IF NOT EXISTS idx_writing_context_docs_project ON writing_context_docs(project_id);

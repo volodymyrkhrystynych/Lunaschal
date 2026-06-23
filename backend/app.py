@@ -14,9 +14,9 @@ def create_app():
     init_db()
 
     from backend.auth import NETWORK_MODE, COOKIE_NAME, is_localhost, decode_token
-    from backend.routes import journal, calendar, flashcard, settings, rag, chat, files
+    from backend.routes import journal, calendar, flashcard, settings, rag, chat, files, writing
     from backend.routes import auth as auth_routes
-    for bp in (auth_routes.bp, journal.bp, calendar.bp, flashcard.bp, settings.bp, rag.bp, chat.bp, files.bp):
+    for bp in (auth_routes.bp, journal.bp, calendar.bp, flashcard.bp, settings.bp, rag.bp, chat.bp, files.bp, writing.bp):
         app.register_blueprint(bp)
 
     @app.before_request

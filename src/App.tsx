@@ -9,9 +9,10 @@ import { Settings } from './components/Settings';
 import { Editor } from './components/Editor';
 import { SttPanel } from './components/Editor/SttPanel';
 import { Login } from './components/Login';
+import { Writing } from './components/Writing';
 import { api } from './hooks/api';
 
-type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files';
+type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
@@ -60,6 +61,8 @@ export default function App() {
         return <Settings />;
       case 'files':
         return <Editor pendingInsert={pendingInsert} onInsertDone={() => setPendingInsert(null)} />;
+      case 'writing':
+        return <Writing />;
       default:
         return null;
     }
