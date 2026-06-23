@@ -1,7 +1,8 @@
 # Lunaschal Desktop App Design
 
 **Date:** 2026-06-22  
-**Status:** Planning
+**Completed:** 2026-06-23  
+**Status:** Done
 
 ---
 
@@ -180,28 +181,28 @@ The STT service and model weights are not bundled (too large, GPU-dependent). `m
 
 ## Phased Delivery
 
-### Phase 1 — Flask shell + PyWebView window (1 day)
+### Phase 1 ✅ — Flask shell + PyWebView window (1 day)
 - Create `backend/app.py` with a single `/api/health` route
 - `main.py`: start Flask in a thread, poll health, open PyWebView window
 - Serve the existing `dist/` from Flask
 - Confirm the window opens and loads the React app
 - Set up `pyproject.toml` / `requirements.txt` for the Python side
 
-### Phase 2 — Port all backend routes (2–3 days)
+### Phase 2 ✅ — Port all backend routes (2–3 days)
 - `db/connection.py` + `schema.sql` (SQLite setup, migrations)
 - All blueprints: journal, calendar, flashcard, settings, rag, chat (SSE)
 - Auth (PyJWT + bcrypt)
 - Replace tRPC hooks in all frontend components with React Query + fetch
 - Delete `server/` (Node.js)
 
-### Phase 3 — File editor + STT panel (1–2 days)
+### Phase 3 ✅ — File editor + STT panel (1–2 days)
 - `routes/files.py` (list/read/write/rename/soft-delete, path traversal guard)
 - `src/components/Editor/` (FileTree, EditorPane with CodeMirror 6, SttPanel)
 - Add Files view to sidebar
 - SttPanel lifted to `App.tsx` level so it's always visible
 - Auto-save with debounce
 
-### Phase 4 — Network / server mode (half day)
+### Phase 4 ✅ — Network / server mode (half day)
 - Bind Flask to `0.0.0.0` via settings toggle
 - `STT_AUTH_TOKEN` shared secret forwarded through the transcribe proxy
 - Laptop opens browser, gets full UI
