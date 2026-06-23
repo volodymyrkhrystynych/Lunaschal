@@ -66,9 +66,6 @@ export function Settings() {
   const [googleKey, setGoogleKey] = useState('');
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
   const [ollamaModel, setOllamaModel] = useState('llama3.2');
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const queryClient = useQueryClient();
 
@@ -79,16 +76,6 @@ export function Settings() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
       setMessage({ type: 'success', text: 'Settings saved successfully' });
-      setTimeout(() => setMessage(null), 3000);
-    },
-    onError: (error: Error) => setMessage({ type: 'error', text: error.message }),
-  });
-
-  const changePassword = useMutation({
-    mutationFn: api.settings.changePassword,
-    onSuccess: () => {
-      setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
-      setMessage({ type: 'success', text: 'Password changed successfully' });
       setTimeout(() => setMessage(null), 3000);
     },
     onError: (error: Error) => setMessage({ type: 'error', text: error.message }),
@@ -186,35 +173,6 @@ export function Settings() {
       </section>
 
       <KnowledgeBaseSection />
-
-      <section className="mb-8">
-        <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">Change Password</h2>
-        <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 max-w-md">
-          <div className="space-y-3">
-            {[
-              { label: 'Current Password', value: currentPassword, onChange: setCurrentPassword },
-              { label: 'New Password', value: newPassword, onChange: setNewPassword },
-              { label: 'Confirm New Password', value: confirmPassword, onChange: setConfirmPassword },
-            ].map(({ label, value, onChange }) => (
-              <div key={label}>
-                <label className="text-sm text-[var(--color-text-muted)]">{label}</label>
-                <input type="password" value={value} onChange={(e) => onChange(e.target.value)}
-                  className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]" />
-              </div>
-            ))}
-            <button
-              onClick={() => {
-                if (newPassword !== confirmPassword) { setMessage({ type: 'error', text: 'Passwords do not match' }); return; }
-                if (newPassword.length < 8) { setMessage({ type: 'error', text: 'Password must be at least 8 characters' }); return; }
-                changePassword.mutate({ currentPassword, newPassword });
-              }}
-              disabled={!currentPassword || !newPassword || !confirmPassword || changePassword.isPending}
-              className="px-4 py-2 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
-              Change Password
-            </button>
-          </div>
-        </div>
-      </section>
 
       <section>
         <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">About</h2>

@@ -117,15 +117,9 @@ const del = <T>(url: string) => send<T>('DELETE', url);
 
 export const api = {
   settings: {
-    isSetupComplete: () => get<{ complete: boolean }>('/api/settings/is-setup-complete'),
-    setup: (data: { password: string }) => post<{ success: boolean }>('/api/settings/setup', data),
-    login: (data: { password: string }) => post<{ success: boolean }>('/api/settings/login', data),
-    logout: () => post<{ success: boolean }>('/api/settings/logout'),
     get: () => get<AppSettings | null>('/api/settings'),
     updateAI: (data: Partial<AppSettings & { openaiApiKey?: string; googleApiKey?: string }>) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
-    changePassword: (data: { currentPassword: string; newPassword: string }) =>
-      post<{ success: boolean }>('/api/settings/change-password', data),
   },
 
   journal: {

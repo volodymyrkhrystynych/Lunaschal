@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:flask\" \"npm run dev:client\"",
     "dev:client": "vite",
-    "dev:flask": "flask --app backend.app run --port 5000 --debug",
+    "dev:flask": ".venv/bin/flask --app backend.app run --port 5000 --debug",
     "dev:desktop": "python main.py --dev",
     "build": "vite build",
     "stt": "concurrently \"./stt/run_service.sh\" \"./stt/run_listener.sh\""

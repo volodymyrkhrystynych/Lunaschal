@@ -1,13 +1,10 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { api } from './hooks/api';
 import { Sidebar } from './components/Sidebar';
 import { Chat } from './components/Chat';
 import { Journal } from './components/Journal';
 import { Calendar } from './components/Calendar';
 import { Flashcards } from './components/Flashcards';
 import { Settings } from './components/Settings';
-import { Setup } from './components/Setup';
 
 type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings';
 
@@ -16,32 +13,10 @@ export default function App() {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
-  const { data, isLoading } = useQuery({
-    queryKey: ['settings', 'isSetupComplete'],
-    queryFn: api.settings.isSetupComplete,
-  });
-
-  if (isLoading) {
-    return (
-      <div className="h-screen flex items-center justify-center bg-[var(--color-bg)]">
-        <div className="text-[var(--color-text-muted)]">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!data?.complete) {
-    return <Setup />;
-  }
-
   const renderView = () => {
     switch (currentView) {
       case 'chat':
-        return (
-          <Chat
-            conversationId={currentConversationId}
-            onConversationChange={setCurrentConversationId}
-          />
-        );
+        return <Chat conversationId={currentConversationId} onConversationChange={setCurrentConversationId} />;
       case 'journal':
         return <Journal />;
       case 'calendar':
