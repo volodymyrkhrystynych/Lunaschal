@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS settings (
     google_api_key TEXT,
     ollama_url TEXT DEFAULT 'http://localhost:11434',
     ollama_model TEXT,
+    network_code TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

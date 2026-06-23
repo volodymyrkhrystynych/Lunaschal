@@ -1,5 +1,7 @@
+import random
 import time
 from flask import Blueprint, jsonify, request
+from backend.auth import NETWORK_MODE
 from backend.db.connection import get_db
 
 bp = Blueprint('settings', __name__, url_prefix='/api/settings')
@@ -22,6 +24,8 @@ def get_settings():
         'hasGoogleKey': bool(s.get('google_api_key')),
         'ollamaUrl': s.get('ollama_url'),
         'ollamaModel': s.get('ollama_model'),
+        'networkMode': NETWORK_MODE,
+        'networkCode': s.get('network_code') if NETWORK_MODE else None,
     })
 
 
@@ -51,3 +55,12 @@ def update_ai():
         db.execute(f'INSERT INTO settings({cols}) VALUES ({ph})', list(updates.values()))
     db.commit()
     return jsonify({'success': True})
+
+
+@bp.post('/regenerate-code')
+def regenerate_code():
+    code = str(random.randint(100000, 999999))
+    db = get_db()
+    db.execute('UPDATE settings SET network_code=?, updated_at=? WHERE id=1', (code, int(time.time())))
+    db.commit()
+    return jsonify({'networkCode': code})

@@ -68,6 +68,13 @@ export interface AppSettings {
   hasGoogleKey: boolean;
   ollamaUrl: string | null;
   ollamaModel: string | null;
+  networkMode: boolean;
+  networkCode: string | null;
+}
+
+export interface AuthStatus {
+  authenticated: boolean;
+  networkMode: boolean;
 }
 
 export interface FileEntry {
@@ -124,10 +131,18 @@ const del = <T>(url: string) => send<T>('DELETE', url);
 // --- API namespaces ---
 
 export const api = {
+  auth: {
+    status: () => get<AuthStatus>('/api/auth/status'),
+    login: (password: string, code: string) =>
+      post<{ success: boolean }>('/api/auth/login', { password, code }),
+    logout: () => post<{ success: boolean }>('/api/auth/logout'),
+  },
+
   settings: {
     get: () => get<AppSettings | null>('/api/settings'),
     updateAI: (data: Partial<AppSettings & { openaiApiKey?: string; googleApiKey?: string }>) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
+    regenerateCode: () => post<{ networkCode: string }>('/api/settings/regenerate-code'),
   },
 
   journal: {

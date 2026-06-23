@@ -14,8 +14,10 @@ PROD_URL = f'http://127.0.0.1:{FLASK_PORT}'
 
 
 def _run_flask():
+    import os
+    host = '0.0.0.0' if os.environ.get('NETWORK_MODE', '').lower() in ('1', 'true', 'yes') else '127.0.0.1'
     app = create_app()
-    app.run(port=FLASK_PORT, use_reloader=False)
+    app.run(host=host, port=FLASK_PORT, use_reloader=False)
 
 
 def _wait_for_flask(timeout: float = 10.0) -> bool:

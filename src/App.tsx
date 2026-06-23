@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Sidebar } from './components/Sidebar';
 import { Chat } from './components/Chat';
 import { Journal } from './components/Journal';
@@ -7,6 +8,8 @@ import { Flashcards } from './components/Flashcards';
 import { Settings } from './components/Settings';
 import { Editor } from './components/Editor';
 import { SttPanel } from './components/Editor/SttPanel';
+import { Login } from './components/Login';
+import { api } from './hooks/api';
 
 type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files';
 
@@ -15,6 +18,13 @@ export default function App() {
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pendingInsert, setPendingInsert] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const { data: authStatus, isLoading: authLoading } = useQuery({
+    queryKey: ['auth', 'status'],
+    queryFn: api.auth.status,
+    retry: false,
+  });
 
   const handleTranscribed = (text: string) => {
     if (currentView === 'files') {
@@ -23,6 +33,18 @@ export default function App() {
       navigator.clipboard.writeText(text).catch(() => {});
     }
   };
+
+  if (authLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center bg-[var(--color-bg)]">
+        <div className="text-[var(--color-text-muted)]">Loading…</div>
+      </div>
+    );
+  }
+
+  if (!authStatus?.authenticated) {
+    return <Login onSuccess={() => queryClient.invalidateQueries({ queryKey: ['auth', 'status'] })} />;
+  }
 
   const renderView = () => {
     switch (currentView) {

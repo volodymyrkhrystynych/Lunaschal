@@ -1,5 +1,7 @@
 import os
+import random
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -53,6 +55,26 @@ def init_db() -> None:
         db.commit()
     _init_fts(db)
     _init_vectors(db)
+    _ensure_network_code(db)
+
+
+def _ensure_network_code(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'network_code' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN network_code TEXT')
+        db.commit()
+    row = db.execute('SELECT id, network_code FROM settings LIMIT 1').fetchone()
+    now = int(time.time())
+    code = str(random.randint(100000, 999999))
+    if row is None:
+        db.execute(
+            'INSERT INTO settings(id, network_code, created_at, updated_at) VALUES(1, ?, ?, ?)',
+            (code, now, now),
+        )
+        db.commit()
+    elif not row['network_code']:
+        db.execute('UPDATE settings SET network_code=? WHERE id=1', (code,))
+        db.commit()
 
 
 def _init_fts(db: sqlite3.Connection) -> None:
