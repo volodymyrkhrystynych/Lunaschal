@@ -45,8 +45,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-STT_URL       = os.environ.get("STT_URL",       "http://127.0.0.1:8765")
-LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:7842")
+STT_URL       = os.environ.get("STT_URL",       "http://127.0.0.1:5000")
+LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:5000")
 
 PASTE_KEY     = os.environ.get("STT_PASTE_KEY", "KEY_F1")   # evdev keycode for record→paste
 VOICE_KEY     = os.environ.get("STT_VOICE_KEY", "KEY_RIGHTALT")  # evdev keycode for record→AI chat
@@ -291,7 +291,7 @@ def _speak(text: str) -> None:
     """Send text to the TTS endpoint and play the returned audio."""
     try:
         resp = requests.post(
-            f"{STT_URL}/tts",
+            f"{STT_URL}/api/tts",
             data={"text": text},
             timeout=30,
         )
@@ -339,7 +339,7 @@ def _transcribe(audio: np.ndarray) -> str | None:
 
     try:
         resp = requests.post(
-            f"{STT_URL}/transcribe",
+            f"{STT_URL}/api/transcribe",
             files={"audio": ("recording.wav", buf, "audio/wav")},
             timeout=120,
         )
@@ -550,7 +550,7 @@ def main() -> None:
     print()
 
     try:
-        r = requests.get(f"{STT_URL}/health", timeout=2)
+        r = requests.get(f"{STT_URL}/api/stt/health", timeout=2)
         data = r.json()
         stt_ok = data.get("stt_ready", data.get("ready", False))
         tts_ok = data.get("tts_ready", False)

@@ -14,10 +14,12 @@ def create_app():
     init_db()
 
     from backend.auth import NETWORK_MODE, COOKIE_NAME, is_localhost, decode_token
-    from backend.routes import journal, calendar, flashcard, settings, rag, chat, files, writing
+    from backend.routes import journal, calendar, flashcard, settings, rag, chat, files, writing, stt
     from backend.routes import auth as auth_routes
-    for bp in (auth_routes.bp, journal.bp, calendar.bp, flashcard.bp, settings.bp, rag.bp, chat.bp, files.bp, writing.bp):
+    for bp in (auth_routes.bp, journal.bp, calendar.bp, flashcard.bp, settings.bp, rag.bp, chat.bp, files.bp, writing.bp, stt.bp):
         app.register_blueprint(bp)
+
+    stt.start_init_thread()
 
     @app.before_request
     def check_auth():
@@ -32,35 +34,6 @@ def create_app():
     @app.get('/api/health')
     def health():
         return jsonify({'status': 'ok', 'timestamp': datetime.now(timezone.utc).isoformat()})
-
-    @app.post('/api/transcribe')
-    def transcribe():
-        import requests as req
-        stt_url = os.environ.get('STT_SERVICE_URL', 'http://127.0.0.1:8765')
-        stt_token = os.environ.get('STT_AUTH_TOKEN')
-        headers = {'Authorization': f'Bearer {stt_token}'} if stt_token else {}
-        try:
-            files = {k: (f.filename, f.stream, f.mimetype) for k, f in request.files.items()}
-            resp = req.post(f'{stt_url}/transcribe', files=files, headers=headers, timeout=30)
-            return jsonify(resp.json()), resp.status_code
-        except req.exceptions.ConnectionError:
-            return jsonify({'error': 'STT service not running. Start it with: ./stt/run_service.sh'}), 503
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
-
-    @app.post('/api/tts')
-    def tts():
-        import requests as req
-        stt_url = os.environ.get('STT_SERVICE_URL', 'http://127.0.0.1:8765')
-        stt_token = os.environ.get('STT_AUTH_TOKEN')
-        headers = {'Authorization': f'Bearer {stt_token}'} if stt_token else {}
-        try:
-            resp = req.post(f'{stt_url}/tts', data=request.form, headers=headers, timeout=30)
-            return resp.content, resp.status_code, {'Content-Type': resp.headers.get('Content-Type', 'audio/wav')}
-        except req.exceptions.ConnectionError:
-            return jsonify({'error': 'STT service not running'}), 503
-        except Exception as e:
-            return jsonify({'error': str(e)}), 500
 
     @app.route('/', defaults={'path': ''})
     @app.route('/<path:path>')
