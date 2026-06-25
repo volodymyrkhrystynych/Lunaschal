@@ -3,6 +3,11 @@ set -e
 
 cd "$(dirname "$0")"
 
+# Kill any leftover processes from a previous session
+for port in 5000 5173; do
+  pids=$(lsof -ti tcp:$port 2>/dev/null) && kill $pids 2>/dev/null && echo "Killed stale process on :$port" || true
+done
+
 # Start ollama if not already running
 if ! pgrep -x ollama > /dev/null; then
   echo "Starting ollama..."
