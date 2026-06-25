@@ -70,6 +70,8 @@ export interface AppSettings {
   ollamaModel: string | null;
   networkMode: boolean;
   networkCode: string | null;
+  sttPasteKey: string | null;
+  sttVoiceKey: string | null;
 }
 
 export interface AuthStatus {
@@ -176,6 +178,8 @@ export const api = {
     get: () => get<AppSettings | null>('/api/settings'),
     updateAI: (data: Partial<AppSettings & { openaiApiKey?: string; googleApiKey?: string }>) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
+    updateShortcuts: (data: { sttPasteKey?: string; sttVoiceKey?: string }) =>
+      patch<{ success: boolean }>('/api/settings/ai', data),
     regenerateCode: () => post<{ networkCode: string }>('/api/settings/regenerate-code'),
   },
 
@@ -272,6 +276,10 @@ export const api = {
       post<{ success: boolean }>('/api/files/rename', { from, to }),
     delete: (path: string) =>
       del<{ success: boolean }>(`/api/files?path=${encodeURIComponent(path)}`),
+  },
+
+  stt: {
+    health: () => get<{ stt_backend: string; stt_model: string; stt_ready: boolean; tts_backend: string; tts_ready: boolean }>('/api/stt/health'),
   },
 
   rag: {

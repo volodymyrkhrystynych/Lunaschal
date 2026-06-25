@@ -1,6 +1,188 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+
+// Maps browser KeyboardEvent.code → evdev keycode name
+const CODE_TO_EVDEV: Record<string, string> = {
+  F1: 'KEY_F1', F2: 'KEY_F2', F3: 'KEY_F3', F4: 'KEY_F4',
+  F5: 'KEY_F5', F6: 'KEY_F6', F7: 'KEY_F7', F8: 'KEY_F8',
+  F9: 'KEY_F9', F10: 'KEY_F10', F11: 'KEY_F11', F12: 'KEY_F12',
+  AltLeft: 'KEY_LEFTALT', AltRight: 'KEY_RIGHTALT',
+  ControlLeft: 'KEY_LEFTCTRL', ControlRight: 'KEY_RIGHTCTRL',
+  ShiftLeft: 'KEY_LEFTSHIFT', ShiftRight: 'KEY_RIGHTSHIFT',
+  CapsLock: 'KEY_CAPSLOCK', Insert: 'KEY_INSERT',
+  Delete: 'KEY_DELETE', Home: 'KEY_HOME', End: 'KEY_END',
+  PageUp: 'KEY_PAGEUP', PageDown: 'KEY_PAGEDOWN',
+  ScrollLock: 'KEY_SCROLLLOCK', Pause: 'KEY_PAUSE',
+  PrintScreen: 'KEY_SYSRQ', NumLock: 'KEY_NUMLOCK',
+  Backquote: 'KEY_GRAVE', Backslash: 'KEY_BACKSLASH',
+};
+
+const EVDEV_DISPLAY: Record<string, string> = {
+  KEY_F1: 'F1', KEY_F2: 'F2', KEY_F3: 'F3', KEY_F4: 'F4',
+  KEY_F5: 'F5', KEY_F6: 'F6', KEY_F7: 'F7', KEY_F8: 'F8',
+  KEY_F9: 'F9', KEY_F10: 'F10', KEY_F11: 'F11', KEY_F12: 'F12',
+  KEY_LEFTALT: 'Left Alt', KEY_RIGHTALT: 'Right Alt',
+  KEY_LEFTCTRL: 'Left Ctrl', KEY_RIGHTCTRL: 'Right Ctrl',
+  KEY_LEFTSHIFT: 'Left Shift', KEY_RIGHTSHIFT: 'Right Shift',
+  KEY_CAPSLOCK: 'Caps Lock', KEY_INSERT: 'Insert',
+  KEY_DELETE: 'Delete', KEY_HOME: 'Home', KEY_END: 'End',
+  KEY_PAGEUP: 'Page Up', KEY_PAGEDOWN: 'Page Down',
+  KEY_SCROLLLOCK: 'Scroll Lock', KEY_PAUSE: 'Pause',
+  KEY_SYSRQ: 'Print Screen', KEY_NUMLOCK: 'Num Lock',
+  KEY_GRAVE: 'Backtick', KEY_BACKSLASH: 'Backslash',
+};
+
+function displayKey(evdevKey: string | null | undefined, fallback: string): string {
+  if (!evdevKey) return fallback;
+  return EVDEV_DISPLAY[evdevKey] ?? evdevKey;
+}
+
+function KeyRecorder({ value, onChange }: { value: string | null; onChange: (key: string) => void }) {
+  const [listening, setListening] = useState(false);
+  const ref = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!listening) return;
+    const handle = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const evdev = CODE_TO_EVDEV[e.code];
+      if (evdev) {
+        onChange(evdev);
+        setListening(false);
+      }
+    };
+    window.addEventListener('keydown', handle, true);
+    return () => window.removeEventListener('keydown', handle, true);
+  }, [listening, onChange]);
+
+  useEffect(() => {
+    if (listening) ref.current?.focus();
+  }, [listening]);
+
+  return (
+    <button
+      ref={ref}
+      onClick={() => setListening(true)}
+      onBlur={() => setListening(false)}
+      className={`px-3 py-1.5 rounded text-sm border transition-colors ${
+        listening
+          ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-[var(--color-primary)] animate-pulse'
+          : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)]'
+      }`}
+    >
+      {listening ? 'Press a key…' : (value ? EVDEV_DISPLAY[value] ?? value : 'Not set')}
+    </button>
+  );
+}
+
+function STTStatusSection() {
+  const { data, isLoading } = useQuery({ queryKey: ['stt', 'health'], queryFn: api.stt.health, refetchInterval: 5000 });
+
+  const Row = ({ label, ready, detail }: { label: string; ready: boolean; detail: string }) => (
+    <div className="flex items-center gap-3">
+      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${ready ? 'bg-green-400' : 'bg-red-400'}`} />
+      <div>
+        <span className="text-sm text-[var(--color-text)]">{label}</span>
+        <span className="text-xs text-[var(--color-text-muted)] ml-2">{detail}</span>
+      </div>
+      <span className={`ml-auto text-xs font-medium ${ready ? 'text-green-400' : 'text-red-400'}`}>
+        {ready ? 'ready' : 'unavailable'}
+      </span>
+    </div>
+  );
+
+  return (
+    <section className="mb-8">
+      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">Voice Status</h2>
+      <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 space-y-3">
+        {isLoading ? (
+          <p className="text-sm text-[var(--color-text-muted)]">Checking…</p>
+        ) : data ? (
+          <>
+            <Row label="Speech-to-text" ready={data.stt_ready} detail={`${data.stt_backend} · ${data.stt_model}`} />
+            <Row label="Text-to-speech" ready={data.tts_ready} detail={data.tts_backend} />
+            {(!data.stt_ready || !data.tts_ready) && (
+              <div className="mt-3 pt-3 border-t border-white/10 text-xs text-[var(--color-text-muted)] space-y-1">
+                <p>To enable local models: <code>pip install faster-whisper kokoro-onnx</code> (requires GPU)</p>
+                <p>To use OpenAI: set <code>STT_BACKEND=openai TTS_BACKEND=openai OPENAI_API_KEY=sk-…</code> and restart</p>
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-red-400">Could not reach STT service</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ShortcutsSection() {
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings.get });
+  const [pasteKey, setPasteKey] = useState<string | null>(null);
+  const [voiceKey, setVoiceKey] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setPasteKey(settings.sttPasteKey ?? null);
+      setVoiceKey(settings.sttVoiceKey ?? null);
+    }
+  }, [settings]);
+
+  const save = useMutation({
+    mutationFn: () => api.settings.updateShortcuts({
+      sttPasteKey: pasteKey ?? undefined,
+      sttVoiceKey: voiceKey ?? undefined,
+    }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    },
+  });
+
+  return (
+    <section className="mb-8">
+      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">Voice Shortcuts</h2>
+      <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 space-y-4">
+        <p className="text-sm text-[var(--color-text-muted)]">
+          Click a shortcut button then press the key you want. Restart the STT listener for changes to take effect.
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <p className="text-sm text-[var(--color-text)] mb-1.5">Paste shortcut</p>
+            <p className="text-xs text-[var(--color-text-muted)] mb-2">Record → transcribe → paste at cursor</p>
+            <KeyRecorder value={pasteKey} onChange={setPasteKey} />
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              Default: <code>F1</code> · env: <code>STT_PASTE_KEY</code>
+            </p>
+          </div>
+          <div>
+            <p className="text-sm text-[var(--color-text)] mb-1.5">Voice shortcut</p>
+            <p className="text-xs text-[var(--color-text-muted)] mb-2">Record → transcribe → AI chat → TTS reply</p>
+            <KeyRecorder value={voiceKey} onChange={setVoiceKey} />
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              Default: <code>Right Alt</code> · env: <code>STT_VOICE_KEY</code>
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 pt-1">
+          <button
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+            className="px-4 py-2 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50 text-sm"
+          >
+            {save.isPending ? 'Saving…' : 'Save shortcuts'}
+          </button>
+          {saved && <span className="text-sm text-green-400">Saved</span>}
+        </div>
+      </div>
+    </section>
+  );
+}
 
 type Provider = 'openai' | 'gemini' | 'ollama';
 
@@ -228,6 +410,10 @@ export function Settings() {
           </div>
         </div>
       </section>
+
+      <STTStatusSection />
+
+      <ShortcutsSection />
 
       <KnowledgeBaseSection />
 

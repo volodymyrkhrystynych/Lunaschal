@@ -48,8 +48,24 @@ logger = logging.getLogger(__name__)
 STT_URL       = os.environ.get("STT_URL",       "http://127.0.0.1:5000")
 LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:5000")
 
-PASTE_KEY     = os.environ.get("STT_PASTE_KEY", "KEY_F1")   # evdev keycode for record→paste
-VOICE_KEY     = os.environ.get("STT_VOICE_KEY", "KEY_RIGHTALT")  # evdev keycode for record→AI chat
+
+def _fetch_shortcut_settings() -> tuple[str | None, str | None]:
+    """Fetch sttPasteKey / sttVoiceKey from the Flask settings API on startup."""
+    try:
+        import urllib.request as _req
+        import json as _json
+        with _req.urlopen(LUNASCHAL_URL + '/api/settings', timeout=3) as r:
+            data = _json.loads(r.read())
+            if data:
+                return data.get('sttPasteKey'), data.get('sttVoiceKey')
+    except Exception:
+        pass
+    return None, None
+
+
+_api_paste, _api_voice = _fetch_shortcut_settings()
+PASTE_KEY = _api_paste or os.environ.get("STT_PASTE_KEY", "KEY_F1")
+VOICE_KEY = _api_voice or os.environ.get("STT_VOICE_KEY", "KEY_RIGHTALT")
 
 SAMPLE_RATE     = 16000
 CHANNELS        = 1

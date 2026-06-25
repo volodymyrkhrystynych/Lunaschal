@@ -26,6 +26,8 @@ def get_settings():
         'ollamaModel': s.get('ollama_model'),
         'networkMode': NETWORK_MODE,
         'networkCode': s.get('network_code') if NETWORK_MODE else None,
+        'sttPasteKey': s.get('stt_paste_key'),
+        'sttVoiceKey': s.get('stt_voice_key'),
     })
 
 
@@ -36,6 +38,7 @@ def update_ai():
         'aiProvider': 'ai_provider', 'aiModel': 'ai_model',
         'openaiApiKey': 'openai_api_key', 'googleApiKey': 'google_api_key',
         'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model',
+        'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():

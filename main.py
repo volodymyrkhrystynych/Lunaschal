@@ -48,6 +48,12 @@ def main():
 
     if server_url:
         url = server_url
+    elif dev:
+        # Flask is already running via `npm run dev:flask`; just point at the Vite dev server
+        if not _wait_for_flask():
+            print('error: Flask did not start in time', file=sys.stderr)
+            sys.exit(1)
+        url = DEV_URL
     else:
         thread = threading.Thread(target=_run_flask, daemon=True)
         thread.start()
@@ -56,7 +62,7 @@ def main():
             print('error: Flask did not start in time', file=sys.stderr)
             sys.exit(1)
 
-        url = DEV_URL if dev else PROD_URL
+        url = PROD_URL
 
     webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600))
     webview.start()

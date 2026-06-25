@@ -57,6 +57,7 @@ def init_db() -> None:
     _init_vectors(db)
     _ensure_network_code(db)
     _ensure_writing_project_id(db)
+    _ensure_stt_shortcuts(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -75,6 +76,16 @@ def _ensure_network_code(db: sqlite3.Connection) -> None:
         db.commit()
     elif not row['network_code']:
         db.execute('UPDATE settings SET network_code=? WHERE id=1', (code,))
+        db.commit()
+
+
+def _ensure_stt_shortcuts(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'stt_paste_key' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN stt_paste_key TEXT')
+        db.commit()
+    if 'stt_voice_key' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN stt_voice_key TEXT')
         db.commit()
 
 
