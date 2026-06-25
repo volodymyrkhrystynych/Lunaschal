@@ -9,9 +9,18 @@ if ! pgrep -x ollama > /dev/null; then
   ollama serve &>/tmp/ollama.log &
 fi
 
-# Start Flask + Vite dev servers (Flask also handles STT/TTS)
+# Start Flask + Vite dev servers
 npm run dev &
 DEV_PID=$!
+
+# Start STT/TTS service in its own venv (heavy ML deps isolated from Flask)
+if [ -f stt/.venv/bin/python ]; then
+  ./stt/run_service.sh &>/tmp/lunaschal-stt.log &
+  STT_PID=$!
+else
+  echo "STT service not set up — run: bash stt/setup.sh"
+  STT_PID=""
+fi
 
 # Wait for Flask to be ready
 echo "Waiting for Flask..."
@@ -25,4 +34,4 @@ LISTENER_PID=$!
 .venv/bin/python main.py --dev
 
 # Kill everything when the window closes
-kill $DEV_PID $LISTENER_PID 2>/dev/null
+kill $DEV_PID $LISTENER_PID ${STT_PID:-} 2>/dev/null
