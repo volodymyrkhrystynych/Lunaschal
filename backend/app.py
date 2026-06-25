@@ -19,8 +19,6 @@ def create_app():
     for bp in (auth_routes.bp, journal.bp, calendar.bp, flashcard.bp, settings.bp, rag.bp, chat.bp, files.bp, writing.bp, stt.bp):
         app.register_blueprint(bp)
 
-    stt.start_init_thread()
-
     @app.before_request
     def check_auth():
         if not NETWORK_MODE or is_localhost(request):
