@@ -11,12 +11,12 @@ on Wayland regardless of which window has focus.
 Requirements:
   - User must be in the 'input' group:
       sudo usermod -a -G input $USER   (then log out/in or: newgrp input)
-  - STT service running: ./stt/run_service.sh
+  - Lunaschal Flask app running: npm run dev
   - wtype installed: sudo pacman -S wtype
 
 Environment variables:
-  STT_URL        STT/TTS service  (default: http://127.0.0.1:8765)
-  LUNASCHAL_URL  Lunaschal server (default: http://127.0.0.1:3000)
+  STT_URL        Lunaschal server (default: http://127.0.0.1:5000)
+  LUNASCHAL_URL  Lunaschal server (default: http://127.0.0.1:5000)
 """
 
 import io
@@ -574,7 +574,7 @@ def main() -> None:
         print(f"  TTS: {'✓ ready' if tts_ok else '⚠ loading or unavailable'}")
     except Exception:
         print(f"  ⚠ STT/TTS service not reachable at {STT_URL}")
-        print("    Start it: ./stt/run_service.sh")
+        print("    Start it: npm run dev")
 
     print("\nWaiting for shortcut…\n")
 

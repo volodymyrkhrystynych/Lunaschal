@@ -1,6 +1,26 @@
+import atexit
+import logging
 import os
+import subprocess
 from datetime import datetime, timezone
+
 from flask import Flask, jsonify, request, send_from_directory
+
+_listener_log = logging.getLogger('stt.listener')
+
+
+def _start_listener():
+    if not os.environ.get('STT_LISTENER'):
+        return
+    stt_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'stt'))
+    python  = os.path.join(stt_dir, '.venv', 'bin', 'python')
+    script  = os.path.join(stt_dir, 'listener.py')
+    if not os.path.exists(python) or not os.path.exists(script):
+        _listener_log.warning("STT_LISTENER=1 but stt/.venv not found — run: bash stt/setup.sh")
+        return
+    proc = subprocess.Popen([python, script])
+    _listener_log.info("Voice listener started (pid=%d)", proc.pid)
+    atexit.register(proc.terminate)
 
 DIST_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'dist'))
 
@@ -41,4 +61,5 @@ def create_app():
             return send_from_directory(DIST_DIR, path)
         return send_from_directory(DIST_DIR, 'index.html')
 
+    _start_listener()
     return app

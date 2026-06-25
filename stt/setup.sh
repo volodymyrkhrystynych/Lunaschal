@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Creates the Python venv and installs STT dependencies.
+# Sets up two virtual environments:
+#
+#   stt/.venv  — listener only (evdev, sounddevice, audio capture)
+#   ../.venv   — main Flask app; also receives local AI deps in local mode
+#                (openai-whisper via requirements.txt, kokoro-onnx added here)
 #
 # Usage:
-#   bash stt/setup.sh           # full local setup (faster-whisper, kokoro-onnx, openwakeword)
+#   bash stt/setup.sh           # full local setup (openai-whisper, kokoro-onnx, openwakeword)
 #   bash stt/setup.sh --api     # API-only setup (openai client only, no heavy local models)
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$SCRIPT_DIR/.venv"
+ROOT_VENV="$(dirname "$SCRIPT_DIR")/.venv"
 
 MODE="local"
 for arg in "$@"; do
@@ -25,23 +30,20 @@ echo "Installing base Python dependencies..."
 "$VENV/bin/pip" install -r "$SCRIPT_DIR/requirements.txt"
 
 if [ "$MODE" = "local" ]; then
-    echo "Installing local AI dependencies (faster-whisper, kokoro-onnx, openwakeword)..."
+    echo "Installing local AI dependencies into listener venv (standalone service)..."
     "$VENV/bin/pip" install -r "$SCRIPT_DIR/requirements-local.txt"
-    # openwakeword declares tflite-runtime as a dependency but no wheel exists for
-    # Python >=3.14. We only use the onnxruntime backend (inference_framework="onnx"),
-    # so install without deps — onnxruntime is already present via faster-whisper.
+    # openwakeword has no Python 3.14 wheel for tflite-runtime; install without
+    # deps since onnxruntime (from kokoro-onnx) covers the onnx inference backend.
     "$VENV/bin/pip" install --no-deps openwakeword
 
-    # Create CUDA compatibility symlinks.
-    # ctranslate2 wheels are built against CUDA 12 (libcublas.so.12) but Arch
-    # ships CUDA 13 (libcublas.so.13). Symlink inside stt/lib/ so we don't
-    # touch system files. run_service.sh prepends this dir to LD_LIBRARY_PATH.
-    CUDA_LIB="${CUDA_LIB:-/opt/cuda/lib64}"
-    if [ -f "$CUDA_LIB/libcublas.so.13" ]; then
-        echo "Creating CUDA 12→13 compatibility symlinks in stt/lib/ ..."
-        mkdir -p "$SCRIPT_DIR/lib"
-        ln -sf "$CUDA_LIB/libcublas.so.13"   "$SCRIPT_DIR/lib/libcublas.so.12"
-        ln -sf "$CUDA_LIB/libcublasLt.so.13" "$SCRIPT_DIR/lib/libcublasLt.so.12"
+    # Install kokoro-onnx into the main Flask venv so local TTS works in-process.
+    # openai-whisper is already listed in ../requirements.txt.
+    if [ -f "$ROOT_VENV/bin/pip" ]; then
+        echo "Installing kokoro-onnx into main Flask venv ($ROOT_VENV)..."
+        "$ROOT_VENV/bin/pip" install "kokoro-onnx>=0.4.0"
+    else
+        echo "Warning: main .venv not found at $ROOT_VENV"
+        echo "  Run: pip install kokoro-onnx>=0.4.0  (in your Flask venv)"
     fi
 fi
 
@@ -50,11 +52,11 @@ echo "Done. System packages also required:"
 echo "  sudo pacman -S wtype portaudio"
 echo ""
 if [ "$MODE" = "api" ]; then
-    echo "API mode: set these env vars before running the service:"
+    echo "API mode: set these env vars before running:"
     echo "  export OPENAI_API_KEY=sk-..."
     echo "  export STT_BACKEND=openai"
     echo "  export TTS_BACKEND=openai"
     echo ""
 fi
-echo "Start the STT service:    ./stt/run_service.sh"
-echo "Start the voice listener: ./stt/run_listener.sh"
+echo "Start the Flask app (handles STT/TTS): npm run dev"
+echo "Start the voice listener:              ./stt/run_listener.sh"

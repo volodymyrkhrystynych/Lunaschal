@@ -10,8 +10,8 @@ Run as background daemon: ./stt/run_morning_checkin.sh
 Run immediately (test):   ./stt/run_morning_checkin.sh --now
 
 Environment variables:
-  STT_URL               (default: http://127.0.0.1:8765)
-  LUNASCHAL_URL         (default: http://127.0.0.1:3000)
+  STT_URL               (default: http://127.0.0.1:5000)
+  LUNASCHAL_URL         (default: http://127.0.0.1:5000)
   MORNING_START_HOUR    start of check-in window, inclusive (default: 8)
   MORNING_END_HOUR      end of check-in window, exclusive  (default: 11)
 """
@@ -39,8 +39,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-STT_URL       = os.environ.get("STT_URL",             "http://127.0.0.1:8765")
-LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL",        "http://127.0.0.1:7842")
+STT_URL       = os.environ.get("STT_URL",             "http://127.0.0.1:5000")
+LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL",        "http://127.0.0.1:5000")
 MORNING_START = int(os.environ.get("MORNING_START_HOUR", "8"))
 MORNING_END   = int(os.environ.get("MORNING_END_HOUR",   "11"))
 

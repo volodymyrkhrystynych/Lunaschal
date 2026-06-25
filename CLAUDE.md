@@ -4,23 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## STT (Speech-to-Text)
 
-Supports two backends — local (faster-whisper + kokoro-onnx, needs GPU) or OpenAI API (cloud, no local models).
+STT/TTS is embedded directly in the Flask backend (`backend/routes/stt.py`). Two backends — local (openai-whisper + kokoro-onnx) or OpenAI API (cloud, no local models).
 
 ```bash
 # --- Local setup (GPU machine) ---
-bash stt/setup.sh           # installs faster-whisper, kokoro-onnx, openwakeword
+bash stt/setup.sh           # installs openai-whisper, kokoro-onnx, openwakeword
 
 # --- API setup (low-power machine) ---
-bash stt/setup.sh --api     # installs only openai client, skips ~2 GB of local models
+bash stt/setup.sh --api     # installs only openai client, skips local models
 export OPENAI_API_KEY=sk-...
 export STT_BACKEND=openai
 export TTS_BACKEND=openai
 
-# Terminal 1 — transcription + TTS service (port 8765)
-./stt/run_service.sh
+# Terminal 1 — Flask app (handles STT/TTS routes)
+npm run dev
 
-# Terminal 2 — global voice input listener (runs in background)
-./stt/run_listener.sh
+# Terminal 2 — global voice input listener (keyboard shortcuts + audio capture)
+./stt/run_listener.sh       # or: npm run stt
 
 # Terminal 3 (optional) — morning check-in daemon
 ./stt/run_morning_checkin.sh
@@ -33,11 +33,11 @@ Shortcuts:
 - **F1** (`STT_PASTE_KEY`) — record → transcribe → paste text at cursor via `wtype`
 - **Right Alt** (`STT_VOICE_KEY`) — record → transcribe → AI chat (Lunaschal `/api/chat/stream`) → TTS reply spoken aloud
 
-The Flask backend exposes `POST /api/transcribe` (multipart `audio` field) which proxies to the Python STT service. The STT service URL can be overridden with `STT_SERVICE_URL` env var (default: `http://127.0.0.1:8765`).
+The Flask backend handles `POST /api/transcribe` and `POST /api/tts` directly (no separate port 8765 service). The Whisper model loads lazily on the first transcription request. `stt/service.py` still exists as a standalone FastAPI server but is no longer used by default.
 
-**Local TTS**: Kokoro-ONNX (~80 MB model cached to `~/.cache/lunaschal/tts/` on first run). **API TTS**: OpenAI (`tts-1`, voice configurable via `OPENAI_TTS_VOICE`, default `nova`). The service exposes `POST /tts` (form field `text`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:5000`).
+**Local TTS**: Kokoro-ONNX (~80 MB model cached to `~/.cache/lunaschal/tts/` on first run). **API TTS**: OpenAI (`tts-1`, voice configurable via `OPENAI_TTS_VOICE`, default `nova`). Voice assistant conversation history is kept in-memory for the lifetime of the listener process. `LUNASCHAL_URL` env var overrides the chat server URL (default: `http://127.0.0.1:5000`).
 
-Service env vars summary:
+STT/TTS env vars summary:
 
 | Var | Default | Notes |
 |-----|---------|-------|
@@ -45,8 +45,9 @@ Service env vars summary:
 | `TTS_BACKEND` | `local` | `local` or `openai` |
 | `OPENAI_API_KEY` | — | Required for openai backends |
 | `OPENAI_TTS_VOICE` | `nova` | alloy / echo / fable / onyx / nova / shimmer |
-| `WHISPER_MODEL` | `large-v3-turbo` | Local STT only |
+| `WHISPER_MODEL` | `turbo` | Local STT only (tiny/base/small/medium/large/large-v2/large-v3/turbo) |
 | `WHISPER_DEVICE` | `cuda` | Local STT only (`cuda` or `cpu`) |
+| `STT_LISTENER` | — | Set to `1` to auto-start the voice listener as a subprocess of Flask |
 
 ### Morning Check-in (`stt/morning_checkin.py`)
 
@@ -73,7 +74,7 @@ python main.py --dev
 npm run build
 python main.py
 
-# Run STT service + listener together
+# Run the voice input listener (Flask app must already be running)
 npm run stt
 ```
 

@@ -1,8 +1,7 @@
 # Local AI dependencies — only needed when STT_BACKEND=local or TTS_BACKEND=local
 # Install alongside requirements.txt:  pip install -r requirements-local.txt
-faster-whisper>=1.1.0
+openai-whisper>=20240930
 kokoro-onnx>=0.4.0
 # openwakeword is installed via setup.sh with --no-deps to skip tflite-runtime
-# (no Python 3.14 wheel exists); onnxruntime (from faster-whisper) covers the
-# only backend actually used (inference_framework="onnx").
+# (no Python 3.14 wheel exists); onnxruntime covers the only backend used.
 tqdm>=4.0.0

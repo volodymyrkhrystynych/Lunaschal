@@ -7,8 +7,8 @@
 #   ./stt/run_morning_checkin.sh --now   # run check-in immediately (for testing)
 #
 # Options via environment:
-#   STT_URL=http://127.0.0.1:8765       (default)
-#   LUNASCHAL_URL=http://127.0.0.1:7842 (default)
+#   STT_URL=http://127.0.0.1:5000       (default — Flask app)
+#   LUNASCHAL_URL=http://127.0.0.1:5000 (default)
 #   MORNING_START_HOUR=8                (default)
 #   MORNING_END_HOUR=11                 (default)
 
