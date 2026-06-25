@@ -65,7 +65,7 @@ def main():
         url = PROD_URL
 
     webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600))
-    webview.start()
+    webview.start(gui='qt')
 
 
 if __name__ == '__main__':
