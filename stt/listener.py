@@ -97,8 +97,44 @@ def _fetch_shortcut_settings() -> tuple[str | None, str | None]:
 
 
 _api_paste, _api_voice = _fetch_shortcut_settings()
-PASTE_KEY = _api_paste or os.environ.get("STT_PASTE_KEY")   # None if not configured
-VOICE_KEY = _api_voice or os.environ.get("STT_VOICE_KEY")   # None if not configured
+PASTE_KEY = _api_paste or os.environ.get("STT_PASTE_KEY")   # None if not configured; may be a combo "KEY_LEFTCTRL+KEY_F1"
+VOICE_KEY = _api_voice or os.environ.get("STT_VOICE_KEY")   # None if not configured; may be a combo
+
+
+_EVDEV_DISPLAY = {
+    'KEY_F1': 'F1', 'KEY_F2': 'F2', 'KEY_F3': 'F3', 'KEY_F4': 'F4',
+    'KEY_F5': 'F5', 'KEY_F6': 'F6', 'KEY_F7': 'F7', 'KEY_F8': 'F8',
+    'KEY_F9': 'F9', 'KEY_F10': 'F10', 'KEY_F11': 'F11', 'KEY_F12': 'F12',
+    'KEY_LEFTCTRL': 'Left Ctrl', 'KEY_RIGHTCTRL': 'Right Ctrl',
+    'KEY_LEFTALT': 'Left Alt', 'KEY_RIGHTALT': 'Right Alt',
+    'KEY_LEFTSHIFT': 'Left Shift', 'KEY_RIGHTSHIFT': 'Right Shift',
+    'KEY_LEFTMETA': 'Left Meta', 'KEY_RIGHTMETA': 'Right Meta',
+    'KEY_CAPSLOCK': 'Caps Lock', 'KEY_INSERT': 'Insert',
+    'KEY_DELETE': 'Delete', 'KEY_HOME': 'Home', 'KEY_END': 'End',
+    'KEY_PAGEUP': 'Page Up', 'KEY_PAGEDOWN': 'Page Down',
+    'KEY_SCROLLLOCK': 'Scroll Lock', 'KEY_PAUSE': 'Pause',
+    'KEY_SYSRQ': 'Print Screen', 'KEY_NUMLOCK': 'Num Lock',
+}
+
+
+def _display_combo(combo: str | None) -> str:
+    if not combo:
+        return 'not configured'
+    return ' + '.join(_EVDEV_DISPLAY.get(p, p) for p in combo.split('+'))
+
+
+def _parse_combo(combo: str | None) -> frozenset[int]:
+    """Parse 'KEY_LEFTCTRL+KEY_F1' into a frozenset of ecodes integers. Returns empty set if None/invalid."""
+    if not combo:
+        return frozenset()
+    result = set()
+    for part in combo.split('+'):
+        ec = getattr(ecodes, part.strip(), None)
+        if ec is None:
+            logger.warning("Unknown key in combo: %s", part)
+        else:
+            result.add(ec)
+    return frozenset(result)
 
 SAMPLE_RATE     = 16000
 CHANNELS        = 1
@@ -175,8 +211,8 @@ def _start_recording(mode: str) -> None:
     _recording = True
     _notify_state(True, False, mode)
     icon = "🎙️ " if mode == "paste" else "🎤"
-    stop_key = PASTE_KEY if mode == "paste" else VOICE_KEY
-    _status(f"{icon} Recording… ({stop_key} to stop)")
+    stop_combo = _display_combo(PASTE_KEY if mode == "paste" else VOICE_KEY)
+    _status(f"{icon} Recording… ({stop_combo} to stop)")
     logger.info("Recording started (mode=%s)", mode)
 
 
@@ -529,37 +565,60 @@ def _trigger(mode: str) -> None:
 
 def _monitor_device(device: InputDevice) -> None:
     logger.info("Monitoring: %s (%s)", device.name, device.path)
+
+    paste_combo = _parse_combo(PASTE_KEY)
+    voice_combo = _parse_combo(VOICE_KEY)
+
+    held: set[int] = set()          # all keys currently pressed on this device
+    paste_active: set[int] = set()  # combo keys still held after paste trigger
+    voice_active: set[int] = set()  # combo keys still held after voice trigger
+
     try:
         for event in device.read_loop():
             if event.type != ecodes.EV_KEY:
                 continue
             key_event = categorize(event)
-            keycode = key_event.keycode
-            if isinstance(keycode, list):
-                keycode = keycode[0]
+            code: int = event.code
 
-            if PASTE_KEY and keycode == PASTE_KEY:
-                if key_event.keystate == 1:    # down
+            if key_event.keystate == 1:  # key down
+                held.add(code)
+
+                # Fire paste combo when the pressed key completes the set
+                if paste_combo and code in paste_combo and paste_combo <= held:
                     _ctrl_released.clear()
+                    paste_active = set(paste_combo)
                     _trigger("paste")
-                elif key_event.keystate == 0:  # up
-                    _ctrl_released.set()
 
-            elif VOICE_KEY and keycode == VOICE_KEY:
-                if key_event.keystate == 1:    # down
+                # Fire voice combo when the pressed key completes the set
+                if voice_combo and code in voice_combo and voice_combo <= held:
                     _alt_released.clear()
+                    voice_active = set(voice_combo)
                     _trigger("voice")
-                elif key_event.keystate == 0:  # up
-                    _alt_released.set()
+
+            elif key_event.keystate == 0:  # key up
+                held.discard(code)
+
+                if code in paste_active:
+                    paste_active.discard(code)
+                    if not paste_active:
+                        _ctrl_released.set()
+
+                if code in voice_active:
+                    voice_active.discard(code)
+                    if not voice_active:
+                        _alt_released.set()
 
     except OSError:
         logger.warning("Device disconnected: %s", device.path)
 
 
 def _find_keyboards() -> list[InputDevice]:
-    paste_ec = getattr(ecodes, PASTE_KEY, None) if PASTE_KEY else None
-    voice_ec = getattr(ecodes, VOICE_KEY, None) if VOICE_KEY else None
-    if paste_ec is None and voice_ec is None:
+    # Collect all ecodes from all combo keys across both shortcuts
+    needed: set[int] = set()
+    for combo in (PASTE_KEY, VOICE_KEY):
+        needed |= _parse_combo(combo)
+
+    if not needed:
         return []
 
     found, permission_errors = [], []
@@ -570,7 +629,7 @@ def _find_keyboards() -> list[InputDevice]:
             if ecodes.EV_KEY not in caps:
                 continue
             keys = caps[ecodes.EV_KEY]
-            if ecodes.KEY_A in keys and (paste_ec in keys or voice_ec in keys):
+            if ecodes.KEY_A in keys and any(ec in keys for ec in needed):
                 found.append(dev)
         except PermissionError:
             permission_errors.append(path)
@@ -594,11 +653,11 @@ def main() -> None:
     print(f"  STT/TTS service : {STT_URL}")
     print(f"  Lunaschal server: {LUNASCHAL_URL}")
     if PASTE_KEY:
-        print(f"  {PASTE_KEY:<16}: record → paste transcription at cursor")
+        print(f"  {_display_combo(PASTE_KEY)}: record → paste transcription at cursor")
     else:
         print("  Paste shortcut  : not configured")
     if VOICE_KEY:
-        print(f"  {VOICE_KEY:<16}: record → AI chat → speak reply")
+        print(f"  {_display_combo(VOICE_KEY)}: record → AI chat → speak reply")
     else:
         print("  Voice shortcut  : not configured")
     if WAKE_WORD_MODEL:
