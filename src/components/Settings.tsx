@@ -184,6 +184,158 @@ function ShortcutsSection() {
   );
 }
 
+const VRAM_TOTAL_MB = 8192;
+const KOKORO_VRAM_MB = 80;
+const WHISPER_VRAM_TABLE: Record<string, number> = {
+  tiny: 1024, base: 1024, small: 2048, medium: 5120, turbo: 6144, 'large-v3': 10240,
+};
+
+function VRAMSection() {
+  const queryClient = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings.get });
+  const { data: whisperModels } = useQuery({ queryKey: ['stt', 'whisper-models'], queryFn: api.stt.whisperModels });
+  const { data: ollamaModels } = useQuery({
+    queryKey: ['settings', 'ollama-models'],
+    queryFn: api.settings.ollamaModels,
+    enabled: settings?.aiProvider === 'ollama',
+  });
+
+  const [saved, setSaved] = useState(false);
+
+  const updateAI = useMutation({
+    mutationFn: api.settings.updateAI,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    },
+  });
+
+  const reloadStt = useMutation({
+    mutationFn: api.stt.reload,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['stt', 'health'] }),
+  });
+
+  const activeSttBackend = settings?.sttBackend ?? 'local';
+  const activeTtsBackend = settings?.ttsBackend ?? 'local';
+  const activeWhisperModel = settings?.whisperModel ?? 'turbo';
+
+  const whisperVram = activeSttBackend === 'local' ? (WHISPER_VRAM_TABLE[activeWhisperModel] ?? 6144) : 0;
+  const kokoroVram = activeTtsBackend === 'local' ? KOKORO_VRAM_MB : 0;
+  const ollamaVram = settings?.aiProvider === 'ollama' && settings.ollamaModel
+    ? (ollamaModels?.find(m => m.name === settings.ollamaModel)?.vramMb ?? 0)
+    : 0;
+  const totalVram = whisperVram + kokoroVram + ollamaVram;
+  const vramPct = Math.min(100, (totalVram / VRAM_TOTAL_MB) * 100);
+  const barColor = vramPct > 90 ? 'bg-red-500' : vramPct > 70 ? 'bg-yellow-500' : 'bg-green-500';
+  const numColor = vramPct > 90 ? 'text-red-400' : vramPct > 70 ? 'text-yellow-400' : 'text-green-400';
+
+  const setSttBackend = (backend: string) => {
+    updateAI.mutate({ sttBackend: backend });
+    reloadStt.mutate();
+  };
+
+  const setWhisperModel = (model: string) => {
+    updateAI.mutate({ whisperModel: model });
+    reloadStt.mutate();
+  };
+
+  return (
+    <section className="mb-8">
+      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">Model & VRAM</h2>
+      <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 space-y-5">
+        <div>
+          <div className="flex justify-between text-sm mb-1.5">
+            <span className="text-[var(--color-text-muted)]">8 GB VRAM budget</span>
+            <span className={`font-medium ${numColor}`}>
+              {totalVram.toLocaleString()} / {VRAM_TOTAL_MB.toLocaleString()} MB
+            </span>
+          </div>
+          <div className="h-2.5 bg-white/10 rounded-full overflow-hidden">
+            <div
+              className={`h-full ${barColor} rounded-full transition-all duration-300`}
+              style={{ width: `${vramPct}%` }}
+            />
+          </div>
+          <div className="flex flex-wrap gap-x-4 mt-1.5 text-xs text-[var(--color-text-muted)]">
+            <span>STT: {activeSttBackend === 'local' ? `${whisperVram} MB` : '0 MB (cloud)'}</span>
+            <span>TTS: {activeTtsBackend === 'local' ? `${kokoroVram} MB` : '0 MB (cloud)'}</span>
+            {settings?.aiProvider === 'ollama' && (
+              <span>LLM: {ollamaVram > 0 ? `~${ollamaVram.toLocaleString()} MB` : 'unknown'}</span>
+            )}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm font-medium text-[var(--color-text)] mb-2">Speech-to-Text (STT)</p>
+          <div className="flex gap-2 mb-2">
+            {(['local', 'openai'] as const).map(b => (
+              <button
+                key={b}
+                onClick={() => setSttBackend(b)}
+                className={`px-3 py-1.5 rounded text-sm border transition-colors ${
+                  activeSttBackend === b
+                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
+                    : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
+                }`}
+              >
+                {b === 'local' ? 'Local (Whisper)' : 'OpenAI API'}
+              </button>
+            ))}
+          </div>
+          {activeSttBackend === 'local' && whisperModels && (
+            <select
+              value={activeWhisperModel}
+              onChange={e => setWhisperModel(e.target.value)}
+              className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+            >
+              {whisperModels.map(m => (
+                <option key={m.name} value={m.name}>{m.name} — {m.vramMb} MB</option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <div>
+          <p className="text-sm font-medium text-[var(--color-text)] mb-2">Text-to-Speech (TTS)</p>
+          <div className="flex gap-2">
+            {(['local', 'openai'] as const).map(b => (
+              <button
+                key={b}
+                onClick={() => updateAI.mutate({ ttsBackend: b })}
+                className={`px-3 py-1.5 rounded text-sm border transition-colors ${
+                  activeTtsBackend === b
+                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
+                    : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
+                }`}
+              >
+                {b === 'local' ? 'Local (Kokoro ~80 MB)' : 'OpenAI API'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {settings?.aiProvider === 'ollama' && ollamaModels && ollamaModels.length > 0 && (
+          <div>
+            <p className="text-sm font-medium text-[var(--color-text)] mb-2">LLM Model (Ollama)</p>
+            <select
+              value={settings.ollamaModel ?? ''}
+              onChange={e => updateAI.mutate({ ollamaModel: e.target.value })}
+              className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+            >
+              {ollamaModels.map(m => (
+                <option key={m.name} value={m.name}>{m.name} — {m.vramMb.toLocaleString()} MB</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {saved && <p className="text-xs text-green-400">Saved</p>}
+      </div>
+    </section>
+  );
+}
+
 type Provider = 'openai' | 'gemini' | 'ollama';
 
 function NetworkSection() {
@@ -310,6 +462,13 @@ export function Settings() {
 
   const { data: settings, isLoading } = useQuery({ queryKey: ['settings'], queryFn: api.settings.get });
 
+  useEffect(() => {
+    if (settings) {
+      setOllamaUrl(settings.ollamaUrl || 'http://localhost:11434');
+      setOllamaModel(settings.ollamaModel || 'llama3.2');
+    }
+  }, [settings]);
+
   const updateAI = useMutation({
     mutationFn: api.settings.updateAI,
     onSuccess: () => {
@@ -360,6 +519,8 @@ export function Settings() {
           ))}
         </div>
       </section>
+
+      <VRAMSection />
 
       <section className="mb-8">
         <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">API Keys</h2>

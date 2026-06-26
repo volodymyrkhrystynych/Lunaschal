@@ -8,11 +8,13 @@ from pathlib import Path
 
 import soundfile as sf
 from flask import Blueprint, Response, jsonify, request
+from backend.db.connection import get_db
 
 logger = logging.getLogger(__name__)
 
 bp = Blueprint('stt', __name__)
 
+# Env-var defaults — used as fallback when no DB setting exists
 STT_BACKEND      = os.environ.get('STT_BACKEND', 'local').lower()
 TTS_BACKEND      = os.environ.get('TTS_BACKEND', 'local').lower()
 MODEL_NAME       = os.environ.get('WHISPER_MODEL', 'turbo')
@@ -22,19 +24,61 @@ OPENAI_STT_MODEL = os.environ.get('OPENAI_STT_MODEL', 'whisper-1')
 OPENAI_TTS_MODEL = os.environ.get('OPENAI_TTS_MODEL', 'tts-1')
 OPENAI_TTS_VOICE = os.environ.get('OPENAI_TTS_VOICE', 'nova')
 
+WHISPER_MODELS = [
+    {'name': 'tiny',     'vramMb': 1024},
+    {'name': 'base',     'vramMb': 1024},
+    {'name': 'small',    'vramMb': 2048},
+    {'name': 'medium',   'vramMb': 5120},
+    {'name': 'turbo',    'vramMb': 6144},
+    {'name': 'large-v3', 'vramMb': 10240},
+]
+
 _TTS_CACHE     = Path.home() / '.cache' / 'lunaschal' / 'tts'
 _KOKORO_MODEL  = 'kokoro-v1.0.onnx'
 _KOKORO_VOICES = 'voices-v1.0.bin'
 _KOKORO_BASE   = 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0'
 
-_stt_lock      = threading.Lock()
-_tts_lock      = threading.Lock()
-_openai_lock   = threading.Lock()
-_stt_model     = None
-_tts_kokoro    = None
-_openai_client = None
-_stt_ready     = False
-_tts_ready     = False
+_stt_lock           = threading.Lock()
+_tts_lock           = threading.Lock()
+_openai_lock        = threading.Lock()
+_stt_model          = None
+_tts_kokoro         = None
+_openai_client      = None
+_stt_ready          = False
+_tts_ready          = False
+_loaded_stt_backend = None   # 'local' or 'openai'
+_loaded_model_name  = None   # whisper model name when _loaded_stt_backend == 'local'
+_loaded_tts_backend = None   # 'local' or 'openai'
+
+
+def _get_active_stt_backend() -> str:
+    try:
+        s = get_db().execute('SELECT stt_backend FROM settings LIMIT 1').fetchone()
+        if s and s['stt_backend']:
+            return s['stt_backend'].lower()
+    except Exception:
+        pass
+    return STT_BACKEND
+
+
+def _get_active_tts_backend() -> str:
+    try:
+        s = get_db().execute('SELECT tts_backend FROM settings LIMIT 1').fetchone()
+        if s and s['tts_backend']:
+            return s['tts_backend'].lower()
+    except Exception:
+        pass
+    return TTS_BACKEND
+
+
+def _get_active_whisper_model() -> str:
+    try:
+        s = get_db().execute('SELECT whisper_model FROM settings LIMIT 1').fetchone()
+        if s and s['whisper_model']:
+            return s['whisper_model']
+    except Exception:
+        pass
+    return MODEL_NAME
 
 
 def _ensure_openai():
@@ -52,31 +96,50 @@ def _ensure_openai():
     return _openai_client
 
 
-def _load_stt():
-    global _stt_model, _stt_ready
-    if _stt_ready:
-        return
-    with _stt_lock:
-        if _stt_ready:
+def _load_stt(model_name: str | None = None, backend: str | None = None):
+    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name
+    backend = backend or _get_active_stt_backend()
+    model_name = model_name or _get_active_whisper_model()
+
+    # Fast path — already loaded with the right config
+    if _stt_ready and _loaded_stt_backend == backend:
+        if backend == 'openai' or _loaded_model_name == model_name:
             return
-        if STT_BACKEND == 'openai':
+
+    with _stt_lock:
+        if _stt_ready and _loaded_stt_backend == backend:
+            if backend == 'openai' or _loaded_model_name == model_name:
+                return
+        # Unload whatever is currently in memory
+        _stt_model = None
+        _stt_ready = False
+
+        if backend == 'openai':
             _ensure_openai()
+            _loaded_stt_backend = 'openai'
+            _loaded_model_name = None
         else:
             import whisper
-            logger.info("Loading Whisper '%s' on %s…", MODEL_NAME, DEVICE)
-            _stt_model = whisper.load_model(MODEL_NAME, device=DEVICE)
+            logger.info("Loading Whisper '%s' on %s…", model_name, DEVICE)
+            _stt_model = whisper.load_model(model_name, device=DEVICE)
+            _loaded_stt_backend = 'local'
+            _loaded_model_name = model_name
             logger.info("STT ready.")
         _stt_ready = True
 
 
-def _load_tts():
-    global _tts_kokoro, _tts_ready
-    if _tts_ready:
+def _load_tts(backend: str | None = None):
+    global _tts_kokoro, _tts_ready, _loaded_tts_backend
+    backend = backend or _get_active_tts_backend()
+
+    if _tts_ready and _loaded_tts_backend == backend:
         return
     with _tts_lock:
-        if _tts_ready:
+        if _tts_ready and _loaded_tts_backend == backend:
             return
-        if TTS_BACKEND == 'openai':
+        _tts_kokoro = None
+        _tts_ready = False
+        if backend == 'openai':
             _ensure_openai()
         else:
             _TTS_CACHE.mkdir(parents=True, exist_ok=True)
@@ -89,18 +152,41 @@ def _load_tts():
             from kokoro_onnx import Kokoro
             _tts_kokoro = Kokoro(str(model_path), str(voices_path))
             logger.info("TTS ready (Kokoro voice=%s).", TTS_VOICE)
+        _loaded_tts_backend = backend
         _tts_ready = True
+
+
+@bp.get('/api/stt/whisper-models')
+def get_whisper_models():
+    return jsonify(WHISPER_MODELS)
+
+
+@bp.post('/api/stt/reload')
+def stt_reload():
+    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name
+    with _stt_lock:
+        _stt_model = None
+        _stt_ready = False
+        _loaded_stt_backend = None
+        _loaded_model_name = None
+    return jsonify({'success': True})
 
 
 @bp.get('/api/stt/health')
 def stt_health():
+    active_stt = _get_active_stt_backend()
+    active_model = _get_active_whisper_model()
+    active_tts = _get_active_tts_backend()
+    stt_is_ready = _stt_ready and _loaded_stt_backend == active_stt and (
+        active_stt == 'openai' or _loaded_model_name == active_model
+    )
     return jsonify({
         'status': 'ok',
-        'stt_backend': STT_BACKEND,
-        'stt_model': MODEL_NAME if STT_BACKEND == 'local' else f'openai/{OPENAI_STT_MODEL}',
-        'stt_ready': _stt_ready,
-        'tts_backend': TTS_BACKEND,
-        'tts_ready': _tts_ready,
+        'stt_backend': active_stt,
+        'stt_model': active_model if active_stt == 'local' else f'openai/{OPENAI_STT_MODEL}',
+        'stt_ready': stt_is_ready,
+        'tts_backend': active_tts,
+        'tts_ready': _tts_ready and _loaded_tts_backend == active_tts,
     })
 
 
@@ -115,8 +201,11 @@ def transcribe():
     language = request.form.get('language') or None
     suffix = os.path.splitext(audio_file.filename or '.wav')[1] or '.wav'
 
+    active_backend = _get_active_stt_backend()
+    active_model = _get_active_whisper_model()
+
     try:
-        _load_stt()
+        _load_stt(active_model, active_backend)
     except Exception as e:
         return jsonify({'error': str(e)}), 503
 
@@ -125,7 +214,7 @@ def transcribe():
         tmp_path = tmp.name
 
     try:
-        if STT_BACKEND == 'openai':
+        if active_backend == 'openai':
             with open(tmp_path, 'rb') as f:
                 result = _openai_client.audio.transcriptions.create(
                     model=OPENAI_STT_MODEL,
@@ -163,13 +252,15 @@ def tts():
     voice = request.form.get('voice')
     speed = float(request.form.get('speed', 1.0))
 
+    active_backend = _get_active_tts_backend()
+
     try:
-        _load_tts()
+        _load_tts(active_backend)
     except Exception as e:
         return jsonify({'error': str(e)}), 503
 
     try:
-        if TTS_BACKEND == 'openai':
+        if active_backend == 'openai':
             audio = _openai_client.audio.speech.create(
                 model=OPENAI_TTS_MODEL,
                 voice=voice or OPENAI_TTS_VOICE,

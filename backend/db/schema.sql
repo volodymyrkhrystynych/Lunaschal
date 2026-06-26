@@ -63,6 +63,9 @@ CREATE TABLE IF NOT EXISTS settings (
     ollama_url TEXT DEFAULT 'http://localhost:11434',
     ollama_model TEXT,
     network_code TEXT,
+    stt_backend TEXT,
+    tts_backend TEXT,
+    whisper_model TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

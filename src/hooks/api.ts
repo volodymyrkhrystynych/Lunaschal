@@ -72,6 +72,19 @@ export interface AppSettings {
   networkCode: string | null;
   sttPasteKey: string | null;
   sttVoiceKey: string | null;
+  sttBackend: string | null;
+  ttsBackend: string | null;
+  whisperModel: string | null;
+}
+
+export interface WhisperModel {
+  name: string;
+  vramMb: number;
+}
+
+export interface OllamaModel {
+  name: string;
+  vramMb: number;
 }
 
 export interface AuthStatus {
@@ -181,6 +194,7 @@ export const api = {
     updateShortcuts: (data: { sttPasteKey?: string; sttVoiceKey?: string }) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
     regenerateCode: () => post<{ networkCode: string }>('/api/settings/regenerate-code'),
+    ollamaModels: () => get<OllamaModel[]>('/api/settings/ollama-models'),
   },
 
   journal: {
@@ -280,6 +294,8 @@ export const api = {
 
   stt: {
     health: () => get<{ stt_backend: string; stt_model: string; stt_ready: boolean; tts_backend: string; tts_ready: boolean }>('/api/stt/health'),
+    whisperModels: () => get<WhisperModel[]>('/api/stt/whisper-models'),
+    reload: () => post<{ success: boolean }>('/api/stt/reload'),
   },
 
   rag: {

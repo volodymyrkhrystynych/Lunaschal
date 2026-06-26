@@ -1,5 +1,7 @@
+import json
 import random
 import time
+import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
 from backend.db.connection import get_db
@@ -28,6 +30,9 @@ def get_settings():
         'networkCode': s.get('network_code') if NETWORK_MODE else None,
         'sttPasteKey': s.get('stt_paste_key'),
         'sttVoiceKey': s.get('stt_voice_key'),
+        'sttBackend': s.get('stt_backend'),
+        'ttsBackend': s.get('tts_backend'),
+        'whisperModel': s.get('whisper_model'),
     })
 
 
@@ -39,6 +44,8 @@ def update_ai():
         'openaiApiKey': 'openai_api_key', 'googleApiKey': 'google_api_key',
         'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key',
+        'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
+        'whisperModel': 'whisper_model',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
@@ -67,3 +74,22 @@ def regenerate_code():
     db.execute('UPDATE settings SET network_code=?, updated_at=? WHERE id=1', (code, int(time.time())))
     db.commit()
     return jsonify({'networkCode': code})
+
+
+@bp.get('/ollama-models')
+def ollama_models():
+    s = _get_settings()
+    ollama_url = (s.get('ollama_url') if s else None) or 'http://localhost:11434'
+    try:
+        req = urllib.request.Request(f'{ollama_url}/api/tags', headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            data = json.loads(r.read())
+        models = [
+            # size is the on-disk file size; multiply by 1.2 to account for KV cache
+            # and runtime overhead (typical real usage runs 10-30% above weights alone)
+            {'name': m['name'], 'vramMb': round(m.get('size', 0) * 1.2 / (1024 * 1024))}
+            for m in data.get('models', [])
+        ]
+        return jsonify(models)
+    except Exception:
+        return jsonify([])

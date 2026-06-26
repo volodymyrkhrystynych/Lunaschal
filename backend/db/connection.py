@@ -58,6 +58,7 @@ def init_db() -> None:
     _ensure_network_code(db)
     _ensure_writing_project_id(db)
     _ensure_stt_shortcuts(db)
+    _ensure_stt_model_settings(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -87,6 +88,14 @@ def _ensure_stt_shortcuts(db: sqlite3.Connection) -> None:
     if 'stt_voice_key' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN stt_voice_key TEXT')
         db.commit()
+
+
+def _ensure_stt_model_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    for col in ('stt_backend', 'tts_backend', 'whisper_model'):
+        if col not in cols:
+            db.execute(f'ALTER TABLE settings ADD COLUMN {col} TEXT')
+    db.commit()
 
 
 def _ensure_writing_project_id(db: sqlite3.Connection) -> None:
