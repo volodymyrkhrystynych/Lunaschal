@@ -8,6 +8,16 @@ from flask import Flask, jsonify, request, send_from_directory
 
 _listener_log = logging.getLogger('stt.listener')
 
+# Suppress Werkzeug access-log spam from high-frequency polling endpoints
+_SILENT_PATHS = {'/api/stt/listener-state', '/api/stt/health'}
+
+class _SilentPollingFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(p in msg for p in _SILENT_PATHS)
+
+logging.getLogger('werkzeug').addFilter(_SilentPollingFilter())
+
 
 def _start_listener():
     if not os.environ.get('STT_LISTENER'):
