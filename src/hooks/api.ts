@@ -296,6 +296,7 @@ export const api = {
     health: () => get<{ stt_backend: string; stt_model: string; stt_ready: boolean; tts_backend: string; tts_ready: boolean }>('/api/stt/health'),
     whisperModels: () => get<WhisperModel[]>('/api/stt/whisper-models'),
     reload: () => post<{ success: boolean }>('/api/stt/reload'),
+    listenerState: () => get<{ recording: boolean; transcribing: boolean; mode: string | null }>('/api/stt/listener-state'),
   },
 
   rag: {

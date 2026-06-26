@@ -49,6 +49,18 @@ STT_URL       = os.environ.get("STT_URL",       "http://127.0.0.1:5000")
 LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:5000")
 
 
+def _notify_state(recording: bool, transcribing: bool, mode: str | None = None) -> None:
+    """Tell the Flask app what state the listener is in so the UI can mirror it."""
+    try:
+        requests.post(
+            f"{STT_URL}/api/stt/listener-state",
+            json={"recording": recording, "transcribing": transcribing, "mode": mode},
+            timeout=1,
+        )
+    except Exception:
+        pass  # never block the listener for a UI notification
+
+
 def _fetch_shortcut_settings() -> tuple[str | None, str | None]:
     """Fetch sttPasteKey / sttVoiceKey from the Flask settings API on startup."""
     try:
@@ -140,6 +152,7 @@ def _start_recording(mode: str) -> None:
     )
     _stream.start()
     _recording = True
+    _notify_state(True, False, mode)
     icon = "🎙️ " if mode == "paste" else "🎤"
     stop_key = PASTE_KEY if mode == "paste" else VOICE_KEY
     _status(f"{icon} Recording… ({stop_key} to stop)")
@@ -153,25 +166,28 @@ def _start_recording(mode: str) -> None:
 def _transcribe_and_paste() -> None:
     global _recording, _stream
 
-    audio = _stop_audio()
-    if audio is None:
-        return
+    try:
+        audio = _stop_audio()
+        if audio is None:
+            return
 
-    duration = len(audio) / SAMPLE_RATE
-    _status(f"⏳ Transcribing {duration:.1f}s…")
+        duration = len(audio) / SAMPLE_RATE
+        _status(f"⏳ Transcribing {duration:.1f}s…")
 
-    text = _transcribe(audio)
-    if not text:
-        return
+        text = _transcribe(audio)
+        if not text:
+            return
 
-    preview = text[:65] + ("…" if len(text) > 65 else "")
-    _status(f"✓ {preview}")
-    logger.info('Transcribed: "%s"', text)
+        preview = text[:65] + ("…" if len(text) > 65 else "")
+        _status(f"✓ {preview}")
+        logger.info('Transcribed: "%s"', text)
 
-    # Wait for F1 to be released so the compositor doesn't
-    # apply it as a modifier to the pasted characters.
-    _ctrl_released.wait(timeout=KEY_RELEASE_TIMEOUT)
-    _paste_text(text)
+        # Wait for F1 to be released so the compositor doesn't
+        # apply it as a modifier to the pasted characters.
+        _ctrl_released.wait(timeout=KEY_RELEASE_TIMEOUT)
+        _paste_text(text)
+    finally:
+        _notify_state(False, False, None)
 
 
 def _paste_text(text: str) -> None:
@@ -192,37 +208,40 @@ def _paste_text(text: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _transcribe_and_chat() -> None:
-    audio = _stop_audio()
-    if audio is None:
-        return
+    try:
+        audio = _stop_audio()
+        if audio is None:
+            return
 
-    duration = len(audio) / SAMPLE_RATE
-    _status(f"⏳ Transcribing {duration:.1f}s…")
+        duration = len(audio) / SAMPLE_RATE
+        _status(f"⏳ Transcribing {duration:.1f}s…")
 
-    text = _transcribe(audio)
-    if not text:
-        return
+        text = _transcribe(audio)
+        if not text:
+            return
 
-    _status(f"💬 You: {text[:60]}")
-    logger.info('Voice input: "%s"', text)
+        _status(f"💬 You: {text[:60]}")
+        logger.info('Voice input: "%s"', text)
 
-    # Wait for Right Alt to be released before speaking (skip for wake-word triggers)
-    if not _wake_triggered:
-        _alt_released.wait(timeout=KEY_RELEASE_TIMEOUT)
+        # Wait for Right Alt to be released before speaking (skip for wake-word triggers)
+        if not _wake_triggered:
+            _alt_released.wait(timeout=KEY_RELEASE_TIMEOUT)
 
-    _voice_history.append({"role": "user", "content": text})
-    reply = _chat(text)
-    if not reply:
-        _voice_history.pop()
-        return
+        _voice_history.append({"role": "user", "content": text})
+        reply = _chat(text)
+        if not reply:
+            _voice_history.pop()
+            return
 
-    _voice_history.append({"role": "assistant", "content": reply})
+        _voice_history.append({"role": "assistant", "content": reply})
 
-    preview = reply[:60] + ("…" if len(reply) > 60 else "")
-    _status(f"🔊 {preview}")
-    logger.info('AI reply: "%s"', reply[:120])
+        preview = reply[:60] + ("…" if len(reply) > 60 else "")
+        _status(f"🔊 {preview}")
+        logger.info('AI reply: "%s"', reply[:120])
 
-    _speak(_clean_for_tts(reply))
+        _speak(_clean_for_tts(reply))
+    finally:
+        _notify_state(False, False, None)
 
 
 def _chat(user_text: str) -> str | None:
@@ -337,6 +356,7 @@ def _stop_audio() -> np.ndarray | None:
         _stream.close()
         _stream = None
     _recording = False
+    _notify_state(False, True, _current_mode)
 
     if not _audio_chunks:
         _status("✗ No audio captured")
@@ -389,6 +409,7 @@ def _wake_record_and_chat() -> None:
     _current_mode = "voice"
     _wake_triggered = True
     _recording = True
+    _notify_state(True, False, "voice")
 
     min_frames = int(WAKE_MIN_SPEECH_SECS * SAMPLE_RATE)
     silence_frames = 0

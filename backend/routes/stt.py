@@ -50,6 +50,9 @@ _loaded_stt_backend = None   # 'local' or 'openai'
 _loaded_model_name  = None   # whisper model name when _loaded_stt_backend == 'local'
 _loaded_tts_backend = None   # 'local' or 'openai'
 
+# Listener process reports its recording state here so the frontend can mirror it
+_listener_state: dict = {'recording': False, 'transcribing': False, 'mode': None}
+
 
 def _get_active_stt_backend() -> str:
     try:
@@ -154,6 +157,23 @@ def _load_tts(backend: str | None = None):
             logger.info("TTS ready (Kokoro voice=%s).", TTS_VOICE)
         _loaded_tts_backend = backend
         _tts_ready = True
+
+
+@bp.get('/api/stt/listener-state')
+def get_listener_state():
+    return jsonify(_listener_state)
+
+
+@bp.post('/api/stt/listener-state')
+def set_listener_state():
+    global _listener_state
+    body = request.json or {}
+    _listener_state = {
+        'recording':    bool(body.get('recording', False)),
+        'transcribing': bool(body.get('transcribing', False)),
+        'mode':         body.get('mode'),
+    }
+    return jsonify({'success': True})
 
 
 @bp.get('/api/stt/whisper-models')

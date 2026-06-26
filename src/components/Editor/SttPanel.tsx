@@ -1,4 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../../hooks/api';
 
 interface Props {
   onTranscribed: (text: string) => void;
@@ -13,6 +15,12 @@ export function SttPanel({ onTranscribed }: Props) {
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const { data: listenerState } = useQuery({
+    queryKey: ['stt', 'listener-state'],
+    queryFn: api.stt.listenerState,
+    refetchInterval: 500,
+  });
 
   useEffect(() => () => {
     if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
@@ -60,29 +68,52 @@ export function SttPanel({ onTranscribed }: Props) {
     mediaRef.current = null;
   };
 
+  // Merge local button state with listener shortcut state.
+  // Local state takes precedence when the user has pressed the in-app button.
+  const listenerRecording    = listenerState?.recording    ?? false;
+  const listenerTranscribing = listenerState?.transcribing ?? false;
+  const isListenerActive     = listenerRecording || listenerTranscribing;
+  const effectiveStatus: Status =
+    status !== 'idle'      ? status :
+    listenerRecording      ? 'recording' :
+    listenerTranscribing   ? 'transcribing' :
+    'idle';
+
+  // When the listener is controlling, the Stop button can't stop the listener
+  const isListenerControlling = isListenerActive && status === 'idle';
+  const buttonDisabled =
+    effectiveStatus === 'transcribing' ||
+    isListenerControlling;
+
+  const buttonLabel =
+    effectiveStatus === 'recording'    ? (isListenerControlling ? 'Recording…' : 'Stop') :
+    effectiveStatus === 'transcribing' ? 'Transcribing…' :
+    'Record';
+
   return (
     <div className="h-10 shrink-0 border-t border-white/10 bg-[var(--color-surface)] flex items-center gap-3 px-4">
       <button
-        onClick={status === 'recording' ? stopRecording : startRecording}
-        disabled={status === 'transcribing'}
+        onClick={effectiveStatus === 'recording' && !isListenerControlling ? stopRecording : startRecording}
+        disabled={buttonDisabled}
         className={`flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
-          status === 'recording'
+          effectiveStatus === 'recording'
             ? 'bg-red-600 hover:bg-red-700 text-white'
             : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
         }`}
       >
         <span className={`w-2 h-2 rounded-full ${
-          status === 'recording' ? 'bg-white animate-pulse' :
-          status === 'transcribing' ? 'bg-yellow-400' : 'bg-[var(--color-text-muted)]'
+          effectiveStatus === 'recording'    ? 'bg-white animate-pulse' :
+          effectiveStatus === 'transcribing' ? 'bg-yellow-400' :
+          'bg-[var(--color-text-muted)]'
         }`} />
-        {status === 'recording' ? 'Stop' : status === 'transcribing' ? 'Transcribing…' : 'Record'}
+        {buttonLabel}
       </button>
 
       {error && <span className="text-xs text-red-400 truncate">{error}</span>}
       {!error && lastText && (
         <span className="text-xs text-[var(--color-text-muted)] truncate">"{lastText}"</span>
       )}
-      {!error && !lastText && status === 'idle' && (
+      {!error && !lastText && effectiveStatus === 'idle' && (
         <span className="text-xs text-[var(--color-text-muted)]">Voice input — transcribes into active editor or clipboard</span>
       )}
     </div>
