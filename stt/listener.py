@@ -97,8 +97,8 @@ def _fetch_shortcut_settings() -> tuple[str | None, str | None]:
 
 
 _api_paste, _api_voice = _fetch_shortcut_settings()
-PASTE_KEY = _api_paste or os.environ.get("STT_PASTE_KEY", "KEY_F1")
-VOICE_KEY = _api_voice or os.environ.get("STT_VOICE_KEY", "KEY_RIGHTALT")
+PASTE_KEY = _api_paste or os.environ.get("STT_PASTE_KEY")   # None if not configured
+VOICE_KEY = _api_voice or os.environ.get("STT_VOICE_KEY")   # None if not configured
 
 SAMPLE_RATE     = 16000
 CHANNELS        = 1
@@ -538,14 +538,14 @@ def _monitor_device(device: InputDevice) -> None:
             if isinstance(keycode, list):
                 keycode = keycode[0]
 
-            if keycode == PASTE_KEY:
+            if PASTE_KEY and keycode == PASTE_KEY:
                 if key_event.keystate == 1:    # down
                     _ctrl_released.clear()
                     _trigger("paste")
                 elif key_event.keystate == 0:  # up
                     _ctrl_released.set()
 
-            elif keycode == VOICE_KEY:
+            elif VOICE_KEY and keycode == VOICE_KEY:
                 if key_event.keystate == 1:    # down
                     _alt_released.clear()
                     _trigger("voice")
@@ -557,6 +557,11 @@ def _monitor_device(device: InputDevice) -> None:
 
 
 def _find_keyboards() -> list[InputDevice]:
+    paste_ec = getattr(ecodes, PASTE_KEY, None) if PASTE_KEY else None
+    voice_ec = getattr(ecodes, VOICE_KEY, None) if VOICE_KEY else None
+    if paste_ec is None and voice_ec is None:
+        return []
+
     found, permission_errors = [], []
     for path in evdev.list_devices():
         try:
@@ -565,8 +570,6 @@ def _find_keyboards() -> list[InputDevice]:
             if ecodes.EV_KEY not in caps:
                 continue
             keys = caps[ecodes.EV_KEY]
-            paste_ec = getattr(ecodes, PASTE_KEY, None)
-            voice_ec = getattr(ecodes, VOICE_KEY, None)
             if ecodes.KEY_A in keys and (paste_ec in keys or voice_ec in keys):
                 found.append(dev)
         except PermissionError:
@@ -590,8 +593,14 @@ def main() -> None:
     print("Lunaschal Voice Input")
     print(f"  STT/TTS service : {STT_URL}")
     print(f"  Lunaschal server: {LUNASCHAL_URL}")
-    print(f"  {PASTE_KEY:<16}: record → paste transcription at cursor")
-    print(f"  {VOICE_KEY:<16}: record → AI chat → speak reply")
+    if PASTE_KEY:
+        print(f"  {PASTE_KEY:<16}: record → paste transcription at cursor")
+    else:
+        print("  Paste shortcut  : not configured")
+    if VOICE_KEY:
+        print(f"  {VOICE_KEY:<16}: record → AI chat → speak reply")
+    else:
+        print("  Voice shortcut  : not configured")
     if WAKE_WORD_MODEL:
         print(f"  Wake word       : \"Hey Luna\"  (WAKE_WORD_MODEL={WAKE_WORD_MODEL})")
     else:
@@ -599,13 +608,15 @@ def main() -> None:
     print("  Exit            : Ctrl+C\n")
 
     keyboards = _find_keyboards()
-    if not keyboards:
+    if keyboards:
+        for kb in keyboards:
+            print(f"  Keyboard: {kb.name}  ({kb.path})")
+    elif PASTE_KEY or VOICE_KEY:
         print("✗ No keyboard devices found. Are you in the 'input' group?")
         print("  Run: sudo usermod -a -G input $USER  then log out/in")
         sys.exit(1)
-
-    for kb in keyboards:
-        print(f"  Keyboard: {kb.name}  ({kb.path})")
+    else:
+        print("  No keyboard shortcuts configured — keyboard monitoring disabled")
     print()
 
     try:
@@ -625,6 +636,7 @@ def main() -> None:
 
     for kb in keyboards:
         threading.Thread(target=_monitor_device, args=(kb,), daemon=True).start()
+
 
     try:
         threading.Event().wait()
