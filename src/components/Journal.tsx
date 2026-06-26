@@ -15,6 +15,7 @@ export function Journal() {
   const { data: entries, isLoading } = useQuery({
     queryKey: searchQuery ? ['journal', 'search', searchQuery] : ['journal'],
     queryFn: () => (searchQuery ? api.journal.search(searchQuery) : api.journal.list()),
+    refetchInterval: 10_000,
   });
 
   const createEntry = useMutation({
@@ -120,7 +121,19 @@ export function Journal() {
                 </div>
               </div>
             ) : (
-              <div className="text-[var(--color-text)] whitespace-pre-wrap">{entry.content}</div>
+              <>
+                <div className="text-[var(--color-text)] whitespace-pre-wrap">{entry.content}</div>
+                {entry.rawContent && (
+                  <details className="mt-3">
+                    <summary className="text-xs text-[var(--color-text-muted)] cursor-pointer select-none hover:text-[var(--color-text)] transition-colors">
+                      Original transcription
+                    </summary>
+                    <div className="mt-2 px-3 py-2 bg-white/5 rounded text-sm text-[var(--color-text-muted)] whitespace-pre-wrap italic">
+                      {entry.rawContent}
+                    </div>
+                  </details>
+                )}
+              </>
             )}
 
             {entry.tags && (
