@@ -72,6 +72,7 @@ export function SttPanel({ onTranscribed }: Props) {
   // Local state takes precedence when the user has pressed the in-app button.
   const listenerRecording    = listenerState?.recording    ?? false;
   const listenerTranscribing = listenerState?.transcribing ?? false;
+  const listenerMode         = listenerState?.mode         ?? null;
   const isListenerActive     = listenerRecording || listenerTranscribing;
   const effectiveStatus: Status =
     status !== 'idle'      ? status :
@@ -81,13 +82,14 @@ export function SttPanel({ onTranscribed }: Props) {
 
   // When the listener is controlling, the Stop button can't stop the listener
   const isListenerControlling = isListenerActive && status === 'idle';
+  const isJournalMode = isListenerControlling && listenerMode === 'journal';
   const buttonDisabled =
     effectiveStatus === 'transcribing' ||
     isListenerControlling;
 
   const buttonLabel =
-    effectiveStatus === 'recording'    ? (isListenerControlling ? 'Recording…' : 'Stop') :
-    effectiveStatus === 'transcribing' ? 'Transcribing…' :
+    effectiveStatus === 'recording'    ? (isJournalMode ? 'Journal…' : isListenerControlling ? 'Recording…' : 'Stop') :
+    effectiveStatus === 'transcribing' ? (isJournalMode ? 'Saving journal…' : 'Transcribing…') :
     'Record';
 
   return (
@@ -96,14 +98,17 @@ export function SttPanel({ onTranscribed }: Props) {
         onClick={effectiveStatus === 'recording' && !isListenerControlling ? stopRecording : startRecording}
         disabled={buttonDisabled}
         className={`flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
-          effectiveStatus === 'recording'
+          effectiveStatus === 'recording' && isJournalMode
+            ? 'bg-amber-600 hover:bg-amber-700 text-white'
+            : effectiveStatus === 'recording'
             ? 'bg-red-600 hover:bg-red-700 text-white'
             : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
         }`}
       >
         <span className={`w-2 h-2 rounded-full ${
-          effectiveStatus === 'recording'    ? 'bg-white animate-pulse' :
-          effectiveStatus === 'transcribing' ? 'bg-yellow-400' :
+          effectiveStatus === 'recording' && isJournalMode ? 'bg-white animate-pulse' :
+          effectiveStatus === 'recording'                  ? 'bg-white animate-pulse' :
+          effectiveStatus === 'transcribing'               ? 'bg-yellow-400' :
           'bg-[var(--color-text-muted)]'
         }`} />
         {buttonLabel}

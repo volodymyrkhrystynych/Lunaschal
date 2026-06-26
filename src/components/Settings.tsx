@@ -192,12 +192,14 @@ function ShortcutsSection() {
   const { data: settings } = useQuery({ queryKey: ['settings'], queryFn: api.settings.get });
   const [pasteKey, setPasteKey] = useState<string | null>(null);
   const [voiceKey, setVoiceKey] = useState<string | null>(null);
+  const [journalKey, setJournalKey] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (settings) {
       setPasteKey(settings.sttPasteKey ?? null);
       setVoiceKey(settings.sttVoiceKey ?? null);
+      setJournalKey(settings.sttJournalKey ?? null);
     }
   }, [settings]);
 
@@ -205,6 +207,7 @@ function ShortcutsSection() {
     mutationFn: () => api.settings.updateShortcuts({
       sttPasteKey: pasteKey ?? undefined,
       sttVoiceKey: voiceKey ?? undefined,
+      sttJournalKey: journalKey ?? undefined,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -227,7 +230,7 @@ function ShortcutsSection() {
         <p className="text-sm text-[var(--color-text-muted)]">
           Click a shortcut button then press the key you want. Restart the STT listener for changes to take effect.
         </p>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-3">
           <div>
             <p className="text-sm text-[var(--color-text)] mb-1.5">Paste shortcut</p>
             <p className="text-xs text-[var(--color-text-muted)] mb-2">Record → transcribe → paste at cursor</p>
@@ -244,6 +247,14 @@ function ShortcutsSection() {
             <KeyRecorder value={voiceKey} onChange={setVoiceKey} />
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
               env: <code>STT_VOICE_KEY</code>
+            </p>
+          </div>
+          <div>
+            <p className="text-sm text-[var(--color-text)] mb-1.5">Journal shortcut</p>
+            <p className="text-xs text-[var(--color-text-muted)] mb-2">Record → transcribe → save as journal entry</p>
+            <KeyRecorder value={journalKey} onChange={setJournalKey} />
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              env: <code>STT_JOURNAL_KEY</code>
             </p>
           </div>
         </div>

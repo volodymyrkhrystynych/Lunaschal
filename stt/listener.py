@@ -82,23 +82,24 @@ def _notify_state(recording: bool, transcribing: bool, mode: str | None = None) 
         pass  # never block the listener for a UI notification
 
 
-def _fetch_shortcut_settings() -> tuple[str | None, str | None]:
-    """Fetch sttPasteKey / sttVoiceKey from the Flask settings API on startup."""
+def _fetch_shortcut_settings() -> tuple[str | None, str | None, str | None]:
+    """Fetch sttPasteKey / sttVoiceKey / sttJournalKey from the Flask settings API on startup."""
     try:
         import urllib.request as _req
         import json as _json
         with _req.urlopen(LUNASCHAL_URL + '/api/settings', timeout=3) as r:
             data = _json.loads(r.read())
             if data:
-                return data.get('sttPasteKey'), data.get('sttVoiceKey')
+                return data.get('sttPasteKey'), data.get('sttVoiceKey'), data.get('sttJournalKey')
     except Exception:
         pass
-    return None, None
+    return None, None, None
 
 
-_api_paste, _api_voice = _fetch_shortcut_settings()
-PASTE_KEY = _api_paste or os.environ.get("STT_PASTE_KEY")   # None if not configured; may be a combo "KEY_LEFTCTRL+KEY_F1"
-VOICE_KEY = _api_voice or os.environ.get("STT_VOICE_KEY")   # None if not configured; may be a combo
+_api_paste, _api_voice, _api_journal = _fetch_shortcut_settings()
+PASTE_KEY   = _api_paste   or os.environ.get("STT_PASTE_KEY")    # None if not configured; may be a combo "KEY_LEFTCTRL+KEY_F1"
+VOICE_KEY   = _api_voice   or os.environ.get("STT_VOICE_KEY")    # None if not configured; may be a combo
+JOURNAL_KEY = _api_journal or os.environ.get("STT_JOURNAL_KEY")  # None if not configured; record → journal entry
 
 
 _EVDEV_DISPLAY = {
@@ -173,10 +174,12 @@ _last_toggle    = 0.0
 _wake_triggered = False      # True when the current recording was started by wake word
 
 # Key-release events (so we wait for the trigger key to be up before typing/speaking)
-_ctrl_released = threading.Event()
+_ctrl_released    = threading.Event()
 _ctrl_released.set()
-_alt_released  = threading.Event()
+_alt_released     = threading.Event()
 _alt_released.set()
+_journal_released = threading.Event()
+_journal_released.set()
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +261,44 @@ def _paste_text(text: str) -> None:
         _status("✓ Copied to clipboard — paste with Ctrl+V  (install wtype to auto-paste)")
     except subprocess.CalledProcessError as e:
         logger.error("wtype error: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Journal mode — transcribe → POST /api/journal
+# ---------------------------------------------------------------------------
+
+def _transcribe_and_journal() -> None:
+    try:
+        audio = _stop_audio()
+        if audio is None:
+            return
+
+        duration = len(audio) / SAMPLE_RATE
+        _status(f"⏳ Transcribing {duration:.1f}s…")
+
+        text = _transcribe(audio)
+        if not text:
+            return
+
+        preview = text[:65] + ("…" if len(text) > 65 else "")
+        _status(f"📝 {preview}")
+        logger.info('Journal text: "%s"', text)
+
+        _journal_released.wait(timeout=KEY_RELEASE_TIMEOUT)
+        try:
+            resp = requests.post(
+                f"{LUNASCHAL_URL}/api/journal",
+                json={"content": text},
+                timeout=5,
+            )
+            if resp.ok:
+                _status("✓ Journal entry saved")
+            else:
+                _status(f"✗ Journal save failed ({resp.status_code})")
+        except Exception as exc:
+            _status(f"✗ {exc}")
+    finally:
+        _notify_state(False, False, None)
 
 
 # ---------------------------------------------------------------------------
@@ -558,20 +599,26 @@ def _trigger(mode: str) -> None:
     if not _recording:
         _start_recording(mode)
     else:
-        use_paste = mode == "paste" or (mode == "voice" and not _is_voice_pipeline_enabled())
-        target = _transcribe_and_paste if use_paste else _transcribe_and_chat
+        if mode == "journal":
+            target = _transcribe_and_journal
+        elif mode == "paste" or (mode == "voice" and not _is_voice_pipeline_enabled()):
+            target = _transcribe_and_paste
+        else:
+            target = _transcribe_and_chat
         threading.Thread(target=target, daemon=True).start()
 
 
 def _monitor_device(device: InputDevice) -> None:
     logger.info("Monitoring: %s (%s)", device.name, device.path)
 
-    paste_combo = _parse_combo(PASTE_KEY)
-    voice_combo = _parse_combo(VOICE_KEY)
+    paste_combo   = _parse_combo(PASTE_KEY)
+    voice_combo   = _parse_combo(VOICE_KEY)
+    journal_combo = _parse_combo(JOURNAL_KEY)
 
-    held: set[int] = set()          # all keys currently pressed on this device
-    paste_active: set[int] = set()  # combo keys still held after paste trigger
-    voice_active: set[int] = set()  # combo keys still held after voice trigger
+    held: set[int] = set()            # all keys currently pressed on this device
+    paste_active: set[int]   = set()  # combo keys still held after paste trigger
+    voice_active: set[int]   = set()  # combo keys still held after voice trigger
+    journal_active: set[int] = set()  # combo keys still held after journal trigger
 
     try:
         for event in device.read_loop():
@@ -595,6 +642,12 @@ def _monitor_device(device: InputDevice) -> None:
                     voice_active = set(voice_combo)
                     _trigger("voice")
 
+                # Fire journal combo when the pressed key completes the set
+                if journal_combo and code in journal_combo and journal_combo <= held:
+                    _journal_released.clear()
+                    journal_active = set(journal_combo)
+                    _trigger("journal")
+
             elif key_event.keystate == 0:  # key up
                 held.discard(code)
 
@@ -608,6 +661,11 @@ def _monitor_device(device: InputDevice) -> None:
                     if not voice_active:
                         _alt_released.set()
 
+                if code in journal_active:
+                    journal_active.discard(code)
+                    if not journal_active:
+                        _journal_released.set()
+
     except OSError:
         logger.warning("Device disconnected: %s", device.path)
 
@@ -615,7 +673,7 @@ def _monitor_device(device: InputDevice) -> None:
 def _find_keyboards() -> list[InputDevice]:
     # Collect all ecodes from all combo keys across both shortcuts
     needed: set[int] = set()
-    for combo in (PASTE_KEY, VOICE_KEY):
+    for combo in (PASTE_KEY, VOICE_KEY, JOURNAL_KEY):
         needed |= _parse_combo(combo)
 
     if not needed:
@@ -655,11 +713,15 @@ def main() -> None:
     if PASTE_KEY:
         print(f"  {_display_combo(PASTE_KEY)}: record → paste transcription at cursor")
     else:
-        print("  Paste shortcut  : not configured")
+        print("  Paste shortcut   : not configured")
     if VOICE_KEY:
         print(f"  {_display_combo(VOICE_KEY)}: record → AI chat → speak reply")
     else:
-        print("  Voice shortcut  : not configured")
+        print("  Voice shortcut   : not configured")
+    if JOURNAL_KEY:
+        print(f"  {_display_combo(JOURNAL_KEY)}: record → save as journal entry")
+    else:
+        print("  Journal shortcut : not configured")
     if WAKE_WORD_MODEL:
         print(f"  Wake word       : \"Hey Luna\"  (WAKE_WORD_MODEL={WAKE_WORD_MODEL})")
     else:

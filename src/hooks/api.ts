@@ -72,6 +72,7 @@ export interface AppSettings {
   networkCode: string | null;
   sttPasteKey: string | null;
   sttVoiceKey: string | null;
+  sttJournalKey: string | null;
   sttBackend: string | null;
   ttsBackend: string | null;
   whisperModel: string | null;
@@ -192,7 +193,7 @@ export const api = {
     get: () => get<AppSettings | null>('/api/settings'),
     updateAI: (data: Partial<AppSettings & { openaiApiKey?: string; googleApiKey?: string }>) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
-    updateShortcuts: (data: { sttPasteKey?: string; sttVoiceKey?: string }) =>
+    updateShortcuts: (data: { sttPasteKey?: string; sttVoiceKey?: string; sttJournalKey?: string }) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
     regenerateCode: () => post<{ networkCode: string }>('/api/settings/regenerate-code'),
     ollamaModels: () => get<OllamaModel[]>('/api/settings/ollama-models'),
