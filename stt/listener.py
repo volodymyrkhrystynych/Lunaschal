@@ -285,11 +285,12 @@ def _transcribe_and_journal() -> None:
         logger.info('Journal text: "%s"', text)
 
         _journal_released.wait(timeout=KEY_RELEASE_TIMEOUT)
+        _status("✨ Polishing entry…")
         try:
             resp = requests.post(
                 f"{LUNASCHAL_URL}/api/journal",
-                json={"content": text},
-                timeout=5,
+                json={"raw_content": text},
+                timeout=30,
             )
             if resp.ok:
                 _status("✓ Journal entry saved")

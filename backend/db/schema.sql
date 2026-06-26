@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
+    raw_content TEXT,
     title TEXT,
     tags TEXT,
     created_at INTEGER NOT NULL,

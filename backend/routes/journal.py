@@ -4,6 +4,7 @@ from ulid import ULID
 from backend.db.connection import get_db, row_to_dict, search_journal_fts
 from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.rag import sync_journal_embeddings, delete_journal_embeddings, search_for_context
+from backend.ai.journal import polish_journal_entry, generate_journal_metadata
 
 bp = Blueprint('journal', __name__, url_prefix='/api/journal')
 
@@ -62,16 +63,33 @@ def get_entry(id):
 @bp.post('')
 def create_entry():
     body = request.json or {}
+    raw_content = body.get('raw_content', '').strip()
     content = body.get('content', '').strip()
-    if not content:
+
+    if raw_content:
+        # STT path: polish the transcription, preserve original
+        content = polish_journal_entry(raw_content)
+    elif not content:
         return jsonify({'error': 'content required'}), 400
+    else:
+        raw_content = None
+
+    title = body.get('title')
+    tags = body.get('tags')
+
+    if not title or not tags:
+        meta = generate_journal_metadata(content)
+        if not title:
+            title = meta.get('title')
+        if not tags:
+            tags = meta.get('tags')
+
+    import json
     now = int(time.time())
     id = str(ULID())
-    tags = body.get('tags')
-    import json
     get_db().execute(
-        'INSERT INTO journal_entries(id, content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?)',
-        (id, content, body.get('title'), json.dumps(tags) if tags is not None else None, now, now),
+        'INSERT INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+        (id, content, raw_content, title, json.dumps(tags) if tags is not None else None, now, now),
     )
     get_db().commit()
     _sync_embeddings_bg(id)

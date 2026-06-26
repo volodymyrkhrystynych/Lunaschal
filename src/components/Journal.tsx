@@ -6,6 +6,7 @@ export function Journal() {
   const [searchQuery, setSearchQuery] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
+  const [editTitle, setEditTitle] = useState('');
   const [newEntry, setNewEntry] = useState('');
   const [showNewEntry, setShowNewEntry] = useState(false);
   const [generatingFor, setGeneratingFor] = useState<string | null>(null);
@@ -28,7 +29,8 @@ export function Journal() {
   });
 
   const updateEntry = useMutation({
-    mutationFn: ({ id, content }: { id: string; content: string }) => api.journal.update(id, { content }),
+    mutationFn: ({ id, content, title }: { id: string; content: string; title: string }) =>
+      api.journal.update(id, { content, title }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['journal'] });
       setEditingId(null);
@@ -98,7 +100,7 @@ export function Journal() {
                   className="text-sm text-[var(--color-primary)] hover:text-[var(--color-primary)]/80 disabled:opacity-50">
                   {generatingFor === entry.id ? 'Generating...' : 'Flashcards'}
                 </button>
-                <button onClick={() => { setEditingId(entry.id); setEditContent(entry.content); }}
+                <button onClick={() => { setEditingId(entry.id); setEditContent(entry.content); setEditTitle(entry.title ?? ''); }}
                   className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Edit</button>
                 <button onClick={() => deleteEntry.mutate(entry.id)} className="text-sm text-red-400 hover:text-red-300">Delete</button>
               </div>
@@ -112,16 +114,22 @@ export function Journal() {
 
             {editingId === entry.id ? (
               <div>
+                <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)}
+                  placeholder="Entry title..."
+                  className="w-full bg-transparent text-[var(--color-text)] font-medium focus:outline-none border border-white/10 rounded p-2 mb-2" />
                 <textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} rows={4}
                   className="w-full bg-transparent text-[var(--color-text)] resize-none focus:outline-none border border-white/10 rounded p-2" />
                 <div className="flex justify-end gap-2 mt-2">
                   <button onClick={() => setEditingId(null)} className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Cancel</button>
-                  <button onClick={() => updateEntry.mutate({ id: entry.id, content: editContent })} disabled={updateEntry.isPending}
+                  <button onClick={() => updateEntry.mutate({ id: entry.id, content: editContent, title: editTitle })} disabled={updateEntry.isPending}
                     className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50">Save</button>
                 </div>
               </div>
             ) : (
               <>
+                {entry.title && (
+                  <h3 className="text-sm font-semibold text-[var(--color-text)] mb-1">{entry.title}</h3>
+                )}
                 <div className="text-[var(--color-text)] whitespace-pre-wrap">{entry.content}</div>
                 {entry.rawContent && (
                   <details className="mt-3">

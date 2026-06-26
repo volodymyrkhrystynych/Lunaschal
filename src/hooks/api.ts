@@ -3,6 +3,7 @@
 export interface JournalEntry {
   id: string;
   content: string;
+  rawContent: string | null;
   title: string | null;
   tags: string | null;
   createdAt: string;

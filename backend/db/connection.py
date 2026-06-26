@@ -59,6 +59,7 @@ def init_db() -> None:
     _ensure_writing_project_id(db)
     _ensure_stt_shortcuts(db)
     _ensure_stt_model_settings(db)
+    _ensure_journal_raw_content(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -101,6 +102,13 @@ def _ensure_stt_model_settings(db: sqlite3.Connection) -> None:
     if 'voice_pipeline_enabled' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN voice_pipeline_enabled INTEGER DEFAULT 1')
     db.commit()
+
+
+def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'raw_content' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN raw_content TEXT')
+        db.commit()
 
 
 def _ensure_writing_project_id(db: sqlite3.Connection) -> None:
