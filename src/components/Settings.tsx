@@ -164,7 +164,7 @@ function ShortcutsSection() {
             <p className="text-xs text-[var(--color-text-muted)] mb-2">Record → transcribe → paste at cursor</p>
             <KeyRecorder value={pasteKey} onChange={setPasteKey} />
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
-              Default: <code>F1</code> · env: <code>STT_PASTE_KEY</code>
+              env: <code>STT_PASTE_KEY</code>
             </p>
           </div>
           <div>
@@ -174,7 +174,7 @@ function ShortcutsSection() {
             </p>
             <KeyRecorder value={voiceKey} onChange={setVoiceKey} />
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
-              Default: <code>Right Alt</code> · env: <code>STT_VOICE_KEY</code>
+              env: <code>STT_VOICE_KEY</code>
             </p>
           </div>
         </div>
