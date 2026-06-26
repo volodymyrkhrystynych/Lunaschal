@@ -144,6 +144,13 @@ function ShortcutsSection() {
     },
   });
 
+  const togglePipeline = useMutation({
+    mutationFn: (enabled: boolean) => api.settings.updateAI({ voicePipelineEnabled: enabled }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  });
+
+  const pipelineEnabled = settings?.voicePipelineEnabled ?? true;
+
   return (
     <section className="mb-8">
       <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">Voice Shortcuts</h2>
@@ -162,13 +169,29 @@ function ShortcutsSection() {
           </div>
           <div>
             <p className="text-sm text-[var(--color-text)] mb-1.5">Voice shortcut</p>
-            <p className="text-xs text-[var(--color-text-muted)] mb-2">Record → transcribe → AI chat → TTS reply</p>
+            <p className="text-xs text-[var(--color-text-muted)] mb-2">
+              {pipelineEnabled ? 'Record → transcribe → AI chat → TTS reply' : 'Record → transcribe → paste at cursor'}
+            </p>
             <KeyRecorder value={voiceKey} onChange={setVoiceKey} />
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
               Default: <code>Right Alt</code> · env: <code>STT_VOICE_KEY</code>
             </p>
           </div>
         </div>
+
+        <label className="flex items-center gap-3 cursor-pointer select-none pt-1">
+          <div
+            onClick={() => togglePipeline.mutate(!pipelineEnabled)}
+            className={`relative w-9 h-5 rounded-full transition-colors ${pipelineEnabled ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
+          >
+            <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${pipelineEnabled ? 'translate-x-4' : 'translate-x-0'}`} />
+          </div>
+          <span className="text-sm text-[var(--color-text)]">AI chat + TTS reply on voice shortcut</span>
+          {!pipelineEnabled && (
+            <span className="text-xs text-[var(--color-text-muted)]">(voice shortcut pastes instead)</span>
+          )}
+        </label>
+
         <div className="flex items-center gap-3 pt-1">
           <button
             onClick={() => save.mutate()}

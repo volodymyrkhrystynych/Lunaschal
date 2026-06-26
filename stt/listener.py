@@ -49,6 +49,27 @@ STT_URL       = os.environ.get("STT_URL",       "http://127.0.0.1:5000")
 LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:5000")
 
 
+_pipeline_cache: bool = True
+_pipeline_cache_ts: float = 0.0
+_PIPELINE_CACHE_TTL = 30.0
+
+
+def _is_voice_pipeline_enabled() -> bool:
+    global _pipeline_cache, _pipeline_cache_ts
+    now = time.time()
+    if now - _pipeline_cache_ts < _PIPELINE_CACHE_TTL:
+        return _pipeline_cache
+    try:
+        r = requests.get(f"{LUNASCHAL_URL}/api/settings", timeout=1)
+        data = r.json()
+        if data and 'voicePipelineEnabled' in data:
+            _pipeline_cache = bool(data['voicePipelineEnabled'])
+    except Exception:
+        pass
+    _pipeline_cache_ts = now
+    return _pipeline_cache
+
+
 def _notify_state(recording: bool, transcribing: bool, mode: str | None = None) -> None:
     """Tell the Flask app what state the listener is in so the UI can mirror it."""
     try:
@@ -501,7 +522,8 @@ def _trigger(mode: str) -> None:
     if not _recording:
         _start_recording(mode)
     else:
-        target = _transcribe_and_paste if mode == "paste" else _transcribe_and_chat
+        use_paste = mode == "paste" or (mode == "voice" and not _is_voice_pipeline_enabled())
+        target = _transcribe_and_paste if use_paste else _transcribe_and_chat
         threading.Thread(target=target, daemon=True).start()
 
 

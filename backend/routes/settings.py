@@ -33,6 +33,7 @@ def get_settings():
         'sttBackend': s.get('stt_backend'),
         'ttsBackend': s.get('tts_backend'),
         'whisperModel': s.get('whisper_model'),
+        'voicePipelineEnabled': bool(s.get('voice_pipeline_enabled', 1)),
     })
 
 
@@ -46,6 +47,7 @@ def update_ai():
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key',
         'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
         'whisperModel': 'whisper_model',
+        'voicePipelineEnabled': 'voice_pipeline_enabled',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():

@@ -75,6 +75,7 @@ export interface AppSettings {
   sttBackend: string | null;
   ttsBackend: string | null;
   whisperModel: string | null;
+  voicePipelineEnabled: boolean;
 }
 
 export interface WhisperModel {
