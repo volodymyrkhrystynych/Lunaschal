@@ -117,3 +117,19 @@ CREATE TABLE IF NOT EXISTS writing_context_docs (
 
 CREATE INDEX IF NOT EXISTS idx_writing_chapters_project ON writing_chapters(project_id, position);
 CREATE INDEX IF NOT EXISTS idx_writing_context_docs_project ON writing_context_docs(project_id);
+
+CREATE TABLE IF NOT EXISTS daily_tasks (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS daily_task_completions (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES daily_tasks(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(task_id, date)
+);

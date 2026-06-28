@@ -151,6 +151,15 @@ export interface WritingContextDoc extends WritingContextDocSummary {
   content: string;
 }
 
+export interface DailyTask {
+  id: string;
+  title: string;
+  position: number;
+  done: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // --- fetch helpers ---
 
 async function get<T>(url: string): Promise<T> {
@@ -342,5 +351,15 @@ export const api = {
       get<Conversation[]>(`/api/writing/projects/${projectId}/conversations`),
     createProjectConversation: (projectId: string, data?: { title?: string }) =>
       post<{ id: string }>(`/api/writing/projects/${projectId}/conversations`, data ?? {}),
+  },
+
+  tasks: {
+    list: () => get<DailyTask[]>('/api/tasks'),
+    create: (title: string) => post<{ id: string }>('/api/tasks', { title }),
+    update: (id: string, title: string) => patch<{ success: boolean }>(`/api/tasks/${id}`, { title }),
+    reorder: (order: string[]) => post<{ success: boolean }>('/api/tasks/reorder', { order }),
+    remove: (id: string) => del<{ success: boolean }>(`/api/tasks/${id}`),
+    complete: (id: string) => post<{ success: boolean }>(`/api/tasks/${id}/complete`),
+    uncomplete: (id: string) => del<{ success: boolean }>(`/api/tasks/${id}/complete`),
   },
 };

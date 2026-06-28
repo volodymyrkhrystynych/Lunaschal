@@ -19,6 +19,7 @@ Environment variables:
   LUNASCHAL_URL  Lunaschal server (default: http://127.0.0.1:5000)
 """
 
+import datetime
 import io
 import json
 import os
@@ -445,6 +446,165 @@ def _speak(text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Task nudge
+# ---------------------------------------------------------------------------
+
+NUDGE_INTERVAL   = int(os.environ.get("NUDGE_INTERVAL",   "2700"))  # default 45 min
+NUDGE_START_HOUR = int(os.environ.get("NUDGE_START_HOUR", "9"))
+NUDGE_END_HOUR   = int(os.environ.get("NUDGE_END_HOUR",   "18"))
+
+_nudge_active = False
+
+
+def _listen_for_reply(timeout: float = 12.0) -> str | None:
+    """Record until silence and transcribe. Returns text or None."""
+    chunks: list[np.ndarray] = []
+    min_frames = int(WAKE_MIN_SPEECH_SECS * SAMPLE_RATE)
+    silence_frames = 0
+    total_frames = 0
+
+    try:
+        with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, dtype="float32", blocksize=1024) as stream:
+            _status("🎤 Listening…")
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                chunk, _ = stream.read(1024)
+                flat = chunk.flatten()
+                chunks.append(flat.reshape(-1, 1))
+                total_frames += len(flat)
+
+                if total_frames > min_frames:
+                    energy = float(np.abs(flat).mean())
+                    if energy < WAKE_SILENCE_RMS:
+                        silence_frames += len(flat)
+                        if silence_frames / SAMPLE_RATE >= WAKE_SILENCE_SECS:
+                            break
+                    else:
+                        silence_frames = 0
+    except Exception as e:
+        logger.error("Nudge listen error: %s", e)
+        return None
+
+    if not chunks:
+        return None
+
+    audio = np.concatenate(chunks, axis=0)
+    return _transcribe(audio)
+
+
+def _nudge_chat(messages: list[dict], system_prompt: str) -> str | None:
+    """Send messages to the chat stream endpoint with a dedicated system prompt."""
+    payload: dict = {"messages": messages, "systemPrompt": system_prompt}
+    try:
+        with requests.post(
+            f"{LUNASCHAL_URL}/api/chat/stream",
+            json=payload,
+            stream=True,
+            timeout=60,
+        ) as resp:
+            resp.raise_for_status()
+            reply = ""
+            for raw in resp.iter_lines():
+                if not raw:
+                    continue
+                line = raw.decode() if isinstance(raw, bytes) else raw
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    if "content" in chunk:
+                        reply += chunk["content"]
+                except json.JSONDecodeError:
+                    pass
+            return reply.strip() or None
+    except Exception as e:
+        logger.error("Nudge chat error: %s", e)
+        return None
+
+
+def _run_nudge(task: dict) -> None:
+    task_title = task.get("title", "your top task")
+    task_id = task.get("id", "")
+
+    system_prompt = (
+        f"You are a brief, friendly accountability partner checking in on the user. "
+        f"Their top priority task is: \"{task_title}\". "
+        f"Ask how it's going in one casual sentence — no lists, no markdown, no emojis. "
+        f"Keep all replies to 1-2 sentences. "
+        f"If they say they're done or finished, say something brief and encouraging. "
+        f"Your reply will be spoken aloud."
+    )
+
+    history: list[dict] = [{"role": "user", "content": "Check in on my top task."}]
+    opening = _nudge_chat(history, system_prompt)
+    if not opening:
+        return
+
+    history.append({"role": "assistant", "content": opening})
+    _speak(_clean_for_tts(opening))
+
+    done_phrases = ("done", "finished", "completed", "did it", "yeah", "yes", "yep")
+
+    for _ in range(3):
+        reply = _listen_for_reply()
+        if not reply:
+            break
+
+        history.append({"role": "user", "content": reply})
+
+        if any(p in reply.lower() for p in done_phrases):
+            try:
+                requests.post(f"{LUNASCHAL_URL}/api/tasks/{task_id}/complete", timeout=5)
+            except Exception:
+                pass
+            closing = _nudge_chat(history, system_prompt)
+            if closing:
+                _speak(_clean_for_tts(closing))
+            break
+
+        response = _nudge_chat(history, system_prompt)
+        if not response:
+            break
+        history.append({"role": "assistant", "content": response})
+        _speak(_clean_for_tts(response))
+
+
+def _nudge_loop() -> None:
+    global _nudge_active
+    time.sleep(NUDGE_INTERVAL)  # initial delay before first nudge
+    while True:
+        time.sleep(NUDGE_INTERVAL)
+
+        hour = datetime.datetime.now().hour
+        if not (NUDGE_START_HOUR <= hour < NUDGE_END_HOUR):
+            continue
+
+        if _recording or _nudge_active:
+            continue
+
+        try:
+            resp = requests.get(f"{LUNASCHAL_URL}/api/tasks", timeout=5)
+            tasks = resp.json()
+        except Exception:
+            continue
+
+        pending = [t for t in tasks if not t.get("done")]
+        if not pending:
+            continue
+
+        _nudge_active = True
+        try:
+            _run_nudge(pending[0])
+        except Exception as e:
+            logger.error("Nudge error: %s", e)
+        finally:
+            _nudge_active = False
+
+
+# ---------------------------------------------------------------------------
 # Shared audio helpers
 # ---------------------------------------------------------------------------
 
@@ -727,6 +887,7 @@ def main() -> None:
         print(f"  Wake word       : \"Hey Luna\"  (WAKE_WORD_MODEL={WAKE_WORD_MODEL})")
     else:
         print("  Wake word       : disabled  (set WAKE_WORD_MODEL=/path/to/hey_luna.onnx)")
+    print(f"  Task nudge      : every {NUDGE_INTERVAL//60} min ({NUDGE_START_HOUR}:00–{NUDGE_END_HOUR}:00)")
     print("  Exit            : Ctrl+C\n")
 
     keyboards = _find_keyboards()
@@ -755,6 +916,7 @@ def main() -> None:
     print("\nWaiting for shortcut…\n")
 
     threading.Thread(target=_wake_word_loop, daemon=True).start()
+    threading.Thread(target=_nudge_loop, daemon=True).start()
 
     for kb in keyboards:
         threading.Thread(target=_monitor_device, args=(kb,), daemon=True).start()
