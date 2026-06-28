@@ -1,5 +1,8 @@
+import json
+import queue
+import threading
 import time
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict, search_journal_fts
 from backend.ai.embeddings import is_embeddings_configured
@@ -7,6 +10,40 @@ from backend.ai.rag import sync_journal_embeddings, delete_journal_embeddings, s
 from backend.ai.journal import polish_journal_entry, generate_journal_metadata
 
 bp = Blueprint('journal', __name__, url_prefix='/api/journal')
+
+_subscribers: list[queue.Queue] = []
+_subscribers_lock = threading.Lock()
+
+
+def _notify_subscribers(entry_id: str) -> None:
+    with _subscribers_lock:
+        for q in _subscribers:
+            q.put(entry_id)
+
+
+@bp.get('/events')
+def events():
+    q: queue.Queue = queue.Queue()
+    with _subscribers_lock:
+        _subscribers.append(q)
+
+    def generate():
+        try:
+            while True:
+                try:
+                    entry_id = q.get(timeout=30)
+                    yield f'data: {json.dumps({"id": entry_id})}\n\n'
+                except queue.Empty:
+                    yield ': heartbeat\n\n'
+        finally:
+            with _subscribers_lock:
+                _subscribers.remove(q)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
+    )
 
 
 @bp.get('')
@@ -84,7 +121,6 @@ def create_entry():
         if not tags:
             tags = meta.get('tags')
 
-    import json
     now = int(time.time())
     id = str(ULID())
     get_db().execute(
@@ -93,13 +129,13 @@ def create_entry():
     )
     get_db().commit()
     _sync_embeddings_bg(id)
+    _notify_subscribers(id)
     return jsonify({'id': id}), 201
 
 
 @bp.patch('/<id>')
 def update_entry(id):
     body = request.json or {}
-    import json
     updates: dict = {'updated_at': int(time.time())}
     if 'content' in body:
         updates['content'] = body['content']
@@ -127,7 +163,6 @@ def delete_entry(id):
 
 
 def _sync_embeddings_bg(journal_id: str) -> None:
-    import threading
     def _sync():
         try:
             if is_embeddings_configured():

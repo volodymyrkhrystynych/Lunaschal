@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 
@@ -16,8 +16,13 @@ export function Journal() {
   const { data: entries, isLoading } = useQuery({
     queryKey: searchQuery ? ['journal', 'search', searchQuery] : ['journal'],
     queryFn: () => (searchQuery ? api.journal.search(searchQuery) : api.journal.list()),
-    refetchInterval: 10_000,
   });
+
+  useEffect(() => {
+    const es = new EventSource('/api/journal/events');
+    es.onmessage = () => queryClient.invalidateQueries({ queryKey: ['journal'] });
+    return () => es.close();
+  }, [queryClient]);
 
   const createEntry = useMutation({
     mutationFn: ({ content }: { content: string }) => api.journal.create({ content }),
