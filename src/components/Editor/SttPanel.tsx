@@ -7,6 +7,12 @@ interface Props {
 }
 
 type Status = 'idle' | 'recording' | 'transcribing';
+type CorrectStatus = 'idle' | 'working';
+
+interface CorrectResult {
+  raw: string;
+  corrected: string;
+}
 
 export function SttPanel({ onTranscribed }: Props) {
   const [status, setStatus] = useState<Status>('idle');
@@ -15,6 +21,14 @@ export function SttPanel({ onTranscribed }: Props) {
   const mediaRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [expanded, setExpanded] = useState(false);
+  const [audioFile, setAudioFile] = useState<File | null>(null);
+  const [groundTruth, setGroundTruth] = useState('');
+  const [correctStatus, setCorrectStatus] = useState<CorrectStatus>('idle');
+  const [correctResult, setCorrectResult] = useState<CorrectResult | null>(null);
+  const [correctError, setCorrectError] = useState('');
+  const audioInputRef = useRef<HTMLInputElement | null>(null);
 
   const { data: listenerState } = useQuery({
     queryKey: ['stt', 'listener-state'],
@@ -68,8 +82,26 @@ export function SttPanel({ onTranscribed }: Props) {
     mediaRef.current = null;
   };
 
-  // Merge local button state with listener shortcut state.
-  // Local state takes precedence when the user has pressed the in-app button.
+  const handleCorrect = async () => {
+    if (!audioFile) return;
+    setCorrectStatus('working');
+    setCorrectError('');
+    setCorrectResult(null);
+    try {
+      const fd = new FormData();
+      fd.append('audio', audioFile);
+      if (groundTruth.trim()) fd.append('ground_truth', groundTruth.trim());
+      const r = await fetch('/api/transcribe/correct', { method: 'POST', body: fd });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Failed');
+      setCorrectResult({ raw: data.raw, corrected: data.corrected });
+    } catch (err) {
+      setCorrectError(err instanceof Error ? err.message : 'Failed');
+    } finally {
+      setCorrectStatus('idle');
+    }
+  };
+
   const listenerRecording    = listenerState?.recording    ?? false;
   const listenerTranscribing = listenerState?.transcribing ?? false;
   const listenerMode         = listenerState?.mode         ?? null;
@@ -80,7 +112,6 @@ export function SttPanel({ onTranscribed }: Props) {
     listenerTranscribing   ? 'transcribing' :
     'idle';
 
-  // When the listener is controlling, the Stop button can't stop the listener
   const isListenerControlling = isListenerActive && status === 'idle';
   const isJournalMode = isListenerControlling && listenerMode === 'journal';
   const buttonDisabled =
@@ -93,34 +124,130 @@ export function SttPanel({ onTranscribed }: Props) {
     'Record';
 
   return (
-    <div className="h-10 shrink-0 border-t border-white/10 bg-[var(--color-surface)] flex items-center gap-3 px-4">
-      <button
-        onClick={effectiveStatus === 'recording' && !isListenerControlling ? stopRecording : startRecording}
-        disabled={buttonDisabled}
-        className={`flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
-          effectiveStatus === 'recording' && isJournalMode
-            ? 'bg-amber-600 hover:bg-amber-700 text-white'
-            : effectiveStatus === 'recording'
-            ? 'bg-red-600 hover:bg-red-700 text-white'
-            : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
-        }`}
-      >
-        <span className={`w-2 h-2 rounded-full ${
-          effectiveStatus === 'recording' && isJournalMode ? 'bg-white animate-pulse' :
-          effectiveStatus === 'recording'                  ? 'bg-white animate-pulse' :
-          effectiveStatus === 'transcribing'               ? 'bg-yellow-400' :
-          'bg-[var(--color-text-muted)]'
-        }`} />
-        {buttonLabel}
-      </button>
+    <div className="shrink-0 border-t border-white/10 bg-[var(--color-surface)]">
+      {expanded && (
+        <div className="p-4 border-b border-white/10 flex flex-col gap-3">
+          <div className="flex gap-3 items-start">
+            <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+              <label className="text-xs text-[var(--color-text-muted)]">Audio file</label>
+              <div className="flex gap-2 items-center">
+                <button
+                  onClick={() => audioInputRef.current?.click()}
+                  className="px-3 py-1 rounded text-xs bg-white/10 hover:bg-white/20 text-[var(--color-text)] transition-colors"
+                >
+                  {audioFile ? audioFile.name : 'Choose file…'}
+                </button>
+                {audioFile && (
+                  <button
+                    onClick={() => { setAudioFile(null); setCorrectResult(null); if (audioInputRef.current) audioInputRef.current.value = ''; }}
+                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+              <input
+                ref={audioInputRef}
+                type="file"
+                accept="audio/*"
+                className="hidden"
+                onChange={e => { setAudioFile(e.target.files?.[0] ?? null); setCorrectResult(null); setCorrectError(''); }}
+              />
+            </div>
+            <button
+              onClick={handleCorrect}
+              disabled={!audioFile || correctStatus === 'working'}
+              className="mt-5 px-3 py-1 rounded text-sm font-medium bg-white/10 hover:bg-white/20 text-[var(--color-text)] transition-colors disabled:opacity-40"
+            >
+              {correctStatus === 'working' ? 'Working…' : 'Transcribe & Correct'}
+            </button>
+          </div>
 
-      {error && <span className="text-xs text-red-400 truncate">{error}</span>}
-      {!error && lastText && (
-        <span className="text-xs text-[var(--color-text-muted)] truncate">"{lastText}"</span>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs text-[var(--color-text-muted)]">Ground truth reference (paste document text)</label>
+            <textarea
+              value={groundTruth}
+              onChange={e => setGroundTruth(e.target.value)}
+              placeholder="Paste reference text here — names, terms, domain vocabulary the LLM will use to correct the transcription…"
+              rows={4}
+              className="w-full rounded bg-white/5 border border-white/10 px-3 py-2 text-xs text-[var(--color-text)] placeholder-[var(--color-text-muted)] resize-y focus:outline-none focus:border-white/25"
+            />
+          </div>
+
+          {correctError && (
+            <p className="text-xs text-red-400">{correctError}</p>
+          )}
+
+          {correctResult && (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-[var(--color-text-muted)]">Raw transcription</span>
+                  <button
+                    onClick={() => onTranscribed(correctResult.raw)}
+                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                  >
+                    Use raw ↑
+                  </button>
+                </div>
+                <pre className="text-xs text-[var(--color-text-muted)] bg-white/5 rounded p-2 whitespace-pre-wrap break-words">{correctResult.raw}</pre>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-[var(--color-text-muted)]">Corrected</span>
+                  <button
+                    onClick={() => onTranscribed(correctResult.corrected)}
+                    className="text-xs font-medium text-[var(--color-text)] hover:opacity-80 transition-opacity"
+                  >
+                    Use corrected ↑
+                  </button>
+                </div>
+                <pre className="text-xs text-[var(--color-text)] bg-white/5 rounded p-2 whitespace-pre-wrap break-words border border-white/10">{correctResult.corrected}</pre>
+              </div>
+            </div>
+          )}
+        </div>
       )}
-      {!error && !lastText && effectiveStatus === 'idle' && (
-        <span className="text-xs text-[var(--color-text-muted)]">Voice input — transcribes into active editor or clipboard</span>
-      )}
+
+      <div className="h-10 flex items-center gap-3 px-4">
+        <button
+          onClick={effectiveStatus === 'recording' && !isListenerControlling ? stopRecording : startRecording}
+          disabled={buttonDisabled}
+          className={`flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
+            effectiveStatus === 'recording' && isJournalMode
+              ? 'bg-amber-600 hover:bg-amber-700 text-white'
+              : effectiveStatus === 'recording'
+              ? 'bg-red-600 hover:bg-red-700 text-white'
+              : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
+          }`}
+        >
+          <span className={`w-2 h-2 rounded-full ${
+            effectiveStatus === 'recording' && isJournalMode ? 'bg-white animate-pulse' :
+            effectiveStatus === 'recording'                  ? 'bg-white animate-pulse' :
+            effectiveStatus === 'transcribing'               ? 'bg-yellow-400' :
+            'bg-[var(--color-text-muted)]'
+          }`} />
+          {buttonLabel}
+        </button>
+
+        {error && <span className="text-xs text-red-400 truncate">{error}</span>}
+        {!error && lastText && (
+          <span className="text-xs text-[var(--color-text-muted)] truncate">"{lastText}"</span>
+        )}
+        {!error && !lastText && effectiveStatus === 'idle' && (
+          <span className="text-xs text-[var(--color-text-muted)]">Voice input — transcribes into active editor or clipboard</span>
+        )}
+
+        <button
+          onClick={() => { setExpanded(e => !e); setCorrectResult(null); setCorrectError(''); }}
+          className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
+            expanded ? 'bg-white/15 text-[var(--color-text)]' : 'bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
+          }`}
+        >
+          File
+          <span className={`transition-transform ${expanded ? 'rotate-180' : ''}`}>▲</span>
+        </button>
+      </div>
     </div>
   );
 }

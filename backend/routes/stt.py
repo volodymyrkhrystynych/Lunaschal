@@ -6,6 +6,9 @@ import threading
 import urllib.request
 from pathlib import Path
 
+from backend.ai.chat import chat_stream
+from backend.ai.provider import is_ai_configured
+
 import soundfile as sf
 from flask import Blueprint, Response, jsonify, request
 from backend.db.connection import get_db
@@ -210,6 +213,30 @@ def stt_health():
     })
 
 
+def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
+    """Transcribe audio bytes; returns {'text': str, 'language': str}."""
+    suffix = os.path.splitext(filename or '.wav')[1] or '.wav'
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+    try:
+        if _loaded_stt_backend == 'openai':
+            with open(tmp_path, 'rb') as f:
+                result = _openai_client.audio.transcriptions.create(
+                    model=OPENAI_STT_MODEL,
+                    file=(filename or f'audio{suffix}', f),
+                    language=language,
+                    response_format='verbose_json',
+                )
+            return {'text': result.text.strip(), 'language': result.language or language or 'en'}
+        else:
+            opts = {'language': language} if language else {}
+            result = _stt_model.transcribe(tmp_path, **opts)
+            return {'text': result['text'].strip(), 'language': result.get('language', language or 'en')}
+    finally:
+        os.unlink(tmp_path)
+
+
 @bp.post('/api/transcribe')
 def transcribe():
     if 'audio' not in request.files:
@@ -219,49 +246,76 @@ def transcribe():
     if not content:
         return jsonify({'error': 'Empty audio file'}), 400
     language = request.form.get('language') or None
-    suffix = os.path.splitext(audio_file.filename or '.wav')[1] or '.wav'
 
     active_backend = _get_active_stt_backend()
     active_model = _get_active_whisper_model()
-
     try:
         _load_stt(active_model, active_backend)
     except Exception as e:
         return jsonify({'error': str(e)}), 503
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-
     try:
-        if active_backend == 'openai':
-            with open(tmp_path, 'rb') as f:
-                result = _openai_client.audio.transcriptions.create(
-                    model=OPENAI_STT_MODEL,
-                    file=(audio_file.filename or f'audio{suffix}', f),
-                    language=language,
-                    response_format='verbose_json',
-                )
-            return jsonify({
-                'text': result.text.strip(),
-                'language': result.language or language or 'en',
-                'language_probability': 1.0,
-            })
-        else:
-            opts = {}
-            if language:
-                opts['language'] = language
-            result = _stt_model.transcribe(tmp_path, **opts)
-            return jsonify({
-                'text': result['text'].strip(),
-                'language': result.get('language', language or 'en'),
-                'language_probability': 1.0,
-            })
+        result = _do_transcribe(content, audio_file.filename or '', language)
+        return jsonify({**result, 'language_probability': 1.0})
     except Exception as e:
         logger.error('Transcription error: %s', e)
         return jsonify({'error': str(e)}), 500
-    finally:
-        os.unlink(tmp_path)
+
+
+@bp.post('/api/transcribe/correct')
+def transcribe_correct():
+    """Transcribe an audio file then use the LLM to fix errors against a ground-truth document."""
+    if 'audio' not in request.files:
+        return jsonify({'error': 'Missing audio file'}), 400
+    audio_file = request.files['audio']
+    content = audio_file.read()
+    if not content:
+        return jsonify({'error': 'Empty audio file'}), 400
+
+    ground_truth = (request.form.get('ground_truth') or '').strip()
+    language = request.form.get('language') or None
+
+    active_backend = _get_active_stt_backend()
+    active_model = _get_active_whisper_model()
+    try:
+        _load_stt(active_model, active_backend)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 503
+
+    try:
+        stt_result = _do_transcribe(content, audio_file.filename or '', language)
+    except Exception as e:
+        logger.error('Transcription error: %s', e)
+        return jsonify({'error': str(e)}), 500
+
+    raw_text = stt_result['text']
+
+    if not ground_truth or not is_ai_configured():
+        return jsonify({'raw': raw_text, 'corrected': raw_text, 'language': stt_result['language']})
+
+    system_prompt = (
+        'You are a transcription corrector. '
+        'You will be given a raw speech-to-text transcription and a ground truth reference document. '
+        'Correct any errors in the transcription — wrong words, misheared proper nouns, domain-specific terms — '
+        'so that it matches terminology in the reference. '
+        'Return only the corrected transcription text, preserving the original meaning and structure. '
+        'Do not add commentary or explanations.'
+    )
+    user_message = (
+        f'Ground truth reference document:\n---\n{ground_truth}\n---\n\n'
+        f'Raw transcription:\n{raw_text}\n\nCorrected transcription:'
+    )
+
+    try:
+        corrected = ''.join(chat_stream(
+            [{'role': 'user', 'content': user_message}],
+            system_prompt=system_prompt,
+        )).strip()
+    except Exception as e:
+        logger.error('LLM correction error: %s', e)
+        return jsonify({'error': f'Correction failed: {e}'}), 500
+
+    return jsonify({'raw': raw_text, 'corrected': corrected, 'language': stt_result['language']})
 
 
 @bp.post('/api/tts')
