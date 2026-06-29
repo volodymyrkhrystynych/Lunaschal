@@ -135,17 +135,21 @@ def polish_entry(id):
     row = get_db().execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    entry = row_to_dict(row)
-    source = entry.get('raw_content') or entry.get('content') or ''
+    source = row['raw_content'] or ''
     if not source.strip():
-        return jsonify({'error': 'No content to polish'}), 400
-    polished = polish_journal_entry(source)
-    get_db().execute(
+        return jsonify({'error': 'No original transcription to polish'}), 400
+    polished = polish_journal_entry(source, background=True)
+    db = get_db()
+    db.execute(
         'UPDATE journal_entries SET content=?, updated_at=? WHERE id=?',
         (polished, int(time.time()), id),
     )
-    get_db().commit()
+    db.commit()
     _notify_subscribers(id)
+    # Regenerate title/tags from the polished text if they're missing
+    entry = row_to_dict(db.execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone())
+    if not entry.get('title') or not entry.get('tags'):
+        _generate_metadata_bg(id, polished)
     return jsonify({'success': True, 'content': polished})
 
 

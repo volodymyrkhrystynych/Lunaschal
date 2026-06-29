@@ -148,7 +148,7 @@ export function Journal() {
             ) : (
               <>
                 {entry.title && (
-                  <h3 className="text-sm font-semibold text-[var(--color-text)] mb-1">{entry.title}</h3>
+                  <h3 className="text-base font-bold text-[var(--color-text)] mb-2">{entry.title}</h3>
                 )}
                 <div className="text-[var(--color-text)] whitespace-pre-wrap">{entry.content}</div>
                 {entry.rawContent && (
@@ -164,10 +164,10 @@ export function Journal() {
               </>
             )}
 
-            {entry.tags && (
-              <div className="flex gap-2 mt-2">
+            {entry.tags && JSON.parse(entry.tags).length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
                 {JSON.parse(entry.tags).map((tag: string) => (
-                  <span key={tag} className="px-2 py-0.5 text-xs bg-white/10 rounded text-[var(--color-text-muted)]">{tag}</span>
+                  <span key={tag} className="px-2 py-0.5 text-xs rounded border border-[var(--color-primary)]/40 text-[var(--color-primary)] bg-[var(--color-primary)]/10">{tag}</span>
                 ))}
               </div>
             )}

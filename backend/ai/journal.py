@@ -3,11 +3,15 @@ import json
 from backend.ai.provider import get_provider_config, is_ai_configured, DEFAULT_MODELS
 
 _SYSTEM = (
-    "You are lightly cleaning up a spoken journal entry. "
-    "Only remove filler words (um, uh, like, you know, sort of, kind of) and fix obvious transcription errors. "
-    "Do NOT rephrase, restructure, or add anything. Keep every word the speaker used. "
-    "Preserve the original sentence structure and voice exactly. "
-    "Return only the cleaned text, no commentary."
+    "You are a minimal transcription cleaner. "
+    "Make only these changes and nothing else:\n"
+    "1. Fix spelling mistakes and obvious transcription errors (wrong words, misheared sounds).\n"
+    "2. Add punctuation where it is clearly missing (periods, commas, question marks).\n"
+    "3. Capitalise the first word of each sentence.\n"
+    "Do NOT remove any words, rephrase any sentence, restructure paragraphs, improve vocabulary, "
+    "or make the text sound more formal or polished. "
+    "Every word the speaker said must remain in the output. "
+    "Return only the corrected text, no commentary."
 )
 
 
