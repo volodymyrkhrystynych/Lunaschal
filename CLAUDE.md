@@ -99,7 +99,7 @@ Lunaschal is a single-user personal knowledge management desktop app with AI int
 
 ### Backend Structure (`backend/`)
 
-Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `flashcard`, `settings`, `rag`, `chat`, `files`, `writing`.
+Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `flashcard`, `settings`, `rag`, `chat`, `files`, `writing`, `curated_tags`.
 
 The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` using Flask's `Response(stream_with_context(...))`.
 
@@ -108,6 +108,7 @@ The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` u
 - `connection.py` — opens a single WAL-mode SQLite connection (`get_db()`), runs `schema.sql` on startup, initializes FTS5 triggers and the sqlite-vec virtual table, ensures the network code exists, and safely adds `writing_project_id` to `conversations` via ALTER TABLE migration
 - FTS5 virtual table (`journal_fts`) is maintained by SQL triggers defined in `connection.py`
 - `sqlite-vec` extension for vector similarity search (RAG); silently skipped if not installed
+- `curated_tags` table stores user-defined tag names (unique); `journal_entry_curated_tags` is the many-to-many join table — both cascade-delete on parent removal
 
 ### AI Layer (`backend/ai/`)
 - `provider.py` — resolves the active AI provider and model from DB settings (or env vars `OPENAI_API_KEY`, `GOOGLE_API_KEY`); supports `openai`, `gemini`, `ollama`
@@ -116,13 +117,14 @@ The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` u
 - `rag.py` — syncs journal entries to embeddings, performs semantic search, formats retrieved context for the LLM
 - `flashcards.py` — AI-assisted flashcard generation
 - `chat.py` — streaming chat generator consumed by the `/api/chat/stream` route
+- `journal.py` — also contains `classify_entry_for_tag(content, tag_name) -> bool`: binary LLM classifier used by the curated-tag background scan; runs on CPU via `_CPU_OPTIONS` for Ollama
 
 ### Auth (`backend/auth.py`)
 Single-user auth via JWT cookie (`lunaschal_token`, 30-day expiry). **Auth is only enforced in network mode** (`NETWORK_MODE=1`) and only for non-localhost requests — the `check_auth` middleware in `app.py` returns early when `is_localhost(request)` is true. Network mode login requires both the password and a rotating 6-digit display code (pseudo-2FA); the code is stored in the `settings` table and can be regenerated from the Settings page.
 
 ### Frontend Structure (`src/`)
 - `App.tsx` — top-level view router; checks auth status on load, shows `Login` if unauthenticated in network mode, otherwise shows a sidebar + main view (chat/journal/writing/calendar/flashcards/files/settings)
-- `src/components/` — one file per view/feature; `Editor/` subdirectory for the file editor and STT panel; `Writing/` subdirectory for the writing workspace
+- `src/components/` — one file per view/feature; `Editor/` subdirectory for the file editor and STT panel; `Writing/` subdirectory for the writing workspace; `CuratedTagsSection.tsx` is the Settings > Tags tab component
 - `src/hooks/api.ts` — typed REST client (`api.*` namespaces) using plain `fetch`; no tRPC
 - `@` path alias resolves to `./src/`
 - CSS custom properties (e.g. `var(--color-bg)`) are used for theming throughout
@@ -137,6 +139,7 @@ Three-panel layout: left nav (project list + chapter list) | center prose editor
 **Writing chat**: reuses `/api/chat/stream` unchanged. The frontend assembles a `systemPrompt` from the project title/description and any context docs the user has checked, then passes it as the existing `systemPrompt` field. No journal/calendar classification — pure story chat.
 
 ### Key Behaviors
+- **Curated tags** — user-defined tags managed in Settings → Tags tab. Each new tag triggers a background daemon thread that calls `classify_entry_for_tag` per journal entry and writes matches to `journal_entry_curated_tags`. Progress tracked in-memory (`_scan_progress` dict in `curated_tags.py`); the list endpoint merges it in. Tags appear as filter pill buttons in the Journal view; entries display curated tags (`#name`, neutral style) separately from freeform AI tags (accent color).
 - **Flashcards** use the SM-2 spaced repetition algorithm (implemented in `backend/routes/flashcard.py`)
 - **RAG** is optional — silently disabled when embeddings aren't configured (Ollama provider, or missing API key)
 - **DB path** defaults to `./data/lunaschal.db`; override with `DATABASE_URL` env var

@@ -5,7 +5,7 @@ A self-hosted personal knowledge management desktop app with local AI. Journal, 
 ## Features
 
 - **AI Chat** — Streaming chat with your choice of LLM. The assistant automatically detects when you're writing a journal entry or logging an event and offers to save it for you. Ask "quiz me on X" to get flashcards on any topic.
-- **Journal** — Write and search personal entries. Full-text search powered by SQLite FTS5.
+- **Journal** — Write and search personal entries. Full-text search powered by SQLite FTS5. Define curated tags in Settings → Tags; the AI scans all existing entries to apply each new tag retroactively. Filter the journal by curated tag via pill buttons above the entry list.
 - **Calendar** — Activity log for events and appointments, linked to journal entries.
 - **Flashcards** — Spaced repetition (SM-2 algorithm) with AI-generated cards from your journal entries or any topic.
 - **RAG** — The chat retrieves semantically relevant journal entries as context for each message using vector embeddings.
