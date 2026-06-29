@@ -11,6 +11,7 @@ export function Journal() {
   const [showNewEntry, setShowNewEntry] = useState(false);
   const [generatingFor, setGeneratingFor] = useState<string | null>(null);
   const [generationResult, setGenerationResult] = useState<{ id: string; count: number } | null>(null);
+  const [polishingFor, setPolishingFor] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const { data: entries, isLoading } = useQuery({
@@ -44,6 +45,13 @@ export function Journal() {
 
   const deleteEntry = useMutation({
     mutationFn: (id: string) => api.journal.delete(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['journal'] }),
+  });
+
+  const polishEntry = useMutation({
+    mutationFn: (id: string) => api.journal.polish(id),
+    onMutate: (id) => setPolishingFor(id),
+    onSettled: () => setPolishingFor(null),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['journal'] }),
   });
 
@@ -100,6 +108,13 @@ export function Journal() {
             <div className="flex items-start justify-between mb-2">
               <span className="text-sm text-[var(--color-text-muted)]">{formatDate(entry.createdAt)}</span>
               <div className="flex gap-2">
+                {entry.rawContent && (
+                  <button onClick={() => polishEntry.mutate(entry.id)}
+                    disabled={polishingFor === entry.id}
+                    className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">
+                    {polishingFor === entry.id ? 'Polishing...' : 'Polish'}
+                  </button>
+                )}
                 <button onClick={() => { setGeneratingFor(entry.id); generateFlashcards.mutate({ journalId: entry.id }); }}
                   disabled={generatingFor === entry.id}
                   className="text-sm text-[var(--color-primary)] hover:text-[var(--color-primary)]/80 disabled:opacity-50">

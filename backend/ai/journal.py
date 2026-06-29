@@ -10,13 +10,6 @@ _SYSTEM = (
     "Return only the cleaned text, no commentary."
 )
 
-_VALID_TAGS = frozenset({
-    'work', 'health', 'fitness', 'relationships', 'family', 'finances', 'home', 'learning',
-    'mood', 'reflection', 'gratitude', 'anxiety', 'motivation', 'growth',
-    'travel', 'reading', 'creative', 'coding',
-    'goals', 'plans', 'decisions', 'ideas',
-    'milestone', 'problem', 'memory',
-})
 
 _METADATA_SYSTEM = (
     "You generate metadata for personal journal entries.\n"
@@ -31,8 +24,17 @@ _METADATA_SYSTEM = (
     'Example: {"title": "Productive morning coding session", "tags": ["work", "coding"]}'
 )
 
+# Passed to Ollama when the call should run entirely on CPU (no VRAM consumed).
+_CPU_OPTIONS = {"options": {"num_gpu": 0}}
+
+
+def _ollama_client(c: dict):
+    from openai import OpenAI
+    return OpenAI(base_url=f"{c['ollama_url']}/v1", api_key='ollama')
+
 
 def generate_journal_metadata(content: str) -> dict:
+    """Background task — always uses the bg model on CPU when Ollama is active."""
     if not content.strip():
         return {}
     try:
@@ -41,14 +43,10 @@ def generate_journal_metadata(content: str) -> dict:
         c = get_provider_config()
         provider = c['provider']
 
-        if provider in ('openai', 'ollama'):
+        if provider == 'openai':
             from openai import OpenAI
-            if provider == 'openai':
-                client = OpenAI(api_key=c['openai_api_key'])
-                model = c['model'] or DEFAULT_MODELS['openai']
-            else:
-                client = OpenAI(base_url=f"{c['ollama_url']}/v1", api_key='ollama')
-                model = c['ollama_model'] or c['model'] or DEFAULT_MODELS['ollama']
+            client = OpenAI(api_key=c['openai_api_key'])
+            model = c['model'] or DEFAULT_MODELS['openai']
             resp = client.chat.completions.create(
                 model=model,
                 messages=[
@@ -58,7 +56,21 @@ def generate_journal_metadata(content: str) -> dict:
                 response_format={'type': 'json_object'},
                 stream=False,
             )
-            data = json.loads(resp.choices[0].message.content)
+
+        elif provider == 'ollama':
+            client = _ollama_client(c)
+            # Prefer the dedicated bg model; fall back to main model but still run on CPU
+            model = c['ollama_bg_model'] or c['ollama_model'] or DEFAULT_MODELS['ollama']
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {'role': 'system', 'content': _METADATA_SYSTEM},
+                    {'role': 'user', 'content': content},
+                ],
+                response_format={'type': 'json_object'},
+                stream=False,
+                extra_body=_CPU_OPTIONS,
+            )
 
         elif provider == 'gemini':
             import google.generativeai as genai
@@ -70,11 +82,15 @@ def generate_journal_metadata(content: str) -> dict:
                 generation_config={'response_mime_type': 'application/json'},
             )
             data = json.loads(resp.text)
+            valid_tags = [t.strip() for t in (data.get('tags') or []) if isinstance(t, str) and t.strip()][:3]
+            title = (data.get('title') or '').strip() or None
+            return {'title': title, 'tags': valid_tags or None}
 
         else:
             return {}
 
-        valid_tags = [t for t in (data.get('tags') or []) if t in _VALID_TAGS][:3]
+        data = json.loads(resp.choices[0].message.content)
+        valid_tags = [t.strip() for t in (data.get('tags') or []) if isinstance(t, str) and t.strip()][:3]
         title = (data.get('title') or '').strip() or None
         return {'title': title, 'tags': valid_tags or None}
 
@@ -84,7 +100,13 @@ def generate_journal_metadata(content: str) -> dict:
     return {}
 
 
-def polish_journal_entry(raw_text: str) -> str:
+def polish_journal_entry(raw_text: str, background: bool = False) -> str:
+    """
+    Clean up a spoken journal entry.
+
+    background=True  → use the bg model on CPU (called from _polish_bg thread).
+    background=False → use the main model on GPU (called from the on-demand /polish endpoint).
+    """
     if not raw_text.strip():
         return raw_text
     try:
@@ -93,14 +115,10 @@ def polish_journal_entry(raw_text: str) -> str:
         c = get_provider_config()
         provider = c['provider']
 
-        if provider in ('openai', 'ollama'):
+        if provider == 'openai':
             from openai import OpenAI
-            if provider == 'openai':
-                client = OpenAI(api_key=c['openai_api_key'])
-                model = c['model'] or DEFAULT_MODELS['openai']
-            else:
-                client = OpenAI(base_url=f"{c['ollama_url']}/v1", api_key='ollama')
-                model = c['ollama_model'] or c['model'] or DEFAULT_MODELS['ollama']
+            client = OpenAI(api_key=c['openai_api_key'])
+            model = c['model'] or DEFAULT_MODELS['openai']
             resp = client.chat.completions.create(
                 model=model,
                 messages=[
@@ -108,6 +126,26 @@ def polish_journal_entry(raw_text: str) -> str:
                     {'role': 'user', 'content': raw_text},
                 ],
                 stream=False,
+            )
+            return resp.choices[0].message.content.strip() or raw_text
+
+        elif provider == 'ollama':
+            client = _ollama_client(c)
+            if background and c['ollama_bg_model']:
+                model = c['ollama_bg_model']
+                extra = _CPU_OPTIONS
+            else:
+                model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+                extra = {}
+            kwargs = {'extra_body': extra} if extra else {}
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {'role': 'system', 'content': _SYSTEM},
+                    {'role': 'user', 'content': raw_text},
+                ],
+                stream=False,
+                **kwargs,
             )
             return resp.choices[0].message.content.strip() or raw_text
 

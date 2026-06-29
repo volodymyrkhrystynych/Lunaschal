@@ -104,22 +104,15 @@ def create_entry():
     content = body.get('content', '').strip()
 
     if raw_content:
-        # STT path: polish the transcription, preserve original
-        content = polish_journal_entry(raw_content)
+        # STT path: save immediately with raw text, polish in background
+        content = raw_content
     elif not content:
         return jsonify({'error': 'content required'}), 400
     else:
         raw_content = None
 
-    title = body.get('title')
-    tags = body.get('tags')
-
-    if not title or not tags:
-        meta = generate_journal_metadata(content)
-        if not title:
-            title = meta.get('title')
-        if not tags:
-            tags = meta.get('tags')
+    title = body.get('title') or None
+    tags = body.get('tags') or None
 
     now = int(time.time())
     id = str(ULID())
@@ -128,9 +121,32 @@ def create_entry():
         (id, content, raw_content, title, json.dumps(tags) if tags is not None else None, now, now),
     )
     get_db().commit()
-    _sync_embeddings_bg(id)
     _notify_subscribers(id)
+    _sync_embeddings_bg(id)
+    if raw_content:
+        _polish_bg(id, raw_content)
+    if not title or not tags:
+        _generate_metadata_bg(id, content)
     return jsonify({'id': id}), 201
+
+
+@bp.post('/<id>/polish')
+def polish_entry(id):
+    row = get_db().execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    entry = row_to_dict(row)
+    source = entry.get('raw_content') or entry.get('content') or ''
+    if not source.strip():
+        return jsonify({'error': 'No content to polish'}), 400
+    polished = polish_journal_entry(source)
+    get_db().execute(
+        'UPDATE journal_entries SET content=?, updated_at=? WHERE id=?',
+        (polished, int(time.time()), id),
+    )
+    get_db().commit()
+    _notify_subscribers(id)
+    return jsonify({'success': True, 'content': polished})
 
 
 @bp.patch('/<id>')
@@ -160,6 +176,50 @@ def delete_entry(id):
     get_db().execute('DELETE FROM journal_entries WHERE id=?', (id,))
     get_db().commit()
     return jsonify({'success': True})
+
+
+def _polish_bg(journal_id: str, raw_content: str) -> None:
+    def _run():
+        try:
+            polished = polish_journal_entry(raw_content, background=True)
+            if polished == raw_content:
+                return
+            db = get_db()
+            db.execute(
+                'UPDATE journal_entries SET content=?, updated_at=? WHERE id=?',
+                (polished, int(time.time()), journal_id),
+            )
+            db.commit()
+            _notify_subscribers(journal_id)
+        except Exception as e:
+            print(f'Background polish failed for {journal_id}: {e}')
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _generate_metadata_bg(journal_id: str, content: str) -> None:
+    def _run():
+        try:
+            meta = generate_journal_metadata(content)
+            if not meta:
+                return
+            updates: dict = {}
+            if meta.get('title'):
+                updates['title'] = meta['title']
+            if meta.get('tags'):
+                updates['tags'] = json.dumps(meta['tags'])
+            if not updates:
+                return
+            db = get_db()
+            set_clause = ', '.join(f'{k}=?' for k in updates)
+            db.execute(
+                f'UPDATE journal_entries SET {set_clause} WHERE id=?',
+                [*updates.values(), journal_id],
+            )
+            db.commit()
+            _notify_subscribers(journal_id)
+        except Exception as e:
+            print(f'Background metadata generation failed for {journal_id}: {e}')
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def _sync_embeddings_bg(journal_id: str) -> None:

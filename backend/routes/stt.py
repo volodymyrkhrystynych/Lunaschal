@@ -42,6 +42,7 @@ _KOKORO_VOICES = 'voices-v1.0.bin'
 _KOKORO_BASE   = 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0'
 
 _stt_lock           = threading.Lock()
+_transcribe_lock    = threading.Lock()   # serialises Whisper inference — model is not thread-safe
 _tts_lock           = threading.Lock()
 _openai_lock        = threading.Lock()
 _stt_model          = None
@@ -52,6 +53,7 @@ _tts_ready          = False
 _loaded_stt_backend = None   # 'local' or 'openai'
 _loaded_model_name  = None   # whisper model name when _loaded_stt_backend == 'local'
 _loaded_tts_backend = None   # 'local' or 'openai'
+_loaded_device      = None   # 'cuda' or 'cpu'
 
 # Listener process reports its recording state here so the frontend can mirror it
 _listener_state: dict = {'recording': False, 'transcribing': False, 'mode': None}
@@ -103,7 +105,7 @@ def _ensure_openai():
 
 
 def _load_stt(model_name: str | None = None, backend: str | None = None):
-    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name
+    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
     backend = backend or _get_active_stt_backend()
     model_name = model_name or _get_active_whisper_model()
 
@@ -124,10 +126,12 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
             _ensure_openai()
             _loaded_stt_backend = 'openai'
             _loaded_model_name = None
+            _loaded_device = None
         else:
             import whisper
             logger.info("Loading Whisper '%s' on %s…", model_name, DEVICE)
             _stt_model = whisper.load_model(model_name, device=DEVICE)
+            _loaded_device = DEVICE
             _loaded_stt_backend = 'local'
             _loaded_model_name = model_name
             logger.info("STT ready.")
@@ -207,14 +211,29 @@ def stt_health():
         'status': 'ok',
         'stt_backend': active_stt,
         'stt_model': active_model if active_stt == 'local' else f'openai/{OPENAI_STT_MODEL}',
+        'stt_device': _loaded_device or DEVICE,
         'stt_ready': stt_is_ready,
         'tts_backend': active_tts,
         'tts_ready': _tts_ready and _loaded_tts_backend == active_tts,
     })
 
 
+def _reset_stt_model() -> None:
+    """Unload the Whisper model so it is reloaded fresh on the next request."""
+    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
+    with _stt_lock:
+        _stt_model = None
+        _stt_ready = False
+        _loaded_stt_backend = None
+        _loaded_model_name = None
+        _loaded_device = None
+
+
 def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
     """Transcribe audio bytes; returns {'text': str, 'language': str}."""
+    if len(content) < 1000:
+        raise ValueError('Audio too short or empty')
+
     suffix = os.path.splitext(filename or '.wav')[1] or '.wav'
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(content)
@@ -231,8 +250,14 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
             return {'text': result.text.strip(), 'language': result.language or language or 'en'}
         else:
             opts = {'language': language} if language else {}
-            result = _stt_model.transcribe(tmp_path, **opts)
-            return {'text': result['text'].strip(), 'language': result.get('language', language or 'en')}
+            with _transcribe_lock:
+                try:
+                    result = _stt_model.transcribe(tmp_path, **opts)
+                    return {'text': result['text'].strip(), 'language': result.get('language', language or 'en')}
+                except Exception:
+                    # Reset so the next request reloads with a fresh CUDA context
+                    _reset_stt_model()
+                    raise
     finally:
         os.unlink(tmp_path)
 
@@ -257,8 +282,13 @@ def transcribe():
     try:
         result = _do_transcribe(content, audio_file.filename or '', language)
         return jsonify({**result, 'language_probability': 1.0})
+    except ValueError as e:
+        # Short/empty audio — not a model error, don't reset
+        logger.warning('Transcription skipped: %s', e)
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         logger.error('Transcription error: %s', e)
+        # Model was reset; next request will reload it
         return jsonify({'error': str(e)}), 500
 
 

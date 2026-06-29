@@ -289,6 +289,20 @@ function ShortcutsSection() {
 
 const VRAM_TOTAL_MB = 8192;
 const KOKORO_VRAM_MB = 80;
+
+const RECOMMENDED_CPU_MODELS: { name: string; ramMb: number; note: string }[] = [
+  { name: 'phi4-mini',        ramMb:  2350, note: 'fastest on CPU, 12 tok/s' },
+  { name: 'llama3.2:3b',      ramMb:  2000, note: 'balanced, fast' },
+  { name: 'gemma3:4b',        ramMb:  4300, note: 'best RAM efficiency' },
+  { name: 'qwen3:8b',         ramMb:  5800, note: 'strong reasoning' },
+  { name: 'llama3.3:8b',      ramMb:  6000, note: 'fast, well-rounded' },
+  { name: 'gemma3:12b',       ramMb:  8700, note: 'top on-device quality' },
+  { name: 'phi4:14b',         ramMb:  9200, note: 'strong coding & reasoning' },
+  { name: 'qwen3:14b',        ramMb: 10500, note: 'multilingual + reasoning' },
+  { name: 'gemma3:27b',       ramMb: 17500, note: 'GPU-class quality on CPU' },
+  { name: 'qwen3:32b',        ramMb: 22000, note: 'best reasoning <32 GB' },
+  { name: 'deepseek-r1:32b',  ramMb: 22000, note: 'best math/reasoning' },
+];
 const WHISPER_VRAM_TABLE: Record<string, number> = {
   tiny: 1024, base: 1024, small: 2048, medium: 5120, turbo: 6144, 'large-v3': 10240,
 };
@@ -418,20 +432,63 @@ function VRAMSection() {
           </div>
         </div>
 
-        {settings?.aiProvider === 'ollama' && ollamaModels && ollamaModels.length > 0 && (
-          <div>
-            <p className="text-sm font-medium text-[var(--color-text)] mb-2">LLM Model (Ollama)</p>
-            <select
-              value={settings.ollamaModel ?? ''}
-              onChange={e => updateAI.mutate({ ollamaModel: e.target.value })}
-              className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
-            >
-              {ollamaModels.map(m => (
-                <option key={m.name} value={m.name}>{m.name} — {m.vramMb.toLocaleString()} MB</option>
-              ))}
-            </select>
-          </div>
-        )}
+        {settings?.aiProvider === 'ollama' && ollamaModels && ollamaModels.length > 0 && (() => {
+          const installedNames = new Set(ollamaModels.map(m => m.name));
+          const notInstalled = RECOMMENDED_CPU_MODELS.filter(r => !installedNames.has(r.name));
+          return (
+            <div>
+              <p className="text-sm font-medium text-[var(--color-text)] mb-2">LLM Model (Ollama)</p>
+              <select
+                value={settings.ollamaModel ?? ''}
+                onChange={e => updateAI.mutate({ ollamaModel: e.target.value })}
+                className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+              >
+                <optgroup label="Installed">
+                  {ollamaModels.map(m => (
+                    <option key={m.name} value={m.name}>{m.name} — {m.vramMb.toLocaleString()} MB</option>
+                  ))}
+                </optgroup>
+                {notInstalled.length > 0 && (
+                  <optgroup label="Recommended for CPU (not installed)">
+                    {notInstalled.map(m => (
+                      <option key={m.name} value={m.name}>{m.name} — ~{m.ramMb.toLocaleString()} MB · {m.note}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </div>
+          );
+        })()}
+
+        {settings?.aiProvider === 'ollama' && ollamaModels && ollamaModels.length > 0 && (() => {
+          const installedNames = new Set(ollamaModels.map(m => m.name));
+          const notInstalled = RECOMMENDED_CPU_MODELS.filter(r => !installedNames.has(r.name));
+          return (
+            <div>
+              <p className="text-sm font-medium text-[var(--color-text)] mb-1">CPU inference model</p>
+              <p className="text-xs text-[var(--color-text-muted)] mb-2">Used for background tasks (title & tag generation). Leave unset to use the LLM model above.</p>
+              <select
+                value={settings.ollamaBgModel ?? ''}
+                onChange={e => updateAI.mutate({ ollamaBgModel: e.target.value || null })}
+                className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+              >
+                <option value="">(same as LLM model)</option>
+                <optgroup label="Installed">
+                  {ollamaModels.map(m => (
+                    <option key={m.name} value={m.name}>{m.name} — {m.vramMb.toLocaleString()} MB</option>
+                  ))}
+                </optgroup>
+                {notInstalled.length > 0 && (
+                  <optgroup label="Recommended for CPU (not installed)">
+                    {notInstalled.map(m => (
+                      <option key={m.name} value={m.name}>{m.name} — ~{m.ramMb.toLocaleString()} MB · {m.note}</option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+            </div>
+          );
+        })()}
 
         {saved && <p className="text-xs text-green-400">Saved</p>}
       </div>

@@ -167,6 +167,8 @@ _voice_history: list[dict] = [
 ]
 
 # --- Recording state ---
+_trigger_lock   = threading.Lock()   # makes cooldown check + state flip atomic across device threads
+_action_lock    = threading.Lock()   # held for the duration of any transcribe+action cycle; non-blocking acquire prevents double-run
 _recording      = False
 _current_mode   = "paste"   # "paste" | "voice"
 _stream: Optional[sd.InputStream] = None
@@ -227,6 +229,10 @@ def _start_recording(mode: str) -> None:
 def _transcribe_and_paste() -> None:
     global _recording, _stream
 
+    if not _action_lock.acquire(blocking=False):
+        _stop_audio()
+        _notify_state(False, False, None)
+        return
     try:
         audio = _stop_audio()
         if audio is None:
@@ -248,6 +254,7 @@ def _transcribe_and_paste() -> None:
         _ctrl_released.wait(timeout=KEY_RELEASE_TIMEOUT)
         _paste_text(text)
     finally:
+        _action_lock.release()
         _notify_state(False, False, None)
 
 
@@ -269,6 +276,10 @@ def _paste_text(text: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _transcribe_and_journal() -> None:
+    if not _action_lock.acquire(blocking=False):
+        _stop_audio()
+        _notify_state(False, False, None)
+        return
     try:
         audio = _stop_audio()
         if audio is None:
@@ -286,7 +297,7 @@ def _transcribe_and_journal() -> None:
         logger.info('Journal text: "%s"', text)
 
         _journal_released.wait(timeout=KEY_RELEASE_TIMEOUT)
-        _status("✨ Polishing entry…")
+        _status("📝 Saving entry…")
         try:
             resp = requests.post(
                 f"{LUNASCHAL_URL}/api/journal",
@@ -294,12 +305,13 @@ def _transcribe_and_journal() -> None:
                 timeout=30,
             )
             if resp.ok:
-                _status("✓ Journal entry saved")
+                _status("✓ Journal entry saved (polishing in background…)")
             else:
                 _status(f"✗ Journal save failed ({resp.status_code})")
         except Exception as exc:
             _status(f"✗ {exc}")
     finally:
+        _action_lock.release()
         _notify_state(False, False, None)
 
 
@@ -308,6 +320,10 @@ def _transcribe_and_journal() -> None:
 # ---------------------------------------------------------------------------
 
 def _transcribe_and_chat() -> None:
+    if not _action_lock.acquire(blocking=False):
+        _stop_audio()
+        _notify_state(False, False, None)
+        return
     try:
         audio = _stop_audio()
         if audio is None:
@@ -341,6 +357,7 @@ def _transcribe_and_chat() -> None:
 
         _speak(_clean_for_tts(reply))
     finally:
+        _action_lock.release()
         _notify_state(False, False, None)
 
 
@@ -748,25 +765,26 @@ def _wake_word_loop() -> None:
 def _trigger(mode: str) -> None:
     global _last_toggle
 
-    # Don't steal a recording started by the other key
-    if _recording and mode != _current_mode:
-        return
+    with _trigger_lock:
+        # Don't steal a recording started by the other key
+        if _recording and mode != _current_mode:
+            return
 
-    now = time.time()
-    if now - _last_toggle < TOGGLE_COOLDOWN:
-        return
-    _last_toggle = now
+        now = time.time()
+        if now - _last_toggle < TOGGLE_COOLDOWN:
+            return
+        _last_toggle = now
 
-    if not _recording:
-        _start_recording(mode)
-    else:
-        if mode == "journal":
-            target = _transcribe_and_journal
-        elif mode == "paste" or (mode == "voice" and not _is_voice_pipeline_enabled()):
-            target = _transcribe_and_paste
+        if not _recording:
+            _start_recording(mode)
         else:
-            target = _transcribe_and_chat
-        threading.Thread(target=target, daemon=True).start()
+            if mode == "journal":
+                target = _transcribe_and_journal
+            elif mode == "paste" or (mode == "voice" and not _is_voice_pipeline_enabled()):
+                target = _transcribe_and_paste
+            else:
+                target = _transcribe_and_chat
+            threading.Thread(target=target, daemon=True).start()
 
 
 def _monitor_device(device: InputDevice) -> None:

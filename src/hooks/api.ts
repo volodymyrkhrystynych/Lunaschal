@@ -69,6 +69,7 @@ export interface AppSettings {
   hasGoogleKey: boolean;
   ollamaUrl: string | null;
   ollamaModel: string | null;
+  ollamaBgModel: string | null;
   networkMode: boolean;
   networkCode: string | null;
   sttPasteKey: string | null;
@@ -222,6 +223,7 @@ export const api = {
     update: (id: string, data: { content?: string; title?: string; tags?: string[] }) =>
       patch<{ success: boolean }>(`/api/journal/${id}`, data),
     delete: (id: string) => del<{ success: boolean }>(`/api/journal/${id}`),
+    polish: (id: string) => post<{ success: boolean; content: string }>(`/api/journal/${id}/polish`),
   },
 
   calendar: {

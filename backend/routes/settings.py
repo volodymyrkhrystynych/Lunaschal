@@ -26,6 +26,7 @@ def get_settings():
         'hasGoogleKey': bool(s.get('google_api_key')),
         'ollamaUrl': s.get('ollama_url'),
         'ollamaModel': s.get('ollama_model'),
+        'ollamaBgModel': s.get('ollama_bg_model'),
         'networkMode': NETWORK_MODE,
         'networkCode': s.get('network_code') if NETWORK_MODE else None,
         'sttPasteKey': s.get('stt_paste_key'),
@@ -44,7 +45,7 @@ def update_ai():
     field_map = {
         'aiProvider': 'ai_provider', 'aiModel': 'ai_model',
         'openaiApiKey': 'openai_api_key', 'googleApiKey': 'google_api_key',
-        'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model',
+        'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model', 'ollamaBgModel': 'ollama_bg_model',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
         'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
         'whisperModel': 'whisper_model',

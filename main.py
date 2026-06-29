@@ -64,6 +64,11 @@ def main():
 
         url = PROD_URL
 
+    import os
+    os.environ.setdefault(
+        'QTWEBENGINE_CHROMIUM_FLAGS',
+        '--disable-gpu --disable-gpu-compositing',
+    )
     webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600))
     webview.start(gui='qt')
 
