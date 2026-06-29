@@ -46,16 +46,47 @@ def events():
     )
 
 
+def _enrich_with_curated_tags(db, dicts: list[dict]) -> list[dict]:
+    if not dicts:
+        return dicts
+    ids = [d['id'] for d in dicts]
+    placeholders = ','.join('?' * len(ids))
+    tag_rows = db.execute(
+        f'SELECT jec.entry_id, ct.name'
+        f' FROM journal_entry_curated_tags jec'
+        f' JOIN curated_tags ct ON ct.id = jec.tag_id'
+        f' WHERE jec.entry_id IN ({placeholders})',
+        ids,
+    ).fetchall()
+    tag_map: dict[str, list[str]] = {}
+    for tr in tag_rows:
+        tag_map.setdefault(tr['entry_id'], []).append(tr['name'])
+    for d in dicts:
+        d['curatedTags'] = tag_map.get(d['id'], [])
+    return dicts
+
+
 @bp.get('')
 def list_entries():
     limit = min(int(request.args.get('limit', 50)), 100)
     offset = int(request.args.get('offset', 0))
+    curated_tag_id = request.args.get('curated_tag_id')
     db = get_db()
-    rows = db.execute(
-        'SELECT * FROM journal_entries ORDER BY created_at DESC LIMIT ? OFFSET ?',
-        (limit, offset),
-    ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    if curated_tag_id:
+        rows = db.execute(
+            'SELECT je.* FROM journal_entries je'
+            ' JOIN journal_entry_curated_tags jec ON je.id = jec.entry_id'
+            ' WHERE jec.tag_id = ?'
+            ' ORDER BY je.created_at DESC LIMIT ? OFFSET ?',
+            (curated_tag_id, limit, offset),
+        ).fetchall()
+    else:
+        rows = db.execute(
+            'SELECT * FROM journal_entries ORDER BY created_at DESC LIMIT ? OFFSET ?',
+            (limit, offset),
+        ).fetchall()
+    dicts = [row_to_dict(r) for r in rows]
+    return jsonify(_enrich_with_curated_tags(db, dicts))
 
 
 @bp.get('/search')
@@ -75,7 +106,7 @@ def search():
         list(id_rank),
     ).fetchall()
     dicts = sorted([row_to_dict(r) for r in rows], key=lambda d: id_rank.get(d['id'], 0))
-    return jsonify(dicts)
+    return jsonify(_enrich_with_curated_tags(db, dicts))
 
 
 @bp.get('/semantic-search')

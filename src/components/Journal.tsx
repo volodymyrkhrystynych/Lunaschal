@@ -4,6 +4,7 @@ import { api } from '../hooks/api';
 
 export function Journal() {
   const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCuratedTagId, setSelectedCuratedTagId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editTitle, setEditTitle] = useState('');
@@ -14,9 +15,19 @@ export function Journal() {
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
+  const { data: curatedTags } = useQuery({
+    queryKey: ['curatedTags'],
+    queryFn: api.curatedTags.list,
+  });
+
   const { data: entries, isLoading } = useQuery({
-    queryKey: searchQuery ? ['journal', 'search', searchQuery] : ['journal'],
-    queryFn: () => (searchQuery ? api.journal.search(searchQuery) : api.journal.list()),
+    queryKey: searchQuery
+      ? ['journal', 'search', searchQuery]
+      : ['journal', { curatedTagId: selectedCuratedTagId }],
+    queryFn: () =>
+      searchQuery
+        ? api.journal.search(searchQuery)
+        : api.journal.list({ curatedTagId: selectedCuratedTagId ?? undefined }),
   });
 
   useEffect(() => {
@@ -82,9 +93,25 @@ export function Journal() {
       </div>
 
       <div className="mb-4">
-        <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+        <input type="text" value={searchQuery}
+          onChange={(e) => { setSearchQuery(e.target.value); setSelectedCuratedTagId(null); }}
           placeholder="Search entries..."
           className="w-full bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]" />
+        {curatedTags && curatedTags.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {curatedTags.map(tag => (
+              <button key={tag.id}
+                onClick={() => setSelectedCuratedTagId(selectedCuratedTagId === tag.id ? null : tag.id)}
+                className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                  selectedCuratedTagId === tag.id
+                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
+                    : 'border-white/20 text-[var(--color-text-muted)] hover:border-white/40 hover:text-[var(--color-text)]'
+                }`}>
+                #{tag.name}{tag.entryCount > 0 && <span className="ml-1 opacity-60">({tag.entryCount})</span>}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {showNewEntry && (
@@ -164,9 +191,12 @@ export function Journal() {
               </>
             )}
 
-            {entry.tags && JSON.parse(entry.tags).length > 0 && (
+            {(entry.curatedTags?.length > 0 || (entry.tags && JSON.parse(entry.tags).length > 0)) && (
               <div className="flex flex-wrap gap-1.5 mt-2">
-                {JSON.parse(entry.tags).map((tag: string) => (
+                {entry.curatedTags?.map((tag: string) => (
+                  <span key={`c:${tag}`} className="px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] bg-white/5">#{tag}</span>
+                ))}
+                {entry.tags && JSON.parse(entry.tags).map((tag: string) => (
                   <span key={tag} className="px-2 py-0.5 text-xs rounded border border-[var(--color-primary)]/40 text-[var(--color-primary)] bg-[var(--color-primary)]/10">{tag}</span>
                 ))}
               </div>

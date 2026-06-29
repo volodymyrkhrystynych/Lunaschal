@@ -6,8 +6,17 @@ export interface JournalEntry {
   rawContent: string | null;
   title: string | null;
   tags: string | null;
+  curatedTags: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CuratedTag {
+  id: string;
+  name: string;
+  createdAt: string;
+  entryCount: number;
+  scanProgress?: { total: number; processed: number; done: boolean };
 }
 
 export interface CalendarEvent {
@@ -211,8 +220,13 @@ export const api = {
   },
 
   journal: {
-    list: (params?: { limit?: number; offset?: number }) =>
-      get<JournalEntry[]>(`/api/journal?${new URLSearchParams(params as Record<string, string> || {})}`),
+    list: (params?: { limit?: number; offset?: number; curatedTagId?: string }) => {
+      const qp = new URLSearchParams();
+      if (params?.limit !== undefined) qp.set('limit', String(params.limit));
+      if (params?.offset !== undefined) qp.set('offset', String(params.offset));
+      if (params?.curatedTagId) qp.set('curated_tag_id', params.curatedTagId);
+      return get<JournalEntry[]>(`/api/journal?${qp}`);
+    },
     search: (query: string, limit?: number) =>
       get<JournalEntry[]>(`/api/journal/search?query=${encodeURIComponent(query)}&limit=${limit ?? 50}`),
     semanticSearch: (query: string, limit?: number) =>
@@ -353,6 +367,14 @@ export const api = {
       get<Conversation[]>(`/api/writing/projects/${projectId}/conversations`),
     createProjectConversation: (projectId: string, data?: { title?: string }) =>
       post<{ id: string }>(`/api/writing/projects/${projectId}/conversations`, data ?? {}),
+  },
+
+  curatedTags: {
+    list: () => get<CuratedTag[]>('/api/curated-tags'),
+    create: (name: string) => post<{ id: string }>('/api/curated-tags', { name }),
+    rename: (id: string, name: string) => patch<{ success: boolean }>(`/api/curated-tags/${id}`, { name }),
+    delete: (id: string) => del<{ success: boolean }>(`/api/curated-tags/${id}`),
+    scanStatus: (id: string) => get<{ total: number; processed: number; done: boolean }>(`/api/curated-tags/${id}/scan-status`),
   },
 
   tasks: {

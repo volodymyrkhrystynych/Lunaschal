@@ -133,3 +133,19 @@ CREATE TABLE IF NOT EXISTS daily_task_completions (
     created_at INTEGER NOT NULL,
     UNIQUE(task_id, date)
 );
+
+CREATE TABLE IF NOT EXISTS curated_tags (
+    id TEXT PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS journal_entry_curated_tags (
+    entry_id TEXT NOT NULL,
+    tag_id TEXT NOT NULL,
+    PRIMARY KEY(entry_id, tag_id),
+    FOREIGN KEY(entry_id) REFERENCES journal_entries(id) ON DELETE CASCADE,
+    FOREIGN KEY(tag_id) REFERENCES curated_tags(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_ject_tag ON journal_entry_curated_tags(tag_id);

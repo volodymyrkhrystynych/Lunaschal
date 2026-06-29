@@ -104,6 +104,54 @@ def generate_journal_metadata(content: str) -> dict:
     return {}
 
 
+def classify_entry_for_tag(content: str, tag_name: str) -> bool:
+    """Returns True if the entry relates to tag_name. Background-safe (uses CPU for Ollama)."""
+    if not content.strip():
+        return False
+    try:
+        if not is_ai_configured():
+            return False
+        c = get_provider_config()
+        provider = c['provider']
+        system = "You are a strict binary classifier. Reply ONLY with 'yes' or 'no', nothing else."
+        user = f"Does this journal entry relate to the topic '{tag_name}'?\n\n{content}"
+
+        if provider == 'openai':
+            from openai import OpenAI
+            client = OpenAI(api_key=c['openai_api_key'])
+            model = c['model'] or DEFAULT_MODELS['openai']
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
+                stream=False,
+            )
+            return resp.choices[0].message.content.lower().strip().startswith('yes')
+
+        elif provider == 'ollama':
+            client = _ollama_client(c)
+            model = c['ollama_bg_model'] or c['ollama_model'] or DEFAULT_MODELS['ollama']
+            resp = client.chat.completions.create(
+                model=model,
+                messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
+                stream=False,
+                extra_body=_CPU_OPTIONS,
+            )
+            return resp.choices[0].message.content.lower().strip().startswith('yes')
+
+        elif provider == 'gemini':
+            import google.generativeai as genai
+            genai.configure(api_key=c['google_api_key'])
+            model_name = c['model'] or DEFAULT_MODELS['gemini']
+            gemini = genai.GenerativeModel(model_name, system_instruction=system)
+            resp = gemini.generate_content(user)
+            return resp.text.lower().strip().startswith('yes')
+
+    except Exception as e:
+        print(f'Tag classification failed for "{tag_name}": {e}')
+
+    return False
+
+
 def polish_journal_entry(raw_text: str, background: bool = False) -> str:
     """
     Clean up a spoken journal entry.

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+import { CuratedTagsSection } from './CuratedTagsSection';
 
 // Maps browser KeyboardEvent.code → evdev keycode name
 const CODE_TO_EVDEV: Record<string, string> = (() => {
@@ -613,6 +614,7 @@ function KnowledgeBaseSection() {
 }
 
 export function Settings() {
+  const [activeTab, setActiveTab] = useState<'general' | 'tags'>('general');
   const [openaiKey, setOpenaiKey] = useState('');
   const [googleKey, setGoogleKey] = useState('');
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
@@ -655,7 +657,26 @@ export function Settings() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4">
-      <h1 className="text-2xl font-semibold text-[var(--color-text)] mb-6">Settings</h1>
+      <div className="flex items-center gap-4 mb-6">
+        <h1 className="text-2xl font-semibold text-[var(--color-text)]">Settings</h1>
+        <div className="flex gap-1 ml-2">
+          {(['general', 'tags'] as const).map(tab => (
+            <button key={tab} onClick={() => setActiveTab(tab)}
+              className={`px-4 py-1.5 rounded text-sm transition-colors ${
+                activeTab === tab
+                  ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)] border border-[var(--color-primary)]/40'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+              }`}>
+              {tab === 'general' ? 'General' : 'Tags'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {activeTab === 'tags' ? (
+        <CuratedTagsSection />
+      ) : (
+      <>
 
       {message && (
         <div className={`mb-4 p-3 rounded-lg ${message.type === 'success' ? 'bg-green-900/30 border border-green-600/50 text-green-200' : 'bg-red-900/30 border border-red-600/50 text-red-200'}`}>
@@ -747,6 +768,8 @@ export function Settings() {
           <p className="text-sm text-[var(--color-text-muted)] mt-1">A privacy-first, self-hosted personal AI knowledge assistant.</p>
         </div>
       </section>
+      </>
+      )}
     </div>
   );
 }
