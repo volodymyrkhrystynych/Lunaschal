@@ -1,6 +1,9 @@
 import json
+import logging
 
 from backend.ai.provider import get_provider_config, is_ai_configured, DEFAULT_MODELS
+
+logger = logging.getLogger(__name__)
 
 _SYSTEM = (
     "You are a minimal transcription cleaner. "
@@ -37,8 +40,41 @@ def _ollama_client(c: dict):
     return OpenAI(base_url=f"{c['ollama_url']}/v1", api_key='ollama')
 
 
+def _ollama_chat(client, model: str, messages: list, extra_body: dict | None, **kwargs):
+    """Run one Ollama chat completion, raising on failure."""
+    return client.chat.completions.create(
+        model=model,
+        messages=messages,
+        stream=False,
+        **({"extra_body": extra_body} if extra_body else {}),
+        **kwargs,
+    )
+
+
+def _ollama_chat_with_fallback(c: dict, messages: list, prefer_bg: bool, **kwargs):
+    """
+    Try the bg model on CPU first; if it's unavailable fall back to the
+    main model, also on CPU.  Returns the completion response.
+    """
+    client = _ollama_client(c)
+    bg_model  = c['ollama_bg_model'] if prefer_bg else None
+    main_model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+
+    if bg_model:
+        try:
+            logger.info("Background LLM: trying bg model '%s' on CPU", bg_model)
+            return _ollama_chat(client, bg_model, messages, _CPU_OPTIONS, **kwargs)
+        except Exception as e:
+            logger.warning(
+                "bg model '%s' unavailable (%s) — falling back to '%s' on CPU",
+                bg_model, e, main_model,
+            )
+
+    logger.info("Background LLM: using main model '%s' on CPU", main_model)
+    return _ollama_chat(client, main_model, messages, _CPU_OPTIONS, **kwargs)
+
+
 def generate_journal_metadata(content: str) -> dict:
-    """Background task — always uses the bg model on CPU when Ollama is active."""
     if not content.strip():
         return {}
     try:
@@ -62,18 +98,14 @@ def generate_journal_metadata(content: str) -> dict:
             )
 
         elif provider == 'ollama':
-            client = _ollama_client(c)
-            # Prefer the dedicated bg model; fall back to main model but still run on CPU
-            model = c['ollama_bg_model'] or c['ollama_model'] or DEFAULT_MODELS['ollama']
-            resp = client.chat.completions.create(
-                model=model,
+            resp = _ollama_chat_with_fallback(
+                c,
                 messages=[
                     {'role': 'system', 'content': _METADATA_SYSTEM},
                     {'role': 'user', 'content': content},
                 ],
+                prefer_bg=True,
                 response_format={'type': 'json_object'},
-                stream=False,
-                extra_body=_CPU_OPTIONS,
             )
 
         elif provider == 'gemini':
@@ -99,7 +131,7 @@ def generate_journal_metadata(content: str) -> dict:
         return {'title': title, 'tags': valid_tags or None}
 
     except Exception as e:
-        print(f'Journal metadata generation failed: {e}')
+        logger.error('Journal metadata generation failed: %s', e)
 
     return {}
 
@@ -153,12 +185,6 @@ def classify_entry_for_tag(content: str, tag_name: str) -> bool:
 
 
 def polish_journal_entry(raw_text: str, background: bool = False) -> str:
-    """
-    Clean up a spoken journal entry.
-
-    background=True  → use the bg model on CPU (called from _polish_bg thread).
-    background=False → use the main model on GPU (called from the on-demand /polish endpoint).
-    """
     if not raw_text.strip():
         return raw_text
     try:
@@ -182,23 +208,29 @@ def polish_journal_entry(raw_text: str, background: bool = False) -> str:
             return resp.choices[0].message.content.strip() or raw_text
 
         elif provider == 'ollama':
-            client = _ollama_client(c)
-            if background and c['ollama_bg_model']:
-                model = c['ollama_bg_model']
-                extra = _CPU_OPTIONS
+            if background:
+                resp = _ollama_chat_with_fallback(
+                    c,
+                    messages=[
+                        {'role': 'system', 'content': _SYSTEM},
+                        {'role': 'user', 'content': raw_text},
+                    ],
+                    prefer_bg=True,
+                )
             else:
+                # On-demand (non-background) also runs on CPU to avoid
+                # stealing VRAM from Whisper / TTS.
+                client = _ollama_client(c)
                 model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-                extra = {}
-            kwargs = {'extra_body': extra} if extra else {}
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {'role': 'system', 'content': _SYSTEM},
-                    {'role': 'user', 'content': raw_text},
-                ],
-                stream=False,
-                **kwargs,
-            )
+                logger.info("On-demand polish: using '%s' on CPU", model)
+                resp = _ollama_chat(
+                    client, model,
+                    messages=[
+                        {'role': 'system', 'content': _SYSTEM},
+                        {'role': 'user', 'content': raw_text},
+                    ],
+                    extra_body=_CPU_OPTIONS,
+                )
             return resp.choices[0].message.content.strip() or raw_text
 
         elif provider == 'gemini':
@@ -210,6 +242,6 @@ def polish_journal_entry(raw_text: str, background: bool = False) -> str:
             return resp.text.strip() or raw_text
 
     except Exception as e:
-        print(f'Journal polish failed, using raw text: {e}')
+        logger.error('Journal polish failed, using raw text: %s', e)
 
     return raw_text
