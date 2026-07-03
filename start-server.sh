@@ -26,8 +26,10 @@ if ! pgrep -x ollama > /dev/null; then
   ollama serve &>/tmp/ollama.log &
 fi
 
-# Start Flask + Vite dev servers
-npm run dev &
+# Start Flask (bound to all interfaces) + Vite dev servers
+./node_modules/.bin/concurrently \
+  ".venv/bin/flask --app backend.app run --host 0.0.0.0 --port 5000 --debug" \
+  "./node_modules/.bin/vite" &
 DEV_PID=$!
 
 # Wait for Flask to be ready
