@@ -1,10 +1,28 @@
 import json
 import random
+import subprocess
 import time
 import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
 from backend.db.connection import get_db
+
+_sleep_inhibitor: subprocess.Popen | None = None
+
+
+def _set_sleep_inhibitor(enabled: bool) -> None:
+    global _sleep_inhibitor
+    if enabled:
+        if _sleep_inhibitor is None or _sleep_inhibitor.poll() is not None:
+            _sleep_inhibitor = subprocess.Popen(
+                ['systemd-inhibit', '--what=sleep:idle', '--who=Lunaschal',
+                 '--why=Server mode active', '--mode=block', 'sleep', 'infinity'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+    else:
+        if _sleep_inhibitor and _sleep_inhibitor.poll() is None:
+            _sleep_inhibitor.terminate()
+        _sleep_inhibitor = None
 
 bp = Blueprint('settings', __name__, url_prefix='/api/settings')
 
@@ -36,6 +54,7 @@ def get_settings():
         'ttsBackend': s.get('tts_backend'),
         'whisperModel': s.get('whisper_model'),
         'voicePipelineEnabled': bool(s.get('voice_pipeline_enabled', 1)),
+        'preventSleep': bool(s.get('prevent_sleep', 0)),
     })
 
 
@@ -50,6 +69,7 @@ def update_ai():
         'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
         'whisperModel': 'whisper_model',
         'voicePipelineEnabled': 'voice_pipeline_enabled',
+        'preventSleep': 'prevent_sleep',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
@@ -68,6 +88,8 @@ def update_ai():
         ph = ', '.join('?' * len(updates))
         db.execute(f'INSERT INTO settings({cols}) VALUES ({ph})', list(updates.values()))
     db.commit()
+    if 'preventSleep' in body:
+        _set_sleep_inhibitor(bool(body['preventSleep']))
     return jsonify({'success': True})
 
 
