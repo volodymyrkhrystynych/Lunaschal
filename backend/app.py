@@ -58,11 +58,10 @@ def create_app():
             return None
         if request.path in _EXEMPT_PATHS or not request.path.startswith('/api/'):
             return None
+        server_password = os.environ.get('LUNASCHAL_PASSWORD', '')
+        if server_password and request.headers.get('X-Lunaschal-Password') == server_password:
+            return None
         token = request.cookies.get(COOKIE_NAME)
-        if not token:
-            auth_header = request.headers.get('Authorization', '')
-            if auth_header.startswith('Bearer '):
-                token = auth_header[7:]
         if not token or not decode_token(token):
             return jsonify({'error': 'Unauthorized', 'auth_required': True}), 401
 

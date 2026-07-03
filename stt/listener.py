@@ -50,9 +50,9 @@ STT_URL       = os.environ.get("STT_URL",       "http://127.0.0.1:5000")
 LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:5000")
 
 _SESSION = requests.Session()
-_LUNASCHAL_TOKEN = os.environ.get("LUNASCHAL_TOKEN")
-if _LUNASCHAL_TOKEN:
-    _SESSION.headers.update({"Authorization": f"Bearer {_LUNASCHAL_TOKEN}"})
+_LUNASCHAL_PASSWORD = os.environ.get("LUNASCHAL_PASSWORD")
+if _LUNASCHAL_PASSWORD:
+    _SESSION.headers.update({"X-Lunaschal-Password": _LUNASCHAL_PASSWORD})
 
 
 _pipeline_cache: bool = True
