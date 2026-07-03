@@ -49,6 +49,11 @@ logger = logging.getLogger(__name__)
 STT_URL       = os.environ.get("STT_URL",       "http://127.0.0.1:5000")
 LUNASCHAL_URL = os.environ.get("LUNASCHAL_URL", "http://127.0.0.1:5000")
 
+_SESSION = requests.Session()
+_LUNASCHAL_TOKEN = os.environ.get("LUNASCHAL_TOKEN")
+if _LUNASCHAL_TOKEN:
+    _SESSION.headers.update({"Authorization": f"Bearer {_LUNASCHAL_TOKEN}"})
+
 
 _pipeline_cache: bool = True
 _pipeline_cache_ts: float = 0.0
@@ -61,7 +66,7 @@ def _is_voice_pipeline_enabled() -> bool:
     if now - _pipeline_cache_ts < _PIPELINE_CACHE_TTL:
         return _pipeline_cache
     try:
-        r = requests.get(f"{LUNASCHAL_URL}/api/settings", timeout=1)
+        r = _SESSION.get(f"{LUNASCHAL_URL}/api/settings", timeout=1)
         data = r.json()
         if data and 'voicePipelineEnabled' in data:
             _pipeline_cache = bool(data['voicePipelineEnabled'])
@@ -74,7 +79,7 @@ def _is_voice_pipeline_enabled() -> bool:
 def _notify_state(recording: bool, transcribing: bool, mode: str | None = None) -> None:
     """Tell the Flask app what state the listener is in so the UI can mirror it."""
     try:
-        requests.post(
+        _SESSION.post(
             f"{STT_URL}/api/stt/listener-state",
             json={"recording": recording, "transcribing": transcribing, "mode": mode},
             timeout=1,
@@ -86,12 +91,11 @@ def _notify_state(recording: bool, transcribing: bool, mode: str | None = None) 
 def _fetch_shortcut_settings() -> tuple[str | None, str | None, str | None]:
     """Fetch sttPasteKey / sttVoiceKey / sttJournalKey from the Flask settings API on startup."""
     try:
-        import urllib.request as _req
         import json as _json
-        with _req.urlopen(LUNASCHAL_URL + '/api/settings', timeout=3) as r:
-            data = _json.loads(r.read())
-            if data:
-                return data.get('sttPasteKey'), data.get('sttVoiceKey'), data.get('sttJournalKey')
+        r = _SESSION.get(LUNASCHAL_URL + '/api/settings', timeout=3)
+        data = _json.loads(r.content)
+        if data:
+            return data.get('sttPasteKey'), data.get('sttVoiceKey'), data.get('sttJournalKey')
     except Exception:
         pass
     return None, None, None
@@ -299,7 +303,7 @@ def _transcribe_and_journal() -> None:
         _journal_released.wait(timeout=KEY_RELEASE_TIMEOUT)
         _status("📝 Saving entry…")
         try:
-            resp = requests.post(
+            resp = _SESSION.post(
                 f"{LUNASCHAL_URL}/api/journal",
                 json={"raw_content": text},
                 timeout=30,
@@ -370,7 +374,7 @@ def _chat(user_text: str) -> str | None:
     if system_msg:
         payload["systemPrompt"] = system_msg
     try:
-        with requests.post(
+        with _SESSION.post(
             f"{LUNASCHAL_URL}/api/chat/stream",
             json=payload,
             stream=True,
@@ -442,7 +446,7 @@ def _clean_for_tts(text: str) -> str:
 def _speak(text: str) -> None:
     """Send text to the TTS endpoint and play the returned audio."""
     try:
-        resp = requests.post(
+        resp = _SESSION.post(
             f"{STT_URL}/api/tts",
             data={"text": text},
             timeout=30,
@@ -513,7 +517,7 @@ def _nudge_chat(messages: list[dict], system_prompt: str) -> str | None:
     """Send messages to the chat stream endpoint with a dedicated system prompt."""
     payload: dict = {"messages": messages, "systemPrompt": system_prompt}
     try:
-        with requests.post(
+        with _SESSION.post(
             f"{LUNASCHAL_URL}/api/chat/stream",
             json=payload,
             stream=True,
@@ -574,7 +578,7 @@ def _run_nudge(task: dict) -> None:
 
         if any(p in reply.lower() for p in done_phrases):
             try:
-                requests.post(f"{LUNASCHAL_URL}/api/tasks/{task_id}/complete", timeout=5)
+                _SESSION.post(f"{LUNASCHAL_URL}/api/tasks/{task_id}/complete", timeout=5)
             except Exception:
                 pass
             closing = _nudge_chat(history, system_prompt)
@@ -603,7 +607,7 @@ def _nudge_loop() -> None:
             continue
 
         try:
-            resp = requests.get(f"{LUNASCHAL_URL}/api/tasks", timeout=5)
+            resp = _SESSION.get(f"{LUNASCHAL_URL}/api/tasks", timeout=5)
             tasks = resp.json()
         except Exception:
             continue
@@ -650,7 +654,7 @@ def _transcribe(audio: np.ndarray) -> str | None:
     buf.seek(0)
 
     try:
-        resp = requests.post(
+        resp = _SESSION.post(
             f"{STT_URL}/api/transcribe",
             files={"audio": ("recording.wav", buf, "audio/wav")},
             timeout=120,
@@ -921,7 +925,7 @@ def main() -> None:
     print()
 
     try:
-        r = requests.get(f"{STT_URL}/api/stt/health", timeout=2)
+        r = _SESSION.get(f"{STT_URL}/api/stt/health", timeout=2)
         data = r.json()
         stt_ok = data.get("stt_ready", data.get("ready", False))
         tts_ok = data.get("tts_ready", False)
