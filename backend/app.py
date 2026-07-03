@@ -22,6 +22,9 @@ logging.getLogger('werkzeug').addFilter(_SilentPollingFilter())
 def _start_listener():
     if not os.environ.get('STT_LISTENER'):
         return
+    # Werkzeug debug reloader forks two processes; only start in the child (the real app).
+    if os.environ.get('WERKZEUG_RUN_MAIN') != 'true' and os.environ.get('FLASK_DEBUG'):
+        return
     stt_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'stt'))
     python  = os.path.join(stt_dir, '.venv', 'bin', 'python')
     script  = os.path.join(stt_dir, 'listener.py')
