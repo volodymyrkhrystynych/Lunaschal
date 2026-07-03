@@ -23,14 +23,11 @@ export STT_URL="$LUNASCHAL_URL"
 
 echo "Connecting to server at $LUNASCHAL_URL"
 
-# Open the app in browser
-if command -v xdg-open &>/dev/null; then
-  xdg-open "$LUNASCHAL_URL" &
-elif command -v open &>/dev/null; then
-  open "$LUNASCHAL_URL" &
-else
-  echo "Open $LUNASCHAL_URL in your browser"
-fi
+# Start STT listener in background
+./stt/run_listener.sh &>/tmp/lunaschal-listener.log &
+LISTENER_PID=$!
 
-# Start STT listener pointing to remote server
-exec ./stt/run_listener.sh
+# Open native desktop window pointing at the remote server
+.venv/bin/python main.py --server-url "$LUNASCHAL_URL"
+
+kill $LISTENER_PID 2>/dev/null
