@@ -6,8 +6,6 @@ import urllib.error
 
 import webview
 
-from backend.app import create_app
-
 FLASK_PORT = 5000
 DEV_URL = 'http://localhost:5173'
 PROD_URL = f'http://127.0.0.1:{FLASK_PORT}'
@@ -15,6 +13,7 @@ PROD_URL = f'http://127.0.0.1:{FLASK_PORT}'
 
 def _run_flask():
     import os
+    from backend.app import create_app
     host = '0.0.0.0' if os.environ.get('NETWORK_MODE', '').lower() in ('1', 'true', 'yes') else '127.0.0.1'
     app = create_app()
     app.run(host=host, port=FLASK_PORT, use_reloader=False)
