@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+import { useShortcuts } from '../shortcuts/ShortcutProvider';
 
 type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks';
 
@@ -12,7 +13,7 @@ interface SidebarProps {
   onConversationSelect: (id: string | null) => void;
 }
 
-const navItems: { view: View; label: string; icon: string }[] = [
+export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'chat', label: 'Chat', icon: '💬' },
   { view: 'tasks', label: 'Tasks', icon: '✅' },
   { view: 'journal', label: 'Journal', icon: '📓' },
@@ -25,6 +26,7 @@ const navItems: { view: View; label: string; icon: string }[] = [
 
 export function Sidebar({ currentView, onViewChange, isOpen, onToggle, currentConversationId, onConversationSelect }: SidebarProps) {
   const queryClient = useQueryClient();
+  const { level } = useShortcuts();
   const { data: conversations } = useQuery({ queryKey: ['chat', 'conversations'], queryFn: api.chat.listConversations });
 
   const createConversation = useMutation({
@@ -65,7 +67,7 @@ export function Sidebar({ currentView, onViewChange, isOpen, onToggle, currentCo
               currentView === item.view
                 ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
                 : 'text-[var(--color-text)] hover:bg-white/10'
-            }`}>
+            } ${currentView === item.view && level === 0 ? 'ring-1 ring-[var(--color-primary)]' : ''}`}>
             <span>{item.icon}</span>
             <span>{item.label}</span>
           </button>

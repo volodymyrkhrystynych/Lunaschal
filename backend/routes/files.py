@@ -67,6 +67,17 @@ def write_file():
     return jsonify({'success': True})
 
 
+@bp.post('/mkdir')
+def make_dir():
+    data = request.json or {}
+    rel = data.get('path', '')
+    p = _safe(rel) if rel else None
+    if p is None or p == FILES_ROOT:
+        return jsonify({'error': 'Invalid path'}), 400
+    p.mkdir(parents=True, exist_ok=True)
+    return jsonify({'success': True})
+
+
 @bp.post('/rename')
 def rename_file():
     data = request.json or {}

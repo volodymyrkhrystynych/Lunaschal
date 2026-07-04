@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type WritingProject } from '../../hooks/api';
+import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
 
 interface Props {
   selectedProjectId: string | null;
@@ -40,6 +41,25 @@ export function ProjectList({ selectedProjectId, onSelectProject }: Props) {
     if (!title) return;
     createProject.mutate({ title });
   };
+
+  const { level } = useShortcuts();
+
+  const step = (dir: 1 | -1) => {
+    if (!projects || projects.length === 0) return;
+    const idx = projects.findIndex((p) => p.id === selectedProjectId);
+    if (idx === -1) {
+      onSelectProject(projects[0].id);
+      return;
+    }
+    const next = Math.min(Math.max(idx + dir, 0), projects.length - 1);
+    if (next !== idx) onSelectProject(projects[next].id);
+  };
+
+  useShortcutScope(1, {
+    next: () => step(1),
+    prev: () => step(-1),
+    create: () => setCreating(true),
+  });
 
   return (
     <div className="flex flex-col h-full">
@@ -84,7 +104,7 @@ export function ProjectList({ selectedProjectId, onSelectProject }: Props) {
               selectedProjectId === project.id
                 ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
                 : 'text-[var(--color-text)] hover:bg-white/10'
-            }`}
+            } ${level === 1 && selectedProjectId === project.id ? 'ring-1 ring-[var(--color-primary)]' : ''}`}
             onClick={() => onSelectProject(project.id)}
           >
             <span className="text-sm truncate flex-1">{project.title}</span>

@@ -197,6 +197,7 @@ async function send<T>(method: string, url: string, body?: unknown): Promise<T> 
 
 const post = <T>(url: string, body?: unknown) => send<T>('POST', url, body);
 const patch = <T>(url: string, body: unknown) => send<T>('PATCH', url, body);
+const put = <T>(url: string, body: unknown) => send<T>('PUT', url, body);
 const del = <T>(url: string) => send<T>('DELETE', url);
 
 // --- API namespaces ---
@@ -318,6 +319,14 @@ export const api = {
       post<{ success: boolean }>('/api/files/rename', { from, to }),
     delete: (path: string) =>
       del<{ success: boolean }>(`/api/files?path=${encodeURIComponent(path)}`),
+    mkdir: (path: string) =>
+      post<{ success: boolean }>('/api/files/mkdir', { path }),
+  },
+
+  shortcuts: {
+    get: () => get<{ version: number; bindings: Record<string, string> }>('/api/shortcuts'),
+    put: (bindings: Record<string, string>) =>
+      put<{ success: boolean }>('/api/shortcuts', { version: 1, bindings }),
   },
 
   stt: {

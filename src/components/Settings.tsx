@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { CuratedTagsSection } from './CuratedTagsSection';
+import { ShortcutSettings } from './ShortcutSettings';
+import { keyCapture } from '../shortcuts/keymap';
 
 // Maps browser KeyboardEvent.code → evdev keycode name
 const CODE_TO_EVDEV: Record<string, string> = (() => {
@@ -76,6 +78,7 @@ function KeyRecorder({ value, onChange }: { value: string | null; onChange: (key
       heldRef.current = new Set();
       return;
     }
+    keyCapture.active = true;
 
     const done = (combo: string) => {
       if (modTimerRef.current) { clearTimeout(modTimerRef.current); modTimerRef.current = null; }
@@ -124,6 +127,7 @@ function KeyRecorder({ value, onChange }: { value: string | null; onChange: (key
       window.removeEventListener('keydown', handleDown, true);
       window.removeEventListener('keyup', handleUp, true);
       if (modTimerRef.current) { clearTimeout(modTimerRef.current); modTimerRef.current = null; }
+      keyCapture.active = false;
     };
   }, [listening, onChange]);
 
@@ -614,7 +618,7 @@ function KnowledgeBaseSection() {
 }
 
 export function Settings() {
-  const [activeTab, setActiveTab] = useState<'general' | 'tags'>('general');
+  const [activeTab, setActiveTab] = useState<'general' | 'tags' | 'shortcuts'>('general');
   const [openaiKey, setOpenaiKey] = useState('');
   const [googleKey, setGoogleKey] = useState('');
   const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
@@ -660,14 +664,14 @@ export function Settings() {
       <div className="flex items-center gap-4 mb-6">
         <h1 className="text-2xl font-semibold text-[var(--color-text)]">Settings</h1>
         <div className="flex gap-1 ml-2">
-          {(['general', 'tags'] as const).map(tab => (
+          {(['general', 'tags', 'shortcuts'] as const).map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className={`px-4 py-1.5 rounded text-sm transition-colors ${
                 activeTab === tab
                   ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)] border border-[var(--color-primary)]/40'
                   : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
               }`}>
-              {tab === 'general' ? 'General' : 'Tags'}
+              {tab === 'general' ? 'General' : tab === 'tags' ? 'Tags' : 'Shortcuts'}
             </button>
           ))}
         </div>
@@ -675,6 +679,8 @@ export function Settings() {
 
       {activeTab === 'tags' ? (
         <CuratedTagsSection />
+      ) : activeTab === 'shortcuts' ? (
+        <ShortcutSettings />
       ) : (
       <>
 

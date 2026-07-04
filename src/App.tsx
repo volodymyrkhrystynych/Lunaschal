@@ -12,6 +12,7 @@ import { Login } from './components/Login';
 import { Writing } from './components/Writing';
 import { Tasks } from './components/Tasks';
 import { api } from './hooks/api';
+import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 
 type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks';
 
@@ -72,19 +73,21 @@ export default function App() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-[var(--color-bg)]">
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar
-          currentView={currentView}
-          onViewChange={setCurrentView}
-          isOpen={sidebarOpen}
-          onToggle={() => setSidebarOpen(!sidebarOpen)}
-          currentConversationId={currentConversationId}
-          onConversationSelect={setCurrentConversationId}
-        />
-        <main className="flex-1 flex flex-col overflow-hidden">{renderView()}</main>
+    <ShortcutProvider currentView={currentView} onViewChange={setCurrentView}>
+      <div className="h-screen flex flex-col bg-[var(--color-bg)]">
+        <div className="flex flex-1 overflow-hidden">
+          <Sidebar
+            currentView={currentView}
+            onViewChange={setCurrentView}
+            isOpen={sidebarOpen}
+            onToggle={() => setSidebarOpen(!sidebarOpen)}
+            currentConversationId={currentConversationId}
+            onConversationSelect={setCurrentConversationId}
+          />
+          <main className="flex-1 flex flex-col overflow-hidden">{renderView()}</main>
+        </div>
+        <SttPanel onTranscribed={handleTranscribed} />
       </div>
-      <SttPanel onTranscribed={handleTranscribed} />
-    </div>
+    </ShortcutProvider>
   );
 }

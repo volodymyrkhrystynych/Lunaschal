@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
 
 export function Journal() {
   const [searchQuery, setSearchQuery] = useState('');
@@ -13,7 +14,9 @@ export function Journal() {
   const [generatingFor, setGeneratingFor] = useState<string | null>(null);
   const [generationResult, setGenerationResult] = useState<{ id: string; count: number } | null>(null);
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
+  const [selIndex, setSelIndex] = useState(0);
   const queryClient = useQueryClient();
+  const { level } = useShortcuts();
 
   const { data: curatedTags } = useQuery({
     queryKey: ['curatedTags'],
@@ -77,6 +80,24 @@ export function Journal() {
     onError: () => setGeneratingFor(null),
   });
 
+  useEffect(() => {
+    setSelIndex((i) => Math.min(i, Math.max((entries?.length ?? 1) - 1, 0)));
+  }, [entries]);
+
+  useShortcutScope(1, {
+    next: () => setSelIndex((i) => Math.min(i + 1, Math.max((entries?.length ?? 1) - 1, 0))),
+    prev: () => setSelIndex((i) => Math.max(i - 1, 0)),
+    create: () => setShowNewEntry(true),
+    drillIn: () => {
+      const entry = entries?.[selIndex];
+      if (!entry) return false;
+      setEditingId(entry.id);
+      setEditContent(entry.content);
+      setEditTitle(entry.title ?? '');
+      return true;
+    },
+  });
+
   const formatDate = (date: string) => new Intl.DateTimeFormat('en-US', {
     weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
     hour: '2-digit', minute: '2-digit',
@@ -116,7 +137,8 @@ export function Journal() {
 
       {showNewEntry && (
         <div className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
-          <textarea value={newEntry} onChange={(e) => setNewEntry(e.target.value)}
+          <textarea value={newEntry} onChange={(e) => setNewEntry(e.target.value)} autoFocus
+            onKeyDown={(e) => { if (e.key === 'Escape') setShowNewEntry(false); }}
             placeholder="Write your journal entry..." rows={4}
             className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none" />
           <div className="flex justify-end gap-2 mt-2">
@@ -130,8 +152,12 @@ export function Journal() {
       <div className="flex-1 overflow-y-auto space-y-4">
         {isLoading && <div className="text-[var(--color-text-muted)]">Loading...</div>}
 
-        {entries?.map((entry) => (
-          <div key={entry.id} className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
+        {entries?.map((entry, idx) => (
+          <div key={entry.id}
+            ref={(el) => { if (el && level >= 1 && idx === selIndex) el.scrollIntoView({ block: 'nearest' }); }}
+            className={`p-4 bg-[var(--color-surface)] rounded-lg border ${
+              level >= 1 && idx === selIndex ? 'border-[var(--color-primary)]' : 'border-white/10'
+            }`}>
             <div className="flex items-start justify-between mb-2">
               <span className="text-sm text-[var(--color-text-muted)]">{formatDate(entry.createdAt)}</span>
               <div className="flex gap-2">

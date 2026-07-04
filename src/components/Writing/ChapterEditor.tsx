@@ -100,6 +100,7 @@ export function ChapterEditor({ chapterId }: Props) {
       </div>
 
       <textarea
+        data-chapter-editor
         value={content}
         onChange={e => handleContentChange(e.target.value)}
         placeholder="Start writing…"
