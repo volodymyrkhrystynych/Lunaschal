@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type FileEntry } from '../../hooks/api';
 import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import { SyncButton } from './SyncButton';
 
 interface Props {
   selectedPath: string | null;
@@ -226,20 +227,23 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="p-2 border-b border-white/10 flex items-center justify-between">
-        <span className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wide">Files</span>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setShowNewFolder(true)}
-            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1"
-            title="New folder"
-          >+ Folder</button>
-          <button
-            onClick={() => setShowNewFile(true)}
-            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1"
-            title="New file"
-          >+ New</button>
+      <div className="p-2 border-b border-white/10 flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wide">Files</span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setShowNewFolder(true)}
+              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1"
+              title="New folder"
+            >+ Folder</button>
+            <button
+              onClick={() => setShowNewFile(true)}
+              className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1"
+              title="New file"
+            >+ New</button>
+          </div>
         </div>
+        <SyncButton />
       </div>
 
       <div className="flex-1 overflow-y-auto py-1">

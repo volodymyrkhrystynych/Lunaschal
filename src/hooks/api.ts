@@ -90,6 +90,26 @@ export interface AppSettings {
   whisperModel: string | null;
   voicePipelineEnabled: boolean;
   preventSleep: boolean;
+  gitRemoteUrl: string | null;
+  gitBranch: string;
+  gitLastSync: number | null;
+}
+
+export interface FileSyncStatus {
+  isRepo: boolean;
+  hasRemote: boolean;
+  remoteUrl: string | null;
+  branch: string;
+  dirty: boolean;
+  ahead: number | null;
+  behind: number | null;
+  hasUpstream: boolean;
+  conflicted: boolean;
+  detached: boolean;
+  running: boolean;
+  phase: string;
+  error: string | null;
+  lastSync: number | null;
 }
 
 export interface WhisperModel {
@@ -331,6 +351,12 @@ export const api = {
       del<{ success: boolean }>(`/api/files?path=${encodeURIComponent(path)}`),
     mkdir: (path: string) =>
       post<{ success: boolean }>('/api/files/mkdir', { path }),
+  },
+
+  filesSync: {
+    status: () => get<FileSyncStatus>('/api/files/sync/status'),
+    init: () => post<FileSyncStatus>('/api/files/sync/init'),
+    sync: () => post<{ running: boolean }>('/api/files/sync'),
   },
 
   shortcuts: {
