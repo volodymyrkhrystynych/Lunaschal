@@ -48,6 +48,10 @@ def create_app():
 
     from backend.auth import NETWORK_MODE, COOKIE_NAME, is_localhost, decode_token
     from backend.routes import journal, calendar, flashcard, settings, rag, chat, files, writing, stt, tasks, curated_tags, shortcuts
+    from backend.routes.settings import _get_settings, _set_sleep_inhibitor
+    s = _get_settings()
+    if s and s.get('prevent_sleep'):
+        _set_sleep_inhibitor(True)
     from backend.routes import auth as auth_routes
     for bp in (auth_routes.bp, journal.bp, calendar.bp, flashcard.bp, settings.bp, rag.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp):
         app.register_blueprint(bp)

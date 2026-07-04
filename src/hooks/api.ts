@@ -88,6 +88,7 @@ export interface AppSettings {
   ttsBackend: string | null;
   whisperModel: string | null;
   voicePipelineEnabled: boolean;
+  preventSleep: boolean;
 }
 
 export interface WhisperModel {

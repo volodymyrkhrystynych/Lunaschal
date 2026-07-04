@@ -61,6 +61,7 @@ def init_db() -> None:
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
     _ensure_ollama_bg_model(db)
+    _ensure_prevent_sleep(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -109,6 +110,13 @@ def _ensure_ollama_bg_model(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'ollama_bg_model' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN ollama_bg_model TEXT')
+        db.commit()
+
+
+def _ensure_prevent_sleep(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'prevent_sleep' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN prevent_sleep INTEGER DEFAULT 0')
         db.commit()
 
 
