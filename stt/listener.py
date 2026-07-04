@@ -88,23 +88,25 @@ def _notify_state(recording: bool, transcribing: bool, mode: str | None = None) 
         pass  # never block the listener for a UI notification
 
 
-def _fetch_shortcut_settings() -> tuple[str | None, str | None, str | None]:
-    """Fetch sttPasteKey / sttVoiceKey / sttJournalKey from the Flask settings API on startup."""
+def _fetch_shortcut_settings() -> tuple[str | None, str | None, str | None, str | None]:
+    """Fetch sttPasteKey / sttVoiceKey / sttJournalKey / sttCommandKey from the Flask settings API on startup."""
     try:
         import json as _json
         r = _SESSION.get(LUNASCHAL_URL + '/api/settings', timeout=3)
         data = _json.loads(r.content)
         if data:
-            return data.get('sttPasteKey'), data.get('sttVoiceKey'), data.get('sttJournalKey')
+            return (data.get('sttPasteKey'), data.get('sttVoiceKey'),
+                    data.get('sttJournalKey'), data.get('sttCommandKey'))
     except Exception:
         pass
-    return None, None, None
+    return None, None, None, None
 
 
-_api_paste, _api_voice, _api_journal = _fetch_shortcut_settings()
+_api_paste, _api_voice, _api_journal, _api_command = _fetch_shortcut_settings()
 PASTE_KEY   = _api_paste   or os.environ.get("STT_PASTE_KEY")    # None if not configured; may be a combo "KEY_LEFTCTRL+KEY_F1"
 VOICE_KEY   = _api_voice   or os.environ.get("STT_VOICE_KEY")    # None if not configured; may be a combo
 JOURNAL_KEY = _api_journal or os.environ.get("STT_JOURNAL_KEY")  # None if not configured; record → journal entry
+COMMAND_KEY = _api_command or os.environ.get("STT_COMMAND_KEY")  # None if not configured; record → parse command → execute
 
 
 _EVDEV_DISPLAY = {
@@ -187,6 +189,8 @@ _alt_released     = threading.Event()
 _alt_released.set()
 _journal_released = threading.Event()
 _journal_released.set()
+_command_released = threading.Event()
+_command_released.set()
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +224,9 @@ def _start_recording(mode: str) -> None:
     _stream.start()
     _recording = True
     _notify_state(True, False, mode)
-    icon = "🎙️ " if mode == "paste" else "🎤"
-    stop_combo = _display_combo(PASTE_KEY if mode == "paste" else VOICE_KEY)
+    icon = {"paste": "🎙️ ", "journal": "📝", "command": "⚡"}.get(mode, "🎤")
+    stop_key = {"paste": PASTE_KEY, "journal": JOURNAL_KEY, "command": COMMAND_KEY}.get(mode, VOICE_KEY)
+    stop_combo = _display_combo(stop_key)
     _status(f"{icon} Recording… ({stop_combo} to stop)")
     logger.info("Recording started (mode=%s)", mode)
 
@@ -317,6 +322,101 @@ def _transcribe_and_journal() -> None:
     finally:
         _action_lock.release()
         _notify_state(False, False, None)
+
+
+# ---------------------------------------------------------------------------
+# Command mode — transcribe → LLM parses intent → execute (todo/event/journal)
+# ---------------------------------------------------------------------------
+
+MAX_CLARIFY_ROUNDS = 3
+
+
+def _transcribe_and_command() -> None:
+    if not _action_lock.acquire(blocking=False):
+        _stop_audio()
+        _notify_state(False, False, None)
+        return
+    try:
+        audio = _stop_audio()
+        if audio is None:
+            return
+
+        duration = len(audio) / SAMPLE_RATE
+        _status(f"⏳ Transcribing {duration:.1f}s…")
+
+        text = _transcribe(audio)
+        if not text:
+            return
+
+        _status(f"⚡ Command: {text[:60]}")
+        logger.info('Voice command: "%s"', text)
+
+        # Wait for the trigger key to be released before any TTS playback
+        _command_released.wait(timeout=KEY_RELEASE_TIMEOUT)
+
+        messages: list[dict] = [{"role": "user", "content": text}]
+
+        for _ in range(MAX_CLARIFY_ROUNDS + 1):
+            result = _run_command(messages)
+            if result is None:
+                return
+
+            speak = result.get("speak") or ""
+            status = result.get("status")
+
+            if status == "done":
+                _status(f"✓ {result.get('action', 'done')}: {speak[:55]}")
+                logger.info("Command executed: %s (%s)", result.get("action"), result.get("id"))
+                if speak:
+                    _speak(_clean_for_tts(speak))
+                return
+
+            if status != "clarify":
+                _status(f"✗ {speak[:65]}")
+                logger.info("Command not executed: %s", speak)
+                if speak:
+                    _speak(_clean_for_tts(speak))
+                return
+
+            # Clarification round: speak the question, listen for the answer
+            _status(f"❓ {speak[:65]}")
+            logger.info("Clarification asked: %s", speak)
+            _speak(_clean_for_tts(speak))
+            messages.append({"role": "assistant", "content": speak})
+
+            answer = _listen_for_reply()
+            if not answer:
+                _status("✗ No reply — command cancelled")
+                _speak("Never mind, cancelling.")
+                return
+            logger.info('Clarification reply: "%s"', answer)
+            messages.append({"role": "user", "content": answer})
+
+        _status("✗ Too many clarification rounds — giving up")
+        _speak("Sorry, I still couldn't work that out. Let's try again later.")
+    finally:
+        _action_lock.release()
+        _notify_state(False, False, None)
+
+
+def _run_command(messages: list[dict]) -> dict | None:
+    """POST the command conversation to the voice-command endpoint."""
+    try:
+        resp = _SESSION.post(
+            f"{LUNASCHAL_URL}/api/voice-command",
+            json={"messages": messages},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.exceptions.ConnectionError:
+        _status(f"✗ Lunaschal server unreachable at {LUNASCHAL_URL}")
+        logger.error("Cannot connect to %s", LUNASCHAL_URL)
+        return None
+    except Exception as e:
+        _status(f"✗ Command error: {e}")
+        logger.error("Command error: %s", e)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -784,6 +884,8 @@ def _trigger(mode: str) -> None:
         else:
             if mode == "journal":
                 target = _transcribe_and_journal
+            elif mode == "command":
+                target = _transcribe_and_command
             elif mode == "paste" or (mode == "voice" and not _is_voice_pipeline_enabled()):
                 target = _transcribe_and_paste
             else:
@@ -797,11 +899,13 @@ def _monitor_device(device: InputDevice) -> None:
     paste_combo   = _parse_combo(PASTE_KEY)
     voice_combo   = _parse_combo(VOICE_KEY)
     journal_combo = _parse_combo(JOURNAL_KEY)
+    command_combo = _parse_combo(COMMAND_KEY)
 
     held: set[int] = set()            # all keys currently pressed on this device
     paste_active: set[int]   = set()  # combo keys still held after paste trigger
     voice_active: set[int]   = set()  # combo keys still held after voice trigger
     journal_active: set[int] = set()  # combo keys still held after journal trigger
+    command_active: set[int] = set()  # combo keys still held after command trigger
 
     try:
         for event in device.read_loop():
@@ -831,6 +935,12 @@ def _monitor_device(device: InputDevice) -> None:
                     journal_active = set(journal_combo)
                     _trigger("journal")
 
+                # Fire command combo when the pressed key completes the set
+                if command_combo and code in command_combo and command_combo <= held:
+                    _command_released.clear()
+                    command_active = set(command_combo)
+                    _trigger("command")
+
             elif key_event.keystate == 0:  # key up
                 held.discard(code)
 
@@ -849,6 +959,11 @@ def _monitor_device(device: InputDevice) -> None:
                     if not journal_active:
                         _journal_released.set()
 
+                if code in command_active:
+                    command_active.discard(code)
+                    if not command_active:
+                        _command_released.set()
+
     except OSError:
         logger.warning("Device disconnected: %s", device.path)
 
@@ -856,7 +971,7 @@ def _monitor_device(device: InputDevice) -> None:
 def _find_keyboards() -> list[InputDevice]:
     # Collect all ecodes from all combo keys across both shortcuts
     needed: set[int] = set()
-    for combo in (PASTE_KEY, VOICE_KEY, JOURNAL_KEY):
+    for combo in (PASTE_KEY, VOICE_KEY, JOURNAL_KEY, COMMAND_KEY):
         needed |= _parse_combo(combo)
 
     if not needed:
@@ -905,6 +1020,10 @@ def main() -> None:
         print(f"  {_display_combo(JOURNAL_KEY)}: record → save as journal entry")
     else:
         print("  Journal shortcut : not configured")
+    if COMMAND_KEY:
+        print(f"  {_display_combo(COMMAND_KEY)}: record → AI parses command → todo/event/journal")
+    else:
+        print("  Command shortcut : not configured")
     if WAKE_WORD_MODEL:
         print(f"  Wake word       : \"Hey Luna\"  (WAKE_WORD_MODEL={WAKE_WORD_MODEL})")
     else:
@@ -916,7 +1035,7 @@ def main() -> None:
     if keyboards:
         for kb in keyboards:
             print(f"  Keyboard: {kb.name}  ({kb.path})")
-    elif PASTE_KEY or VOICE_KEY:
+    elif PASTE_KEY or VOICE_KEY or JOURNAL_KEY or COMMAND_KEY:
         print("✗ No keyboard devices found. Are you in the 'input' group?")
         print("  Run: sudo usermod -a -G input $USER  then log out/in")
         sys.exit(1)

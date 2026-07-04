@@ -32,6 +32,10 @@ npm run dev
 Shortcuts:
 - **F1** (`STT_PASTE_KEY`) — record → transcribe → paste text at cursor via `wtype`
 - **Right Alt** (`STT_VOICE_KEY`) — record → transcribe → AI chat (Lunaschal `/api/chat/stream`) → TTS reply spoken aloud
+- (`STT_JOURNAL_KEY`) — record → transcribe → save as journal entry
+- (`STT_COMMAND_KEY`) — record → transcribe → LLM parses the command (`POST /api/voice-command`, parser in `backend/ai/commands.py`) and creates a todo, calendar event, or journal entry; if essential details are missing the LLM asks a clarifying question via TTS and the listener records the answer (max 3 rounds)
+
+All four shortcuts are rebindable in Settings → Voice Shortcuts (stored in the `settings` table; env vars are fallbacks).
 
 The Flask backend handles `POST /api/transcribe` and `POST /api/tts` directly (no separate port 8765 service). The Whisper model loads lazily on the first transcription request. `stt/service.py` still exists as a standalone FastAPI server but is no longer used by default.
 

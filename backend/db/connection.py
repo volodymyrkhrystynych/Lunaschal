@@ -94,6 +94,9 @@ def _ensure_stt_shortcuts(db: sqlite3.Connection) -> None:
     if 'stt_journal_key' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN stt_journal_key TEXT')
         db.commit()
+    if 'stt_command_key' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN stt_command_key TEXT')
+        db.commit()
 
 
 def _ensure_stt_model_settings(db: sqlite3.Connection) -> None:
