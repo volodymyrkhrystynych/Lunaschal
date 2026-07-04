@@ -171,6 +171,14 @@ export interface DailyTask {
   updatedAt: string;
 }
 
+export interface TodoItem {
+  id: string;
+  title: string;
+  done: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // --- fetch helpers ---
 
 async function get<T>(url: string): Promise<T> {
@@ -395,5 +403,13 @@ export const api = {
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/${id}`),
     complete: (id: string) => post<{ success: boolean }>(`/api/tasks/${id}/complete`),
     uncomplete: (id: string) => del<{ success: boolean }>(`/api/tasks/${id}/complete`),
+  },
+
+  todos: {
+    list: () => get<TodoItem[]>('/api/tasks/todos'),
+    create: (title: string) => post<{ id: string }>('/api/tasks/todos', { title }),
+    update: (id: string, data: { title?: string; done?: boolean }) =>
+      patch<{ success: boolean }>(`/api/tasks/todos/${id}`, data),
+    remove: (id: string) => del<{ success: boolean }>(`/api/tasks/todos/${id}`),
   },
 };

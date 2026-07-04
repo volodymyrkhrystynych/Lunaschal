@@ -131,3 +131,66 @@ def uncomplete_task(task_id):
     )
     db.commit()
     return jsonify({'success': True})
+
+
+# --- Todos (one-off items, unlike daily tasks they don't reset each day) ---
+
+
+@bp.get('/todos')
+def list_todos():
+    db = get_db()
+    rows = db.execute(
+        'SELECT id, title, done, created_at, updated_at FROM todos ORDER BY done, created_at'
+    ).fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
+
+
+@bp.post('/todos')
+def create_todo():
+    body = request.json or {}
+    title = (body.get('title') or '').strip()
+    if not title:
+        return jsonify({'error': 'title required'}), 400
+
+    now = int(time.time())
+    todo_id = str(ULID())
+    db = get_db()
+    db.execute(
+        'INSERT INTO todos(id, title, done, created_at, updated_at) VALUES (?,?,0,?,?)',
+        (todo_id, title, now, now),
+    )
+    db.commit()
+    return jsonify({'id': todo_id}), 201
+
+
+@bp.patch('/todos/<todo_id>')
+def update_todo(todo_id):
+    body = request.json or {}
+    fields = []
+    values = []
+    if 'title' in body:
+        title = (body.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': 'title required'}), 400
+        fields.append('title=?')
+        values.append(title)
+    if 'done' in body:
+        fields.append('done=?')
+        values.append(1 if body['done'] else 0)
+    if not fields:
+        return jsonify({'error': 'nothing to update'}), 400
+
+    fields.append('updated_at=?')
+    values.extend([int(time.time()), todo_id])
+    db = get_db()
+    db.execute(f'UPDATE todos SET {", ".join(fields)} WHERE id=?', values)
+    db.commit()
+    return jsonify({'success': True})
+
+
+@bp.delete('/todos/<todo_id>')
+def delete_todo(todo_id):
+    db = get_db()
+    db.execute('DELETE FROM todos WHERE id=?', (todo_id,))
+    db.commit()
+    return jsonify({'success': True})
