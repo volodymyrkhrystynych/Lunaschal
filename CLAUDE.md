@@ -2,6 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working conventions
+
+Development happens on two machines: a desktop (comfortable, full mouse/keyboard) and a GPD Pocket 2 — a low-powered handheld with no usable mouse. On the Pocket 2, manual click-through testing is slow and painful, so the workflow leans on branches and automated tests so changes can be verified without a hands-on walkthrough.
+
+### Branch per feature
+- **Whenever the user asks for a new feature, start it on a fresh branch** — don't build features on `main`. Create the branch before writing code.
+- Branch naming follows the existing convention: `feat/<short-kebab-description>` for features, `fix/<...>` for bug fixes. Match the style of recent branches (e.g. `feat/voice-command-shortcut`).
+- If the user asks for a feature while already on a relevant feature branch, keep working there; otherwise branch off the up-to-date `main`.
+- Only commit or push when the user asks.
+
+### Tests are the primary safety net
+- Because manual testing is impractical on the Pocket 2, **new features and bug fixes should come with automated tests** that exercise the behavior. Prefer proving a change works with a test over asking the user to click through the UI.
+- There is currently no test runner configured. When adding the first tests, set one up: **pytest** for the Flask/Python backend (`backend/`), and **Vitest** for the React/TypeScript frontend (`src/`). Add matching `npm run test` / `npm run test:backend` scripts so tests are runnable with one command.
+- Favor fast, isolated tests: unit-test the AI parsing/classification logic (`backend/ai/`), route handlers, the SM-2 flashcard algorithm, and DB layer against a temporary SQLite file. Mock external AI providers rather than calling them.
+- After making changes, run the relevant tests and report the actual results. Treat a green test suite — not a manual walkthrough — as the default bar for "done."
+
 ## STT (Speech-to-Text)
 
 STT/TTS is embedded directly in the Flask backend (`backend/routes/stt.py`). Two backends — local (openai-whisper + kokoro-onnx) or OpenAI API (cloud, no local models).
@@ -80,9 +96,15 @@ python main.py
 
 # Run the voice input listener (Flask app must already be running)
 npm run stt
+
+# Tests
+npm run test:backend     # pytest (backend/tests) — needs: .venv/bin/pip install -r requirements-dev.txt
+npm run test             # vitest run (frontend, src/**/*.test.ts)
+npm run test:all         # both suites
+npm run test:watch       # vitest in watch mode
 ```
 
-There are no tests or linting scripts configured.
+Tests: **pytest** for the backend (`backend/tests/`, config in `pytest.ini`) and **Vitest** for the frontend (config in the `test` block of `vite.config.ts`). Vitest currently runs in the `node` environment; add `jsdom` + `@testing-library/react` before writing component tests. No linting is configured.
 
 ## Architecture
 

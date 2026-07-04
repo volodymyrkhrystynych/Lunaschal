@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -9,6 +10,12 @@ export default defineConfig({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  test: {
+    // 'node' is enough for pure logic. Switch to 'jsdom' (and add the
+    // jsdom + @testing-library/react deps) when adding component tests.
+    environment: 'node',
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
   server: {
     port: 5173,
