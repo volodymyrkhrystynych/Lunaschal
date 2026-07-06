@@ -142,7 +142,10 @@ def list_todos():
     rows = db.execute(
         'SELECT id, title, done, created_at, updated_at FROM todos ORDER BY done, created_at'
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    todos = [row_to_dict(r) for r in rows]
+    for t in todos:
+        t['done'] = bool(t['done'])  # SQLite stores 0/1; the API contract is a boolean
+    return jsonify(todos)
 
 
 @bp.post('/todos')
