@@ -9,6 +9,10 @@
     "dev:flask": ".venv/bin/flask --app backend.app run --port 5000 --debug",
     "dev:desktop": "python main.py --dev",
     "build": "vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:backend": ".venv/bin/pytest",
+    "test:all": "npm run test:backend && npm run test",
     "stt": "./stt/run_listener.sh"
   },
   "dependencies": {
@@ -29,6 +33,7 @@
     "concurrently": "^9.2.1",
     "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vitest": "^4.1.9"
   }
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, DailyTask } from '../hooks/api';
+import { api, DailyTask, TodoItem } from '../hooks/api';
 
 export function Tasks() {
   const [newTitle, setNewTitle] = useState('');
@@ -198,6 +198,145 @@ export function Tasks() {
             </button>
           </div>
         )}
+
+        <TodoSection />
+      </div>
+    </div>
+  );
+}
+
+function TodoSection() {
+  const [newTitle, setNewTitle] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const queryClient = useQueryClient();
+
+  const { data: todos = [], isLoading } = useQuery({
+    queryKey: ['todos'],
+    queryFn: api.todos.list,
+  });
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['todos'] });
+
+  const createTodo = useMutation({
+    mutationFn: (title: string) => api.todos.create(title),
+    onSuccess: () => { invalidate(); setNewTitle(''); },
+  });
+
+  const updateTodo = useMutation({
+    mutationFn: ({ id, ...data }: { id: string; title?: string; done?: boolean }) =>
+      api.todos.update(id, data),
+    onSuccess: () => { invalidate(); setEditingId(null); },
+  });
+
+  const deleteTodo = useMutation({
+    mutationFn: (id: string) => api.todos.remove(id),
+    onSuccess: invalidate,
+  });
+
+  const startEdit = (todo: TodoItem) => {
+    setEditingId(todo.id);
+    setEditTitle(todo.title);
+  };
+
+  const saveEdit = () => {
+    if (!editingId) return;
+    const trimmed = editTitle.trim();
+    if (trimmed) updateTodo.mutate({ id: editingId, title: trimmed });
+    else setEditingId(null);
+  };
+
+  return (
+    <div className="mt-10">
+      <h2 className="text-xl font-semibold text-[var(--color-text)] mb-6">To-Do</h2>
+
+      {isLoading && (
+        <div className="text-[var(--color-text-muted)] text-sm">Loading…</div>
+      )}
+
+      <div className="space-y-2">
+        {todos.map((todo) => (
+          <div
+            key={todo.id}
+            className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
+              todo.done
+                ? 'border-white/5 bg-white/3 opacity-60'
+                : 'border-white/10 bg-[var(--color-surface)]'
+            }`}
+          >
+            <button
+              onClick={() => updateTodo.mutate({ id: todo.id, done: !todo.done })}
+              className={`w-5 h-5 rounded border shrink-0 flex items-center justify-center transition-colors ${
+                todo.done
+                  ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
+                  : 'border-white/30 hover:border-white/50'
+              }`}
+            >
+              {todo.done && <span className="text-xs">✓</span>}
+            </button>
+
+            <div className="flex-1 min-w-0">
+              {editingId === todo.id ? (
+                <input
+                  autoFocus
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  onBlur={saveEdit}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') saveEdit();
+                    if (e.key === 'Escape') setEditingId(null);
+                  }}
+                  className="w-full bg-transparent text-[var(--color-text)] text-sm outline-none border-b border-[var(--color-primary)]"
+                />
+              ) : (
+                <span
+                  onClick={() => startEdit(todo)}
+                  className={`text-sm cursor-text select-none ${
+                    todo.done
+                      ? 'line-through text-[var(--color-text-muted)]'
+                      : 'text-[var(--color-text)]'
+                  }`}
+                >
+                  {todo.title}
+                </span>
+              )}
+            </div>
+
+            <button
+              onClick={() => deleteTodo.mutate(todo.id)}
+              className="p-1 rounded text-[var(--color-text-muted)] hover:text-red-400 hover:bg-white/10 transition-colors text-xs shrink-0"
+              title="Delete"
+            >
+              ✕
+            </button>
+          </div>
+        ))}
+
+        {todos.length === 0 && !isLoading && (
+          <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
+            Nothing on the list.
+          </div>
+        )}
+      </div>
+
+      <div className="mt-3 flex gap-2">
+        <input
+          value={newTitle}
+          onChange={(e) => setNewTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && newTitle.trim()) createTodo.mutate(newTitle.trim());
+            if (e.key === 'Escape') setNewTitle('');
+          }}
+          placeholder="Add a to-do…"
+          className="flex-1 bg-[var(--color-surface)] border border-white/20 rounded px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]"
+        />
+        <button
+          onClick={() => { if (newTitle.trim()) createTodo.mutate(newTitle.trim()); }}
+          disabled={!newTitle.trim() || createTodo.isPending}
+          className="px-3 py-2 rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/30 disabled:opacity-40 transition-colors text-sm"
+        >
+          Add
+        </button>
       </div>
     </div>
   );
