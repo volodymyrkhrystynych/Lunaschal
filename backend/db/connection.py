@@ -62,6 +62,7 @@ def init_db() -> None:
     _ensure_journal_raw_content(db)
     _ensure_ollama_bg_model(db)
     _ensure_prevent_sleep(db)
+    _ensure_git_sync(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -121,6 +122,17 @@ def _ensure_prevent_sleep(db: sqlite3.Connection) -> None:
     if 'prevent_sleep' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN prevent_sleep INTEGER DEFAULT 0')
         db.commit()
+
+
+def _ensure_git_sync(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'git_remote_url' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN git_remote_url TEXT')
+    if 'git_branch' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN git_branch TEXT')
+    if 'git_last_sync' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN git_last_sync INTEGER')
+    db.commit()
 
 
 def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:

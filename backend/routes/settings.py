@@ -56,6 +56,9 @@ def get_settings():
         'whisperModel': s.get('whisper_model'),
         'voicePipelineEnabled': bool(s.get('voice_pipeline_enabled', 1)),
         'preventSleep': bool(s.get('prevent_sleep', 0)),
+        'gitRemoteUrl': s.get('git_remote_url'),
+        'gitBranch': s.get('git_branch') or 'main',
+        'gitLastSync': s.get('git_last_sync'),
     })
 
 
@@ -72,6 +75,7 @@ def update_ai():
         'whisperModel': 'whisper_model',
         'voicePipelineEnabled': 'voice_pipeline_enabled',
         'preventSleep': 'prevent_sleep',
+        'gitRemoteUrl': 'git_remote_url', 'gitBranch': 'git_branch',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
