@@ -1,42 +1,73 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+import { parseTagsInput } from '../lib/tags';
 
 type Mode = 'browse' | 'review' | 'create';
+
+const pillClass = (active: boolean) =>
+  `px-3 py-1 text-sm rounded-full border transition-colors ${active ? 'bg-[var(--color-primary)] border-[var(--color-primary)] text-white' : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`;
 
 export function Flashcards() {
   const [mode, setMode] = useState<Mode>('browse');
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [showAnswer, setShowAnswer] = useState(false);
-  const [newCard, setNewCard] = useState({ front: '', back: '' });
+  const [newCard, setNewCard] = useState({ front: '', back: '', tags: '' });
   const [flipAnimation, setFlipAnimation] = useState(false);
+  const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
-  const { data: allCards } = useQuery({ queryKey: ['flashcard'], queryFn: () => api.flashcard.list() });
-  const { data: dueCards, refetch: refetchDue } = useQuery({ queryKey: ['flashcard', 'due'], queryFn: api.flashcard.getDue });
-  const { data: stats } = useQuery({ queryKey: ['flashcard', 'stats'], queryFn: api.flashcard.getStats });
+  const { data: allCards } = useQuery({
+    queryKey: ['flashcard', 'list', selectedTag],
+    queryFn: () => api.flashcard.list(selectedTag ? { tag: selectedTag } : undefined),
+  });
+  const { data: dueCards, refetch: refetchDue } = useQuery({
+    queryKey: ['flashcard', 'due', selectedTag],
+    queryFn: () => api.flashcard.getDue(selectedTag ?? undefined),
+  });
+  const { data: stats } = useQuery({
+    queryKey: ['flashcard', 'stats', selectedTag],
+    queryFn: () => api.flashcard.getStats(selectedTag ?? undefined),
+  });
+  const { data: tags } = useQuery({ queryKey: ['flashcard', 'tags'], queryFn: api.flashcard.getTags });
+
+  // If the selected tag vanishes (its last card deleted or retagged), drop the
+  // filter instead of showing a permanently empty deck with no pill highlighted.
+  useEffect(() => {
+    if (selectedTag && tags && !tags.some((t) => t.name === selectedTag)) {
+      setSelectedTag(null);
+    }
+  }, [tags, selectedTag]);
+
+  const selectTag = (tag: string | null) => {
+    setSelectedTag(tag);
+    setCurrentCardIndex(0);
+    setShowAnswer(false);
+  };
 
   const createCard = useMutation({
-    mutationFn: api.flashcard.create,
+    mutationFn: (card: { front: string; back: string; tags: string }) =>
+      api.flashcard.create({ front: card.front, back: card.back, tags: parseTagsInput(card.tags) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['flashcard'] });
-      setNewCard({ front: '', back: '' });
+      setNewCard((prev) => ({ front: '', back: '', tags: prev.tags }));
     },
   });
 
   const reviewCard = useMutation({
     mutationFn: ({ id, grade }: { id: string; grade: number }) => api.flashcard.review(id, grade),
-    onSuccess: () => {
-      refetchDue();
+    onSuccess: async () => {
+      queryClient.invalidateQueries({ queryKey: ['flashcard', 'list'] });
       queryClient.invalidateQueries({ queryKey: ['flashcard', 'stats'] });
       setFlipAnimation(true);
+      // The graded card leaves the due list (its next review is at least a day
+      // out), so the next card sits at the same index in the refetched list —
+      // only wrap to 0 when the index falls off the end.
+      const { data: freshDue } = await refetchDue();
       setTimeout(() => {
         setShowAnswer(false);
         setFlipAnimation(false);
-        setCurrentCardIndex((prev) => {
-          const next = dueCards && prev < dueCards.length - 1 ? prev + 1 : 0;
-          return next;
-        });
+        setCurrentCardIndex((prev) => (freshDue && prev < freshDue.length ? prev : 0));
       }, 200);
     },
   });
@@ -74,6 +105,20 @@ export function Flashcards() {
           </button>
         </div>
       </div>
+
+      {tags && tags.length > 0 && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          <button onClick={() => selectTag(null)} className={pillClass(!selectedTag)}>
+            All
+          </button>
+          {tags.map((t) => (
+            <button key={t.name} onClick={() => selectTag(selectedTag === t.name ? null : t.name)}
+              className={pillClass(selectedTag === t.name)}>
+              #{t.name} <span className="opacity-60">{t.count}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {stats && (
         <div className="mb-4 grid grid-cols-4 gap-4">
@@ -113,6 +158,16 @@ export function Flashcards() {
                   <div className="text-[var(--color-text)] mb-4 line-clamp-3">{card.front}</div>
                   <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">Answer</div>
                   <div className="text-[var(--color-text)] mb-4 line-clamp-3">{card.back}</div>
+                  {card.tags.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mb-3">
+                      {card.tags.map((t) => (
+                        <button key={t} onClick={() => selectTag(t)}
+                          className="px-2 py-0.5 text-xs rounded-full bg-white/5 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+                          #{t}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex items-center justify-between text-xs text-[var(--color-text-muted)] pt-2 border-t border-white/5">
                     <span>Next: {new Date(card.nextReview).toLocaleDateString()}</span>
                     <span>Interval: {card.interval || 0}d</span>
@@ -123,8 +178,17 @@ export function Flashcards() {
             {(!allCards || allCards.length === 0) && (
               <div className="col-span-full text-center text-[var(--color-text-muted)] py-12">
                 <div className="text-4xl mb-4">📚</div>
-                <div className="text-lg">No flashcards yet</div>
-                <div className="mt-2">Create some manually or generate them from journal entries!</div>
+                {selectedTag ? (
+                  <>
+                    <div className="text-lg">No cards tagged <span className="text-[var(--color-text)]">#{selectedTag}</span></div>
+                    <div className="mt-2">Pick another tag or All to see the rest of your cards.</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-lg">No flashcards yet</div>
+                    <div className="mt-2">Create some manually or generate them from journal entries!</div>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -171,7 +235,9 @@ export function Flashcards() {
               <div className="text-center py-16">
                 <div className="text-6xl mb-4">🎉</div>
                 <div className="text-2xl font-semibold text-[var(--color-text)] mb-2">All caught up!</div>
-                <div className="text-[var(--color-text-muted)]">No cards due for review right now.</div>
+                <div className="text-[var(--color-text-muted)]">
+                  {selectedTag ? <>No <span className="text-[var(--color-text)]">#{selectedTag}</span> cards due for review right now.</> : 'No cards due for review right now.'}
+                </div>
                 {stats && stats.total > 0 && (
                   <div className="mt-6 text-sm text-[var(--color-text-muted)]">
                     You have {stats.mastered} mastered cards and {stats.learning} still learning.
@@ -191,11 +257,17 @@ export function Flashcards() {
                   placeholder="What do you want to remember?" rows={3}
                   className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border border-white/10 rounded-lg p-3 resize-none focus:outline-none focus:border-[var(--color-primary)]" />
               </div>
-              <div className="mb-6">
+              <div className="mb-4">
                 <label className="block text-sm text-[var(--color-text-muted)] mb-2">Back (Answer)</label>
                 <textarea value={newCard.back} onChange={(e) => setNewCard({ ...newCard, back: e.target.value })}
                   placeholder="The answer or explanation" rows={3}
                   className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border border-white/10 rounded-lg p-3 resize-none focus:outline-none focus:border-[var(--color-primary)]" />
+              </div>
+              <div className="mb-6">
+                <label className="block text-sm text-[var(--color-text-muted)] mb-2">Tags (comma-separated, optional)</label>
+                <input value={newCard.tags} onChange={(e) => setNewCard({ ...newCard, tags: e.target.value })}
+                  placeholder="javascript, python, ..."
+                  className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border border-white/10 rounded-lg p-3 focus:outline-none focus:border-[var(--color-primary)]" />
               </div>
               <button onClick={() => createCard.mutate(newCard)} disabled={!newCard.front.trim() || !newCard.back.trim() || createCard.isPending}
                 className="w-full py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors disabled:opacity-50">

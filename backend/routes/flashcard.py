@@ -1,10 +1,34 @@
+import json
 import time
 from datetime import datetime, timezone, timedelta
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
+from backend.tags import tags_json
 
 bp = Blueprint('flashcard', __name__, url_prefix='/api/flashcards')
+
+# Tags are stored lowercased so "JavaScript" and "javascript" are one deck.
+_TAG_FILTER_SQL = 'EXISTS (SELECT 1 FROM json_each(flashcards.tags) WHERE json_each.value = ?)'
+
+_INSERT_CARD_SQL = (
+    'INSERT INTO flashcards(id, front, back, tags, source_id, easiness, interval, repetitions, next_review, created_at)'
+    ' VALUES (?,?,?,?,?,?,?,?,?,?)'
+)
+
+
+def _card_to_dict(row) -> dict:
+    d = row_to_dict(row)
+    d['tags'] = json.loads(d['tags']) if d.get('tags') else []
+    return d
+
+
+def _tag_clause() -> tuple[str, list[str]]:
+    """(' AND <filter>', [tag]) for the optional ?tag= query param, or ('', [])."""
+    tag = (request.args.get('tag') or '').strip().lower()
+    if not tag:
+        return '', []
+    return f' AND {_TAG_FILTER_SQL}', [tag]
 
 
 def _sm2(interval: int, repetitions: int, efactor: float, grade: int) -> tuple[int, int, float]:
@@ -27,29 +51,50 @@ def _sm2(interval: int, repetitions: int, efactor: float, grade: int) -> tuple[i
 def list_cards():
     limit = min(int(request.args.get('limit', 50)), 100)
     offset = int(request.args.get('offset', 0))
+    clause, params = _tag_clause()
     rows = get_db().execute(
-        'SELECT * FROM flashcards ORDER BY created_at DESC LIMIT ? OFFSET ?', (limit, offset)
+        f'SELECT * FROM flashcards WHERE 1=1{clause} ORDER BY created_at DESC LIMIT ? OFFSET ?',
+        [*params, limit, offset],
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    return jsonify([_card_to_dict(r) for r in rows])
 
 
 @bp.get('/due')
 def get_due():
     now = int(time.time())
+    clause, params = _tag_clause()
     rows = get_db().execute(
-        'SELECT * FROM flashcards WHERE next_review <= ? ORDER BY next_review LIMIT 20', (now,)
+        f'SELECT * FROM flashcards WHERE next_review <= ?{clause} ORDER BY next_review LIMIT 20',
+        [now, *params],
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    return jsonify([_card_to_dict(r) for r in rows])
 
 
 @bp.get('/stats')
 def get_stats():
-    db = get_db()
     now = int(time.time())
-    total = db.execute('SELECT COUNT(*) FROM flashcards').fetchone()[0]
-    due = db.execute('SELECT COUNT(*) FROM flashcards WHERE next_review <= ?', (now,)).fetchone()[0]
-    mastered = db.execute('SELECT COUNT(*) FROM flashcards WHERE interval >= 21').fetchone()[0]
-    return jsonify({'total': total, 'due': due, 'mastered': mastered, 'learning': total - mastered})
+    clause, params = _tag_clause()
+    row = get_db().execute(
+        f'SELECT COUNT(*) AS total,'
+        f' COALESCE(SUM(next_review <= ?), 0) AS due,'
+        f' COALESCE(SUM(interval >= 21), 0) AS mastered'
+        f' FROM flashcards WHERE 1=1{clause}',
+        [now, *params],
+    ).fetchone()
+    return jsonify({
+        'total': row['total'], 'due': row['due'], 'mastered': row['mastered'],
+        'learning': row['total'] - row['mastered'],
+    })
+
+
+@bp.get('/tags')
+def list_tags():
+    rows = get_db().execute(
+        'SELECT je.value AS name, COUNT(*) AS count'
+        ' FROM flashcards f JOIN json_each(f.tags) je'
+        ' GROUP BY je.value ORDER BY count DESC, name'
+    ).fetchall()
+    return jsonify([{'name': r['name'], 'count': r['count']} for r in rows])
 
 
 @bp.get('/by-source/<source_id>')
@@ -57,7 +102,7 @@ def get_by_source(source_id):
     rows = get_db().execute(
         'SELECT * FROM flashcards WHERE source_id=? ORDER BY created_at DESC', (source_id,)
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    return jsonify([_card_to_dict(r) for r in rows])
 
 
 @bp.get('/<id>')
@@ -65,7 +110,7 @@ def get_card(id):
     row = get_db().execute('SELECT * FROM flashcards WHERE id=?', (id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(row_to_dict(row))
+    return jsonify(_card_to_dict(row))
 
 
 @bp.post('')
@@ -76,8 +121,8 @@ def create_card():
     now = int(time.time())
     id = str(ULID())
     get_db().execute(
-        'INSERT INTO flashcards(id, front, back, source_id, easiness, interval, repetitions, next_review, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        (id, body['front'], body['back'], body.get('sourceId'), 2.5, 0, 0, now, now),
+        _INSERT_CARD_SQL,
+        (id, body['front'], body['back'], tags_json(body.get('tags')), body.get('sourceId'), 2.5, 0, 0, now, now),
     )
     get_db().commit()
     return jsonify({'id': id}), 201
@@ -115,6 +160,8 @@ def update_card(id):
         updates['front'] = body['front']
     if 'back' in body:
         updates['back'] = body['back']
+    if 'tags' in body:
+        updates['tags'] = tags_json(body['tags'])
     if not updates:
         return jsonify({'success': True})
     set_clause = ', '.join(f'{k}=?' for k in updates)
@@ -142,14 +189,15 @@ def generate_from_journal():
     if not row:
         return jsonify({'error': 'Journal entry not found'}), 404
     cards = generate_flashcards_from_content(row['content'], row['title'])
+    tags = tags_json(body.get('tags'))
     now = int(time.time())
     ids = []
     for card in cards:
         id = str(ULID())
         ids.append(id)
         db.execute(
-            'INSERT INTO flashcards(id, front, back, source_id, easiness, interval, repetitions, next_review, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-            (id, card['front'], card['back'], journal_id, 2.5, 0, 0, now, now),
+            _INSERT_CARD_SQL,
+            (id, card['front'], card['back'], tags, journal_id, 2.5, 0, 0, now, now),
         )
     db.commit()
     return jsonify({'count': len(ids), 'ids': ids})
@@ -169,14 +217,15 @@ def generate_for_topic():
     ).fetchall()
     context = '\n\n---\n\n'.join(r['content'] for r in related) if related else None
     cards = generate_flashcards_for_topic(topic, context)
+    tags = tags_json(body.get('tags'))
     now = int(time.time())
     ids = []
     for card in cards:
         id = str(ULID())
         ids.append(id)
         db.execute(
-            'INSERT INTO flashcards(id, front, back, source_id, easiness, interval, repetitions, next_review, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-            (id, card['front'], card['back'], None, 2.5, 0, 0, now, now),
+            _INSERT_CARD_SQL,
+            (id, card['front'], card['back'], tags, None, 2.5, 0, 0, now, now),
         )
     db.commit()
     return jsonify({'count': len(ids), 'ids': ids})

@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS flashcards (
     id TEXT PRIMARY KEY,
     front TEXT NOT NULL,
     back TEXT NOT NULL,
+    tags TEXT,
     source_id TEXT REFERENCES journal_entries(id),
     easiness REAL DEFAULT 2.5,
     interval INTEGER DEFAULT 0,
