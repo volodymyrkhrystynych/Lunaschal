@@ -36,6 +36,7 @@ export interface Flashcard {
   id: string;
   front: string;
   back: string;
+  tags: string[];
   sourceId: string | null;
   easiness: number;
   interval: number;
@@ -49,6 +50,11 @@ export interface FlashcardStats {
   due: number;
   mastered: number;
   learning: number;
+}
+
+export interface FlashcardTag {
+  name: string;
+  count: number;
 }
 
 export interface Conversation {
@@ -273,17 +279,25 @@ export const api = {
   },
 
   flashcard: {
-    list: (params?: { limit?: number; offset?: number }) =>
-      get<Flashcard[]>(`/api/flashcards?${new URLSearchParams(params as Record<string, string> || {})}`),
-    getDue: () => get<Flashcard[]>('/api/flashcards/due'),
-    getStats: () => get<FlashcardStats>('/api/flashcards/stats'),
+    list: (params?: { limit?: number; offset?: number; tag?: string }) => {
+      const qp = new URLSearchParams();
+      if (params?.limit !== undefined) qp.set('limit', String(params.limit));
+      if (params?.offset !== undefined) qp.set('offset', String(params.offset));
+      if (params?.tag) qp.set('tag', params.tag);
+      return get<Flashcard[]>(`/api/flashcards?${qp}`);
+    },
+    getDue: (tag?: string) =>
+      get<Flashcard[]>(`/api/flashcards/due${tag ? `?tag=${encodeURIComponent(tag)}` : ''}`),
+    getStats: (tag?: string) =>
+      get<FlashcardStats>(`/api/flashcards/stats${tag ? `?tag=${encodeURIComponent(tag)}` : ''}`),
+    getTags: () => get<FlashcardTag[]>('/api/flashcards/tags'),
     get: (id: string) => get<Flashcard>(`/api/flashcards/${id}`),
     getBySource: (sourceId: string) => get<Flashcard[]>(`/api/flashcards/by-source/${sourceId}`),
-    create: (data: { front: string; back: string; sourceId?: string }) =>
+    create: (data: { front: string; back: string; sourceId?: string; tags?: string[] }) =>
       post<{ id: string }>('/api/flashcards', data),
     review: (id: string, grade: number) =>
       post<{ nextReview: string; interval: number }>(`/api/flashcards/${id}/review`, { grade }),
-    update: (id: string, data: { front?: string; back?: string }) =>
+    update: (id: string, data: { front?: string; back?: string; tags?: string[] }) =>
       patch<{ success: boolean }>(`/api/flashcards/${id}`, data),
     delete: (id: string) => del<{ success: boolean }>(`/api/flashcards/${id}`),
     generateFromJournal: (journalId: string) =>

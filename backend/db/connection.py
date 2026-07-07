@@ -60,6 +60,7 @@ def init_db() -> None:
     _ensure_stt_shortcuts(db)
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
+    _ensure_flashcard_tags(db)
     _ensure_ollama_bg_model(db)
     _ensure_prevent_sleep(db)
 
@@ -127,6 +128,13 @@ def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
     if 'raw_content' not in cols:
         db.execute('ALTER TABLE journal_entries ADD COLUMN raw_content TEXT')
+        db.commit()
+
+
+def _ensure_flashcard_tags(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(flashcards)')}
+    if 'tags' not in cols:
+        db.execute('ALTER TABLE flashcards ADD COLUMN tags TEXT')
         db.commit()
 
 
