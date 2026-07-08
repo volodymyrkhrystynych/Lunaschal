@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { useShortcuts } from '../shortcuts/ShortcutProvider';
 
-type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks';
+type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'habits';
 
 interface SidebarProps {
   currentView: View;
@@ -16,6 +16,7 @@ interface SidebarProps {
 export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'chat', label: 'Chat', icon: '💬' },
   { view: 'tasks', label: 'Tasks', icon: '✅' },
+  { view: 'habits', label: 'Habits', icon: '🔁' },
   { view: 'journal', label: 'Journal', icon: '📓' },
   { view: 'writing', label: 'Writing', icon: '✍️' },
   { view: 'calendar', label: 'Calendar', icon: '📅' },

@@ -11,10 +11,11 @@ import { SttPanel } from './components/Editor/SttPanel';
 import { Login } from './components/Login';
 import { Writing } from './components/Writing';
 import { Tasks } from './components/Tasks';
+import { Habits } from './components/Habits';
 import { api } from './hooks/api';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 
-type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks';
+type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'habits';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
@@ -67,6 +68,8 @@ export default function App() {
         return <Writing />;
       case 'tasks':
         return <Tasks />;
+      case 'habits':
+        return <Habits />;
       default:
         return null;
     }

@@ -18,6 +18,7 @@ export type ActionId =
   | 'tab.flashcards'
   | 'tab.files'
   | 'tab.settings'
+  | 'tab.habits'
   | 'global.newJournalEntry';
 
 export const DEFAULT_BINDINGS: Record<ActionId, string> = {
@@ -35,6 +36,7 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'tab.flashcards': 'Digit6',
   'tab.files': 'Digit7',
   'tab.settings': 'Digit8',
+  'tab.habits': 'Digit9',
   'global.newJournalEntry': 'shift+KeyJ',
 };
 
@@ -53,6 +55,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'tab.flashcards': 'Go to Flashcards',
   'tab.files': 'Go to Files',
   'tab.settings': 'Go to Settings',
+  'tab.habits': 'Go to Habits',
   'global.newJournalEntry': 'New journal entry (from anywhere)',
 };
 

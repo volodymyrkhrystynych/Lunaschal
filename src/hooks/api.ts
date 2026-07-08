@@ -186,6 +186,53 @@ export interface TodoItem {
   updatedAt: string;
 }
 
+export type HabitScheduleType = 'daily' | 'weekdays' | 'per_week';
+export type HabitCheckStatus = 'done' | 'skipped' | 'none';
+
+export interface Habit {
+  id: string;
+  name: string;
+  type: 'boolean' | 'quantity';
+  targetValue: number | null;
+  unit: string | null;
+  scheduleType: HabitScheduleType;
+  scheduleDays: number[] | null; // 0=Mon..6=Sun
+  timesPerWeek: number | null;
+  color: string | null;
+  position: number;
+  archived: boolean;
+  createdAt: string;
+  updatedAt: string;
+  // server-computed stats
+  currentStreak: number;
+  longestStreak: number;
+  streakUnit: 'days' | 'weeks';
+  completion30: number | null;
+  todayStatus: HabitCheckStatus;
+  todayValue: number | null;
+  todaySatisfied: boolean;
+  todayScheduled: boolean;
+}
+
+export interface HabitCheck {
+  habitId: string;
+  date: string; // YYYY-MM-DD
+  status: 'done' | 'skipped';
+  value: number | null;
+}
+
+export interface HabitInput {
+  name?: string;
+  type?: 'boolean' | 'quantity';
+  targetValue?: number | null;
+  unit?: string | null;
+  scheduleType?: HabitScheduleType;
+  scheduleDays?: number[] | null;
+  timesPerWeek?: number | null;
+  color?: string | null;
+  archived?: boolean;
+}
+
 // --- fetch helpers ---
 
 async function get<T>(url: string): Promise<T> {
@@ -426,5 +473,16 @@ export const api = {
     update: (id: string, data: { title?: string; done?: boolean }) =>
       patch<{ success: boolean }>(`/api/tasks/todos/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/todos/${id}`),
+  },
+
+  habits: {
+    list: (archived?: boolean) => get<Habit[]>(`/api/habits${archived ? '?archived=1' : ''}`),
+    create: (data: HabitInput) => post<{ id: string }>('/api/habits', data),
+    update: (id: string, data: HabitInput) => patch<{ success: boolean }>(`/api/habits/${id}`, data),
+    reorder: (order: string[]) => post<{ success: boolean }>('/api/habits/reorder', { order }),
+    remove: (id: string) => del<{ success: boolean }>(`/api/habits/${id}`),
+    setCheck: (id: string, date: string, data: { status: HabitCheckStatus; value?: number }) =>
+      put<{ success: boolean }>(`/api/habits/${id}/checks/${date}`, data),
+    checks: (from: string, to: string) => get<HabitCheck[]>(`/api/habits/checks?from=${from}&to=${to}`),
   },
 };

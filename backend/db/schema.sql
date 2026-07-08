@@ -158,3 +158,29 @@ CREATE TABLE IF NOT EXISTS journal_entry_curated_tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ject_tag ON journal_entry_curated_tags(tag_id);
+
+CREATE TABLE IF NOT EXISTS habits (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'boolean' CHECK(type IN ('boolean','quantity')),
+    target_value REAL,
+    unit TEXT,
+    schedule_type TEXT NOT NULL DEFAULT 'daily' CHECK(schedule_type IN ('daily','weekdays','per_week')),
+    schedule_days TEXT,
+    times_per_week INTEGER,
+    color TEXT,
+    position INTEGER NOT NULL DEFAULT 1,
+    archived INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS habit_checks (
+    id TEXT PRIMARY KEY,
+    habit_id TEXT NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'done' CHECK(status IN ('done','skipped')),
+    value REAL,
+    created_at INTEGER NOT NULL,
+    UNIQUE(habit_id, date)
+);

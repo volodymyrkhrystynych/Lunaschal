@@ -5,13 +5,14 @@ import { api } from '../hooks/api';
 import { DEFAULT_BINDINGS, comboFromEvent, isEditableTarget, keyCapture } from './keymap';
 import type { ActionId } from './keymap';
 
-export type AppView = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks';
+export type AppView = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'habits';
 
-export const VIEW_ORDER: AppView[] = ['chat', 'tasks', 'journal', 'writing', 'calendar', 'flashcards', 'files', 'settings'];
+export const VIEW_ORDER: AppView[] = ['chat', 'tasks', 'habits', 'journal', 'writing', 'calendar', 'flashcards', 'files', 'settings'];
 
 const TAB_ACTIONS: Partial<Record<ActionId, AppView>> = {
   'tab.chat': 'chat',
   'tab.tasks': 'tasks',
+  'tab.habits': 'habits',
   'tab.journal': 'journal',
   'tab.writing': 'writing',
   'tab.calendar': 'calendar',
