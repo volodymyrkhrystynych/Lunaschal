@@ -250,7 +250,9 @@ def _transcribe_and_paste() -> None:
         duration = len(audio) / SAMPLE_RATE
         _status(f"⏳ Transcribing {duration:.1f}s…")
 
-        text = _transcribe(audio)
+        # source="paste" asks the server to keep this in the transcription log,
+        # tagged with the window the text is about to be pasted into
+        text = _transcribe(audio, source="paste", window=_window_context())
         if not text:
             return
 
@@ -747,7 +749,27 @@ def _stop_audio() -> np.ndarray | None:
     return audio
 
 
-def _transcribe(audio: np.ndarray) -> str | None:
+def _window_context() -> dict[str, str]:
+    """Focused window's class + title via Hyprland; empty dict on any failure
+    (other compositors, hyprctl missing) so transcription never breaks."""
+    try:
+        out = subprocess.run(
+            ["hyprctl", "activewindow", "-j"],
+            capture_output=True, text=True, timeout=2,
+        )
+        win = json.loads(out.stdout)
+        ctx = {}
+        if win.get("class"):
+            ctx["app"] = win["class"]
+        if win.get("title"):
+            ctx["window_title"] = win["title"]
+        return ctx
+    except Exception:
+        return {}
+
+
+def _transcribe(audio: np.ndarray, source: str | None = None,
+                window: dict[str, str] | None = None) -> str | None:
     audio_i16 = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
     buf = io.BytesIO()
     wavfile.write(buf, SAMPLE_RATE, audio_i16)
@@ -756,6 +778,7 @@ def _transcribe(audio: np.ndarray) -> str | None:
     try:
         resp = _SESSION.post(
             f"{STT_URL}/api/transcribe",
+            data={"source": source, **(window or {})} if source else None,
             files={"audio": ("recording.wav", buf, "audio/wav")},
             timeout=120,
         )

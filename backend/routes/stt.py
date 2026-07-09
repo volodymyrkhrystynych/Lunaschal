@@ -1,10 +1,14 @@
 import io
 import os
+import re
 import tempfile
 import logging
 import threading
+import time
 import urllib.request
 from pathlib import Path
+
+from ulid import ULID
 
 from backend.ai.chat import chat_stream
 from backend.ai.provider import is_ai_configured
@@ -262,6 +266,51 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
         os.unlink(tmp_path)
 
 
+# Sources whose transcriptions are kept in the transcription log (Journal view,
+# hidden behind a toggle). Journal-key transcriptions already persist as journal
+# entries; voice/command modes are conversational and intentionally not logged.
+_LOGGED_SOURCES = {'paste'}
+
+# Window classes treated as browsers: their page title is stored as extra
+# context (it names the site/page). All other apps store the class only —
+# titles elsewhere (documents, chats) are more sensitive than useful.
+_BROWSER_CLASSES = (
+    'firefox', 'librewolf', 'zen', 'vivaldi', 'chromium', 'google-chrome',
+    'brave', 'opera', 'qutebrowser', 'epiphany',
+)
+
+_BROWSER_TITLE_SUFFIX = re.compile(
+    r'\s+[-—–]\s+(Mozilla Firefox|LibreWolf|Zen Browser|Vivaldi|Chromium|'
+    r'Google Chrome|Brave|Opera|qutebrowser|Web)$',
+    re.IGNORECASE,
+)
+
+
+def _window_detail(app: str, title: str) -> str | None:
+    if not title or not any(app.startswith(b) for b in _BROWSER_CLASSES):
+        return None
+    return _BROWSER_TITLE_SUFFIX.sub('', title).strip() or None
+
+
+def _log_transcription(result: dict, form) -> None:
+    source = (form.get('source') or '').strip().lower()
+    if source not in _LOGGED_SOURCES or not result.get('text'):
+        return
+    try:
+        app = (form.get('app') or '').strip().lower() or None
+        detail = _window_detail(app, (form.get('window_title') or '').strip()) if app else None
+        db = get_db()
+        db.execute(
+            'INSERT INTO transcriptions (id, text, source, app, detail, created_at)'
+            ' VALUES (?, ?, ?, ?, ?, ?)',
+            (str(ULID()), result['text'], source, app, detail, int(time.time())),
+        )
+        db.commit()
+    except Exception:
+        # Logging must never break the transcription response
+        logger.exception('Failed to log transcription')
+
+
 @bp.post('/api/transcribe')
 def transcribe():
     if 'audio' not in request.files:
@@ -281,6 +330,7 @@ def transcribe():
 
     try:
         result = _do_transcribe(content, audio_file.filename or '', language)
+        _log_transcription(result, request.form)
         return jsonify({**result, 'language_probability': 1.0})
     except ValueError as e:
         # Short/empty audio — not a model error, don't reset
