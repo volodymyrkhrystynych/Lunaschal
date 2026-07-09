@@ -326,7 +326,9 @@ function TodoSection() {
 
         {active.length === 0 && !isLoading && (
           <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
-            Nothing on the list.
+            {completed.length > 0
+              ? `All done — ${completed.length} completed.`
+              : 'Nothing on the list.'}
           </div>
         )}
       </div>
