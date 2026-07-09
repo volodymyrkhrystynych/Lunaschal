@@ -69,7 +69,8 @@ def main():
         '--disable-gpu --disable-gpu-compositing --disable-vulkan '
         '--disable-background-networking --disable-sync',
     )
-    webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600))
+    webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600),
+                          text_select=True)
     webview.start(gui='qt')
 
 
