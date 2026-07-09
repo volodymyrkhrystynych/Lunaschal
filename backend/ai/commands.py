@@ -12,6 +12,7 @@ Actions:
 - create_todo: add an item to the todo list. "Create a todo about...", "remind me to...", "add ... to my list"
 - create_event: add a calendar event. "There's an event on...", "I have a meeting...", "schedule..."
 - create_journal: save a journal entry. "Journal that...", "make a note that today I..."
+- create_recipe: save a recipe to the cookbook. "Save this recipe...", "add a recipe for..."
 - clarify: something essential is missing or genuinely ambiguous — ask ONE short question.
 - none: the command doesn't match any action; explain briefly in "speak".
 
@@ -27,11 +28,12 @@ actions it confirms what was done, e.g. "Added a todo: buy milk." For clarify it
 
 Respond with valid JSON matching this schema:
 {
-  "action": "create_todo|create_event|create_journal|clarify|none",
+  "action": "create_todo|create_event|create_journal|create_recipe|clarify|none",
   "speak": "one sentence, spoken aloud",
   "todo": {"title": "..."} (only if create_todo),
   "event": {"title": "...", "date": "YYYY-MM-DD", "time": "HH:MM" (optional), "description": "..." (optional)} (only if create_event),
-  "journal": {"content": "..."} (only if create_journal)
+  "journal": {"content": "..."} (only if create_journal),
+  "recipe": {"title": "...", "content": "the recipe as spoken, ingredients and steps"} (only if create_recipe)
 }"""
 
 

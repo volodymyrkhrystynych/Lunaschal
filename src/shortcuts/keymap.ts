@@ -16,6 +16,7 @@ export type ActionId =
   | 'tab.writing'
   | 'tab.calendar'
   | 'tab.flashcards'
+  | 'tab.cookbook'
   | 'tab.files'
   | 'tab.settings'
   | 'global.newJournalEntry';
@@ -33,6 +34,7 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'tab.writing': 'Digit4',
   'tab.calendar': 'Digit5',
   'tab.flashcards': 'Digit6',
+  'tab.cookbook': 'Digit9',
   'tab.files': 'Digit7',
   'tab.settings': 'Digit8',
   'global.newJournalEntry': 'shift+KeyJ',
@@ -51,6 +53,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'tab.writing': 'Go to Writing',
   'tab.calendar': 'Go to Calendar',
   'tab.flashcards': 'Go to Flashcards',
+  'tab.cookbook': 'Go to Cookbook',
   'tab.files': 'Go to Files',
   'tab.settings': 'Go to Settings',
   'global.newJournalEntry': 'New journal entry (from anywhere)',

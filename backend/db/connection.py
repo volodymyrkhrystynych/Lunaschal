@@ -54,6 +54,7 @@ def init_db() -> None:
         db.execute('ALTER TABLE settings DROP COLUMN password_hash')
         db.commit()
     _init_fts(db)
+    _init_recipes_fts(db)
     _init_vectors(db)
     _ensure_network_code(db)
     _ensure_writing_project_id(db)
@@ -191,6 +192,41 @@ def _init_fts(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _init_recipes_fts(db: sqlite3.Connection) -> None:
+    db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS recipes_fts USING fts5(
+            id UNINDEXED,
+            title,
+            content,
+            tags,
+            content='recipes',
+            content_rowid='rowid'
+        )
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS recipes_ai AFTER INSERT ON recipes BEGIN
+            INSERT INTO recipes_fts(rowid, id, title, content, tags)
+            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content, NEW.tags);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS recipes_ad AFTER DELETE ON recipes BEGIN
+            INSERT INTO recipes_fts(recipes_fts, rowid, id, title, content, tags)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.content, OLD.tags);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS recipes_au AFTER UPDATE ON recipes BEGIN
+            INSERT INTO recipes_fts(recipes_fts, rowid, id, title, content, tags)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.content, OLD.tags);
+            INSERT INTO recipes_fts(rowid, id, title, content, tags)
+            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content, NEW.tags);
+        END
+    """)
+    db.execute("INSERT INTO recipes_fts(recipes_fts) VALUES('rebuild')")
+    db.commit()
+
+
 def _init_vectors(db: sqlite3.Connection) -> None:
     try:
         import sqlite_vec
@@ -216,6 +252,19 @@ def search_journal_fts(query: str, limit: int = 50) -> list[dict]:
     escaped = ' OR '.join(f'"{w}"*' for w in words)
     rows = db.execute(
         'SELECT id, rank FROM journal_fts WHERE journal_fts MATCH ? ORDER BY rank LIMIT ?',
+        (escaped, limit),
+    ).fetchall()
+    return [{'id': r['id'], 'rank': r['rank']} for r in rows]
+
+
+def search_recipes_fts(query: str, limit: int = 50) -> list[dict]:
+    db = get_db()
+    words = [w for w in query.split() if w]
+    if not words:
+        return []
+    escaped = ' OR '.join(f'"{w}"*' for w in words)
+    rows = db.execute(
+        'SELECT id, rank FROM recipes_fts WHERE recipes_fts MATCH ? ORDER BY rank LIMIT ?',
         (escaped, limit),
     ).fetchall()
     return [{'id': r['id'], 'rank': r['rank']} for r in rows]

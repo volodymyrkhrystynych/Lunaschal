@@ -69,6 +69,17 @@ def _create_journal(journal: dict) -> str | None:
     return entry_id
 
 
+def _create_recipe(recipe: dict) -> str | None:
+    title = (recipe.get('title') or '').strip()
+    content = (recipe.get('content') or '').strip()
+    if not title or not content:
+        return None
+    from backend.routes.cookbook import _insert_recipe, _sync_embeddings_bg
+    recipe_id = _insert_recipe(title, content, None)
+    _sync_embeddings_bg(recipe_id)
+    return recipe_id
+
+
 @bp.post('')
 def handle_command():
     """Parse a transcribed voice command with the LLM and execute the resulting action.
@@ -107,6 +118,9 @@ def handle_command():
     elif action == 'create_journal':
         created_id = _create_journal(result.get('journal') or {})
         fallback = 'Saved the journal entry.'
+    elif action == 'create_recipe':
+        created_id = _create_recipe(result.get('recipe') or {})
+        fallback = 'Saved the recipe.'
     else:
         return jsonify({
             'status': 'none',
@@ -126,5 +140,5 @@ def handle_command():
         'action': action,
         'id': created_id,
         'speak': speak or fallback,
-        'details': result.get('todo') or result.get('event') or result.get('journal'),
+        'details': result.get('todo') or result.get('event') or result.get('journal') or result.get('recipe'),
     })

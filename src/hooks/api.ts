@@ -20,6 +20,21 @@ export interface Transcription {
   createdAt: string;
 }
 
+export interface Recipe {
+  id: string;
+  title: string;
+  content: string;
+  tags: string | null;
+  sourceUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RecipeTag {
+  name: string;
+  count: number;
+}
+
 export interface CuratedTag {
   id: string;
   name: string;
@@ -275,6 +290,27 @@ export const api = {
       return get<Transcription[]>(`/api/transcriptions?${qp}`);
     },
     delete: (id: string) => del<{ success: boolean }>(`/api/transcriptions/${id}`),
+  },
+
+  cookbook: {
+    list: (params?: { limit?: number; offset?: number; tag?: string }) => {
+      const qp = new URLSearchParams();
+      if (params?.limit !== undefined) qp.set('limit', String(params.limit));
+      if (params?.offset !== undefined) qp.set('offset', String(params.offset));
+      if (params?.tag) qp.set('tag', params.tag);
+      return get<Recipe[]>(`/api/cookbook?${qp}`);
+    },
+    search: (query: string, limit?: number) =>
+      get<Recipe[]>(`/api/cookbook/search?query=${encodeURIComponent(query)}&limit=${limit ?? 50}`),
+    tags: () => get<RecipeTag[]>('/api/cookbook/tags'),
+    get: (id: string) => get<Recipe>(`/api/cookbook/${id}`),
+    create: (data: { title: string; content: string; tags?: string[] }) =>
+      post<{ id: string }>('/api/cookbook', data),
+    update: (id: string, data: { title?: string; content?: string; tags?: string[] }) =>
+      patch<{ success: boolean }>(`/api/cookbook/${id}`, data),
+    delete: (id: string) => del<{ success: boolean }>(`/api/cookbook/${id}`),
+    importRecipe: (data: { text?: string; url?: string }) =>
+      post<{ id: string; recipe: Recipe }>('/api/cookbook/import', data),
   },
 
   calendar: {
