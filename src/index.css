@@ -14,3 +14,63 @@ body {
   color: var(--color-text);
   font-family: system-ui, -apple-system, sans-serif;
 }
+
+/* Reader pane for imported fanfic chapters (server-sanitized HTML). */
+.fanfic-prose {
+  color: var(--color-text);
+  font-size: 1.05rem;
+  line-height: 1.75;
+}
+.fanfic-prose p,
+.fanfic-prose div {
+  margin-bottom: 0.9em;
+}
+.fanfic-prose h1, .fanfic-prose h2, .fanfic-prose h3,
+.fanfic-prose h4, .fanfic-prose h5, .fanfic-prose h6 {
+  font-weight: 700;
+  margin: 1.2em 0 0.6em;
+}
+.fanfic-prose a {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+.fanfic-prose img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 0.75em 0;
+}
+.fanfic-prose blockquote {
+  border-left: 3px solid var(--color-primary);
+  padding-left: 1em;
+  margin: 0.9em 0;
+  color: var(--color-text-muted);
+}
+.fanfic-prose table {
+  border-collapse: collapse;
+  margin: 0.9em 0;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+}
+.fanfic-prose td, .fanfic-prose th {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 0.35em 0.7em;
+}
+.fanfic-prose hr {
+  border-color: rgba(255, 255, 255, 0.15);
+  margin: 1.5em 0;
+}
+.fanfic-prose ul, .fanfic-prose ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.9em;
+}
+.fanfic-prose ul { list-style: disc; }
+.fanfic-prose ol { list-style: decimal; }
+.fanfic-prose pre {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  padding: 0.75em;
+  overflow-x: auto;
+  margin: 0.9em 0;
+}

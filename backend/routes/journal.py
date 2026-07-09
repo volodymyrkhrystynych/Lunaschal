@@ -66,6 +66,33 @@ def _enrich_with_curated_tags(db, dicts: list[dict]) -> list[dict]:
     return dicts
 
 
+def _enrich_with_fic_refs(db, dicts: list[dict]) -> list[dict]:
+    if not dicts:
+        return dicts
+    ids = [d['id'] for d in dicts]
+    placeholders = ','.join('?' * len(ids))
+    ref_rows = db.execute(
+        f'SELECT jefr.journal_entry_id, jefr.fic_id, f.title AS fic_title,'
+        f' jefr.chapter_id, fc.title AS chapter_title'
+        f' FROM journal_entry_fic_refs jefr'
+        f' JOIN fics f ON f.id = jefr.fic_id'
+        f' LEFT JOIN fic_chapters fc ON fc.id = jefr.chapter_id'
+        f' WHERE jefr.journal_entry_id IN ({placeholders})',
+        ids,
+    ).fetchall()
+    ref_map: dict[str, list[dict]] = {}
+    for r in ref_rows:
+        ref_map.setdefault(r['journal_entry_id'], []).append({
+            'ficId': r['fic_id'],
+            'ficTitle': r['fic_title'],
+            'chapterId': r['chapter_id'],
+            'chapterTitle': r['chapter_title'],
+        })
+    for d in dicts:
+        d['ficRefs'] = ref_map.get(d['id'], [])
+    return dicts
+
+
 @bp.get('')
 def list_entries():
     limit = min(int(request.args.get('limit', 50)), 100)
@@ -86,7 +113,7 @@ def list_entries():
             (limit, offset),
         ).fetchall()
     dicts = [row_to_dict(r) for r in rows]
-    return jsonify(_enrich_with_curated_tags(db, dicts))
+    return jsonify(_enrich_with_fic_refs(db, _enrich_with_curated_tags(db, dicts)))
 
 
 @bp.get('/search')
@@ -106,7 +133,7 @@ def search():
         list(id_rank),
     ).fetchall()
     dicts = sorted([row_to_dict(r) for r in rows], key=lambda d: id_rank.get(d['id'], 0))
-    return jsonify(_enrich_with_curated_tags(db, dicts))
+    return jsonify(_enrich_with_fic_refs(db, _enrich_with_curated_tags(db, dicts)))
 
 
 @bp.get('/semantic-search')

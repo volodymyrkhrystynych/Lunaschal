@@ -7,8 +7,68 @@ export interface JournalEntry {
   title: string | null;
   tags: string | null;
   curatedTags: string[];
+  ficRefs?: FicRef[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface FicRef {
+  ficId: string;
+  ficTitle: string;
+  chapterId: string | null;
+  chapterTitle: string | null;
+}
+
+export interface FicDownloadProgress {
+  phase: 'index' | 'chapters' | 'updating' | 'done' | 'error';
+  chaptersDone: number;
+  chaptersTotal: number | null;
+  error: string | null;
+  done: boolean;
+}
+
+export interface Fic {
+  id: string;
+  title: string;
+  author: string | null;
+  sourceType: 'xenforo' | 'epub' | 'docx' | 'pdf';
+  sourceUrl: string | null;
+  site: string | null;
+  description?: string | null;
+  coverPath: string | null;
+  wordCount: number;
+  chapterCount: number;
+  downloadStatus: 'downloading' | 'complete' | 'error';
+  downloadError: string | null;
+  lastReadChapterId: string | null;
+  lastCheckedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  downloadProgress?: FicDownloadProgress;
+  matchedChapters?: { id: string; title: string }[];
+}
+
+export interface FicChapterSummary {
+  id: string;
+  ficId: string;
+  position: number;
+  title: string;
+  category: string;
+  wordCount: number;
+  postedAt: string | null;
+}
+
+export interface FicChapter extends FicChapterSummary {
+  contentHtml: string;
+  contentText: string;
+  sourceUrl: string | null;
+  createdAt: string;
+}
+
+export interface SiteCookieInfo {
+  domain: string;
+  hasCookie: boolean;
+  updatedAt: string | null;
 }
 
 export interface Transcription {
@@ -241,6 +301,15 @@ const patch = <T>(url: string, body: unknown) => send<T>('PATCH', url, body);
 const put = <T>(url: string, body: unknown) => send<T>('PUT', url, body);
 const del = <T>(url: string) => send<T>('DELETE', url);
 
+async function upload<T>(url: string, form: FormData): Promise<T> {
+  const r = await fetch(url, { method: 'POST', credentials: 'include', body: form });
+  if (!r.ok) {
+    const b = await r.json().catch(() => ({}));
+    throw new Error(b.error || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
 // --- API namespaces ---
 
 export const api = {
@@ -311,6 +380,42 @@ export const api = {
     delete: (id: string) => del<{ success: boolean }>(`/api/cookbook/${id}`),
     importRecipe: (data: { text?: string; url?: string }) =>
       post<{ id: string; recipe: Recipe }>('/api/cookbook/import', data),
+  },
+
+  fanfic: {
+    list: (params?: { limit?: number; offset?: number }) => {
+      const qp = new URLSearchParams();
+      if (params?.limit !== undefined) qp.set('limit', String(params.limit));
+      if (params?.offset !== undefined) qp.set('offset', String(params.offset));
+      return get<Fic[]>(`/api/fanfic?${qp}`);
+    },
+    search: (query: string) =>
+      get<Fic[]>(`/api/fanfic/search?query=${encodeURIComponent(query)}`),
+    get: (id: string) => get<Fic>(`/api/fanfic/${id}`),
+    delete: (id: string) => del<{ success: boolean }>(`/api/fanfic/${id}`),
+    chapters: (ficId: string) => get<FicChapterSummary[]>(`/api/fanfic/${ficId}/chapters`),
+    chapter: (chapterId: string) => get<FicChapter>(`/api/fanfic/chapters/${chapterId}`),
+    importUrl: (url: string) =>
+      post<{ id: string; alreadyExists?: boolean }>('/api/fanfic/import', { url }),
+    status: (ficId: string) => get<FicDownloadProgress | { done: true }>(`/api/fanfic/${ficId}/status`),
+    checkUpdates: (ficId: string) => post<{ id: string }>(`/api/fanfic/${ficId}/check-updates`),
+    uploadFile: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return upload<{ id: string; fic: Fic }>('/api/fanfic/upload', form);
+    },
+    saveProgress: (ficId: string, chapterId: string) =>
+      post<{ success: boolean }>(`/api/fanfic/${ficId}/progress`, { chapterId }),
+    linkJournal: (ficId: string, journalEntryId: string, chapterId?: string) =>
+      post<{ id: string }>(`/api/fanfic/${ficId}/journal-link`, { journalEntryId, chapterId }),
+    unlinkJournal: (ficId: string, journalEntryId: string, chapterId?: string) =>
+      del<{ success: boolean }>(
+        `/api/fanfic/${ficId}/journal-link/${journalEntryId}${chapterId ? `?chapterId=${chapterId}` : ''}`),
+    cookies: {
+      list: () => get<SiteCookieInfo[]>('/api/fanfic/cookies'),
+      put: (domain: string, cookie: string) =>
+        put<{ success: boolean }>('/api/fanfic/cookies', { domain, cookie }),
+    },
   },
 
   calendar: {

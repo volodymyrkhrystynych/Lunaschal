@@ -1,0 +1,46 @@
+<html>
+<body>
+<div class="block-body js-replyNewMessageContainer">
+
+<article class="message message--post" data-author="TestAuthor" data-content="post-101">
+  <div class="message-cell message-cell--main">
+    <div class="message-attribution">
+      <ul class="message-attribution-main">
+        <li><span class="threadmarkLabel">Chapter One</span></li>
+        <li><a href="/threads/a-test-fic.12345/post-101"><time class="u-dt" data-time="1600000000" datetime="2020-09-13T12:26:40+0000">Sep 13, 2020</time></a></li>
+      </ul>
+    </div>
+    <div class="message-content js-messageContent">
+      <div class="bbWrapper">It began on a <b>Tuesday</b>.
+        <img src="/proxy.php?image=https%3A%2F%2Fexample.com%2Fart.png&amp;hash=abc123" data-url="https://example.com/art.png" class="bbImage" alt="cover art" />
+        <img src="/styles/default/xenforo/smilies/smile.png" alt=":)" class="smilie" />
+        <script>alert('xss')</script>
+        <span onclick="steal()">Nothing suspicious here.</span>
+      </div>
+    </div>
+  </div>
+</article>
+
+<article class="message message--post" data-author="TestAuthor" data-content="post-102">
+  <div class="message-cell message-cell--main">
+    <div class="message-attribution">
+      <span class="threadmarkLabel">Chapter Two</span>
+      <time class="u-dt" data-time="1600100000" datetime="2020-09-14T16:13:20+0000">Sep 14, 2020</time>
+    </div>
+    <div class="message-content js-messageContent">
+      <div class="bbWrapper">The plot <i>thickens</i> considerably in this chapter about wizards.</div>
+    </div>
+  </div>
+</article>
+
+</div>
+<nav class="pageNavWrapper">
+  <div class="pageNav">
+    <ul class="pageNav-main">
+      <li class="pageNav-page pageNav-page--current"><a href="/threads/a-test-fic.12345/reader">1</a></li>
+      <li class="pageNav-page"><a href="/threads/a-test-fic.12345/reader/page-2">2</a></li>
+    </ul>
+  </div>
+</nav>
+</body>
+</html>
