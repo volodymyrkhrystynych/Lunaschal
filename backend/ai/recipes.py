@@ -1,10 +1,7 @@
 import json
-import logging
 
 from backend.ai.journal import _ollama_chat_with_fallback
 from backend.ai.provider import get_provider_config, is_ai_configured, DEFAULT_MODELS
-
-logger = logging.getLogger(__name__)
 
 _MAX_INPUT_CHARS = 15000
 
@@ -80,6 +77,6 @@ def parse_recipe(text: str) -> dict | None:
         return {'title': title, 'content': content, 'tags': tags}
 
     except Exception as e:
-        logger.error('Recipe parsing failed: %s', e)
+        print(f'Recipe parsing failed: {e}')
 
     return None
