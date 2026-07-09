@@ -4,6 +4,7 @@ at a time so a crash leaves a resumable partial fic. Progress is tracked in
 an in-memory registry (same pattern as the curated-tags scan)."""
 
 import hashlib
+import re
 import threading
 import time
 from urllib.parse import urlparse
@@ -172,25 +173,31 @@ def _ext_for(url: str, content_type: str) -> str:
     return suffix if suffix in _KNOWN_EXTS else '.img'
 
 
-def download_images(fic_id: str, urls: list[str]) -> dict[str, str]:
+def download_images(fic_id: str, sources: list[xenforo.ImageSource]) -> dict[str, str]:
     """Download each remote image into the fic's images dir. Returns a
-    url -> local-api-src mapping; failed downloads are simply omitted so
-    those images keep their remote URL."""
+    url -> local-api-src mapping keyed by the source's preferred URL; when
+    that fails, the forum's proxy copy is tried before giving up. Failed
+    downloads are simply omitted so those images keep their remote URL."""
     mapping: dict[str, str] = {}
     img_dir = storage.images_dir(fic_id)
     if img_dir is None:
         return mapping
     img_dir.mkdir(parents=True, exist_ok=True)
-    for url in urls:
+    for source in sources:
+        url = source.url
         stem = hashlib.sha1(url.encode()).hexdigest()[:16]
         existing = next(img_dir.glob(f'{stem}.*'), None)
         if existing:
             mapping[url] = f'/api/fanfic/{fic_id}/images/{existing.name}'
             continue
-        try:
-            data, content_type = _fetch_binary(url)
-        except Exception as e:
-            print(f'Fanfic image download failed ({url}): {e}')
+        data = None
+        for candidate in filter(None, (url, source.proxy_url)):
+            try:
+                data, content_type = _fetch_binary(candidate)
+                break
+            except Exception as e:
+                print(f'Fanfic image download failed ({candidate}): {e}')
+        if data is None:
             continue
         name = stem + _ext_for(url, content_type)
         (img_dir / name).write_bytes(data)
@@ -201,14 +208,14 @@ def download_images(fic_id: str, urls: list[str]) -> dict[str, str]:
 def process_post_html(fic_id: str, content_html: str, base_url: str) -> tuple[str, str, str | None]:
     """Download images, rewrite srcs, sanitize. Returns (clean_html, text,
     first local image filename or None)."""
-    urls = xenforo.extract_image_urls(content_html, base_url)
-    mapping = download_images(fic_id, urls)
+    sources = xenforo.extract_image_sources(content_html, base_url)
+    mapping = download_images(fic_id, sources)
     html = xenforo.rewrite_image_srcs(content_html, base_url, mapping)
     clean = sanitize_chapter_html(html)
     first_image = None
-    for url in urls:
-        if url in mapping:
-            first_image = mapping[url].rsplit('/', 1)[-1]
+    for source in sources:
+        if source.url in mapping:
+            first_image = mapping[source.url].rsplit('/', 1)[-1]
             break
     return clean, html_to_text(clean), first_image
 
@@ -242,6 +249,25 @@ def _finalize_fic(db, fic_id: str, cover: str | None) -> None:
         ' cover_path=COALESCE(cover_path, ?) WHERE id=?',
         (agg['n'], agg['words'], 'complete', now, now, cover, fic_id),
     )
+    db.commit()
+
+
+def _sync_site_tags(db, fic_id: str, ref: xenforo.ThreadRef) -> None:
+    """Fetch the main thread page and replace the fic's site tags.
+    Best-effort: a fetch/parse failure, or an empty result (usually a login
+    wall rather than an untagged thread), leaves existing tags alone."""
+    try:
+        tags = xenforo.parse_thread_tags(_fetch(ref.thread_url).text)
+    except Exception as e:
+        print(f'Fanfic tag fetch failed for {fic_id}: {e}')
+        return
+    if not tags:
+        return
+    now = int(time.time())
+    db.execute('DELETE FROM fic_site_tags WHERE fic_id=?', (fic_id,))
+    db.executemany(
+        'INSERT OR IGNORE INTO fic_site_tags(fic_id, name, created_at) VALUES (?,?,?)',
+        [(fic_id, t, now) for t in tags])
     db.commit()
 
 
@@ -402,6 +428,8 @@ def run_import(fic_id: str, ref: xenforo.ThreadRef) -> None:
         )
         db.commit()
 
+        _sync_site_tags(db, fic_id, ref)
+
         counts = [c.count for c in index.categories]
         total = sum(counts) if all(c is not None for c in counts) else None
         _update_progress(fic_id, phase='chapters', chaptersTotal=total)
@@ -471,6 +499,8 @@ def run_check_updates(fic_id: str) -> None:
             db.execute('UPDATE fics SET description=? WHERE id=?', (index.description, fic_id))
         db.commit()
 
+        _sync_site_tags(db, fic_id, ref)
+
         author = index.author
         for cat in index.categories:
             stats = db.execute(
@@ -500,8 +530,62 @@ def run_check_updates(fic_id: str) -> None:
             return
         if author and not index.author:
             db.execute('UPDATE fics SET author=COALESCE(author, ?) WHERE id=?', (author, fic_id))
+
+        try:
+            _repair_remote_images(db, fic_id, ref)
+        except Exception as e:
+            print(f'Fanfic image repair failed for {fic_id}: {e}')
+
         _finalize_fic(db, fic_id, _first_local_image(db, fic_id))
         _update_progress(fic_id, phase='done', done=True)
     except Exception as e:
         print(f'Fanfic update check failed for {fic_id}: {e}')
         _fail_fic(fic_id, str(e))
+
+
+_REMOTE_IMG = re.compile(r'<img[^>]+src="https?://', re.I)
+
+
+def _repair_remote_images(db, fic_id: str, ref: xenforo.ThreadRef) -> int:
+    """Chapters whose images couldn't be downloaded keep remote srcs; many
+    are recoverable later (e.g. via the forum's proxy cache, or once a site
+    cookie is stored). Re-fetch those chapters' thread pages and re-process
+    the ones that improve. Returns the number of chapters repaired."""
+    rows = db.execute(
+        "SELECT id, source_post_id, content_html FROM fic_chapters"
+        " WHERE fic_id=? AND source_post_id IS NOT NULL AND content_html LIKE '%<img%'",
+        (fic_id,)).fetchall()
+    broken = [r for r in rows if _REMOTE_IMG.search(r['content_html'])]
+    if not broken:
+        return 0
+
+    # One post URL fetch resolves a whole thread page — cache its posts so
+    # several broken chapters on the same page cost a single request.
+    harvested: dict[str, xenforo.ReaderPost] = {}
+    harvested_meta: dict[str, str] = {}
+    repaired = 0
+    for row in broken:
+        if _cancelled(fic_id):
+            break
+        post_id = row['source_post_id']
+        if post_id not in harvested:
+            try:
+                resp = _fetch(ref.post_url(post_id))
+            except Exception as e:
+                print(f'Fanfic image repair: fetch failed for post {post_id}: {e}')
+                continue
+            for post in xenforo.parse_reader_page(resp.text).posts:
+                if post.post_id not in harvested:
+                    harvested[post.post_id] = post
+                    harvested_meta[post.post_id] = str(resp.url)
+        post = harvested.get(post_id)
+        if post is None:
+            continue
+        clean, text, _ = process_post_html(fic_id, post.content_html, harvested_meta[post_id])
+        if len(_REMOTE_IMG.findall(clean)) < len(_REMOTE_IMG.findall(row['content_html'])):
+            db.execute(
+                'UPDATE fic_chapters SET content_html=?, content_text=?, word_count=? WHERE id=?',
+                (clean, text, count_words(text), row['id']))
+            db.commit()
+            repaired += 1
+    return repaired

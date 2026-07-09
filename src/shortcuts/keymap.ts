@@ -10,6 +10,9 @@ export type ActionId =
   | 'nav.in'
   | 'action.new'
   | 'action.newAlt'
+  | 'action.annotate'
+  | 'scroll.down'
+  | 'scroll.up'
   | 'tab.chat'
   | 'tab.tasks'
   | 'tab.journal'
@@ -29,6 +32,9 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'nav.in': 'KeyD',
   'action.new': 'KeyN',
   'action.newAlt': 'shift+KeyN',
+  'action.annotate': 'KeyI',
+  'scroll.down': 'KeyJ',
+  'scroll.up': 'KeyK',
   'tab.chat': 'Digit1',
   'tab.tasks': 'Digit2',
   'tab.journal': 'Digit3',
@@ -49,6 +55,9 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'nav.in': 'Go in (drill into tab / item)',
   'action.new': 'New item (entry, file, project…)',
   'action.newAlt': 'New folder (Files)',
+  'action.annotate': 'Write commentary (reader)',
+  'scroll.down': 'Scroll down (reader / lists)',
+  'scroll.up': 'Scroll up (reader / lists)',
   'tab.chat': 'Go to Chat',
   'tab.tasks': 'Go to Tasks',
   'tab.journal': 'Go to Journal',

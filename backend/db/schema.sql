@@ -200,6 +200,8 @@ CREATE TABLE IF NOT EXISTS fics (
     download_error TEXT,
     last_read_chapter_id TEXT,
     last_checked_at INTEGER,
+    rating INTEGER CHECK(rating BETWEEN 1 AND 5),
+    review TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -242,3 +244,36 @@ CREATE TABLE IF NOT EXISTS site_cookies (
     cookie TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS fic_folders (
+    id TEXT PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fic_folder_items (
+    folder_id TEXT NOT NULL REFERENCES fic_folders(id) ON DELETE CASCADE,
+    fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (folder_id, fic_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ffi_fic ON fic_folder_items(fic_id);
+
+CREATE TABLE IF NOT EXISTS fic_site_tags (
+    fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (fic_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_fst_name ON fic_site_tags(name);
+
+CREATE TABLE IF NOT EXISTS fic_chapter_reads (
+    chapter_id TEXT PRIMARY KEY REFERENCES fic_chapters(id) ON DELETE CASCADE,
+    fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fcr_fic ON fic_chapter_reads(fic_id);

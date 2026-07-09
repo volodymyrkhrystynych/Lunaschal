@@ -42,10 +42,28 @@ export interface Fic {
   downloadError: string | null;
   lastReadChapterId: string | null;
   lastCheckedAt: string | null;
+  rating: number | null;
+  review?: string | null;
   createdAt: string;
   updatedAt: string;
   downloadProgress?: FicDownloadProgress;
   matchedChapters?: { id: string; title: string }[];
+  folderIds?: string[];
+  tags?: string[];
+  readCount?: number;
+}
+
+export interface FicFolder {
+  id: string;
+  name: string;
+  ficCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FicTagCount {
+  name: string;
+  count: number;
 }
 
 export interface FicChapterSummary {
@@ -56,6 +74,7 @@ export interface FicChapterSummary {
   category: string;
   wordCount: number;
   postedAt: string | null;
+  isRead: boolean;
 }
 
 export interface FicChapter extends FicChapterSummary {
@@ -383,12 +402,30 @@ export const api = {
   },
 
   fanfic: {
-    list: (params?: { limit?: number; offset?: number }) => {
+    list: (params?: { limit?: number; offset?: number; folderId?: string; tag?: string }) => {
       const qp = new URLSearchParams();
       if (params?.limit !== undefined) qp.set('limit', String(params.limit));
       if (params?.offset !== undefined) qp.set('offset', String(params.offset));
+      if (params?.folderId) qp.set('folderId', params.folderId);
+      if (params?.tag) qp.set('tag', params.tag);
       return get<Fic[]>(`/api/fanfic?${qp}`);
     },
+    tags: () => get<FicTagCount[]>('/api/fanfic/tags'),
+    folders: {
+      list: () => get<FicFolder[]>('/api/fanfic/folders'),
+      create: (name: string) => post<{ id: string }>('/api/fanfic/folders', { name }),
+      rename: (id: string, name: string) =>
+        patch<{ success: boolean }>(`/api/fanfic/folders/${id}`, { name }),
+      delete: (id: string) => del<{ success: boolean }>(`/api/fanfic/folders/${id}`),
+    },
+    addToFolder: (ficId: string, folderId: string) =>
+      post<{ success: boolean }>(`/api/fanfic/${ficId}/folders`, { folderId }),
+    removeFromFolder: (ficId: string, folderId: string) =>
+      del<{ success: boolean }>(`/api/fanfic/${ficId}/folders/${folderId}`),
+    setRead: (ficId: string, chapterIds: string[], read: boolean) =>
+      post<{ success: boolean; readCount: number }>(`/api/fanfic/${ficId}/read`, { chapterIds, read }),
+    saveReview: (ficId: string, data: { rating?: number | null; review?: string | null }) =>
+      patch<{ success: boolean }>(`/api/fanfic/${ficId}/review`, data),
     search: (query: string) =>
       get<Fic[]>(`/api/fanfic/search?query=${encodeURIComponent(query)}`),
     get: (id: string) => get<Fic>(`/api/fanfic/${id}`),

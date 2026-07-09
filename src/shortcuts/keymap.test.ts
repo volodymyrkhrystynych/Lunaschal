@@ -1,5 +1,18 @@
 import { describe, it, expect } from 'vitest';
-import { displayCombo, isModifierCode } from './keymap';
+import { DEFAULT_BINDINGS, displayCombo, isModifierCode } from './keymap';
+
+describe('DEFAULT_BINDINGS', () => {
+  it('binds the vim-style reader keys', () => {
+    expect(DEFAULT_BINDINGS['scroll.down']).toBe('KeyJ');
+    expect(DEFAULT_BINDINGS['scroll.up']).toBe('KeyK');
+    expect(DEFAULT_BINDINGS['action.annotate']).toBe('KeyI');
+  });
+
+  it('has no two actions on the same combo', () => {
+    const combos = Object.values(DEFAULT_BINDINGS);
+    expect(new Set(combos).size).toBe(combos.length);
+  });
+});
 
 describe('displayCombo', () => {
   it('humanizes modifier tokens', () => {

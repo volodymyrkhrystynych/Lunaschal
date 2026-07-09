@@ -219,3 +219,210 @@ def test_journal_search_carries_fic_refs(client):
     client.post(f'/api/fanfic/{fic_id}/journal-link', json={'journalEntryId': entry_id})
     hits = client.get('/api/journal/search?query=pondering').get_json()
     assert hits and hits[0]['ficRefs'][0]['ficId'] == fic_id
+
+
+# --- folders ---
+
+def make_folder(client, name):
+    resp = client.post('/api/fanfic/folders', json={'name': name})
+    assert resp.status_code == 201, resp.get_json()
+    return resp.get_json()['id']
+
+
+def test_folder_crud(client):
+    # static /folders route must not be swallowed by /<fic_id>
+    assert client.get('/api/fanfic/folders').get_json() == []
+
+    folder_id = make_folder(client, 'backlog')
+    assert client.post('/api/fanfic/folders', json={'name': 'backlog'}).status_code == 409
+    assert client.post('/api/fanfic/folders', json={'name': '  '}).status_code == 400
+
+    folders = client.get('/api/fanfic/folders').get_json()
+    assert [(f['name'], f['ficCount']) for f in folders] == [('backlog', 0)]
+
+    assert client.patch(f'/api/fanfic/folders/{folder_id}',
+                        json={'name': 'finished'}).status_code == 200
+    assert client.patch('/api/fanfic/folders/nope', json={'name': 'x'}).status_code == 404
+    other = make_folder(client, 'favorites')
+    assert client.patch(f'/api/fanfic/folders/{other}',
+                        json={'name': 'finished'}).status_code == 409
+
+    assert client.delete(f'/api/fanfic/folders/{folder_id}').status_code == 200
+    assert [f['name'] for f in client.get('/api/fanfic/folders').get_json()] == ['favorites']
+
+
+def test_folder_membership(client):
+    fic_id, _ = make_fic()
+    folder_id = make_folder(client, 'favorites')
+
+    assert client.post(f'/api/fanfic/{fic_id}/folders',
+                       json={'folderId': folder_id}).status_code == 200
+    # idempotent
+    assert client.post(f'/api/fanfic/{fic_id}/folders',
+                       json={'folderId': folder_id}).status_code == 200
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['folderIds'] == [folder_id]
+    assert client.get('/api/fanfic/folders').get_json()[0]['ficCount'] == 1
+
+    # unknown fic / folder rejected
+    assert client.post('/api/fanfic/nope/folders',
+                       json={'folderId': folder_id}).status_code == 404
+    assert client.post(f'/api/fanfic/{fic_id}/folders',
+                       json={'folderId': 'nope'}).status_code == 404
+
+    # deleting the folder removes only the membership, never the fic
+    assert client.delete(f'/api/fanfic/folders/{folder_id}').status_code == 200
+    fic = client.get(f'/api/fanfic/{fic_id}').get_json()
+    assert fic['title'] == 'Test Fic'
+    assert fic['folderIds'] == []
+
+
+def test_folder_membership_remove_and_fic_cascade(client):
+    fic_id, _ = make_fic()
+    folder_id = make_folder(client, 'backlog')
+    client.post(f'/api/fanfic/{fic_id}/folders', json={'folderId': folder_id})
+
+    assert client.delete(f'/api/fanfic/{fic_id}/folders/{folder_id}').status_code == 200
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['folderIds'] == []
+
+    # deleting a fic cascades its memberships
+    client.post(f'/api/fanfic/{fic_id}/folders', json={'folderId': folder_id})
+    client.delete(f'/api/fanfic/{fic_id}')
+    assert client.get('/api/fanfic/folders').get_json()[0]['ficCount'] == 0
+
+
+def _tag_fic(fic_id, *names):
+    db = get_db()
+    now = int(time.time())
+    db.executemany(
+        'INSERT INTO fic_site_tags(fic_id, name, created_at) VALUES (?,?,?)',
+        [(fic_id, n, now) for n in names])
+    db.commit()
+
+
+def test_list_filters_by_folder_and_tag(client):
+    fic_a, _ = make_fic('Fic A')
+    fic_b, _ = make_fic('Fic B')
+    folder_id = make_folder(client, 'favorites')
+    client.post(f'/api/fanfic/{fic_a}/folders', json={'folderId': folder_id})
+    _tag_fic(fic_a, 'isekai')
+    _tag_fic(fic_b, 'isekai', 'worm')
+
+    assert {f['id'] for f in client.get('/api/fanfic').get_json()} == {fic_a, fic_b}
+    assert [f['id'] for f in client.get(f'/api/fanfic?folderId={folder_id}').get_json()] == [fic_a]
+    assert {f['id'] for f in client.get('/api/fanfic?tag=isekai').get_json()} == {fic_a, fic_b}
+    assert [f['id'] for f in client.get('/api/fanfic?tag=worm').get_json()] == [fic_b]
+    # filters intersect
+    assert [f['id'] for f in
+            client.get(f'/api/fanfic?folderId={folder_id}&tag=worm').get_json()] == []
+
+    # list rows carry the tags for chips
+    rows = client.get('/api/fanfic').get_json()
+    assert next(f for f in rows if f['id'] == fic_b)['tags'] == ['isekai', 'worm']
+
+
+def test_site_tag_index(client):
+    fic_a, _ = make_fic('Fic A')
+    fic_b, _ = make_fic('Fic B')
+    _tag_fic(fic_a, 'isekai')
+    _tag_fic(fic_b, 'isekai', 'worm')
+    assert client.get('/api/fanfic/tags').get_json() == [
+        {'name': 'isekai', 'count': 2},
+        {'name': 'worm', 'count': 1},
+    ]
+
+
+# --- read tracking ---
+
+def test_progress_marks_chapter_read(client):
+    fic_id, chapter_ids = make_fic(chapters=[('One', 'text'), ('Two', 'more')])
+    client.post(f'/api/fanfic/{fic_id}/progress', json={'chapterId': chapter_ids[0]})
+
+    chapters = client.get(f'/api/fanfic/{fic_id}/chapters').get_json()
+    assert [c['isRead'] for c in chapters] == [True, False]
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['readCount'] == 1
+    assert client.get('/api/fanfic').get_json()[0]['readCount'] == 1
+
+
+def test_bulk_read_toggle(client):
+    fic_id, chapter_ids = make_fic(chapters=[('One', 'a'), ('Two', 'b'), ('Three', 'c')])
+
+    resp = client.post(f'/api/fanfic/{fic_id}/read',
+                       json={'chapterIds': chapter_ids[:2], 'read': True})
+    assert resp.status_code == 200
+    assert resp.get_json()['readCount'] == 2
+    chapters = client.get(f'/api/fanfic/{fic_id}/chapters').get_json()
+    assert [c['isRead'] for c in chapters] == [True, True, False]
+
+    # marking again is idempotent
+    resp = client.post(f'/api/fanfic/{fic_id}/read',
+                       json={'chapterIds': chapter_ids[:2], 'read': True})
+    assert resp.get_json()['readCount'] == 2
+
+    # unmark one
+    resp = client.post(f'/api/fanfic/{fic_id}/read',
+                       json={'chapterIds': [chapter_ids[0]], 'read': False})
+    assert resp.get_json()['readCount'] == 1
+    chapters = client.get(f'/api/fanfic/{fic_id}/chapters').get_json()
+    assert [c['isRead'] for c in chapters] == [False, True, False]
+
+
+def test_bulk_read_validation(client):
+    fic_id, chapter_ids = make_fic(chapters=[('One', 'a')])
+    other_fic, other_chapters = make_fic('Other', chapters=[('X', 'y')])
+
+    assert client.post(f'/api/fanfic/{fic_id}/read', json={}).status_code == 400
+    assert client.post(f'/api/fanfic/{fic_id}/read',
+                       json={'chapterIds': [], 'read': True}).status_code == 400
+    assert client.post(f'/api/fanfic/{fic_id}/read',
+                       json={'chapterIds': chapter_ids, 'read': 'yes'}).status_code == 400
+    # a chapter belonging to another fic is rejected wholesale
+    assert client.post(f'/api/fanfic/{fic_id}/read',
+                       json={'chapterIds': chapter_ids + other_chapters,
+                             'read': True}).status_code == 404
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['readCount'] == 0
+
+
+def test_read_state_cascades_on_delete(client):
+    fic_id, chapter_ids = make_fic(chapters=[('One', 'a')])
+    client.post(f'/api/fanfic/{fic_id}/read', json={'chapterIds': chapter_ids, 'read': True})
+    client.delete(f'/api/fanfic/{fic_id}')
+    rows = get_db().execute('SELECT COUNT(*) AS n FROM fic_chapter_reads').fetchone()
+    assert rows['n'] == 0
+
+
+# --- review ---
+
+def test_review_roundtrip(client):
+    fic_id, _ = make_fic()
+    resp = client.patch(f'/api/fanfic/{fic_id}/review',
+                        json={'rating': 4, 'review': 'Great worldbuilding.'})
+    assert resp.status_code == 200
+    fic = client.get(f'/api/fanfic/{fic_id}').get_json()
+    assert fic['rating'] == 4
+    assert fic['review'] == 'Great worldbuilding.'
+    # rating rides the list columns for the library card
+    assert client.get('/api/fanfic').get_json()[0]['rating'] == 4
+
+    # partial update: rating only, review preserved
+    client.patch(f'/api/fanfic/{fic_id}/review', json={'rating': 5})
+    fic = client.get(f'/api/fanfic/{fic_id}').get_json()
+    assert fic['rating'] == 5
+    assert fic['review'] == 'Great worldbuilding.'
+
+    # null clears
+    client.patch(f'/api/fanfic/{fic_id}/review', json={'rating': None, 'review': None})
+    fic = client.get(f'/api/fanfic/{fic_id}').get_json()
+    assert fic['rating'] is None
+    assert fic['review'] is None
+
+
+def test_review_validation(client):
+    fic_id, _ = make_fic()
+    for bad in (0, 6, 'x', 3.5, True):
+        assert client.patch(f'/api/fanfic/{fic_id}/review',
+                            json={'rating': bad}).status_code == 400, bad
+    assert client.patch(f'/api/fanfic/{fic_id}/review', json={}).status_code == 400
+    assert client.patch('/api/fanfic/nope/review', json={'rating': 3}).status_code == 404
+    # whitespace-only review is stored as null
+    client.patch(f'/api/fanfic/{fic_id}/review', json={'review': '   '})
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['review'] is None

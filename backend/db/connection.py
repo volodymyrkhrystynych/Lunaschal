@@ -67,6 +67,7 @@ def init_db() -> None:
     _ensure_ollama_bg_model(db)
     _ensure_prevent_sleep(db)
     _ensure_todo_completed_at(db)
+    _ensure_fic_review_columns(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -129,6 +130,15 @@ def _ensure_todo_completed_at(db: sqlite3.Connection) -> None:
         # last update was the moment they were checked off.
         db.execute('UPDATE todos SET completed_at=updated_at WHERE done=1')
         db.commit()
+
+
+def _ensure_fic_review_columns(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
+    if 'rating' not in cols:
+        db.execute('ALTER TABLE fics ADD COLUMN rating INTEGER CHECK(rating BETWEEN 1 AND 5)')
+    if 'review' not in cols:
+        db.execute('ALTER TABLE fics ADD COLUMN review TEXT')
+    db.commit()
 
 
 def _ensure_prevent_sleep(db: sqlite3.Connection) -> None:
