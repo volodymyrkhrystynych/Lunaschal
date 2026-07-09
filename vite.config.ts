@@ -25,6 +25,14 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    watch: {
+      // SQLite runs in WAL mode, so data/*.db-wal and -shm are rewritten on
+      // every DB transaction. Vite's watcher only excludes node_modules/.git
+      // by default, so without this it re-processes a change event on
+      // practically every API request — steadily leaking memory until the
+      // dev server OOMs (observed crashing ~100s in).
+      ignored: ['**/data/**', '**/data_backup/**', '**/.venv/**'],
+    },
   },
   build: {
     outDir: 'dist',
