@@ -98,3 +98,30 @@ def test_create_journal_action_persists(client, monkeypatch):
     row = get_db().execute('SELECT content, raw_content FROM journal_entries').fetchone()
     assert row['content'] == 'Today was a good day.'
     assert row['raw_content'] == 'Today was a good day.'
+
+
+def test_create_recipe_action_persists(client, monkeypatch):
+    from backend.routes import cookbook
+    monkeypatch.setattr(cookbook, '_sync_embeddings_bg', lambda recipe_id: None)
+
+    _mock_parser(monkeypatch, {
+        'action': 'create_recipe', 'speak': 'Saved the recipe.',
+        'recipe': {'title': 'Pancakes', 'content': 'Mix flour and milk, fry.'},
+    })
+    r = client.post('/api/voice-command', json={'messages': [{'role': 'user', 'content': 'save a recipe for pancakes'}]})
+    data = r.get_json()
+    assert data['status'] == 'done'
+    assert data['action'] == 'create_recipe'
+
+    row = get_db().execute('SELECT title, content FROM recipes').fetchone()
+    assert (row['title'], row['content']) == ('Pancakes', 'Mix flour and milk, fry.')
+
+
+def test_create_recipe_missing_title_creates_nothing(client, monkeypatch):
+    _mock_parser(monkeypatch, {
+        'action': 'create_recipe', 'speak': 'Saved the recipe.',
+        'recipe': {'content': 'Mix flour and milk.'},
+    })
+    r = client.post('/api/voice-command', json={'messages': [{'role': 'user', 'content': 'save this recipe'}]})
+    assert r.get_json()['status'] == 'none'
+    assert get_db().execute('SELECT COUNT(*) c FROM recipes').fetchone()['c'] == 0

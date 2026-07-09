@@ -159,6 +159,18 @@ CREATE TABLE IF NOT EXISTS journal_entry_curated_tags (
 
 CREATE INDEX IF NOT EXISTS idx_ject_tag ON journal_entry_curated_tags(tag_id);
 
+CREATE TABLE IF NOT EXISTS recipes (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tags TEXT,
+    source_url TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recipes_created ON recipes(created_at DESC);
+
 CREATE TABLE IF NOT EXISTS transcriptions (
     id TEXT PRIMARY KEY,
     text TEXT NOT NULL,

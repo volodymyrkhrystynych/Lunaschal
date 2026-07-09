@@ -83,6 +83,26 @@ def delete_journal_embeddings(journal_id: str) -> None:
     _delete_embeddings_by_source('journal', journal_id)
 
 
+def sync_recipe_embeddings(recipe_id: str) -> int:
+    if not is_embeddings_configured():
+        return 0
+    db = get_db()
+    row = db.execute('SELECT * FROM recipes WHERE id=?', (recipe_id,)).fetchone()
+    if not row:
+        raise ValueError('Recipe not found')
+    _delete_embeddings_by_source('recipe', recipe_id)
+    content = f"{row['title']}\n\n{row['content']}"
+    results = generate_embeddings(content)
+    from ulid import ULID
+    for r in results:
+        _insert_embedding(str(ULID()), r['embedding'], 'recipe', recipe_id, r['chunk_index'], r['chunk_text'])
+    return len(results)
+
+
+def delete_recipe_embeddings(recipe_id: str) -> None:
+    _delete_embeddings_by_source('recipe', recipe_id)
+
+
 def search_for_context(query: str, limit: int = 5) -> list[dict]:
     if not is_embeddings_configured():
         return []
@@ -99,6 +119,19 @@ def search_for_context(query: str, limit: int = 5) -> list[dict]:
             continue
         if r['source_type'] == 'journal':
             row = db.execute('SELECT * FROM journal_entries WHERE id=?', (r['source_id'],)).fetchone()
+            if row:
+                seen[key] = {
+                    'sourceType': r['source_type'],
+                    'sourceId': r['source_id'],
+                    'content': row['content'],
+                    'score': 1 - r['distance'],
+                    'metadata': {
+                        'title': row['title'],
+                        'createdAt': row['created_at'],
+                    },
+                }
+        elif r['source_type'] == 'recipe':
+            row = db.execute('SELECT * FROM recipes WHERE id=?', (r['source_id'],)).fetchone()
             if row:
                 seen[key] = {
                     'sourceType': r['source_type'],
