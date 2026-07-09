@@ -11,7 +11,8 @@ def fanfic_root() -> Path:
 
 
 def fic_dir(fic_id: str) -> Path | None:
-    if not _SAFE_NAME.match(fic_id):
+    # Dot-only names like '..' pass _SAFE_NAME but escape the root.
+    if not _SAFE_NAME.match(fic_id) or set(fic_id) == {'.'}:
         return None
     return fanfic_root() / fic_id
 
@@ -27,11 +28,12 @@ def pdf_path(fic_id: str) -> Path | None:
 
 
 def safe_image_path(fic_id: str, filename: str) -> Path | None:
-    if not _SAFE_NAME.match(fic_id) or not _SAFE_NAME.match(filename):
+    if not _SAFE_NAME.match(filename) or set(filename) == {'.'}:
         return None
-    if set(fic_id) == {'.'} or set(filename) == {'.'}:
+    d = images_dir(fic_id)
+    if d is None:
         return None
-    base = (fanfic_root() / fic_id / 'images').resolve()
+    base = d.resolve()
     p = (base / filename).resolve()
     if p.parent != base:
         return None
@@ -40,5 +42,11 @@ def safe_image_path(fic_id: str, filename: str) -> Path | None:
 
 def delete_fic_dir(fic_id: str) -> None:
     d = fic_dir(fic_id)
-    if d and d.is_dir():
+    if d is None:
+        return
+    # Belt and braces: only ever delete a direct child of the fanfic root.
+    d = d.resolve()
+    if d.parent != fanfic_root():
+        return
+    if d.is_dir():
         shutil.rmtree(d, ignore_errors=True)

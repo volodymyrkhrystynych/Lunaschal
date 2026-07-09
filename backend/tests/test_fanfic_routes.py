@@ -103,6 +103,37 @@ def test_image_traversal_guard(client, fanfic_root):
     assert ok is not None and ok.name == 'abc123.png'
 
 
+def test_delete_traversal_guard(client, fanfic_root):
+    """DELETE /api/fanfic/.. must never rmtree outside the fanfic root —
+    fanfic_root/'..' is the data dir holding the SQLite DB."""
+    fanfic_root.mkdir(parents=True)
+    canary = fanfic_root.parent / 'canary.txt'
+    canary.write_text('still here')
+    sibling = fanfic_root.parent / 'sibling-dir'
+    sibling.mkdir()
+
+    for fic_id in ('..', '.', '...', '..%2f', '%2e%2e'):
+        client.delete(f'/api/fanfic/{fic_id}')
+    assert canary.exists()
+    assert sibling.is_dir()
+    assert fanfic_root.is_dir()
+
+    from backend.fanfic.storage import delete_fic_dir, fic_dir, pdf_path
+    for hostile in ('..', '.', '...', '../x', 'a/b', ''):
+        assert fic_dir(hostile) is None, hostile
+        assert pdf_path(hostile) is None, hostile
+        delete_fic_dir(hostile)  # must be a no-op, not an escape
+    assert canary.exists()
+
+    # legitimate ids still resolve and delete
+    fic_id, _ = make_fic()
+    (fanfic_root / fic_id).mkdir()
+    assert fic_dir(fic_id) == fanfic_root / fic_id
+    delete_fic_dir(fic_id)
+    assert not (fanfic_root / fic_id).exists()
+    assert fanfic_root.is_dir()
+
+
 def test_reading_progress(client):
     fic_id, chapter_ids = make_fic(chapters=[('One', 'text'), ('Two', 'more text')])
     resp = client.post(f'/api/fanfic/{fic_id}/progress', json={'chapterId': chapter_ids[1]})
