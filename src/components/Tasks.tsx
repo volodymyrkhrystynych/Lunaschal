@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, DailyTask, TodoItem } from '../hooks/api';
+import { partitionTodos, formatCompletedAt } from '../lib/todos';
 
 export function Tasks() {
   const [newTitle, setNewTitle] = useState('');
@@ -209,6 +210,7 @@ function TodoSection() {
   const [newTitle, setNewTitle] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
+  const [showCompleted, setShowCompleted] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: todos = [], isLoading } = useQuery({
@@ -246,6 +248,71 @@ function TodoSection() {
     else setEditingId(null);
   };
 
+  const { active, completed } = partitionTodos(todos);
+
+  const renderTodo = (todo: TodoItem) => (
+    <div
+      key={todo.id}
+      className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
+        todo.done
+          ? 'border-white/5 bg-white/3 opacity-60'
+          : 'border-white/10 bg-[var(--color-surface)]'
+      }`}
+    >
+      <button
+        onClick={() => updateTodo.mutate({ id: todo.id, done: !todo.done })}
+        className={`w-5 h-5 rounded border shrink-0 flex items-center justify-center transition-colors ${
+          todo.done
+            ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
+            : 'border-white/30 hover:border-white/50'
+        }`}
+      >
+        {todo.done && <span className="text-xs">✓</span>}
+      </button>
+
+      <div className="flex-1 min-w-0">
+        {editingId === todo.id ? (
+          <input
+            autoFocus
+            value={editTitle}
+            onChange={(e) => setEditTitle(e.target.value)}
+            onBlur={saveEdit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') saveEdit();
+              if (e.key === 'Escape') setEditingId(null);
+            }}
+            className="w-full bg-transparent text-[var(--color-text)] text-sm outline-none border-b border-[var(--color-primary)]"
+          />
+        ) : (
+          <span
+            onClick={() => startEdit(todo)}
+            className={`text-sm cursor-text select-none ${
+              todo.done
+                ? 'line-through text-[var(--color-text-muted)]'
+                : 'text-[var(--color-text)]'
+            }`}
+          >
+            {todo.title}
+          </span>
+        )}
+      </div>
+
+      {todo.done && todo.completedAt && (
+        <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+          {formatCompletedAt(todo.completedAt)}
+        </span>
+      )}
+
+      <button
+        onClick={() => deleteTodo.mutate(todo.id)}
+        className="p-1 rounded text-[var(--color-text-muted)] hover:text-red-400 hover:bg-white/10 transition-colors text-xs shrink-0"
+        title="Delete"
+      >
+        ✕
+      </button>
+    </div>
+  );
+
   return (
     <div className="mt-10">
       <h2 className="text-xl font-semibold text-[var(--color-text)] mb-6">To-Do</h2>
@@ -255,64 +322,9 @@ function TodoSection() {
       )}
 
       <div className="space-y-2">
-        {todos.map((todo) => (
-          <div
-            key={todo.id}
-            className={`flex items-center gap-3 p-3 rounded-lg border transition-colors ${
-              todo.done
-                ? 'border-white/5 bg-white/3 opacity-60'
-                : 'border-white/10 bg-[var(--color-surface)]'
-            }`}
-          >
-            <button
-              onClick={() => updateTodo.mutate({ id: todo.id, done: !todo.done })}
-              className={`w-5 h-5 rounded border shrink-0 flex items-center justify-center transition-colors ${
-                todo.done
-                  ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
-                  : 'border-white/30 hover:border-white/50'
-              }`}
-            >
-              {todo.done && <span className="text-xs">✓</span>}
-            </button>
+        {active.map(renderTodo)}
 
-            <div className="flex-1 min-w-0">
-              {editingId === todo.id ? (
-                <input
-                  autoFocus
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  onBlur={saveEdit}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') saveEdit();
-                    if (e.key === 'Escape') setEditingId(null);
-                  }}
-                  className="w-full bg-transparent text-[var(--color-text)] text-sm outline-none border-b border-[var(--color-primary)]"
-                />
-              ) : (
-                <span
-                  onClick={() => startEdit(todo)}
-                  className={`text-sm cursor-text select-none ${
-                    todo.done
-                      ? 'line-through text-[var(--color-text-muted)]'
-                      : 'text-[var(--color-text)]'
-                  }`}
-                >
-                  {todo.title}
-                </span>
-              )}
-            </div>
-
-            <button
-              onClick={() => deleteTodo.mutate(todo.id)}
-              className="p-1 rounded text-[var(--color-text-muted)] hover:text-red-400 hover:bg-white/10 transition-colors text-xs shrink-0"
-              title="Delete"
-            >
-              ✕
-            </button>
-          </div>
-        ))}
-
-        {todos.length === 0 && !isLoading && (
+        {active.length === 0 && !isLoading && (
           <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
             Nothing on the list.
           </div>
@@ -338,6 +350,23 @@ function TodoSection() {
           Add
         </button>
       </div>
+
+      {completed.length > 0 && (
+        <div className="mt-6">
+          <button
+            onClick={() => setShowCompleted((v) => !v)}
+            className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+          >
+            {showCompleted
+              ? `Hide completed (${completed.length})`
+              : `Show completed (${completed.length})`}
+          </button>
+
+          {showCompleted && (
+            <div className="space-y-2 mt-3">{completed.map(renderTodo)}</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

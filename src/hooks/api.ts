@@ -182,6 +182,7 @@ export interface TodoItem {
   id: string;
   title: string;
   done: boolean;
+  completedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

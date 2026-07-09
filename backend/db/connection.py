@@ -9,7 +9,7 @@ _DB_PATH = os.environ.get('DATABASE_URL', './data/lunaschal.db')
 _conn: sqlite3.Connection | None = None
 
 TIMESTAMP_COLS = frozenset({
-    'created_at', 'updated_at', 'next_review',
+    'created_at', 'updated_at', 'next_review', 'completed_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -63,6 +63,7 @@ def init_db() -> None:
     _ensure_flashcard_tags(db)
     _ensure_ollama_bg_model(db)
     _ensure_prevent_sleep(db)
+    _ensure_todo_completed_at(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -114,6 +115,16 @@ def _ensure_ollama_bg_model(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'ollama_bg_model' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN ollama_bg_model TEXT')
+        db.commit()
+
+
+def _ensure_todo_completed_at(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(todos)')}
+    if 'completed_at' not in cols:
+        db.execute('ALTER TABLE todos ADD COLUMN completed_at INTEGER')
+        # Best guess for todos completed before this column existed: their
+        # last update was the moment they were checked off.
+        db.execute('UPDATE todos SET completed_at=updated_at WHERE done=1')
         db.commit()
 
 
