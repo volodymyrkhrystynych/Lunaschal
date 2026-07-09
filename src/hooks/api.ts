@@ -11,6 +11,15 @@ export interface JournalEntry {
   updatedAt: string;
 }
 
+export interface Transcription {
+  id: string;
+  text: string;
+  source: string;
+  app: string | null;
+  detail: string | null;
+  createdAt: string;
+}
+
 export interface CuratedTag {
   id: string;
   name: string;
@@ -255,6 +264,16 @@ export const api = {
       patch<{ success: boolean }>(`/api/journal/${id}`, data),
     delete: (id: string) => del<{ success: boolean }>(`/api/journal/${id}`),
     polish: (id: string) => post<{ success: boolean; content: string }>(`/api/journal/${id}/polish`),
+  },
+
+  transcriptions: {
+    list: (params?: { limit?: number; offset?: number }) => {
+      const qp = new URLSearchParams();
+      if (params?.limit !== undefined) qp.set('limit', String(params.limit));
+      if (params?.offset !== undefined) qp.set('offset', String(params.offset));
+      return get<Transcription[]>(`/api/transcriptions?${qp}`);
+    },
+    delete: (id: string) => del<{ success: boolean }>(`/api/transcriptions/${id}`),
   },
 
   calendar: {

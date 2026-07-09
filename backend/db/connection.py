@@ -63,6 +63,7 @@ def init_db() -> None:
     _ensure_flashcard_tags(db)
     _ensure_ollama_bg_model(db)
     _ensure_prevent_sleep(db)
+    _ensure_transcription_context(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -122,6 +123,14 @@ def _ensure_prevent_sleep(db: sqlite3.Connection) -> None:
     if 'prevent_sleep' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN prevent_sleep INTEGER DEFAULT 0')
         db.commit()
+
+
+def _ensure_transcription_context(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(transcriptions)')}
+    for col in ('app', 'detail'):
+        if col not in cols:
+            db.execute(f'ALTER TABLE transcriptions ADD COLUMN {col} TEXT')
+            db.commit()
 
 
 def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:

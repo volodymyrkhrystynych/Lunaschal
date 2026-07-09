@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+import { buildFeed } from '../lib/journalFeed';
 import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
 
 export function Journal() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCuratedTagId, setSelectedCuratedTagId] = useState<string | null>(null);
+  const [showTranscriptions, setShowTranscriptions] = useState(false);
+  const [copiedTranscriptionId, setCopiedTranscriptionId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editTitle, setEditTitle] = useState('');
@@ -31,6 +34,16 @@ export function Journal() {
       searchQuery
         ? api.journal.search(searchQuery)
         : api.journal.list({ curatedTagId: selectedCuratedTagId ?? undefined }),
+  });
+
+  // Transcriptions only interleave in the plain chronological view — FTS search
+  // doesn't cover them and a tag-filtered view is a curation context.
+  const transcriptionsVisible = showTranscriptions && !searchQuery && !selectedCuratedTagId;
+
+  const { data: transcriptions } = useQuery({
+    queryKey: ['transcriptions'],
+    queryFn: () => api.transcriptions.list(),
+    enabled: transcriptionsVisible,
   });
 
   useEffect(() => {
@@ -61,6 +74,27 @@ export function Journal() {
     mutationFn: (id: string) => api.journal.delete(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['journal'] }),
   });
+
+  const deleteTranscription = useMutation({
+    mutationFn: (id: string) => api.transcriptions.delete(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['transcriptions'] }),
+  });
+
+  const copyTranscription = async (id: string, text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // navigator.clipboard needs a secure context; fall back for webviews that deny it
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    }
+    setCopiedTranscriptionId(id);
+    setTimeout(() => setCopiedTranscriptionId((cur) => (cur === id ? null : cur)), 1500);
+  };
 
   const polishEntry = useMutation({
     mutationFn: (id: string) => api.journal.polish(id),
@@ -118,21 +152,27 @@ export function Journal() {
           onChange={(e) => { setSearchQuery(e.target.value); setSelectedCuratedTagId(null); }}
           placeholder="Search entries..."
           className="w-full bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]" />
-        {curatedTags && curatedTags.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {curatedTags.map(tag => (
-              <button key={tag.id}
-                onClick={() => setSelectedCuratedTagId(selectedCuratedTagId === tag.id ? null : tag.id)}
-                className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                  selectedCuratedTagId === tag.id
-                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
-                    : 'border-white/20 text-[var(--color-text-muted)] hover:border-white/40 hover:text-[var(--color-text)]'
-                }`}>
-                #{tag.name}{tag.entryCount > 0 && <span className="ml-1 opacity-60">({tag.entryCount})</span>}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {curatedTags?.map(tag => (
+            <button key={tag.id}
+              onClick={() => setSelectedCuratedTagId(selectedCuratedTagId === tag.id ? null : tag.id)}
+              className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                selectedCuratedTagId === tag.id
+                  ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
+                  : 'border-white/20 text-[var(--color-text-muted)] hover:border-white/40 hover:text-[var(--color-text)]'
+              }`}>
+              #{tag.name}{tag.entryCount > 0 && <span className="ml-1 opacity-60">({tag.entryCount})</span>}
+            </button>
+          ))}
+          <button onClick={() => setShowTranscriptions(!showTranscriptions)}
+            className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+              showTranscriptions
+                ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
+                : 'border-white/20 text-[var(--color-text-muted)] hover:border-white/40 hover:text-[var(--color-text)]'
+            }`}>
+            Show transcriptions
+          </button>
+        </div>
       </div>
 
       {showNewEntry && (
@@ -152,7 +192,34 @@ export function Journal() {
       <div className="flex-1 overflow-y-auto space-y-4">
         {isLoading && <div className="text-[var(--color-text-muted)]">Loading...</div>}
 
-        {entries?.map((entry, idx) => (
+        {buildFeed(entries ?? [], transcriptionsVisible ? (transcriptions ?? []) : []).map((item) => {
+          if (item.kind === 'transcription') {
+            const t = item.transcription;
+            return (
+              <div key={t.id} className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5 opacity-70">
+                <div className="flex items-start justify-between gap-2 mb-1">
+                  <div className="flex items-baseline gap-2 min-w-0">
+                    <span className="text-sm text-[var(--color-text-muted)] shrink-0">{formatDate(t.createdAt)}</span>
+                    {t.app && (
+                      <span className="px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] bg-white/5 truncate">
+                        {t.app}{t.detail && ` · ${t.detail}`}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <button onClick={() => copyTranscription(t.id, t.text)}
+                      className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
+                      {copiedTranscriptionId === t.id ? 'Copied!' : 'Copy'}
+                    </button>
+                    <button onClick={() => deleteTranscription.mutate(t.id)} className="text-sm text-red-400 hover:text-red-300">Delete</button>
+                  </div>
+                </div>
+                <div className="text-sm text-[var(--color-text-muted)] italic whitespace-pre-wrap">{t.text}</div>
+              </div>
+            );
+          }
+          const { entry, entryIndex: idx } = item;
+          return (
           <div key={entry.id}
             ref={(el) => { if (el && level >= 1 && idx === selIndex) el.scrollIntoView({ block: 'nearest' }); }}
             className={`p-4 bg-[var(--color-surface)] rounded-lg border ${
@@ -228,7 +295,8 @@ export function Journal() {
               </div>
             )}
           </div>
-        ))}
+          );
+        })}
 
         {entries?.length === 0 && !isLoading && (
           <div className="text-center text-[var(--color-text-muted)] py-12">
