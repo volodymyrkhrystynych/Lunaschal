@@ -5,9 +5,9 @@ import { api } from '../hooks/api';
 import { DEFAULT_BINDINGS, comboFromEvent, isEditableTarget, keyCapture } from './keymap';
 import type { ActionId } from './keymap';
 
-export type AppView = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook';
+export type AppView = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic';
 
-export const VIEW_ORDER: AppView[] = ['chat', 'tasks', 'journal', 'writing', 'calendar', 'flashcards', 'cookbook', 'files', 'settings'];
+export const VIEW_ORDER: AppView[] = ['chat', 'tasks', 'journal', 'writing', 'calendar', 'flashcards', 'cookbook', 'fanfic', 'files', 'settings'];
 
 const TAB_ACTIONS: Partial<Record<ActionId, AppView>> = {
   'tab.chat': 'chat',
@@ -17,6 +17,7 @@ const TAB_ACTIONS: Partial<Record<ActionId, AppView>> = {
   'tab.calendar': 'calendar',
   'tab.flashcards': 'flashcards',
   'tab.cookbook': 'cookbook',
+  'tab.fanfic': 'fanfic',
   'tab.files': 'files',
   'tab.settings': 'settings',
 };

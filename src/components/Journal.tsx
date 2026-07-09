@@ -4,7 +4,12 @@ import { api } from '../hooks/api';
 import { buildFeed } from '../lib/journalFeed';
 import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
 
-export function Journal() {
+interface JournalProps {
+  /** Navigate to the fanfic reader (chip on entries linked to a fic chapter). */
+  onOpenFic?: (target: { ficId: string; chapterId?: string }) => void;
+}
+
+export function Journal({ onOpenFic }: JournalProps = {}) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCuratedTagId, setSelectedCuratedTagId] = useState<string | null>(null);
   const [showTranscriptions, setShowTranscriptions] = useState(false);
@@ -284,8 +289,16 @@ export function Journal() {
               </>
             )}
 
-            {(entry.curatedTags?.length > 0 || (entry.tags && JSON.parse(entry.tags).length > 0)) && (
+            {((entry.ficRefs?.length ?? 0) > 0 || entry.curatedTags?.length > 0 || (entry.tags && JSON.parse(entry.tags).length > 0)) && (
               <div className="flex flex-wrap gap-1.5 mt-2">
+                {entry.ficRefs?.map((ref) => (
+                  <button key={`f:${ref.ficId}:${ref.chapterId ?? ''}`}
+                    onClick={() => onOpenFic?.({ ficId: ref.ficId, chapterId: ref.chapterId ?? undefined })}
+                    title="Open in reader"
+                    className="px-2 py-0.5 text-xs rounded border border-[var(--color-accent)]/40 text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 transition-colors">
+                    📖 {ref.ficTitle}{ref.chapterTitle ? ` · ${ref.chapterTitle}` : ''}
+                  </button>
+                ))}
                 {entry.curatedTags?.map((tag: string) => (
                   <span key={`c:${tag}`} className="px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] bg-white/5">#{tag}</span>
                 ))}

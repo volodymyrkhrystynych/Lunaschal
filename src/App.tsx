@@ -12,16 +12,19 @@ import { Login } from './components/Login';
 import { Writing } from './components/Writing';
 import { Tasks } from './components/Tasks';
 import { Cookbook } from './components/Cookbook';
+import { Fanfic } from './components/Fanfic/Fanfic';
+import type { FicTarget } from './components/Fanfic/Fanfic';
 import { api } from './hooks/api';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 
-type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook';
+type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pendingInsert, setPendingInsert] = useState<string | null>(null);
+  const [ficTarget, setFicTarget] = useState<FicTarget | null>(null);
   const queryClient = useQueryClient();
 
   const { data: authStatus, isLoading: authLoading } = useQuery({
@@ -55,7 +58,7 @@ export default function App() {
       case 'chat':
         return <Chat conversationId={currentConversationId} onConversationChange={setCurrentConversationId} />;
       case 'journal':
-        return <Journal />;
+        return <Journal onOpenFic={(target) => { setFicTarget(target); setCurrentView('fanfic'); }} />;
       case 'calendar':
         return <Calendar />;
       case 'flashcards':
@@ -70,6 +73,8 @@ export default function App() {
         return <Tasks />;
       case 'cookbook':
         return <Cookbook />;
+      case 'fanfic':
+        return <Fanfic target={ficTarget} onTargetConsumed={() => setFicTarget(null)} />;
       default:
         return null;
     }

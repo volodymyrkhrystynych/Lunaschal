@@ -10,6 +10,7 @@ _conn: sqlite3.Connection | None = None
 
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
+    'posted_at', 'last_checked_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -55,6 +56,7 @@ def init_db() -> None:
         db.commit()
     _init_fts(db)
     _init_recipes_fts(db)
+    _init_fanfic_fts(db)
     _init_vectors(db)
     _ensure_network_code(db)
     _ensure_writing_project_id(db)
@@ -227,6 +229,40 @@ def _init_recipes_fts(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _init_fanfic_fts(db: sqlite3.Connection) -> None:
+    db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS fic_chapters_fts USING fts5(
+            id UNINDEXED,
+            title,
+            content_text,
+            content='fic_chapters',
+            content_rowid='rowid'
+        )
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS fic_chapters_ai AFTER INSERT ON fic_chapters BEGIN
+            INSERT INTO fic_chapters_fts(rowid, id, title, content_text)
+            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content_text);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS fic_chapters_ad AFTER DELETE ON fic_chapters BEGIN
+            INSERT INTO fic_chapters_fts(fic_chapters_fts, rowid, id, title, content_text)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.content_text);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS fic_chapters_au AFTER UPDATE ON fic_chapters BEGIN
+            INSERT INTO fic_chapters_fts(fic_chapters_fts, rowid, id, title, content_text)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.content_text);
+            INSERT INTO fic_chapters_fts(rowid, id, title, content_text)
+            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content_text);
+        END
+    """)
+    db.execute("INSERT INTO fic_chapters_fts(fic_chapters_fts) VALUES('rebuild')")
+    db.commit()
+
+
 def _init_vectors(db: sqlite3.Connection) -> None:
     try:
         import sqlite_vec
@@ -265,6 +301,19 @@ def search_recipes_fts(query: str, limit: int = 50) -> list[dict]:
     escaped = ' OR '.join(f'"{w}"*' for w in words)
     rows = db.execute(
         'SELECT id, rank FROM recipes_fts WHERE recipes_fts MATCH ? ORDER BY rank LIMIT ?',
+        (escaped, limit),
+    ).fetchall()
+    return [{'id': r['id'], 'rank': r['rank']} for r in rows]
+
+
+def search_fanfic_fts(query: str, limit: int = 50) -> list[dict]:
+    db = get_db()
+    words = [w for w in query.split() if w]
+    if not words:
+        return []
+    escaped = ' OR '.join(f'"{w}"*' for w in words)
+    rows = db.execute(
+        'SELECT id, rank FROM fic_chapters_fts WHERE fic_chapters_fts MATCH ? ORDER BY rank LIMIT ?',
         (escaped, limit),
     ).fetchall()
     return [{'id': r['id'], 'rank': r['rank']} for r in rows]
