@@ -140,7 +140,7 @@ def uncomplete_task(task_id):
 def list_todos():
     db = get_db()
     rows = db.execute(
-        'SELECT id, title, done, created_at, updated_at FROM todos ORDER BY done, created_at'
+        'SELECT id, title, done, completed_at, created_at, updated_at FROM todos ORDER BY done, created_at'
     ).fetchall()
     todos = [row_to_dict(r) for r in rows]
     for t in todos:
@@ -178,8 +178,14 @@ def update_todo(todo_id):
         fields.append('title=?')
         values.append(title)
     if 'done' in body:
-        fields.append('done=?')
-        values.append(1 if body['done'] else 0)
+        if body['done']:
+            fields.append('done=1')
+            # Keep the original completion time if it was already done
+            fields.append('completed_at=COALESCE(completed_at, ?)')
+            values.append(int(time.time()))
+        else:
+            fields.append('done=0')
+            fields.append('completed_at=NULL')
     if not fields:
         return jsonify({'error': 'nothing to update'}), 400
 
