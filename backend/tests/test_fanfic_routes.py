@@ -58,6 +58,25 @@ def test_list_excludes_description(client):
     assert rows[0]['title'] == 'Test Fic'
 
 
+def test_list_orders_by_latest_chapter_not_fic_created(client):
+    older_fic, _ = make_fic('Older Fic', chapters=[('Ch 1', 'hello world')])
+    newer_fic, _ = make_fic('Newer Fic', chapters=[('Ch 1', 'hello world')])
+
+    # A later "check updates" adds a fresh chapter to the older fic, which
+    # should bump it back to the top even though it was created first.
+    db = get_db()
+    db.execute(
+        'INSERT INTO fic_chapters(id, fic_id, position, title, category,'
+        ' content_html, content_text, source_post_id, word_count, created_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?)',
+        (str(ULID()), older_fic, 2, 'Ch 2', 'threadmarks', '<p>new</p>', 'new',
+         '2000', 1, int(time.time()) + 1000))
+    db.commit()
+
+    rows = client.get('/api/fanfic').get_json()
+    assert [r['id'] for r in rows] == [older_fic, newer_fic]
+
+
 def test_fts_search(client):
     fic_id, _ = make_fic('Wizard Fic', chapters=[
         ('Chapter One', 'The wizard cast a mighty spell.'),

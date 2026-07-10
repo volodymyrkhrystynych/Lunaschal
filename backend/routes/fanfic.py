@@ -78,7 +78,11 @@ def list_fics():
         params.append(tag)
     where_sql = f" WHERE {' AND '.join(where)}" if where else ''
     rows = get_db().execute(
-        f'SELECT {_LIST_COLS} FROM fics{where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?',
+        f'SELECT {_LIST_COLS} FROM fics{where_sql}'
+        ' ORDER BY COALESCE('
+        '  (SELECT MAX(created_at) FROM fic_chapters WHERE fic_chapters.fic_id = fics.id),'
+        '  fics.created_at'
+        ' ) DESC LIMIT ? OFFSET ?',
         (*params, limit, offset),
     ).fetchall()
     return jsonify(_attach_library_meta(_attach_progress([row_to_dict(r) for r in rows])))
