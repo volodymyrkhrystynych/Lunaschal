@@ -78,6 +78,7 @@ def get_settings():
         'sttBackend': s.get('stt_backend'),
         'ttsBackend': s.get('tts_backend'),
         'whisperModel': s.get('whisper_model'),
+        'sttDevice': s.get('stt_device'),
         'voicePipelineEnabled': bool(s.get('voice_pipeline_enabled', 1)),
         'preventSleep': bool(s.get('prevent_sleep', 0)),
     })
@@ -93,7 +94,7 @@ def update_ai():
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
         'sttCommandKey': 'stt_command_key',
         'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
-        'whisperModel': 'whisper_model',
+        'whisperModel': 'whisper_model', 'sttDevice': 'stt_device',
         'voicePipelineEnabled': 'voice_pipeline_enabled',
         'preventSleep': 'prevent_sleep',
     }

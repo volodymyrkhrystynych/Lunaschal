@@ -351,8 +351,11 @@ function VRAMSection() {
   const activeSttBackend = settings?.sttBackend ?? 'local';
   const activeTtsBackend = settings?.ttsBackend ?? 'local';
   const activeWhisperModel = settings?.whisperModel ?? 'turbo';
+  const activeSttDevice = settings?.sttDevice ?? 'cuda';
 
-  const whisperVram = activeSttBackend === 'local' ? (WHISPER_VRAM_TABLE[activeWhisperModel] ?? 6144) : 0;
+  const whisperVram = activeSttBackend === 'local' && activeSttDevice !== 'cpu'
+    ? (WHISPER_VRAM_TABLE[activeWhisperModel] ?? 6144)
+    : 0;
   const kokoroVram = activeTtsBackend === 'local' ? KOKORO_VRAM_MB : 0;
   const ollamaVram = settings?.aiProvider === 'ollama' && settings.ollamaModel
     ? (ollamaModels?.find(m => m.name === settings.ollamaModel)?.vramMb ?? 0)
@@ -373,6 +376,11 @@ function VRAMSection() {
 
   const setWhisperModel = (model: string) => {
     updateAI.mutate({ whisperModel: model });
+    reloadStt.mutate();
+  };
+
+  const setSttDevice = (device: string) => {
+    updateAI.mutate({ sttDevice: device });
     reloadStt.mutate();
   };
 
@@ -439,6 +447,23 @@ function VRAMSection() {
                 <option key={m.name} value={m.name}>{m.name} — {m.vramMb} MB</option>
               ))}
             </select>
+          )}
+          {activeSttBackend === 'local' && (
+            <div className="flex gap-2 mt-2">
+              {(['cuda', 'cpu'] as const).map(d => (
+                <button
+                  key={d}
+                  onClick={() => setSttDevice(d)}
+                  className={`px-3 py-1.5 rounded text-sm border transition-colors ${
+                    activeSttDevice === d
+                      ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
+                      : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
+                  }`}
+                >
+                  {d === 'cuda' ? 'GPU' : 'CPU'}
+                </button>
+              ))}
+            </div>
           )}
         </div>
 

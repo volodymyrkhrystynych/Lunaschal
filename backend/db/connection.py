@@ -110,7 +110,7 @@ def _ensure_stt_shortcuts(db: sqlite3.Connection) -> None:
 
 def _ensure_stt_model_settings(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
-    for col in ('stt_backend', 'tts_backend', 'whisper_model'):
+    for col in ('stt_backend', 'tts_backend', 'whisper_model', 'stt_device'):
         if col not in cols:
             db.execute(f'ALTER TABLE settings ADD COLUMN {col} TEXT')
     if 'voice_pipeline_enabled' not in cols:
