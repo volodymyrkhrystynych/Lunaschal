@@ -196,6 +196,7 @@ export interface AppSettings {
   sttBackend: string | null;
   ttsBackend: string | null;
   whisperModel: string | null;
+  sttDevice: string | null;
   voicePipelineEnabled: boolean;
   preventSleep: boolean;
 }

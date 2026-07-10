@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 import urllib.request
+import warnings
 from pathlib import Path
 
 from ulid import ULID
@@ -93,6 +94,16 @@ def _get_active_whisper_model() -> str:
     return MODEL_NAME
 
 
+def _get_active_stt_device() -> str:
+    try:
+        s = get_db().execute('SELECT stt_device FROM settings LIMIT 1').fetchone()
+        if s and s['stt_device']:
+            return s['stt_device'].lower()
+    except Exception:
+        pass
+    return DEVICE
+
+
 def _ensure_openai():
     global _openai_client
     if _openai_client is not None:
@@ -112,15 +123,16 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
     global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
     backend = backend or _get_active_stt_backend()
     model_name = model_name or _get_active_whisper_model()
+    device = _get_active_stt_device()
 
     # Fast path — already loaded with the right config
     if _stt_ready and _loaded_stt_backend == backend:
-        if backend == 'openai' or _loaded_model_name == model_name:
+        if backend == 'openai' or (_loaded_model_name == model_name and _loaded_device == device):
             return
 
     with _stt_lock:
         if _stt_ready and _loaded_stt_backend == backend:
-            if backend == 'openai' or _loaded_model_name == model_name:
+            if backend == 'openai' or (_loaded_model_name == model_name and _loaded_device == device):
                 return
         # Unload whatever is currently in memory
         _stt_model = None
@@ -133,9 +145,9 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
             _loaded_device = None
         else:
             import whisper
-            logger.info("Loading Whisper '%s' on %s…", model_name, DEVICE)
-            _stt_model = whisper.load_model(model_name, device=DEVICE)
-            _loaded_device = DEVICE
+            logger.info("Loading Whisper '%s' on %s…", model_name, device)
+            _stt_model = whisper.load_model(model_name, device=device)
+            _loaded_device = device
             _loaded_stt_backend = 'local'
             _loaded_model_name = model_name
             logger.info("STT ready.")
@@ -254,9 +266,18 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
             return {'text': result.text.strip(), 'language': result.language or language or 'en'}
         else:
             opts = {'language': language} if language else {}
+            if _loaded_device == 'cpu':
+                # CPU is a deliberate choice (Settings > STT Device), not an accidental
+                # fallback — skip the fp16 probe and its "CUDA available but unused"
+                # warning, which would otherwise fire on every single transcription.
+                opts['fp16'] = False
             with _transcribe_lock:
                 try:
-                    result = _stt_model.transcribe(tmp_path, **opts)
+                    with warnings.catch_warnings():
+                        if _loaded_device == 'cpu':
+                            warnings.filterwarnings(
+                                'ignore', message='Performing inference on CPU when CUDA is available')
+                        result = _stt_model.transcribe(tmp_path, **opts)
                     return {'text': result['text'].strip(), 'language': result.get('language', language or 'en')}
                 except Exception:
                     # Reset so the next request reloads with a fresh CUDA context

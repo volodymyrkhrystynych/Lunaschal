@@ -68,6 +68,7 @@ CREATE TABLE IF NOT EXISTS settings (
     stt_backend TEXT,
     tts_backend TEXT,
     whisper_model TEXT,
+    stt_device TEXT,
     voice_pipeline_enabled INTEGER DEFAULT 1,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
