@@ -19,6 +19,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   const [editTitle, setEditTitle] = useState('');
   const [newEntry, setNewEntry] = useState('');
   const [showNewEntry, setShowNewEntry] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
   const [generatingFor, setGeneratingFor] = useState<string | null>(null);
   const [generationResult, setGenerationResult] = useState<{ id: string; count: number } | null>(null);
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
@@ -146,10 +147,21 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-semibold text-[var(--color-text)]">Journal</h1>
-        <button onClick={() => setShowNewEntry(!showNewEntry)}
-          className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors">
-          + New Entry
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => setShowDelete(!showDelete)}
+            title={showDelete ? 'Hide delete buttons' : 'Show delete buttons'}
+            className={`px-4 py-2 border rounded-lg transition-colors ${
+              showDelete
+                ? 'border-red-400/50 text-red-400 bg-red-500/10'
+                : 'border-white/20 text-[var(--color-text-muted)] hover:bg-white/10'
+            }`}>
+            🗑
+          </button>
+          <button onClick={() => setShowNewEntry(!showNewEntry)}
+            className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors">
+            + New Entry
+          </button>
+        </div>
       </div>
 
       <div className="mb-4">
@@ -216,7 +228,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                       className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">
                       {copiedTranscriptionId === t.id ? 'Copied!' : 'Copy'}
                     </button>
-                    <button onClick={() => deleteTranscription.mutate(t.id)} className="text-sm text-red-400 hover:text-red-300">Delete</button>
+                    {showDelete && (
+                      <button onClick={() => deleteTranscription.mutate(t.id)} className="text-sm text-red-400 hover:text-red-300">Delete</button>
+                    )}
                   </div>
                 </div>
                 <div className="text-sm text-[var(--color-text-muted)] italic whitespace-pre-wrap">{t.text}</div>
@@ -247,7 +261,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                 </button>
                 <button onClick={() => { setEditingId(entry.id); setEditContent(entry.content); setEditTitle(entry.title ?? ''); }}
                   className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Edit</button>
-                <button onClick={() => deleteEntry.mutate(entry.id)} className="text-sm text-red-400 hover:text-red-300">Delete</button>
+                {showDelete && (
+                  <button onClick={() => deleteEntry.mutate(entry.id)} className="text-sm text-red-400 hover:text-red-300">Delete</button>
+                )}
               </div>
             </div>
 

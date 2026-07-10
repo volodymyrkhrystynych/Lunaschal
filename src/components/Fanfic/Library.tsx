@@ -23,6 +23,7 @@ export function Library({ onOpen }: LibraryProps) {
   const [selIndex, setSelIndex] = useState(0);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
+  const [showDelete, setShowDelete] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
@@ -108,6 +109,15 @@ export function Library({ onOpen }: LibraryProps) {
               if (file) uploadFile.mutate(file);
               e.target.value = '';
             }} />
+          <button onClick={() => setShowDelete(!showDelete)}
+            title={showDelete ? 'Hide delete buttons' : 'Show delete buttons'}
+            className={`px-4 py-2 border rounded-lg transition-colors ${
+              showDelete
+                ? 'border-red-400/50 text-red-400 bg-red-500/10'
+                : 'border-white/20 text-[var(--color-text-muted)] hover:bg-white/10'
+            }`}>
+            🗑
+          </button>
           <button onClick={() => setShowImport(!showImport)}
             className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors">
             + Import from forum
@@ -179,6 +189,7 @@ export function Library({ onOpen }: LibraryProps) {
         {fics?.map((fic, idx) => (
           <FicCard key={fic.id} fic={fic}
             selected={level >= 1 && idx === selIndex}
+            showDelete={showDelete}
             onOpen={() => onOpen(fic.id)}
             onCheckUpdates={() => checkUpdates.mutate(fic.id)}
             onTagClick={(name) => { setSearchQuery(''); setTag(name); }}
@@ -197,9 +208,10 @@ export function Library({ onOpen }: LibraryProps) {
   );
 }
 
-function FicCard({ fic, selected, onOpen, onCheckUpdates, onTagClick, onDelete }: {
+function FicCard({ fic, selected, showDelete, onOpen, onCheckUpdates, onTagClick, onDelete }: {
   fic: Fic;
   selected: boolean;
+  showDelete: boolean;
   onOpen: () => void;
   onCheckUpdates: () => void;
   onTagClick: (name: string) => void;
@@ -237,7 +249,9 @@ function FicCard({ fic, selected, onOpen, onCheckUpdates, onTagClick, onDelete }
                   className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                   title="Fetch new chapters">↻ Update</button>
               )}
-              <button onClick={onDelete} className="text-sm text-red-400 hover:text-red-300">Delete</button>
+              {showDelete && (
+                <button onClick={onDelete} className="text-sm text-red-400 hover:text-red-300">Delete</button>
+              )}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-text-muted)] mt-0.5">
