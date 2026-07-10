@@ -29,6 +29,9 @@ export interface ScopeHandlers {
   drillOut?: () => boolean | void;
   create?: () => void;
   createAlt?: () => void;
+  scrollDown?: () => void;
+  scrollUp?: () => void;
+  annotate?: () => void;
 }
 
 interface ShortcutContextValue {
@@ -168,6 +171,15 @@ export function ShortcutProvider({ currentView, onViewChange, children }: Shortc
       if (!consumed) setLevel(Math.max(0, lvl - 1));
     } else if (action === 'action.new' || action === 'action.newAlt') {
       const handler = resolveHandler(scopes, Math.max(lvl, 1), action === 'action.new' ? 'create' : 'createAlt');
+      if (handler) (handler as () => void)();
+      else handled = false;
+    } else if (action === 'scroll.down' || action === 'scroll.up') {
+      const handler = resolveHandler(
+        scopes, Math.max(lvl, 1), action === 'scroll.down' ? 'scrollDown' : 'scrollUp');
+      if (handler) (handler as () => void)();
+      else handled = false;
+    } else if (action === 'action.annotate') {
+      const handler = resolveHandler(scopes, Math.max(lvl, 1), 'annotate');
       if (handler) (handler as () => void)();
       else handled = false;
     } else {

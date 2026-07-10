@@ -69,3 +69,18 @@ export function groupChaptersByCategory(chapters: FicChapterSummary[]): [string,
   }
   return groups;
 }
+
+/** Ids of all chapters up to and including the target, in reading order —
+ * powers "mark read up to here". Unknown target returns []. */
+export function chapterIdsUpTo(chapters: FicChapterSummary[], chapterId: string): string[] {
+  const ordered = orderChapters(chapters);
+  const idx = ordered.findIndex((c) => c.id === chapterId);
+  if (idx === -1) return [];
+  return ordered.slice(0, idx + 1).map((c) => c.id);
+}
+
+/** "★★★☆☆"-style string for a 1–5 rating; null when unrated. */
+export function formatRating(rating: number | null | undefined): string | null {
+  if (!rating || rating < 1 || rating > 5) return null;
+  return '★'.repeat(rating) + '☆'.repeat(5 - rating);
+}

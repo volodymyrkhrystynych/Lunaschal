@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { adjacentChapter, detectFicSite, groupChaptersByCategory, orderChapters } from './fanfic';
+import { adjacentChapter, chapterIdsUpTo, detectFicSite, formatRating, groupChaptersByCategory, orderChapters } from './fanfic';
 import type { FicChapterSummary } from '@/hooks/api';
 
 describe('detectFicSite', () => {
@@ -21,7 +21,7 @@ describe('detectFicSite', () => {
 });
 
 function ch(id: string, category: string, position: number): FicChapterSummary {
-  return { id, ficId: 'f', position, title: id, category, wordCount: 0, postedAt: null };
+  return { id, ficId: 'f', position, title: id, category, wordCount: 0, postedAt: null, isRead: false };
 }
 
 const CHAPTERS = [
@@ -71,5 +71,38 @@ describe('groupChaptersByCategory', () => {
       ['Apocrypha', 1],
       ['Sidestory', 1],
     ]);
+  });
+});
+
+describe('chapterIdsUpTo', () => {
+  it('returns ids in reading order up to and including the target', () => {
+    expect(chapterIdsUpTo(CHAPTERS, 'main2')).toEqual(['main1', 'main2']);
+    expect(chapterIdsUpTo(CHAPTERS, 'main1')).toEqual(['main1']);
+  });
+
+  it('crosses category boundaries in display order', () => {
+    expect(chapterIdsUpTo(CHAPTERS, 'apoc1')).toEqual(['main1', 'main2', 'main3', 'apoc1']);
+    expect(chapterIdsUpTo(CHAPTERS, 'side1')).toEqual(
+      ['main1', 'main2', 'main3', 'apoc1', 'side1']);
+  });
+
+  it('returns [] for unknown ids and empty input', () => {
+    expect(chapterIdsUpTo(CHAPTERS, 'nope')).toEqual([]);
+    expect(chapterIdsUpTo([], 'main1')).toEqual([]);
+  });
+});
+
+describe('formatRating', () => {
+  it('renders 1-5 stars', () => {
+    expect(formatRating(1)).toBe('★☆☆☆☆');
+    expect(formatRating(3)).toBe('★★★☆☆');
+    expect(formatRating(5)).toBe('★★★★★');
+  });
+
+  it('returns null for unrated or out-of-range values', () => {
+    expect(formatRating(null)).toBeNull();
+    expect(formatRating(undefined)).toBeNull();
+    expect(formatRating(0)).toBeNull();
+    expect(formatRating(6)).toBeNull();
   });
 });

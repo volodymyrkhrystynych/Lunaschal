@@ -20,6 +20,7 @@ class FakeResp:
 
 def _fixture_map() -> dict[str, str]:
     return {
+        f'{THREAD}/': (FIXTURES / 'thread_page.html').read_text(),
         f'{THREAD}/threadmarks': (FIXTURES / 'threadmarks_index.html').read_text(),
         f'{THREAD}/reader?threadmark_category=1': (FIXTURES / 'reader_p1.html').read_text(),
         f'{THREAD}/reader/page-2?threadmark_category=1': (FIXTURES / 'reader_p2.html').read_text(),
@@ -63,6 +64,14 @@ def _import_fic(client) -> str:
     return resp.get_json()['id']
 
 
+def _site_tags(fic_id: str) -> list[str]:
+    from backend.db.connection import get_db
+    rows = get_db().execute(
+        'SELECT name FROM fic_site_tags WHERE fic_id=? ORDER BY created_at, rowid',
+        (fic_id,)).fetchall()
+    return [r['name'] for r in rows]
+
+
 def test_full_import(client, fake_net):
     fic_id = _import_fic(client)
 
@@ -104,6 +113,36 @@ def test_full_import(client, fake_net):
 
     # Progress reports done
     assert client.get(f'/api/fanfic/{fic_id}/status').get_json()['done'] is True
+
+    # Site tags scraped from the main thread page
+    assert _site_tags(fic_id) == ['isekai', 'time travel']
+
+
+def test_tag_fetch_failure_tolerated(client, fake_net):
+    del fake_net['pages'][f'{THREAD}/']
+    fic_id = _import_fic(client)
+    fic = client.get(f'/api/fanfic/{fic_id}').get_json()
+    assert fic['downloadStatus'] == 'complete'
+    assert _site_tags(fic_id) == []
+
+
+def test_check_updates_refreshes_tags(client, fake_net):
+    fic_id = _import_fic(client)
+    assert _site_tags(fic_id) == ['isekai', 'time travel']
+    # Site tags changed; check-updates backfills/replaces them wholesale
+    fake_net['pages'][f'{THREAD}/'] = (
+        '<div class="tagList"><a class="tagItem">complete</a>'
+        '<a class="tagItem">isekai</a></div>')
+    assert client.post(f'/api/fanfic/{fic_id}/check-updates').status_code == 202
+    assert _site_tags(fic_id) == ['complete', 'isekai']
+
+
+def test_empty_tag_page_keeps_existing_tags(client, fake_net):
+    fic_id = _import_fic(client)
+    # A login wall returns HTTP 200 with no tag list — must not wipe tags
+    fake_net['pages'][f'{THREAD}/'] = '<html><body><h1>Log in</h1></body></html>'
+    assert client.post(f'/api/fanfic/{fic_id}/check-updates').status_code == 202
+    assert _site_tags(fic_id) == ['isekai', 'time travel']
 
 
 def test_reimport_returns_existing(client, fake_net):
@@ -237,6 +276,60 @@ def test_check_updates_appends_new_chapter(client, fake_net):
     # Idempotent: running again adds nothing
     client.post(f'/api/fanfic/{fic_id}/check-updates')
     assert client.get(f'/api/fanfic/{fic_id}').get_json()['chapterCount'] == 5
+
+
+PROXY_ART = ('https://forums.spacebattles.com/proxy.php'
+             '?image=https%3A%2F%2Fexample.com%2Fart.png&hash=abc123')
+
+
+def test_image_falls_back_to_forum_proxy(client, fake_net):
+    # The original image host is dead, but the forum's proxy cache has a copy
+    # (the reader_p1 fixture's img carries both URLs, like real XenForo output).
+    del fake_net['binaries']['https://example.com/art.png']
+    fake_net['binaries'][PROXY_ART] = (b'\x89PNG-proxy-bytes', 'image/png')
+
+    fic_id = _import_fic(client)
+    chapters = client.get(f'/api/fanfic/{fic_id}/chapters').get_json()
+    ch1 = client.get(f"/api/fanfic/chapters/{chapters[0]['id']}").get_json()
+    assert f'/api/fanfic/{fic_id}/images/' in ch1['contentHtml']
+    assert 'example.com/art.png' not in ch1['contentHtml']
+    files = list((fake_net['root'] / fic_id / 'images').glob('*.png'))
+    assert len(files) == 1
+    assert files[0].read_bytes() == b'\x89PNG-proxy-bytes'
+
+
+def test_check_updates_repairs_missing_images(client, fake_net):
+    # Import while the image is unreachable: the chapter keeps the remote src.
+    saved = dict(fake_net['binaries'])
+    fake_net['binaries'].clear()
+    fic_id = _import_fic(client)
+    chapters = client.get(f'/api/fanfic/{fic_id}/chapters').get_json()
+    ch1 = client.get(f"/api/fanfic/chapters/{chapters[0]['id']}").get_json()
+    assert 'https://example.com/art.png' in ch1['contentHtml']
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['coverPath'] is None
+
+    # Later the forum's proxy copy is reachable; ↻ Update re-fetches the
+    # chapter's thread page and repairs the image.
+    fake_net['binaries'][PROXY_ART] = saved['https://example.com/art.png']
+    fake_net['pages'][f'{THREAD}/post-101'] = (FIXTURES / 'reader_p1.html').read_text()
+    assert client.post(f'/api/fanfic/{fic_id}/check-updates').status_code == 202
+
+    ch1 = client.get(f"/api/fanfic/chapters/{chapters[0]['id']}").get_json()
+    assert f'/api/fanfic/{fic_id}/images/' in ch1['contentHtml']
+    assert 'example.com/art.png' not in ch1['contentHtml']
+    # the backfilled image also becomes the cover
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['coverPath'] is not None
+
+
+def test_check_updates_repair_tolerates_fetch_failure(client, fake_net):
+    # Broken images whose pages can't be re-fetched are left alone and the
+    # update still completes.
+    fake_net['binaries'].clear()
+    fic_id = _import_fic(client)
+    # no f'{THREAD}/post-101' page registered -> repair fetch fails
+    assert client.post(f'/api/fanfic/{fic_id}/check-updates').status_code == 202
+    fic = client.get(f'/api/fanfic/{fic_id}').get_json()
+    assert fic['downloadStatus'] == 'complete'
 
 
 def test_check_updates_rejected_for_file_fics(client, fake_net):

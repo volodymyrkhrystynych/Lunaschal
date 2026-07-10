@@ -184,6 +184,24 @@ def parse_threadmarks_index(html: str) -> ThreadIndex:
     return ThreadIndex(title=title, author=author, description=description, categories=categories)
 
 
+def parse_thread_tags(html: str) -> list[str]:
+    """Tags from a thread page's tag list. XenForo 2 renders them as
+    <a class="tagItem"> anchors, either wrapped in a span.js-tagList or
+    directly inside a .tagList container; the bare a.tagItem fallback covers
+    customized themes (QQ). Returns display names in page order, deduped
+    case-insensitively."""
+    soup = BeautifulSoup(html, 'html.parser')
+    anchors = soup.select('.js-tagList .tagItem, .tagList .tagItem') or soup.select('a.tagItem')
+    tags: list[str] = []
+    seen: set[str] = set()
+    for a in anchors:
+        name = _tag_text(a)
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            tags.append(name)
+    return tags
+
+
 def _last_page(soup) -> int:
     last = 1
     for a in soup.select('.pageNav-main .pageNav-page'):
@@ -259,14 +277,40 @@ def _image_src(img, base_url: str) -> str | None:
     return None
 
 
-def extract_image_urls(content_html: str, base_url: str) -> list[str]:
+@dataclass
+class ImageSource:
+    url: str                    # preferred remote URL (the post's original image)
+    proxy_url: str | None = None  # the forum's /proxy.php cached copy, if present
+
+
+def extract_image_sources(content_html: str, base_url: str) -> list[ImageSource]:
+    """Image URLs to download, in document order. XenForo's image proxy
+    rewrites remote images to src="/proxy.php?image=<orig>&hash=..." with the
+    original URL in data-url; the original is preferred but the proxy copy is
+    kept as a fallback — the forum's cache often outlives the original (e.g.
+    expiring Discord attachment links)."""
     soup = BeautifulSoup(content_html, 'html.parser')
-    urls: list[str] = []
+    sources: list[ImageSource] = []
+    seen: set[str] = set()
     for img in soup.find_all('img'):
         src = _image_src(img, base_url)
-        if src and src.startswith(('http://', 'https://')) and src not in urls:
-            urls.append(src)
-    return urls
+        if not src or not src.startswith(('http://', 'https://')) or src in seen:
+            continue
+        seen.add(src)
+        proxy = None
+        for attr in ('src', 'data-src'):
+            val = (img.get(attr) or '').strip()
+            if val and 'proxy.php' in val:
+                proxy = urljoin(base_url, val)
+                break
+        if proxy == src:
+            proxy = None
+        sources.append(ImageSource(url=src, proxy_url=proxy))
+    return sources
+
+
+def extract_image_urls(content_html: str, base_url: str) -> list[str]:
+    return [s.url for s in extract_image_sources(content_html, base_url)]
 
 
 def rewrite_image_srcs(content_html: str, base_url: str, mapping: dict[str, str]) -> str:

@@ -1,3 +1,4 @@
+import sqlite3
 import threading
 import time
 
@@ -14,10 +15,10 @@ bp = Blueprint('fanfic', __name__, url_prefix='/api/fanfic')
 _LIST_COLS = (
     'id, title, author, source_type, source_url, site, cover_path, word_count,'
     ' chapter_count, download_status, download_error, last_read_chapter_id,'
-    ' last_checked_at, created_at, updated_at'
+    ' last_checked_at, rating, created_at, updated_at'
 )
 
-_CHAPTER_LIST_COLS = 'id, fic_id, position, title, category, word_count, posted_at'
+_CHAPTER_LIST_COLS = 'c.id, c.fic_id, c.position, c.title, c.category, c.word_count, c.posted_at'
 
 
 def _attach_progress(dicts: list[dict]) -> list[dict]:
@@ -28,15 +29,57 @@ def _attach_progress(dicts: list[dict]) -> list[dict]:
     return dicts
 
 
+def _attach_library_meta(dicts: list[dict]) -> list[dict]:
+    """Batch-attach folderIds, site tags and read-chapter counts."""
+    if not dicts:
+        return dicts
+    db = get_db()
+    ids = [d['id'] for d in dicts]
+    placeholders = ','.join('?' * len(ids))
+    folders: dict[str, list[str]] = {}
+    tags: dict[str, list[str]] = {}
+    reads: dict[str, int] = {}
+    for r in db.execute(
+            f'SELECT fic_id, folder_id FROM fic_folder_items WHERE fic_id IN ({placeholders})'
+            ' ORDER BY created_at, rowid', ids):
+        folders.setdefault(r['fic_id'], []).append(r['folder_id'])
+    for r in db.execute(
+            f'SELECT fic_id, name FROM fic_site_tags WHERE fic_id IN ({placeholders})'
+            ' ORDER BY created_at, rowid', ids):
+        tags.setdefault(r['fic_id'], []).append(r['name'])
+    for r in db.execute(
+            f'SELECT fic_id, COUNT(*) AS n FROM fic_chapter_reads'
+            f' WHERE fic_id IN ({placeholders}) GROUP BY fic_id', ids):
+        reads[r['fic_id']] = r['n']
+    for d in dicts:
+        d['folderIds'] = folders.get(d['id'], [])
+        d['tags'] = tags.get(d['id'], [])
+        d['readCount'] = reads.get(d['id'], 0)
+    return dicts
+
+
 @bp.get('')
 def list_fics():
     limit = min(int(request.args.get('limit', 100)), 200)
     offset = int(request.args.get('offset', 0))
+    where = []
+    params: list = []
+    folder_id = request.args.get('folderId')
+    if folder_id:
+        where.append('EXISTS (SELECT 1 FROM fic_folder_items'
+                     ' WHERE folder_id=? AND fic_id=fics.id)')
+        params.append(folder_id)
+    tag = request.args.get('tag')
+    if tag:
+        where.append('EXISTS (SELECT 1 FROM fic_site_tags'
+                     ' WHERE name=? AND fic_id=fics.id)')
+        params.append(tag)
+    where_sql = f" WHERE {' AND '.join(where)}" if where else ''
     rows = get_db().execute(
-        f'SELECT {_LIST_COLS} FROM fics ORDER BY created_at DESC LIMIT ? OFFSET ?',
-        (limit, offset),
+        f'SELECT {_LIST_COLS} FROM fics{where_sql} ORDER BY created_at DESC LIMIT ? OFFSET ?',
+        (*params, limit, offset),
     ).fetchall()
-    return jsonify(_attach_progress([row_to_dict(r) for r in rows]))
+    return jsonify(_attach_library_meta(_attach_progress([row_to_dict(r) for r in rows])))
 
 
 @bp.get('/search')
@@ -71,7 +114,7 @@ def search():
         d = row_to_dict(row)
         d['matchedChapters'] = by_fic[row['id']]['matched']
         dicts.append(d)
-    return jsonify(_attach_progress(dicts))
+    return jsonify(_attach_library_meta(_attach_progress(dicts)))
 
 
 @bp.get('/cookies')
@@ -147,12 +190,101 @@ def put_cookie():
     return jsonify({'success': True})
 
 
+@bp.get('/tags')
+def list_site_tags():
+    rows = get_db().execute(
+        'SELECT name, COUNT(*) AS count FROM fic_site_tags'
+        ' GROUP BY name ORDER BY count DESC, name').fetchall()
+    return jsonify([{'name': r['name'], 'count': r['count']} for r in rows])
+
+
+@bp.get('/folders')
+def list_folders():
+    rows = get_db().execute(
+        'SELECT f.id, f.name, f.created_at, f.updated_at, COUNT(i.fic_id) AS fic_count'
+        ' FROM fic_folders f'
+        ' LEFT JOIN fic_folder_items i ON i.folder_id = f.id'
+        ' GROUP BY f.id ORDER BY f.created_at ASC').fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
+
+
+@bp.post('/folders')
+def create_folder():
+    name = ((request.json or {}).get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    folder_id = str(ULID())
+    now = int(time.time())
+    db = get_db()
+    try:
+        db.execute(
+            'INSERT INTO fic_folders(id, name, created_at, updated_at) VALUES (?,?,?,?)',
+            (folder_id, name, now, now))
+        db.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({'error': 'Folder name already exists'}), 409
+    return jsonify({'id': folder_id}), 201
+
+
+@bp.patch('/folders/<folder_id>')
+def rename_folder(folder_id):
+    name = ((request.json or {}).get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name required'}), 400
+    db = get_db()
+    try:
+        cur = db.execute(
+            'UPDATE fic_folders SET name=?, updated_at=? WHERE id=?',
+            (name, int(time.time()), folder_id))
+        db.commit()
+    except sqlite3.IntegrityError:
+        return jsonify({'error': 'Folder name already exists'}), 409
+    if cur.rowcount == 0:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'success': True})
+
+
+@bp.delete('/folders/<folder_id>')
+def delete_folder(folder_id):
+    db = get_db()
+    db.execute('DELETE FROM fic_folders WHERE id=?', (folder_id,))
+    db.commit()
+    return jsonify({'success': True})
+
+
+@bp.post('/<fic_id>/folders')
+def add_fic_to_folder(fic_id):
+    folder_id = (request.json or {}).get('folderId')
+    if not folder_id:
+        return jsonify({'error': 'folderId required'}), 400
+    db = get_db()
+    if not db.execute('SELECT id FROM fics WHERE id=?', (fic_id,)).fetchone():
+        return jsonify({'error': 'Fic not found'}), 404
+    if not db.execute('SELECT id FROM fic_folders WHERE id=?', (folder_id,)).fetchone():
+        return jsonify({'error': 'Folder not found'}), 404
+    db.execute(
+        'INSERT OR IGNORE INTO fic_folder_items(folder_id, fic_id, created_at) VALUES (?,?,?)',
+        (folder_id, fic_id, int(time.time())))
+    db.commit()
+    return jsonify({'success': True})
+
+
+@bp.delete('/<fic_id>/folders/<folder_id>')
+def remove_fic_from_folder(fic_id, folder_id):
+    db = get_db()
+    db.execute(
+        'DELETE FROM fic_folder_items WHERE folder_id=? AND fic_id=?',
+        (folder_id, fic_id))
+    db.commit()
+    return jsonify({'success': True})
+
+
 @bp.get('/<fic_id>')
 def get_fic(fic_id):
     row = get_db().execute('SELECT * FROM fics WHERE id=?', (fic_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(_attach_progress([row_to_dict(row)])[0])
+    return jsonify(_attach_library_meta(_attach_progress([row_to_dict(row)]))[0])
 
 
 @bp.delete('/<fic_id>')
@@ -168,12 +300,18 @@ def delete_fic(fic_id):
 @bp.get('/<fic_id>/chapters')
 def list_chapters(fic_id):
     rows = get_db().execute(
-        f'SELECT {_CHAPTER_LIST_COLS} FROM fic_chapters WHERE fic_id=?'
-        " ORDER BY CASE WHEN LOWER(category) IN ('threadmarks','chapters') THEN 0 ELSE 1 END,"
-        ' category, position',
+        f'SELECT {_CHAPTER_LIST_COLS}, r.chapter_id IS NOT NULL AS is_read'
+        ' FROM fic_chapters c'
+        ' LEFT JOIN fic_chapter_reads r ON r.chapter_id = c.id'
+        ' WHERE c.fic_id=?'
+        " ORDER BY CASE WHEN LOWER(c.category) IN ('threadmarks','chapters') THEN 0 ELSE 1 END,"
+        ' c.category, c.position',
         (fic_id,),
     ).fetchall()
-    return jsonify([row_to_dict(r) for r in rows])
+    dicts = [row_to_dict(r) for r in rows]
+    for d in dicts:
+        d['isRead'] = bool(d['isRead'])
+    return jsonify(dicts)
 
 
 @bp.get('/chapters/<chapter_id>')
@@ -369,11 +507,77 @@ def save_reading_progress(fic_id):
             (chapter_id, fic_id)).fetchone()
         if not ch:
             return jsonify({'error': 'Chapter not found in this fic'}), 404
+    now = int(time.time())
     db.execute(
         'UPDATE fics SET last_read_chapter_id=?, updated_at=? WHERE id=?',
-        (chapter_id, int(time.time()), fic_id),
+        (chapter_id, now, fic_id),
     )
+    if chapter_id:
+        db.execute(
+            'INSERT OR IGNORE INTO fic_chapter_reads(chapter_id, fic_id, created_at)'
+            ' VALUES (?,?,?)',
+            (chapter_id, fic_id, now))
     db.commit()
+    return jsonify({'success': True})
+
+
+@bp.post('/<fic_id>/read')
+def set_chapters_read(fic_id):
+    body = request.json or {}
+    chapter_ids = body.get('chapterIds')
+    read = body.get('read')
+    if not isinstance(chapter_ids, list) or not chapter_ids or not isinstance(read, bool):
+        return jsonify({'error': 'chapterIds (non-empty list) and read (boolean) required'}), 400
+    db = get_db()
+    placeholders = ','.join('?' * len(chapter_ids))
+    owned = {r['id'] for r in db.execute(
+        f'SELECT id FROM fic_chapters WHERE fic_id=? AND id IN ({placeholders})',
+        (fic_id, *chapter_ids))}
+    if owned != set(chapter_ids):
+        return jsonify({'error': 'Chapter not found in this fic'}), 404
+    if read:
+        now = int(time.time())
+        db.executemany(
+            'INSERT OR IGNORE INTO fic_chapter_reads(chapter_id, fic_id, created_at)'
+            ' VALUES (?,?,?)',
+            [(cid, fic_id, now) for cid in chapter_ids])
+    else:
+        db.execute(
+            f'DELETE FROM fic_chapter_reads WHERE fic_id=? AND chapter_id IN ({placeholders})',
+            (fic_id, *chapter_ids))
+    db.commit()
+    count = db.execute(
+        'SELECT COUNT(*) AS n FROM fic_chapter_reads WHERE fic_id=?', (fic_id,)).fetchone()
+    return jsonify({'success': True, 'readCount': count['n']})
+
+
+@bp.patch('/<fic_id>/review')
+def save_review(fic_id):
+    body = request.json or {}
+    sets = []
+    params: list = []
+    if 'rating' in body:
+        rating = body['rating']
+        if rating is not None and (not isinstance(rating, int) or isinstance(rating, bool)
+                                   or not 1 <= rating <= 5):
+            return jsonify({'error': 'rating must be null or an integer from 1 to 5'}), 400
+        sets.append('rating=?')
+        params.append(rating)
+    if 'review' in body:
+        review = body['review']
+        if review is not None and not isinstance(review, str):
+            return jsonify({'error': 'review must be null or a string'}), 400
+        sets.append('review=?')
+        params.append(review.strip() or None if review else None)
+    if not sets:
+        return jsonify({'error': 'nothing to update'}), 400
+    db = get_db()
+    cur = db.execute(
+        f"UPDATE fics SET {', '.join(sets)}, updated_at=? WHERE id=?",
+        (*params, int(time.time()), fic_id))
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify({'error': 'Not found'}), 404
     return jsonify({'success': True})
 
 
