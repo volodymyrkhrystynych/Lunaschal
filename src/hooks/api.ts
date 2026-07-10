@@ -187,7 +187,6 @@ export interface AppSettings {
   hasGoogleKey: boolean;
   ollamaUrl: string | null;
   ollamaModel: string | null;
-  ollamaBgModel: string | null;
   networkMode: boolean;
   networkCode: string | null;
   sttPasteKey: string | null;
@@ -209,6 +208,12 @@ export interface WhisperModel {
 export interface OllamaModel {
   name: string;
   vramMb: number;
+}
+
+export interface GpuVram {
+  available: boolean;
+  baseMb?: number;
+  totalMb?: number;
 }
 
 export interface AuthStatus {
@@ -360,6 +365,7 @@ export const api = {
       patch<{ success: boolean }>('/api/settings/ai', data),
     regenerateCode: () => post<{ networkCode: string }>('/api/settings/regenerate-code'),
     ollamaModels: () => get<OllamaModel[]>('/api/settings/ollama-models'),
+    gpuVram: () => get<GpuVram>('/api/settings/gpu-vram'),
   },
 
   journal: {

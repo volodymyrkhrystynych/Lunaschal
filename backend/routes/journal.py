@@ -196,7 +196,7 @@ def polish_entry(id):
     source = row['raw_content'] or ''
     if not source.strip():
         return jsonify({'error': 'No original transcription to polish'}), 400
-    polished = polish_journal_entry(source, background=True)
+    polished = polish_journal_entry(source)
     db = get_db()
     db.execute(
         'UPDATE journal_entries SET content=?, updated_at=? WHERE id=?',
@@ -243,7 +243,7 @@ def delete_entry(id):
 def _polish_bg(journal_id: str, raw_content: str) -> None:
     def _run():
         try:
-            polished = polish_journal_entry(raw_content, background=True)
+            polished = polish_journal_entry(raw_content)
             if polished == raw_content:
                 return
             db = get_db()

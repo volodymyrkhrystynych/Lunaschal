@@ -54,6 +54,10 @@ def init_db() -> None:
     if 'password_hash' in cols:
         db.execute('ALTER TABLE settings DROP COLUMN password_hash')
         db.commit()
+    # Drop ollama_bg_model — CPU-inference background model concept removed
+    if 'ollama_bg_model' in cols:
+        db.execute('ALTER TABLE settings DROP COLUMN ollama_bg_model')
+        db.commit()
     _init_fts(db)
     _init_recipes_fts(db)
     _init_fanfic_fts(db)
@@ -64,7 +68,6 @@ def init_db() -> None:
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
     _ensure_flashcard_tags(db)
-    _ensure_ollama_bg_model(db)
     _ensure_prevent_sleep(db)
     _ensure_todo_completed_at(db)
     _ensure_fic_review_columns(db)
@@ -113,13 +116,6 @@ def _ensure_stt_model_settings(db: sqlite3.Connection) -> None:
     if 'voice_pipeline_enabled' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN voice_pipeline_enabled INTEGER DEFAULT 1')
     db.commit()
-
-
-def _ensure_ollama_bg_model(db: sqlite3.Connection) -> None:
-    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
-    if 'ollama_bg_model' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN ollama_bg_model TEXT')
-        db.commit()
 
 
 def _ensure_todo_completed_at(db: sqlite3.Connection) -> None:
