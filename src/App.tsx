@@ -14,10 +14,11 @@ import { Tasks } from './components/Tasks';
 import { Cookbook } from './components/Cookbook';
 import { Fanfic } from './components/Fanfic/Fanfic';
 import type { FicTarget } from './components/Fanfic/Fanfic';
+import { Newspapers } from './components/Newspapers';
 import { api } from './hooks/api';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 
-type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic';
+type View = 'chat' | 'journal' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic' | 'newspapers';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
@@ -75,6 +76,8 @@ export default function App() {
         return <Cookbook />;
       case 'fanfic':
         return <Fanfic target={ficTarget} onTargetConsumed={() => setFicTarget(null)} />;
+      case 'newspapers':
+        return <Newspapers />;
       default:
         return null;
     }
