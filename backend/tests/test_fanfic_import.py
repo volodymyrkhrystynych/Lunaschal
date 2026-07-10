@@ -459,6 +459,29 @@ def test_cookie_input_normalization(client, fake_net):
     assert jar == {'xf_user': 'u123', 'xf_session': 's456', 'cf_clearance': 'cf789'}
 
 
+def test_stale_downloading_status_reset_on_startup(client):
+    """A fic left 'downloading' by a killed/replaced process (e.g. the dev
+    server's autoreloader restarting mid-download) has no thread left to
+    finish it — the in-memory progress registry starts empty on every
+    process start, so the next startup must flip any such row to 'error'
+    instead of leaving the UI spinning forever."""
+    from backend.db.connection import get_db, init_db
+
+    db = get_db()
+    db.execute(
+        "INSERT INTO fics(id, title, source_type, site, thread_id, download_status,"
+        " created_at, updated_at) VALUES ('stale1','x','xenforo','forums.spacebattles.com',"
+        " '999','downloading',0,0)")
+    db.commit()
+
+    init_db()
+
+    row = db.execute(
+        "SELECT download_status, download_error FROM fics WHERE id='stale1'").fetchone()
+    assert row['download_status'] == 'error'
+    assert 'restart' in row['download_error']
+
+
 def test_import_rejects_bad_urls(client, fake_net):
     assert client.post('/api/fanfic/import', json={}).status_code == 400
     assert client.post('/api/fanfic/import', json={'url': 'file:///etc/passwd'}).status_code == 400

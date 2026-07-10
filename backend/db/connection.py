@@ -71,6 +71,7 @@ def init_db() -> None:
     _ensure_prevent_sleep(db)
     _ensure_todo_completed_at(db)
     _ensure_fic_review_columns(db)
+    _reset_stale_fic_downloads(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -134,6 +135,22 @@ def _ensure_fic_review_columns(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE fics ADD COLUMN rating INTEGER CHECK(rating BETWEEN 1 AND 5)')
     if 'review' not in cols:
         db.execute('ALTER TABLE fics ADD COLUMN review TEXT')
+    db.commit()
+
+
+def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
+    """A fic's in-memory download progress (backend/fanfic/download.py's
+    `_dl_progress`) never survives a process restart, but the persisted
+    `download_status='downloading'` row does — if the process died (or the
+    dev server's autoreloader restarted it) mid-download, the fic is left
+    permanently stuck 'downloading' with no thread left to finish it. Since
+    this runs once at startup, before any download thread exists in this
+    process, any row still marked 'downloading' here is necessarily orphaned."""
+    db.execute(
+        "UPDATE fics SET download_status='error',"
+        " download_error='Interrupted by an app restart — click Update to retry.'"
+        " WHERE download_status='downloading'"
+    )
     db.commit()
 
 
