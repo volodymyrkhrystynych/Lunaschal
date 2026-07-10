@@ -93,3 +93,69 @@ def test_gpu_vram_route_unavailable_when_not_measured(client):
     resp = client.get('/api/settings/gpu-vram')
     assert resp.status_code == 200
     assert resp.get_json() == {'available': False}
+
+
+@pytest.fixture(autouse=True)
+def restore_sleep_inhibitor():
+    prev = settings._sleep_inhibitor
+    yield
+    settings._sleep_inhibitor = prev
+
+
+def test_kill_orphaned_inhibitors_kills_matching_pids(monkeypatch):
+    monkeypatch.setattr(
+        settings.subprocess, 'run',
+        lambda *a, **k: SimpleNamespace(stdout='111\n222\n'),
+    )
+    killed = []
+    monkeypatch.setattr(settings.os, 'kill', lambda pid, sig: killed.append(pid))
+
+    settings._kill_orphaned_inhibitors()
+
+    assert killed == [111, 222]
+
+
+def test_kill_orphaned_inhibitors_tolerates_missing_pgrep(monkeypatch):
+    def fake_run(*a, **k):
+        raise FileNotFoundError('pgrep not found')
+
+    monkeypatch.setattr(settings.subprocess, 'run', fake_run)
+
+    settings._kill_orphaned_inhibitors()  # must not raise
+
+
+def test_kill_orphaned_inhibitors_tolerates_already_dead_pid(monkeypatch):
+    monkeypatch.setattr(
+        settings.subprocess, 'run',
+        lambda *a, **k: SimpleNamespace(stdout='333\n'),
+    )
+
+    def fake_kill(pid, sig):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(settings.os, 'kill', fake_kill)
+
+    settings._kill_orphaned_inhibitors()  # must not raise
+
+
+def test_set_sleep_inhibitor_enable_sweeps_orphans_then_spawns(monkeypatch):
+    swept = []
+    monkeypatch.setattr(settings, '_kill_orphaned_inhibitors', lambda: swept.append(1))
+    spawned = SimpleNamespace(poll=lambda: None)
+    monkeypatch.setattr(settings.subprocess, 'Popen', lambda *a, **k: spawned)
+
+    settings._set_sleep_inhibitor(True)
+
+    assert swept == [1]
+    assert settings._sleep_inhibitor is spawned
+
+
+def test_set_sleep_inhibitor_disable_sweeps_orphans_and_clears_handle(monkeypatch):
+    swept = []
+    monkeypatch.setattr(settings, '_kill_orphaned_inhibitors', lambda: swept.append(1))
+    settings._sleep_inhibitor = SimpleNamespace(poll=lambda: None, terminate=lambda: None)
+
+    settings._set_sleep_inhibitor(False)
+
+    assert swept == [1]
+    assert settings._sleep_inhibitor is None
