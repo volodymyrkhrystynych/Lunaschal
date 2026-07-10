@@ -69,6 +69,13 @@ export function FolderBar({ folderId, onSelect }: {
           : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
         All
       </button>
+      <button onClick={() => onSelect(folderId === 'unsorted' ? null : 'unsorted')}
+        title="Show fics not in any folder"
+        className={`${pillBase} ${folderId === 'unsorted'
+          ? 'border-amber-400/60 bg-amber-400/10 text-amber-300'
+          : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+        Unsorted
+      </button>
       {folders?.map((f) =>
         renaming && f.id === folderId ? (
           <span key={f.id}>

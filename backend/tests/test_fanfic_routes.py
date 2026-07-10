@@ -320,6 +320,15 @@ def test_list_filters_by_folder_and_tag(client):
     assert next(f for f in rows if f['id'] == fic_b)['tags'] == ['isekai', 'worm']
 
 
+def test_list_filters_unsorted(client):
+    fic_a, _ = make_fic('Fic A')
+    fic_b, _ = make_fic('Fic B')
+    folder_id = make_folder(client, 'favorites')
+    client.post(f'/api/fanfic/{fic_a}/folders', json={'folderId': folder_id})
+
+    assert [f['id'] for f in client.get('/api/fanfic?folderId=unsorted').get_json()] == [fic_b]
+
+
 def test_site_tag_index(client):
     fic_a, _ = make_fic('Fic A')
     fic_b, _ = make_fic('Fic B')

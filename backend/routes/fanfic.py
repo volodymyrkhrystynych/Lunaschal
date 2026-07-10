@@ -65,7 +65,9 @@ def list_fics():
     where = []
     params: list = []
     folder_id = request.args.get('folderId')
-    if folder_id:
+    if folder_id == 'unsorted':
+        where.append('NOT EXISTS (SELECT 1 FROM fic_folder_items WHERE fic_id=fics.id)')
+    elif folder_id:
         where.append('EXISTS (SELECT 1 FROM fic_folder_items'
                      ' WHERE folder_id=? AND fic_id=fics.id)')
         params.append(folder_id)
