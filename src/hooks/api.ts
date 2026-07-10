@@ -290,6 +290,19 @@ export interface TodoItem {
   updatedAt: string;
 }
 
+export interface FrontPage {
+  paper: string;
+  label: string;
+  date: string;
+  imageUrl: string | null;
+}
+
+export interface SyncResult {
+  paper: string;
+  status: 'downloaded' | 'already-saved' | 'error';
+  error?: string;
+}
+
 // --- fetch helpers ---
 
 async function get<T>(url: string): Promise<T> {
@@ -624,5 +637,10 @@ export const api = {
     update: (id: string, data: { title?: string; done?: boolean }) =>
       patch<{ success: boolean }>(`/api/tasks/todos/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/todos/${id}`),
+  },
+
+  newspapers: {
+    getByDate: (date: string) => get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
+    sync: () => post<SyncResult[]>('/api/newspapers/sync'),
   },
 };

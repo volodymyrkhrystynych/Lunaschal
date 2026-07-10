@@ -277,3 +277,15 @@ CREATE TABLE IF NOT EXISTS fic_chapter_reads (
 );
 
 CREATE INDEX IF NOT EXISTS idx_fcr_fic ON fic_chapter_reads(fic_id);
+
+CREATE TABLE IF NOT EXISTS newspaper_frontpages (
+    id TEXT PRIMARY KEY,
+    paper TEXT NOT NULL CHECK(paper IN ('toronto-star','nyt')),
+    date TEXT NOT NULL,
+    image_path TEXT NOT NULL,
+    source_url TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_newspaper_frontpages_paper_date ON newspaper_frontpages(paper, date);
+CREATE INDEX IF NOT EXISTS idx_newspaper_frontpages_date ON newspaper_frontpages(date DESC);
