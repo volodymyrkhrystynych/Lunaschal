@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { shiftDateISO, isFutureDate } from './newspapers';
+import { shiftDateISO, isFutureDate, todayISO } from './newspapers';
+
+describe('todayISO', () => {
+  it('uses the local calendar date, not the UTC one', () => {
+    // 11pm local time can already be tomorrow in UTC for timezones behind
+    // UTC — todayISO must still report the viewer's local "today" so it
+    // stays in sync with the backend's `date.today()` (also local).
+    const localLateEvening = new Date(2026, 6, 9, 23, 0, 0); // Jul 9, 11pm, local time
+    expect(todayISO(localLateEvening)).toBe('2026-07-09');
+  });
+});
 
 describe('shiftDateISO', () => {
   it('moves forward and backward within a month', () => {

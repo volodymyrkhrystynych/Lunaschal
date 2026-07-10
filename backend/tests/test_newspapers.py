@@ -51,8 +51,9 @@ def test_sync_is_idempotent(client, mock_fetch):
     resp = client.post('/api/newspapers/sync')
     results = resp.get_json()
     assert all(r['status'] == 'already-saved' for r in results)
-    # Second sync shouldn't have hit the network again.
-    assert mock_fetch['fetch'] == 2
+    # The lightweight page fetch always re-runs (it's how we discover the
+    # edition's real date), but the second sync shouldn't re-download images.
+    assert mock_fetch['fetch'] == 4
     assert mock_fetch['download'] == 2
 
 
@@ -105,6 +106,44 @@ def test_build_path_picks_extension_from_content_type(newspapers_root):
         newspapers_root / 'nyt' / '2026-07-10.jpg'
     # Unknown/missing content-type falls back to a sane default.
     assert storage.build_path('nyt', '2026-07-10', '') == newspapers_root / 'nyt' / '2026-07-10.jpg'
+
+
+def test_sync_uses_edition_date_from_url_not_server_clock(client, monkeypatch, newspapers_root):
+    """frontpages.com can still be serving yesterday's cover for a while
+    after our local midnight; the date baked into the image URL is the
+    source of truth, not `date.today()` (see scraper.py docstring)."""
+    stale_date = '2000-01-01'
+
+    def fake_fetch_image_url(page_url):
+        paper = page_url.split('/')[-2]
+        return f'https://www.frontpages.com/g/2000/01/01/{paper}-fake.webp'
+
+    monkeypatch.setattr('backend.newspapers.sync.scraper.fetch_image_url', fake_fetch_image_url)
+    monkeypatch.setattr(
+        'backend.newspapers.sync.scraper.download_image', lambda url: (b'fake-image-bytes', 'image/webp')
+    )
+
+    resp = client.post('/api/newspapers/sync')
+    results = resp.get_json()
+    assert all(r['status'] == 'downloaded' and r['date'] == stale_date for r in results)
+
+    today = date.today().isoformat()
+    for paper in ('toronto-star', 'nyt'):
+        assert not (newspapers_root / paper / f'{today}.webp').exists()
+        assert (newspapers_root / paper / f'{stale_date}.webp').is_file()
+
+    # A same-day resync (edition still not updated) must not re-download or
+    # duplicate the row — it should recognize the stale date is already saved.
+    resp = client.post('/api/newspapers/sync')
+    results = resp.get_json()
+    assert all(r['status'] == 'already-saved' and r['date'] == stale_date for r in results)
+
+
+def test_extract_date_from_url():
+    assert scraper.extract_date(
+        'https://www.frontpages.com/g/2026/07/09/toronto-star-074321g3y2oa6.webp'
+    ) == '2026-07-09'
+    assert scraper.extract_date('https://www.frontpages.com/g/fake/toronto-star.webp') is None
 
 
 def test_sync_reports_error_without_blocking_other_paper(client, monkeypatch, newspapers_root):

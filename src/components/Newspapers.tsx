@@ -1,11 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
-import { shiftDateISO, isFutureDate } from '../lib/newspapers';
-
-function formatDateISO(date: Date) {
-  return date.toISOString().split('T')[0];
-}
+import { shiftDateISO, isFutureDate, todayISO } from '../lib/newspapers';
 
 function formatDisplayDate(date: string) {
   return new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
@@ -23,7 +19,7 @@ function Lightbox({ src, alt, onClose }: { src: string; alt: string; onClose: ()
 }
 
 export function Newspapers() {
-  const today = formatDateISO(new Date());
+  const today = todayISO();
   const [selectedDate, setSelectedDate] = useState(today);
   const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
   const queryClient = useQueryClient();
