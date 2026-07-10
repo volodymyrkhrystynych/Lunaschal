@@ -1,5 +1,7 @@
 import json
+import os
 import random
+import signal
 import subprocess
 import time
 import urllib.request
@@ -8,20 +10,43 @@ from backend.auth import NETWORK_MODE
 from backend.db.connection import get_db
 
 _sleep_inhibitor: subprocess.Popen | None = None
+_INHIBIT_WHO = 'Lunaschal'
+
+
+def _kill_orphaned_inhibitors() -> None:
+    """Kill any systemd-inhibit processes tagged with our --who marker.
+
+    The Werkzeug --debug reloader (and crashes) can kill this process
+    without running atexit handlers, orphaning the systemd-inhibit child
+    (reparented to init) and leaking a permanent sleep-block lock that a
+    later process's in-memory _sleep_inhibitor handle can't see or clear.
+    Sweeping by command line instead of relying on that handle lets us
+    clean up locks left behind by prior process instances too.
+    """
+    try:
+        out = subprocess.run(
+            ['pgrep', '-f', f'systemd-inhibit --what=sleep:idle --who={_INHIBIT_WHO}'],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        return
+    for pid in out.stdout.split():
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (ValueError, ProcessLookupError):
+            pass
 
 
 def _set_sleep_inhibitor(enabled: bool) -> None:
     global _sleep_inhibitor
+    _kill_orphaned_inhibitors()
     if enabled:
-        if _sleep_inhibitor is None or _sleep_inhibitor.poll() is not None:
-            _sleep_inhibitor = subprocess.Popen(
-                ['systemd-inhibit', '--what=sleep:idle', '--who=Lunaschal',
-                 '--why=Server mode active', '--mode=block', 'sleep', 'infinity'],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+        _sleep_inhibitor = subprocess.Popen(
+            ['systemd-inhibit', '--what=sleep:idle', f'--who={_INHIBIT_WHO}',
+             '--why=Server mode active', '--mode=block', 'sleep', 'infinity'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
     else:
-        if _sleep_inhibitor and _sleep_inhibitor.poll() is None:
-            _sleep_inhibitor.terminate()
         _sleep_inhibitor = None
 
 bp = Blueprint('settings', __name__, url_prefix='/api/settings')
