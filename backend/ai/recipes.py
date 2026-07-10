@@ -1,6 +1,6 @@
 import json
 
-from backend.ai.journal import _ollama_chat_with_fallback
+from backend.ai.journal import _ollama_client
 from backend.ai.provider import get_provider_config, is_ai_configured, DEFAULT_MODELS
 
 _MAX_INPUT_CHARS = 15000
@@ -47,11 +47,13 @@ def parse_recipe(text: str) -> dict | None:
             data = json.loads(resp.choices[0].message.content)
 
         elif provider == 'ollama':
-            resp = _ollama_chat_with_fallback(
-                c,
+            client = _ollama_client(c)
+            model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+            resp = client.chat.completions.create(
+                model=model,
                 messages=messages,
-                prefer_bg=False,
                 response_format={'type': 'json_object'},
+                stream=False,
             )
             data = json.loads(resp.choices[0].message.content)
 

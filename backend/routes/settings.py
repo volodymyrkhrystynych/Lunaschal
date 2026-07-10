@@ -44,7 +44,6 @@ def get_settings():
         'hasGoogleKey': bool(s.get('google_api_key')),
         'ollamaUrl': s.get('ollama_url'),
         'ollamaModel': s.get('ollama_model'),
-        'ollamaBgModel': s.get('ollama_bg_model'),
         'networkMode': NETWORK_MODE,
         'networkCode': s.get('network_code') if NETWORK_MODE else None,
         'sttPasteKey': s.get('stt_paste_key'),
@@ -65,7 +64,7 @@ def update_ai():
     field_map = {
         'aiProvider': 'ai_provider', 'aiModel': 'ai_model',
         'openaiApiKey': 'openai_api_key', 'googleApiKey': 'google_api_key',
-        'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model', 'ollamaBgModel': 'ollama_bg_model',
+        'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
         'sttCommandKey': 'stt_command_key',
         'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
@@ -121,3 +120,37 @@ def ollama_models():
         return jsonify(models)
     except Exception:
         return jsonify([])
+
+
+_gpu_base_vram_mb: int | None = None
+_gpu_total_vram_mb: int | None = None
+
+
+def measure_base_gpu_vram() -> None:
+    """Capture whatever's already using GPU VRAM (browser, compositor, other
+    apps) once at process startup, before Lunaschal's own models are loaded —
+    that's the "base" cost the VRAM budget in Settings needs to subtract from
+    the card's total. Best-effort; leaves both values unset if nvidia-smi
+    isn't available (e.g. no NVIDIA GPU). Only measures once per process —
+    safe to call repeatedly (e.g. once per test's create_app())."""
+    global _gpu_base_vram_mb, _gpu_total_vram_mb
+    if _gpu_base_vram_mb is not None:
+        return
+    try:
+        out = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=3, check=True,
+        ).stdout.strip()
+        used_mb, total_mb = (int(x.strip()) for x in out.split(','))
+        _gpu_base_vram_mb = used_mb
+        _gpu_total_vram_mb = total_mb
+    except Exception:
+        _gpu_base_vram_mb = None
+        _gpu_total_vram_mb = None
+
+
+@bp.get('/gpu-vram')
+def gpu_vram():
+    if _gpu_base_vram_mb is None:
+        return jsonify({'available': False})
+    return jsonify({'available': True, 'baseMb': _gpu_base_vram_mb, 'totalMb': _gpu_total_vram_mb})
