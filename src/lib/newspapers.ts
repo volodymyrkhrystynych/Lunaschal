@@ -1,6 +1,18 @@
 // Pure date-math helpers for the Newspapers front-page archive view.
-// Dates are plain 'YYYY-MM-DD' strings; parsed as UTC midnight so day-nav
-// math isn't skewed by the local timezone offset.
+// Dates are plain 'YYYY-MM-DD' strings. Once anchored, shifting by whole
+// days is parsed as UTC midnight so the math isn't skewed by the local
+// timezone offset — but the anchor itself ("today") must come from the
+// viewer's local calendar date, matching the backend's `date.today()`
+// (also local). Using `Date#toISOString()` for the anchor would read the
+// *UTC* calendar date instead, which drifts a day off local for several
+// hours around midnight depending on the timezone offset.
+
+export function todayISO(now: Date = new Date()): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 export function shiftDateISO(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00Z`);
@@ -9,6 +21,5 @@ export function shiftDateISO(date: string, days: number): string {
 }
 
 export function isFutureDate(date: string, now: Date = new Date()): boolean {
-  const today = now.toISOString().split('T')[0];
-  return date > today;
+  return date > todayISO(now);
 }
