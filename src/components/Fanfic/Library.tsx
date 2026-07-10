@@ -262,6 +262,10 @@ function FicCard({ fic, selected, showDelete, onOpen, onCheckUpdates, onTagClick
             {badge && (
               <span className="px-1.5 py-0.5 text-xs rounded border border-white/20">{badge}</span>
             )}
+            {(fic.folderIds?.length ?? 0) === 0 && (
+              <span className="px-1.5 py-0.5 text-xs rounded border border-amber-400/40 text-amber-300"
+                title="Not sorted into any folder">Unsorted</span>
+            )}
             {fic.chapterCount > 0 && <span>{fic.chapterCount} chapters</span>}
             {(fic.readCount ?? 0) > 0 && fic.chapterCount > 0 && (
               <span title="Chapters read">{fic.readCount}/{fic.chapterCount} read</span>
