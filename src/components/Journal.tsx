@@ -136,6 +136,11 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
       setEditTitle(entry.title ?? '');
       return true;
     },
+    drillOut: () => {
+      if (!editingId) return false;
+      setEditingId(null);
+      return true;
+    },
   });
 
   const formatDate = (date: string) => new Intl.DateTimeFormat('en-US', {
@@ -277,8 +282,10 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
               <div>
                 <input value={editTitle} onChange={(e) => setEditTitle(e.target.value)}
                   placeholder="Entry title..."
+                  onKeyDown={(e) => { if (e.key === 'Escape') setEditingId(null); }}
                   className="w-full bg-transparent text-[var(--color-text)] font-medium focus:outline-none border border-white/10 rounded p-2 mb-2" />
-                <textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} rows={4}
+                <textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} rows={4} autoFocus
+                  onKeyDown={(e) => { if (e.key === 'Escape') setEditingId(null); }}
                   className="w-full bg-transparent text-[var(--color-text)] resize-none focus:outline-none border border-white/10 rounded p-2" />
                 <div className="flex justify-end gap-2 mt-2">
                   <button onClick={() => setEditingId(null)} className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Cancel</button>

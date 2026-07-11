@@ -9,7 +9,7 @@ import type { ActionId } from '../shortcuts/keymap';
 const GROUPS: { title: string; actions: ActionId[] }[] = [
   { title: 'Navigation', actions: ['nav.up', 'nav.down', 'nav.in', 'nav.out'] },
   { title: 'Actions', actions: ['action.new', 'action.newAlt', 'global.newJournalEntry'] },
-  { title: 'Reader', actions: ['scroll.down', 'scroll.up', 'action.annotate'] },
+  { title: 'Reader', actions: ['action.annotate'] },
   {
     title: 'Tabs',
     actions: ['tab.chat', 'tab.tasks', 'tab.journal', 'tab.writing', 'tab.calendar', 'tab.flashcards', 'tab.cookbook', 'tab.fanfic', 'tab.files', 'tab.settings'],

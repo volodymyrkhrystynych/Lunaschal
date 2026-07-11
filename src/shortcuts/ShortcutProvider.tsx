@@ -158,7 +158,10 @@ export function ShortcutProvider({ currentView, onViewChange, children }: Shortc
         const next = action === 'nav.down' ? Math.min(idx + 1, VIEW_ORDER.length - 1) : Math.max(idx - 1, 0);
         if (next !== idx) onViewChange(VIEW_ORDER[next]);
       } else {
-        const handler = resolveHandler(scopes, lvl, action === 'nav.down' ? 'next' : 'prev');
+        // Lists move their selection; content-only scopes scroll instead.
+        const handler =
+          resolveHandler(scopes, lvl, action === 'nav.down' ? 'next' : 'prev') ??
+          resolveHandler(scopes, lvl, action === 'nav.down' ? 'scrollDown' : 'scrollUp');
         if (handler) (handler as () => void)();
       }
     } else if (action === 'nav.in') {
@@ -171,11 +174,6 @@ export function ShortcutProvider({ currentView, onViewChange, children }: Shortc
       if (!consumed) setLevel(Math.max(0, lvl - 1));
     } else if (action === 'action.new' || action === 'action.newAlt') {
       const handler = resolveHandler(scopes, Math.max(lvl, 1), action === 'action.new' ? 'create' : 'createAlt');
-      if (handler) (handler as () => void)();
-      else handled = false;
-    } else if (action === 'scroll.down' || action === 'scroll.up') {
-      const handler = resolveHandler(
-        scopes, Math.max(lvl, 1), action === 'scroll.down' ? 'scrollDown' : 'scrollUp');
       if (handler) (handler as () => void)();
       else handled = false;
     } else if (action === 'action.annotate') {

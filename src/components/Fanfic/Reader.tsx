@@ -18,7 +18,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const contentRef = useRef<HTMLDivElement>(null);
   const commentaryRef = useRef<HTMLTextAreaElement>(null);
   const queryClient = useQueryClient();
-  const { setLevel } = useShortcuts();
+  const { setLevel, level } = useShortcuts();
 
   // Opening a fic (even by mouse) puts keyboard focus inside the reader so
   // W/S move between chapters instead of switching app tabs.
@@ -92,17 +92,26 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const prev = chapterId && chapters ? adjacentChapter(chapters, chapterId, -1) : null;
   const next = chapterId && chapters ? adjacentChapter(chapters, chapterId, 1) : null;
 
+  const annotate = () => {
+    setShowCommentary(true);
+    // autoFocus covers first open; refocus when the panel is already open
+    setTimeout(() => commentaryRef.current?.focus(), 0);
+  };
+
+  // Level 1: chapter list — W/S switch chapters, A back to library, D enters the chapter.
   useShortcutScope(1, {
     next: () => { if (next) setChapterId(next.id); },
     prev: () => { if (prev) setChapterId(prev.id); },
     drillOut: () => { onBack(); return true; },
+    annotate,
+  });
+
+  // Level 2: reading — no next/prev, so W/S fall back to scrolling the prose;
+  // A ascends back to the chapter list by default.
+  useShortcutScope(2, {
     scrollDown: () => contentRef.current?.scrollBy({ top: 120, behavior: 'smooth' }),
     scrollUp: () => contentRef.current?.scrollBy({ top: -120, behavior: 'smooth' }),
-    annotate: () => {
-      setShowCommentary(true);
-      // autoFocus covers first open; refocus when the panel is already open
-      setTimeout(() => commentaryRef.current?.focus(), 0);
-    },
+    annotate,
   });
 
   const chapterNav = (position: 'top' | 'bottom') => (
@@ -142,7 +151,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                       ch.id === chapterId
                         ? 'bg-[var(--color-primary)]/20'
                         : 'hover:bg-white/10'
-                    }`}>
+                    } ${level === 1 && ch.id === chapterId ? 'ring-1 ring-[var(--color-primary)]' : ''}`}>
                     <button onClick={() => setChapterId(ch.id)}
                       className={`flex-1 min-w-0 text-left px-2 py-1.5 text-sm truncate ${
                         ch.id === chapterId
@@ -193,7 +202,8 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
             <iframe src={`/api/fanfic/${ficId}/pdf`} title={fic?.title} className="flex-1 w-full border-0" />
           </>
         ) : (
-          <div ref={contentRef} className="flex-1 overflow-y-auto">
+          <div ref={contentRef}
+            className={`flex-1 overflow-y-auto ${level >= 2 ? 'ring-1 ring-inset ring-[var(--color-primary)]' : ''}`}>
             <div className="max-w-3xl mx-auto px-6 py-6">
               {chapterNav('top')}
               {chapters && chapters.length === 0 ? (
