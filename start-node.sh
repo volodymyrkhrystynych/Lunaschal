@@ -27,7 +27,14 @@ echo "Connecting to server at $LUNASCHAL_URL"
 ./stt/run_listener.sh &>/tmp/lunaschal-listener.log &
 LISTENER_PID=$!
 
-# Open native desktop window pointing at the remote server
-.venv/bin/python main.py --server-url "$LUNASCHAL_URL"
+# Serve the frontend locally (fast: no waiting on the server's dist/ to be
+# rebuilt, just `git pull` here) while proxying /api calls to the remote server.
+VITE_API_PROXY_TARGET="$LUNASCHAL_URL" npm run dev:client &>/tmp/lunaschal-vite.log &
+VITE_PID=$!
 
-kill $LISTENER_PID 2>/dev/null
+# Open native desktop window against the local Vite dev server; --server-url
+# tells main.py the backend lives remotely, so it waits for Vite instead of
+# spawning a local Flask process.
+.venv/bin/python main.py --dev --server-url "$LUNASCHAL_URL"
+
+kill $LISTENER_PID $VITE_PID 2>/dev/null

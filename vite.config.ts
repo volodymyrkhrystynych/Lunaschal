@@ -21,7 +21,9 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        // Overridden by start-node.sh so a weak machine can run the frontend
+        // locally while proxying API calls to the backend on another machine.
+        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
         changeOrigin: true,
       },
     },
