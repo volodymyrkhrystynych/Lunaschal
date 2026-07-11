@@ -131,4 +131,22 @@ describe('Reader keyboard navigation', () => {
     fireEvent.keyDown(window, { code: 'KeyA' }); // back to library
     expect(onBack).toHaveBeenCalledTimes(1);
   });
+
+  it('shows which pane has focus: chapter row ring at the list level, content ring while reading', async () => {
+    renderReader();
+    await heading('Chapter 1');
+    const chapterRow = () => screen.getByTitle('Chapter 1').closest('div')!;
+
+    enterChapterList();
+    expect(chapterRow().className).toContain('ring-1');
+    expect(document.querySelector('.ring-inset')).toBeNull();
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // enter the chapter
+    expect(chapterRow().className).not.toContain('ring-1');
+    expect(document.querySelector('.ring-inset')).not.toBeNull();
+
+    fireEvent.keyDown(window, { code: 'KeyA' }); // back to the chapter list
+    expect(chapterRow().className).toContain('ring-1');
+    expect(document.querySelector('.ring-inset')).toBeNull();
+  });
 });
