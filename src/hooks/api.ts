@@ -47,7 +47,6 @@ export interface Fic {
   createdAt: string;
   updatedAt: string;
   downloadProgress?: FicDownloadProgress;
-  matchedChapters?: { id: string; title: string }[];
   folderIds?: string[];
   tags?: string[];
   readCount?: number;

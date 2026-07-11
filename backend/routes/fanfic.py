@@ -5,7 +5,7 @@ import time
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
-from backend.db.connection import get_db, row_to_dict, search_fanfic_fts
+from backend.db.connection import get_db, row_to_dict
 from backend.fanfic import download, storage, xenforo
 from backend.fanfic.download import FetchBlockedError
 from backend.fanfic.xenforo import KNOWN_SITES, UnsupportedUrlError
@@ -88,39 +88,33 @@ def list_fics():
     return jsonify(_attach_library_meta(_attach_progress([row_to_dict(r) for r in rows])))
 
 
+def _like_pattern(word: str) -> str:
+    escaped = word.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    return f'%{escaped}%'
+
+
 @bp.get('/search')
 def search():
+    """Match fics by title or site tag only — every word of the query must
+    appear as a substring of the title or of one of the fic's tags."""
     query = request.args.get('query', '').strip()
-    if not query:
+    words = query.split()
+    if not words:
         return jsonify([])
-    fts = search_fanfic_fts(query, limit=100)
-    if not fts:
-        return jsonify([])
-    db = get_db()
-    id_rank = {r['id']: r['rank'] for r in fts}
-    placeholders = ','.join('?' * len(id_rank))
-    chapters = db.execute(
-        f'SELECT id, fic_id, title FROM fic_chapters WHERE id IN ({placeholders})',
-        list(id_rank),
+    clause = ("(title LIKE ? ESCAPE '\\' OR EXISTS"
+              " (SELECT 1 FROM fic_site_tags"
+              "  WHERE fic_id = fics.id AND name LIKE ? ESCAPE '\\'))")
+    where_sql = ' AND '.join(clause for _ in words)
+    params = [p for w in words for p in (_like_pattern(w), _like_pattern(w))]
+    rows = get_db().execute(
+        f'SELECT {_LIST_COLS} FROM fics WHERE {where_sql}'
+        ' ORDER BY COALESCE('
+        '  (SELECT MAX(created_at) FROM fic_chapters WHERE fic_chapters.fic_id = fics.id),'
+        '  fics.created_at'
+        ' ) DESC LIMIT 100',
+        params,
     ).fetchall()
-    by_fic: dict[str, dict] = {}
-    for ch in sorted(chapters, key=lambda c: id_rank.get(c['id'], 0)):
-        entry = by_fic.setdefault(ch['fic_id'], {'rank': id_rank[ch['id']], 'matched': []})
-        if len(entry['matched']) < 3:
-            entry['matched'].append({'id': ch['id'], 'title': ch['title']})
-    if not by_fic:
-        return jsonify([])
-    placeholders = ','.join('?' * len(by_fic))
-    fics = db.execute(
-        f'SELECT {_LIST_COLS} FROM fics WHERE id IN ({placeholders})',
-        list(by_fic),
-    ).fetchall()
-    dicts = []
-    for row in sorted(fics, key=lambda f: by_fic[f['id']]['rank']):
-        d = row_to_dict(row)
-        d['matchedChapters'] = by_fic[row['id']]['matched']
-        dicts.append(d)
-    return jsonify(_attach_library_meta(_attach_progress(dicts)))
+    return jsonify(_attach_library_meta(_attach_progress([row_to_dict(r) for r in rows])))
 
 
 @bp.get('/cookies')

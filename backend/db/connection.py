@@ -327,16 +327,3 @@ def search_recipes_fts(query: str, limit: int = 50) -> list[dict]:
         (escaped, limit),
     ).fetchall()
     return [{'id': r['id'], 'rank': r['rank']} for r in rows]
-
-
-def search_fanfic_fts(query: str, limit: int = 50) -> list[dict]:
-    db = get_db()
-    words = [w for w in query.split() if w]
-    if not words:
-        return []
-    escaped = ' OR '.join(f'"{w}"*' for w in words)
-    rows = db.execute(
-        'SELECT id, rank FROM fic_chapters_fts WHERE fic_chapters_fts MATCH ? ORDER BY rank LIMIT ?',
-        (escaped, limit),
-    ).fetchall()
-    return [{'id': r['id'], 'rank': r['rank']} for r in rows]
