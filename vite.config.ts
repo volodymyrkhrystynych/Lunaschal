@@ -16,6 +16,7 @@ export default defineConfig({
     // jsdom + @testing-library/react deps) when adding component tests.
     environment: 'node',
     include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    setupFiles: ['src/test/setup.ts'],
   },
   server: {
     port: 5173,

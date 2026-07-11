@@ -40,12 +40,12 @@ vi.mock('../../hooks/api', () => ({
   },
 }));
 
-function renderReader() {
+function renderReader(onBack: () => void = () => {}) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="fanfic" onViewChange={() => {}}>
-        <Reader ficId="fic1" onBack={() => {}} />
+        <Reader ficId="fic1" onBack={onBack} />
       </ShortcutProvider>
     </QueryClientProvider>,
   );
@@ -70,5 +70,65 @@ describe('Reader chapter sidebar', () => {
       expect(scrollSpy.mock.calls.length).toBeGreaterThan(callsBefore);
     });
     expect(scrollSpy.mock.calls.at(-1)?.[0]).toEqual({ block: 'nearest' });
+  });
+});
+
+describe('Reader keyboard navigation', () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.scrollTo = vi.fn();
+    Element.prototype.scrollBy = vi.fn();
+  });
+
+  const heading = (name: string) => screen.findByRole('heading', { name });
+
+  // In tests the provider mounts together with the Reader, so its level-reset
+  // effect wins over the Reader's setLevel(1); press D once to descend into
+  // the chapter list, as from the sidebar level.
+  const enterChapterList = () => fireEvent.keyDown(window, { code: 'KeyD' });
+
+  it('W/S switch chapters at the chapter-list level', async () => {
+    renderReader();
+    await heading('Chapter 1');
+    enterChapterList();
+
+    fireEvent.keyDown(window, { code: 'KeyS' });
+    await heading('Chapter 2');
+
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    await heading('Chapter 1');
+  });
+
+  it('D enters the chapter; W/S then scroll the prose without changing chapters', async () => {
+    renderReader();
+    await heading('Chapter 1');
+    enterChapterList();
+    const scrollSpy = Element.prototype.scrollBy as unknown as ReturnType<typeof vi.fn>;
+
+    fireEvent.keyDown(window, { code: 'KeyD' });
+    fireEvent.keyDown(window, { code: 'KeyS' });
+    expect(scrollSpy).toHaveBeenCalledWith({ top: 120, behavior: 'smooth' });
+
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    expect(scrollSpy).toHaveBeenCalledWith({ top: -120, behavior: 'smooth' });
+
+    await heading('Chapter 1'); // still on the same chapter
+  });
+
+  it('A backs out of reading to the chapter list, then to the library', async () => {
+    const onBack = vi.fn();
+    renderReader(onBack);
+    await heading('Chapter 1');
+    enterChapterList();
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // enter chapter
+    fireEvent.keyDown(window, { code: 'KeyA' }); // back to chapter list
+    expect(onBack).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { code: 'KeyS' }); // W/S switch chapters again
+    await heading('Chapter 2');
+
+    fireEvent.keyDown(window, { code: 'KeyA' }); // back to library
+    expect(onBack).toHaveBeenCalledTimes(1);
   });
 });

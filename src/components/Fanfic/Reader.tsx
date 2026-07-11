@@ -92,17 +92,26 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const prev = chapterId && chapters ? adjacentChapter(chapters, chapterId, -1) : null;
   const next = chapterId && chapters ? adjacentChapter(chapters, chapterId, 1) : null;
 
+  const annotate = () => {
+    setShowCommentary(true);
+    // autoFocus covers first open; refocus when the panel is already open
+    setTimeout(() => commentaryRef.current?.focus(), 0);
+  };
+
+  // Level 1: chapter list — W/S switch chapters, A back to library, D enters the chapter.
   useShortcutScope(1, {
     next: () => { if (next) setChapterId(next.id); },
     prev: () => { if (prev) setChapterId(prev.id); },
     drillOut: () => { onBack(); return true; },
+    annotate,
+  });
+
+  // Level 2: reading — no next/prev, so W/S fall back to scrolling the prose;
+  // A ascends back to the chapter list by default.
+  useShortcutScope(2, {
     scrollDown: () => contentRef.current?.scrollBy({ top: 120, behavior: 'smooth' }),
     scrollUp: () => contentRef.current?.scrollBy({ top: -120, behavior: 'smooth' }),
-    annotate: () => {
-      setShowCommentary(true);
-      // autoFocus covers first open; refocus when the panel is already open
-      setTimeout(() => commentaryRef.current?.focus(), 0);
-    },
+    annotate,
   });
 
   const chapterNav = (position: 'top' | 'bottom') => (

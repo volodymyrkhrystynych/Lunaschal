@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { DEFAULT_BINDINGS, displayCombo, isModifierCode } from './keymap';
 
 describe('DEFAULT_BINDINGS', () => {
-  it('binds the vim-style reader keys', () => {
-    expect(DEFAULT_BINDINGS['scroll.down']).toBe('KeyJ');
-    expect(DEFAULT_BINDINGS['scroll.up']).toBe('KeyK');
+  it('binds the reader annotate key', () => {
     expect(DEFAULT_BINDINGS['action.annotate']).toBe('KeyI');
+  });
+
+  it('has no scroll actions — W/S scroll content-only scopes instead', () => {
+    expect(Object.keys(DEFAULT_BINDINGS).some((k) => k.startsWith('scroll.'))).toBe(false);
   });
 
   it('has no two actions on the same combo', () => {

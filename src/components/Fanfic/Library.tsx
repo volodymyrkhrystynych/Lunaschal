@@ -87,8 +87,6 @@ export function Library({ onOpen }: LibraryProps) {
       onOpen(fic.id);
       return true;
     },
-    scrollDown: () => listRef.current?.scrollBy({ top: 120, behavior: 'smooth' }),
-    scrollUp: () => listRef.current?.scrollBy({ top: -120, behavior: 'smooth' }),
   });
 
   const importSite = detectFicSite(importUrl);
