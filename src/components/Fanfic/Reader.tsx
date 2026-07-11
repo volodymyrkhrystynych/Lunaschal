@@ -137,6 +137,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                 )}
                 {chs.map((ch) => (
                   <div key={ch.id}
+                    ref={(el) => { if (el && ch.id === chapterId) el.scrollIntoView({ block: 'nearest' }); }}
                     className={`flex items-center rounded transition-colors ${
                       ch.id === chapterId
                         ? 'bg-[var(--color-primary)]/20'
