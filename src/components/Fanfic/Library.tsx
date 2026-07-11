@@ -25,6 +25,7 @@ export function Library({ onOpen }: LibraryProps) {
   const [tag, setTag] = useState<string | null>(null);
   const [showDelete, setShowDelete] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const { level } = useShortcuts();
@@ -81,6 +82,10 @@ export function Library({ onOpen }: LibraryProps) {
     next: () => setSelIndex((i) => Math.min(i + 1, Math.max((fics?.length ?? 1) - 1, 0))),
     prev: () => setSelIndex((i) => Math.max(i - 1, 0)),
     create: () => setShowImport(true),
+    search: () => {
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    },
     drillIn: () => {
       const fic = fics?.[selIndex];
       if (!fic) return false;
@@ -124,8 +129,8 @@ export function Library({ onOpen }: LibraryProps) {
       </div>
 
       <div className="mb-4">
-        <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search fics and chapter text..."
+        <input ref={searchInputRef} type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search titles and tags..."
           className="w-full bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]" />
       </div>
 
@@ -281,12 +286,6 @@ function FicCard({ fic, selected, showDelete, onOpen, onCheckUpdates, onTagClick
                   {name}
                 </button>
               ))}
-            </div>
-          )}
-
-          {fic.matchedChapters && fic.matchedChapters.length > 0 && (
-            <div className="mt-1 text-xs text-[var(--color-text-muted)]">
-              matches: {fic.matchedChapters.map((c) => c.title).join(' · ')}
             </div>
           )}
 

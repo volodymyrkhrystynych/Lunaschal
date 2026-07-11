@@ -1,5 +1,5 @@
-"""Route-level tests: CRUD, FTS search, image traversal guard, journal links
-and the ficRefs enrichment of journal responses."""
+"""Route-level tests: CRUD, title/tag search, image traversal guard, journal
+links and the ficRefs enrichment of journal responses."""
 import time
 
 import pytest
@@ -77,21 +77,64 @@ def test_list_orders_by_latest_chapter_not_fic_created(client):
     assert [r['id'] for r in rows] == [older_fic, newer_fic]
 
 
-def test_fts_search(client):
-    fic_id, _ = make_fic('Wizard Fic', chapters=[
-        ('Chapter One', 'The wizard cast a mighty spell.'),
-        ('Chapter Two', 'A dragon appeared over the mountains.'),
-    ])
-    make_fic('Other Fic', chapters=[('Intro', 'Nothing relevant here.')])
+def test_search_matches_title(client):
+    fic_id, _ = make_fic('The Wizard of Bones')
+    make_fic('Other Fic')
 
-    hits = client.get('/api/fanfic/search?query=wizard').get_json()
-    assert len(hits) == 1
-    assert hits[0]['id'] == fic_id
-    assert hits[0]['matchedChapters'][0]['title'] == 'Chapter One'
+    # case-insensitive substring match
+    for q in ('wizard', 'WIZARD', 'izard of bo'):
+        hits = client.get(f'/api/fanfic/search?query={q}').get_json()
+        assert [h['id'] for h in hits] == [fic_id], q
 
-    # FTS follows deletes
     client.delete(f'/api/fanfic/{fic_id}')
     assert client.get('/api/fanfic/search?query=wizard').get_json() == []
+
+
+def test_search_matches_tags(client):
+    fic_a, _ = make_fic('Fic A')
+    fic_b, _ = make_fic('Fic B')
+    _tag_fic(fic_a, 'isekai')
+    _tag_fic(fic_b, 'time travel')
+
+    assert [h['id'] for h in
+            client.get('/api/fanfic/search?query=Isekai').get_json()] == [fic_a]
+    assert [h['id'] for h in
+            client.get('/api/fanfic/search?query=travel').get_json()] == [fic_b]
+
+
+def test_search_ignores_chapter_text(client):
+    make_fic('Quiet Title', chapters=[('Chapter One', 'The wizard cast a mighty spell.')])
+    assert client.get('/api/fanfic/search?query=wizard').get_json() == []
+    assert client.get('/api/fanfic/search?query=Chapter+One').get_json() == []
+
+
+def test_search_words_combine_title_and_tags(client):
+    fic_a, _ = make_fic('Dragon Story')
+    fic_b, _ = make_fic('Dragon Saga')
+    _tag_fic(fic_a, 'isekai')
+
+    # every word must hit the title or a tag; words can hit different fields
+    assert [h['id'] for h in
+            client.get('/api/fanfic/search?query=dragon+isekai').get_json()] == [fic_a]
+    assert {h['id'] for h in
+            client.get('/api/fanfic/search?query=dragon').get_json()} == {fic_a, fic_b}
+    assert client.get('/api/fanfic/search?query=dragon+nothing').get_json() == []
+
+
+def test_search_escapes_like_wildcards(client):
+    make_fic('Plain Fic')
+    fic_pct, _ = make_fic('100% Wolf')
+    assert [h['id'] for h in
+            client.get('/api/fanfic/search?query=%25').get_json()] == [fic_pct]
+    assert client.get('/api/fanfic/search?query=_').get_json() == []
+
+
+def test_search_results_carry_library_meta(client):
+    fic_id, _ = make_fic('Wizard Fic')
+    _tag_fic(fic_id, 'isekai')
+    hits = client.get('/api/fanfic/search?query=wizard').get_json()
+    assert hits[0]['tags'] == ['isekai']
+    assert hits[0]['folderIds'] == []
 
 
 def test_image_traversal_guard(client, fanfic_root):

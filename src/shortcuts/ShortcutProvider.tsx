@@ -32,6 +32,7 @@ export interface ScopeHandlers {
   scrollDown?: () => void;
   scrollUp?: () => void;
   annotate?: () => void;
+  search?: () => void;
 }
 
 interface ShortcutContextValue {
@@ -178,6 +179,10 @@ export function ShortcutProvider({ currentView, onViewChange, children }: Shortc
       else handled = false;
     } else if (action === 'action.annotate') {
       const handler = resolveHandler(scopes, Math.max(lvl, 1), 'annotate');
+      if (handler) (handler as () => void)();
+      else handled = false;
+    } else if (action === 'action.search') {
+      const handler = resolveHandler(scopes, Math.max(lvl, 1), 'search');
       if (handler) (handler as () => void)();
       else handled = false;
     } else {

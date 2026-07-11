@@ -57,3 +57,26 @@ describe('W/S dispatch inside a scope', () => {
     expect(scrollUp).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('F search shortcut', () => {
+  it('invokes the search handler even from the sidebar level', () => {
+    const search = vi.fn();
+    renderScope({ search });
+
+    fireEvent.keyDown(window, { code: 'KeyF' });
+
+    expect(search).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays inert while typing in an input', () => {
+    const search = vi.fn();
+    const { container } = renderScope({ search });
+    const input = document.createElement('input');
+    container.appendChild(input);
+    input.focus();
+
+    fireEvent.keyDown(input, { code: 'KeyF' });
+
+    expect(search).not.toHaveBeenCalled();
+  });
+});
