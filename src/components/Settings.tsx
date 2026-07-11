@@ -5,6 +5,7 @@ import { CuratedTagsSection } from './CuratedTagsSection';
 import { ShortcutSettings } from './ShortcutSettings';
 import { vramColors } from '../lib/vram';
 import { keyCapture } from '../shortcuts/keymap';
+import { FONT_SIZE_PRESETS, getStoredFontSize, setStoredFontSize } from '../lib/fontSize';
 
 // Maps browser KeyboardEvent.code → evdev keycode name
 const CODE_TO_EVDEV: Record<string, string> = (() => {
@@ -696,6 +697,33 @@ function FanficCookieRow({ domain, hasCookie, updatedAt }: { domain: string; has
   );
 }
 
+function DisplaySection() {
+  const [fontSize, setFontSize] = useState(() => getStoredFontSize());
+
+  return (
+    <section className="mb-8">
+      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">Display</h2>
+      <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
+        <p className="text-sm text-[var(--color-text-muted)] mb-3">
+          Font size for this machine only — not synced across devices, so a laptop and the Pocket 2 can each have their own.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {FONT_SIZE_PRESETS.map(({ label, px }) => (
+            <button key={px} onClick={() => setFontSize(setStoredFontSize(px))}
+              className={`px-3 py-1.5 rounded text-sm border transition-colors ${
+                fontSize === px
+                  ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
+                  : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
+              }`}>
+              {label} <span className="opacity-60">{px}px</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function FanficCookiesSection() {
   const { data: cookies } = useQuery({ queryKey: ['fanfic', 'cookies'], queryFn: api.fanfic.cookies.list });
 
@@ -791,6 +819,8 @@ export function Settings() {
           {message.text}
         </div>
       )}
+
+      <DisplaySection />
 
       <section className="mb-8">
         <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">AI Provider</h2>
