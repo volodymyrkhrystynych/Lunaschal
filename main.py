@@ -31,6 +31,17 @@ def _wait_for_flask(timeout: float = 10.0) -> bool:
     return False
 
 
+def _wait_for_vite(timeout: float = 15.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            urllib.request.urlopen(DEV_URL, timeout=1)
+            return True
+        except (urllib.error.URLError, OSError):
+            time.sleep(0.2)
+    return False
+
+
 def _parse_args():
     dev = '--dev' in sys.argv
     server_url = None
@@ -42,26 +53,40 @@ def _parse_args():
     return dev, server_url
 
 
+def _resolve_target(dev: bool, server_url: str | None) -> tuple[str, str]:
+    """Decide which URL PyWebView should open and how to wait for it to be ready.
+
+    wait_for is one of:
+    - 'vite': local Vite dev server, /api proxied to server_url (see start-node.sh)
+    - 'none': server_url is a fully remote page — nothing local to wait for
+    - 'flask-external': local Vite dev server backed by a Flask the caller already started
+    - 'flask-spawn': serve the built dist/ from a Flask instance we start ourselves
+    """
+    if dev and server_url:
+        return DEV_URL, 'vite'
+    if server_url:
+        return server_url, 'none'
+    if dev:
+        return DEV_URL, 'flask-external'
+    return PROD_URL, 'flask-spawn'
+
+
 def main():
     dev, server_url = _parse_args()
+    url, wait_for = _resolve_target(dev, server_url)
 
-    if server_url:
-        url = server_url
-    elif dev:
-        # Flask is already running via `npm run dev:flask`; just point at the Vite dev server
-        if not _wait_for_flask():
-            print('error: Flask did not start in time', file=sys.stderr)
-            sys.exit(1)
-        url = DEV_URL
-    else:
+    if wait_for == 'flask-spawn':
         thread = threading.Thread(target=_run_flask, daemon=True)
         thread.start()
 
+    if wait_for in ('flask-spawn', 'flask-external'):
         if not _wait_for_flask():
             print('error: Flask did not start in time', file=sys.stderr)
             sys.exit(1)
-
-        url = PROD_URL
+    elif wait_for == 'vite':
+        if not _wait_for_vite():
+            print('error: Vite dev server did not start in time', file=sys.stderr)
+            sys.exit(1)
 
     import os
     os.environ.setdefault('QSG_RHI_BACKEND', 'opengl')
