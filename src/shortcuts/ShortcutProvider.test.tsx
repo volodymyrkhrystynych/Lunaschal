@@ -15,11 +15,11 @@ function Scope({ handlers }: { handlers: ScopeHandlers }) {
   return null;
 }
 
-function renderScope(handlers: ScopeHandlers) {
+function renderScope(handlers: ScopeHandlers, onToggleSidebar?: () => void) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <ShortcutProvider currentView="journal" onViewChange={() => {}}>
+      <ShortcutProvider currentView="journal" onViewChange={() => {}} onToggleSidebar={onToggleSidebar}>
         <Scope handlers={handlers} />
       </ShortcutProvider>
     </QueryClientProvider>,
@@ -55,6 +55,39 @@ describe('W/S dispatch inside a scope', () => {
 
     expect(scrollDown).toHaveBeenCalledTimes(1);
     expect(scrollUp).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('B sidebar toggle shortcut', () => {
+  it('toggles the sidebar from the sidebar level', () => {
+    const toggle = vi.fn();
+    renderScope({}, toggle);
+
+    fireEvent.keyDown(window, { code: 'KeyB' });
+
+    expect(toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('toggles the sidebar even from inside a tab scope', () => {
+    const toggle = vi.fn();
+    renderScope({ next: vi.fn() }, toggle);
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // descend into the scope
+    fireEvent.keyDown(window, { code: 'KeyB' });
+
+    expect(toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays inert while typing in an input', () => {
+    const toggle = vi.fn();
+    const { container } = renderScope({}, toggle);
+    const input = document.createElement('input');
+    container.appendChild(input);
+    input.focus();
+
+    fireEvent.keyDown(input, { code: 'KeyB' });
+
+    expect(toggle).not.toHaveBeenCalled();
   });
 });
 

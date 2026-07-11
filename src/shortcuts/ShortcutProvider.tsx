@@ -54,10 +54,11 @@ export function useShortcuts(): ShortcutContextValue {
 interface ShortcutProviderProps {
   currentView: AppView;
   onViewChange: (view: AppView) => void;
+  onToggleSidebar?: () => void;
   children: ReactNode;
 }
 
-export function ShortcutProvider({ currentView, onViewChange, children }: ShortcutProviderProps) {
+export function ShortcutProvider({ currentView, onViewChange, onToggleSidebar, children }: ShortcutProviderProps) {
   const [level, setLevel] = useState(0);
   const scopesRef = useRef(new Map<number, ScopeHandlers[]>());
   const pendingCreateRef = useRef<AppView | null>(null);
@@ -153,6 +154,9 @@ export function ShortcutProvider({ currentView, onViewChange, children }: Shortc
     } else if (action === 'global.newJournalEntry') {
       onViewChange('journal');
       requestCreate('journal');
+    } else if (action === 'global.toggleSidebar') {
+      if (onToggleSidebar) onToggleSidebar();
+      else handled = false;
     } else if (action === 'nav.up' || action === 'nav.down') {
       if (lvl === 0) {
         const idx = VIEW_ORDER.indexOf(currentViewRef.current);

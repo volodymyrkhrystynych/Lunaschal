@@ -22,7 +22,8 @@ export type ActionId =
   | 'tab.fanfic'
   | 'tab.files'
   | 'tab.settings'
-  | 'global.newJournalEntry';
+  | 'global.newJournalEntry'
+  | 'global.toggleSidebar';
 
 export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'nav.up': 'KeyW',
@@ -44,6 +45,7 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'tab.files': 'Digit7',
   'tab.settings': 'Digit8',
   'global.newJournalEntry': 'shift+KeyJ',
+  'global.toggleSidebar': 'KeyB',
 };
 
 export const ACTION_LABELS: Record<ActionId, string> = {
@@ -66,6 +68,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'tab.files': 'Go to Files',
   'tab.settings': 'Go to Settings',
   'global.newJournalEntry': 'New journal entry (from anywhere)',
+  'global.toggleSidebar': 'Toggle sidebar (open/close)',
 };
 
 const MODIFIER_CODES = new Set([
