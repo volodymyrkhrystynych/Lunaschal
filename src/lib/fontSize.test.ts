@@ -2,7 +2,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   FONT_SIZE_DEFAULT, FONT_SIZE_MAX, FONT_SIZE_MIN,
+  CHAPTER_FONT_SIZE_DEFAULT, CHAPTER_FONT_SIZE_MAX, CHAPTER_FONT_SIZE_MIN,
   applyFontSize, getStoredFontSize, setStoredFontSize,
+  getStoredChapterFontSize, setStoredChapterFontSize,
 } from './fontSize';
 
 beforeEach(() => {
@@ -44,6 +46,34 @@ describe('setStoredFontSize', () => {
   it('clamps values outside the allowed range', () => {
     expect(setStoredFontSize(1000)).toBe(FONT_SIZE_MAX);
     expect(setStoredFontSize(-5)).toBe(FONT_SIZE_MIN);
+  });
+});
+
+describe('chapter font size', () => {
+  it('falls back to the default when nothing is stored', () => {
+    expect(getStoredChapterFontSize()).toBe(CHAPTER_FONT_SIZE_DEFAULT);
+  });
+
+  it('falls back to the default for garbage values', () => {
+    localStorage.setItem('lunaschal:chapterFontSize', 'not-a-number');
+    expect(getStoredChapterFontSize()).toBe(CHAPTER_FONT_SIZE_DEFAULT);
+  });
+
+  it('persists the clamped size and reads it back', () => {
+    expect(setStoredChapterFontSize(22)).toBe(22);
+    expect(getStoredChapterFontSize()).toBe(22);
+  });
+
+  it('clamps values outside the allowed range', () => {
+    expect(setStoredChapterFontSize(1000)).toBe(CHAPTER_FONT_SIZE_MAX);
+    expect(setStoredChapterFontSize(-5)).toBe(CHAPTER_FONT_SIZE_MIN);
+  });
+
+  it('is stored independently of the base UI font size', () => {
+    setStoredFontSize(14);
+    setStoredChapterFontSize(24);
+    expect(getStoredFontSize()).toBe(14);
+    expect(getStoredChapterFontSize()).toBe(24);
   });
 });
 

@@ -9,18 +9,19 @@ vi.mock('../hooks/api', () => ({
   api: { shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) } },
 }));
 
-// Registers a depth-1 scope like a view component would.
-function Scope({ handlers }: { handlers: ScopeHandlers }) {
-  useShortcutScope(1, handlers);
+// Registers a scope like a view component would (depth 1 unless overridden).
+function Scope({ handlers, depth = 1 }: { handlers: ScopeHandlers; depth?: number }) {
+  useShortcutScope(depth, handlers);
   return null;
 }
 
-function renderScope(handlers: ScopeHandlers, onToggleSidebar?: () => void) {
+function renderScope(handlers: ScopeHandlers, onToggleSidebar?: () => void, deepHandlers?: ScopeHandlers) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="journal" onViewChange={() => {}} onToggleSidebar={onToggleSidebar}>
         <Scope handlers={handlers} />
+        {deepHandlers && <Scope handlers={deepHandlers} depth={2} />}
       </ShortcutProvider>
     </QueryClientProvider>,
   );
@@ -88,6 +89,55 @@ describe('B sidebar toggle shortcut', () => {
     fireEvent.keyDown(input, { code: 'KeyB' });
 
     expect(toggle).not.toHaveBeenCalled();
+  });
+});
+
+describe('writing font size and chapter list shortcuts', () => {
+  it('invokes fontUp/fontDown on =/- from the sidebar level', () => {
+    const fontUp = vi.fn();
+    const fontDown = vi.fn();
+    renderScope({ fontUp, fontDown });
+
+    fireEvent.keyDown(window, { code: 'Equal' });
+    fireEvent.keyDown(window, { code: 'Minus' });
+
+    expect(fontUp).toHaveBeenCalledTimes(1);
+    expect(fontDown).toHaveBeenCalledTimes(1);
+  });
+
+  it('invokes toggleList on L', () => {
+    const toggleList = vi.fn();
+    renderScope({ toggleList });
+
+    fireEvent.keyDown(window, { code: 'KeyL' });
+
+    expect(toggleList).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the depth-1 handler from a deeper scope', () => {
+    const fontUp = vi.fn();
+    renderScope({ fontUp, next: vi.fn() }, undefined, { next: vi.fn() });
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 1
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 2 (deep scope has no fontUp)
+    fireEvent.keyDown(window, { code: 'Equal' });
+
+    expect(fontUp).toHaveBeenCalledTimes(1);
+  });
+
+  it('stays inert while typing in a textarea', () => {
+    const fontUp = vi.fn();
+    const toggleList = vi.fn();
+    const { container } = renderScope({ fontUp, toggleList });
+    const textarea = document.createElement('textarea');
+    container.appendChild(textarea);
+    textarea.focus();
+
+    fireEvent.keyDown(textarea, { code: 'Equal' });
+    fireEvent.keyDown(textarea, { code: 'KeyL' });
+
+    expect(fontUp).not.toHaveBeenCalled();
+    expect(toggleList).not.toHaveBeenCalled();
   });
 });
 

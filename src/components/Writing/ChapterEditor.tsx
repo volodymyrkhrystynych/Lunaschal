@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import {
+  CHAPTER_FONT_SIZE_DEFAULT, CHAPTER_FONT_SIZE_STEP,
+  getStoredChapterFontSize, setStoredChapterFontSize,
+} from '../../lib/fontSize';
 
 interface Props {
   chapterId: string;
@@ -17,8 +22,18 @@ export function ChapterEditor({ chapterId }: Props) {
   const [title, setTitle] = useState('');
   const [editingTitle, setEditingTitle] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
+  const [fontSize, setFontSize] = useState(getStoredChapterFontSize);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedChapterRef = useRef<string | null>(null);
+
+  const adjustFontSize = (delta: number) => {
+    setFontSize((px) => setStoredChapterFontSize(px + delta));
+  };
+
+  useShortcutScope(1, {
+    fontUp: () => adjustFontSize(CHAPTER_FONT_SIZE_STEP),
+    fontDown: () => adjustFontSize(-CHAPTER_FONT_SIZE_STEP),
+  });
 
   const { data: chapter, isLoading } = useQuery({
     queryKey: ['writing', 'chapter', chapterId],
@@ -94,6 +109,7 @@ export function ChapterEditor({ chapterId }: Props) {
           </button>
         )}
         <div className="flex items-center gap-3 shrink-0 text-xs text-[var(--color-text-muted)]">
+          {fontSize !== CHAPTER_FONT_SIZE_DEFAULT && <span>{fontSize}px</span>}
           <span>{wordCount.toLocaleString()} {wordCount === 1 ? 'word' : 'words'}</span>
           <span className={statusColor}>{statusLabel}</span>
         </div>
@@ -104,7 +120,8 @@ export function ChapterEditor({ chapterId }: Props) {
         value={content}
         onChange={e => handleContentChange(e.target.value)}
         placeholder="Start writing…"
-        className="flex-1 resize-none bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] p-6 focus:outline-none leading-relaxed text-base font-serif"
+        className="flex-1 resize-none bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] p-6 focus:outline-none leading-relaxed font-serif"
+        style={{ fontSize: `${fontSize}px` }}
         spellCheck
       />
     </div>

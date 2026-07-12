@@ -33,6 +33,9 @@ export interface ScopeHandlers {
   scrollUp?: () => void;
   annotate?: () => void;
   search?: () => void;
+  fontUp?: () => void;
+  fontDown?: () => void;
+  toggleList?: () => void;
 }
 
 interface ShortcutContextValue {
@@ -189,6 +192,13 @@ export function ShortcutProvider({ currentView, onViewChange, onToggleSidebar, c
       const handler = resolveHandler(scopes, Math.max(lvl, 1), 'search');
       if (handler) (handler as () => void)();
       else handled = false;
+    } else if (action === 'writing.fontUp' || action === 'writing.fontDown' || action === 'writing.toggleChapterList') {
+      const method =
+        action === 'writing.fontUp' ? 'fontUp' : action === 'writing.fontDown' ? 'fontDown' : 'toggleList';
+      // These handlers live at depth 1 but should work from any depth in the view.
+      const handler = resolveHandlerDeep(scopes, Math.max(lvl, 1), method);
+      if (handler) (handler as () => void)();
+      else handled = false;
     } else {
       handled = false;
     }
@@ -222,6 +232,18 @@ function resolveHandler(
   if (!list) return null;
   for (let i = list.length - 1; i >= 0; i--) {
     const fn = list[i][method];
+    if (fn) return fn;
+  }
+  return null;
+}
+
+function resolveHandlerDeep(
+  scopes: Map<number, ScopeHandlers[]>,
+  depth: number,
+  method: keyof ScopeHandlers,
+): ScopeHandlers[keyof ScopeHandlers] | null {
+  for (let d = depth; d >= 1; d--) {
+    const fn = resolveHandler(scopes, d, method);
     if (fn) return fn;
   }
   return null;
