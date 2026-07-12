@@ -84,7 +84,7 @@ export default function App() {
   };
 
   return (
-    <ShortcutProvider currentView={currentView} onViewChange={setCurrentView}>
+    <ShortcutProvider currentView={currentView} onViewChange={setCurrentView} onToggleSidebar={() => setSidebarOpen((o) => !o)}>
       <div className="h-screen flex flex-col bg-[var(--color-bg)]">
         <div className="flex flex-1 overflow-hidden">
           <Sidebar
