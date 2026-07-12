@@ -23,7 +23,10 @@ export type ActionId =
   | 'tab.files'
   | 'tab.settings'
   | 'global.newJournalEntry'
-  | 'global.toggleSidebar';
+  | 'global.toggleSidebar'
+  | 'writing.fontUp'
+  | 'writing.fontDown'
+  | 'writing.toggleChapterList';
 
 export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'nav.up': 'KeyW',
@@ -46,6 +49,9 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'tab.settings': 'Digit8',
   'global.newJournalEntry': 'shift+KeyJ',
   'global.toggleSidebar': 'KeyB',
+  'writing.fontUp': 'Equal',
+  'writing.fontDown': 'Minus',
+  'writing.toggleChapterList': 'KeyL',
 };
 
 export const ACTION_LABELS: Record<ActionId, string> = {
@@ -69,6 +75,9 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'tab.settings': 'Go to Settings',
   'global.newJournalEntry': 'New journal entry (from anywhere)',
   'global.toggleSidebar': 'Toggle sidebar (open/close)',
+  'writing.fontUp': 'Increase chapter text size',
+  'writing.fontDown': 'Decrease chapter text size',
+  'writing.toggleChapterList': 'Toggle project/chapter list',
 };
 
 const MODIFIER_CODES = new Set([
@@ -101,6 +110,8 @@ export function displayCombo(combo: string): string {
       if (part.startsWith('Key')) return part.slice(3);
       if (part.startsWith('Digit')) return part.slice(5);
       if (part.startsWith('Arrow')) return part.slice(5) + ' Arrow';
+      if (part === 'Equal') return '=';
+      if (part === 'Minus') return '-';
       return part;
     })
     .join(' + ');

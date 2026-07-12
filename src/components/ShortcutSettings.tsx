@@ -10,6 +10,7 @@ const GROUPS: { title: string; actions: ActionId[] }[] = [
   { title: 'Navigation', actions: ['nav.up', 'nav.down', 'nav.in', 'nav.out', 'global.toggleSidebar'] },
   { title: 'Actions', actions: ['action.new', 'action.newAlt', 'action.search', 'global.newJournalEntry'] },
   { title: 'Reader', actions: ['action.annotate'] },
+  { title: 'Writing', actions: ['writing.fontUp', 'writing.fontDown', 'writing.toggleChapterList'] },
   {
     title: 'Tabs',
     actions: ['tab.chat', 'tab.tasks', 'tab.journal', 'tab.writing', 'tab.calendar', 'tab.flashcards', 'tab.cookbook', 'tab.fanfic', 'tab.files', 'tab.settings'],

@@ -37,3 +37,29 @@ export function setStoredFontSize(px: number): number {
   applyFontSize(clamped);
   return clamped;
 }
+
+// Chapter prose font size (Writing view) — independent of the base UI size so
+// the editor text can be scaled with shortcuts without touching the chrome.
+// Also localStorage: a per-screen ergonomic preference, like the base size.
+const CHAPTER_STORAGE_KEY = 'lunaschal:chapterFontSize';
+
+export const CHAPTER_FONT_SIZE_MIN = 12;
+export const CHAPTER_FONT_SIZE_MAX = 32;
+export const CHAPTER_FONT_SIZE_DEFAULT = 16;
+export const CHAPTER_FONT_SIZE_STEP = 1;
+
+function clampChapter(px: number): number {
+  return Math.min(CHAPTER_FONT_SIZE_MAX, Math.max(CHAPTER_FONT_SIZE_MIN, px));
+}
+
+export function getStoredChapterFontSize(): number {
+  const raw = localStorage.getItem(CHAPTER_STORAGE_KEY);
+  const parsed = raw === null ? NaN : Number(raw);
+  return Number.isFinite(parsed) ? clampChapter(parsed) : CHAPTER_FONT_SIZE_DEFAULT;
+}
+
+export function setStoredChapterFontSize(px: number): number {
+  const clamped = clampChapter(px);
+  localStorage.setItem(CHAPTER_STORAGE_KEY, String(clamped));
+  return clamped;
+}
