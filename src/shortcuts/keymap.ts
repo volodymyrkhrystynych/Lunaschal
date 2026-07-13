@@ -24,9 +24,9 @@ export type ActionId =
   | 'tab.settings'
   | 'global.newJournalEntry'
   | 'global.toggleSidebar'
-  | 'writing.fontUp'
-  | 'writing.fontDown'
-  | 'writing.toggleChapterList';
+  | 'reader.fontUp'
+  | 'reader.fontDown'
+  | 'reader.toggleList';
 
 export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'nav.up': 'KeyW',
@@ -49,9 +49,9 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'tab.settings': 'Digit8',
   'global.newJournalEntry': 'shift+KeyJ',
   'global.toggleSidebar': 'KeyB',
-  'writing.fontUp': 'Equal',
-  'writing.fontDown': 'Minus',
-  'writing.toggleChapterList': 'KeyL',
+  'reader.fontUp': 'Equal',
+  'reader.fontDown': 'Minus',
+  'reader.toggleList': 'KeyL',
 };
 
 export const ACTION_LABELS: Record<ActionId, string> = {
@@ -75,9 +75,9 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'tab.settings': 'Go to Settings',
   'global.newJournalEntry': 'New journal entry (from anywhere)',
   'global.toggleSidebar': 'Toggle sidebar (open/close)',
-  'writing.fontUp': 'Increase chapter text size',
-  'writing.fontDown': 'Decrease chapter text size',
-  'writing.toggleChapterList': 'Toggle project/chapter list',
+  'reader.fontUp': 'Increase reading/chapter text size',
+  'reader.fontDown': 'Decrease reading/chapter text size',
+  'reader.toggleList': 'Toggle list panel (Writing chapters / Library chapters)',
 };
 
 const MODIFIER_CODES = new Set([

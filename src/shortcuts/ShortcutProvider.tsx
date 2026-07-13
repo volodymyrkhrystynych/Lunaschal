@@ -192,9 +192,9 @@ export function ShortcutProvider({ currentView, onViewChange, onToggleSidebar, c
       const handler = resolveHandler(scopes, Math.max(lvl, 1), 'search');
       if (handler) (handler as () => void)();
       else handled = false;
-    } else if (action === 'writing.fontUp' || action === 'writing.fontDown' || action === 'writing.toggleChapterList') {
+    } else if (action === 'reader.fontUp' || action === 'reader.fontDown' || action === 'reader.toggleList') {
       const method =
-        action === 'writing.fontUp' ? 'fontUp' : action === 'writing.fontDown' ? 'fontDown' : 'toggleList';
+        action === 'reader.fontUp' ? 'fontUp' : action === 'reader.fontDown' ? 'fontDown' : 'toggleList';
       // These handlers live at depth 1 but should work from any depth in the view.
       const handler = resolveHandlerDeep(scopes, Math.max(lvl, 1), method);
       if (handler) (handler as () => void)();
