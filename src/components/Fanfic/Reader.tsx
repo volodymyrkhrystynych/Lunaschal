@@ -3,6 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { adjacentChapter, chapterIdsUpTo, groupChaptersByCategory, orderChapters } from '../../lib/fanfic';
 import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import {
+  READING_FONT_SIZE_DEFAULT, READING_FONT_SIZE_STEP,
+  getStoredReadingFontSize, setStoredReadingFontSize,
+} from '../../lib/fontSize';
 
 interface ReaderProps {
   ficId: string;
@@ -15,6 +19,8 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const [showCommentary, setShowCommentary] = useState(false);
   const [commentary, setCommentary] = useState('');
   const [commentarySaved, setCommentarySaved] = useState(false);
+  const [navVisible, setNavVisible] = useState(true);
+  const [fontSize, setFontSize] = useState(getStoredReadingFontSize);
   const contentRef = useRef<HTMLDivElement>(null);
   const commentaryRef = useRef<HTMLTextAreaElement>(null);
   const queryClient = useQueryClient();
@@ -98,12 +104,19 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
     setTimeout(() => commentaryRef.current?.focus(), 0);
   };
 
+  const adjustFontSize = (delta: number) => {
+    setFontSize((px) => setStoredReadingFontSize(px + delta));
+  };
+
   // Level 1: chapter list — W/S switch chapters, A back to library, D enters the chapter.
   useShortcutScope(1, {
     next: () => { if (next) setChapterId(next.id); },
     prev: () => { if (prev) setChapterId(prev.id); },
     drillOut: () => { onBack(); return true; },
     annotate,
+    fontUp: () => adjustFontSize(READING_FONT_SIZE_STEP),
+    fontDown: () => adjustFontSize(-READING_FONT_SIZE_STEP),
+    toggleList: () => setNavVisible((v) => !v),
   });
 
   // Level 2: reading — no next/prev, so W/S fall back to scrolling the prose;
@@ -130,8 +143,8 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* Chapter sidebar */}
-      {!isPdf && (
-        <aside className="w-64 border-r border-white/10 bg-[var(--color-surface)] flex flex-col shrink-0">
+      {!isPdf && navVisible && (
+        <aside data-reader-nav className="w-64 border-r border-white/10 bg-[var(--color-surface)] flex flex-col shrink-0">
           <div className="p-3 border-b border-white/10">
             <button onClick={onBack}
               className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">← Library</button>
@@ -220,12 +233,13 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                   <h2 className="text-xl font-bold text-[var(--color-text)] mb-1">{chapter.title}</h2>
                   <div className="text-sm text-[var(--color-text-muted)] mb-6 flex gap-3">
                     <span>{chapter.wordCount} words</span>
+                    {fontSize !== READING_FONT_SIZE_DEFAULT && <span>{fontSize}px</span>}
                     {chapter.sourceUrl && (
                       <a href={chapter.sourceUrl} target="_blank" rel="noreferrer"
                         className="underline hover:text-[var(--color-text)]">view on forum</a>
                     )}
                   </div>
-                  <div className="fanfic-prose" dangerouslySetInnerHTML={{ __html: chapter.contentHtml }} />
+                  <div className="fanfic-prose" style={{ fontSize: `${fontSize}px` }} dangerouslySetInnerHTML={{ __html: chapter.contentHtml }} />
                   {chapterNav('bottom')}
                 </>
               ) : (

@@ -92,7 +92,7 @@ describe('B sidebar toggle shortcut', () => {
   });
 });
 
-describe('writing font size and chapter list shortcuts', () => {
+describe('reader/writing font size and list-toggle shortcuts', () => {
   it('invokes fontUp/fontDown on =/- from the sidebar level', () => {
     const fontUp = vi.fn();
     const fontDown = vi.fn();

@@ -150,3 +150,39 @@ describe('Reader keyboard navigation', () => {
     expect(document.querySelector('.ring-inset')).toBeNull();
   });
 });
+
+describe('Reader chapter list toggle and font size shortcuts', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.scrollTo = vi.fn();
+  });
+
+  it('hides and re-shows the chapter sidebar with L', async () => {
+    const { container } = renderReader();
+    await screen.findByText('Chapter 1');
+    expect(container.querySelector('[data-reader-nav]')).not.toBeNull();
+
+    fireEvent.keyDown(window, { code: 'KeyL' });
+    expect(container.querySelector('[data-reader-nav]')).toBeNull();
+
+    fireEvent.keyDown(window, { code: 'KeyL' });
+    expect(container.querySelector('[data-reader-nav]')).not.toBeNull();
+  });
+
+  it('grows and shrinks the reading text with =/- and persists the size', async () => {
+    const { container } = renderReader();
+    await screen.findByRole('heading', { name: 'Chapter 1' });
+    const prose = () => container.querySelector<HTMLElement>('.fanfic-prose')!;
+    expect(prose().style.fontSize).toBe('17px');
+
+    fireEvent.keyDown(window, { code: 'Equal' });
+    expect(prose().style.fontSize).toBe('18px');
+    expect(localStorage.getItem('lunaschal:readingFontSize')).toBe('18');
+
+    fireEvent.keyDown(window, { code: 'Minus' });
+    fireEvent.keyDown(window, { code: 'Minus' });
+    expect(prose().style.fontSize).toBe('16px');
+    expect(localStorage.getItem('lunaschal:readingFontSize')).toBe('16');
+  });
+});
