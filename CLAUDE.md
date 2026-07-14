@@ -156,13 +156,13 @@ Single-user auth via JWT cookie (`lunaschal_token`, 30-day expiry). **Auth is on
 - CSS custom properties (e.g. `var(--color-bg)`) are used for theming throughout
 
 ### Writing Module (`src/components/Writing/`, `backend/routes/writing.py`)
-Three-panel layout: left nav (project list + chapter list) | center prose editor | right AI chat sidebar.
+Two-panel layout: left nav (project list + a `WritingNav` with Chapters/Notes/Discussions sections) | full-width center panel that switches on the selected item: chapter → prose editor, note → note editor, discussion → chat view. `WritingNav` owns the single shortcut scope 2 for the whole nav (flattened chapters→notes→discussions stepping) — never add a second `useShortcutScope(2, …)` in the Writing tree; the last registration silently wins.
 
-**DB tables**: `writing_projects`, `writing_chapters` (ordered by `position`), `writing_context_docs` (typed: `character | outline | worldbuilding | note`). Writing conversations reuse the existing `conversations` + `messages` tables; `conversations.writing_project_id` scopes them to a project.
+**DB tables**: `writing_projects`, `writing_chapters` (ordered by `position`), `writing_context_docs` (typed: `character | outline | worldbuilding | note`). "Notes" in the UI/API are stored in `writing_context_docs` (HTTP paths are `/api/writing/.../notes`; the table name is legacy). Discussions reuse the existing `conversations` + `messages` tables; `conversations.writing_project_id` scopes them to a project, and the general Chat tab filters them out (`writing_project_id IS NULL`). Deleting a project deletes its discussions.
 
-**Chapter editor**: plain `<textarea>` (not CodeMirror — prose, not code) with 1.5 s debounced auto-save and live word count.
+**Chapter/note editors**: plain `<textarea>` (not CodeMirror — prose, not code) with 1.5 s debounced auto-save; chapters add live word count and font-size shortcuts.
 
-**Writing chat**: reuses `/api/chat/stream` unchanged. The frontend assembles a `systemPrompt` from the project title/description and any context docs the user has checked, then passes it as the existing `systemPrompt` field. No journal/calendar classification — pure story chat.
+**Discussions**: full-size chat reusing `/api/chat/stream` unchanged. The frontend assembles a `systemPrompt` from the project title/description and any notes the user has checked in the context panel. No journal/calendar classification — pure story chat. A **Summarize** button (`POST /api/writing/conversations/<id>/summarize`) distills the transcript via `backend/ai/writing.py:summarize_discussion` into a new note (`doc_type='note'`).
 
 ### Key Behaviors
 - **Curated tags** — user-defined tags managed in Settings → Tags tab. Each new tag triggers a background daemon thread that calls `classify_entry_for_tag` per journal entry and writes matches to `journal_entry_curated_tags`. Progress tracked in-memory (`_scan_progress` dict in `curated_tags.py`); the list endpoint merges it in. Tags appear as filter pill buttons in the Journal view; entries display curated tags (`#name`, neutral style) separately from freeform AI tags (accent color).
