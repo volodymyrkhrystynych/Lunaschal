@@ -14,7 +14,9 @@ bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 
 @bp.get('/conversations')
 def list_conversations():
-    rows = get_db().execute('SELECT * FROM conversations ORDER BY updated_at DESC').fetchall()
+    rows = get_db().execute(
+        'SELECT * FROM conversations WHERE writing_project_id IS NULL ORDER BY updated_at DESC'
+    ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
 

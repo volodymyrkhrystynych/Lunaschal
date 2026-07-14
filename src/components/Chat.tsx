@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Flashcard } from '../hooks/api';
+import { MessageMarkdown } from './MessageMarkdown';
 
 interface ChatProps {
   conversationId: string | null;
@@ -304,7 +305,11 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
             <div key={message.id} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div className="max-w-[80%]">
                 <div className={`rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-surface)] text-[var(--color-text)]'}`}>
-                  <div className="whitespace-pre-wrap">{message.content}</div>
+                  {message.role === 'user' ? (
+                    <div className="whitespace-pre-wrap">{message.content}</div>
+                  ) : (
+                    <MessageMarkdown content={message.content} />
+                  )}
                 </div>
                 {hasSaved && (
                   <div className="mt-1 text-xs text-[var(--color-text-muted)] text-right">
@@ -325,7 +330,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
                 </div>
               )}
               <div className="rounded-lg px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text)]">
-                <div className="whitespace-pre-wrap">{streamingContent}</div>
+                <MessageMarkdown content={streamingContent} />
               </div>
             </div>
           </div>

@@ -3,13 +3,14 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { ProjectList } from './ProjectList';
-import { ChapterList } from './ChapterList';
+import { WritingNav, type Selection } from './WritingNav';
 import { ChapterEditor } from './ChapterEditor';
-import { WritingChat } from './WritingChat';
+import { NoteEditor } from './NoteEditor';
+import { DiscussionView } from './DiscussionView';
 
 export function Writing() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
-  const [selectedChapterId, setSelectedChapterId] = useState<string>('');
+  const [selection, setSelection] = useState<Selection>(null);
   const [navVisible, setNavVisible] = useState(true);
 
   useShortcutScope(1, {
@@ -24,15 +25,15 @@ export function Writing() {
 
   const handleSelectProject = (id: string) => {
     setSelectedProjectId(id);
-    setSelectedChapterId('');
+    setSelection(null);
   };
 
   return (
     <div className="flex-1 flex overflow-hidden">
-      {/* Left nav: Projects + Chapters stacked */}
+      {/* Left nav: Projects + Chapters/Notes/Discussions stacked */}
       {navVisible && (
-        <div data-writing-nav className="w-56 shrink-0 border-r border-white/10 bg-[var(--color-surface)] flex flex-col overflow-hidden">
-          <div className={`${selectedProjectId ? 'h-1/2' : 'flex-1'} border-b border-white/10 overflow-hidden flex flex-col`}>
+        <div data-writing-nav className="w-64 shrink-0 border-r border-white/10 bg-[var(--color-surface)] flex flex-col overflow-hidden">
+          <div className={`${selectedProjectId ? 'h-2/5' : 'flex-1'} border-b border-white/10 overflow-hidden flex flex-col`}>
             <ProjectList
               selectedProjectId={selectedProjectId}
               onSelectProject={handleSelectProject}
@@ -40,38 +41,36 @@ export function Writing() {
           </div>
           {selectedProjectId && (
             <div className="flex-1 overflow-hidden flex flex-col">
-              <ChapterList
+              <WritingNav
                 projectId={selectedProjectId}
-                selectedChapterId={selectedChapterId}
-                onSelectChapter={setSelectedChapterId}
+                selection={selection}
+                onSelect={setSelection}
               />
             </div>
           )}
         </div>
       )}
 
-      {/* Center: Chapter editor */}
+      {/* Center: chapter editor | note editor | discussion */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {selectedChapterId ? (
-          <ChapterEditor chapterId={selectedChapterId} />
+        {selection?.kind === 'chapter' ? (
+          <ChapterEditor chapterId={selection.id} />
+        ) : selection?.kind === 'note' ? (
+          <NoteEditor noteId={selection.id} />
+        ) : selection?.kind === 'discussion' && project ? (
+          <DiscussionView
+            key={selection.id}
+            project={project}
+            discussionId={selection.id}
+            onNoteCreated={(noteId) => setSelection({ kind: 'note', id: noteId })}
+          />
         ) : selectedProjectId ? (
           <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
-            Select a chapter to start writing
+            Select a chapter, note, or discussion
           </div>
         ) : (
           <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
             Select or create a project
-          </div>
-        )}
-      </div>
-
-      {/* Right: Chat sidebar */}
-      <div className="w-80 shrink-0 flex flex-col overflow-hidden">
-        {project ? (
-          <WritingChat project={project} />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)] border-l border-white/10 text-sm p-4 text-center">
-            Select a project to chat about your story
           </div>
         )}
       </div>

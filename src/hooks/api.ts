@@ -162,6 +162,7 @@ export interface FlashcardTag {
 export interface Conversation {
   id: string;
   title: string | null;
+  writingProjectId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -264,7 +265,7 @@ export interface WritingChapter extends WritingChapterSummary {
   content: string;
 }
 
-export interface WritingContextDocSummary {
+export interface WritingNoteSummary {
   id: string;
   projectId: string;
   title: string;
@@ -273,7 +274,7 @@ export interface WritingContextDocSummary {
   updatedAt: string;
 }
 
-export interface WritingContextDoc extends WritingContextDocSummary {
+export interface WritingNote extends WritingNoteSummary {
   content: string;
 }
 
@@ -604,19 +605,21 @@ export const api = {
       patch<{ success: boolean }>(`/api/writing/chapters/${chapterId}`, data),
     deleteChapter: (chapterId: string) => del<{ success: boolean }>(`/api/writing/chapters/${chapterId}`),
 
-    listContextDocs: (projectId: string) =>
-      get<WritingContextDocSummary[]>(`/api/writing/projects/${projectId}/context-docs`),
-    createContextDoc: (projectId: string, data: { title: string; content: string; docType: string }) =>
-      post<{ id: string }>(`/api/writing/projects/${projectId}/context-docs`, data),
-    getContextDoc: (docId: string) => get<WritingContextDoc>(`/api/writing/context-docs/${docId}`),
-    updateContextDoc: (docId: string, data: { title?: string; content?: string; docType?: string }) =>
-      patch<{ success: boolean }>(`/api/writing/context-docs/${docId}`, data),
-    deleteContextDoc: (docId: string) => del<{ success: boolean }>(`/api/writing/context-docs/${docId}`),
+    listNotes: (projectId: string) =>
+      get<WritingNoteSummary[]>(`/api/writing/projects/${projectId}/notes`),
+    createNote: (projectId: string, data: { title: string; content?: string; docType?: string }) =>
+      post<{ id: string }>(`/api/writing/projects/${projectId}/notes`, data),
+    getNote: (noteId: string) => get<WritingNote>(`/api/writing/notes/${noteId}`),
+    updateNote: (noteId: string, data: { title?: string; content?: string; docType?: string }) =>
+      patch<{ success: boolean }>(`/api/writing/notes/${noteId}`, data),
+    deleteNote: (noteId: string) => del<{ success: boolean }>(`/api/writing/notes/${noteId}`),
 
-    listProjectConversations: (projectId: string) =>
+    listDiscussions: (projectId: string) =>
       get<Conversation[]>(`/api/writing/projects/${projectId}/conversations`),
-    createProjectConversation: (projectId: string, data?: { title?: string }) =>
+    createDiscussion: (projectId: string, data?: { title?: string }) =>
       post<{ id: string }>(`/api/writing/projects/${projectId}/conversations`, data ?? {}),
+    summarizeDiscussion: (discussionId: string) =>
+      post<WritingNote>(`/api/writing/conversations/${discussionId}/summarize`),
   },
 
   curatedTags: {
