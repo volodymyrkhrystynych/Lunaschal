@@ -4,7 +4,7 @@ from flask import Blueprint, jsonify, request, Response, stream_with_context
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
 from backend.ai.provider import is_ai_configured
-from backend.ai.chat import chat_stream
+from backend.ai.chat import chat_stream, build_chat_system_prompt
 from backend.ai.classifier import classify_intent, should_classify
 from backend.ai.rag import search_for_context, format_rag_context
 from backend.ai.embeddings import is_embeddings_configured
@@ -158,6 +158,10 @@ def stream():
     messages = body.get('messages', [])
     rag_context = body.get('ragContext', '')
     system_prompt = body.get('systemPrompt', '')
+    if not system_prompt:
+        # Plain chat (no caller-supplied prompt, e.g. the Chat tab) gets the
+        # default prompt enriched with the last day's journal entries.
+        system_prompt = build_chat_system_prompt()
 
     def generate():
         try:

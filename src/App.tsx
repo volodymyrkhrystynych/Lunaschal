@@ -92,8 +92,6 @@ export default function App() {
             onViewChange={setCurrentView}
             isOpen={sidebarOpen}
             onToggle={() => setSidebarOpen(!sidebarOpen)}
-            currentConversationId={currentConversationId}
-            onConversationSelect={setCurrentConversationId}
           />
           <main className="flex-1 flex flex-col overflow-hidden">{renderView()}</main>
         </div>

@@ -2,10 +2,11 @@ import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type Flashcard } from '../hooks/api';
 import { MessageMarkdown } from './MessageMarkdown';
+import { ChatNav } from './ChatNav';
 
 interface ChatProps {
   conversationId: string | null;
-  onConversationChange: (id: string) => void;
+  onConversationChange: (id: string | null) => void;
 }
 
 interface PendingSave {
@@ -284,7 +285,9 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
   ];
 
   return (
-    <div className="flex-1 flex flex-col">
+    <div className="flex-1 flex overflow-hidden">
+      <ChatNav currentConversationId={conversationId} onSelect={onConversationChange} />
+      <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {!isConfigured && (
           <div className="bg-yellow-900/30 border border-yellow-600/50 rounded-lg p-4 text-yellow-200">
@@ -434,6 +437,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
