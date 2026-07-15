@@ -10,10 +10,12 @@ Run as background daemon: ./stt/run_morning_checkin.sh
 Run immediately (test):   ./stt/run_morning_checkin.sh --now
 
 Environment variables:
-  STT_URL               (default: http://127.0.0.1:5000)
-  LUNASCHAL_URL         (default: http://127.0.0.1:5000)
-  MORNING_START_HOUR    start of check-in window, inclusive (default: 8)
-  MORNING_END_HOUR      end of check-in window, exclusive  (default: 11)
+  STT_URL                  (default: http://127.0.0.1:5000)
+  LUNASCHAL_URL            (default: http://127.0.0.1:5000)
+  MORNING_START_HOUR       start of check-in window, inclusive (default: 8)
+  MORNING_END_HOUR         end of check-in window, exclusive  (default: 11)
+  MORNING_CHECKIN_DISABLED set to "1" to make this script exit immediately
+                           without running (daemon or --now)
 """
 
 import datetime
@@ -218,12 +220,13 @@ def _wait_for_services(timeout: int = 60) -> bool:
     return False
 
 
-def run_checkin() -> None:
+def run_checkin() -> bool:
+    """Run the check-in conversation. Returns True if it actually ran."""
     logger.info("Morning check-in starting")
 
     if not _wait_for_services(timeout=60):
         logger.warning("Services not ready — skipping morning check-in")
-        return
+        return False
 
     now      = datetime.datetime.now()
     greeting = (
@@ -283,6 +286,7 @@ def run_checkin() -> None:
 
     print(f"{'─' * 50}\n")
     logger.info("Morning check-in complete")
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -343,14 +347,13 @@ def monitor_loop() -> None:
             logger.info("Check-in already done today, skipping")
             continue
 
-        _mark_checkin_done()
-
         # Give audio and network services a moment to settle after wake
         logger.info("Waiting 8 s for services to settle…")
         time.sleep(8)
 
         try:
-            run_checkin()
+            if run_checkin():
+                _mark_checkin_done()
         except Exception as e:
             logger.error("Check-in failed: %s", e)
 
@@ -360,6 +363,10 @@ def monitor_loop() -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    if os.environ.get("MORNING_CHECKIN_DISABLED") == "1":
+        logger.info("MORNING_CHECKIN_DISABLED=1 — morning check-in is disabled, exiting")
+        sys.exit(0)
+
     if "--now" in sys.argv:
         run_checkin()
     else:

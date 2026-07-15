@@ -18,6 +18,11 @@ Development happens on two machines: a desktop (comfortable, full mouse/keyboard
 - Favor fast, isolated tests: unit-test the AI parsing/classification logic (`backend/ai/`), route handlers, the SM-2 flashcard algorithm, and DB layer against a temporary SQLite file. Mock external AI providers rather than calling them.
 - After making changes, run the relevant tests and report the actual results. Treat a green test suite — not a manual walkthrough — as the default bar for "done."
 
+### Show a change map before implementing
+- **Before writing code for anything that touches more than one file**, present a short plan as a Mermaid diagram (e.g. `graph TD`) showing which files/modules will be changed and how they connect, plus a one-line note per node on what changes there. Wait for a go-ahead before implementing.
+- The terminal can't render Mermaid — use the `mermaid` MCP server's `mermaid_preview` tool to render the diagram (opens in browser with live reload) instead of pasting raw Mermaid source into the chat.
+- Skip the diagram for trivial single-file tweaks (typo fixes, one-line bug fixes, config value changes) — use judgment on "trivial."
+
 ## STT (Speech-to-Text)
 
 STT/TTS is embedded directly in the Flask backend (`backend/routes/stt.py`). Two backends — local (openai-whisper + kokoro-onnx) or OpenAI API (cloud, no local models).
