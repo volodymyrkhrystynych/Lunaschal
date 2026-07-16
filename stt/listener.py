@@ -102,6 +102,19 @@ def _fetch_shortcut_settings() -> tuple[str | None, str | None, str | None, str 
     return None, None, None, None
 
 
+def _fetch_nudge_settings() -> tuple[bool | None, int | None]:
+    """Fetch nudgeEnabled / nudgeIntervalMinutes from the Flask settings API on startup."""
+    try:
+        import json as _json
+        r = _SESSION.get(LUNASCHAL_URL + '/api/settings', timeout=3)
+        data = _json.loads(r.content)
+        if data:
+            return data.get('nudgeEnabled'), data.get('nudgeIntervalMinutes')
+    except Exception:
+        pass
+    return None, None
+
+
 _api_paste, _api_voice, _api_journal, _api_command = _fetch_shortcut_settings()
 PASTE_KEY   = _api_paste   or os.environ.get("STT_PASTE_KEY")    # None if not configured; may be a combo "KEY_LEFTCTRL+KEY_F1"
 VOICE_KEY   = _api_voice   or os.environ.get("STT_VOICE_KEY")    # None if not configured; may be a combo
@@ -572,7 +585,10 @@ def _speak(text: str) -> None:
 # Task nudge
 # ---------------------------------------------------------------------------
 
-NUDGE_INTERVAL   = int(os.environ.get("NUDGE_INTERVAL",   "2700"))  # default 45 min
+_api_nudge_enabled, _api_nudge_interval_min = _fetch_nudge_settings()
+NUDGE_ENABLED    = _api_nudge_enabled if _api_nudge_enabled is not None else True
+NUDGE_INTERVAL   = (_api_nudge_interval_min * 60) if _api_nudge_interval_min else \
+    int(os.environ.get("NUDGE_INTERVAL", "2700"))  # default 45 min
 NUDGE_START_HOUR = int(os.environ.get("NUDGE_START_HOUR", "9"))
 NUDGE_END_HOUR   = int(os.environ.get("NUDGE_END_HOUR",   "18"))
 
@@ -1051,7 +1067,10 @@ def main() -> None:
         print(f"  Wake word       : \"Hey Luna\"  (WAKE_WORD_MODEL={WAKE_WORD_MODEL})")
     else:
         print("  Wake word       : disabled  (set WAKE_WORD_MODEL=/path/to/hey_luna.onnx)")
-    print(f"  Task nudge      : every {NUDGE_INTERVAL//60} min ({NUDGE_START_HOUR}:00–{NUDGE_END_HOUR}:00)")
+    if NUDGE_ENABLED:
+        print(f"  Task nudge      : every {NUDGE_INTERVAL//60} min ({NUDGE_START_HOUR}:00–{NUDGE_END_HOUR}:00)")
+    else:
+        print("  Task nudge      : disabled")
     print("  Exit            : Ctrl+C\n")
 
     keyboards = _find_keyboards()
@@ -1080,7 +1099,8 @@ def main() -> None:
     print("\nWaiting for shortcut…\n")
 
     threading.Thread(target=_wake_word_loop, daemon=True).start()
-    threading.Thread(target=_nudge_loop, daemon=True).start()
+    if NUDGE_ENABLED:
+        threading.Thread(target=_nudge_loop, daemon=True).start()
 
     for kb in keyboards:
         threading.Thread(target=_monitor_device, args=(kb,), daemon=True).start()

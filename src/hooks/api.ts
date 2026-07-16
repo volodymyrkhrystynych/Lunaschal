@@ -199,6 +199,8 @@ export interface AppSettings {
   sttDevice: string | null;
   voicePipelineEnabled: boolean;
   preventSleep: boolean;
+  nudgeEnabled: boolean;
+  nudgeIntervalMinutes: number;
 }
 
 export interface WhisperModel {
