@@ -154,6 +154,21 @@ def _fetch_binary(url: str) -> tuple[bytes, str]:
         return b''.join(chunks), resp.headers.get('Content-Type', '')
 
 
+def fetch_alerts(domain: str) -> list[xenforo.AlertItem]:
+    """Fetch and parse page 1 of a site's /account/alerts. Requires a stored
+    session cookie — guests are redirected to the login page, which is
+    reported as a blocked fetch rather than an empty alert list."""
+    resp = _fetch(f'https://{domain}/account/alerts')
+    items = xenforo.parse_alerts(resp.text, domain)
+    logged_out = '/login' in urlparse(str(resp.url)).path or \
+        (not items and '/login/login' in resp.text)
+    if logged_out:
+        raise FetchBlockedError(
+            f'{domain}: not logged in — paste a fresh Cookie header in'
+            ' Settings → Fanfic site cookies.')
+    return items
+
+
 # --- images ---
 
 _EXT_FROM_CT = {
@@ -541,6 +556,63 @@ def run_check_updates(fic_id: str) -> None:
     except Exception as e:
         print(f'Fanfic update check failed for {fic_id}: {e}')
         _fail_fic(fic_id, str(e))
+
+
+# --- pending-update queue ---
+#
+# Bulk updates (alerts refresh, the per-fic Update button) never fetch
+# directly: they set fics.update_pending and a single drain worker walks the
+# flags one fic at a time. Strictly serial on purpose — parallel scrapes get
+# the account rate-limited or Cloudflare-banned. The flag persists across
+# restarts; a leftover queue resumes on the next drain trigger.
+
+_drain_lock = threading.Lock()
+_drain_active = False
+
+
+def start_drain() -> None:
+    """Spawn the drain worker unless one is already running. A running
+    worker re-queries the flags each round, so newly flagged fics are picked
+    up without a second thread."""
+    global _drain_active
+    with _drain_lock:
+        if _drain_active:
+            return
+        _drain_active = True
+
+    def worker():
+        global _drain_active
+        try:
+            run_drain_pending()
+        finally:
+            with _drain_lock:
+                _drain_active = False
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
+def run_drain_pending() -> None:
+    db = get_db()
+    while True:
+        row = db.execute(
+            "SELECT id FROM fics WHERE update_pending=1"
+            " AND download_status != 'downloading'"
+            ' ORDER BY updated_at LIMIT 1').fetchone()
+        if not row:
+            return
+        fic_id = row['id']
+        db.execute(
+            "UPDATE fics SET update_pending=0, download_status='downloading' WHERE id=?",
+            (fic_id,))
+        db.commit()
+        start_progress(fic_id, 'updating')
+        try:
+            run_check_updates(fic_id)
+        except Exception as e:
+            # run_check_updates handles its own errors; this guards the queue
+            # against anything that escapes so one bad fic can't stop the rest.
+            print(f'Fanfic drain: update crashed for {fic_id}: {e}')
+            _fail_fic(fic_id, str(e))
 
 
 _REMOTE_IMG = re.compile(r'<img[^>]+src="https?://', re.I)

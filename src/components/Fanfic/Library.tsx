@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
-import type { Fic } from '../../hooks/api';
+import type { Fic, RefreshAlertsResult } from '../../hooks/api';
 import { detectFicSite, formatRating, siteLabel, SITE_LABELS } from '../../lib/fanfic';
 import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { FolderBar, FolderPicker } from './Folders';
@@ -24,6 +24,7 @@ export function Library({ onOpen }: LibraryProps) {
   const [folderId, setFolderId] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
   const [showDelete, setShowDelete] = useState(false);
+  const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -35,9 +36,11 @@ export function Library({ onOpen }: LibraryProps) {
     queryFn: () => (searchQuery
       ? api.fanfic.search(searchQuery)
       : api.fanfic.list({ folderId: folderId ?? undefined, tag: tag ?? undefined })),
-    // Poll while any fic is still downloading so progress bars advance.
+    // Poll while any fic is still downloading or queued behind the serial
+    // update worker so progress bars and queued badges advance.
     refetchInterval: (query) =>
-      query.state.data?.some((f: Fic) => f.downloadStatus === 'downloading') ? 1500 : false,
+      query.state.data?.some((f: Fic) => f.downloadStatus === 'downloading' || f.updatePending)
+        ? 1500 : false,
   });
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ['fanfic'] });
@@ -74,6 +77,23 @@ export function Library({ onOpen }: LibraryProps) {
     onSuccess: invalidate,
   });
 
+  const refreshAlerts = useMutation({
+    mutationFn: () => api.fanfic.refreshAlerts(),
+    onSuccess: (r: RefreshAlertsResult) => {
+      invalidate();
+      const parts = [];
+      if (r.flagged) parts.push(`${r.flagged} queued for update`);
+      if (r.newImports) parts.push(`${r.newImports} new import${r.newImports > 1 ? 's' : ''}`);
+      if (r.skippedFresh) parts.push(`${r.skippedFresh} already current`);
+      if (r.skippedActive) parts.push(`${r.skippedActive} already queued`);
+      if (parts.length === 0) parts.push(`no library threads among ${r.alertsSeen} alerts`);
+      const siteErrors = Object.entries(r.errors).map(([d, msg]) => `${d}: ${msg}`);
+      setRefreshSummary([parts.join(' · '), ...siteErrors].join(' — '));
+      setImportError(null);
+    },
+    onError: (e: Error) => setImportError(e.message),
+  });
+
   useEffect(() => {
     setSelIndex((i) => Math.min(i, Math.max((fics?.length ?? 1) - 1, 0)));
   }, [fics]);
@@ -101,6 +121,12 @@ export function Library({ onOpen }: LibraryProps) {
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-semibold text-[var(--color-text)]">Library</h1>
         <div className="flex gap-2">
+          <button onClick={() => refreshAlerts.mutate()}
+            disabled={refreshAlerts.isPending}
+            title="Check each site's alerts page and queue updates for threads with new activity"
+            className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50">
+            {refreshAlerts.isPending ? 'Checking…' : '⟳ Refresh'}
+          </button>
           <button onClick={() => fileInputRef.current?.click()}
             disabled={uploadFile.isPending}
             className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50">
@@ -186,6 +212,14 @@ export function Library({ onOpen }: LibraryProps) {
         </div>
       )}
 
+      {refreshSummary && (
+        <div className="mb-4 px-3 py-2 bg-[var(--color-surface)] border border-white/15 rounded text-sm text-[var(--color-text-muted)] flex justify-between">
+          <span>{refreshSummary}</span>
+          <button onClick={() => setRefreshSummary(null)}
+            className="ml-2 hover:text-[var(--color-text)]">✕</button>
+        </div>
+      )}
+
       <div ref={listRef} className="flex-1 overflow-y-auto space-y-3">
         {isLoading && <div className="text-[var(--color-text-muted)]">Loading...</div>}
 
@@ -249,8 +283,14 @@ function FicCard({ fic, selected, showDelete, onOpen, onCheckUpdates, onTagClick
                 title="Rate and review">Review</button>
               {fic.sourceType === 'xenforo' && !downloading && (
                 <button onClick={onCheckUpdates}
-                  className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                  title="Fetch new chapters">↻ Update</button>
+                  className={`text-sm ${fic.updatePending
+                    ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+                  title={fic.updatePending
+                    ? 'Waiting for the update worker — click to un-queue'
+                    : 'Queue an update check'}>
+                  {fic.updatePending ? '⏳ Queued' : '↻ Update'}
+                </button>
               )}
               {showDelete && (
                 <button onClick={onDelete} className="text-sm text-red-400 hover:text-red-300">Delete</button>

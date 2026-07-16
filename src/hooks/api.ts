@@ -40,6 +40,7 @@ export interface Fic {
   chapterCount: number;
   downloadStatus: 'downloading' | 'complete' | 'error';
   downloadError: string | null;
+  updatePending?: boolean;
   lastReadChapterId: string | null;
   lastCheckedAt: string | null;
   rating: number | null;
@@ -63,6 +64,15 @@ export interface FicFolder {
 export interface FicTagCount {
   name: string;
   count: number;
+}
+
+export interface RefreshAlertsResult {
+  flagged: number;
+  newImports: number;
+  skippedFresh: number;
+  skippedActive: number;
+  alertsSeen: number;
+  errors: Record<string, string>;
 }
 
 export interface FicChapterSummary {
@@ -455,7 +465,9 @@ export const api = {
     importUrl: (url: string) =>
       post<{ id: string; alreadyExists?: boolean }>('/api/fanfic/import', { url }),
     status: (ficId: string) => get<FicDownloadProgress | { done: true }>(`/api/fanfic/${ficId}/status`),
-    checkUpdates: (ficId: string) => post<{ id: string }>(`/api/fanfic/${ficId}/check-updates`),
+    checkUpdates: (ficId: string) =>
+      post<{ id: string; queued: boolean }>(`/api/fanfic/${ficId}/check-updates`),
+    refreshAlerts: () => post<RefreshAlertsResult>('/api/fanfic/refresh-alerts'),
     uploadFile: (file: File) => {
       const form = new FormData();
       form.append('file', file);

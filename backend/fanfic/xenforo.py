@@ -184,6 +184,38 @@ def parse_threadmarks_index(html: str) -> ThreadIndex:
     return ThreadIndex(title=title, author=author, description=description, categories=categories)
 
 
+@dataclass
+class AlertItem:
+    ref: ThreadRef
+    alert_at: int | None  # unix seconds from the alert row's <time data-time>
+
+
+def parse_alerts(html: str, domain: str) -> list[AlertItem]:
+    """Thread references from an /account/alerts page. Each alert row links
+    to its content; only rows with a direct thread link are kept — resolving
+    bare /posts/ links (reply/quote alerts) would cost a request each.
+    Duplicates are preserved in page order; callers dedupe (newest
+    timestamp wins)."""
+    soup = BeautifulSoup(html, 'html.parser')
+    rows = soup.select('li.js-alert') or soup.select('[data-alert-id]')
+    base = f'https://{domain}/'
+    items: list[AlertItem] = []
+    for row in rows:
+        ref = None
+        for a in row.select('a[href]'):
+            ref = parse_thread_ref(urljoin(base, a['href']))
+            if ref:
+                break
+        if not ref:
+            continue
+        time_tag = row.select_one('time[data-time]')
+        alert_at = None
+        if time_tag and str(time_tag.get('data-time', '')).isdigit():
+            alert_at = int(time_tag['data-time'])
+        items.append(AlertItem(ref=ref, alert_at=alert_at))
+    return items
+
+
 def parse_thread_tags(html: str) -> list[str]:
     """Tags from a thread page's tag list. XenForo 2 renders them as
     <a class="tagItem"> anchors, either wrapped in a span.js-tagList or
