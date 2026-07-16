@@ -249,6 +249,7 @@ CREATE TABLE IF NOT EXISTS site_cookies (
 CREATE TABLE IF NOT EXISTS fic_folders (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

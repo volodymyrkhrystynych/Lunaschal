@@ -55,6 +55,7 @@ export interface Fic {
 export interface FicFolder {
   id: string;
   name: string;
+  position: number;
   ficCount: number;
   createdAt: string;
   updatedAt: string;
@@ -436,6 +437,8 @@ export const api = {
       create: (name: string) => post<{ id: string }>('/api/fanfic/folders', { name }),
       rename: (id: string, name: string) =>
         patch<{ success: boolean }>(`/api/fanfic/folders/${id}`, { name }),
+      reorder: (ids: string[]) =>
+        put<{ success: boolean }>('/api/fanfic/folders/order', { ids }),
       delete: (id: string) => del<{ success: boolean }>(`/api/fanfic/folders/${id}`),
     },
     addToFolder: (ficId: string, folderId: string) =>

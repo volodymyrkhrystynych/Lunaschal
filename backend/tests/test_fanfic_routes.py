@@ -313,6 +313,109 @@ def test_folder_crud(client):
     assert [f['name'] for f in client.get('/api/fanfic/folders').get_json()] == ['favorites']
 
 
+def _add_chapter(fic_id, position=1, posted_at=None, created_at=None):
+    db = get_db()
+    db.execute(
+        'INSERT INTO fic_chapters(id, fic_id, position, title, category,'
+        ' content_html, content_text, source_post_id, word_count, posted_at, created_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        (str(ULID()), fic_id, position, f'Ch {position}', 'threadmarks', '<p>x</p>', 'x',
+         str(ULID()), 1, posted_at, created_at or int(time.time())))
+    db.commit()
+
+
+def test_folder_reorder(client):
+    a = make_folder(client, 'a')
+    b = make_folder(client, 'b')
+    c = make_folder(client, 'c')
+
+    def names():
+        return [f['name'] for f in client.get('/api/fanfic/folders').get_json()]
+
+    # default order is creation order
+    assert names() == ['a', 'b', 'c']
+
+    assert client.put('/api/fanfic/folders/order',
+                      json={'ids': [c, a, b]}).status_code == 200
+    assert names() == ['c', 'a', 'b']
+
+    # new folders append at the end of the custom order
+    make_folder(client, 'd')
+    assert names() == ['c', 'a', 'b', 'd']
+
+
+def test_folder_reorder_validation(client):
+    a = make_folder(client, 'a')
+    b = make_folder(client, 'b')
+
+    for bad in ({}, {'ids': 'x'}, {'ids': [a]}, {'ids': [a, a]},
+                {'ids': [a, b, 'nope']}, {'ids': [a, 'nope']}):
+        assert client.put('/api/fanfic/folders/order', json=bad).status_code == 400, bad
+    # failed calls leave the order untouched
+    assert [f['name'] for f in client.get('/api/fanfic/folders').get_json()] == ['a', 'b']
+
+
+def test_all_view_groups_fics_by_folder_order(client):
+    now = int(time.time())
+    fic_a, _ = make_fic('A')
+    fic_b, _ = make_fic('B')
+    fic_c, _ = make_fic('C')  # stays unsorted
+    # distinct forum dates make within-group order deterministic:
+    # a is the most recently updated, then b, then c
+    _add_chapter(fic_a, posted_at=now - 50)
+    _add_chapter(fic_b, posted_at=now - 100)
+    _add_chapter(fic_c, posted_at=now - 10)
+    first = make_folder(client, 'first')
+    second = make_folder(client, 'second')
+    client.post(f'/api/fanfic/{fic_a}/folders', json={'folderId': first})
+    client.post(f'/api/fanfic/{fic_b}/folders', json={'folderId': second})
+
+    def ids():
+        return [f['id'] for f in client.get('/api/fanfic').get_json()]
+
+    # folder 1's fics, then folder 2's, unsorted last — even though the
+    # unsorted fic has the newest forum activity
+    assert ids() == [fic_a, fic_b, fic_c]
+
+    # swapping the folders swaps the groups
+    client.put('/api/fanfic/folders/order', json={'ids': [second, first]})
+    assert ids() == [fic_b, fic_a, fic_c]
+
+    # a fic in several folders sorts under its earliest-positioned one:
+    # a joins the leading folder "second" and outranks b there by recency
+    client.post(f'/api/fanfic/{fic_a}/folders', json={'folderId': second})
+    assert ids() == [fic_a, fic_b, fic_c]
+
+    # single-folder and unsorted views ignore grouping entirely
+    assert [f['id'] for f in
+            client.get(f'/api/fanfic?folderId={second}').get_json()] == [fic_a, fic_b]
+    assert [f['id'] for f in
+            client.get('/api/fanfic?folderId=unsorted').get_json()] == [fic_c]
+
+
+def test_list_orders_by_forum_post_date_not_import_date(client):
+    now = int(time.time())
+    # imported just now, but its latest forum post is old
+    stale, _ = make_fic('Stale')
+    _add_chapter(stale, posted_at=now - 5000, created_at=now)
+    # imported long ago, but has recent forum activity
+    fresh, _ = make_fic('Fresh')
+    _add_chapter(fresh, posted_at=now - 100, created_at=now - 3000)
+
+    ids = [f['id'] for f in client.get('/api/fanfic').get_json()]
+    assert ids == [fresh, stale]
+
+    # chapters without a forum date (epub/docx) fall back to import time
+    epub, _ = make_fic('Epub')
+    _add_chapter(epub, posted_at=None, created_at=now + 50)
+    ids = [f['id'] for f in client.get('/api/fanfic').get_json()]
+    assert ids == [epub, fresh, stale]
+
+    # search uses the same ordering
+    hits = [f['id'] for f in client.get('/api/fanfic/search?query=s').get_json()]
+    assert hits == [fresh, stale]
+
+
 def test_folder_membership(client):
     fic_id, _ = make_fic()
     folder_id = make_folder(client, 'favorites')
