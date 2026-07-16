@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 
 from backend.ai.provider import get_provider_config, is_ai_configured, DEFAULT_MODELS
 
@@ -11,11 +12,50 @@ _SYSTEM = (
     "1. Fix spelling mistakes and obvious transcription errors (wrong words, misheared sounds).\n"
     "2. Add punctuation where it is clearly missing (periods, commas, question marks).\n"
     "3. Capitalise the first word of each sentence.\n"
-    "Do NOT remove any words, rephrase any sentence, restructure paragraphs, improve vocabulary, "
+    "4. Insert paragraph breaks (a blank line) between distinct thoughts or topic shifts, "
+    "so a long stream-of-consciousness transcript reads as separate paragraphs.\n"
+    "Do NOT remove any words, rephrase any sentence, reorder any sentence, improve vocabulary, "
     "or make the text sound more formal or polished. "
-    "Every word the speaker said must remain in the output. "
-    "Return only the corrected text, no commentary."
+    "Every word the speaker said must remain in the output, in the original order. "
+    "Return only the corrected text, no commentary, no lead-in phrase, and no preamble. "
+    "Do NOT start your reply with anything like 'Here is the corrected text:' or 'Sure, here you go:' — "
+    "the very first character of your reply must be the first character of the corrected text itself. "
+    "Do NOT wrap the output — or any paragraph of it — in quotation marks. "
+    "Only include a quotation mark if the speaker was themselves quoting someone."
 )
+
+_PREAMBLE_RE = re.compile(
+    r"""^\s*
+        (?:(?:sure|of course|certainly|okay|ok)[,!.]?\s*)?
+        (?:here(?:'s|\s+is)\s+(?:your|the)\s+)?
+        (?:corrected|cleaned(?:[\s-]up)?|polished|edited|revised)\s+
+        (?:text|transcript|version|entry)
+        \s*:?\s*\n+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+_WRAP_QUOTE_PAIRS = [('"', '"'), ("'", "'"), ('“', '”'), ('‘', '’'), ('«', '»')]
+
+
+def _unwrap_quotes(paragraph: str) -> str:
+    """Strip a single pair of matching quote marks that wraps an entire
+    paragraph — models sometimes render "the corrected text" as a literal
+    quoted string despite being told not to."""
+    p = paragraph.strip()
+    for open_q, close_q in _WRAP_QUOTE_PAIRS:
+        if len(p) >= 2 and p.startswith(open_q) and p.endswith(close_q):
+            return p[len(open_q):-len(close_q)].strip()
+    return p
+
+
+def _clean_polish_output(text: str) -> str:
+    """Strip a leading preamble line (e.g. "Here is the corrected text:") and
+    any wrapping quotation marks the model adds despite being told not to."""
+    text = _PREAMBLE_RE.sub('', text.strip(), count=1).strip()
+    paragraphs = text.split('\n\n')
+    return '\n\n'.join(_unwrap_quotes(p) if p.strip() else p for p in paragraphs)
 
 
 _METADATA_SYSTEM = (
@@ -169,7 +209,7 @@ def polish_journal_entry(raw_text: str) -> str:
                 ],
                 stream=False,
             )
-            return resp.choices[0].message.content.strip() or raw_text
+            return _clean_polish_output(resp.choices[0].message.content) or raw_text
 
         elif provider == 'ollama':
             client = _ollama_client(c)
@@ -182,7 +222,7 @@ def polish_journal_entry(raw_text: str) -> str:
                 ],
                 stream=False,
             )
-            return resp.choices[0].message.content.strip() or raw_text
+            return _clean_polish_output(resp.choices[0].message.content) or raw_text
 
         elif provider == 'gemini':
             import google.generativeai as genai
@@ -190,7 +230,7 @@ def polish_journal_entry(raw_text: str) -> str:
             model_name = c['model'] or DEFAULT_MODELS['gemini']
             gemini = genai.GenerativeModel(model_name, system_instruction=_SYSTEM)
             resp = gemini.generate_content(raw_text)
-            return resp.text.strip() or raw_text
+            return _clean_polish_output(resp.text) or raw_text
 
     except Exception as e:
         logger.error('Journal polish failed, using raw text: %s', e)

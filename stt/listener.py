@@ -260,12 +260,18 @@ def _transcribe_and_paste() -> None:
         if audio is None:
             return
 
+        # Snapshot the target window now, at the moment recording stops —
+        # transcription can take a while (e.g. CPU-bound Whisper), and by the
+        # time it's done the user may have clicked or alt-tabbed elsewhere.
+        win = _active_window()
+        target_address = win.get("address")
+
         duration = len(audio) / SAMPLE_RATE
         _status(f"⏳ Transcribing {duration:.1f}s…")
 
         # source="paste" asks the server to keep this in the transcription log,
         # tagged with the window the text is about to be pasted into
-        text = _transcribe(audio, source="paste", window=_window_context())
+        text = _transcribe(audio, source="paste", window=_window_context(win))
         if not text:
             return
 
@@ -276,6 +282,8 @@ def _transcribe_and_paste() -> None:
         # Wait for F1 to be released so the compositor doesn't
         # apply it as a modifier to the pasted characters.
         _ctrl_released.wait(timeout=KEY_RELEASE_TIMEOUT)
+        if target_address:
+            _focus_window(target_address)
         _paste_text(text)
     finally:
         _action_lock.release()
@@ -765,23 +773,40 @@ def _stop_audio() -> np.ndarray | None:
     return audio
 
 
-def _window_context() -> dict[str, str]:
-    """Focused window's class + title via Hyprland; empty dict on any failure
-    (other compositors, hyprctl missing) so transcription never breaks."""
+def _active_window() -> dict:
+    """Raw Hyprland activewindow JSON; {} on any failure (other compositors,
+    hyprctl missing) so callers can safely no-op."""
     try:
         out = subprocess.run(
             ["hyprctl", "activewindow", "-j"],
             capture_output=True, text=True, timeout=2,
         )
-        win = json.loads(out.stdout)
-        ctx = {}
-        if win.get("class"):
-            ctx["app"] = win["class"]
-        if win.get("title"):
-            ctx["window_title"] = win["title"]
-        return ctx
+        return json.loads(out.stdout) or {}
     except Exception:
         return {}
+
+
+def _window_context(win: dict) -> dict[str, str]:
+    """Focused window's class + title, for tagging the transcription log."""
+    ctx = {}
+    if win.get("class"):
+        ctx["app"] = win["class"]
+    if win.get("title"):
+        ctx["window_title"] = win["title"]
+    return ctx
+
+
+def _focus_window(address: str) -> None:
+    """Re-focus a specific window by Hyprland address (works across
+    workspaces); best-effort, silently no-ops on other compositors."""
+    try:
+        subprocess.run(
+            ["hyprctl", "dispatch", "focuswindow", f"address:{address}"],
+            capture_output=True, timeout=2,
+        )
+        time.sleep(0.1)  # give the compositor a moment to hand focus over
+    except Exception:
+        pass
 
 
 def _transcribe(audio: np.ndarray, source: str | None = None,
@@ -791,12 +816,18 @@ def _transcribe(audio: np.ndarray, source: str | None = None,
     wavfile.write(buf, SAMPLE_RATE, audio_i16)
     buf.seek(0)
 
+    duration_secs = len(audio) / SAMPLE_RATE
+    # Fixed 120s timeout was too short for long recordings on slower (CPU/API)
+    # backends; scale with recording length so an 8+ minute clip doesn't
+    # abort mid-transcription.
+    timeout = max(120, duration_secs * 2 + 60)
+
     try:
         resp = _SESSION.post(
             f"{STT_URL}/api/transcribe",
             data={"source": source, **(window or {})} if source else None,
             files={"audio": ("recording.wav", buf, "audio/wav")},
-            timeout=120,
+            timeout=timeout,
         )
         resp.raise_for_status()
         text = resp.json().get("text", "").strip()
