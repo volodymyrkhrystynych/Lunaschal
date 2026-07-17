@@ -100,6 +100,30 @@ def test_missing_track_is_skipped(env):
     assert [s['speaker'] for s in m['segments']] == ['Me']
 
 
+def test_no_mic_track_skips_mic_phase(env, monkeypatch):
+    """Uploaded single-track meetings have no mic.wav at all — the phase
+    label shown to the user should never claim to be transcribing a mic."""
+    meeting_id = _insert_meeting()
+    _write_track(storage.system_path(meeting_id))
+    # No mic.wav written.
+
+    phases = []
+    real_set_phase = pipeline._set_phase
+
+    def spy(mid, phase, **kw):
+        phases.append(phase)
+        return real_set_phase(mid, phase, **kw)
+
+    monkeypatch.setattr(pipeline, '_set_phase', spy)
+    pipeline._run(meeting_id)
+
+    assert phases[0] == 'transcribing_system'
+    assert 'transcribing_mic' not in phases
+    m = _get(env['client'], meeting_id)
+    assert m['status'] == 'done'
+    assert [s['speaker'] for s in m['segments']] == ['Others']
+
+
 def test_whisper_failure_marks_error(env, monkeypatch):
     meeting_id = _insert_meeting()
     _write_track(storage.mic_path(meeting_id))

@@ -1,9 +1,11 @@
 """Route tests for /api/meetings with ffmpeg and the pipeline mocked out."""
+import io
+import subprocess
 import time
 
 import pytest
 
-from backend.meetings import recorder
+from backend.meetings import recorder, storage
 
 
 class FakePopen:
@@ -202,6 +204,69 @@ def test_summarize_uses_renamed_speakers(client, rec, monkeypatch):
     assert 'Alice: hi there' in seen['text']
     assert 'Speaker 1' not in seen['text']
     assert 'Me: hello' in seen['text']
+
+
+def _upload(client, filename='recording.mp3', title=None, duration=12.5, monkeypatch=None,
+            transcode=None):
+    if monkeypatch is not None:
+        monkeypatch.setattr(storage, 'transcode_to_system_track',
+                            transcode or (lambda src, dest: duration))
+    data = {'audio': (io.BytesIO(b'fake audio bytes'), filename)}
+    if title is not None:
+        data['title'] = title
+    return client.post('/api/meetings/upload', data=data, content_type='multipart/form-data')
+
+
+def test_upload_creates_meeting_row(client, rec, monkeypatch):
+    resp = _upload(client, monkeypatch=monkeypatch, duration=12.5)
+    assert resp.status_code == 201
+    meeting_id = resp.get_json()['id']
+    assert rec['pipeline_calls'] == [meeting_id]
+
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    assert m['status'] == 'transcribing'
+    assert m['phase'] == 'transcribing_system'
+    assert m['source'] == 'upload'
+    assert m['durationSeconds'] == 12.5
+    assert m['title'] is None
+
+
+def test_upload_with_title(client, rec, monkeypatch):
+    resp = _upload(client, title='Standup recap', monkeypatch=monkeypatch)
+    meeting_id = resp.get_json()['id']
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    assert m['title'] == 'Standup recap'
+
+
+def test_upload_missing_file(client, rec):
+    resp = client.post('/api/meetings/upload', data={}, content_type='multipart/form-data')
+    assert resp.status_code == 400
+    assert client.get('/api/meetings').get_json() == []
+
+
+def test_upload_bad_audio_rolls_back(client, rec, monkeypatch, tmp_path):
+    def boom(src, dest):
+        raise subprocess.CalledProcessError(1, ['ffmpeg'])
+
+    resp = _upload(client, monkeypatch=monkeypatch, transcode=boom)
+    assert resp.status_code == 400
+    assert client.get('/api/meetings').get_json() == []
+    assert list((tmp_path / 'meetings').iterdir()) == []
+
+
+def test_transcode_to_system_track_real_ffmpeg(tmp_path):
+    """Exercises the real ffmpeg/ffprobe calls (no test hits the network or
+    an AI provider here, so this is worth running for real rather than mocking)."""
+    src = tmp_path / 'source.wav'
+    subprocess.run(
+        ['ffmpeg', '-y', '-loglevel', 'error', '-f', 'lavfi',
+         '-i', 'sine=frequency=440:duration=2', str(src)],
+        check=True,
+    )
+    dest = tmp_path / 'system.wav'
+    duration = storage.transcode_to_system_track(src, dest)
+    assert dest.is_file()
+    assert duration == pytest.approx(2.0, abs=0.2)
 
 
 def test_reset_stale_meetings(client, rec):

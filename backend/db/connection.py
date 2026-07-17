@@ -77,6 +77,7 @@ def init_db() -> None:
     _ensure_hf_token(db)
     _ensure_meeting_speaker_names(db)
     _ensure_meeting_echo_cancel(db)
+    _ensure_meeting_source(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
 
@@ -197,6 +198,13 @@ def _ensure_meeting_speaker_names(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(meetings)')}
     if 'speaker_names' not in cols:
         db.execute('ALTER TABLE meetings ADD COLUMN speaker_names TEXT')
+        db.commit()
+
+
+def _ensure_meeting_source(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(meetings)')}
+    if 'source' not in cols:
+        db.execute("ALTER TABLE meetings ADD COLUMN source TEXT NOT NULL DEFAULT 'live'")
         db.commit()
 
 

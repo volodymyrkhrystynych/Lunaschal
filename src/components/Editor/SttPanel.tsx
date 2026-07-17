@@ -4,6 +4,7 @@ import { api } from '../../hooks/api';
 
 interface Props {
   onTranscribed: (text: string) => void;
+  onMeetingUploaded: (id: string) => void;
 }
 
 type Status = 'idle' | 'recording' | 'transcribing';
@@ -14,7 +15,7 @@ interface CorrectResult {
   corrected: string;
 }
 
-export function SttPanel({ onTranscribed }: Props) {
+export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const [status, setStatus] = useState<Status>('idle');
   const [lastText, setLastText] = useState('');
   const [error, setError] = useState('');
@@ -78,6 +79,18 @@ export function SttPanel({ onTranscribed }: Props) {
   });
 
   const meetingPending = startMeeting.isPending || stopMeeting.isPending;
+
+  const uploadMeeting = useMutation({
+    mutationFn: () => api.meetings.upload(audioFile!),
+    onSuccess: (data) => {
+      setAudioFile(null);
+      setCorrectResult(null);
+      if (audioInputRef.current) audioInputRef.current.value = '';
+      invalidateMeetings();
+      onMeetingUploaded(data.id);
+    },
+    onError: (err) => setCorrectError(err instanceof Error ? err.message : 'Failed to upload meeting'),
+  });
 
   useEffect(() => () => {
     if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
@@ -203,6 +216,14 @@ export function SttPanel({ onTranscribed }: Props) {
               className="mt-5 px-3 py-1 rounded text-sm font-medium bg-white/10 hover:bg-white/20 text-[var(--color-text)] transition-colors disabled:opacity-40"
             >
               {correctStatus === 'working' ? 'Working…' : 'Transcribe & Correct'}
+            </button>
+            <button
+              onClick={() => uploadMeeting.mutate()}
+              disabled={!audioFile || uploadMeeting.isPending}
+              title="Process this file as a meeting recording — transcribed and diarized like a live meeting, in the Meetings tab"
+              className="mt-5 px-3 py-1 rounded text-sm font-medium bg-white/10 hover:bg-white/20 text-[var(--color-text)] transition-colors disabled:opacity-40"
+            >
+              {uploadMeeting.isPending ? 'Uploading…' : 'Add as meeting'}
             </button>
           </div>
 

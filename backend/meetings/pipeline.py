@@ -94,8 +94,12 @@ def _run(meeting_id: str) -> None:
     try:
         mic = storage.mic_path(meeting_id)
         system = storage.system_path(meeting_id)
+        has_mic = mic is not None and mic.is_file()
 
-        _set_phase(meeting_id, 'transcribing_mic', status='transcribing')
+        # Uploaded single-track meetings have no separate mic recording — skip
+        # straight to the phase label that actually applies.
+        _set_phase(meeting_id, 'transcribing_mic' if has_mic else 'transcribing_system',
+                   status='transcribing')
         # A private model instance: going through stt._load_stt would evict the
         # user's configured model from its settings-keyed singleton.
         import whisper
@@ -103,7 +107,8 @@ def _run(meeting_id: str) -> None:
         model = whisper.load_model(WHISPER_MODEL, device='cpu')
         mic_segments = _transcribe_track(model, mic)
 
-        _set_phase(meeting_id, 'transcribing_system')
+        if has_mic:
+            _set_phase(meeting_id, 'transcribing_system')
         system_segments = _transcribe_track(model, system)
         del model
         gc.collect()

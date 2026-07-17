@@ -142,6 +142,7 @@ export interface Meeting {
 }
 
 export interface MeetingDetail extends Omit<Meeting, 'hasNotes' | 'hasSummary'> {
+  source: 'live' | 'upload';
   segments: MeetingSegment[] | null;
   transcriptText: string | null;
   speakerNames: Record<string, string> | null;
@@ -462,6 +463,12 @@ export const api = {
 
   meetings: {
     start: () => post<{ id: string }>('/api/meetings/start'),
+    upload: (file: File, title?: string) => {
+      const form = new FormData();
+      form.append('audio', file);
+      if (title?.trim()) form.append('title', title.trim());
+      return upload<{ id: string }>('/api/meetings/upload', form);
+    },
     stop: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/stop`),
     active: () => get<ActiveMeeting>('/api/meetings/active'),
     list: () => get<Meeting[]>('/api/meetings'),

@@ -1,5 +1,8 @@
 import json
+import subprocess
+import tempfile
 import time
+from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
@@ -63,6 +66,45 @@ def stop_meeting(id):
     db.commit()
     start_pipeline(id)
     return jsonify({'success': True})
+
+
+@bp.post('/upload')
+def upload_meeting():
+    file = request.files.get('audio')
+    if not file or not file.filename:
+        return jsonify({'error': 'No audio file provided'}), 400
+    title = (request.form.get('title') or '').strip() or None
+
+    meeting_id = str(ULID())
+    d = storage.meeting_dir(meeting_id)
+    if d is None:
+        return jsonify({'error': 'Invalid meeting id'}), 500
+    d.mkdir(parents=True, exist_ok=True)
+
+    suffix = Path(file.filename).suffix or '.audio'
+    with tempfile.NamedTemporaryFile(dir=d, suffix=suffix, delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    file.save(tmp_path)
+    try:
+        duration = storage.transcode_to_system_track(tmp_path, storage.system_path(meeting_id))
+    except subprocess.CalledProcessError:
+        storage.delete_meeting_dir(meeting_id)
+        return jsonify({'error': 'Could not read that audio file'}), 400
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    now = int(time.time())
+    started_at = now - int(duration)
+    db = get_db()
+    db.execute(
+        "INSERT INTO meetings(id, title, status, phase, source, started_at, ended_at,"
+        " duration_seconds, created_at, updated_at)"
+        " VALUES (?, ?, 'transcribing', 'transcribing_system', 'upload', ?, ?, ?, ?, ?)",
+        (meeting_id, title, started_at, now, duration, now, now),
+    )
+    db.commit()
+    start_pipeline(meeting_id)
+    return jsonify({'id': meeting_id}), 201
 
 
 @bp.get('')

@@ -299,6 +299,7 @@ CREATE TABLE IF NOT EXISTS meetings (
     status TEXT NOT NULL DEFAULT 'recording'
         CHECK(status IN ('recording','transcribing','done','error')),
     phase TEXT NOT NULL DEFAULT 'recording',
+    source TEXT NOT NULL DEFAULT 'live' CHECK(source IN ('live','upload')),
     error TEXT,
     segments TEXT,
     transcript_text TEXT,

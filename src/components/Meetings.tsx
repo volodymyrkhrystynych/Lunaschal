@@ -117,7 +117,7 @@ export function Meetings() {
 
         {meetings?.length === 0 && !isLoading && (
           <div className="text-center text-[var(--color-text-muted)] py-12">
-            No meetings yet. Use the Meeting button in the bottom bar to record one.
+            No meetings yet. Use the Meeting button in the bottom bar to record one, or the File panel to add one from an audio file.
           </div>
         )}
       </div>
@@ -246,16 +246,20 @@ function MeetingDetailView({ id, onBack }: { id: string; onBack: () => void }) {
         {meeting.status !== 'recording' && (
           <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 space-y-3">
             <h3 className="text-sm font-medium text-[var(--color-text)]">Audio</h3>
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-[var(--color-text-muted)] w-24 shrink-0">My mic</span>
-                <audio controls preload="none" src={api.meetings.audioUrl(id, 'mic')} className="w-full h-9" />
+            {meeting.source === 'upload' ? (
+              <audio controls preload="none" src={api.meetings.audioUrl(id, 'system')} className="w-full h-9" />
+            ) : (
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-[var(--color-text-muted)] w-24 shrink-0">My mic</span>
+                  <audio controls preload="none" src={api.meetings.audioUrl(id, 'mic')} className="w-full h-9" />
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-[var(--color-text-muted)] w-24 shrink-0">Participants</span>
+                  <audio controls preload="none" src={api.meetings.audioUrl(id, 'system')} className="w-full h-9" />
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <span className="text-xs text-[var(--color-text-muted)] w-24 shrink-0">Participants</span>
-                <audio controls preload="none" src={api.meetings.audioUrl(id, 'system')} className="w-full h-9" />
-              </div>
-            </div>
+            )}
           </div>
         )}
 

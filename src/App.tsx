@@ -98,7 +98,7 @@ export default function App() {
           />
           <main className="flex-1 flex flex-col overflow-hidden">{renderView()}</main>
         </div>
-        <SttPanel onTranscribed={handleTranscribed} />
+        <SttPanel onTranscribed={handleTranscribed} onMeetingUploaded={() => setCurrentView('meetings')} />
       </div>
     </ShortcutProvider>
   );
