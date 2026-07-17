@@ -400,6 +400,7 @@ function VRAMSection() {
   const { data: gpuVram } = useQuery({ queryKey: ['settings', 'gpu-vram'], queryFn: api.settings.gpuVram });
 
   const [saved, setSaved] = useState(false);
+  const [hfToken, setHfToken] = useState('');
 
   const updateAI = useMutation({
     mutationFn: api.settings.updateAI,
@@ -550,6 +551,44 @@ function VRAMSection() {
                 {b === 'local' ? 'Local (Kokoro ~80 MB)' : 'OpenAI API'}
               </button>
             ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-sm font-medium text-[var(--color-text)] mb-2">Meeting recording</p>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <div
+              onClick={() => updateAI.mutate({ meetingEchoCancel: !(settings?.meetingEchoCancel ?? false) })}
+              className={`relative w-9 h-5 rounded-full transition-colors ${settings?.meetingEchoCancel ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${settings?.meetingEchoCancel ? 'translate-x-4' : 'translate-x-0'}`} />
+            </div>
+            <div>
+              <span className="text-sm text-[var(--color-text)]">Echo cancellation</span>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Keeps the other participants out of your mic track when using speakers instead
+                of headphones. May soften your voice while others are talking. Falls back to the
+                raw mic automatically if unavailable.
+              </p>
+            </div>
+          </label>
+        </div>
+
+        <div>
+          <p className="text-sm font-medium text-[var(--color-text)] mb-2">Speaker diarization (meetings)</p>
+          <p className="text-xs text-[var(--color-text-muted)] mb-2">
+            HuggingFace token for pyannote speaker diarization — used to tell meeting participants
+            apart. Without it, remote speakers are all labeled "Others".
+          </p>
+          <div className="flex gap-2">
+            <input type="password" value={hfToken} onChange={(e) => setHfToken(e.target.value)}
+              placeholder={settings?.hasHfToken ? '••••••••••••••••' : 'hf_...'}
+              className="flex-1 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]" />
+            <button onClick={() => { updateAI.mutate({ hfToken }); setHfToken(''); }}
+              disabled={!hfToken.trim()}
+              className="px-3 py-1.5 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)] disabled:opacity-50">
+              Save
+            </button>
           </div>
         </div>
 

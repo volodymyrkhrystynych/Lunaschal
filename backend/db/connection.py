@@ -10,7 +10,7 @@ _conn: sqlite3.Connection | None = None
 
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
-    'posted_at', 'last_checked_at',
+    'posted_at', 'last_checked_at', 'started_at', 'ended_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -74,7 +74,11 @@ def init_db() -> None:
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
+    _ensure_hf_token(db)
+    _ensure_meeting_speaker_names(db)
+    _ensure_meeting_echo_cancel(db)
     _reset_stale_fic_downloads(db)
+    _reset_stale_meetings(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -171,6 +175,39 @@ def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
         "UPDATE fics SET download_status='error',"
         " download_error='Interrupted by an app restart — click Update to retry.'"
         " WHERE download_status='downloading'"
+    )
+    db.commit()
+
+
+def _ensure_hf_token(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'hf_token' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN hf_token TEXT')
+        db.commit()
+
+
+def _ensure_meeting_echo_cancel(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'meeting_echo_cancel' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN meeting_echo_cancel INTEGER DEFAULT 0')
+        db.commit()
+
+
+def _ensure_meeting_speaker_names(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(meetings)')}
+    if 'speaker_names' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN speaker_names TEXT')
+        db.commit()
+
+
+def _reset_stale_meetings(db: sqlite3.Connection) -> None:
+    """Meeting recordings (ffmpeg Popen handles) and transcription threads never
+    survive a process restart, but the persisted status does — any row still
+    'recording' or 'transcribing' at startup is necessarily orphaned."""
+    db.execute(
+        "UPDATE meetings SET status='error', phase='error',"
+        " error='Interrupted by an app restart.'"
+        " WHERE status IN ('recording','transcribing')"
     )
     db.commit()
 

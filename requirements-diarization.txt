@@ -1,0 +1,9 @@
+# Optional: speaker diarization for meeting transcripts.
+# Requires a free HuggingFace token (set in Settings, or HF_TOKEN env var)
+# AND accepting the user conditions on ALL THREE gated repos while logged in:
+#   https://huggingface.co/pyannote/speaker-diarization-3.1
+#   https://huggingface.co/pyannote/segmentation-3.0
+#   https://huggingface.co/pyannote/speaker-diarization-community-1
+#     (pyannote.audio 4.x loads PLDA files from community-1 even for the 3.1 pipeline)
+# Without this installed, meeting transcripts label remote audio as "Others".
+pyannote.audio>=3.1
