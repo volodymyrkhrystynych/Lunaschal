@@ -10,7 +10,7 @@ _conn: sqlite3.Connection | None = None
 
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
-    'posted_at', 'last_checked_at', 'started_at', 'ended_at',
+    'posted_at', 'last_checked_at', 'started_at', 'ended_at', 'due',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -67,7 +67,7 @@ def init_db() -> None:
     _ensure_stt_shortcuts(db)
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
-    _ensure_flashcard_tags(db)
+    _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
     _ensure_nudge_settings(db)
     _ensure_todo_completed_at(db)
@@ -287,11 +287,32 @@ def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:
         db.commit()
 
 
-def _ensure_flashcard_tags(db: sqlite3.Connection) -> None:
+def _migrate_flashcards_to_learning(db: sqlite3.Connection) -> None:
+    # One-time move of legacy SM-2 flashcards into learning_cards; scheduling
+    # resets (all due now, fresh FSRS). Dropping the table makes reruns no-ops.
+    exists = db.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='flashcards'"
+    ).fetchone()
+    if not exists:
+        return
     cols = {r[1] for r in db.execute('PRAGMA table_info(flashcards)')}
-    if 'tags' not in cols:
-        db.execute('ALTER TABLE flashcards ADD COLUMN tags TEXT')
-        db.commit()
+    tags_expr = 'tags' if 'tags' in cols else 'NULL'
+    now = int(time.time())
+    db.execute(
+        f"""
+        INSERT INTO learning_cards
+            (id, question, answer, tags, source_type, source_id,
+             state, fsrs_state, due, created_at, updated_at)
+        SELECT id, front, back, {tags_expr},
+               CASE WHEN source_id IS NOT NULL THEN 'journal' ELSE 'manual' END,
+               source_id, 'active', NULL, ?, created_at, ?
+        FROM flashcards
+        """,
+        (now, now),
+    )
+    db.execute('DROP TABLE flashcards')
+    db.execute('DROP INDEX IF EXISTS idx_flashcard_next_review')
+    db.commit()
 
 
 def _ensure_writing_project_id(db: sqlite3.Connection) -> None:
