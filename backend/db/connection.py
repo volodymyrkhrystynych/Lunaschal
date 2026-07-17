@@ -78,6 +78,8 @@ def init_db() -> None:
     _ensure_meeting_speaker_names(db)
     _ensure_meeting_echo_cancel(db)
     _ensure_meeting_source(db)
+    _ensure_meeting_pause_columns(db)
+    _ensure_meeting_whisper_columns(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
 
@@ -208,14 +210,42 @@ def _ensure_meeting_source(db: sqlite3.Connection) -> None:
         db.commit()
 
 
+def _ensure_meeting_pause_columns(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(meetings)')}
+    if 'pause_requested' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN pause_requested INTEGER NOT NULL DEFAULT 0')
+    if 'mic_offset_seconds' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN mic_offset_seconds REAL NOT NULL DEFAULT 0')
+    if 'mic_segments_partial' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN mic_segments_partial TEXT')
+    if 'system_offset_seconds' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN system_offset_seconds REAL NOT NULL DEFAULT 0')
+    if 'system_segments_partial' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN system_segments_partial TEXT')
+    db.commit()
+
+
+def _ensure_meeting_whisper_columns(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(meetings)')}
+    if 'whisper_model' not in cols:
+        db.execute("ALTER TABLE meetings ADD COLUMN whisper_model TEXT NOT NULL DEFAULT 'large-v3'")
+    if 'whisper_device' not in cols:
+        db.execute("ALTER TABLE meetings ADD COLUMN whisper_device TEXT NOT NULL DEFAULT 'cpu'")
+    db.commit()
+
+
 def _reset_stale_meetings(db: sqlite3.Connection) -> None:
     """Meeting recordings (ffmpeg Popen handles) and transcription threads never
     survive a process restart, but the persisted status does — any row still
-    'recording' or 'transcribing' at startup is necessarily orphaned."""
+    'recording' or 'transcribing' at startup is necessarily orphaned, UNLESS it
+    was deliberately paused (checkpointed cleanly, no thread to lose) or is
+    still awaiting the user to pick a model and start transcription (no thread
+    was ever spawned for it in the first place)."""
     db.execute(
         "UPDATE meetings SET status='error', phase='error',"
         " error='Interrupted by an app restart.'"
         " WHERE status IN ('recording','transcribing')"
+        " AND phase NOT IN ('paused_mic','paused_system','awaiting_start')"
     )
     db.commit()
 

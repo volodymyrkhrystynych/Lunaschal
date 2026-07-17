@@ -87,14 +87,16 @@ def test_failed_spawn_rolls_back_row(client, rec, monkeypatch):
     assert client.get('/api/meetings').get_json() == []
 
 
-def test_stop_starts_pipeline(client, rec):
+def test_stop_awaits_transcription_start(client, rec):
     meeting_id = _start(client)
     resp = client.post(f'/api/meetings/{meeting_id}/stop')
     assert resp.status_code == 200
-    assert rec['pipeline_calls'] == [meeting_id]
+    # Transcription no longer starts automatically — the pipeline is only
+    # spawned once the user picks a model/device via /start-transcription.
+    assert rec['pipeline_calls'] == []
     m = client.get(f'/api/meetings/{meeting_id}').get_json()
     assert m['status'] == 'transcribing'
-    assert m['phase'] == 'transcribing_mic'
+    assert m['phase'] == 'awaiting_start'
     assert m['endedAt'] is not None
     assert m['durationSeconds'] is not None
     # Both ffmpeg procs were stopped gracefully.
@@ -221,11 +223,12 @@ def test_upload_creates_meeting_row(client, rec, monkeypatch):
     resp = _upload(client, monkeypatch=monkeypatch, duration=12.5)
     assert resp.status_code == 201
     meeting_id = resp.get_json()['id']
-    assert rec['pipeline_calls'] == [meeting_id]
+    # Uploads also await a manual model/device choice before transcribing.
+    assert rec['pipeline_calls'] == []
 
     m = client.get(f'/api/meetings/{meeting_id}').get_json()
     assert m['status'] == 'transcribing'
-    assert m['phase'] == 'transcribing_system'
+    assert m['phase'] == 'awaiting_start'
     assert m['source'] == 'upload'
     assert m['durationSeconds'] == 12.5
     assert m['title'] is None
@@ -269,6 +272,282 @@ def test_transcode_to_system_track_real_ffmpeg(tmp_path):
     assert duration == pytest.approx(2.0, abs=0.2)
 
 
+def _set_phase(meeting_id, phase, status='transcribing'):
+    from backend.db.connection import get_db
+    get_db().execute('UPDATE meetings SET status=?, phase=? WHERE id=?', (status, phase, meeting_id))
+    get_db().commit()
+
+
+def _start_transcription(client, meeting_id, model='large-v3', device='cpu'):
+    return client.post(f'/api/meetings/{meeting_id}/start-transcription',
+                       json={'whisperModel': model, 'device': device})
+
+
+def test_start_transcription_success_and_conflicts(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')  # phase='awaiting_start'
+
+    resp = _start_transcription(client, meeting_id, model='turbo', device='cuda')
+    assert resp.status_code == 200
+    assert rec['pipeline_calls'] == [meeting_id]
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    assert m['phase'] == 'transcribing_mic'
+    assert m['status'] == 'transcribing'
+    assert m['whisperModel'] == 'turbo'
+    assert m['whisperDevice'] == 'cuda'
+
+    for phase, status in [
+        ('recording', 'recording'), ('transcribing_mic', 'transcribing'),
+        ('transcribing_system', 'transcribing'), ('diarizing', 'transcribing'),
+        ('summarizing', 'transcribing'), ('done', 'done'), ('error', 'error'),
+        ('paused_mic', 'transcribing'), ('paused_system', 'transcribing'),
+    ]:
+        _set_phase(meeting_id, phase, status)
+        resp = _start_transcription(client, meeting_id)
+        assert resp.status_code == 409, f'phase={phase!r} should reject start-transcription'
+
+    assert _start_transcription(client, 'unknown').status_code == 404
+
+
+def test_start_transcription_routes_upload_to_system_phase(client, rec, monkeypatch):
+    resp = _upload(client, monkeypatch=monkeypatch)
+    meeting_id = resp.get_json()['id']
+
+    assert _start_transcription(client, meeting_id).status_code == 200
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    assert m['phase'] == 'transcribing_system'
+
+
+def test_start_transcription_validates_body(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+
+    assert client.post(f'/api/meetings/{meeting_id}/start-transcription',
+                       json={'device': 'cpu'}).status_code == 400
+    assert client.post(f'/api/meetings/{meeting_id}/start-transcription',
+                       json={'whisperModel': 'turbo', 'device': 'tpu'}).status_code == 400
+    assert rec['pipeline_calls'] == []
+
+
+def test_retry_success_and_conflicts(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+    _start_transcription(client, meeting_id, model='large-v3', device='cuda')
+
+    # Simulate a CUDA OOM: pipeline failed mid-mic-track, leaving phase
+    # exactly where it was (not overwritten to a generic 'error').
+    _set_phase(meeting_id, 'transcribing_mic', status='error')
+    from backend.db.connection import get_db
+    get_db().execute("UPDATE meetings SET error='CUDA out of memory' WHERE id=?", (meeting_id,))
+    get_db().commit()
+
+    resp = client.post(f'/api/meetings/{meeting_id}/retry',
+                       json={'whisperModel': 'tiny', 'device': 'cpu'})
+    assert resp.status_code == 200
+    assert rec['pipeline_calls'] == [meeting_id, meeting_id]  # start + retry
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    assert m['status'] == 'transcribing'
+    assert m['phase'] == 'transcribing_mic'  # resume point preserved, not reset
+    assert m['whisperModel'] == 'tiny'
+    assert m['whisperDevice'] == 'cpu'
+    assert m['error'] is None
+
+    for phase, status in [
+        ('recording', 'recording'), ('awaiting_start', 'transcribing'),
+        ('transcribing_mic', 'transcribing'), ('transcribing_system', 'transcribing'),
+        ('diarizing', 'transcribing'), ('summarizing', 'transcribing'),
+        ('paused_mic', 'transcribing'), ('paused_system', 'transcribing'),
+        ('done', 'done'),
+    ]:
+        _set_phase(meeting_id, phase, status)
+        resp = client.post(f'/api/meetings/{meeting_id}/retry',
+                           json={'whisperModel': 'tiny', 'device': 'cpu'})
+        assert resp.status_code == 409, f'status={status!r} phase={phase!r} should reject retry'
+
+    assert client.post('/api/meetings/unknown/retry',
+                       json={'whisperModel': 'tiny', 'device': 'cpu'}).status_code == 404
+
+
+def test_retry_validates_body(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+    _set_phase(meeting_id, 'transcribing_mic', status='error')
+
+    assert client.post(f'/api/meetings/{meeting_id}/retry',
+                       json={'device': 'cpu'}).status_code == 400
+    assert client.post(f'/api/meetings/{meeting_id}/retry',
+                       json={'whisperModel': 'tiny', 'device': 'tpu'}).status_code == 400
+    assert rec['pipeline_calls'] == []
+
+
+def test_redo_from_done_clears_transcript_and_checkpoints(client, rec):
+    import json as _json
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+    _start_transcription(client, meeting_id, model='large-v3', device='cpu')
+
+    from backend.db.connection import get_db
+    segments = [{'start': 0.0, 'end': 2.0, 'speaker': 'Me', 'text': 'hello'}]
+    get_db().execute(
+        "UPDATE meetings SET status='done', phase='done', segments=?, transcript_text=?,"
+        " summary=?, speaker_names=?, mic_offset_seconds=12, mic_segments_partial=?,"
+        " system_offset_seconds=8, system_segments_partial=? WHERE id=?",
+        (_json.dumps(segments), '[00:00] Me: hello', 'a summary',
+         _json.dumps({'Me': 'Volodya'}), _json.dumps(segments), _json.dumps(segments), meeting_id),
+    )
+    get_db().commit()
+
+    resp = client.post(f'/api/meetings/{meeting_id}/redo',
+                       json={'whisperModel': 'turbo', 'device': 'cuda'})
+    assert resp.status_code == 200
+    assert rec['pipeline_calls'] == [meeting_id, meeting_id]  # start + redo
+
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    assert m['status'] == 'transcribing'
+    assert m['phase'] == 'transcribing_mic'
+    assert m['whisperModel'] == 'turbo'
+    assert m['whisperDevice'] == 'cuda'
+    assert m['segments'] is None
+    assert m['transcriptText'] is None
+    assert m['summary'] is None
+    assert m['speakerNames'] is None
+
+    row = get_db().execute(
+        'SELECT mic_offset_seconds, mic_segments_partial,'
+        ' system_offset_seconds, system_segments_partial FROM meetings WHERE id=?',
+        (meeting_id,)).fetchone()
+    assert row['mic_offset_seconds'] == 0
+    assert row['mic_segments_partial'] is None
+    assert row['system_offset_seconds'] == 0
+    assert row['system_segments_partial'] is None
+
+
+def test_redo_from_error_and_upload_routing(client, rec, monkeypatch):
+    resp = _upload(client, monkeypatch=monkeypatch)
+    meeting_id = resp.get_json()['id']
+    _set_phase(meeting_id, 'transcribing_system', status='error')
+
+    resp = client.post(f'/api/meetings/{meeting_id}/redo',
+                       json={'whisperModel': 'tiny', 'device': 'cpu'})
+    assert resp.status_code == 200
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    # Uploads have no mic track — redo must route straight to the system phase.
+    assert m['phase'] == 'transcribing_system'
+    assert m['error'] is None
+
+
+def test_redo_conflicts_and_validation(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+
+    for phase, status in [
+        ('recording', 'recording'), ('awaiting_start', 'transcribing'),
+        ('transcribing_mic', 'transcribing'), ('transcribing_system', 'transcribing'),
+        ('diarizing', 'transcribing'), ('summarizing', 'transcribing'),
+        ('paused_mic', 'transcribing'), ('paused_system', 'transcribing'),
+    ]:
+        _set_phase(meeting_id, phase, status)
+        resp = client.post(f'/api/meetings/{meeting_id}/redo',
+                           json={'whisperModel': 'tiny', 'device': 'cpu'})
+        assert resp.status_code == 409, f'status={status!r} phase={phase!r} should reject redo'
+
+    _set_phase(meeting_id, 'done', status='done')
+    assert client.post(f'/api/meetings/{meeting_id}/redo',
+                       json={'device': 'cpu'}).status_code == 400
+    assert client.post(f'/api/meetings/{meeting_id}/redo',
+                       json={'whisperModel': 'tiny', 'device': 'tpu'}).status_code == 400
+    assert rec['pipeline_calls'] == []
+
+    assert client.post('/api/meetings/unknown/redo',
+                       json={'whisperModel': 'tiny', 'device': 'cpu'}).status_code == 404
+
+
+def test_pause_success_and_conflicts(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+    _start_transcription(client, meeting_id)  # phase='transcribing_mic'
+
+    resp = client.post(f'/api/meetings/{meeting_id}/pause')
+    assert resp.status_code == 200
+    from backend.db.connection import get_db
+    row = get_db().execute('SELECT pause_requested FROM meetings WHERE id=?', (meeting_id,)).fetchone()
+    assert row['pause_requested'] == 1
+
+    _set_phase(meeting_id, 'transcribing_system')
+    assert client.post(f'/api/meetings/{meeting_id}/pause').status_code == 200
+
+    for phase, status in [
+        ('recording', 'recording'), ('awaiting_start', 'transcribing'),
+        ('diarizing', 'transcribing'),
+        ('summarizing', 'transcribing'), ('done', 'done'), ('error', 'error'),
+        ('paused_mic', 'transcribing'), ('paused_system', 'transcribing'),
+    ]:
+        _set_phase(meeting_id, phase, status)
+        resp = client.post(f'/api/meetings/{meeting_id}/pause')
+        assert resp.status_code == 409, f'phase={phase!r} should reject pause'
+
+    assert client.post('/api/meetings/unknown/pause').status_code == 404
+
+
+def test_resume_success_and_conflicts(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+
+    _set_phase(meeting_id, 'paused_mic')
+    resp = client.post(f'/api/meetings/{meeting_id}/resume')
+    assert resp.status_code == 200
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    assert m['phase'] == 'transcribing_mic'
+    assert m['status'] == 'transcribing'
+
+    _set_phase(meeting_id, 'paused_system')
+    resp = client.post(f'/api/meetings/{meeting_id}/resume')
+    assert resp.status_code == 200
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    assert m['phase'] == 'transcribing_system'
+    assert m['status'] == 'transcribing'
+    # Both successful /resume calls each spawn the pipeline once (/stop no
+    # longer does, since transcription now awaits a manual start).
+    assert rec['pipeline_calls'] == [meeting_id, meeting_id]
+
+    for phase, status in [
+        ('recording', 'recording'), ('awaiting_start', 'transcribing'),
+        ('transcribing_mic', 'transcribing'),
+        ('transcribing_system', 'transcribing'), ('diarizing', 'transcribing'),
+        ('summarizing', 'transcribing'), ('done', 'done'), ('error', 'error'),
+    ]:
+        _set_phase(meeting_id, phase, status)
+        resp = client.post(f'/api/meetings/{meeting_id}/resume')
+        assert resp.status_code == 409, f'phase={phase!r} should reject resume'
+
+    assert client.post('/api/meetings/unknown/resume').status_code == 404
+
+
+def test_double_resume_race_only_one_succeeds(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+    _set_phase(meeting_id, 'paused_mic')
+
+    codes = sorted([
+        client.post(f'/api/meetings/{meeting_id}/resume').status_code,
+        client.post(f'/api/meetings/{meeting_id}/resume').status_code,
+    ])
+    assert codes == [200, 409]
+    # Only the single successful /resume spawns the pipeline.
+    assert rec['pipeline_calls'] == [meeting_id]
+
+
+def test_internal_pause_columns_not_exposed(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+    _start_transcription(client, meeting_id)
+    client.post(f'/api/meetings/{meeting_id}/pause')
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    for key in ('pauseRequested', 'micOffsetSeconds', 'micSegmentsPartial',
+               'systemOffsetSeconds', 'systemSegmentsPartial'):
+        assert key not in m
+
+
 def test_reset_stale_meetings(client, rec):
     meeting_id = _start(client)
     from backend.db.connection import get_db, _reset_stale_meetings
@@ -277,3 +556,31 @@ def test_reset_stale_meetings(client, rec):
     m = client.get(f'/api/meetings/{meeting_id}').get_json()
     assert m['status'] == 'error'
     assert 'restart' in m['error']
+
+
+def test_reset_stale_meetings_leaves_paused_meetings_untouched(client, rec):
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')
+
+    for phase in ('paused_mic', 'paused_system'):
+        _set_phase(meeting_id, phase)
+        from backend.db.connection import get_db, _reset_stale_meetings
+        _reset_stale_meetings(get_db())
+        m = client.get(f'/api/meetings/{meeting_id}').get_json()
+        assert m['phase'] == phase
+        assert m['status'] == 'transcribing'
+        assert m['error'] is None
+
+
+def test_reset_stale_meetings_leaves_awaiting_start_untouched(client, rec):
+    """A meeting parked at awaiting_start has no thread running for it — an
+    app restart must not error it out, same as the paused states."""
+    meeting_id = _start(client)
+    client.post(f'/api/meetings/{meeting_id}/stop')  # phase='awaiting_start'
+
+    from backend.db.connection import get_db, _reset_stale_meetings
+    _reset_stale_meetings(get_db())
+    m = client.get(f'/api/meetings/{meeting_id}').get_json()
+    assert m['phase'] == 'awaiting_start'
+    assert m['status'] == 'transcribing'
+    assert m['error'] is None

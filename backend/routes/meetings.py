@@ -59,12 +59,11 @@ def stop_meeting(id):
     duration = recorder.stop(id)
     now = int(time.time())
     db.execute(
-        "UPDATE meetings SET status='transcribing', phase='transcribing_mic',"
+        "UPDATE meetings SET status='transcribing', phase='awaiting_start',"
         ' ended_at=?, duration_seconds=?, updated_at=? WHERE id=?',
         (now, duration, now, id),
     )
     db.commit()
-    start_pipeline(id)
     return jsonify({'success': True})
 
 
@@ -99,12 +98,148 @@ def upload_meeting():
     db.execute(
         "INSERT INTO meetings(id, title, status, phase, source, started_at, ended_at,"
         " duration_seconds, created_at, updated_at)"
-        " VALUES (?, ?, 'transcribing', 'transcribing_system', 'upload', ?, ?, ?, ?, ?)",
+        " VALUES (?, ?, 'transcribing', 'awaiting_start', 'upload', ?, ?, ?, ?, ?)",
         (meeting_id, title, started_at, now, duration, now, now),
     )
     db.commit()
-    start_pipeline(meeting_id)
     return jsonify({'id': meeting_id}), 201
+
+
+@bp.post('/<id>/start-transcription')
+def start_transcription(id):
+    body = request.json or {}
+    model = (body.get('whisperModel') or '').strip()
+    device = (body.get('device') or '').strip().lower()
+    if not model:
+        return jsonify({'error': 'whisperModel is required'}), 400
+    if device not in ('cpu', 'cuda'):
+        return jsonify({'error': 'device must be "cpu" or "cuda"'}), 400
+
+    db = get_db()
+    now = int(time.time())
+    cur = db.execute(
+        "UPDATE meetings SET status='transcribing', updated_at=?,"
+        ' whisper_model=?, whisper_device=?,'
+        " phase = CASE WHEN source='upload' THEN 'transcribing_system' ELSE 'transcribing_mic' END"
+        " WHERE id=? AND phase='awaiting_start'",
+        (now, model, device, id),
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        row = db.execute('SELECT id FROM meetings WHERE id=?', (id,)).fetchone()
+        if row is None:
+            return jsonify({'error': 'Meeting not found'}), 404
+        return jsonify({'error': 'Meeting is not awaiting transcription'}), 409
+    start_pipeline(id)
+    return jsonify({'success': True})
+
+
+@bp.post('/<id>/retry')
+def retry_meeting(id):
+    """Re-attempts a failed meeting, typically with a different model/device
+    (e.g. after a CUDA OOM). `phase` was left untouched by the failure, so it
+    already records the correct resume point (mid-track offsets are still
+    checkpointed) — this just clears the error and re-enters the pipeline."""
+    body = request.json or {}
+    model = (body.get('whisperModel') or '').strip()
+    device = (body.get('device') or '').strip().lower()
+    if not model:
+        return jsonify({'error': 'whisperModel is required'}), 400
+    if device not in ('cpu', 'cuda'):
+        return jsonify({'error': 'device must be "cpu" or "cuda"'}), 400
+
+    db = get_db()
+    now = int(time.time())
+    cur = db.execute(
+        "UPDATE meetings SET status='transcribing', updated_at=?,"
+        " whisper_model=?, whisper_device=?, error=NULL"
+        " WHERE id=? AND status='error'",
+        (now, model, device, id),
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        row = db.execute('SELECT id FROM meetings WHERE id=?', (id,)).fetchone()
+        if row is None:
+            return jsonify({'error': 'Meeting not found'}), 404
+        return jsonify({'error': 'Meeting has not failed'}), 409
+    start_pipeline(id)
+    return jsonify({'success': True})
+
+
+@bp.post('/<id>/redo')
+def redo_meeting(id):
+    """Fully restarts transcription from scratch — for when the user wants a
+    completely fresh pass (e.g. a better model on a finished meeting) rather
+    than /retry's checkpoint-resume. Discards the existing transcript,
+    summary, speaker renames, and chunk checkpoints; the audio itself is
+    untouched."""
+    body = request.json or {}
+    model = (body.get('whisperModel') or '').strip()
+    device = (body.get('device') or '').strip().lower()
+    if not model:
+        return jsonify({'error': 'whisperModel is required'}), 400
+    if device not in ('cpu', 'cuda'):
+        return jsonify({'error': 'device must be "cpu" or "cuda"'}), 400
+
+    db = get_db()
+    now = int(time.time())
+    cur = db.execute(
+        "UPDATE meetings SET status='transcribing', updated_at=?,"
+        " whisper_model=?, whisper_device=?, error=NULL,"
+        " segments=NULL, transcript_text=NULL, summary=NULL, speaker_names=NULL,"
+        " pause_requested=0, mic_offset_seconds=0, mic_segments_partial=NULL,"
+        " system_offset_seconds=0, system_segments_partial=NULL,"
+        " phase = CASE WHEN source='upload' THEN 'transcribing_system' ELSE 'transcribing_mic' END"
+        " WHERE id=? AND status IN ('done','error')",
+        (now, model, device, id),
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        row = db.execute('SELECT id FROM meetings WHERE id=?', (id,)).fetchone()
+        if row is None:
+            return jsonify({'error': 'Meeting not found'}), 404
+        return jsonify({'error': 'Meeting is not finished processing'}), 409
+    start_pipeline(id)
+    return jsonify({'success': True})
+
+
+@bp.post('/<id>/pause')
+def pause_meeting(id):
+    db = get_db()
+    now = int(time.time())
+    cur = db.execute(
+        "UPDATE meetings SET pause_requested=1, updated_at=? WHERE id=?"
+        " AND phase IN ('transcribing_mic','transcribing_system')",
+        (now, id),
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        row = db.execute('SELECT id FROM meetings WHERE id=?', (id,)).fetchone()
+        if row is None:
+            return jsonify({'error': 'Meeting not found'}), 404
+        return jsonify({'error': 'Meeting is not currently transcribing'}), 409
+    return jsonify({'success': True})
+
+
+@bp.post('/<id>/resume')
+def resume_meeting(id):
+    db = get_db()
+    now = int(time.time())
+    cur = db.execute(
+        "UPDATE meetings SET status='transcribing', updated_at=?,"
+        " phase = CASE phase WHEN 'paused_mic' THEN 'transcribing_mic'"
+        "                    WHEN 'paused_system' THEN 'transcribing_system' END"
+        " WHERE id=? AND phase IN ('paused_mic','paused_system')",
+        (now, id),
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        row = db.execute('SELECT id FROM meetings WHERE id=?', (id,)).fetchone()
+        if row is None:
+            return jsonify({'error': 'Meeting not found'}), 404
+        return jsonify({'error': 'Meeting is not paused'}), 409
+    start_pipeline(id)
+    return jsonify({'success': True})
 
 
 @bp.get('')
@@ -142,6 +277,9 @@ def get_meeting(id):
     d = row_to_dict(row)
     d['segments'] = json.loads(d['segments']) if d.get('segments') else None
     d['speakerNames'] = json.loads(d['speakerNames']) if d.get('speakerNames') else None
+    for k in ('pauseRequested', 'micOffsetSeconds', 'micSegmentsPartial',
+              'systemOffsetSeconds', 'systemSegmentsPartial'):
+        d.pop(k, None)
     return jsonify(d)
 
 

@@ -119,8 +119,11 @@ export interface MeetingSegment {
 export type MeetingStatus = 'recording' | 'transcribing' | 'done' | 'error';
 export type MeetingPhase =
   | 'recording'
+  | 'awaiting_start'
   | 'transcribing_mic'
   | 'transcribing_system'
+  | 'paused_mic'
+  | 'paused_system'
   | 'diarizing'
   | 'summarizing'
   | 'done'
@@ -143,6 +146,8 @@ export interface Meeting {
 
 export interface MeetingDetail extends Omit<Meeting, 'hasNotes' | 'hasSummary'> {
   source: 'live' | 'upload';
+  whisperModel: string;
+  whisperDevice: string;
   segments: MeetingSegment[] | null;
   transcriptText: string | null;
   speakerNames: Record<string, string> | null;
@@ -470,6 +475,14 @@ export const api = {
       return upload<{ id: string }>('/api/meetings/upload', form);
     },
     stop: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/stop`),
+    startTranscription: (id: string, opts: { whisperModel: string; device: string }) =>
+      post<{ success: boolean }>(`/api/meetings/${id}/start-transcription`, opts),
+    retry: (id: string, opts: { whisperModel: string; device: string }) =>
+      post<{ success: boolean }>(`/api/meetings/${id}/retry`, opts),
+    redo: (id: string, opts: { whisperModel: string; device: string }) =>
+      post<{ success: boolean }>(`/api/meetings/${id}/redo`, opts),
+    pause: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/pause`),
+    resume: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/resume`),
     active: () => get<ActiveMeeting>('/api/meetings/active'),
     list: () => get<Meeting[]>('/api/meetings'),
     get: (id: string) => get<MeetingDetail>(`/api/meetings/${id}`),
