@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS fics (
     download_status TEXT NOT NULL DEFAULT 'complete'
         CHECK(download_status IN ('downloading','complete','error')),
     download_error TEXT,
+    update_pending INTEGER NOT NULL DEFAULT 0,
     last_read_chapter_id TEXT,
     last_checked_at INTEGER,
     rating INTEGER CHECK(rating BETWEEN 1 AND 5),

@@ -69,9 +69,11 @@ def init_db() -> None:
     _ensure_journal_raw_content(db)
     _ensure_flashcard_tags(db)
     _ensure_prevent_sleep(db)
+    _ensure_nudge_settings(db)
     _ensure_todo_completed_at(db)
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
+    _ensure_fic_update_pending(db)
     _reset_stale_fic_downloads(db)
 
 
@@ -150,6 +152,13 @@ def _ensure_fic_folder_position(db: sqlite3.Connection) -> None:
         db.commit()
 
 
+def _ensure_fic_update_pending(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
+    if 'update_pending' not in cols:
+        db.execute('ALTER TABLE fics ADD COLUMN update_pending INTEGER NOT NULL DEFAULT 0')
+        db.commit()
+
+
 def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
     """A fic's in-memory download progress (backend/fanfic/download.py's
     `_dl_progress`) never survives a process restart, but the persisted
@@ -171,6 +180,15 @@ def _ensure_prevent_sleep(db: sqlite3.Connection) -> None:
     if 'prevent_sleep' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN prevent_sleep INTEGER DEFAULT 0')
         db.commit()
+
+
+def _ensure_nudge_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'nudge_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN nudge_enabled INTEGER DEFAULT 1')
+    if 'nudge_interval_minutes' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN nudge_interval_minutes INTEGER DEFAULT 45')
+    db.commit()
 
 
 def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:

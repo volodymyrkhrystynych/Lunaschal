@@ -81,6 +81,8 @@ def get_settings():
         'sttDevice': s.get('stt_device'),
         'voicePipelineEnabled': bool(s.get('voice_pipeline_enabled', 1)),
         'preventSleep': bool(s.get('prevent_sleep', 0)),
+        'nudgeEnabled': bool(s.get('nudge_enabled', 1)),
+        'nudgeIntervalMinutes': s.get('nudge_interval_minutes') or 45,
     })
 
 
@@ -97,6 +99,8 @@ def update_ai():
         'whisperModel': 'whisper_model', 'sttDevice': 'stt_device',
         'voicePipelineEnabled': 'voice_pipeline_enabled',
         'preventSleep': 'prevent_sleep',
+        'nudgeEnabled': 'nudge_enabled',
+        'nudgeIntervalMinutes': 'nudge_interval_minutes',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
