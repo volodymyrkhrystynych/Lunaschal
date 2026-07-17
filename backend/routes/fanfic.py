@@ -473,8 +473,11 @@ def refresh_alerts():
                  ref.thread_id, now, now))
             new_imports += 1
     db.commit()
-    if flagged or new_imports:
-        _start_drain_bg()
+    # Always poke the drain worker, even if nothing was freshly flagged here —
+    # a prior crash/restart can leave fics stuck at update_pending=1 with no
+    # worker running to drain them (nothing else resumes that queue on
+    # startup), and start_drain() is a cheap no-op when there's nothing to do.
+    _start_drain_bg()
     return jsonify({
         'flagged': flagged, 'newImports': new_imports,
         'skippedFresh': skipped_fresh, 'skippedActive': skipped_active,

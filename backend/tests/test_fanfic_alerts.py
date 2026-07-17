@@ -163,6 +163,32 @@ def test_refresh_skips_already_queued_fic(client, fake_net, monkeypatch):
     assert body['skippedActive'] == 2
 
 
+def test_refresh_still_drains_when_nothing_newly_flagged(client, fake_net):
+    """A restart can leave fics stuck at update_pending=1 with no worker
+    running to drain them. Refresh must still resume that queue even when
+    every thread mentioned in this batch of alerts is already known and
+    already queued (flagged == new_imports == 0) — it must not gate the
+    drain trigger on having found something new."""
+    fic_a = _import_fic(client)
+    fake_net['pages'].update(_thread_pages(OTHER))
+    fic_b = _import_fic(client, OTHER)
+    _put_cookie(client)
+
+    from backend.db.connection import get_db
+    db = get_db()
+    db.execute('UPDATE fics SET update_pending=1 WHERE id IN (?, ?)', (fic_a, fic_b))
+    db.commit()
+
+    body = client.post('/api/fanfic/refresh-alerts').get_json()
+    assert body['flagged'] == 0
+    assert body['newImports'] == 0
+    assert body['skippedActive'] == 2
+
+    fics = {f['id']: f for f in client.get('/api/fanfic').get_json()}
+    assert fics[fic_a]['updatePending'] is False
+    assert fics[fic_b]['updatePending'] is False
+
+
 def test_refresh_reports_per_site_errors(client, fake_net):
     fic_id = _import_fic(client)
     _set_last_checked(fic_id, 1000)
