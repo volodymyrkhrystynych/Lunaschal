@@ -35,7 +35,11 @@ export function Library({ onOpen }: LibraryProps) {
     queryKey: searchQuery ? ['fanfic', 'search', searchQuery] : ['fanfic', 'list', folderId, tag],
     queryFn: () => (searchQuery
       ? api.fanfic.search(searchQuery)
-      : api.fanfic.list({ folderId: folderId ?? undefined, tag: tag ?? undefined })),
+      : api.fanfic.list({
+          folderId: folderId && folderId !== 'recent' ? folderId : undefined,
+          tag: tag ?? undefined,
+          sort: folderId === 'recent' ? 'recent' : undefined,
+        })),
     // Poll while any fic is still downloading or queued behind the serial
     // update worker so progress bars and queued badges advance.
     refetchInterval: (query) =>

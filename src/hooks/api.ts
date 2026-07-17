@@ -56,6 +56,7 @@ export interface Fic {
 export interface FicFolder {
   id: string;
   name: string;
+  position: number;
   ficCount: number;
   createdAt: string;
   updatedAt: string;
@@ -434,12 +435,13 @@ export const api = {
   },
 
   fanfic: {
-    list: (params?: { limit?: number; offset?: number; folderId?: string; tag?: string }) => {
+    list: (params?: { limit?: number; offset?: number; folderId?: string; tag?: string; sort?: 'recent' }) => {
       const qp = new URLSearchParams();
       if (params?.limit !== undefined) qp.set('limit', String(params.limit));
       if (params?.offset !== undefined) qp.set('offset', String(params.offset));
       if (params?.folderId) qp.set('folderId', params.folderId);
       if (params?.tag) qp.set('tag', params.tag);
+      if (params?.sort) qp.set('sort', params.sort);
       return get<Fic[]>(`/api/fanfic?${qp}`);
     },
     tags: () => get<FicTagCount[]>('/api/fanfic/tags'),
@@ -448,6 +450,8 @@ export const api = {
       create: (name: string) => post<{ id: string }>('/api/fanfic/folders', { name }),
       rename: (id: string, name: string) =>
         patch<{ success: boolean }>(`/api/fanfic/folders/${id}`, { name }),
+      reorder: (ids: string[]) =>
+        put<{ success: boolean }>('/api/fanfic/folders/order', { ids }),
       delete: (id: string) => del<{ success: boolean }>(`/api/fanfic/folders/${id}`),
     },
     addToFolder: (ficId: string, folderId: string) =>

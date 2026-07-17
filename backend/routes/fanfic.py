@@ -20,6 +20,25 @@ _LIST_COLS = (
 
 _CHAPTER_LIST_COLS = 'c.id, c.fic_id, c.position, c.title, c.category, c.word_count, c.posted_at'
 
+# Newest forum activity first: latest threadmark's forum post date, falling
+# back to import time for chapters without one (epub/docx uploads), then to
+# the fic's own creation for fics with no chapters yet.
+_LATEST_ACTIVITY_ORDER = (
+    'COALESCE('
+    ' (SELECT MAX(posted_at) FROM fic_chapters WHERE fic_chapters.fic_id = fics.id),'
+    ' (SELECT MAX(created_at) FROM fic_chapters WHERE fic_chapters.fic_id = fics.id),'
+    ' fics.created_at'
+    ') DESC'
+)
+
+# The "All" view groups fics by folder order (a fic in several folders counts
+# under its earliest-positioned one); fics in no folder sort last.
+_FOLDER_GROUP_ORDER = (
+    '(SELECT MIN(f.position) FROM fic_folder_items i'
+    ' JOIN fic_folders f ON f.id = i.folder_id'
+    ' WHERE i.fic_id = fics.id) ASC NULLS LAST'
+)
+
 
 def _attach_progress(dicts: list[dict]) -> list[dict]:
     for d in dicts:
@@ -79,12 +98,17 @@ def list_fics():
                      ' WHERE name=? AND fic_id=fics.id)')
         params.append(tag)
     where_sql = f" WHERE {' AND '.join(where)}" if where else ''
+    # Inside a single folder (or the unsorted view) grouping is meaningless —
+    # plain recency there; the "Recent" pill explicitly asks for the same;
+    # everywhere else group by folder order first.
+    sort = request.args.get('sort')
+    if folder_id or sort == 'recent':
+        order = _LATEST_ACTIVITY_ORDER
+    else:
+        order = f'{_FOLDER_GROUP_ORDER}, {_LATEST_ACTIVITY_ORDER}'
     rows = get_db().execute(
         f'SELECT {_LIST_COLS} FROM fics{where_sql}'
-        ' ORDER BY COALESCE('
-        '  (SELECT MAX(created_at) FROM fic_chapters WHERE fic_chapters.fic_id = fics.id),'
-        '  fics.created_at'
-        ' ) DESC LIMIT ? OFFSET ?',
+        f' ORDER BY {order} LIMIT ? OFFSET ?',
         (*params, limit, offset),
     ).fetchall()
     return jsonify(_attach_library_meta(_attach_progress([row_to_dict(r) for r in rows])))
@@ -110,10 +134,7 @@ def search():
     params = [p for w in words for p in (_like_pattern(w), _like_pattern(w))]
     rows = get_db().execute(
         f'SELECT {_LIST_COLS} FROM fics WHERE {where_sql}'
-        ' ORDER BY COALESCE('
-        '  (SELECT MAX(created_at) FROM fic_chapters WHERE fic_chapters.fic_id = fics.id),'
-        '  fics.created_at'
-        ' ) DESC LIMIT 100',
+        f' ORDER BY {_LATEST_ACTIVITY_ORDER} LIMIT 100',
         params,
     ).fetchall()
     return jsonify(_attach_library_meta(_attach_progress([row_to_dict(r) for r in rows])))
@@ -203,11 +224,31 @@ def list_site_tags():
 @bp.get('/folders')
 def list_folders():
     rows = get_db().execute(
-        'SELECT f.id, f.name, f.created_at, f.updated_at, COUNT(i.fic_id) AS fic_count'
+        'SELECT f.id, f.name, f.position, f.created_at, f.updated_at,'
+        ' COUNT(i.fic_id) AS fic_count'
         ' FROM fic_folders f'
         ' LEFT JOIN fic_folder_items i ON i.folder_id = f.id'
-        ' GROUP BY f.id ORDER BY f.created_at ASC').fetchall()
+        ' GROUP BY f.id ORDER BY f.position ASC, f.created_at ASC').fetchall()
     return jsonify([row_to_dict(r) for r in rows])
+
+
+@bp.put('/folders/order')
+def reorder_folders():
+    """Persist a full folder ordering — `ids` must list every folder exactly
+    once; positions are assigned from the list order."""
+    ids = (request.json or {}).get('ids')
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        return jsonify({'error': 'ids (list of folder ids) required'}), 400
+    db = get_db()
+    existing = {r['id'] for r in db.execute('SELECT id FROM fic_folders')}
+    if len(ids) != len(existing) or set(ids) != existing:
+        return jsonify({'error': 'ids must contain every folder id exactly once'}), 400
+    now = int(time.time())
+    db.executemany(
+        'UPDATE fic_folders SET position=?, updated_at=? WHERE id=?',
+        [(pos, now, folder_id) for pos, folder_id in enumerate(ids)])
+    db.commit()
+    return jsonify({'success': True})
 
 
 @bp.post('/folders')
@@ -220,7 +261,8 @@ def create_folder():
     db = get_db()
     try:
         db.execute(
-            'INSERT INTO fic_folders(id, name, created_at, updated_at) VALUES (?,?,?,?)',
+            'INSERT INTO fic_folders(id, name, position, created_at, updated_at)'
+            ' VALUES (?,?,(SELECT COALESCE(MAX(position),-1)+1 FROM fic_folders),?,?)',
             (folder_id, name, now, now))
         db.commit()
     except sqlite3.IntegrityError:

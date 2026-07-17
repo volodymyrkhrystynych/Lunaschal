@@ -72,6 +72,7 @@ def init_db() -> None:
     _ensure_nudge_settings(db)
     _ensure_todo_completed_at(db)
     _ensure_fic_review_columns(db)
+    _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
     _reset_stale_fic_downloads(db)
 
@@ -138,6 +139,17 @@ def _ensure_fic_review_columns(db: sqlite3.Connection) -> None:
     if 'review' not in cols:
         db.execute('ALTER TABLE fics ADD COLUMN review TEXT')
     db.commit()
+
+
+def _ensure_fic_folder_position(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fic_folders)')}
+    if 'position' not in cols:
+        db.execute('ALTER TABLE fic_folders ADD COLUMN position INTEGER NOT NULL DEFAULT 0')
+        # Backfill with the creation order the folder list used until now.
+        rows = db.execute('SELECT id FROM fic_folders ORDER BY created_at, rowid').fetchall()
+        db.executemany('UPDATE fic_folders SET position=? WHERE id=?',
+                       [(i, r['id']) for i, r in enumerate(rows)])
+        db.commit()
 
 
 def _ensure_fic_update_pending(db: sqlite3.Connection) -> None:

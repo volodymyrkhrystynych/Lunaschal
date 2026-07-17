@@ -48,7 +48,22 @@ export function FolderBar({ folderId, onSelect }: {
     },
   });
 
+  const reorderFolders = useMutation({
+    mutationFn: (ids: string[]) => api.fanfic.folders.reorder(ids),
+    onSuccess: invalidate,
+  });
+
   const active = folders?.find((f) => f.id === folderId);
+  const activeIndex = folders?.findIndex((f) => f.id === folderId) ?? -1;
+
+  const moveActive = (dir: -1 | 1) => {
+    if (!folders || activeIndex < 0) return;
+    const target = activeIndex + dir;
+    if (target < 0 || target >= folders.length) return;
+    const ids = folders.map((f) => f.id);
+    [ids[activeIndex], ids[target]] = [ids[target], ids[activeIndex]];
+    reorderFolders.mutate(ids);
+  };
 
   const nameInput = (onSubmit: (n: string) => void, onCancel: () => void, placeholder: string) => (
     <input value={name} autoFocus placeholder={placeholder}
@@ -68,6 +83,13 @@ export function FolderBar({ folderId, onSelect }: {
           ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
           : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
         All
+      </button>
+      <button onClick={() => onSelect(folderId === 'recent' ? null : 'recent')}
+        title="All fics, sorted only by the latest threadmark's forum post date"
+        className={`${pillBase} ${folderId === 'recent'
+          ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+          : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+        Recent
       </button>
       <button onClick={() => onSelect(folderId === 'unsorted' ? null : 'unsorted')}
         title="Show fics not in any folder"
@@ -98,6 +120,15 @@ export function FolderBar({ folderId, onSelect }: {
       )}
       {active && !renaming && (
         <span className="flex gap-1 text-xs text-[var(--color-text-muted)]">
+          <button onClick={() => moveActive(-1)}
+            disabled={activeIndex <= 0 || reorderFolders.isPending}
+            className="hover:text-[var(--color-text)] disabled:opacity-30"
+            title="Move folder earlier — its fics sort higher in the All view">◀</button>
+          <button onClick={() => moveActive(1)}
+            disabled={activeIndex >= (folders?.length ?? 0) - 1 || reorderFolders.isPending}
+            className="hover:text-[var(--color-text)] disabled:opacity-30"
+            title="Move folder later — its fics sort lower in the All view">▶</button>
+          <span>·</span>
           <button onClick={() => { setRenaming(true); setName(active.name); }}
             className="hover:text-[var(--color-text)]" title="Rename folder">rename</button>
           <span>·</span>
