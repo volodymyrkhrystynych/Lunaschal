@@ -10,7 +10,7 @@ _conn: sqlite3.Connection | None = None
 
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
-    'posted_at', 'last_checked_at',
+    'posted_at', 'last_checked_at', 'started_at', 'ended_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -74,7 +74,14 @@ def init_db() -> None:
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
+    _ensure_hf_token(db)
+    _ensure_meeting_speaker_names(db)
+    _ensure_meeting_echo_cancel(db)
+    _ensure_meeting_source(db)
+    _ensure_meeting_pause_columns(db)
+    _ensure_meeting_whisper_columns(db)
     _reset_stale_fic_downloads(db)
+    _reset_stale_meetings(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -171,6 +178,88 @@ def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
         "UPDATE fics SET download_status='error',"
         " download_error='Interrupted by an app restart — click Update to retry.'"
         " WHERE download_status='downloading'"
+    )
+    db.commit()
+
+
+def _ensure_hf_token(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'hf_token' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN hf_token TEXT')
+        db.commit()
+
+
+def _ensure_meeting_echo_cancel(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'meeting_echo_cancel' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN meeting_echo_cancel INTEGER DEFAULT 0')
+        db.commit()
+
+
+def _ensure_meeting_speaker_names(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(meetings)')}
+    if 'speaker_names' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN speaker_names TEXT')
+        db.commit()
+
+
+def _ensure_meeting_source(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(meetings)')}
+    if 'source' not in cols:
+        db.execute("ALTER TABLE meetings ADD COLUMN source TEXT NOT NULL DEFAULT 'live'")
+        db.commit()
+
+
+def _ensure_meeting_pause_columns(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(meetings)')}
+    if 'pause_requested' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN pause_requested INTEGER NOT NULL DEFAULT 0')
+    if 'mic_offset_seconds' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN mic_offset_seconds REAL NOT NULL DEFAULT 0')
+    if 'mic_segments_partial' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN mic_segments_partial TEXT')
+    if 'system_offset_seconds' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN system_offset_seconds REAL NOT NULL DEFAULT 0')
+    if 'system_segments_partial' not in cols:
+        db.execute('ALTER TABLE meetings ADD COLUMN system_segments_partial TEXT')
+    db.commit()
+
+
+def _ensure_meeting_whisper_columns(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(meetings)')}
+    if 'whisper_model' not in cols:
+        db.execute("ALTER TABLE meetings ADD COLUMN whisper_model TEXT NOT NULL DEFAULT 'large-v3'")
+    if 'whisper_device' not in cols:
+        db.execute("ALTER TABLE meetings ADD COLUMN whisper_device TEXT NOT NULL DEFAULT 'cpu'")
+    db.commit()
+
+
+def _reset_stale_meetings(db: sqlite3.Connection) -> None:
+    """Meeting recordings (ffmpeg Popen handles) and transcription threads never
+    survive a process restart, but the persisted status does — any row still
+    'recording' or 'transcribing' at startup is necessarily orphaned, UNLESS it
+    was deliberately paused (checkpointed cleanly, no thread to lose) or is
+    still awaiting the user to pick a model and start transcription (no thread
+    was ever spawned for it in the first place).
+
+    A 'recording' row has no checkpoint at all — the ffmpeg capture is simply
+    gone — so its phase is reset to 'error' too. A 'transcribing' row DOES have
+    a checkpoint (offset + partial segments, or a fully-finished track once
+    past transcribing_mic), and _run()'s resume logic branches on the exact
+    phase string to know which track to continue — so phase must be left
+    untouched, exactly like _set_error does for an in-process exception.
+    Only status/error are updated here; retry then resumes from the same
+    point a mid-pipeline crash would have."""
+    db.execute(
+        "UPDATE meetings SET status='error', phase='error',"
+        " error='Interrupted by an app restart.'"
+        " WHERE status='recording'"
+    )
+    db.execute(
+        "UPDATE meetings SET status='error',"
+        " error='Interrupted by an app restart.'"
+        " WHERE status='transcribing'"
+        " AND phase NOT IN ('paused_mic','paused_system','awaiting_start')"
     )
     db.commit()
 

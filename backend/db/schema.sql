@@ -292,3 +292,32 @@ CREATE TABLE IF NOT EXISTS newspaper_frontpages (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_newspaper_frontpages_paper_date ON newspaper_frontpages(paper, date);
 CREATE INDEX IF NOT EXISTS idx_newspaper_frontpages_date ON newspaper_frontpages(date DESC);
+
+CREATE TABLE IF NOT EXISTS meetings (
+    id TEXT PRIMARY KEY,
+    title TEXT,
+    status TEXT NOT NULL DEFAULT 'recording'
+        CHECK(status IN ('recording','transcribing','done','error')),
+    phase TEXT NOT NULL DEFAULT 'recording',
+    source TEXT NOT NULL DEFAULT 'live' CHECK(source IN ('live','upload')),
+    error TEXT,
+    segments TEXT,
+    transcript_text TEXT,
+    speaker_names TEXT,
+    summary TEXT,
+    notes TEXT NOT NULL DEFAULT '',
+    duration_seconds REAL,
+    whisper_model TEXT NOT NULL DEFAULT 'large-v3',
+    whisper_device TEXT NOT NULL DEFAULT 'cpu',
+    pause_requested INTEGER NOT NULL DEFAULT 0,
+    mic_offset_seconds REAL NOT NULL DEFAULT 0,
+    mic_segments_partial TEXT,
+    system_offset_seconds REAL NOT NULL DEFAULT 0,
+    system_segments_partial TEXT,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_meetings_created ON meetings(created_at DESC);

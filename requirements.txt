@@ -14,3 +14,4 @@ kokoro-onnx>=0.4.0
 beautifulsoup4>=4.12
 nh3>=0.2
 mammoth>=1.6
+# Speaker diarization for meetings is optional: pip install -r requirements-diarization.txt

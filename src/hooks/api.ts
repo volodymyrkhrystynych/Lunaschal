@@ -109,6 +109,57 @@ export interface Transcription {
   createdAt: string;
 }
 
+export interface MeetingSegment {
+  start: number;
+  end: number;
+  speaker: string;
+  text: string;
+}
+
+export type MeetingStatus = 'recording' | 'transcribing' | 'done' | 'error';
+export type MeetingPhase =
+  | 'recording'
+  | 'awaiting_start'
+  | 'transcribing_mic'
+  | 'transcribing_system'
+  | 'paused_mic'
+  | 'paused_system'
+  | 'diarizing'
+  | 'summarizing'
+  | 'done'
+  | 'error';
+
+export interface Meeting {
+  id: string;
+  title: string | null;
+  status: MeetingStatus;
+  phase: MeetingPhase;
+  error: string | null;
+  durationSeconds: number | null;
+  hasNotes: boolean;
+  hasSummary: boolean;
+  startedAt: string;
+  endedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MeetingDetail extends Omit<Meeting, 'hasNotes' | 'hasSummary'> {
+  source: 'live' | 'upload';
+  whisperModel: string;
+  whisperDevice: string;
+  segments: MeetingSegment[] | null;
+  transcriptText: string | null;
+  speakerNames: Record<string, string> | null;
+  summary: string | null;
+  notes: string;
+}
+
+export interface ActiveMeeting {
+  id: string | null;
+  startedAt: string | null;
+}
+
 export interface Recipe {
   id: string;
   title: string;
@@ -196,6 +247,7 @@ export interface AppSettings {
   aiModel: string | null;
   hasOpenaiKey: boolean;
   hasGoogleKey: boolean;
+  hasHfToken: boolean;
   ollamaUrl: string | null;
   ollamaModel: string | null;
   networkMode: boolean;
@@ -210,6 +262,7 @@ export interface AppSettings {
   sttDevice: string | null;
   voicePipelineEnabled: boolean;
   preventSleep: boolean;
+  meetingEchoCancel: boolean;
   nudgeEnabled: boolean;
   nudgeIntervalMinutes: number;
 }
@@ -373,7 +426,7 @@ export const api = {
 
   settings: {
     get: () => get<AppSettings | null>('/api/settings'),
-    updateAI: (data: Partial<AppSettings & { openaiApiKey?: string; googleApiKey?: string }>) =>
+    updateAI: (data: Partial<AppSettings & { openaiApiKey?: string; googleApiKey?: string; hfToken?: string }>) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
     updateShortcuts: (data: { sttPasteKey?: string; sttVoiceKey?: string; sttJournalKey?: string; sttCommandKey?: string }) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
@@ -411,6 +464,33 @@ export const api = {
       return get<Transcription[]>(`/api/transcriptions?${qp}`);
     },
     delete: (id: string) => del<{ success: boolean }>(`/api/transcriptions/${id}`),
+  },
+
+  meetings: {
+    start: () => post<{ id: string }>('/api/meetings/start'),
+    upload: (file: File, title?: string) => {
+      const form = new FormData();
+      form.append('audio', file);
+      if (title?.trim()) form.append('title', title.trim());
+      return upload<{ id: string }>('/api/meetings/upload', form);
+    },
+    stop: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/stop`),
+    startTranscription: (id: string, opts: { whisperModel: string; device: string }) =>
+      post<{ success: boolean }>(`/api/meetings/${id}/start-transcription`, opts),
+    retry: (id: string, opts: { whisperModel: string; device: string }) =>
+      post<{ success: boolean }>(`/api/meetings/${id}/retry`, opts),
+    redo: (id: string, opts: { whisperModel: string; device: string }) =>
+      post<{ success: boolean }>(`/api/meetings/${id}/redo`, opts),
+    pause: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/pause`),
+    resume: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/resume`),
+    active: () => get<ActiveMeeting>('/api/meetings/active'),
+    list: () => get<Meeting[]>('/api/meetings'),
+    get: (id: string) => get<MeetingDetail>(`/api/meetings/${id}`),
+    update: (id: string, data: { title?: string; notes?: string; speakerNames?: Record<string, string> | null }) =>
+      patch<{ success: boolean }>(`/api/meetings/${id}`, data),
+    delete: (id: string) => del<{ success: boolean }>(`/api/meetings/${id}`),
+    summarize: (id: string) => post<{ summary: string }>(`/api/meetings/${id}/summarize`),
+    audioUrl: (id: string, track: 'mic' | 'system') => `/api/meetings/${id}/audio/${track}`,
   },
 
   cookbook: {

@@ -67,6 +67,7 @@ def get_settings():
         'aiModel': s.get('ai_model'),
         'hasOpenaiKey': bool(s.get('openai_api_key')),
         'hasGoogleKey': bool(s.get('google_api_key')),
+        'hasHfToken': bool(s.get('hf_token')),
         'ollamaUrl': s.get('ollama_url'),
         'ollamaModel': s.get('ollama_model'),
         'networkMode': NETWORK_MODE,
@@ -81,6 +82,7 @@ def get_settings():
         'sttDevice': s.get('stt_device'),
         'voicePipelineEnabled': bool(s.get('voice_pipeline_enabled', 1)),
         'preventSleep': bool(s.get('prevent_sleep', 0)),
+        'meetingEchoCancel': bool(s.get('meeting_echo_cancel', 0)),
         'nudgeEnabled': bool(s.get('nudge_enabled', 1)),
         'nudgeIntervalMinutes': s.get('nudge_interval_minutes') or 45,
     })
@@ -97,8 +99,10 @@ def update_ai():
         'sttCommandKey': 'stt_command_key',
         'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
         'whisperModel': 'whisper_model', 'sttDevice': 'stt_device',
+        'hfToken': 'hf_token',
         'voicePipelineEnabled': 'voice_pipeline_enabled',
         'preventSleep': 'prevent_sleep',
+        'meetingEchoCancel': 'meeting_echo_cancel',
         'nudgeEnabled': 'nudge_enabled',
         'nudgeIntervalMinutes': 'nudge_interval_minutes',
     }
