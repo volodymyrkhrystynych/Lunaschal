@@ -77,6 +77,23 @@ def test_measure_base_gpu_vram_leaves_unset_on_malformed_output(monkeypatch):
     assert settings._gpu_total_vram_mb is None
 
 
+def test_get_settings_defaults_nudge_enabled_and_45_minute_interval(client):
+    resp = client.get('/api/settings')
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data['nudgeEnabled'] is True
+    assert data['nudgeIntervalMinutes'] == 45
+
+
+def test_patch_settings_updates_nudge_fields(client):
+    resp = client.patch('/api/settings/ai', json={'nudgeEnabled': False, 'nudgeIntervalMinutes': 20})
+    assert resp.status_code == 200
+
+    data = client.get('/api/settings').get_json()
+    assert data['nudgeEnabled'] is False
+    assert data['nudgeIntervalMinutes'] == 20
+
+
 def test_gpu_vram_route_serves_cached_snapshot(client):
     settings._gpu_base_vram_mb = 3303
     settings._gpu_total_vram_mb = 8192
