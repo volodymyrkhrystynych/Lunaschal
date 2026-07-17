@@ -334,6 +334,69 @@ def test_retry_after_failure_resumes_from_checkpoint_and_keeps_phase(client, mon
     assert model.calls == 10
 
 
+def test_retry_after_app_restart_resumes_mic_from_checkpoint(client, monkeypatch, tmp_path):
+    """Regression test: an app restart mid-mic-track must not lose the rest of
+    the mic track. _reset_stale_meetings runs at startup and flips orphaned
+    'transcribing' rows to status='error', but (like the in-process-exception
+    path above) must leave `phase` untouched — overwriting it to a generic
+    'error' would make the resumed _run() treat the mic track as already
+    finished (using only the partial checkpoint) and skip straight to the
+    system track, silently dropping everything said after the restart."""
+    from backend.db.connection import get_db, _reset_stale_meetings
+    monkeypatch.setenv('MEETINGS_ROOT', str(tmp_path / 'meetings'))
+    meeting_id = _insert_meeting()
+    _write_track(storage.mic_path(meeting_id))
+    _write_track(storage.system_path(meeting_id))
+    model = _setup_counting_pipeline(monkeypatch, mic_seconds=5, system_seconds=5)
+    real_transcribe = _pause_after_nth_call(get_db, meeting_id, model, n=2)
+
+    # Capture the pre-merge segment lists directly — the counting model numbers
+    # chunks sequentially across both tracks, so mic/system chunk text can
+    # coincidentally fuzzy-match and get echo-stripped by merge_segments,
+    # which would confound an assertion on the final rendered transcript.
+    captured = {}
+    real_merge_segments = pipeline.merge_segments
+
+    def spy_merge(mic_segments, system_segments, turns):
+        captured['mic'] = list(mic_segments)
+        captured['system'] = list(system_segments)
+        return real_merge_segments(mic_segments, system_segments, turns)
+
+    monkeypatch.setattr(pipeline, 'merge_segments', spy_merge)
+    # The pause path checkpoints mid-mic exactly like a genuine interruption
+    # would, without needing to fake a process kill.
+    pipeline._run(meeting_id)
+    assert _get(client, meeting_id)['phase'] == 'paused_mic'
+    # Restarting mid-transcription (not mid-pause) is what's under test, so
+    # move the row back to the live phase a restart would actually catch it in.
+    get_db().execute("UPDATE meetings SET phase='transcribing_mic', status='transcribing' WHERE id=?",
+                     (meeting_id,))
+    get_db().commit()
+
+    _reset_stale_meetings(get_db())
+
+    m = _get(client, meeting_id)
+    assert m['status'] == 'error'
+    assert 'restart' in m['error']
+    assert m['phase'] == 'transcribing_mic'  # resume point preserved, not clobbered
+
+    # Simulate the /retry route: flip status back, re-enter _run.
+    model.transcribe = real_transcribe
+    get_db().execute("UPDATE meetings SET status='transcribing', error=NULL WHERE id=?", (meeting_id,))
+    get_db().commit()
+
+    pipeline._run(meeting_id)
+
+    m = _get(client, meeting_id)
+    assert m['status'] == 'done'
+    # 2 mic chunks already done + 3 remaining mic + 5 system = 10 — no lost mic audio.
+    assert model.calls == 10
+    # All 5 mic chunks reached the merge step — none silently dropped by
+    # treating the mic track as finished at the 2-chunk checkpoint.
+    assert [s['text'] for s in captured['mic']] == [' chunk1 ', ' chunk2 ', ' chunk3 ', ' chunk4 ', ' chunk5 ']
+    assert [s['text'] for s in captured['system']] == [' chunk6 ', ' chunk7 ', ' chunk8 ', ' chunk9 ', ' chunk10 ']
+
+
 def test_pause_mid_system_track_leaves_mic_checkpoint_untouched(client, monkeypatch, tmp_path):
     from backend.db.connection import get_db
     monkeypatch.setenv('MEETINGS_ROOT', str(tmp_path / 'meetings'))

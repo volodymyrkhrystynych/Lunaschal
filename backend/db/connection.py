@@ -240,11 +240,25 @@ def _reset_stale_meetings(db: sqlite3.Connection) -> None:
     'recording' or 'transcribing' at startup is necessarily orphaned, UNLESS it
     was deliberately paused (checkpointed cleanly, no thread to lose) or is
     still awaiting the user to pick a model and start transcription (no thread
-    was ever spawned for it in the first place)."""
+    was ever spawned for it in the first place).
+
+    A 'recording' row has no checkpoint at all — the ffmpeg capture is simply
+    gone — so its phase is reset to 'error' too. A 'transcribing' row DOES have
+    a checkpoint (offset + partial segments, or a fully-finished track once
+    past transcribing_mic), and _run()'s resume logic branches on the exact
+    phase string to know which track to continue — so phase must be left
+    untouched, exactly like _set_error does for an in-process exception.
+    Only status/error are updated here; retry then resumes from the same
+    point a mid-pipeline crash would have."""
     db.execute(
         "UPDATE meetings SET status='error', phase='error',"
         " error='Interrupted by an app restart.'"
-        " WHERE status IN ('recording','transcribing')"
+        " WHERE status='recording'"
+    )
+    db.execute(
+        "UPDATE meetings SET status='error',"
+        " error='Interrupted by an app restart.'"
+        " WHERE status='transcribing'"
         " AND phase NOT IN ('paused_mic','paused_system','awaiting_start')"
     )
     db.commit()
