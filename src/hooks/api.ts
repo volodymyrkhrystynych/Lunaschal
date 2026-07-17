@@ -423,12 +423,13 @@ export const api = {
   },
 
   fanfic: {
-    list: (params?: { limit?: number; offset?: number; folderId?: string; tag?: string }) => {
+    list: (params?: { limit?: number; offset?: number; folderId?: string; tag?: string; sort?: 'recent' }) => {
       const qp = new URLSearchParams();
       if (params?.limit !== undefined) qp.set('limit', String(params.limit));
       if (params?.offset !== undefined) qp.set('offset', String(params.offset));
       if (params?.folderId) qp.set('folderId', params.folderId);
       if (params?.tag) qp.set('tag', params.tag);
+      if (params?.sort) qp.set('sort', params.sort);
       return get<Fic[]>(`/api/fanfic?${qp}`);
     },
     tags: () => get<FicTagCount[]>('/api/fanfic/tags'),

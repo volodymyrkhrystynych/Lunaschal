@@ -97,8 +97,13 @@ def list_fics():
         params.append(tag)
     where_sql = f" WHERE {' AND '.join(where)}" if where else ''
     # Inside a single folder (or the unsorted view) grouping is meaningless —
-    # plain recency there; everywhere else group by folder order first.
-    order = _LATEST_ACTIVITY_ORDER if folder_id else f'{_FOLDER_GROUP_ORDER}, {_LATEST_ACTIVITY_ORDER}'
+    # plain recency there; the "Recent" pill explicitly asks for the same;
+    # everywhere else group by folder order first.
+    sort = request.args.get('sort')
+    if folder_id or sort == 'recent':
+        order = _LATEST_ACTIVITY_ORDER
+    else:
+        order = f'{_FOLDER_GROUP_ORDER}, {_LATEST_ACTIVITY_ORDER}'
     rows = get_db().execute(
         f'SELECT {_LIST_COLS} FROM fics{where_sql}'
         f' ORDER BY {order} LIMIT ? OFFSET ?',

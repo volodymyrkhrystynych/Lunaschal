@@ -392,6 +392,11 @@ def test_all_view_groups_fics_by_folder_order(client):
     assert [f['id'] for f in
             client.get('/api/fanfic?folderId=unsorted').get_json()] == [fic_c]
 
+    # sort=recent opts out of folder grouping too: c (unsorted, most recent)
+    # now leads even though it trails both folders in the grouped view
+    assert [f['id'] for f in
+            client.get('/api/fanfic?sort=recent').get_json()] == [fic_c, fic_a, fic_b]
+
 
 def test_list_orders_by_forum_post_date_not_import_date(client):
     now = int(time.time())

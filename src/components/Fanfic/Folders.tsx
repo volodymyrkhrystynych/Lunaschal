@@ -84,6 +84,13 @@ export function FolderBar({ folderId, onSelect }: {
           : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
         All
       </button>
+      <button onClick={() => onSelect(folderId === 'recent' ? null : 'recent')}
+        title="All fics, sorted only by the latest threadmark's forum post date"
+        className={`${pillBase} ${folderId === 'recent'
+          ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+          : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+        Recent
+      </button>
       <button onClick={() => onSelect(folderId === 'unsorted' ? null : 'unsorted')}
         title="Show fics not in any folder"
         className={`${pillBase} ${folderId === 'unsorted'

@@ -33,11 +33,11 @@ beforeEach(() => {
   ]);
 });
 
-function renderBar(folderId: string | null) {
+function renderBar(folderId: string | null, onSelect: (id: string | null) => void = () => {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <FolderBar folderId={folderId} onSelect={() => {}} />
+      <FolderBar folderId={folderId} onSelect={onSelect} />
     </QueryClientProvider>,
   );
 }
@@ -71,6 +71,23 @@ describe('FolderBar reordering', () => {
   it('shows no move buttons when no folder is selected', async () => {
     renderBar(null);
     await screen.findByText('First');
+    expect(screen.queryByTitle(/Move folder/)).toBeNull();
+  });
+});
+
+describe('Recent pill', () => {
+  it('selects the recent sentinel and hides move buttons', async () => {
+    const onSelect = vi.fn();
+    renderBar(null, onSelect);
+    fireEvent.click(await screen.findByText('Recent'));
+    expect(onSelect).toHaveBeenCalledWith('recent');
+  });
+
+  it('deselects back to All when clicked again while active', async () => {
+    const onSelect = vi.fn();
+    renderBar('recent', onSelect);
+    fireEvent.click(await screen.findByText('Recent'));
+    expect(onSelect).toHaveBeenCalledWith(null);
     expect(screen.queryByTitle(/Move folder/)).toBeNull();
   });
 });
