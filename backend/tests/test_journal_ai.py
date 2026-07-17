@@ -80,3 +80,44 @@ def test_falls_back_to_default_model_when_unset(monkeypatch):
     journal.polish_journal_entry('raw text')
 
     assert captured['kwargs']['model'] == journal.DEFAULT_MODELS['ollama']
+
+
+class TestCleanPolishOutput:
+    """Unit tests for the preamble-stripping / quote-unwrapping heuristics
+    applied to raw LLM output before it's saved as a journal entry."""
+
+    def test_passes_through_clean_text_unchanged(self):
+        text = 'First paragraph.\n\nSecond paragraph.'
+        assert journal._clean_polish_output(text) == text
+
+    def test_strips_leading_preamble_line(self):
+        text = "Here is the corrected text:\n\nActual entry content."
+        assert journal._clean_polish_output(text) == 'Actual entry content.'
+
+    def test_strips_preamble_with_lead_in_phrase(self):
+        text = "Sure, here's the corrected version:\nActual entry content."
+        assert journal._clean_polish_output(text) == 'Actual entry content.'
+
+    def test_unwraps_single_paragraph_wrapped_in_quotes(self):
+        text = '"Actual entry content."'
+        assert journal._clean_polish_output(text) == 'Actual entry content.'
+
+    def test_unwraps_quotes_around_entire_multi_paragraph_output(self):
+        text = '"First paragraph.\n\nSecond paragraph."'
+        assert journal._clean_polish_output(text) == 'First paragraph.\n\nSecond paragraph.'
+
+    def test_unwraps_curly_quotes_around_entire_multi_paragraph_output(self):
+        text = '“First paragraph.\n\nSecond paragraph.”'
+        assert journal._clean_polish_output(text) == 'First paragraph.\n\nSecond paragraph.'
+
+    def test_unwraps_quotes_per_paragraph(self):
+        text = '"First paragraph."\n\n"Second paragraph."'
+        assert journal._clean_polish_output(text) == 'First paragraph.\n\nSecond paragraph.'
+
+    def test_preserves_legitimate_quote_that_does_not_wrap_whole_paragraph(self):
+        text = 'She said "hello" to me.'
+        assert journal._clean_polish_output(text) == text
+
+    def test_strips_preamble_and_wrapping_quotes_together(self):
+        text = 'Here is the corrected text:\n"First paragraph.\n\nSecond paragraph."'
+        assert journal._clean_polish_output(text) == 'First paragraph.\n\nSecond paragraph.'

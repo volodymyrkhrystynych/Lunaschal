@@ -55,7 +55,13 @@ def _clean_polish_output(text: str) -> str:
     any wrapping quotation marks the model adds despite being told not to."""
     text = _PREAMBLE_RE.sub('', text.strip(), count=1).strip()
     paragraphs = text.split('\n\n')
-    return '\n\n'.join(_unwrap_quotes(p) if p.strip() else p for p in paragraphs)
+    text = '\n\n'.join(_unwrap_quotes(p) if p.strip() else p for p in paragraphs)
+    # A model that ignores "don't wrap in quotes" may wrap the entire
+    # multi-paragraph reply in a single pair instead of quoting each
+    # paragraph on its own — check for that only after the per-paragraph
+    # pass, so paragraphs that are legitimately individually quoted aren't
+    # mistaken for one big wrapped block and double-stripped.
+    return _unwrap_quotes(text)
 
 
 _METADATA_SYSTEM = (
