@@ -14,8 +14,8 @@ bp = Blueprint('fanfic', __name__, url_prefix='/api/fanfic')
 
 _LIST_COLS = (
     'id, title, author, source_type, source_url, site, cover_path, word_count,'
-    ' chapter_count, download_status, download_error, last_read_chapter_id,'
-    ' last_checked_at, rating, created_at, updated_at'
+    ' chapter_count, download_status, download_error, update_pending,'
+    ' last_read_chapter_id, last_checked_at, rating, created_at, updated_at'
 )
 
 _CHAPTER_LIST_COLS = 'c.id, c.fic_id, c.position, c.title, c.category, c.word_count, c.posted_at'
@@ -26,6 +26,8 @@ def _attach_progress(dicts: list[dict]) -> list[dict]:
         progress = download.get_progress(d['id'])
         if progress:
             d['downloadProgress'] = progress
+        if 'updatePending' in d:
+            d['updatePending'] = bool(d['updatePending'])
     return dicts
 
 
@@ -327,8 +329,8 @@ def _start_import_bg(fic_id: str, ref: xenforo.ThreadRef) -> None:
     threading.Thread(target=download.run_import, args=(fic_id, ref), daemon=True).start()
 
 
-def _start_update_bg(fic_id: str) -> None:
-    threading.Thread(target=download.run_check_updates, args=(fic_id,), daemon=True).start()
+def _start_drain_bg() -> None:
+    download.start_drain()
 
 
 @bp.post('/import')
@@ -359,11 +361,10 @@ def import_from_url():
         # (dedupes on post id, continues positions).
         broken = existing['download_status'] == 'error' or existing['chapter_count'] == 0
         if broken and not download.is_active(existing['id']):
-            db.execute("UPDATE fics SET download_status='downloading', download_error=NULL WHERE id=?",
+            db.execute('UPDATE fics SET update_pending=1, download_error=NULL WHERE id=?',
                        (existing['id'],))
             db.commit()
-            download.start_progress(existing['id'], 'updating')
-            _start_update_bg(existing['id'])
+            _start_drain_bg()
             return jsonify({'id': existing['id'], 'restarted': True}), 202
         return jsonify({'id': existing['id'], 'alreadyExists': True})
 
@@ -390,19 +391,98 @@ def import_status(fic_id):
 
 @bp.post('/<fic_id>/check-updates')
 def check_updates(fic_id):
+    """Toggle the fic's spot in the serial update queue. Updates are never
+    run directly — the drain worker fetches one fic at a time to stay polite
+    to the forums — so queueing is cheap and a mis-click can be undone by
+    clicking again before the worker gets there."""
     db = get_db()
-    row = db.execute('SELECT source_type FROM fics WHERE id=?', (fic_id,)).fetchone()
+    row = db.execute(
+        'SELECT source_type, update_pending, download_status FROM fics WHERE id=?',
+        (fic_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
     if row['source_type'] != 'xenforo':
         return jsonify({'error': 'Only forum fics can be updated'}), 400
-    if download.is_active(fic_id):
+    if download.is_active(fic_id) or row['download_status'] == 'downloading':
         return jsonify({'error': 'A download is already running for this fic'}), 409
-    download.start_progress(fic_id, 'updating')
-    db.execute("UPDATE fics SET download_status='downloading' WHERE id=?", (fic_id,))
+    if row['update_pending']:
+        db.execute('UPDATE fics SET update_pending=0 WHERE id=?', (fic_id,))
+        db.commit()
+        return jsonify({'id': fic_id, 'queued': False})
+    db.execute('UPDATE fics SET update_pending=1 WHERE id=?', (fic_id,))
     db.commit()
-    _start_update_bg(fic_id)
-    return jsonify({'id': fic_id}), 202
+    _start_drain_bg()
+    return jsonify({'id': fic_id, 'queued': True}), 202
+
+
+@bp.post('/refresh-alerts')
+def refresh_alerts():
+    """Scan page 1 of each cookie'd site's alerts page and queue updates for
+    the unique threads mentioned: library fics get flagged unless their last
+    fetch is newer than the alert, unknown threads get a placeholder fic that
+    the drain worker imports."""
+    db = get_db()
+    domains = [
+        r['domain'] for r in
+        db.execute('SELECT domain FROM site_cookies ORDER BY domain').fetchall()
+        if r['domain'] in KNOWN_SITES
+    ]
+    if not domains:
+        return jsonify({'error': 'No site cookies configured — paste your forum'
+                        ' session cookies in Settings → Fanfic site cookies first'}), 400
+
+    errors: dict[str, str] = {}
+    alerts_seen = 0
+    # (site, thread_id) -> (ref, newest alert timestamp)
+    newest: dict[tuple[str, str], tuple[xenforo.ThreadRef, int | None]] = {}
+    for domain in domains:
+        try:
+            items = download.fetch_alerts(domain)
+        except Exception as e:
+            errors[domain] = str(e)
+            continue
+        alerts_seen += len(items)
+        for item in items:
+            key = (item.ref.domain, item.ref.thread_id)
+            prev = newest.get(key)
+            if prev is None or (item.alert_at or 0) > (prev[1] or 0):
+                newest[key] = (item.ref, item.alert_at)
+
+    flagged = new_imports = skipped_fresh = skipped_active = 0
+    now = int(time.time())
+    for (site, thread_id), (ref, alert_at) in newest.items():
+        row = db.execute(
+            'SELECT id, update_pending, download_status, last_checked_at'
+            ' FROM fics WHERE site=? AND thread_id=?', (site, thread_id)).fetchone()
+        if row:
+            if (row['update_pending'] or row['download_status'] == 'downloading'
+                    or download.is_active(row['id'])):
+                skipped_active += 1
+            elif (row['last_checked_at'] is not None and alert_at is not None
+                    and row['last_checked_at'] >= alert_at):
+                skipped_fresh += 1
+            else:
+                db.execute('UPDATE fics SET update_pending=1 WHERE id=?', (row['id'],))
+                flagged += 1
+        else:
+            placeholder = ref.slug.replace('-', ' ').strip() or 'Importing…'
+            db.execute(
+                'INSERT INTO fics(id, title, source_type, source_url, site, thread_id,'
+                ' update_pending, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?)',
+                (str(ULID()), placeholder, 'xenforo', ref.thread_url, ref.domain,
+                 ref.thread_id, now, now))
+            new_imports += 1
+    db.commit()
+    # Always poke the drain worker, even if nothing was freshly flagged here —
+    # a prior crash/restart can leave fics stuck at update_pending=1 with no
+    # worker running to drain them (nothing else resumes that queue on
+    # startup), and start_drain() is a cheap no-op when there's nothing to do.
+    _start_drain_bg()
+    return jsonify({
+        'flagged': flagged, 'newImports': new_imports,
+        'skippedFresh': skipped_fresh, 'skippedActive': skipped_active,
+        'alertsSeen': alerts_seen, 'errors': errors,
+    })
 
 
 def _insert_book(book, fic_id: str) -> str:

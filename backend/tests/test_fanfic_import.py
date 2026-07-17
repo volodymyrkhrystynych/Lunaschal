@@ -36,7 +36,7 @@ def fake_net(monkeypatch, tmp_path):
     monkeypatch.setenv('FANFIC_ROOT', str(tmp_path / 'fanfic'))
     monkeypatch.setattr(download, 'REQUEST_DELAY', 0)
     monkeypatch.setattr(fanfic_routes, '_start_import_bg', download.run_import)
-    monkeypatch.setattr(fanfic_routes, '_start_update_bg', download.run_check_updates)
+    monkeypatch.setattr(fanfic_routes, '_start_drain_bg', download.run_drain_pending)
 
     pages = _fixture_map()
     binaries: dict[str, tuple[bytes, str]] = {

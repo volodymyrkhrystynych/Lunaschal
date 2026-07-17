@@ -257,3 +257,24 @@ def test_rewrite_image_srcs():
     assert 'data-url' not in out
     # unmapped image keeps its remote URL
     assert 'src="https://example.com/other.png"' in out
+
+
+# --- parse_alerts ---
+
+def test_parse_alerts():
+    items = xenforo.parse_alerts(fixture('alerts.html'), 'forums.spacebattles.com')
+    # 5 alert rows: the /posts/-only quote alert is dropped, duplicates for
+    # the same thread are kept, a missing <time> yields alert_at None
+    assert [(i.ref.thread_id, i.alert_at) for i in items] == [
+        ('12345', 1600400000),
+        ('12345', 1600500000),
+        ('67890', 1600450000),
+        ('12345', None),
+    ]
+    assert items[0].ref == ThreadRef('forums.spacebattles.com', '12345', 'a-test-fic')
+    assert items[2].ref.slug == 'another-fic'
+
+
+def test_parse_alerts_empty_page():
+    assert xenforo.parse_alerts('<html><body>no alerts</body></html>',
+                                'forums.spacebattles.com') == []

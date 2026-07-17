@@ -71,6 +71,7 @@ def init_db() -> None:
     _ensure_prevent_sleep(db)
     _ensure_todo_completed_at(db)
     _ensure_fic_review_columns(db)
+    _ensure_fic_update_pending(db)
     _reset_stale_fic_downloads(db)
 
 
@@ -136,6 +137,13 @@ def _ensure_fic_review_columns(db: sqlite3.Connection) -> None:
     if 'review' not in cols:
         db.execute('ALTER TABLE fics ADD COLUMN review TEXT')
     db.commit()
+
+
+def _ensure_fic_update_pending(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
+    if 'update_pending' not in cols:
+        db.execute('ALTER TABLE fics ADD COLUMN update_pending INTEGER NOT NULL DEFAULT 0')
+        db.commit()
 
 
 def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
