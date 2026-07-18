@@ -6,7 +6,10 @@ import { ShortcutProvider, useShortcutScope } from './ShortcutProvider';
 import type { ScopeHandlers } from './ShortcutProvider';
 
 vi.mock('../hooks/api', () => ({
-  api: { shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) } },
+  api: {
+    shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
+    settings: { get: vi.fn().mockResolvedValue({}) },
+  },
 }));
 
 // Registers a scope like a view component would (depth 1 unless overridden).

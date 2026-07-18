@@ -48,6 +48,7 @@ vi.mock('../hooks/api', () => ({
     transcriptions: { list: vi.fn().mockResolvedValue([]), delete: vi.fn() },
     learning: { generateFromJournal: vi.fn() },
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
+    settings: { get: vi.fn().mockResolvedValue({}) },
   },
 }));
 

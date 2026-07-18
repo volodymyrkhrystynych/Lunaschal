@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type LearningCard, type VerifyResult } from '../../hooks/api';
+import { MessageMarkdown } from '../MessageMarkdown';
 
 interface Props {
   card: LearningCard;
@@ -98,10 +99,10 @@ export function VerificationPanel({ card, onClose, onRevised }: Props) {
 
         <div className="border border-white/10 rounded-lg p-3 mb-4">
           <div className="text-sm text-[var(--color-text)]">
-            {card.question}
+            <MessageMarkdown content={card.question} />
           </div>
           <div className="text-sm text-[var(--color-text-muted)] mt-1">
-            {card.answer}
+            <MessageMarkdown content={card.answer} />
           </div>
         </div>
 

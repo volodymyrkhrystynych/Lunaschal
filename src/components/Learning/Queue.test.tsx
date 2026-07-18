@@ -45,6 +45,7 @@ vi.mock('../../hooks/api', () => ({
   api: {
     learning: mocks,
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
+    settings: { get: vi.fn().mockResolvedValue({}) },
   },
 }));
 
@@ -81,6 +82,23 @@ describe('Queue', () => {
     expect(await screen.findByText('Question c1?')).toBeTruthy();
     expect(screen.getByText('Question c2?')).toBeTruthy();
     expect(screen.getAllByText('follow-up')).toHaveLength(1);
+  });
+
+  it('renders markdown in card question and answer as formatted elements', async () => {
+    mocks.listQueue.mockResolvedValue([
+      {
+        ...QUEUE[0],
+        question: 'Define **closure**?',
+        answer: 'A function plus its captured `scope`.',
+      },
+    ]);
+    renderQueue();
+
+    const strong = await screen.findByText('closure');
+    expect(strong.tagName).toBe('STRONG');
+    const code = screen.getByText('scope');
+    expect(code.tagName).toBe('CODE');
+    expect(screen.queryByText(/\*\*/)).toBeNull();
   });
 
   it('approves a card', async () => {

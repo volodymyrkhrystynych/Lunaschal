@@ -60,6 +60,7 @@ vi.mock('../../hooks/api', () => ({
   api: {
     learning: mocks,
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
+    settings: { get: vi.fn().mockResolvedValue({}) },
   },
 }));
 
@@ -171,6 +172,25 @@ describe('ReviewSession', () => {
     expect(await screen.findByText('Verify against evidence')).toBeTruthy();
     await waitFor(() => expect(mocks.verify).toHaveBeenCalledWith('c1'));
     expect(await screen.findByText(/no evidence provider bound/)).toBeTruthy();
+  });
+
+  it('renders markdown in the question and answer as formatted elements', async () => {
+    mocks.getDue.mockResolvedValue([
+      {
+        ...DUE[0],
+        question: 'What does **hoisting** move?',
+        answer: 'Declarations move to the top of their `scope`.',
+      },
+    ]);
+    renderSession();
+
+    const strong = await screen.findByText('hoisting');
+    expect(strong.tagName).toBe('STRONG');
+    expect(screen.queryByText(/\*\*/)).toBeNull();
+
+    fireEvent.click(screen.getByText('Flip'));
+    const code = await screen.findByText('scope');
+    expect(code.tagName).toBe('CODE');
   });
 
   it('shows the all-caught-up state when nothing is due', async () => {

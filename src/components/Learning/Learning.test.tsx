@@ -33,6 +33,7 @@ vi.mock('../../hooks/api', () => ({
   api: {
     learning: mocks,
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
+    settings: { get: vi.fn().mockResolvedValue({}) },
   },
 }));
 

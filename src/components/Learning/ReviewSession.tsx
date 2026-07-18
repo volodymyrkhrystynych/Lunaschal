@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type GradeResult, type LearningCard } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import { MessageMarkdown } from '../MessageMarkdown';
 import { CoverageResult } from './CoverageResult';
 import { VerificationPanel } from './VerificationPanel';
 
@@ -132,7 +133,7 @@ export function ReviewSession({ folderId, tag }: Props) {
             Card {index + 1} of {due?.length}
           </div>
           <div className="text-xl text-[var(--color-text)] text-center leading-relaxed mb-6">
-            {card.question}
+            <MessageMarkdown content={card.question} />
           </div>
 
           {!answered && (
@@ -212,7 +213,9 @@ export function ReviewSession({ folderId, tag }: Props) {
                 <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
                   Answer
                 </div>
-                <div className="text-[var(--color-text)]">{card.answer}</div>
+                <div className="text-[var(--color-text)]">
+                  <MessageMarkdown content={card.answer} />
+                </div>
               </div>
 
               {grade && (
