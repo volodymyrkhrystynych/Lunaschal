@@ -2,7 +2,7 @@ import json
 import logging
 import re
 
-from backend.ai.provider import get_provider_config, is_ai_configured, DEFAULT_MODELS
+from backend.ai.provider import get_provider_config, get_ollama_client, is_ai_configured, DEFAULT_MODELS
 
 logger = logging.getLogger(__name__)
 
@@ -78,11 +78,6 @@ _METADATA_SYSTEM = (
 )
 
 
-def _ollama_client(c: dict):
-    from openai import OpenAI
-    return OpenAI(base_url=f"{c['ollama_url']}/v1", api_key='ollama')
-
-
 def generate_journal_metadata(content: str) -> dict:
     if not content.strip():
         return {}
@@ -90,57 +85,21 @@ def generate_journal_metadata(content: str) -> dict:
         if not is_ai_configured():
             return {}
         c = get_provider_config()
-        provider = c['provider']
-
-        if provider == 'openai':
-            from openai import OpenAI
-            client = OpenAI(api_key=c['openai_api_key'])
-            model = c['model'] or DEFAULT_MODELS['openai']
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {'role': 'system', 'content': _METADATA_SYSTEM},
-                    {'role': 'user', 'content': content},
-                ],
-                response_format={'type': 'json_object'},
-                stream=False,
-            )
-
-        elif provider == 'ollama':
-            client = _ollama_client(c)
-            model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {'role': 'system', 'content': _METADATA_SYSTEM},
-                    {'role': 'user', 'content': content},
-                ],
-                response_format={'type': 'json_object'},
-                stream=False,
-            )
-
-        elif provider == 'gemini':
-            import google.generativeai as genai
-            genai.configure(api_key=c['google_api_key'])
-            model_name = c['model'] or DEFAULT_MODELS['gemini']
-            gemini = genai.GenerativeModel(model_name, system_instruction=_METADATA_SYSTEM)
-            resp = gemini.generate_content(
-                content,
-                generation_config={'response_mime_type': 'application/json'},
-            )
-            data = json.loads(resp.text)
-            valid_tags = [t.strip() for t in (data.get('tags') or []) if isinstance(t, str) and t.strip()][:3]
-            title = (data.get('title') or '').strip() or None
-            return {'title': title, 'tags': valid_tags or None}
-
-        else:
-            return {}
-
+        client = get_ollama_client(c)
+        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {'role': 'system', 'content': _METADATA_SYSTEM},
+                {'role': 'user', 'content': content},
+            ],
+            response_format={'type': 'json_object'},
+            stream=False,
+        )
         data = json.loads(resp.choices[0].message.content)
         valid_tags = [t.strip() for t in (data.get('tags') or []) if isinstance(t, str) and t.strip()][:3]
         title = (data.get('title') or '').strip() or None
         return {'title': title, 'tags': valid_tags or None}
-
     except Exception as e:
         logger.error('Journal metadata generation failed: %s', e)
 
@@ -155,39 +114,16 @@ def classify_entry_for_tag(content: str, tag_name: str) -> bool:
         if not is_ai_configured():
             return False
         c = get_provider_config()
-        provider = c['provider']
         system = "You are a strict binary classifier. Reply ONLY with 'yes' or 'no', nothing else."
         user = f"Does this journal entry relate to the topic '{tag_name}'?\n\n{content}"
-
-        if provider == 'openai':
-            from openai import OpenAI
-            client = OpenAI(api_key=c['openai_api_key'])
-            model = c['model'] or DEFAULT_MODELS['openai']
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
-                stream=False,
-            )
-            return resp.choices[0].message.content.lower().strip().startswith('yes')
-
-        elif provider == 'ollama':
-            client = _ollama_client(c)
-            model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
-                stream=False,
-            )
-            return resp.choices[0].message.content.lower().strip().startswith('yes')
-
-        elif provider == 'gemini':
-            import google.generativeai as genai
-            genai.configure(api_key=c['google_api_key'])
-            model_name = c['model'] or DEFAULT_MODELS['gemini']
-            gemini = genai.GenerativeModel(model_name, system_instruction=system)
-            resp = gemini.generate_content(user)
-            return resp.text.lower().strip().startswith('yes')
-
+        client = get_ollama_client(c)
+        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
+            stream=False,
+        )
+        return resp.choices[0].message.content.lower().strip().startswith('yes')
     except Exception as e:
         print(f'Tag classification failed for "{tag_name}": {e}')
 
@@ -201,43 +137,17 @@ def polish_journal_entry(raw_text: str) -> str:
         if not is_ai_configured():
             return raw_text
         c = get_provider_config()
-        provider = c['provider']
-
-        if provider == 'openai':
-            from openai import OpenAI
-            client = OpenAI(api_key=c['openai_api_key'])
-            model = c['model'] or DEFAULT_MODELS['openai']
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {'role': 'system', 'content': _SYSTEM},
-                    {'role': 'user', 'content': raw_text},
-                ],
-                stream=False,
-            )
-            return _clean_polish_output(resp.choices[0].message.content) or raw_text
-
-        elif provider == 'ollama':
-            client = _ollama_client(c)
-            model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
-                    {'role': 'system', 'content': _SYSTEM},
-                    {'role': 'user', 'content': raw_text},
-                ],
-                stream=False,
-            )
-            return _clean_polish_output(resp.choices[0].message.content) or raw_text
-
-        elif provider == 'gemini':
-            import google.generativeai as genai
-            genai.configure(api_key=c['google_api_key'])
-            model_name = c['model'] or DEFAULT_MODELS['gemini']
-            gemini = genai.GenerativeModel(model_name, system_instruction=_SYSTEM)
-            resp = gemini.generate_content(raw_text)
-            return _clean_polish_output(resp.text) or raw_text
-
+        client = get_ollama_client(c)
+        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {'role': 'system', 'content': _SYSTEM},
+                {'role': 'user', 'content': raw_text},
+            ],
+            stream=False,
+        )
+        return _clean_polish_output(resp.choices[0].message.content) or raw_text
     except Exception as e:
         logger.error('Journal polish failed, using raw text: %s', e)
 

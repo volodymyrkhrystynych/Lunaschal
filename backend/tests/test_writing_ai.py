@@ -27,7 +27,6 @@ def _fake_openai(monkeypatch, content: str):
 def _configure_ollama(monkeypatch):
     monkeypatch.setattr(writing, 'is_ai_configured', lambda: True)
     monkeypatch.setattr(writing, 'get_provider_config', lambda: {
-        'provider': 'ollama',
         'ollama_url': 'http://localhost:11434',
         'ollama_model': 'llama3.2',
     })

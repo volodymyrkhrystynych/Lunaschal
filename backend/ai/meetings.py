@@ -1,5 +1,4 @@
-from backend.ai.journal import _ollama_client
-from backend.ai.provider import get_provider_config, is_ai_configured, DEFAULT_MODELS
+from backend.ai.provider import get_provider_config, get_ollama_client, is_ai_configured, DEFAULT_MODELS
 
 _MAX_INPUT_CHARS = 48000
 
@@ -24,39 +23,16 @@ def summarize_meeting(transcript: str) -> str | None:
         if not is_ai_configured():
             return None
         c = get_provider_config()
-        provider = c['provider']
         messages = [
             {'role': 'system', 'content': _SUMMARY_SYSTEM},
             {'role': 'user', 'content': transcript},
         ]
-
-        if provider == 'openai':
-            from openai import OpenAI
-            client = OpenAI(api_key=c['openai_api_key'])
-            model = c['model'] or DEFAULT_MODELS['openai']
-            resp = client.chat.completions.create(model=model, messages=messages, stream=False)
-            text = resp.choices[0].message.content
-
-        elif provider == 'ollama':
-            client = _ollama_client(c)
-            model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-            resp = client.chat.completions.create(model=model, messages=messages, stream=False)
-            text = resp.choices[0].message.content
-
-        elif provider == 'gemini':
-            import google.generativeai as genai
-            genai.configure(api_key=c['google_api_key'])
-            model_name = c['model'] or DEFAULT_MODELS['gemini']
-            gemini = genai.GenerativeModel(model_name, system_instruction=_SUMMARY_SYSTEM)
-            resp = gemini.generate_content(transcript)
-            text = resp.text
-
-        else:
-            return None
-
+        client = get_ollama_client(c)
+        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+        resp = client.chat.completions.create(model=model, messages=messages, stream=False)
+        text = resp.choices[0].message.content
         text = (text or '').strip()
         return text or None
-
     except Exception as e:
         print(f'Meeting summarization failed: {e}')
 

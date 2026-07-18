@@ -63,13 +63,9 @@ def get_settings():
     if not s:
         return jsonify(None)
     return jsonify({
-        'aiProvider': s.get('ai_provider'),
-        'aiModel': s.get('ai_model'),
-        'hasOpenaiKey': bool(s.get('openai_api_key')),
-        'hasGoogleKey': bool(s.get('google_api_key')),
-        'hasHfToken': bool(s.get('hf_token')),
         'ollamaUrl': s.get('ollama_url'),
         'ollamaModel': s.get('ollama_model'),
+        'hasHfToken': bool(s.get('hf_token')),
         'networkMode': NETWORK_MODE,
         'networkCode': s.get('network_code') if NETWORK_MODE else None,
         'sttPasteKey': s.get('stt_paste_key'),
@@ -92,8 +88,6 @@ def get_settings():
 def update_ai():
     body = request.json or {}
     field_map = {
-        'aiProvider': 'ai_provider', 'aiModel': 'ai_model',
-        'openaiApiKey': 'openai_api_key', 'googleApiKey': 'google_api_key',
         'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
         'sttCommandKey': 'stt_command_key',
