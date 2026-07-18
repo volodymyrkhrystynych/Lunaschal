@@ -15,7 +15,7 @@ Development happens on two machines: a desktop (comfortable, full mouse/keyboard
 ### Tests are the primary safety net
 - Because manual testing is impractical on the Pocket 2, **new features and bug fixes should come with automated tests** that exercise the behavior. Prefer proving a change works with a test over asking the user to click through the UI.
 - There is currently no test runner configured. When adding the first tests, set one up: **pytest** for the Flask/Python backend (`backend/`), and **Vitest** for the React/TypeScript frontend (`src/`). Add matching `npm run test` / `npm run test:backend` scripts so tests are runnable with one command.
-- Favor fast, isolated tests: unit-test the AI parsing/classification logic (`backend/ai/`), route handlers, the SM-2 flashcard algorithm, and DB layer against a temporary SQLite file. Mock external AI providers rather than calling them.
+- Favor fast, isolated tests: unit-test the AI parsing/classification logic (`backend/ai/`), route handlers, the FSRS scheduling adapter, and DB layer against a temporary SQLite file. Mock external AI providers rather than calling them.
 - After making changes, run the relevant tests and report the actual results. Treat a green test suite — not a manual walkthrough — as the default bar for "done."
 
 ### Show a change map before implementing
@@ -113,7 +113,7 @@ Tests: **pytest** for the backend (`backend/tests/`, config in `pytest.ini`) and
 
 ## Architecture
 
-Lunaschal is a single-user personal knowledge management desktop app with AI integration. It combines a journal, calendar, flashcard system (spaced repetition), creative writing workspace, file editor, and AI chat with RAG. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
+Lunaschal is a single-user personal knowledge management desktop app with AI integration. It combines a journal, calendar, AI-augmented spaced-repetition learning system, creative writing workspace, file editor, and AI chat with RAG. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
 
 ### Stack
 - **Desktop shell**: PyWebView — `main.py` starts Flask in a background thread then opens a `webview.create_window`
@@ -130,7 +130,7 @@ Lunaschal is a single-user personal knowledge management desktop app with AI int
 
 ### Backend Structure (`backend/`)
 
-Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `flashcard`, `settings`, `rag`, `chat`, `files`, `writing`, `curated_tags`.
+Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `rag`, `chat`, `files`, `writing`, `curated_tags`.
 
 The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` using Flask's `Response(stream_with_context(...))`.
 
@@ -144,9 +144,13 @@ The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` u
 ### AI Layer (`backend/ai/`)
 - `provider.py` — resolves the active AI provider and model from DB settings (or env vars `OPENAI_API_KEY`, `GOOGLE_API_KEY`); supports `openai`, `gemini`, `ollama`
 - `classifier.py` — classifies chat messages into intents: `journal | calendar | question | flashcard_request | conversation`; extracts structured data when saving entries
-- `embeddings.py` — generates text embeddings for RAG; OpenAI (`text-embedding-3-small`) and Gemini (`text-embedding-004`) supported; Ollama embeddings not yet implemented
+- `embeddings.py` — generates text embeddings for RAG and Learning answer-dedup; OpenAI (`text-embedding-3-small`), Gemini (`text-embedding-004`), and Ollama (`nomic-embed-text`) supported
 - `rag.py` — syncs journal entries to embeddings, performs semantic search, formats retrieved context for the LLM
-- `flashcards.py` — AI-assisted flashcard generation
+- `llm.py` — shared provider-aware helpers: `chat_json` (JSON mode), `chat_text`, `chat_with_tools` (OpenAI-compat tool calling; raises `ToolCallingUnsupported` for gemini)
+- `learning_generation.py` — atomic flashcard generation from brain-dumps, steerable regeneration, voice-transcript normalization
+- `learning_grading.py` — claim decomposition + coverage checking + suggested-rating mapping for the Learning review flow
+- `learning_verification.py` — MCP-grounded evidence cases (`build_case` tool loop) and the semantic-change judge for card revisions
+- `mcp_client.py` — asyncio bridge to the `mcp` SDK (per-request sessions, stdio/http transports), MCP→OpenAI tool mapping
 - `chat.py` — streaming chat generator consumed by the `/api/chat/stream` route
 - `journal.py` — also contains `classify_entry_for_tag(content, tag_name) -> bool`: binary LLM classifier used by the curated-tag background scan; runs on CPU via `_CPU_OPTIONS` for Ollama
 
@@ -154,7 +158,7 @@ The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` u
 Single-user auth via JWT cookie (`lunaschal_token`, 30-day expiry). **Auth is only enforced in network mode** (`NETWORK_MODE=1`) and only for non-localhost requests — the `check_auth` middleware in `app.py` returns early when `is_localhost(request)` is true. Network mode login requires both the password and a rotating 6-digit display code (pseudo-2FA); the code is stored in the `settings` table and can be regenerated from the Settings page.
 
 ### Frontend Structure (`src/`)
-- `App.tsx` — top-level view router; checks auth status on load, shows `Login` if unauthenticated in network mode, otherwise shows a sidebar + main view (chat/journal/writing/calendar/flashcards/files/settings)
+- `App.tsx` — top-level view router; checks auth status on load, shows `Login` if unauthenticated in network mode, otherwise shows a sidebar + main view (chat/journal/writing/calendar/learning/files/settings)
 - `src/components/` — one file per view/feature; `Editor/` subdirectory for the file editor and STT panel; `Writing/` subdirectory for the writing workspace; `CuratedTagsSection.tsx` is the Settings > Tags tab component
 - `src/hooks/api.ts` — typed REST client (`api.*` namespaces) using plain `fetch`; no tRPC
 - `@` path alias resolves to `./src/`
@@ -171,7 +175,7 @@ Two-panel layout: left nav (project list + a `WritingNav` with Chapters/Notes/Di
 
 ### Key Behaviors
 - **Curated tags** — user-defined tags managed in Settings → Tags tab. Each new tag triggers a background daemon thread that calls `classify_entry_for_tag` per journal entry and writes matches to `journal_entry_curated_tags`. Progress tracked in-memory (`_scan_progress` dict in `curated_tags.py`); the list endpoint merges it in. Tags appear as filter pill buttons in the Journal view; entries display curated tags (`#name`, neutral style) separately from freeform AI tags (accent color).
-- **Flashcards** use the SM-2 spaced repetition algorithm (implemented in `backend/routes/flashcard.py`)
+- **Learning** (`backend/routes/learning.py`, `src/components/Learning/`) — AI-augmented spaced repetition. All generated cards (brain-dump, journal, chat topic, verification follow-ups) land as `pending` in ONE approval queue (approve / steerable-regenerate / deny); scheduling is **FSRS** via the `fsrs` package (`backend/learning/scheduler.py`; `fsrs_state=NULL` = never reviewed/reset). Grading is claim-coverage: cached claim decomposition → coverage check → pre-selected Again/Hard/Good/Easy the user can override. Answer embeddings live as float32 blobs on `learning_cards` (in-Python cosine, `backend/learning/dedup.py`) powering the approve-time duplicate **hint** (never auto-reject) and the low-similarity grading gate; both silently disable without an embedding provider. Folders bind at most one MCP evidence provider (`mcp_servers` registry) for verification — trust-first: no provider/no hit ⇒ "no authoritative source found", never open-web. Revising an active answer retires the card (`revised_from` links versions, append-only `learning_revisions` log) and resets FSRS only for semantic changes. Deletes are hard deletes; FKs null `derived_from`/`revised_from` breadcrumbs.
 - **RAG** is optional — silently disabled when embeddings aren't configured (Ollama provider, or missing API key)
 - **DB path** defaults to `./data/lunaschal.db`; override with `DATABASE_URL` env var
 - **JWT secret** defaults to a hardcoded dev string; set `JWT_SECRET` env var in production
