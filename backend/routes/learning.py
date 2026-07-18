@@ -216,10 +216,33 @@ def list_queue():
 
 @bp.post('/queue/<id>/approve')
 def approve_card(id):
+    from backend.learning.dedup import DEDUP_THRESHOLD, find_similar_answer
+    body = request.json or {}
     row = _get_card(id)
     if not row or row['state'] != 'pending':
         return jsonify({'error': 'Not found'}), 404
     db = get_db()
+
+    # Duplicate detection is a dismissable hint, never an auto-block: surface
+    # the nearest active answer and let the user decide (force re-approves).
+    if not body.get('force'):
+        embedding = row['answer_embedding']
+        if embedding is None:
+            embedding = embed_answer(row['answer'])
+            if embedding is not None:
+                db.execute('UPDATE learning_cards SET answer_embedding=? WHERE id=?',
+                           (embedding, id))
+                db.commit()
+        if embedding is not None:
+            match = find_similar_answer(embedding, id)
+            if match and match[1] >= DEDUP_THRESHOLD:
+                similar, score = match
+                return jsonify({
+                    'status': 'duplicateHint',
+                    'similar': similar,
+                    'score': round(score, 3),
+                })
+
     now = int(time.time())
     db.execute(
         "UPDATE learning_cards SET state='active', due=?, updated_at=? WHERE id=?",
@@ -376,6 +399,223 @@ def delete_card(id):
     db.execute('DELETE FROM learning_cards WHERE id=?', (id,))
     db.commit()
     return jsonify({'success': True})
+
+
+# ---------------------------------------------------------------- versioning
+
+@bp.post('/cards/<id>/revise')
+def revise_card(id):
+    import difflib
+    from backend.ai.learning_verification import judge_semantic_change
+    body = request.json or {}
+    new_answer = (body.get('answer') or '').strip()
+    trigger_type = body.get('triggerType') or 'manual_edit'
+    if not new_answer:
+        return jsonify({'error': 'answer required'}), 400
+    if trigger_type not in ('manual_edit', 'web_verification'):
+        return jsonify({'error': 'invalid triggerType'}), 400
+    row = _get_card(id)
+    if not row or row['state'] != 'active':
+        return jsonify({'error': 'Not found'}), 404
+
+    new_question = (body.get('question') or '').strip() or row['question']
+    old_answer = row['answer']
+    diff = '\n'.join(difflib.unified_diff(
+        old_answer.splitlines(), new_answer.splitlines(),
+        fromfile='old', tofile='new', lineterm='',
+    ))
+    is_semantic = judge_semantic_change(old_answer, new_answer)
+
+    db = get_db()
+    now = int(time.time())
+    new_id = str(ULID())
+    # Semantic change: aggressive relearn (fresh FSRS, due now). Cosmetic:
+    # the schedule survives — resetting a well-learned card for a typo fix
+    # is pure loss.
+    fsrs_state, due = (None, now) if is_semantic else (row['fsrs_state'], row['due'])
+    db.execute(
+        'INSERT INTO learning_cards'
+        ' (id, folder_id, question, answer, state, tags, answer_embedding,'
+        '  source_type, source_id, derived_from, revised_from, generation_context,'
+        '  fsrs_state, due, created_at, updated_at)'
+        " VALUES (?,?,?,?,'active',?,?,?,?,?,?,?,?,?,?,?)",
+        (new_id, row['folder_id'], new_question, new_answer, row['tags'],
+         embed_answer(new_answer), row['source_type'], row['source_id'],
+         row['derived_from'], id, row['generation_context'],
+         fsrs_state, due, now, now),
+    )
+    db.execute(
+        "UPDATE learning_cards SET state='retired', updated_at=? WHERE id=?",
+        (now, id),
+    )
+    sources = body.get('sources')
+    db.execute(
+        'INSERT INTO learning_revisions'
+        ' (id, old_card_id, new_card_id, trigger_type, old_answer, new_answer,'
+        '  diff, is_semantic, sources, note, created_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+        (str(ULID()), id, new_id, trigger_type, old_answer, new_answer, diff,
+         int(is_semantic), json.dumps(sources) if sources else None,
+         body.get('note'), now),
+    )
+    db.commit()
+    return jsonify({'newCardId': new_id, 'isSemantic': is_semantic})
+
+
+@bp.get('/cards/<id>/revisions')
+def list_revisions(id):
+    """Revision chain for a card, newest first, following revised_from links."""
+    db = get_db()
+    if not _get_card(id):
+        return jsonify({'error': 'Not found'}), 404
+    revisions = []
+    current, seen = id, set()
+    while current and current not in seen:
+        seen.add(current)
+        row = db.execute(
+            'SELECT * FROM learning_revisions WHERE new_card_id=?', (current,)
+        ).fetchone()
+        if not row:
+            break
+        d = row_to_dict(row)
+        d['sources'] = json.loads(d['sources']) if d.get('sources') else []
+        d['isSemantic'] = bool(d['isSemantic'])
+        revisions.append(d)
+        current = row['old_card_id']
+    return jsonify(revisions)
+
+
+# ---------------------------------------------------------------- review
+
+def _review_filters() -> tuple[str, list]:
+    clause, params = '', []
+    folder_id = request.args.get('folderId')
+    if folder_id:
+        clause += ' AND folder_id = ?'
+        params.append(folder_id)
+    tag = (request.args.get('tag') or '').strip().lower()
+    if tag:
+        clause += f' AND {_TAG_FILTER_SQL}'
+        params.append(tag)
+    return clause, params
+
+
+@bp.get('/due')
+def get_due():
+    clause, params = _review_filters()
+    rows = get_db().execute(
+        f"SELECT * FROM learning_cards WHERE state='active' AND due <= ?{clause}"
+        ' ORDER BY due LIMIT 20',
+        [int(time.time()), *params],
+    ).fetchall()
+    return jsonify([_card_to_dict(r) for r in rows])
+
+
+@bp.get('/stats')
+def get_stats():
+    clause, params = _review_filters()
+    now = int(time.time())
+    row = get_db().execute(
+        f"""
+        SELECT
+            COALESCE(SUM(state='active'), 0) AS total,
+            COALESCE(SUM(state='active' AND due <= ?), 0) AS due,
+            COALESCE(SUM(state='pending'), 0) AS pending,
+            COALESCE(SUM(state='active' AND json_extract(fsrs_state, '$.stability') >= 21), 0) AS mastered
+        FROM learning_cards WHERE state != 'retired'{clause}
+        """,
+        [now, *params],
+    ).fetchone()
+    return jsonify({
+        'total': row['total'], 'due': row['due'], 'pending': row['pending'],
+        'mastered': row['mastered'], 'learning': row['total'] - row['mastered'],
+    })
+
+
+def _card_claims(row) -> list[dict]:
+    """Cached claim decomposition; computed at first grade, stored on the card."""
+    from backend.ai.learning_grading import decompose_claims
+    if row['claims']:
+        return json.loads(row['claims'])
+    claims = decompose_claims(row['question'], row['answer'])
+    db = get_db()
+    db.execute('UPDATE learning_cards SET claims=? WHERE id=?', (json.dumps(claims), row['id']))
+    db.commit()
+    return claims
+
+
+@bp.post('/cards/<id>/grade')
+def grade_card(id):
+    from backend.ai import learning_grading
+    from backend.learning.dedup import cosine
+    body = request.json or {}
+    answer = (body.get('answer') or '').strip()
+    if not answer:
+        return jsonify({'error': 'answer required'}), 400
+    row = _get_card(id)
+    if not row or row['state'] != 'active':
+        return jsonify({'error': 'Not found'}), 404
+
+    if body.get('answerMode') == 'voice':
+        from backend.ai.learning_generation import normalize_transcript
+        answer = normalize_transcript(answer)
+
+    # Cheap gate: an answer nowhere near the stored one is graded Again
+    # without the claim-check LLM call.
+    if row['answer_embedding'] is not None:
+        sim = cosine(embed_answer(answer), row['answer_embedding'])
+        if sim is not None and sim < learning_grading.GATE_LOW:
+            coverage = learning_grading.gated_coverage()
+            return jsonify({
+                'coverage': coverage,
+                'suggestedRating': learning_grading.suggest_rating(coverage),
+                'normalizedAnswer': answer,
+            })
+
+    coverage = learning_grading.check_coverage(_card_claims(row), answer)
+    return jsonify({
+        'coverage': coverage,
+        'suggestedRating': learning_grading.suggest_rating(coverage),
+        'normalizedAnswer': answer,
+    })
+
+
+@bp.post('/cards/<id>/review')
+def review_card(id):
+    from backend.learning import scheduler
+    body = request.json or {}
+    try:
+        rating = int(body.get('rating'))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'rating must be 1-4'}), 400
+    if rating not in (1, 2, 3, 4):
+        return jsonify({'error': 'rating must be 1-4'}), 400
+    row = _get_card(id)
+    if not row or row['state'] != 'active':
+        return jsonify({'error': 'Not found'}), 404
+
+    new_state, due, review_log = scheduler.review(row['fsrs_state'], rating)
+    now = int(time.time())
+    db = get_db()
+    db.execute(
+        'UPDATE learning_cards SET fsrs_state=?, due=?, updated_at=? WHERE id=?',
+        (new_state, due, now, id),
+    )
+    coverage = body.get('coverage')
+    db.execute(
+        'INSERT INTO learning_reviews'
+        ' (id, card_id, rating, suggested_rating, user_answer, coverage, answer_mode, review_log, created_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?)',
+        (str(ULID()), id, rating, body.get('suggestedRating'), body.get('userAnswer'),
+         json.dumps(coverage) if coverage is not None else None,
+         body.get('answerMode'), review_log, now),
+    )
+    db.commit()
+    from datetime import datetime, timezone
+    return jsonify({
+        'due': datetime.fromtimestamp(due, tz=timezone.utc).isoformat(),
+        'state': 'active',
+    })
 
 
 @bp.get('/tags')
