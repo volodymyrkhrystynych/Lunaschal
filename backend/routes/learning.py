@@ -124,6 +124,172 @@ def delete_folder(id):
     return jsonify({'success': True})
 
 
+# ---------------------------------------------------------------- MCP registry
+
+def _server_to_dict(row) -> dict:
+    d = row_to_dict(row)
+    d['args'] = json.loads(d['args']) if d.get('args') else []
+    d['env'] = json.loads(d['env']) if d.get('env') else {}
+    return d
+
+
+def _validate_server_body(body: dict, *, partial: bool) -> tuple[dict, str | None]:
+    fields: dict = {}
+    if 'name' in body or not partial:
+        name = (body.get('name') or '').strip()
+        if not name:
+            return {}, 'name required'
+        fields['name'] = name
+    if 'transport' in body or not partial:
+        transport = body.get('transport') or 'stdio'
+        if transport not in ('stdio', 'http'):
+            return {}, "transport must be 'stdio' or 'http'"
+        fields['transport'] = transport
+    if 'command' in body:
+        fields['command'] = (body.get('command') or '').strip() or None
+    if 'args' in body:
+        args = body.get('args') or []
+        if not isinstance(args, list):
+            return {}, 'args must be a list'
+        fields['args'] = json.dumps([str(a) for a in args]) if args else None
+    if 'env' in body:
+        env = body.get('env') or {}
+        if not isinstance(env, dict):
+            return {}, 'env must be an object'
+        fields['env'] = json.dumps({str(k): str(v) for k, v in env.items()}) if env else None
+    if 'url' in body:
+        fields['url'] = (body.get('url') or '').strip() or None
+    return fields, None
+
+
+@bp.get('/mcp-servers')
+def list_mcp_servers():
+    rows = get_db().execute('SELECT * FROM mcp_servers ORDER BY name').fetchall()
+    return jsonify([_server_to_dict(r) for r in rows])
+
+
+@bp.post('/mcp-servers')
+def create_mcp_server():
+    body = request.json or {}
+    fields, err = _validate_server_body(body, partial=False)
+    if not err:
+        if fields['transport'] == 'stdio' and not fields.get('command'):
+            err = 'stdio transport requires command'
+        elif fields['transport'] == 'http' and not fields.get('url'):
+            err = 'http transport requires url'
+    if err:
+        return jsonify({'error': err}), 400
+    db = get_db()
+    now = int(time.time())
+    id = str(ULID())
+    try:
+        db.execute(
+            'INSERT INTO mcp_servers(id, name, transport, command, args, env, url, created_at, updated_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?)',
+            (id, fields['name'], fields['transport'], fields.get('command'),
+             fields.get('args'), fields.get('env'), fields.get('url'), now, now),
+        )
+    except Exception:
+        return jsonify({'error': 'A server with that name already exists'}), 400
+    db.commit()
+    return jsonify({'id': id}), 201
+
+
+@bp.patch('/mcp-servers/<id>')
+def update_mcp_server(id):
+    db = get_db()
+    if not db.execute('SELECT 1 FROM mcp_servers WHERE id=?', (id,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+    fields, err = _validate_server_body(request.json or {}, partial=True)
+    if err:
+        return jsonify({'error': err}), 400
+    if fields:
+        fields['updated_at'] = int(time.time())
+        set_clause = ', '.join(f'{k}=?' for k in fields)
+        db.execute(f'UPDATE mcp_servers SET {set_clause} WHERE id=?', [*fields.values(), id])
+        db.commit()
+    return jsonify({'success': True})
+
+
+@bp.delete('/mcp-servers/<id>')
+def delete_mcp_server(id):
+    db = get_db()
+    db.execute('DELETE FROM mcp_servers WHERE id=?', (id,))
+    db.commit()
+    return jsonify({'success': True})
+
+
+@bp.post('/mcp-servers/<id>/test')
+def test_mcp_server(id):
+    from backend.ai import mcp_client
+    row = get_db().execute('SELECT * FROM mcp_servers WHERE id=?', (id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(mcp_client.test_server(row))
+
+
+# ---------------------------------------------------------------- verification
+
+def _resolve_provider(card_row):
+    if not card_row['folder_id']:
+        return None
+    return get_db().execute(
+        'SELECT m.* FROM mcp_servers m'
+        ' JOIN learning_folders f ON f.evidence_provider_id = m.id'
+        ' WHERE f.id = ?',
+        (card_row['folder_id'],),
+    ).fetchone()
+
+
+def _run_verification(row, followup=None, transcript=None):
+    from backend.ai import mcp_client
+    from backend.ai.learning_verification import build_case
+    from backend.ai.llm import ToolCallingUnsupported
+
+    server = _resolve_provider(row)
+    if not server:
+        # Trust-first: no bound provider means no case — never open-web.
+        return jsonify({'status': 'noProvider', 'case': None, 'transcript': []})
+
+    async def worker(session):
+        return await build_case(session, row['question'], row['answer'],
+                                followup=followup, transcript=transcript)
+
+    try:
+        case, out_transcript = mcp_client.run_tool_session(server, worker)
+    except ToolCallingUnsupported:
+        return jsonify({
+            'status': 'providerUnsupported', 'case': None, 'transcript': [],
+            'error': 'Verification requires the OpenAI or Ollama provider',
+        })
+    except Exception as e:
+        return jsonify({'error': f'Evidence provider failed: {e}'}), 502
+
+    status = 'notFound' if case['verdict'] == 'notFound' else 'ok'
+    return jsonify({'status': status, 'case': case, 'transcript': out_transcript})
+
+
+@bp.post('/cards/<id>/verify')
+def verify_card(id):
+    row = _get_card(id)
+    if not row or row['state'] != 'active':
+        return jsonify({'error': 'Not found'}), 404
+    return _run_verification(row)
+
+
+@bp.post('/cards/<id>/verify/followup')
+def verify_followup(id):
+    body = request.json or {}
+    question = (body.get('question') or '').strip()
+    if not question:
+        return jsonify({'error': 'question required'}), 400
+    row = _get_card(id)
+    if not row or row['state'] != 'active':
+        return jsonify({'error': 'Not found'}), 404
+    return _run_verification(row, followup=question,
+                             transcript=body.get('transcript') or None)
+
+
 # ---------------------------------------------------------------- generation
 
 @bp.post('/generate')
