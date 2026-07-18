@@ -32,7 +32,7 @@ vi.mock('../hooks/api', () => ({
     },
     curatedTags: { list: vi.fn().mockResolvedValue([]) },
     transcriptions: { list: vi.fn().mockResolvedValue([]), delete: vi.fn() },
-    flashcard: { generateFromJournal: vi.fn() },
+    learning: { generateFromJournal: vi.fn() },
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
   },
 }));

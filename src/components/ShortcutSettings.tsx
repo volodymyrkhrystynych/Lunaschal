@@ -12,7 +12,7 @@ const GROUPS: { title: string; actions: ActionId[] }[] = [
   { title: 'Reader / Writing', actions: ['action.annotate', 'reader.fontUp', 'reader.fontDown', 'reader.toggleList'] },
   {
     title: 'Tabs',
-    actions: ['tab.chat', 'tab.tasks', 'tab.journal', 'tab.writing', 'tab.calendar', 'tab.flashcards', 'tab.cookbook', 'tab.fanfic', 'tab.files', 'tab.settings'],
+    actions: ['tab.chat', 'tab.tasks', 'tab.journal', 'tab.writing', 'tab.calendar', 'tab.learning', 'tab.cookbook', 'tab.fanfic', 'tab.files', 'tab.settings'],
   },
 ];
 

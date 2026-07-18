@@ -4,7 +4,7 @@ import { Sidebar } from './components/Sidebar';
 import { Chat } from './components/Chat';
 import { Journal } from './components/Journal';
 import { Calendar } from './components/Calendar';
-import { Flashcards } from './components/Flashcards';
+import { Learning } from './components/Learning/Learning';
 import { Settings } from './components/Settings';
 import { Editor } from './components/Editor';
 import { SttPanel } from './components/Editor/SttPanel';
@@ -19,7 +19,7 @@ import { Meetings } from './components/Meetings';
 import { api } from './hooks/api';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 
-type View = 'chat' | 'journal' | 'meetings' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic' | 'newspapers';
+type View = 'chat' | 'journal' | 'meetings' | 'calendar' | 'learning' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic' | 'newspapers';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
@@ -63,8 +63,8 @@ export default function App() {
         return <Journal onOpenFic={(target) => { setFicTarget(target); setCurrentView('fanfic'); }} />;
       case 'calendar':
         return <Calendar />;
-      case 'flashcards':
-        return <Flashcards />;
+      case 'learning':
+        return <Learning />;
       case 'settings':
         return <Settings />;
       case 'files':

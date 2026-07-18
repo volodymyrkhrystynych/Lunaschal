@@ -5,9 +5,9 @@ import { api } from '../hooks/api';
 import { DEFAULT_BINDINGS, comboFromEvent, isEditableTarget, keyCapture } from './keymap';
 import type { ActionId } from './keymap';
 
-export type AppView = 'chat' | 'journal' | 'meetings' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic' | 'newspapers';
+export type AppView = 'chat' | 'journal' | 'meetings' | 'calendar' | 'learning' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic' | 'newspapers';
 
-export const VIEW_ORDER: AppView[] = ['chat', 'tasks', 'journal', 'meetings', 'writing', 'calendar', 'flashcards', 'cookbook', 'fanfic', 'newspapers', 'files', 'settings'];
+export const VIEW_ORDER: AppView[] = ['chat', 'tasks', 'journal', 'meetings', 'writing', 'calendar', 'learning', 'cookbook', 'fanfic', 'newspapers', 'files', 'settings'];
 
 const TAB_ACTIONS: Partial<Record<ActionId, AppView>> = {
   'tab.chat': 'chat',
@@ -15,7 +15,7 @@ const TAB_ACTIONS: Partial<Record<ActionId, AppView>> = {
   'tab.journal': 'journal',
   'tab.writing': 'writing',
   'tab.calendar': 'calendar',
-  'tab.flashcards': 'flashcards',
+  'tab.learning': 'learning',
   'tab.cookbook': 'cookbook',
   'tab.fanfic': 'fanfic',
   'tab.files': 'files',
