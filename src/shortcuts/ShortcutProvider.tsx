@@ -120,6 +120,9 @@ export interface ScopeHandlers {
   approve?: () => void;
   deny?: () => void;
   record?: () => void;
+  check?: () => void;
+  flip?: () => void;
+  rate?: (rating: 1 | 2 | 3 | 4) => void;
   fontUp?: () => void;
   fontDown?: () => void;
   toggleList?: () => void;
@@ -195,7 +198,7 @@ export function ShortcutProvider({
   const comboToAction = useMemo(() => {
     const m: Record<string, ActionId> = {};
     for (const [action, combo] of Object.entries(bindings))
-      m[combo] = action as ActionId;
+      if (combo) m[combo] = action as ActionId;
     return m;
   }, [bindings]);
 
@@ -354,6 +357,28 @@ export function ShortcutProvider({
       const handler = resolveHandlerDeep(scopes, maxDepth, 'record');
       if (handler) (handler as () => void)();
       else handled = false;
+    } else if (action === 'learning.check' || action === 'learning.flip') {
+      // Review actions apply to the single visible card, so any depth works.
+      const maxDepth = Math.max(lvl, 1, ...Array.from(scopes.keys()));
+      const handler = resolveHandlerDeep(
+        scopes,
+        maxDepth,
+        action === 'learning.check' ? 'check' : 'flip'
+      );
+      if (handler) (handler as () => void)();
+      else handled = false;
+    } else if (
+      action === 'learning.rate1' ||
+      action === 'learning.rate2' ||
+      action === 'learning.rate3' ||
+      action === 'learning.rate4'
+    ) {
+      const maxDepth = Math.max(lvl, 1, ...Array.from(scopes.keys()));
+      const handler = resolveHandlerDeep(scopes, maxDepth, 'rate');
+      if (handler) {
+        const rating = Number(action.slice(-1)) as 1 | 2 | 3 | 4;
+        (handler as (r: 1 | 2 | 3 | 4) => void)(rating);
+      } else handled = false;
     } else if (
       action === 'reader.fontUp' ||
       action === 'reader.fontDown' ||

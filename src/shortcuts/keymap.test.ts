@@ -12,9 +12,14 @@ describe('DEFAULT_BINDINGS', () => {
     ).toBe(false);
   });
 
-  it('has no two actions on the same combo', () => {
-    const combos = Object.values(DEFAULT_BINDINGS);
+  it('has no two actions on the same combo ("" = unbound, exempt)', () => {
+    const combos = Object.values(DEFAULT_BINDINGS).filter(Boolean);
     expect(new Set(combos).size).toBe(combos.length);
+  });
+
+  it('leaves all tab actions unbound — digits belong to review ratings', () => {
+    for (const [action, combo] of Object.entries(DEFAULT_BINDINGS))
+      if (action.startsWith('tab.')) expect(combo).toBe('');
   });
 });
 

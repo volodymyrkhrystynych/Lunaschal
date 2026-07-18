@@ -27,6 +27,12 @@ export type ActionId =
   | 'learning.approve'
   | 'learning.deny'
   | 'learning.record'
+  | 'learning.check'
+  | 'learning.flip'
+  | 'learning.rate1'
+  | 'learning.rate2'
+  | 'learning.rate3'
+  | 'learning.rate4'
   | 'reader.fontUp'
   | 'reader.fontDown'
   | 'reader.toggleList';
@@ -40,21 +46,29 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'action.newAlt': 'shift+KeyN',
   'action.annotate': 'KeyI',
   'action.search': 'KeyF',
-  'tab.chat': 'Digit1',
-  'tab.tasks': 'Digit2',
-  'tab.journal': 'Digit3',
-  'tab.writing': 'Digit4',
-  'tab.calendar': 'Digit5',
-  'tab.learning': 'Digit6',
-  'tab.cookbook': 'Digit9',
-  'tab.fanfic': 'Digit0',
-  'tab.files': 'Digit7',
-  'tab.settings': 'Digit8',
+  // Tab digits are unbound by default — the number row belongs to Learning
+  // review ratings. Rebindable in Settings ('' = unbound).
+  'tab.chat': '',
+  'tab.tasks': '',
+  'tab.journal': '',
+  'tab.writing': '',
+  'tab.calendar': '',
+  'tab.learning': '',
+  'tab.cookbook': '',
+  'tab.fanfic': '',
+  'tab.files': '',
+  'tab.settings': '',
   'global.newJournalEntry': 'shift+KeyJ',
   'global.toggleSidebar': 'KeyB',
   'learning.approve': 'KeyY',
   'learning.deny': 'KeyX',
   'learning.record': 'KeyV',
+  'learning.check': 'Enter',
+  'learning.flip': 'Space',
+  'learning.rate1': 'Digit1',
+  'learning.rate2': 'Digit2',
+  'learning.rate3': 'Digit3',
+  'learning.rate4': 'Digit4',
   'reader.fontUp': 'Equal',
   'reader.fontDown': 'Minus',
   'reader.toggleList': 'KeyL',
@@ -85,6 +99,12 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'learning.approve': 'Approve selected card (Learning queue)',
   'learning.deny': 'Deny selected card (Learning queue)',
   'learning.record': 'Toggle voice recording (Learning)',
+  'learning.check': 'Check answer (Learning review)',
+  'learning.flip': 'Flip card / show answer (Learning review)',
+  'learning.rate1': 'Rate Again (Learning review)',
+  'learning.rate2': 'Rate Hard (Learning review)',
+  'learning.rate3': 'Rate Good (Learning review)',
+  'learning.rate4': 'Rate Easy (Learning review)',
   'reader.fontUp': 'Increase reading/chapter text size',
   'reader.fontDown': 'Decrease reading/chapter text size',
   'reader.toggleList':

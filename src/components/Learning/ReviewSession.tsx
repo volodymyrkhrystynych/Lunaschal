@@ -103,6 +103,18 @@ export function ReviewSession({ folderId, tag }: Props) {
       if (recorder.status === 'recording') recorder.stop();
       else if (recorder.status === 'idle') recorder.start();
     },
+    check: () => {
+      if (!card || answered || gradeAnswer.isPending) return;
+      if (answer.trim() && recorder.status === 'idle') gradeAnswer.mutate();
+    },
+    flip: () => {
+      if (!card || answered || gradeAnswer.isPending) return;
+      setFlipped(true);
+    },
+    rate: rating => {
+      if (!card || !answered || review.isPending) return;
+      review.mutate(rating);
+    },
   });
 
   if (!card) {

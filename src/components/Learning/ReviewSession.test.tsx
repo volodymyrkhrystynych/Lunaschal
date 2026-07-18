@@ -228,6 +228,74 @@ describe('ReviewSession', () => {
     );
   });
 
+  it('Space flips the card and a digit commits that rating directly', async () => {
+    renderSession();
+    await screen.findByText('What is a closure?');
+
+    fireEvent.keyDown(window, { code: 'Space' });
+    expect(
+      await screen.findByText('A function plus its captured lexical scope.')
+    ).toBeTruthy();
+    expect(mocks.grade).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { code: 'Digit4' });
+    await waitFor(() =>
+      expect(mocks.review).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({
+          rating: 4,
+          answerMode: 'self',
+        })
+      )
+    );
+  });
+
+  it('digits are inert before the answer is shown', async () => {
+    renderSession();
+    await screen.findByText('What is a closure?');
+
+    fireEvent.keyDown(window, { code: 'Digit2' });
+
+    expect(mocks.review).not.toHaveBeenCalled();
+  });
+
+  it('Enter checks the typed answer, then a digit overrides the suggestion', async () => {
+    renderSession();
+    fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
+      target: { value: 'a function' },
+    });
+
+    fireEvent.keyDown(window, { code: 'Enter' });
+    await waitFor(() =>
+      expect(mocks.grade).toHaveBeenCalledWith('c1', {
+        answer: 'a function',
+        answerMode: 'typed',
+      })
+    );
+    await screen.findByText(/suggestion highlighted/);
+
+    fireEvent.keyDown(window, { code: 'Digit1' });
+    await waitFor(() =>
+      expect(mocks.review).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({
+          rating: 1,
+          suggestedRating: 2,
+          answerMode: 'typed',
+        })
+      )
+    );
+  });
+
+  it('Enter does nothing when the answer box is empty', async () => {
+    renderSession();
+    await screen.findByText('What is a closure?');
+
+    fireEvent.keyDown(window, { code: 'Enter' });
+
+    expect(mocks.grade).not.toHaveBeenCalled();
+  });
+
   it('after grading, D commits the suggested rating without extra keys', async () => {
     renderSession();
     fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {

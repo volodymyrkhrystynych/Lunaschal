@@ -42,7 +42,17 @@ const GROUPS: { title: string; actions: ActionId[] }[] = [
   },
   {
     title: 'Learning',
-    actions: ['learning.approve', 'learning.deny', 'learning.record'],
+    actions: [
+      'learning.approve',
+      'learning.deny',
+      'learning.record',
+      'learning.check',
+      'learning.flip',
+      'learning.rate1',
+      'learning.rate2',
+      'learning.rate3',
+      'learning.rate4',
+    ],
   },
   {
     title: 'Tabs',
@@ -107,7 +117,7 @@ function BrowserKeyRecorder({
           : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)]'
       }`}
     >
-      {listening ? 'Press a key…' : displayCombo(value)}
+      {listening ? 'Press a key…' : value ? displayCombo(value) : 'Unbound'}
     </button>
   );
 }
@@ -150,10 +160,10 @@ export function ShortcutSettings() {
       setMessage({ type: 'error', text: error.message }),
   });
 
-  // Actions whose combo is shared with another action
+  // Actions whose combo is shared with another action ('' = unbound, no conflict)
   const comboCounts = new Map<string, number>();
   for (const combo of Object.values(draft))
-    comboCounts.set(combo, (comboCounts.get(combo) ?? 0) + 1);
+    if (combo) comboCounts.set(combo, (comboCounts.get(combo) ?? 0) + 1);
   const hasConflicts = [...comboCounts.values()].some(n => n > 1);
 
   const handleExport = () => {
@@ -258,7 +268,7 @@ export function ShortcutSettings() {
                           }))
                         }
                         className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                        title={`Reset to ${displayCombo(DEFAULT_BINDINGS[action])}`}
+                        title={`Reset to ${DEFAULT_BINDINGS[action] ? displayCombo(DEFAULT_BINDINGS[action]) : 'unbound'}`}
                       >
                         ↺
                       </button>
