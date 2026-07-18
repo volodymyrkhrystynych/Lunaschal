@@ -158,6 +158,63 @@ describe('reader/writing font size and list-toggle shortcuts', () => {
   });
 });
 
+describe('learning review shortcuts', () => {
+  it('dispatches rate with the digit value from any depth', () => {
+    const rate = vi.fn();
+    renderScope({}, undefined, { rate });
+
+    fireEvent.keyDown(window, { code: 'Digit1' });
+    fireEvent.keyDown(window, { code: 'Digit4' });
+
+    expect(rate).toHaveBeenNthCalledWith(1, 1);
+    expect(rate).toHaveBeenNthCalledWith(2, 4);
+  });
+
+  it('dispatches check on Enter and flip on Space', () => {
+    const check = vi.fn();
+    const flip = vi.fn();
+    renderScope({}, undefined, { check, flip });
+
+    fireEvent.keyDown(window, { code: 'Enter' });
+    fireEvent.keyDown(window, { code: 'Space' });
+
+    expect(check).toHaveBeenCalledTimes(1);
+    expect(flip).toHaveBeenCalledTimes(1);
+  });
+
+  it('digits no longer switch tabs (tab.* defaults are unbound)', () => {
+    const onViewChange = vi.fn();
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ShortcutProvider currentView="journal" onViewChange={onViewChange}>
+          <Scope handlers={{}} />
+        </ShortcutProvider>
+      </QueryClientProvider>
+    );
+
+    for (const code of ['Digit1', 'Digit5', 'Digit8', 'Digit0'])
+      fireEvent.keyDown(window, { code });
+
+    expect(onViewChange).not.toHaveBeenCalled();
+  });
+
+  it('stays inert while typing in an input', () => {
+    const rate = vi.fn();
+    const check = vi.fn();
+    const { container } = renderScope({}, undefined, { rate, check });
+    const input = document.createElement('input');
+    container.appendChild(input);
+    input.focus();
+
+    fireEvent.keyDown(input, { code: 'Digit3' });
+    fireEvent.keyDown(input, { code: 'Enter' });
+
+    expect(rate).not.toHaveBeenCalled();
+    expect(check).not.toHaveBeenCalled();
+  });
+});
+
 describe('F search shortcut', () => {
   it('invokes the search handler even from the sidebar level', () => {
     const search = vi.fn();
