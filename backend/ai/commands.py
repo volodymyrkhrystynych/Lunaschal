@@ -1,6 +1,6 @@
 import json
 from datetime import date
-from backend.ai.provider import get_provider_config, DEFAULT_MODELS
+from backend.ai.provider import get_provider_config, get_ollama_client, DEFAULT_MODELS
 
 COMMAND_PROMPT = """You are a voice command parser for a personal assistant. The user spoke a command \
 which was transcribed by speech-to-text (so expect minor transcription errors). Decide what they want \
@@ -40,38 +40,19 @@ Respond with valid JSON matching this schema:
 def parse_voice_command(messages: list[dict]) -> dict:
     """Parse a spoken command (possibly a multi-turn clarification exchange) into an action dict."""
     c = get_provider_config()
-    provider = c['provider']
     today = date.today()
     system = COMMAND_PROMPT.replace('{TODAY}', today.isoformat()).replace(
         '{WEEKDAY}', today.strftime('%A'))
 
     try:
-        if provider in ('openai', 'ollama'):
-            from openai import OpenAI
-            if provider == 'openai':
-                client = OpenAI(api_key=c['openai_api_key'])
-                model = c['model'] or DEFAULT_MODELS['openai']
-            else:
-                client = OpenAI(base_url=f"{c['ollama_url']}/v1", api_key='ollama')
-                model = c['ollama_model'] or c['model'] or DEFAULT_MODELS['ollama']
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[{'role': 'system', 'content': system}, *messages],
-                response_format={'type': 'json_object'},
-            )
-            return json.loads(resp.choices[0].message.content)
-
-        if provider == 'gemini':
-            import google.generativeai as genai
-            genai.configure(api_key=c['google_api_key'])
-            model_name = c['model'] or DEFAULT_MODELS['gemini']
-            convo = '\n'.join(f"{m['role']}: {m['content']}" for m in messages)
-            resp = genai.GenerativeModel(model_name).generate_content(
-                f'{system}\n\nConversation:\n{convo}',
-                generation_config={'response_mime_type': 'application/json'},
-            )
-            return json.loads(resp.text)
-
+        client = get_ollama_client(c)
+        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[{'role': 'system', 'content': system}, *messages],
+            response_format={'type': 'json_object'},
+        )
+        return json.loads(resp.choices[0].message.content)
     except Exception as e:
         print(f'Voice command parse error: {e}')
 

@@ -33,7 +33,6 @@ def test_parse_recipe_uses_configured_model_no_cpu_options(monkeypatch):
     captured = _fake_openai(monkeypatch, content)
     monkeypatch.setattr(recipes, 'is_ai_configured', lambda: True)
     monkeypatch.setattr(recipes, 'get_provider_config', lambda: {
-        'provider': 'ollama',
         'ollama_url': 'http://localhost:11434',
         'ollama_model': 'llama3.2',
     })

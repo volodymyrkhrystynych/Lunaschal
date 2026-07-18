@@ -1,8 +1,8 @@
 """Unit tests for the voice-command LLM parser (`backend.ai.commands`).
 
-The real provider call is faked, so these tests cover the parser's own logic —
-today's-date injection into the system prompt, JSON decoding of the reply, and
-the safe fallback for an unrecognized provider — without hitting the network.
+The real Ollama-compatible call is faked, so these tests cover the parser's own
+logic — today's-date injection into the system prompt, JSON decoding of the reply,
+and the safe fallback when Ollama is not reachable — without hitting the network.
 """
 import json
 from datetime import date
@@ -13,14 +13,14 @@ import pytest
 from backend.ai import commands
 
 
-def test_unknown_provider_returns_safe_fallback(monkeypatch):
-    monkeypatch.setattr(commands, 'get_provider_config', lambda: {'provider': 'unsupported'})
+def test_unconfigured_returns_safe_fallback(monkeypatch):
+    monkeypatch.setattr(commands, 'get_provider_config', lambda: {'ollama_url': ''})
     result = commands.parse_voice_command([{'role': 'user', 'content': 'hi'}])
     assert result['action'] == 'none'
     assert result['speak']  # always something for TTS to say
 
 
-def test_openai_path_parses_json_and_injects_today(monkeypatch):
+def test_ollama_path_parses_json_and_injects_today(monkeypatch):
     openai = pytest.importorskip('openai')
     captured = {}
 
@@ -39,8 +39,7 @@ def test_openai_path_parses_json_and_injects_today(monkeypatch):
 
     monkeypatch.setattr(openai, 'OpenAI', FakeOpenAI)
     monkeypatch.setattr(commands, 'get_provider_config', lambda: {
-        'provider': 'openai', 'openai_api_key': 'x', 'model': 'gpt-test',
-        'ollama_url': '', 'ollama_model': '',
+        'ollama_url': 'http://localhost:11434', 'ollama_model': 'test-model',
     })
 
     result = commands.parse_voice_command([{'role': 'user', 'content': 'add milk to my list'}])

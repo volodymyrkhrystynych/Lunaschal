@@ -149,8 +149,8 @@ def test_generation_prompt_parses_and_enforces_shape(monkeypatch):
 
     monkeypatch.setattr(openai, 'OpenAI', FakeOpenAI)
     monkeypatch.setattr(llm, 'get_provider_config', lambda: {
-        'provider': 'ollama', 'ollama_url': 'http://localhost:11434',
-        'ollama_model': 'llama3.2', 'model': None,
+        'ollama_url': 'http://localhost:11434',
+        'ollama_model': 'llama3.2',
     })
 
     cards = learning_generation.generate_cards('some text', direction='keep it atomic')

@@ -27,7 +27,6 @@ def _fake_openai(monkeypatch, content: str):
 
 def _ollama_config(**overrides):
     config = {
-        'provider': 'ollama',
         'ollama_url': 'http://localhost:11434',
         'ollama_model': 'llama3.2',
     }

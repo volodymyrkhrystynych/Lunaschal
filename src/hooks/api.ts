@@ -332,10 +332,6 @@ export interface ConversationWithMessages extends Conversation {
 }
 
 export interface AppSettings {
-  aiProvider: string | null;
-  aiModel: string | null;
-  hasOpenaiKey: boolean;
-  hasGoogleKey: boolean;
   hasHfToken: boolean;
   ollamaUrl: string | null;
   ollamaModel: string | null;
@@ -515,7 +511,7 @@ export const api = {
 
   settings: {
     get: () => get<AppSettings | null>('/api/settings'),
-    updateAI: (data: Partial<AppSettings & { openaiApiKey?: string; googleApiKey?: string; hfToken?: string }>) =>
+    updateAI: (data: Partial<AppSettings & { hfToken?: string }>) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
     updateShortcuts: (data: { sttPasteKey?: string; sttVoiceKey?: string; sttJournalKey?: string; sttCommandKey?: string }) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
