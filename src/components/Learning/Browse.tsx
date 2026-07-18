@@ -6,6 +6,7 @@ import {
   useShortcuts,
   useShortcutScope,
 } from '../../shortcuts/ShortcutProvider';
+import { MessageMarkdown } from '../MessageMarkdown';
 import { VerificationPanel } from './VerificationPanel';
 
 interface Props {
@@ -118,13 +119,13 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
                 Question
               </div>
               <div className="text-[var(--color-text)] mb-4 line-clamp-3">
-                {card.question}
+                <MessageMarkdown content={card.question} />
               </div>
               <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
                 Answer
               </div>
               <div className="text-[var(--color-text)] mb-4 line-clamp-3">
-                {card.answer}
+                <MessageMarkdown content={card.answer} />
               </div>
               {card.tags.length > 0 && (
                 <div className="flex flex-wrap gap-1 mb-3">

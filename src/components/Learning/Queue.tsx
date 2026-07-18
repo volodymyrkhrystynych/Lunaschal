@@ -5,6 +5,7 @@ import {
   useShortcuts,
   useShortcutScope,
 } from '../../shortcuts/ShortcutProvider';
+import { MessageMarkdown } from '../MessageMarkdown';
 
 interface HintState {
   card: LearningCard;
@@ -153,11 +154,15 @@ export function Queue() {
           <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
             Question
           </div>
-          <div className="text-[var(--color-text)] mb-3">{card.question}</div>
+          <div className="text-[var(--color-text)] mb-3">
+            <MessageMarkdown content={card.question} />
+          </div>
           <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
             Answer
           </div>
-          <div className="text-[var(--color-text)] mb-4">{card.answer}</div>
+          <div className="text-[var(--color-text)] mb-4">
+            <MessageMarkdown content={card.answer} />
+          </div>
 
           {regenFor === card.id ? (
             <div className="flex gap-2">
@@ -270,19 +275,19 @@ function DuplicateHintDialog({
               New card
             </div>
             <div className="text-sm text-[var(--color-text)]">
-              {hint.card.question}
+              <MessageMarkdown content={hint.card.question} />
             </div>
             <div className="text-sm text-[var(--color-text-muted)] mt-1">
-              {hint.card.answer}
+              <MessageMarkdown content={hint.card.answer} />
             </div>
           </div>
           <div className="border border-orange-500/30 rounded-lg p-3">
             <div className="text-xs text-orange-300 mb-1">Existing card</div>
             <div className="text-sm text-[var(--color-text)]">
-              {hint.similar.question}
+              <MessageMarkdown content={hint.similar.question} />
             </div>
             <div className="text-sm text-[var(--color-text-muted)] mt-1">
-              {hint.similar.answer}
+              <MessageMarkdown content={hint.similar.answer} />
             </div>
           </div>
         </div>
