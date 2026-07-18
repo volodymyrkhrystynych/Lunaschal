@@ -14,7 +14,7 @@ export function Writing() {
   const [navVisible, setNavVisible] = useState(true);
 
   useShortcutScope(1, {
-    toggleList: () => setNavVisible((v) => !v),
+    toggleList: () => setNavVisible(v => !v),
   });
 
   const { data: project } = useQuery({
@@ -32,8 +32,13 @@ export function Writing() {
     <div className="flex-1 flex overflow-hidden">
       {/* Left nav: Projects + Chapters/Notes/Discussions stacked */}
       {navVisible && (
-        <div data-writing-nav className="w-64 shrink-0 border-r border-white/10 bg-[var(--color-surface)] flex flex-col overflow-hidden">
-          <div className={`${selectedProjectId ? 'h-2/5' : 'flex-1'} border-b border-white/10 overflow-hidden flex flex-col`}>
+        <div
+          data-writing-nav
+          className="w-64 shrink-0 border-r border-white/10 bg-[var(--color-surface)] flex flex-col overflow-hidden"
+        >
+          <div
+            className={`${selectedProjectId ? 'h-2/5' : 'flex-1'} border-b border-white/10 overflow-hidden flex flex-col`}
+          >
             <ProjectList
               selectedProjectId={selectedProjectId}
               onSelectProject={handleSelectProject}
@@ -62,7 +67,7 @@ export function Writing() {
             key={selection.id}
             project={project}
             discussionId={selection.id}
-            onNoteCreated={(noteId) => setSelection({ kind: 'note', id: noteId })}
+            onNoteCreated={noteId => setSelection({ kind: 'note', id: noteId })}
           />
         ) : selectedProjectId ? (
           <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">

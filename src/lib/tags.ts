@@ -3,5 +3,8 @@
 // re-normalizes every create/update payload — keeping one source of truth
 // for what makes two tags "the same".
 export function parseTagsInput(input: string): string[] {
-  return input.split(',').map((t) => t.trim()).filter(Boolean);
+  return input
+    .split(',')
+    .map(t => t.trim())
+    .filter(Boolean);
 }

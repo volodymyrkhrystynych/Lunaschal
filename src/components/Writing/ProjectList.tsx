@@ -1,7 +1,10 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type WritingProject } from '../../hooks/api';
-import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import {
+  useShortcuts,
+  useShortcutScope,
+} from '../../shortcuts/ShortcutProvider';
 
 interface Props {
   selectedProjectId: string | null;
@@ -20,7 +23,7 @@ export function ProjectList({ selectedProjectId, onSelectProject }: Props) {
 
   const createProject = useMutation({
     mutationFn: api.writing.createProject,
-    onSuccess: (data) => {
+    onSuccess: data => {
       queryClient.invalidateQueries({ queryKey: ['writing', 'projects'] });
       onSelectProject(data.id);
       setCreating(false);
@@ -46,7 +49,7 @@ export function ProjectList({ selectedProjectId, onSelectProject }: Props) {
 
   const step = (dir: 1 | -1) => {
     if (!projects || projects.length === 0) return;
-    const idx = projects.findIndex((p) => p.id === selectedProjectId);
+    const idx = projects.findIndex(p => p.id === selectedProjectId);
     if (idx === -1) {
       onSelectProject(projects[0].id);
       return;
@@ -64,14 +67,22 @@ export function ProjectList({ selectedProjectId, onSelectProject }: Props) {
   return (
     <div className="flex flex-col h-full">
       <div className="p-3 border-b border-white/10 shrink-0">
-        <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Projects</div>
+        <div className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
+          Projects
+        </div>
         {creating ? (
           <div className="flex gap-1">
             <input
               autoFocus
               value={newTitle}
               onChange={e => setNewTitle(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') { setCreating(false); setNewTitle(''); } }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleCreate();
+                if (e.key === 'Escape') {
+                  setCreating(false);
+                  setNewTitle('');
+                }
+              }}
               placeholder="Project title…"
               className="flex-1 px-2 py-1 text-sm rounded bg-white/5 border border-white/20 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
             />
@@ -95,7 +106,9 @@ export function ProjectList({ selectedProjectId, onSelectProject }: Props) {
 
       <div className="flex-1 overflow-y-auto p-2">
         {isLoading && (
-          <div className="text-sm text-[var(--color-text-muted)] px-2 py-2">Loading…</div>
+          <div className="text-sm text-[var(--color-text-muted)] px-2 py-2">
+            Loading…
+          </div>
         )}
         {projects?.map((project: WritingProject) => (
           <div
@@ -109,7 +122,11 @@ export function ProjectList({ selectedProjectId, onSelectProject }: Props) {
           >
             <span className="text-sm truncate flex-1">{project.title}</span>
             <button
-              onClick={e => { e.stopPropagation(); if (confirm(`Delete "${project.title}" and all its content?`)) deleteProject.mutate(project.id); }}
+              onClick={e => {
+                e.stopPropagation();
+                if (confirm(`Delete "${project.title}" and all its content?`))
+                  deleteProject.mutate(project.id);
+              }}
               className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-white/20 text-[var(--color-text-muted)] hover:text-red-400 transition-all"
               title="Delete project"
             >
@@ -118,7 +135,9 @@ export function ProjectList({ selectedProjectId, onSelectProject }: Props) {
           </div>
         ))}
         {!isLoading && (!projects || projects.length === 0) && (
-          <div className="text-sm text-[var(--color-text-muted)] px-2 py-2">No projects yet</div>
+          <div className="text-sm text-[var(--color-text-muted)] px-2 py-2">
+            No projects yet
+          </div>
         )}
       </div>
     </div>

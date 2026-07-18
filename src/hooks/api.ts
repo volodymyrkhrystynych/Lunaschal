@@ -144,7 +144,10 @@ export interface Meeting {
   updatedAt: string;
 }
 
-export interface MeetingDetail extends Omit<Meeting, 'hasNotes' | 'hasSummary'> {
+export interface MeetingDetail extends Omit<
+  Meeting,
+  'hasNotes' | 'hasSummary'
+> {
   source: 'live' | 'upload';
   whisperModel: string;
   whisperDevice: string;
@@ -471,11 +474,16 @@ async function get<T>(url: string): Promise<T> {
   return r.json();
 }
 
-async function send<T>(method: string, url: string, body?: unknown): Promise<T> {
+async function send<T>(
+  method: string,
+  url: string,
+  body?: unknown
+): Promise<T> {
   const r = await fetch(url, {
     method,
     credentials: 'include',
-    headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    headers:
+      body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!r.ok) {
@@ -491,7 +499,11 @@ const put = <T>(url: string, body: unknown) => send<T>('PUT', url, body);
 const del = <T>(url: string) => send<T>('DELETE', url);
 
 async function upload<T>(url: string, form: FormData): Promise<T> {
-  const r = await fetch(url, { method: 'POST', credentials: 'include', body: form });
+  const r = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    body: form,
+  });
   if (!r.ok) {
     const b = await r.json().catch(() => ({}));
     throw new Error(b.error || `HTTP ${r.status}`);
@@ -513,15 +525,24 @@ export const api = {
     get: () => get<AppSettings | null>('/api/settings'),
     updateAI: (data: Partial<AppSettings & { hfToken?: string }>) =>
       patch<{ success: boolean }>('/api/settings/ai', data),
-    updateShortcuts: (data: { sttPasteKey?: string; sttVoiceKey?: string; sttJournalKey?: string; sttCommandKey?: string }) =>
-      patch<{ success: boolean }>('/api/settings/ai', data),
-    regenerateCode: () => post<{ networkCode: string }>('/api/settings/regenerate-code'),
+    updateShortcuts: (data: {
+      sttPasteKey?: string;
+      sttVoiceKey?: string;
+      sttJournalKey?: string;
+      sttCommandKey?: string;
+    }) => patch<{ success: boolean }>('/api/settings/ai', data),
+    regenerateCode: () =>
+      post<{ networkCode: string }>('/api/settings/regenerate-code'),
     ollamaModels: () => get<OllamaModel[]>('/api/settings/ollama-models'),
     gpuVram: () => get<GpuVram>('/api/settings/gpu-vram'),
   },
 
   journal: {
-    list: (params?: { limit?: number; offset?: number; curatedTagId?: string }) => {
+    list: (params?: {
+      limit?: number;
+      offset?: number;
+      curatedTagId?: string;
+    }) => {
       const qp = new URLSearchParams();
       if (params?.limit !== undefined) qp.set('limit', String(params.limit));
       if (params?.offset !== undefined) qp.set('offset', String(params.offset));
@@ -529,16 +550,23 @@ export const api = {
       return get<JournalEntry[]>(`/api/journal?${qp}`);
     },
     search: (query: string, limit?: number) =>
-      get<JournalEntry[]>(`/api/journal/search?query=${encodeURIComponent(query)}&limit=${limit ?? 50}`),
+      get<JournalEntry[]>(
+        `/api/journal/search?query=${encodeURIComponent(query)}&limit=${limit ?? 50}`
+      ),
     semanticSearch: (query: string, limit?: number) =>
-      get<JournalEntry[]>(`/api/journal/semantic-search?query=${encodeURIComponent(query)}&limit=${limit ?? 5}`),
+      get<JournalEntry[]>(
+        `/api/journal/semantic-search?query=${encodeURIComponent(query)}&limit=${limit ?? 5}`
+      ),
     get: (id: string) => get<JournalEntry>(`/api/journal/${id}`),
     create: (data: { content: string; title?: string; tags?: string[] }) =>
       post<{ id: string }>('/api/journal', data),
-    update: (id: string, data: { content?: string; title?: string; tags?: string[] }) =>
-      patch<{ success: boolean }>(`/api/journal/${id}`, data),
+    update: (
+      id: string,
+      data: { content?: string; title?: string; tags?: string[] }
+    ) => patch<{ success: boolean }>(`/api/journal/${id}`, data),
     delete: (id: string) => del<{ success: boolean }>(`/api/journal/${id}`),
-    polish: (id: string) => post<{ success: boolean; content: string }>(`/api/journal/${id}/polish`),
+    polish: (id: string) =>
+      post<{ success: boolean; content: string }>(`/api/journal/${id}/polish`),
   },
 
   transcriptions: {
@@ -548,7 +576,8 @@ export const api = {
       if (params?.offset !== undefined) qp.set('offset', String(params.offset));
       return get<Transcription[]>(`/api/transcriptions?${qp}`);
     },
-    delete: (id: string) => del<{ success: boolean }>(`/api/transcriptions/${id}`),
+    delete: (id: string) =>
+      del<{ success: boolean }>(`/api/transcriptions/${id}`),
   },
 
   meetings: {
@@ -559,23 +588,40 @@ export const api = {
       if (title?.trim()) form.append('title', title.trim());
       return upload<{ id: string }>('/api/meetings/upload', form);
     },
-    stop: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/stop`),
-    startTranscription: (id: string, opts: { whisperModel: string; device: string }) =>
-      post<{ success: boolean }>(`/api/meetings/${id}/start-transcription`, opts),
+    stop: (id: string) =>
+      post<{ success: boolean }>(`/api/meetings/${id}/stop`),
+    startTranscription: (
+      id: string,
+      opts: { whisperModel: string; device: string }
+    ) =>
+      post<{ success: boolean }>(
+        `/api/meetings/${id}/start-transcription`,
+        opts
+      ),
     retry: (id: string, opts: { whisperModel: string; device: string }) =>
       post<{ success: boolean }>(`/api/meetings/${id}/retry`, opts),
     redo: (id: string, opts: { whisperModel: string; device: string }) =>
       post<{ success: boolean }>(`/api/meetings/${id}/redo`, opts),
-    pause: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/pause`),
-    resume: (id: string) => post<{ success: boolean }>(`/api/meetings/${id}/resume`),
+    pause: (id: string) =>
+      post<{ success: boolean }>(`/api/meetings/${id}/pause`),
+    resume: (id: string) =>
+      post<{ success: boolean }>(`/api/meetings/${id}/resume`),
     active: () => get<ActiveMeeting>('/api/meetings/active'),
     list: () => get<Meeting[]>('/api/meetings'),
     get: (id: string) => get<MeetingDetail>(`/api/meetings/${id}`),
-    update: (id: string, data: { title?: string; notes?: string; speakerNames?: Record<string, string> | null }) =>
-      patch<{ success: boolean }>(`/api/meetings/${id}`, data),
+    update: (
+      id: string,
+      data: {
+        title?: string;
+        notes?: string;
+        speakerNames?: Record<string, string> | null;
+      }
+    ) => patch<{ success: boolean }>(`/api/meetings/${id}`, data),
     delete: (id: string) => del<{ success: boolean }>(`/api/meetings/${id}`),
-    summarize: (id: string) => post<{ summary: string }>(`/api/meetings/${id}/summarize`),
-    audioUrl: (id: string, track: 'mic' | 'system') => `/api/meetings/${id}/audio/${track}`,
+    summarize: (id: string) =>
+      post<{ summary: string }>(`/api/meetings/${id}/summarize`),
+    audioUrl: (id: string, track: 'mic' | 'system') =>
+      `/api/meetings/${id}/audio/${track}`,
   },
 
   cookbook: {
@@ -587,20 +633,30 @@ export const api = {
       return get<Recipe[]>(`/api/cookbook?${qp}`);
     },
     search: (query: string, limit?: number) =>
-      get<Recipe[]>(`/api/cookbook/search?query=${encodeURIComponent(query)}&limit=${limit ?? 50}`),
+      get<Recipe[]>(
+        `/api/cookbook/search?query=${encodeURIComponent(query)}&limit=${limit ?? 50}`
+      ),
     tags: () => get<RecipeTag[]>('/api/cookbook/tags'),
     get: (id: string) => get<Recipe>(`/api/cookbook/${id}`),
     create: (data: { title: string; content: string; tags?: string[] }) =>
       post<{ id: string }>('/api/cookbook', data),
-    update: (id: string, data: { title?: string; content?: string; tags?: string[] }) =>
-      patch<{ success: boolean }>(`/api/cookbook/${id}`, data),
+    update: (
+      id: string,
+      data: { title?: string; content?: string; tags?: string[] }
+    ) => patch<{ success: boolean }>(`/api/cookbook/${id}`, data),
     delete: (id: string) => del<{ success: boolean }>(`/api/cookbook/${id}`),
     importRecipe: (data: { text?: string; url?: string }) =>
       post<{ id: string; recipe: Recipe }>('/api/cookbook/import', data),
   },
 
   fanfic: {
-    list: (params?: { limit?: number; offset?: number; folderId?: string; tag?: string; sort?: 'recent' }) => {
+    list: (params?: {
+      limit?: number;
+      offset?: number;
+      folderId?: string;
+      tag?: string;
+      sort?: 'recent';
+    }) => {
       const qp = new URLSearchParams();
       if (params?.limit !== undefined) qp.set('limit', String(params.limit));
       if (params?.offset !== undefined) qp.set('offset', String(params.offset));
@@ -612,45 +668,70 @@ export const api = {
     tags: () => get<FicTagCount[]>('/api/fanfic/tags'),
     folders: {
       list: () => get<FicFolder[]>('/api/fanfic/folders'),
-      create: (name: string) => post<{ id: string }>('/api/fanfic/folders', { name }),
+      create: (name: string) =>
+        post<{ id: string }>('/api/fanfic/folders', { name }),
       rename: (id: string, name: string) =>
         patch<{ success: boolean }>(`/api/fanfic/folders/${id}`, { name }),
       reorder: (ids: string[]) =>
         put<{ success: boolean }>('/api/fanfic/folders/order', { ids }),
-      delete: (id: string) => del<{ success: boolean }>(`/api/fanfic/folders/${id}`),
+      delete: (id: string) =>
+        del<{ success: boolean }>(`/api/fanfic/folders/${id}`),
     },
     addToFolder: (ficId: string, folderId: string) =>
       post<{ success: boolean }>(`/api/fanfic/${ficId}/folders`, { folderId }),
     removeFromFolder: (ficId: string, folderId: string) =>
       del<{ success: boolean }>(`/api/fanfic/${ficId}/folders/${folderId}`),
     setRead: (ficId: string, chapterIds: string[], read: boolean) =>
-      post<{ success: boolean; readCount: number }>(`/api/fanfic/${ficId}/read`, { chapterIds, read }),
-    saveReview: (ficId: string, data: { rating?: number | null; review?: string | null }) =>
-      patch<{ success: boolean }>(`/api/fanfic/${ficId}/review`, data),
+      post<{ success: boolean; readCount: number }>(
+        `/api/fanfic/${ficId}/read`,
+        { chapterIds, read }
+      ),
+    saveReview: (
+      ficId: string,
+      data: { rating?: number | null; review?: string | null }
+    ) => patch<{ success: boolean }>(`/api/fanfic/${ficId}/review`, data),
     search: (query: string) =>
       get<Fic[]>(`/api/fanfic/search?query=${encodeURIComponent(query)}`),
     get: (id: string) => get<Fic>(`/api/fanfic/${id}`),
     delete: (id: string) => del<{ success: boolean }>(`/api/fanfic/${id}`),
-    chapters: (ficId: string) => get<FicChapterSummary[]>(`/api/fanfic/${ficId}/chapters`),
-    chapter: (chapterId: string) => get<FicChapter>(`/api/fanfic/chapters/${chapterId}`),
+    chapters: (ficId: string) =>
+      get<FicChapterSummary[]>(`/api/fanfic/${ficId}/chapters`),
+    chapter: (chapterId: string) =>
+      get<FicChapter>(`/api/fanfic/chapters/${chapterId}`),
     importUrl: (url: string) =>
-      post<{ id: string; alreadyExists?: boolean }>('/api/fanfic/import', { url }),
-    status: (ficId: string) => get<FicDownloadProgress | { done: true }>(`/api/fanfic/${ficId}/status`),
+      post<{ id: string; alreadyExists?: boolean }>('/api/fanfic/import', {
+        url,
+      }),
+    status: (ficId: string) =>
+      get<FicDownloadProgress | { done: true }>(`/api/fanfic/${ficId}/status`),
     checkUpdates: (ficId: string) =>
-      post<{ id: string; queued: boolean }>(`/api/fanfic/${ficId}/check-updates`),
-    refreshAlerts: () => post<RefreshAlertsResult>('/api/fanfic/refresh-alerts'),
+      post<{ id: string; queued: boolean }>(
+        `/api/fanfic/${ficId}/check-updates`
+      ),
+    refreshAlerts: () =>
+      post<RefreshAlertsResult>('/api/fanfic/refresh-alerts'),
     uploadFile: (file: File) => {
       const form = new FormData();
       form.append('file', file);
       return upload<{ id: string; fic: Fic }>('/api/fanfic/upload', form);
     },
     saveProgress: (ficId: string, chapterId: string) =>
-      post<{ success: boolean }>(`/api/fanfic/${ficId}/progress`, { chapterId }),
+      post<{ success: boolean }>(`/api/fanfic/${ficId}/progress`, {
+        chapterId,
+      }),
     linkJournal: (ficId: string, journalEntryId: string, chapterId?: string) =>
-      post<{ id: string }>(`/api/fanfic/${ficId}/journal-link`, { journalEntryId, chapterId }),
-    unlinkJournal: (ficId: string, journalEntryId: string, chapterId?: string) =>
+      post<{ id: string }>(`/api/fanfic/${ficId}/journal-link`, {
+        journalEntryId,
+        chapterId,
+      }),
+    unlinkJournal: (
+      ficId: string,
+      journalEntryId: string,
+      chapterId?: string
+    ) =>
       del<{ success: boolean }>(
-        `/api/fanfic/${ficId}/journal-link/${journalEntryId}${chapterId ? `?chapterId=${chapterId}` : ''}`),
+        `/api/fanfic/${ficId}/journal-link/${journalEntryId}${chapterId ? `?chapterId=${chapterId}` : ''}`
+      ),
     cookies: {
       list: () => get<SiteCookieInfo[]>('/api/fanfic/cookies'),
       put: (domain: string, cookie: string) =>
@@ -661,14 +742,21 @@ export const api = {
   calendar: {
     listByRange: (start: string, end: string) =>
       get<CalendarEvent[]>(`/api/calendar?start=${start}&end=${end}`),
-    listByDate: (date: string) => get<CalendarEvent[]>(`/api/calendar/date/${date}`),
-    listByWeek: (date: string) => get<CalendarEvent[]>(`/api/calendar/week/${date}`),
+    listByDate: (date: string) =>
+      get<CalendarEvent[]>(`/api/calendar/date/${date}`),
+    listByWeek: (date: string) =>
+      get<CalendarEvent[]>(`/api/calendar/week/${date}`),
     get: (id: string) => get<CalendarEvent>(`/api/calendar/${id}`),
     findRelatedJournals: (date: string) =>
       get<JournalEntry[]>(`/api/calendar/related-journals/${date}`),
     create: (data: {
-      title: string; date: string; description?: string; time?: string;
-      endTime?: string; tags?: string[]; journalId?: string;
+      title: string;
+      date: string;
+      description?: string;
+      time?: string;
+      endTime?: string;
+      tags?: string[];
+      journalId?: string;
     }) => post<{ id: string }>('/api/calendar', data),
     update: (id: string, data: Record<string, unknown>) =>
       patch<{ success: boolean }>(`/api/calendar/${id}`, data),
@@ -680,7 +768,13 @@ export const api = {
   },
 
   learning: {
-    listCards: (params?: { limit?: number; offset?: number; tag?: string; folderId?: string; state?: string }) => {
+    listCards: (params?: {
+      limit?: number;
+      offset?: number;
+      tag?: string;
+      folderId?: string;
+      state?: string;
+    }) => {
       const qp = new URLSearchParams();
       if (params?.limit !== undefined) qp.set('limit', String(params.limit));
       if (params?.offset !== undefined) qp.set('offset', String(params.offset));
@@ -690,11 +784,23 @@ export const api = {
       return get<LearningCard[]>(`/api/learning/cards?${qp}`);
     },
     getCard: (id: string) => get<LearningCard>(`/api/learning/cards/${id}`),
-    createCard: (data: { question: string; answer: string; folderId?: string; tags?: string[] }) =>
-      post<{ id: string }>('/api/learning/cards', data),
-    updateCard: (id: string, data: { question?: string; answer?: string; tags?: string[]; folderId?: string | null }) =>
-      patch<{ success: boolean }>(`/api/learning/cards/${id}`, data),
-    deleteCard: (id: string) => del<{ success: boolean }>(`/api/learning/cards/${id}`),
+    createCard: (data: {
+      question: string;
+      answer: string;
+      folderId?: string;
+      tags?: string[];
+    }) => post<{ id: string }>('/api/learning/cards', data),
+    updateCard: (
+      id: string,
+      data: {
+        question?: string;
+        answer?: string;
+        tags?: string[];
+        folderId?: string | null;
+      }
+    ) => patch<{ success: boolean }>(`/api/learning/cards/${id}`, data),
+    deleteCard: (id: string) =>
+      del<{ success: boolean }>(`/api/learning/cards/${id}`),
     getDue: (params?: { tag?: string; folderId?: string }) => {
       const qp = new URLSearchParams();
       if (params?.tag) qp.set('tag', params.tag);
@@ -709,57 +815,121 @@ export const api = {
     },
     getTags: () => get<LearningTag[]>('/api/learning/tags'),
 
-    grade: (id: string, data: { answer: string; answerMode: 'typed' | 'voice' }) =>
-      post<GradeResult>(`/api/learning/cards/${id}/grade`, data),
-    review: (id: string, data: {
-      rating: number; suggestedRating?: number; userAnswer?: string;
-      coverage?: ClaimCoverage; answerMode?: 'typed' | 'voice' | 'self';
-    }) => post<{ due: string; state: string }>(`/api/learning/cards/${id}/review`, data),
+    grade: (
+      id: string,
+      data: { answer: string; answerMode: 'typed' | 'voice' }
+    ) => post<GradeResult>(`/api/learning/cards/${id}/grade`, data),
+    review: (
+      id: string,
+      data: {
+        rating: number;
+        suggestedRating?: number;
+        userAnswer?: string;
+        coverage?: ClaimCoverage;
+        answerMode?: 'typed' | 'voice' | 'self';
+      }
+    ) =>
+      post<{ due: string; state: string }>(
+        `/api/learning/cards/${id}/review`,
+        data
+      ),
 
     generate: (data: {
-      text: string; folderId?: string; tags?: string[];
-      sourceType?: string; sourceId?: string; derivedFrom?: string; direction?: string;
-    }) => post<{ count: number; ids: string[] }>('/api/learning/generate', data),
+      text: string;
+      folderId?: string;
+      tags?: string[];
+      sourceType?: string;
+      sourceId?: string;
+      derivedFrom?: string;
+      direction?: string;
+    }) =>
+      post<{ count: number; ids: string[] }>('/api/learning/generate', data),
     generateFromJournal: (journalId: string, folderId?: string) =>
-      post<{ count: number; ids: string[] }>('/api/learning/generate-from-journal', { journalId, folderId }),
+      post<{ count: number; ids: string[] }>(
+        '/api/learning/generate-from-journal',
+        { journalId, folderId }
+      ),
     generateForTopic: (topic: string, folderId?: string) =>
-      post<{ count: number; ids: string[] }>('/api/learning/generate-for-topic', { topic, folderId }),
+      post<{ count: number; ids: string[] }>(
+        '/api/learning/generate-for-topic',
+        { topic, folderId }
+      ),
 
     listQueue: () => get<LearningCard[]>('/api/learning/queue'),
     approve: (id: string, force?: boolean) =>
       post<ApproveResult>(`/api/learning/queue/${id}/approve`, { force }),
     regenerate: (id: string, direction: string) =>
-      post<{ count: number; ids: string[] }>(`/api/learning/queue/${id}/regenerate`, { direction }),
-    deny: (id: string) => del<{ success: boolean }>(`/api/learning/queue/${id}`),
+      post<{ count: number; ids: string[] }>(
+        `/api/learning/queue/${id}/regenerate`,
+        { direction }
+      ),
+    deny: (id: string) =>
+      del<{ success: boolean }>(`/api/learning/queue/${id}`),
 
-    verify: (id: string) => post<VerifyResult>(`/api/learning/cards/${id}/verify`, {}),
+    verify: (id: string) =>
+      post<VerifyResult>(`/api/learning/cards/${id}/verify`, {}),
     verifyFollowup: (id: string, question: string, transcript: unknown[]) =>
-      post<VerifyResult>(`/api/learning/cards/${id}/verify/followup`, { question, transcript }),
-    revise: (id: string, data: {
-      answer: string; question?: string;
-      triggerType?: 'manual_edit' | 'web_verification';
-      sources?: VerificationCitation[]; note?: string;
-    }) => post<{ newCardId: string; isSemantic: boolean }>(`/api/learning/cards/${id}/revise`, data),
-    getRevisions: (id: string) => get<LearningRevision[]>(`/api/learning/cards/${id}/revisions`),
+      post<VerifyResult>(`/api/learning/cards/${id}/verify/followup`, {
+        question,
+        transcript,
+      }),
+    revise: (
+      id: string,
+      data: {
+        answer: string;
+        question?: string;
+        triggerType?: 'manual_edit' | 'web_verification';
+        sources?: VerificationCitation[];
+        note?: string;
+      }
+    ) =>
+      post<{ newCardId: string; isSemantic: boolean }>(
+        `/api/learning/cards/${id}/revise`,
+        data
+      ),
+    getRevisions: (id: string) =>
+      get<LearningRevision[]>(`/api/learning/cards/${id}/revisions`),
 
     listFolders: () => get<LearningFolder[]>('/api/learning/folders'),
-    createFolder: (name: string) => post<{ id: string }>('/api/learning/folders', { name }),
-    updateFolder: (id: string, data: { name?: string; position?: number; evidenceProviderId?: string | null }) =>
-      patch<{ success: boolean }>(`/api/learning/folders/${id}`, data),
-    deleteFolder: (id: string) => del<{ success: boolean }>(`/api/learning/folders/${id}`),
+    createFolder: (name: string) =>
+      post<{ id: string }>('/api/learning/folders', { name }),
+    updateFolder: (
+      id: string,
+      data: {
+        name?: string;
+        position?: number;
+        evidenceProviderId?: string | null;
+      }
+    ) => patch<{ success: boolean }>(`/api/learning/folders/${id}`, data),
+    deleteFolder: (id: string) =>
+      del<{ success: boolean }>(`/api/learning/folders/${id}`),
 
     listMcpServers: () => get<McpServer[]>('/api/learning/mcp-servers'),
     createMcpServer: (data: {
-      name: string; transport: 'stdio' | 'http';
-      command?: string; args?: string[]; env?: Record<string, string>; url?: string;
+      name: string;
+      transport: 'stdio' | 'http';
+      command?: string;
+      args?: string[];
+      env?: Record<string, string>;
+      url?: string;
     }) => post<{ id: string }>('/api/learning/mcp-servers', data),
-    updateMcpServer: (id: string, data: Partial<{
-      name: string; transport: 'stdio' | 'http';
-      command: string; args: string[]; env: Record<string, string>; url: string;
-    }>) => patch<{ success: boolean }>(`/api/learning/mcp-servers/${id}`, data),
-    deleteMcpServer: (id: string) => del<{ success: boolean }>(`/api/learning/mcp-servers/${id}`),
+    updateMcpServer: (
+      id: string,
+      data: Partial<{
+        name: string;
+        transport: 'stdio' | 'http';
+        command: string;
+        args: string[];
+        env: Record<string, string>;
+        url: string;
+      }>
+    ) => patch<{ success: boolean }>(`/api/learning/mcp-servers/${id}`, data),
+    deleteMcpServer: (id: string) =>
+      del<{ success: boolean }>(`/api/learning/mcp-servers/${id}`),
     testMcpServer: (id: string) =>
-      post<{ ok: boolean; tools: string[]; error?: string }>(`/api/learning/mcp-servers/${id}/test`),
+      post<{ ok: boolean; tools: string[]; error?: string }>(
+        `/api/learning/mcp-servers/${id}/test`
+      ),
   },
 
   chat: {
@@ -769,20 +939,35 @@ export const api = {
     createConversation: (data?: { title?: string }) =>
       post<{ id: string }>('/api/chat/conversations', data ?? {}),
     updateTitle: (id: string, title: string) =>
-      patch<{ success: boolean }>(`/api/chat/conversations/${id}/title`, { title }),
+      patch<{ success: boolean }>(`/api/chat/conversations/${id}/title`, {
+        title,
+      }),
     deleteConversation: (id: string) =>
       del<{ success: boolean }>(`/api/chat/conversations/${id}`),
-    addMessage: (id: string, data: { role: string; content: string; metadata?: string }) =>
-      post<{ id: string }>(`/api/chat/conversations/${id}/messages`, data),
+    addMessage: (
+      id: string,
+      data: { role: string; content: string; metadata?: string }
+    ) => post<{ id: string }>(`/api/chat/conversations/${id}/messages`, data),
     classify: (message: string) =>
-      post<{ intent: string; confidence: number; [key: string]: unknown }>('/api/chat/classify', { message }),
+      post<{ intent: string; confidence: number; [key: string]: unknown }>(
+        '/api/chat/classify',
+        { message }
+      ),
     saveJournal: (data: {
-      conversationId: string; messageId?: string;
-      title: string; content: string; tags: string[];
+      conversationId: string;
+      messageId?: string;
+      title: string;
+      content: string;
+      tags: string[];
     }) => post<{ id: string }>('/api/chat/save-journal', data),
     saveCalendar: (data: {
-      conversationId: string; messageId?: string;
-      title: string; description: string; date: string; time?: string; tags: string[];
+      conversationId: string;
+      messageId?: string;
+      title: string;
+      description: string;
+      date: string;
+      time?: string;
+      tags: string[];
     }) => post<{ id: string }>('/api/chat/save-calendar', data),
     ragContext: (message: string, limit?: number) =>
       post<RAGContext>('/api/chat/rag-context', { message, limit: limit ?? 3 }),
@@ -790,9 +975,13 @@ export const api = {
 
   files: {
     list: (path?: string) =>
-      get<FileEntry[]>(`/api/files?${path ? `path=${encodeURIComponent(path)}` : ''}`),
+      get<FileEntry[]>(
+        `/api/files?${path ? `path=${encodeURIComponent(path)}` : ''}`
+      ),
     read: (path: string) =>
-      get<{ content: string }>(`/api/files/read?path=${encodeURIComponent(path)}`),
+      get<{ content: string }>(
+        `/api/files/read?path=${encodeURIComponent(path)}`
+      ),
     write: (path: string, content: string) =>
       post<{ success: boolean }>('/api/files/write', { path, content }),
     rename: (from: string, to: string) =>
@@ -804,90 +993,145 @@ export const api = {
   },
 
   shortcuts: {
-    get: () => get<{ version: number; bindings: Record<string, string> }>('/api/shortcuts'),
+    get: () =>
+      get<{ version: number; bindings: Record<string, string> }>(
+        '/api/shortcuts'
+      ),
     put: (bindings: Record<string, string>) =>
       put<{ success: boolean }>('/api/shortcuts', { version: 1, bindings }),
   },
 
   stt: {
-    health: () => get<{ stt_backend: string; stt_model: string; stt_ready: boolean; tts_backend: string; tts_ready: boolean }>('/api/stt/health'),
+    health: () =>
+      get<{
+        stt_backend: string;
+        stt_model: string;
+        stt_ready: boolean;
+        tts_backend: string;
+        tts_ready: boolean;
+      }>('/api/stt/health'),
     whisperModels: () => get<WhisperModel[]>('/api/stt/whisper-models'),
     reload: () => post<{ success: boolean }>('/api/stt/reload'),
-    listenerState: () => get<{ recording: boolean; transcribing: boolean; mode: string | null }>('/api/stt/listener-state'),
+    listenerState: () =>
+      get<{ recording: boolean; transcribing: boolean; mode: string | null }>(
+        '/api/stt/listener-state'
+      ),
   },
 
   rag: {
     isConfigured: () => get<boolean>('/api/rag/configured'),
-    getStats: () => get<{ totalJournals: number; indexedJournals: number; totalChunks: number; isConfigured: boolean }>('/api/rag/stats'),
-    syncJournal: (journalId: string) => post<{ chunks: number }>(`/api/rag/sync/${journalId}`),
-    syncAll: () => post<{ synced: number; chunks: number }>('/api/rag/sync-all'),
+    getStats: () =>
+      get<{
+        totalJournals: number;
+        indexedJournals: number;
+        totalChunks: number;
+        isConfigured: boolean;
+      }>('/api/rag/stats'),
+    syncJournal: (journalId: string) =>
+      post<{ chunks: number }>(`/api/rag/sync/${journalId}`),
+    syncAll: () =>
+      post<{ synced: number; chunks: number }>('/api/rag/sync-all'),
     search: (query: string, limit?: number) =>
-      get<RAGResult[]>(`/api/rag/search?query=${encodeURIComponent(query)}&limit=${limit ?? 5}`),
+      get<RAGResult[]>(
+        `/api/rag/search?query=${encodeURIComponent(query)}&limit=${limit ?? 5}`
+      ),
   },
 
   writing: {
     listProjects: () => get<WritingProject[]>('/api/writing/projects'),
     createProject: (data: { title: string; description?: string }) =>
       post<{ id: string }>('/api/writing/projects', data),
-    getProject: (id: string) => get<WritingProject>(`/api/writing/projects/${id}`),
-    updateProject: (id: string, data: { title?: string; description?: string }) =>
-      patch<{ success: boolean }>(`/api/writing/projects/${id}`, data),
-    deleteProject: (id: string) => del<{ success: boolean }>(`/api/writing/projects/${id}`),
+    getProject: (id: string) =>
+      get<WritingProject>(`/api/writing/projects/${id}`),
+    updateProject: (
+      id: string,
+      data: { title?: string; description?: string }
+    ) => patch<{ success: boolean }>(`/api/writing/projects/${id}`, data),
+    deleteProject: (id: string) =>
+      del<{ success: boolean }>(`/api/writing/projects/${id}`),
 
     listChapters: (projectId: string) =>
-      get<WritingChapterSummary[]>(`/api/writing/projects/${projectId}/chapters`),
+      get<WritingChapterSummary[]>(
+        `/api/writing/projects/${projectId}/chapters`
+      ),
     createChapter: (projectId: string, data: { title: string }) =>
       post<{ id: string }>(`/api/writing/projects/${projectId}/chapters`, data),
-    getChapter: (chapterId: string) => get<WritingChapter>(`/api/writing/chapters/${chapterId}`),
-    updateChapter: (chapterId: string, data: { title?: string; content?: string }) =>
+    getChapter: (chapterId: string) =>
+      get<WritingChapter>(`/api/writing/chapters/${chapterId}`),
+    updateChapter: (
+      chapterId: string,
+      data: { title?: string; content?: string }
+    ) =>
       patch<{ success: boolean }>(`/api/writing/chapters/${chapterId}`, data),
-    deleteChapter: (chapterId: string) => del<{ success: boolean }>(`/api/writing/chapters/${chapterId}`),
+    deleteChapter: (chapterId: string) =>
+      del<{ success: boolean }>(`/api/writing/chapters/${chapterId}`),
 
     listNotes: (projectId: string) =>
       get<WritingNoteSummary[]>(`/api/writing/projects/${projectId}/notes`),
-    createNote: (projectId: string, data: { title: string; content?: string; docType?: string }) =>
-      post<{ id: string }>(`/api/writing/projects/${projectId}/notes`, data),
-    getNote: (noteId: string) => get<WritingNote>(`/api/writing/notes/${noteId}`),
-    updateNote: (noteId: string, data: { title?: string; content?: string; docType?: string }) =>
-      patch<{ success: boolean }>(`/api/writing/notes/${noteId}`, data),
-    deleteNote: (noteId: string) => del<{ success: boolean }>(`/api/writing/notes/${noteId}`),
+    createNote: (
+      projectId: string,
+      data: { title: string; content?: string; docType?: string }
+    ) => post<{ id: string }>(`/api/writing/projects/${projectId}/notes`, data),
+    getNote: (noteId: string) =>
+      get<WritingNote>(`/api/writing/notes/${noteId}`),
+    updateNote: (
+      noteId: string,
+      data: { title?: string; content?: string; docType?: string }
+    ) => patch<{ success: boolean }>(`/api/writing/notes/${noteId}`, data),
+    deleteNote: (noteId: string) =>
+      del<{ success: boolean }>(`/api/writing/notes/${noteId}`),
 
     listDiscussions: (projectId: string) =>
       get<Conversation[]>(`/api/writing/projects/${projectId}/conversations`),
     createDiscussion: (projectId: string, data?: { title?: string }) =>
-      post<{ id: string }>(`/api/writing/projects/${projectId}/conversations`, data ?? {}),
+      post<{ id: string }>(
+        `/api/writing/projects/${projectId}/conversations`,
+        data ?? {}
+      ),
     summarizeDiscussion: (discussionId: string) =>
       post<WritingNote>(`/api/writing/conversations/${discussionId}/summarize`),
   },
 
   curatedTags: {
     list: () => get<CuratedTag[]>('/api/curated-tags'),
-    create: (name: string) => post<{ id: string }>('/api/curated-tags', { name }),
-    rename: (id: string, name: string) => patch<{ success: boolean }>(`/api/curated-tags/${id}`, { name }),
-    delete: (id: string) => del<{ success: boolean }>(`/api/curated-tags/${id}`),
-    scanStatus: (id: string) => get<{ total: number; processed: number; done: boolean }>(`/api/curated-tags/${id}/scan-status`),
+    create: (name: string) =>
+      post<{ id: string }>('/api/curated-tags', { name }),
+    rename: (id: string, name: string) =>
+      patch<{ success: boolean }>(`/api/curated-tags/${id}`, { name }),
+    delete: (id: string) =>
+      del<{ success: boolean }>(`/api/curated-tags/${id}`),
+    scanStatus: (id: string) =>
+      get<{ total: number; processed: number; done: boolean }>(
+        `/api/curated-tags/${id}/scan-status`
+      ),
   },
 
   tasks: {
     list: () => get<DailyTask[]>('/api/tasks'),
     create: (title: string) => post<{ id: string }>('/api/tasks', { title }),
-    update: (id: string, title: string) => patch<{ success: boolean }>(`/api/tasks/${id}`, { title }),
-    reorder: (order: string[]) => post<{ success: boolean }>('/api/tasks/reorder', { order }),
+    update: (id: string, title: string) =>
+      patch<{ success: boolean }>(`/api/tasks/${id}`, { title }),
+    reorder: (order: string[]) =>
+      post<{ success: boolean }>('/api/tasks/reorder', { order }),
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/${id}`),
-    complete: (id: string) => post<{ success: boolean }>(`/api/tasks/${id}/complete`),
-    uncomplete: (id: string) => del<{ success: boolean }>(`/api/tasks/${id}/complete`),
+    complete: (id: string) =>
+      post<{ success: boolean }>(`/api/tasks/${id}/complete`),
+    uncomplete: (id: string) =>
+      del<{ success: boolean }>(`/api/tasks/${id}/complete`),
   },
 
   todos: {
     list: () => get<TodoItem[]>('/api/tasks/todos'),
-    create: (title: string) => post<{ id: string }>('/api/tasks/todos', { title }),
+    create: (title: string) =>
+      post<{ id: string }>('/api/tasks/todos', { title }),
     update: (id: string, data: { title?: string; done?: boolean }) =>
       patch<{ success: boolean }>(`/api/tasks/todos/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/todos/${id}`),
   },
 
   newspapers: {
-    getByDate: (date: string) => get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
+    getByDate: (date: string) =>
+      get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
     sync: () => post<SyncResult[]>('/api/newspapers/sync'),
   },
 };

@@ -10,20 +10,34 @@ vi.mock('../hooks/api', () => ({
 }));
 
 // Registers a scope like a view component would (depth 1 unless overridden).
-function Scope({ handlers, depth = 1 }: { handlers: ScopeHandlers; depth?: number }) {
+function Scope({
+  handlers,
+  depth = 1,
+}: {
+  handlers: ScopeHandlers;
+  depth?: number;
+}) {
   useShortcutScope(depth, handlers);
   return null;
 }
 
-function renderScope(handlers: ScopeHandlers, onToggleSidebar?: () => void, deepHandlers?: ScopeHandlers) {
+function renderScope(
+  handlers: ScopeHandlers,
+  onToggleSidebar?: () => void,
+  deepHandlers?: ScopeHandlers
+) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
-      <ShortcutProvider currentView="journal" onViewChange={() => {}} onToggleSidebar={onToggleSidebar}>
+      <ShortcutProvider
+        currentView="journal"
+        onViewChange={() => {}}
+        onToggleSidebar={onToggleSidebar}
+      >
         <Scope handlers={handlers} />
         {deepHandlers && <Scope handlers={deepHandlers} depth={2} />}
       </ShortcutProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 

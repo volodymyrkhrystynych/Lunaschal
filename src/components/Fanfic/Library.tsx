@@ -2,18 +2,31 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { Fic, RefreshAlertsResult } from '../../hooks/api';
-import { detectFicSite, formatRating, siteLabel, SITE_LABELS } from '../../lib/fanfic';
-import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import {
+  detectFicSite,
+  formatRating,
+  siteLabel,
+  SITE_LABELS,
+} from '../../lib/fanfic';
+import {
+  useShortcuts,
+  useShortcutScope,
+} from '../../shortcuts/ShortcutProvider';
 import { FolderBar, FolderPicker } from './Folders';
 
 interface LibraryProps {
   onOpen: (ficId: string) => void;
 }
 
-const formatWords = (n: number) => (n >= 1000 ? `${Math.round(n / 1000)}k words` : `${n} words`);
+const formatWords = (n: number) =>
+  n >= 1000 ? `${Math.round(n / 1000)}k words` : `${n} words`;
 
 const formatDate = (date: string) =>
-  new Intl.DateTimeFormat('en-US', { year: 'numeric', month: 'short', day: 'numeric' }).format(new Date(date));
+  new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(date));
 
 export function Library({ onOpen }: LibraryProps) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -32,26 +45,33 @@ export function Library({ onOpen }: LibraryProps) {
   const { level } = useShortcuts();
 
   const { data: fics, isLoading } = useQuery({
-    queryKey: searchQuery ? ['fanfic', 'search', searchQuery] : ['fanfic', 'list', folderId, tag],
-    queryFn: () => (searchQuery
-      ? api.fanfic.search(searchQuery)
-      : api.fanfic.list({
-          folderId: folderId && folderId !== 'recent' ? folderId : undefined,
-          tag: tag ?? undefined,
-          sort: folderId === 'recent' ? 'recent' : undefined,
-        })),
+    queryKey: searchQuery
+      ? ['fanfic', 'search', searchQuery]
+      : ['fanfic', 'list', folderId, tag],
+    queryFn: () =>
+      searchQuery
+        ? api.fanfic.search(searchQuery)
+        : api.fanfic.list({
+            folderId: folderId && folderId !== 'recent' ? folderId : undefined,
+            tag: tag ?? undefined,
+            sort: folderId === 'recent' ? 'recent' : undefined,
+          }),
     // Poll while any fic is still downloading or queued behind the serial
     // update worker so progress bars and queued badges advance.
-    refetchInterval: (query) =>
-      query.state.data?.some((f: Fic) => f.downloadStatus === 'downloading' || f.updatePending)
-        ? 1500 : false,
+    refetchInterval: query =>
+      query.state.data?.some(
+        (f: Fic) => f.downloadStatus === 'downloading' || f.updatePending
+      )
+        ? 1500
+        : false,
   });
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['fanfic'] });
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['fanfic'] });
 
   const importFic = useMutation({
     mutationFn: (url: string) => api.fanfic.importUrl(url),
-    onSuccess: (result) => {
+    onSuccess: result => {
       invalidate();
       setImportUrl('');
       setShowImport(false);
@@ -87,11 +107,15 @@ export function Library({ onOpen }: LibraryProps) {
       invalidate();
       const parts = [];
       if (r.flagged) parts.push(`${r.flagged} queued for update`);
-      if (r.newImports) parts.push(`${r.newImports} new import${r.newImports > 1 ? 's' : ''}`);
+      if (r.newImports)
+        parts.push(`${r.newImports} new import${r.newImports > 1 ? 's' : ''}`);
       if (r.skippedFresh) parts.push(`${r.skippedFresh} already current`);
       if (r.skippedActive) parts.push(`${r.skippedActive} already queued`);
-      if (parts.length === 0) parts.push(`no library threads among ${r.alertsSeen} alerts`);
-      const siteErrors = Object.entries(r.errors).map(([d, msg]) => `${d}: ${msg}`);
+      if (parts.length === 0)
+        parts.push(`no library threads among ${r.alertsSeen} alerts`);
+      const siteErrors = Object.entries(r.errors).map(
+        ([d, msg]) => `${d}: ${msg}`
+      );
       setRefreshSummary([parts.join(' · '), ...siteErrors].join(' — '));
       setImportError(null);
     },
@@ -99,12 +123,13 @@ export function Library({ onOpen }: LibraryProps) {
   });
 
   useEffect(() => {
-    setSelIndex((i) => Math.min(i, Math.max((fics?.length ?? 1) - 1, 0)));
+    setSelIndex(i => Math.min(i, Math.max((fics?.length ?? 1) - 1, 0)));
   }, [fics]);
 
   useShortcutScope(1, {
-    next: () => setSelIndex((i) => Math.min(i + 1, Math.max((fics?.length ?? 1) - 1, 0))),
-    prev: () => setSelIndex((i) => Math.max(i - 1, 0)),
+    next: () =>
+      setSelIndex(i => Math.min(i + 1, Math.max((fics?.length ?? 1) - 1, 0))),
+    prev: () => setSelIndex(i => Math.max(i - 1, 0)),
     create: () => setShowImport(true),
     search: () => {
       searchInputRef.current?.focus();
@@ -123,54 +148,76 @@ export function Library({ onOpen }: LibraryProps) {
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold text-[var(--color-text)]">Library</h1>
+        <h1 className="text-2xl font-semibold text-[var(--color-text)]">
+          Library
+        </h1>
         <div className="flex gap-2">
-          <button onClick={() => refreshAlerts.mutate()}
+          <button
+            onClick={() => refreshAlerts.mutate()}
             disabled={refreshAlerts.isPending}
             title="Check each site's alerts page and queue updates for threads with new activity"
-            className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50">
+            className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
+          >
             {refreshAlerts.isPending ? 'Checking…' : '⟳ Refresh'}
           </button>
-          <button onClick={() => fileInputRef.current?.click()}
+          <button
+            onClick={() => fileInputRef.current?.click()}
             disabled={uploadFile.isPending}
-            className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50">
+            className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
+          >
             {uploadFile.isPending ? 'Importing…' : 'Upload file'}
           </button>
-          <input ref={fileInputRef} type="file" accept=".epub,.docx,.pdf" className="hidden"
-            onChange={(e) => {
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".epub,.docx,.pdf"
+            className="hidden"
+            onChange={e => {
               const file = e.target.files?.[0];
               if (file) uploadFile.mutate(file);
               e.target.value = '';
-            }} />
-          <button onClick={() => setShowDelete(!showDelete)}
+            }}
+          />
+          <button
+            onClick={() => setShowDelete(!showDelete)}
             title={showDelete ? 'Hide delete buttons' : 'Show delete buttons'}
             className={`px-4 py-2 border rounded-lg transition-colors ${
               showDelete
                 ? 'border-red-400/50 text-red-400 bg-red-500/10'
                 : 'border-white/20 text-[var(--color-text-muted)] hover:bg-white/10'
-            }`}>
+            }`}
+          >
             🗑
           </button>
-          <button onClick={() => setShowImport(!showImport)}
-            className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors">
+          <button
+            onClick={() => setShowImport(!showImport)}
+            className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors"
+          >
             + Import from forum
           </button>
         </div>
       </div>
 
       <div className="mb-4">
-        <input ref={searchInputRef} type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)}
+        <input
+          ref={searchInputRef}
+          type="text"
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
           placeholder="Search titles and tags..."
-          className="w-full bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]" />
+          className="w-full bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
+        />
       </div>
 
       {!searchQuery && (
         <div className="flex flex-wrap items-center gap-2">
           <FolderBar folderId={folderId} onSelect={setFolderId} />
           {tag && (
-            <button onClick={() => setTag(null)}
+            <button
+              onClick={() => setTag(null)}
               className="mb-4 px-3 py-1 text-sm rounded-full border border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]"
-              title="Clear tag filter">
+              title="Clear tag filter"
+            >
               tag: {tag} ✕
             </button>
           )}
@@ -180,29 +227,50 @@ export function Library({ onOpen }: LibraryProps) {
       {showImport && (
         <div className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
           <div className="text-sm text-[var(--color-text-muted)] mb-2">
-            Paste any link to the fic — a chapter, the thread, or the reader. The whole fic
-            (all threadmarks, sidestories and images) is downloaded for offline reading.
+            Paste any link to the fic — a chapter, the thread, or the reader.
+            The whole fic (all threadmarks, sidestories and images) is
+            downloaded for offline reading.
           </div>
-          <input value={importUrl} autoFocus
-            onChange={(e) => { setImportUrl(e.target.value); setImportError(null); }}
-            onKeyDown={(e) => {
+          <input
+            value={importUrl}
+            autoFocus
+            onChange={e => {
+              setImportUrl(e.target.value);
+              setImportError(null);
+            }}
+            onKeyDown={e => {
               if (e.key === 'Escape') setShowImport(false);
-              if (e.key === 'Enter' && importUrl.trim()) importFic.mutate(importUrl.trim());
+              if (e.key === 'Enter' && importUrl.trim())
+                importFic.mutate(importUrl.trim());
             }}
             placeholder="https://forums.spacebattles.com/threads/..."
-            className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none border border-white/10 rounded p-2 mb-2" />
+            className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none border border-white/10 rounded p-2 mb-2"
+          />
           {importSite && (
-            <div className="mb-2 text-xs text-[var(--color-primary)]">{SITE_LABELS[importSite]} thread detected</div>
+            <div className="mb-2 text-xs text-[var(--color-primary)]">
+              {SITE_LABELS[importSite]} thread detected
+            </div>
           )}
           {importError && (
-            <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">{importError}</div>
+            <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
+              {importError}
+            </div>
           )}
           <div className="flex justify-end gap-2">
-            <button onClick={() => { setShowImport(false); setImportError(null); }}
-              className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Cancel</button>
-            <button onClick={() => importFic.mutate(importUrl.trim())}
+            <button
+              onClick={() => {
+                setShowImport(false);
+                setImportError(null);
+              }}
+              className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => importFic.mutate(importUrl.trim())}
               disabled={!importUrl.trim() || importFic.isPending}
-              className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
+              className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+            >
               {importFic.isPending ? 'Starting…' : 'Import'}
             </button>
           </div>
@@ -212,36 +280,56 @@ export function Library({ onOpen }: LibraryProps) {
       {!showImport && importError && (
         <div className="mb-4 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400 flex justify-between">
           <span>{importError}</span>
-          <button onClick={() => setImportError(null)} className="ml-2 hover:text-red-300">✕</button>
+          <button
+            onClick={() => setImportError(null)}
+            className="ml-2 hover:text-red-300"
+          >
+            ✕
+          </button>
         </div>
       )}
 
       {refreshSummary && (
         <div className="mb-4 px-3 py-2 bg-[var(--color-surface)] border border-white/15 rounded text-sm text-[var(--color-text-muted)] flex justify-between">
           <span>{refreshSummary}</span>
-          <button onClick={() => setRefreshSummary(null)}
-            className="ml-2 hover:text-[var(--color-text)]">✕</button>
+          <button
+            onClick={() => setRefreshSummary(null)}
+            className="ml-2 hover:text-[var(--color-text)]"
+          >
+            ✕
+          </button>
         </div>
       )}
 
       <div ref={listRef} className="flex-1 overflow-y-auto space-y-3">
-        {isLoading && <div className="text-[var(--color-text-muted)]">Loading...</div>}
+        {isLoading && (
+          <div className="text-[var(--color-text-muted)]">Loading...</div>
+        )}
 
         {fics?.map((fic, idx) => (
-          <FicCard key={fic.id} fic={fic}
+          <FicCard
+            key={fic.id}
+            fic={fic}
             selected={level >= 1 && idx === selIndex}
             showDelete={showDelete}
             onOpen={() => onOpen(fic.id)}
             onCheckUpdates={() => checkUpdates.mutate(fic.id)}
-            onTagClick={(name) => { setSearchQuery(''); setTag(name); }}
+            onTagClick={name => {
+              setSearchQuery('');
+              setTag(name);
+            }}
             onDelete={() => {
-              if (window.confirm(`Delete "${fic.title}" and all its chapters?`)) deleteFic.mutate(fic.id);
-            }} />
+              if (window.confirm(`Delete "${fic.title}" and all its chapters?`))
+                deleteFic.mutate(fic.id);
+            }}
+          />
         ))}
 
         {fics?.length === 0 && !isLoading && (
           <div className="text-center text-[var(--color-text-muted)] py-12">
-            {searchQuery ? 'No fics match' : 'Nothing here yet — import a fic from a forum or upload an EPUB/DOCX/PDF.'}
+            {searchQuery
+              ? 'No fics match'
+              : 'Nothing here yet — import a fic from a forum or upload an EPUB/DOCX/PDF.'}
           </div>
         )}
       </div>
@@ -249,7 +337,15 @@ export function Library({ onOpen }: LibraryProps) {
   );
 }
 
-function FicCard({ fic, selected, showDelete, onOpen, onCheckUpdates, onTagClick, onDelete }: {
+function FicCard({
+  fic,
+  selected,
+  showDelete,
+  onOpen,
+  onCheckUpdates,
+  onTagClick,
+  onDelete,
+}: {
   fic: Fic;
   selected: boolean;
   showDelete: boolean;
@@ -262,60 +358,100 @@ function FicCard({ fic, selected, showDelete, onOpen, onCheckUpdates, onTagClick
   const downloading = fic.downloadStatus === 'downloading';
   const progress = fic.downloadProgress;
   const pct = progress?.chaptersTotal
-    ? Math.min(100, Math.round((progress.chaptersDone / progress.chaptersTotal) * 100))
+    ? Math.min(
+        100,
+        Math.round((progress.chaptersDone / progress.chaptersTotal) * 100)
+      )
     : null;
-  const badge = fic.sourceType === 'xenforo' ? siteLabel(fic.site) : fic.sourceType.toUpperCase();
+  const badge =
+    fic.sourceType === 'xenforo'
+      ? siteLabel(fic.site)
+      : fic.sourceType.toUpperCase();
 
   return (
-    <div ref={(el) => { if (el && selected) el.scrollIntoView({ block: 'nearest' }); }}
-      className={`p-4 bg-[var(--color-surface)] rounded-lg border ${selected ? 'border-[var(--color-primary)]' : 'border-white/10'}`}>
+    <div
+      ref={el => {
+        if (el && selected) el.scrollIntoView({ block: 'nearest' });
+      }}
+      className={`p-4 bg-[var(--color-surface)] rounded-lg border ${selected ? 'border-[var(--color-primary)]' : 'border-white/10'}`}
+    >
       <div className="flex items-start gap-3">
         {fic.coverPath && (
-          <img src={`/api/fanfic/${fic.id}/images/${fic.coverPath}`} alt=""
-            className="w-12 h-16 object-cover rounded border border-white/10 shrink-0" />
+          <img
+            src={`/api/fanfic/${fic.id}/images/${fic.coverPath}`}
+            alt=""
+            className="w-12 h-16 object-cover rounded border border-white/10 shrink-0"
+          />
         )}
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between gap-2">
-            <button onClick={onOpen}
-              className="text-left text-base font-bold text-[var(--color-text)] hover:text-[var(--color-primary)] transition-colors">
+            <button
+              onClick={onOpen}
+              className="text-left text-base font-bold text-[var(--color-text)] hover:text-[var(--color-primary)] transition-colors"
+            >
               {fic.title}
             </button>
             <div className="flex gap-2 shrink-0">
               <FolderPicker fic={fic} />
-              <button onClick={() => setShowReview(!showReview)}
+              <button
+                onClick={() => setShowReview(!showReview)}
                 className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                title="Rate and review">Review</button>
+                title="Rate and review"
+              >
+                Review
+              </button>
               {fic.sourceType === 'xenforo' && !downloading && (
-                <button onClick={onCheckUpdates}
-                  className={`text-sm ${fic.updatePending
-                    ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
-                  title={fic.updatePending
-                    ? 'Waiting for the update worker — click to un-queue'
-                    : 'Queue an update check'}>
+                <button
+                  onClick={onCheckUpdates}
+                  className={`text-sm ${
+                    fic.updatePending
+                      ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                  }`}
+                  title={
+                    fic.updatePending
+                      ? 'Waiting for the update worker — click to un-queue'
+                      : 'Queue an update check'
+                  }
+                >
                   {fic.updatePending ? '⏳ Queued' : '↻ Update'}
                 </button>
               )}
               {showDelete && (
-                <button onClick={onDelete} className="text-sm text-red-400 hover:text-red-300">Delete</button>
+                <button
+                  onClick={onDelete}
+                  className="text-sm text-red-400 hover:text-red-300"
+                >
+                  Delete
+                </button>
               )}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-text-muted)] mt-0.5">
             {fic.author && <span>{fic.author}</span>}
             {formatRating(fic.rating) && (
-              <span className="text-amber-400" title={`Rated ${fic.rating}/5`}>{formatRating(fic.rating)}</span>
+              <span className="text-amber-400" title={`Rated ${fic.rating}/5`}>
+                {formatRating(fic.rating)}
+              </span>
             )}
             {badge && (
-              <span className="px-1.5 py-0.5 text-xs rounded border border-white/20">{badge}</span>
+              <span className="px-1.5 py-0.5 text-xs rounded border border-white/20">
+                {badge}
+              </span>
             )}
             {(fic.folderIds?.length ?? 0) === 0 && (
-              <span className="px-1.5 py-0.5 text-xs rounded border border-amber-400/40 text-amber-300"
-                title="Not sorted into any folder">Unsorted</span>
+              <span
+                className="px-1.5 py-0.5 text-xs rounded border border-amber-400/40 text-amber-300"
+                title="Not sorted into any folder"
+              >
+                Unsorted
+              </span>
             )}
             {fic.chapterCount > 0 && <span>{fic.chapterCount} chapters</span>}
             {(fic.readCount ?? 0) > 0 && fic.chapterCount > 0 && (
-              <span title="Chapters read">{fic.readCount}/{fic.chapterCount} read</span>
+              <span title="Chapters read">
+                {fic.readCount}/{fic.chapterCount} read
+              </span>
             )}
             {fic.wordCount > 0 && <span>{formatWords(fic.wordCount)}</span>}
             <span>added {formatDate(fic.createdAt)}</span>
@@ -323,31 +459,43 @@ function FicCard({ fic, selected, showDelete, onOpen, onCheckUpdates, onTagClick
 
           {fic.tags && fic.tags.length > 0 && (
             <div className="flex flex-wrap gap-1 mt-1.5">
-              {fic.tags.map((name) => (
-                <button key={name} onClick={() => onTagClick(name)}
+              {fic.tags.map(name => (
+                <button
+                  key={name}
+                  onClick={() => onTagClick(name)}
                   className="px-1.5 py-0.5 text-xs rounded border border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/30 transition-colors"
-                  title={`Filter library by "${name}"`}>
+                  title={`Filter library by "${name}"`}
+                >
                   {name}
                 </button>
               ))}
             </div>
           )}
 
-          {showReview && <ReviewEditor fic={fic} onClose={() => setShowReview(false)} />}
+          {showReview && (
+            <ReviewEditor fic={fic} onClose={() => setShowReview(false)} />
+          )}
 
           {downloading && (
             <div className="mt-2">
               <div className="flex justify-between text-xs text-[var(--color-text-muted)] mb-1">
                 <span>
-                  {progress?.phase === 'index' ? 'Fetching index…'
-                    : progress?.phase === 'updating' ? 'Checking for new chapters…'
-                    : `Downloading chapters… ${progress?.chaptersDone ?? 0}${progress?.chaptersTotal ? ` / ${progress.chaptersTotal}` : ''}`}
+                  {progress?.phase === 'index'
+                    ? 'Fetching index…'
+                    : progress?.phase === 'updating'
+                      ? 'Checking for new chapters…'
+                      : `Downloading chapters… ${progress?.chaptersDone ?? 0}${progress?.chaptersTotal ? ` / ${progress.chaptersTotal}` : ''}`}
                 </span>
                 {pct !== null && <span>{pct}%</span>}
               </div>
               <div className="h-1.5 bg-white/10 rounded overflow-hidden">
-                <div className="h-full bg-[var(--color-primary)] transition-all"
-                  style={{ width: pct !== null ? `${pct}%` : '100%', opacity: pct !== null ? 1 : 0.4 }} />
+                <div
+                  className="h-full bg-[var(--color-primary)] transition-all"
+                  style={{
+                    width: pct !== null ? `${pct}%` : '100%',
+                    opacity: pct !== null ? 1 : 0.4,
+                  }}
+                />
               </div>
             </div>
           )}
@@ -377,10 +525,11 @@ function ReviewEditor({ fic, onClose }: { fic: Fic; onClose: () => void }) {
   const value = text ?? detail?.review ?? '';
 
   const save = useMutation({
-    mutationFn: () => api.fanfic.saveReview(fic.id, {
-      rating,
-      review: value.trim() || null,
-    }),
+    mutationFn: () =>
+      api.fanfic.saveReview(fic.id, {
+        rating,
+        review: value.trim() || null,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fanfic'] });
       onClose();
@@ -390,25 +539,41 @@ function ReviewEditor({ fic, onClose }: { fic: Fic; onClose: () => void }) {
   return (
     <div className="mt-2 p-3 bg-black/20 rounded-lg border border-white/10">
       <div className="flex items-center gap-1 mb-2">
-        {[1, 2, 3, 4, 5].map((n) => (
-          <button key={n} onClick={() => setRating(rating === n ? null : n)}
+        {[1, 2, 3, 4, 5].map(n => (
+          <button
+            key={n}
+            onClick={() => setRating(rating === n ? null : n)}
             className={`text-xl leading-none ${rating !== null && n <= rating ? 'text-amber-400' : 'text-white/25 hover:text-white/50'}`}
-            title={rating === n ? 'Clear rating' : `Rate ${n}/5`}>
+            title={rating === n ? 'Clear rating' : `Rate ${n}/5`}
+          >
             ★
           </button>
         ))}
         {rating !== null && (
-          <span className="ml-1 text-xs text-[var(--color-text-muted)]">{rating}/5</span>
+          <span className="ml-1 text-xs text-[var(--color-text-muted)]">
+            {rating}/5
+          </span>
         )}
       </div>
-      <textarea value={value} onChange={(e) => setText(e.target.value)}
-        placeholder="Your overall thoughts on this fic…" rows={3}
-        className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none border border-white/10 rounded p-2 resize-y" />
+      <textarea
+        value={value}
+        onChange={e => setText(e.target.value)}
+        placeholder="Your overall thoughts on this fic…"
+        rows={3}
+        className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none border border-white/10 rounded p-2 resize-y"
+      />
       <div className="flex justify-end gap-2 mt-1">
-        <button onClick={onClose}
-          className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Cancel</button>
-        <button onClick={() => save.mutate()} disabled={save.isPending}
-          className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
+        <button
+          onClick={onClose}
+          className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={() => save.mutate()}
+          disabled={save.isPending}
+          className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+        >
           {save.isPending ? 'Saving…' : 'Save'}
         </button>
       </div>

@@ -3,12 +3,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import { ShortcutProvider, useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import {
+  ShortcutProvider,
+  useShortcutScope,
+} from '../../shortcuts/ShortcutProvider';
 import { Queue } from './Queue';
 import type { LearningCard } from '../../hooks/api';
 
 const { QUEUE, mocks } = vi.hoisted(() => {
-  const card = (id: string, extra: Partial<LearningCard> = {}): LearningCard => ({
+  const card = (
+    id: string,
+    extra: Partial<LearningCard> = {}
+  ): LearningCard => ({
     id,
     folderId: null,
     question: `Question ${id}?`,
@@ -49,7 +55,9 @@ function Scope1({ children }: { children: ReactNode }) {
 }
 
 function renderQueue() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="learning" onViewChange={() => {}}>
@@ -57,7 +65,7 @@ function renderQueue() {
           <Queue />
         </Scope1>
       </ShortcutProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
@@ -79,7 +87,9 @@ describe('Queue', () => {
     mocks.approve.mockResolvedValue({ status: 'approved', due: 'now' });
     renderQueue();
     fireEvent.click((await screen.findAllByText('Approve'))[0]);
-    await waitFor(() => expect(mocks.approve).toHaveBeenCalledWith('c1', undefined));
+    await waitFor(() =>
+      expect(mocks.approve).toHaveBeenCalledWith('c1', undefined)
+    );
     expect(screen.queryByText('Possible duplicate')).toBeNull();
   });
 
@@ -87,7 +97,11 @@ describe('Queue', () => {
     mocks.approve
       .mockResolvedValueOnce({
         status: 'duplicateHint',
-        similar: { id: 'old1', question: 'Existing?', answer: 'Existing answer.' },
+        similar: {
+          id: 'old1',
+          question: 'Existing?',
+          answer: 'Existing answer.',
+        },
         score: 0.91,
       })
       .mockResolvedValueOnce({ status: 'approved', due: 'now' });
@@ -99,24 +113,34 @@ describe('Queue', () => {
     expect(screen.getByText('Existing?')).toBeTruthy();
 
     fireEvent.click(screen.getByText("Keep both — they're distinct"));
-    await waitFor(() => expect(mocks.approve).toHaveBeenLastCalledWith('c1', true));
+    await waitFor(() =>
+      expect(mocks.approve).toHaveBeenLastCalledWith('c1', true)
+    );
   });
 
   it('deletes the old card then force-approves on "keep the new one"', async () => {
     mocks.approve
       .mockResolvedValueOnce({
         status: 'duplicateHint',
-        similar: { id: 'old1', question: 'Existing?', answer: 'Existing answer.' },
+        similar: {
+          id: 'old1',
+          question: 'Existing?',
+          answer: 'Existing answer.',
+        },
         score: 0.85,
       })
       .mockResolvedValueOnce({ status: 'approved', due: 'now' });
     mocks.deleteCard.mockResolvedValue({ success: true });
     renderQueue();
     fireEvent.click((await screen.findAllByText('Approve'))[0]);
-    fireEvent.click(await screen.findByText('Keep the new one, delete the old'));
+    fireEvent.click(
+      await screen.findByText('Keep the new one, delete the old')
+    );
 
     await waitFor(() => expect(mocks.deleteCard).toHaveBeenCalledWith('old1'));
-    await waitFor(() => expect(mocks.approve).toHaveBeenLastCalledWith('c1', true));
+    await waitFor(() =>
+      expect(mocks.approve).toHaveBeenLastCalledWith('c1', true)
+    );
   });
 
   it('submits steerable regeneration with the typed direction', async () => {
@@ -127,7 +151,8 @@ describe('Queue', () => {
     fireEvent.change(input, { target: { value: 'too broad, split it' } });
     fireEvent.click(screen.getByText('Go'));
     await waitFor(() =>
-      expect(mocks.regenerate).toHaveBeenCalledWith('c1', 'too broad, split it'));
+      expect(mocks.regenerate).toHaveBeenCalledWith('c1', 'too broad, split it')
+    );
   });
 
   it('denies a card', async () => {
@@ -147,7 +172,9 @@ describe('Queue', () => {
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
     fireEvent.keyDown(window, { code: 'KeyS' }); // select second card
     fireEvent.keyDown(window, { code: 'KeyY' });
-    await waitFor(() => expect(mocks.approve).toHaveBeenCalledWith('c2', undefined));
+    await waitFor(() =>
+      expect(mocks.approve).toHaveBeenCalledWith('c2', undefined)
+    );
 
     fireEvent.keyDown(window, { code: 'KeyX' });
     await waitFor(() => expect(mocks.deny).toHaveBeenCalledWith('c2'));

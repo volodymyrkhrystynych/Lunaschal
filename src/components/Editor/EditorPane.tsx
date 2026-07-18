@@ -29,7 +29,9 @@ export function EditorPane({ filePath, pendingInsert, onInsertDone }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>(
+    'saved'
+  );
   const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
@@ -42,8 +44,9 @@ export function EditorPane({ filePath, pendingInsert, onInsertDone }: Props) {
     mutationFn: (content: string) => api.files.write(filePath, content),
     onSuccess: () => {
       setSaveStatus('saved');
-      queryClient.setQueryData(['files', 'read', filePath], (old: { content: string } | undefined) =>
-        old ? old : undefined
+      queryClient.setQueryData(
+        ['files', 'read', filePath],
+        (old: { content: string } | undefined) => (old ? old : undefined)
       );
     },
   });
@@ -109,17 +112,31 @@ export function EditorPane({ filePath, pendingInsert, onInsertDone }: Props) {
     );
   }
 
-  const statusLabel = saveStatus === 'saved' ? 'Saved' : saveStatus === 'saving' ? 'Saving…' : 'Unsaved';
-  const statusColor = saveStatus === 'saved' ? 'text-green-500' : saveStatus === 'saving' ? 'text-yellow-400' : 'text-[var(--color-text-muted)]';
+  const statusLabel =
+    saveStatus === 'saved'
+      ? 'Saved'
+      : saveStatus === 'saving'
+        ? 'Saving…'
+        : 'Unsaved';
+  const statusColor =
+    saveStatus === 'saved'
+      ? 'text-green-500'
+      : saveStatus === 'saving'
+        ? 'text-yellow-400'
+        : 'text-[var(--color-text-muted)]';
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1 border-b border-white/10 bg-[var(--color-surface)] shrink-0">
-        <span className="text-sm text-[var(--color-text-muted)] truncate">{filePath}</span>
+        <span className="text-sm text-[var(--color-text-muted)] truncate">
+          {filePath}
+        </span>
         <span className={`text-xs ${statusColor}`}>{statusLabel}</span>
       </div>
       {isLoading ? (
-        <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">Loading…</div>
+        <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
+          Loading…
+        </div>
       ) : (
         <div ref={containerRef} className="flex-1 overflow-hidden" />
       )}

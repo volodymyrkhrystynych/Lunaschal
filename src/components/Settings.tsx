@@ -1,109 +1,109 @@
-import { useState, useEffect, useRef } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "../hooks/api";
-import { CuratedTagsSection } from "./CuratedTagsSection";
-import { ShortcutSettings } from "./ShortcutSettings";
-import { vramColors } from "../lib/vram";
-import { keyCapture } from "../shortcuts/keymap";
+import { useState, useEffect, useRef } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '../hooks/api';
+import { CuratedTagsSection } from './CuratedTagsSection';
+import { ShortcutSettings } from './ShortcutSettings';
+import { vramColors } from '../lib/vram';
+import { keyCapture } from '../shortcuts/keymap';
 import {
   FONT_SIZE_PRESETS,
   getStoredFontSize,
   setStoredFontSize,
-} from "../lib/fontSize";
+} from '../lib/fontSize';
 
 // Maps browser KeyboardEvent.code → evdev keycode name
 const CODE_TO_EVDEV: Record<string, string> = (() => {
   const m: Record<string, string> = {
-    F1: "KEY_F1",
-    F2: "KEY_F2",
-    F3: "KEY_F3",
-    F4: "KEY_F4",
-    F5: "KEY_F5",
-    F6: "KEY_F6",
-    F7: "KEY_F7",
-    F8: "KEY_F8",
-    F9: "KEY_F9",
-    F10: "KEY_F10",
-    F11: "KEY_F11",
-    F12: "KEY_F12",
-    AltLeft: "KEY_LEFTALT",
-    AltRight: "KEY_RIGHTALT",
-    ControlLeft: "KEY_LEFTCTRL",
-    ControlRight: "KEY_RIGHTCTRL",
-    ShiftLeft: "KEY_LEFTSHIFT",
-    ShiftRight: "KEY_RIGHTSHIFT",
-    MetaLeft: "KEY_LEFTMETA",
-    MetaRight: "KEY_RIGHTMETA",
-    CapsLock: "KEY_CAPSLOCK",
-    Insert: "KEY_INSERT",
-    Delete: "KEY_DELETE",
-    Home: "KEY_HOME",
-    End: "KEY_END",
-    PageUp: "KEY_PAGEUP",
-    PageDown: "KEY_PAGEDOWN",
-    ScrollLock: "KEY_SCROLLLOCK",
-    Pause: "KEY_PAUSE",
-    PrintScreen: "KEY_SYSRQ",
-    NumLock: "KEY_NUMLOCK",
-    Backquote: "KEY_GRAVE",
-    Backslash: "KEY_BACKSLASH",
+    F1: 'KEY_F1',
+    F2: 'KEY_F2',
+    F3: 'KEY_F3',
+    F4: 'KEY_F4',
+    F5: 'KEY_F5',
+    F6: 'KEY_F6',
+    F7: 'KEY_F7',
+    F8: 'KEY_F8',
+    F9: 'KEY_F9',
+    F10: 'KEY_F10',
+    F11: 'KEY_F11',
+    F12: 'KEY_F12',
+    AltLeft: 'KEY_LEFTALT',
+    AltRight: 'KEY_RIGHTALT',
+    ControlLeft: 'KEY_LEFTCTRL',
+    ControlRight: 'KEY_RIGHTCTRL',
+    ShiftLeft: 'KEY_LEFTSHIFT',
+    ShiftRight: 'KEY_RIGHTSHIFT',
+    MetaLeft: 'KEY_LEFTMETA',
+    MetaRight: 'KEY_RIGHTMETA',
+    CapsLock: 'KEY_CAPSLOCK',
+    Insert: 'KEY_INSERT',
+    Delete: 'KEY_DELETE',
+    Home: 'KEY_HOME',
+    End: 'KEY_END',
+    PageUp: 'KEY_PAGEUP',
+    PageDown: 'KEY_PAGEDOWN',
+    ScrollLock: 'KEY_SCROLLLOCK',
+    Pause: 'KEY_PAUSE',
+    PrintScreen: 'KEY_SYSRQ',
+    NumLock: 'KEY_NUMLOCK',
+    Backquote: 'KEY_GRAVE',
+    Backslash: 'KEY_BACKSLASH',
   };
-  for (const c of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") m[`Key${c}`] = `KEY_${c}`;
-  for (const d of "0123456789") m[`Digit${d}`] = `KEY_${d}`;
+  for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') m[`Key${c}`] = `KEY_${c}`;
+  for (const d of '0123456789') m[`Digit${d}`] = `KEY_${d}`;
   return m;
 })();
 
 const EVDEV_DISPLAY: Record<string, string> = (() => {
   const m: Record<string, string> = {
-    KEY_F1: "F1",
-    KEY_F2: "F2",
-    KEY_F3: "F3",
-    KEY_F4: "F4",
-    KEY_F5: "F5",
-    KEY_F6: "F6",
-    KEY_F7: "F7",
-    KEY_F8: "F8",
-    KEY_F9: "F9",
-    KEY_F10: "F10",
-    KEY_F11: "F11",
-    KEY_F12: "F12",
-    KEY_LEFTALT: "Left Alt",
-    KEY_RIGHTALT: "Right Alt",
-    KEY_LEFTCTRL: "Left Ctrl",
-    KEY_RIGHTCTRL: "Right Ctrl",
-    KEY_LEFTSHIFT: "Left Shift",
-    KEY_RIGHTSHIFT: "Right Shift",
-    KEY_LEFTMETA: "Left Meta",
-    KEY_RIGHTMETA: "Right Meta",
-    KEY_CAPSLOCK: "Caps Lock",
-    KEY_INSERT: "Insert",
-    KEY_DELETE: "Delete",
-    KEY_HOME: "Home",
-    KEY_END: "End",
-    KEY_PAGEUP: "Page Up",
-    KEY_PAGEDOWN: "Page Down",
-    KEY_SCROLLLOCK: "Scroll Lock",
-    KEY_PAUSE: "Pause",
-    KEY_SYSRQ: "Print Screen",
-    KEY_NUMLOCK: "Num Lock",
-    KEY_GRAVE: "Backtick",
-    KEY_BACKSLASH: "Backslash",
+    KEY_F1: 'F1',
+    KEY_F2: 'F2',
+    KEY_F3: 'F3',
+    KEY_F4: 'F4',
+    KEY_F5: 'F5',
+    KEY_F6: 'F6',
+    KEY_F7: 'F7',
+    KEY_F8: 'F8',
+    KEY_F9: 'F9',
+    KEY_F10: 'F10',
+    KEY_F11: 'F11',
+    KEY_F12: 'F12',
+    KEY_LEFTALT: 'Left Alt',
+    KEY_RIGHTALT: 'Right Alt',
+    KEY_LEFTCTRL: 'Left Ctrl',
+    KEY_RIGHTCTRL: 'Right Ctrl',
+    KEY_LEFTSHIFT: 'Left Shift',
+    KEY_RIGHTSHIFT: 'Right Shift',
+    KEY_LEFTMETA: 'Left Meta',
+    KEY_RIGHTMETA: 'Right Meta',
+    KEY_CAPSLOCK: 'Caps Lock',
+    KEY_INSERT: 'Insert',
+    KEY_DELETE: 'Delete',
+    KEY_HOME: 'Home',
+    KEY_END: 'End',
+    KEY_PAGEUP: 'Page Up',
+    KEY_PAGEDOWN: 'Page Down',
+    KEY_SCROLLLOCK: 'Scroll Lock',
+    KEY_PAUSE: 'Pause',
+    KEY_SYSRQ: 'Print Screen',
+    KEY_NUMLOCK: 'Num Lock',
+    KEY_GRAVE: 'Backtick',
+    KEY_BACKSLASH: 'Backslash',
   };
-  for (const c of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") m[`KEY_${c}`] = c;
-  for (const d of "0123456789") m[`KEY_${d}`] = d;
+  for (const c of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') m[`KEY_${c}`] = c;
+  for (const d of '0123456789') m[`KEY_${d}`] = d;
   return m;
 })();
 
 // Modifier keys that can be held as part of a combo
 const MODIFIER_CODES = new Set([
-  "ControlLeft",
-  "ControlRight",
-  "AltLeft",
-  "AltRight",
-  "ShiftLeft",
-  "ShiftRight",
-  "MetaLeft",
-  "MetaRight",
+  'ControlLeft',
+  'ControlRight',
+  'AltLeft',
+  'AltRight',
+  'ShiftLeft',
+  'ShiftRight',
+  'MetaLeft',
+  'MetaRight',
 ]);
 
 // Canonical sort order for modifiers when building combo strings
@@ -120,13 +120,13 @@ const MOD_PRIORITY: Record<string, number> = {
 
 function displayCombo(
   evdev: string | null | undefined,
-  fallback: string,
+  fallback: string
 ): string {
   if (!evdev) return fallback;
   return evdev
-    .split("+")
-    .map((k) => EVDEV_DISPLAY[k] ?? k)
-    .join(" + ");
+    .split('+')
+    .map(k => EVDEV_DISPLAY[k] ?? k)
+    .join(' + ');
 }
 
 function KeyRecorder({
@@ -169,12 +169,12 @@ function KeyRecorder({
         modTimerRef.current = setTimeout(() => {
           modTimerRef.current = null;
           const parts = [...heldRef.current]
-            .map((m) => CODE_TO_EVDEV[m])
+            .map(m => CODE_TO_EVDEV[m])
             .filter(Boolean) as string[];
           parts.sort(
-            (a, b) => (MOD_PRIORITY[a] ?? 99) - (MOD_PRIORITY[b] ?? 99),
+            (a, b) => (MOD_PRIORITY[a] ?? 99) - (MOD_PRIORITY[b] ?? 99)
           );
-          if (parts.length > 0) done(parts.join("+"));
+          if (parts.length > 0) done(parts.join('+'));
         }, 500);
         return;
       }
@@ -187,23 +187,23 @@ function KeyRecorder({
       const evdev = CODE_TO_EVDEV[e.code];
       if (!evdev) return;
       const modParts = [...heldRef.current]
-        .map((m) => CODE_TO_EVDEV[m])
+        .map(m => CODE_TO_EVDEV[m])
         .filter(Boolean) as string[];
       modParts.sort(
-        (a, b) => (MOD_PRIORITY[a] ?? 99) - (MOD_PRIORITY[b] ?? 99),
+        (a, b) => (MOD_PRIORITY[a] ?? 99) - (MOD_PRIORITY[b] ?? 99)
       );
-      done([...modParts, evdev].join("+"));
+      done([...modParts, evdev].join('+'));
     };
 
     const handleUp = (e: KeyboardEvent) => {
       heldRef.current.delete(e.code);
     };
 
-    window.addEventListener("keydown", handleDown, true);
-    window.addEventListener("keyup", handleUp, true);
+    window.addEventListener('keydown', handleDown, true);
+    window.addEventListener('keyup', handleUp, true);
     return () => {
-      window.removeEventListener("keydown", handleDown, true);
-      window.removeEventListener("keyup", handleUp, true);
+      window.removeEventListener('keydown', handleDown, true);
+      window.removeEventListener('keyup', handleUp, true);
       if (modTimerRef.current) {
         clearTimeout(modTimerRef.current);
         modTimerRef.current = null;
@@ -223,18 +223,18 @@ function KeyRecorder({
       onBlur={() => setListening(false)}
       className={`px-3 py-1.5 rounded text-sm border transition-colors ${
         listening
-          ? "border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-[var(--color-primary)] animate-pulse"
-          : "border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)]"
+          ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10 text-[var(--color-primary)] animate-pulse'
+          : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)]'
       }`}
     >
-      {listening ? "Press a key combo…" : displayCombo(value, "Not set")}
+      {listening ? 'Press a key combo…' : displayCombo(value, 'Not set')}
     </button>
   );
 }
 
 function STTStatusSection() {
   const { data, isLoading } = useQuery({
-    queryKey: ["stt", "health"],
+    queryKey: ['stt', 'health'],
     queryFn: api.stt.health,
     refetchInterval: 5000,
   });
@@ -250,7 +250,7 @@ function STTStatusSection() {
   }) => (
     <div className="flex items-center gap-3">
       <span
-        className={`w-2 h-2 rounded-full flex-shrink-0 ${ready ? "bg-green-400" : "bg-red-400"}`}
+        className={`w-2 h-2 rounded-full flex-shrink-0 ${ready ? 'bg-green-400' : 'bg-red-400'}`}
       />
       <div>
         <span className="text-sm text-[var(--color-text)]">{label}</span>
@@ -259,9 +259,9 @@ function STTStatusSection() {
         </span>
       </div>
       <span
-        className={`ml-auto text-xs font-medium ${ready ? "text-green-400" : "text-red-400"}`}
+        className={`ml-auto text-xs font-medium ${ready ? 'text-green-400' : 'text-red-400'}`}
       >
-        {ready ? "ready" : "unavailable"}
+        {ready ? 'ready' : 'unavailable'}
       </span>
     </div>
   );
@@ -289,15 +289,15 @@ function STTStatusSection() {
             {(!data.stt_ready || !data.tts_ready) && (
               <div className="mt-3 pt-3 border-t border-white/10 text-xs text-[var(--color-text-muted)] space-y-1">
                 <p>
-                  To enable local models:{" "}
+                  To enable local models:{' '}
                   <code>pip install faster-whisper kokoro-onnx</code> (requires
                   GPU)
                 </p>
                 <p>
-                  To use OpenAI: set{" "}
+                  To use OpenAI: set{' '}
                   <code>
                     STT_BACKEND=openai TTS_BACKEND=openai OPENAI_API_KEY=sk-…
-                  </code>{" "}
+                  </code>{' '}
                   and restart
                 </p>
               </div>
@@ -314,7 +314,7 @@ function STTStatusSection() {
 function ShortcutsSection() {
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({
-    queryKey: ["settings"],
+    queryKey: ['settings'],
     queryFn: api.settings.get,
   });
   const [pasteKey, setPasteKey] = useState<string | null>(null);
@@ -341,7 +341,7 @@ function ShortcutsSection() {
         sttCommandKey: commandKey ?? undefined,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     },
@@ -350,7 +350,7 @@ function ShortcutsSection() {
   const togglePipeline = useMutation({
     mutationFn: (enabled: boolean) =>
       api.settings.updateAI({ voicePipelineEnabled: enabled }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
   const pipelineEnabled = settings?.voicePipelineEnabled ?? true;
@@ -384,8 +384,8 @@ function ShortcutsSection() {
             </p>
             <p className="text-xs text-[var(--color-text-muted)] mb-2">
               {pipelineEnabled
-                ? "Record → transcribe → AI chat → TTS reply"
-                : "Record → transcribe → paste at cursor"}
+                ? 'Record → transcribe → AI chat → TTS reply'
+                : 'Record → transcribe → paste at cursor'}
             </p>
             <KeyRecorder value={voiceKey} onChange={setVoiceKey} />
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
@@ -422,10 +422,10 @@ function ShortcutsSection() {
         <label className="flex items-center gap-3 cursor-pointer select-none pt-1">
           <div
             onClick={() => togglePipeline.mutate(!pipelineEnabled)}
-            className={`relative w-9 h-5 rounded-full transition-colors ${pipelineEnabled ? "bg-[var(--color-primary)]" : "bg-white/20"}`}
+            className={`relative w-9 h-5 rounded-full transition-colors ${pipelineEnabled ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
           >
             <span
-              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${pipelineEnabled ? "translate-x-4" : "translate-x-0"}`}
+              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${pipelineEnabled ? 'translate-x-4' : 'translate-x-0'}`}
             />
           </div>
           <span className="text-sm text-[var(--color-text)]">
@@ -444,7 +444,7 @@ function ShortcutsSection() {
             disabled={save.isPending}
             className="px-4 py-2 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50 text-sm"
           >
-            {save.isPending ? "Saving…" : "Save shortcuts"}
+            {save.isPending ? 'Saving…' : 'Save shortcuts'}
           </button>
           {saved && <span className="text-sm text-green-400">Saved</span>}
         </div>
@@ -456,10 +456,10 @@ function ShortcutsSection() {
 function NudgeSection() {
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({
-    queryKey: ["settings"],
+    queryKey: ['settings'],
     queryFn: api.settings.get,
   });
-  const [intervalInput, setIntervalInput] = useState("45");
+  const [intervalInput, setIntervalInput] = useState('45');
 
   useEffect(() => {
     if (settings) {
@@ -470,13 +470,13 @@ function NudgeSection() {
   const toggleEnabled = useMutation({
     mutationFn: (enabled: boolean) =>
       api.settings.updateAI({ nudgeEnabled: enabled }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
   const saveInterval = useMutation({
     mutationFn: (minutes: number) =>
       api.settings.updateAI({ nudgeIntervalMinutes: minutes }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
   const nudgeEnabled = settings?.nudgeEnabled ?? true;
@@ -500,10 +500,10 @@ function NudgeSection() {
         <label className="flex items-center gap-3 cursor-pointer select-none">
           <div
             onClick={() => toggleEnabled.mutate(!nudgeEnabled)}
-            className={`relative w-9 h-5 rounded-full transition-colors ${nudgeEnabled ? "bg-[var(--color-primary)]" : "bg-white/20"}`}
+            className={`relative w-9 h-5 rounded-full transition-colors ${nudgeEnabled ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
           >
             <span
-              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${nudgeEnabled ? "translate-x-4" : "translate-x-0"}`}
+              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${nudgeEnabled ? 'translate-x-4' : 'translate-x-0'}`}
             />
           </div>
           <span className="text-sm text-[var(--color-text)]">
@@ -519,7 +519,7 @@ function NudgeSection() {
               type="number"
               min={1}
               value={intervalInput}
-              onChange={(e) => setIntervalInput(e.target.value)}
+              onChange={e => setIntervalInput(e.target.value)}
               onBlur={commitInterval}
               className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
             />
@@ -543,50 +543,50 @@ const WHISPER_VRAM_TABLE: Record<string, number> = {
   small: 2048,
   medium: 5120,
   turbo: 6144,
-  "large-v3": 10240,
+  'large-v3': 10240,
 };
 
 // Small, GPU-friendly models that leave headroom for STT/TTS in an 8GB
 // budget — shown as pull suggestions for whichever of these aren't
 // installed yet. vramMb figures are measured, not estimated.
 const RECOMMENDED_MODELS: { name: string; vramMb: number; note: string }[] = [
-  { name: "llama3.2:latest", vramMb: 2311, note: "small, fast, well-rounded" },
-  { name: "phi4-mini:3.8b", vramMb: 2852, note: "strong for its size" },
+  { name: 'llama3.2:latest', vramMb: 2311, note: 'small, fast, well-rounded' },
+  { name: 'phi4-mini:3.8b', vramMb: 2852, note: 'strong for its size' },
   {
-    name: "phi4-mini-reasoning:latest",
+    name: 'phi4-mini-reasoning:latest',
     vramMb: 3608,
-    note: "reasoning-focused",
+    note: 'reasoning-focused',
   },
-  { name: "qwen3.5:2b", vramMb: 3137, note: "compact, multilingual" },
+  { name: 'qwen3.5:2b', vramMb: 3137, note: 'compact, multilingual' },
 ];
 
 function VRAMSection() {
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({
-    queryKey: ["settings"],
+    queryKey: ['settings'],
     queryFn: api.settings.get,
   });
   const { data: whisperModels } = useQuery({
-    queryKey: ["stt", "whisper-models"],
+    queryKey: ['stt', 'whisper-models'],
     queryFn: api.stt.whisperModels,
   });
   const { data: ollamaModels } = useQuery({
-    queryKey: ["settings", "ollama-models"],
+    queryKey: ['settings', 'ollama-models'],
     queryFn: api.settings.ollamaModels,
     enabled: !!settings?.ollamaUrl,
   });
   const { data: gpuVram } = useQuery({
-    queryKey: ["settings", "gpu-vram"],
+    queryKey: ['settings', 'gpu-vram'],
     queryFn: api.settings.gpuVram,
   });
 
   const [saved, setSaved] = useState(false);
-  const [hfToken, setHfToken] = useState("");
+  const [hfToken, setHfToken] = useState('');
 
   const updateAI = useMutation({
     mutationFn: api.settings.updateAI,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     },
@@ -595,21 +595,21 @@ function VRAMSection() {
   const reloadStt = useMutation({
     mutationFn: api.stt.reload,
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["stt", "health"] }),
+      queryClient.invalidateQueries({ queryKey: ['stt', 'health'] }),
   });
 
-  const activeSttBackend = settings?.sttBackend ?? "local";
-  const activeTtsBackend = settings?.ttsBackend ?? "local";
-  const activeWhisperModel = settings?.whisperModel ?? "turbo";
-  const activeSttDevice = settings?.sttDevice ?? "cuda";
+  const activeSttBackend = settings?.sttBackend ?? 'local';
+  const activeTtsBackend = settings?.ttsBackend ?? 'local';
+  const activeWhisperModel = settings?.whisperModel ?? 'turbo';
+  const activeSttDevice = settings?.sttDevice ?? 'cuda';
 
   const whisperVram =
-    activeSttBackend === "local" && activeSttDevice !== "cpu"
+    activeSttBackend === 'local' && activeSttDevice !== 'cpu'
       ? (WHISPER_VRAM_TABLE[activeWhisperModel] ?? 6144)
       : 0;
-  const kokoroVram = activeTtsBackend === "local" ? KOKORO_VRAM_MB : 0;
+  const kokoroVram = activeTtsBackend === 'local' ? KOKORO_VRAM_MB : 0;
   const ollamaVram = settings?.ollamaModel
-    ? (ollamaModels?.find((m) => m.name === settings.ollamaModel)?.vramMb ?? 0)
+    ? (ollamaModels?.find(m => m.name === settings.ollamaModel)?.vramMb ?? 0)
     : 0;
   // baseVram is whatever else was already using the GPU (browser, compositor,
   // etc.) measured once when the server started — not live, so it won't
@@ -648,7 +648,7 @@ function VRAMSection() {
               {(effectiveTotalMb / 1024).toFixed(1)} GB VRAM budget
             </span>
             <span className={`font-medium ${numColor}`}>
-              {totalVram.toLocaleString()} / {effectiveTotalMb.toLocaleString()}{" "}
+              {totalVram.toLocaleString()} / {effectiveTotalMb.toLocaleString()}{' '}
               MB
             </span>
           </div>
@@ -663,22 +663,22 @@ function VRAMSection() {
               <span>Base (other apps): {baseVram.toLocaleString()} MB</span>
             )}
             <span>
-              STT:{" "}
-              {activeSttBackend === "local"
+              STT:{' '}
+              {activeSttBackend === 'local'
                 ? `${whisperVram} MB`
-                : "0 MB (cloud)"}
+                : '0 MB (cloud)'}
             </span>
             <span>
-              TTS:{" "}
-              {activeTtsBackend === "local"
+              TTS:{' '}
+              {activeTtsBackend === 'local'
                 ? `${kokoroVram} MB`
-                : "0 MB (cloud)"}
+                : '0 MB (cloud)'}
             </span>
             <span>
-              LLM:{" "}
+              LLM:{' '}
               {ollamaVram > 0
                 ? `~${ollamaVram.toLocaleString()} MB`
-                : "unknown"}
+                : 'unknown'}
             </span>
           </div>
           {gpuVram?.available === false && (
@@ -694,46 +694,46 @@ function VRAMSection() {
             Speech-to-Text (STT)
           </p>
           <div className="flex gap-2 mb-2">
-            {(["local", "openai"] as const).map((b) => (
+            {(['local', 'openai'] as const).map(b => (
               <button
                 key={b}
                 onClick={() => setSttBackend(b)}
                 className={`px-3 py-1.5 rounded text-sm border transition-colors ${
                   activeSttBackend === b
-                    ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-                    : "border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]"
+                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
+                    : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
                 }`}
               >
-                {b === "local" ? "Local (Whisper)" : "OpenAI API"}
+                {b === 'local' ? 'Local (Whisper)' : 'OpenAI API'}
               </button>
             ))}
           </div>
-          {activeSttBackend === "local" && whisperModels && (
+          {activeSttBackend === 'local' && whisperModels && (
             <select
               value={activeWhisperModel}
-              onChange={(e) => setWhisperModel(e.target.value)}
+              onChange={e => setWhisperModel(e.target.value)}
               className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
             >
-              {whisperModels.map((m) => (
+              {whisperModels.map(m => (
                 <option key={m.name} value={m.name}>
                   {m.name} — {m.vramMb} MB
                 </option>
               ))}
             </select>
           )}
-          {activeSttBackend === "local" && (
+          {activeSttBackend === 'local' && (
             <div className="flex gap-2 mt-2">
-              {(["cuda", "cpu"] as const).map((d) => (
+              {(['cuda', 'cpu'] as const).map(d => (
                 <button
                   key={d}
                   onClick={() => setSttDevice(d)}
                   className={`px-3 py-1.5 rounded text-sm border transition-colors ${
                     activeSttDevice === d
-                      ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-                      : "border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]"
+                      ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
+                      : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
                   }`}
                 >
-                  {d === "cuda" ? "GPU" : "CPU"}
+                  {d === 'cuda' ? 'GPU' : 'CPU'}
                 </button>
               ))}
             </div>
@@ -745,17 +745,17 @@ function VRAMSection() {
             Text-to-Speech (TTS)
           </p>
           <div className="flex gap-2">
-            {(["local", "openai"] as const).map((b) => (
+            {(['local', 'openai'] as const).map(b => (
               <button
                 key={b}
                 onClick={() => updateAI.mutate({ ttsBackend: b })}
                 className={`px-3 py-1.5 rounded text-sm border transition-colors ${
                   activeTtsBackend === b
-                    ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-                    : "border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]"
+                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
+                    : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
                 }`}
               >
-                {b === "local" ? "Local (Kokoro ~80 MB)" : "OpenAI API"}
+                {b === 'local' ? 'Local (Kokoro ~80 MB)' : 'OpenAI API'}
               </button>
             ))}
           </div>
@@ -772,10 +772,10 @@ function VRAMSection() {
                   meetingEchoCancel: !(settings?.meetingEchoCancel ?? false),
                 })
               }
-              className={`relative w-9 h-5 rounded-full transition-colors ${settings?.meetingEchoCancel ? "bg-[var(--color-primary)]" : "bg-white/20"}`}
+              className={`relative w-9 h-5 rounded-full transition-colors ${settings?.meetingEchoCancel ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
             >
               <span
-                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${settings?.meetingEchoCancel ? "translate-x-4" : "translate-x-0"}`}
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${settings?.meetingEchoCancel ? 'translate-x-4' : 'translate-x-0'}`}
               />
             </div>
             <div>
@@ -805,14 +805,14 @@ function VRAMSection() {
             <input
               type="password"
               value={hfToken}
-              onChange={(e) => setHfToken(e.target.value)}
-              placeholder={settings?.hasHfToken ? "••••••••••••••••" : "hf_..."}
+              onChange={e => setHfToken(e.target.value)}
+              placeholder={settings?.hasHfToken ? '••••••••••••••••' : 'hf_...'}
               className="flex-1 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
             />
             <button
               onClick={() => {
                 updateAI.mutate({ hfToken });
-                setHfToken("");
+                setHfToken('');
               }}
               disabled={!hfToken.trim()}
               className="px-3 py-1.5 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text)] disabled:opacity-50"
@@ -825,9 +825,9 @@ function VRAMSection() {
         {ollamaModels &&
           ollamaModels.length > 0 &&
           (() => {
-            const installedNames = new Set(ollamaModels.map((m) => m.name));
+            const installedNames = new Set(ollamaModels.map(m => m.name));
             const notInstalled = RECOMMENDED_MODELS.filter(
-              (r) => !installedNames.has(r.name),
+              r => !installedNames.has(r.name)
             );
             return (
               <div>
@@ -835,14 +835,14 @@ function VRAMSection() {
                   LLM Model (Ollama)
                 </p>
                 <select
-                  value={settings?.ollamaModel ?? ""}
-                  onChange={(e) =>
+                  value={settings?.ollamaModel ?? ''}
+                  onChange={e =>
                     updateAI.mutate({ ollamaModel: e.target.value })
                   }
                   className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
                 >
                   <optgroup label="Installed">
-                    {ollamaModels.map((m) => (
+                    {ollamaModels.map(m => (
                       <option key={m.name} value={m.name}>
                         {m.name} — {m.vramMb.toLocaleString()} MB
                       </option>
@@ -850,7 +850,7 @@ function VRAMSection() {
                   </optgroup>
                   {notInstalled.length > 0 && (
                     <optgroup label="Recommended (not installed)">
-                      {notInstalled.map((m) => (
+                      {notInstalled.map(m => (
                         <option key={m.name} value={m.name}>
                           {m.name} — ~{m.vramMb.toLocaleString()} MB · {m.note}
                         </option>
@@ -871,19 +871,19 @@ function VRAMSection() {
 function NetworkSection() {
   const queryClient = useQueryClient();
   const { data: settings } = useQuery({
-    queryKey: ["settings"],
+    queryKey: ['settings'],
     queryFn: api.settings.get,
   });
 
   const regenerate = useMutation({
     mutationFn: api.settings.regenerateCode,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
   const toggleSleep = useMutation({
     mutationFn: (enabled: boolean) =>
       api.settings.updateAI({ preventSleep: enabled }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
   const preventSleep = settings?.preventSleep ?? false;
@@ -891,7 +891,7 @@ function NetworkSection() {
   const logout = useMutation({
     mutationFn: api.auth.logout,
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["auth", "status"] }),
+      queryClient.invalidateQueries({ queryKey: ['auth', 'status'] }),
   });
 
   const origin = window.location.origin;
@@ -914,18 +914,18 @@ function NetworkSection() {
           </p>
           <div className="flex items-center gap-4">
             <span className="text-4xl font-mono tracking-[0.3em] text-[var(--color-text)]">
-              {settings?.networkCode ?? "------"}
+              {settings?.networkCode ?? '------'}
             </span>
             <button
               onClick={() => regenerate.mutate()}
               disabled={regenerate.isPending}
               className="px-3 py-1 text-sm bg-white/10 hover:bg-white/20 text-[var(--color-text)] rounded disabled:opacity-50 transition-colors"
             >
-              {regenerate.isPending ? "Regenerating…" : "Regenerate"}
+              {regenerate.isPending ? 'Regenerating…' : 'Regenerate'}
             </button>
           </div>
           <p className="text-xs text-[var(--color-text-muted)] mt-2">
-            Laptop sign-in requires this code plus{" "}
+            Laptop sign-in requires this code plus{' '}
             <code>LUNASCHAL_PASSWORD</code>. Regenerate after each remote
             session.
           </p>
@@ -933,10 +933,10 @@ function NetworkSection() {
         <label className="flex items-center gap-3 cursor-pointer select-none pt-2 border-t border-white/10">
           <div
             onClick={() => toggleSleep.mutate(!preventSleep)}
-            className={`relative w-9 h-5 rounded-full transition-colors ${preventSleep ? "bg-[var(--color-primary)]" : "bg-white/20"}`}
+            className={`relative w-9 h-5 rounded-full transition-colors ${preventSleep ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
           >
             <span
-              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${preventSleep ? "translate-x-4" : "translate-x-0"}`}
+              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${preventSleep ? 'translate-x-4' : 'translate-x-0'}`}
             />
           </div>
           <div>
@@ -966,20 +966,20 @@ function KnowledgeBaseSection() {
   const [syncProgress, setSyncProgress] = useState<string | null>(null);
 
   const { data: ragConfigured } = useQuery({
-    queryKey: ["rag", "configured"],
+    queryKey: ['rag', 'configured'],
     queryFn: api.rag.isConfigured,
   });
   const { data: stats } = useQuery({
-    queryKey: ["rag", "stats"],
+    queryKey: ['rag', 'stats'],
     queryFn: api.rag.getStats,
   });
 
   const syncAll = useMutation({
     mutationFn: api.rag.syncAll,
-    onMutate: () => setSyncProgress("Starting sync..."),
-    onSuccess: (result) => {
+    onMutate: () => setSyncProgress('Starting sync...'),
+    onSuccess: result => {
       setSyncProgress(
-        `Synced ${result.synced} entries (${result.chunks} chunks)`,
+        `Synced ${result.synced} entries (${result.chunks} chunks)`
       );
       setTimeout(() => setSyncProgress(null), 5000);
     },
@@ -1015,7 +1015,7 @@ function KnowledgeBaseSection() {
               </div>
               <div className="bg-white/5 rounded-lg p-3">
                 <div className="text-2xl font-bold text-green-400">
-                  {stats?.isConfigured ? "Active" : "Inactive"}
+                  {stats?.isConfigured ? 'Active' : 'Inactive'}
                 </div>
                 <div className="text-sm text-[var(--color-text-muted)]">
                   Embedding Status
@@ -1028,7 +1028,7 @@ function KnowledgeBaseSection() {
                 disabled={syncAll.isPending}
                 className="px-4 py-2 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
               >
-                {syncAll.isPending ? "Syncing..." : "Rebuild Knowledge Base"}
+                {syncAll.isPending ? 'Syncing...' : 'Rebuild Knowledge Base'}
               </button>
               {syncProgress && (
                 <span className="text-sm text-[var(--color-text-muted)]">
@@ -1056,14 +1056,14 @@ function FanficCookieRow({
   hasCookie: boolean;
   updatedAt: string | null;
 }) {
-  const [value, setValue] = useState("");
+  const [value, setValue] = useState('');
   const queryClient = useQueryClient();
 
   const save = useMutation({
     mutationFn: (cookie: string) => api.fanfic.cookies.put(domain, cookie),
     onSuccess: () => {
-      setValue("");
-      queryClient.invalidateQueries({ queryKey: ["fanfic", "cookies"] });
+      setValue('');
+      queryClient.invalidateQueries({ queryKey: ['fanfic', 'cookies'] });
     },
   });
 
@@ -1075,7 +1075,7 @@ function FanficCookieRow({
           <span className="text-xs text-green-400">
             cookie set
             {updatedAt &&
-              ` · ${new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(updatedAt))}`}
+              ` · ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(updatedAt))}`}
           </span>
         ) : (
           <span className="text-xs text-[var(--color-text-muted)]">
@@ -1087,13 +1087,13 @@ function FanficCookieRow({
         <input
           type="text"
           value={value}
-          onChange={(e) => setValue(e.target.value)}
+          onChange={e => setValue(e.target.value)}
           spellCheck={false}
           autoComplete="off"
           placeholder={
             hasCookie
-              ? "paste a new cookie to replace the stored one"
-              : "xf_user=...; xf_session=...; cf_clearance=..."
+              ? 'paste a new cookie to replace the stored one'
+              : 'xf_user=...; xf_session=...; cf_clearance=...'
           }
           className="flex-1 bg-transparent font-mono text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
         />
@@ -1106,7 +1106,7 @@ function FanficCookieRow({
         </button>
         {hasCookie && (
           <button
-            onClick={() => save.mutate("")}
+            onClick={() => save.mutate('')}
             disabled={save.isPending}
             className="px-3 py-2 text-sm text-red-400 hover:text-red-300 disabled:opacity-50"
           >
@@ -1138,8 +1138,8 @@ function DisplaySection() {
               onClick={() => setFontSize(setStoredFontSize(px))}
               className={`px-3 py-1.5 rounded text-sm border transition-colors ${
                 fontSize === px
-                  ? "border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]"
-                  : "border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]"
+                  ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/15 text-[var(--color-primary)]'
+                  : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
               }`}
             >
               {label} <span className="opacity-60">{px}px</span>
@@ -1153,7 +1153,7 @@ function DisplaySection() {
 
 function FanficCookiesSection() {
   const { data: cookies } = useQuery({
-    queryKey: ["fanfic", "cookies"],
+    queryKey: ['fanfic', 'cookies'],
     queryFn: api.fanfic.cookies.list,
   });
 
@@ -1164,7 +1164,7 @@ function FanficCookiesSection() {
       </h2>
       <p className="text-sm text-[var(--color-text-muted)] mb-4">
         Needed for login-gated fics (e.g. Questionable Questing NSFW sections).
-        Log in to the site in your browser, open DevTools (<code>F12</code>) →{" "}
+        Log in to the site in your browser, open DevTools (<code>F12</code>) →{' '}
         <strong>Network</strong> tab, reload the page, then right-click the
         first request → <strong>Copy Value → Copy Request Headers</strong> and
         paste the whole thing below — the <code>Cookie</code> line is extracted
@@ -1172,7 +1172,7 @@ function FanficCookiesSection() {
         as cURL" command, or a bare cookie string all work too.
       </p>
       <div className="space-y-4">
-        {cookies?.map((c) => (
+        {cookies?.map(c => (
           <FanficCookieRow
             key={c.domain}
             domain={c.domain}
@@ -1186,38 +1186,38 @@ function FanficCookiesSection() {
 }
 
 export function Settings() {
-  const [activeTab, setActiveTab] = useState<"general" | "tags" | "shortcuts">(
-    "general",
+  const [activeTab, setActiveTab] = useState<'general' | 'tags' | 'shortcuts'>(
+    'general'
   );
-  const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
-  const [ollamaModel, setOllamaModel] = useState("llama3.2");
+  const [ollamaUrl, setOllamaUrl] = useState('http://localhost:11434');
+  const [ollamaModel, setOllamaModel] = useState('llama3.2');
   const [message, setMessage] = useState<{
-    type: "success" | "error";
+    type: 'success' | 'error';
     text: string;
   } | null>(null);
   const queryClient = useQueryClient();
 
   const { data: settings, isLoading } = useQuery({
-    queryKey: ["settings"],
+    queryKey: ['settings'],
     queryFn: api.settings.get,
   });
 
   useEffect(() => {
     if (settings) {
-      setOllamaUrl(settings.ollamaUrl || "http://localhost:11434");
-      setOllamaModel(settings.ollamaModel || "llama3.2");
+      setOllamaUrl(settings.ollamaUrl || 'http://localhost:11434');
+      setOllamaModel(settings.ollamaModel || 'llama3.2');
     }
   }, [settings]);
 
   const updateAI = useMutation({
     mutationFn: api.settings.updateAI,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["settings"] });
-      setMessage({ type: "success", text: "Settings saved successfully" });
+      queryClient.invalidateQueries({ queryKey: ['settings'] });
+      setMessage({ type: 'success', text: 'Settings saved successfully' });
       setTimeout(() => setMessage(null), 3000);
     },
     onError: (error: Error) =>
-      setMessage({ type: "error", text: error.message }),
+      setMessage({ type: 'error', text: error.message }),
   });
 
   if (isLoading) {
@@ -1235,35 +1235,35 @@ export function Settings() {
           Settings
         </h1>
         <div className="flex gap-1 ml-2">
-          {(["general", "tags", "shortcuts"] as const).map((tab) => (
+          {(['general', 'tags', 'shortcuts'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-1.5 rounded text-sm transition-colors ${
                 activeTab === tab
-                  ? "bg-[var(--color-primary)]/20 text-[var(--color-primary)] border border-[var(--color-primary)]/40"
-                  : "text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)] border border-[var(--color-primary)]/40'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
               }`}
             >
-              {tab === "general"
-                ? "General"
-                : tab === "tags"
-                  ? "Tags"
-                  : "Shortcuts"}
+              {tab === 'general'
+                ? 'General'
+                : tab === 'tags'
+                  ? 'Tags'
+                  : 'Shortcuts'}
             </button>
           ))}
         </div>
       </div>
 
-      {activeTab === "tags" ? (
+      {activeTab === 'tags' ? (
         <CuratedTagsSection />
-      ) : activeTab === "shortcuts" ? (
+      ) : activeTab === 'shortcuts' ? (
         <ShortcutSettings />
       ) : (
         <>
           {message && (
             <div
-              className={`mb-4 p-3 rounded-lg ${message.type === "success" ? "bg-green-900/30 border border-green-600/50 text-green-200" : "bg-red-900/30 border border-red-600/50 text-red-200"}`}
+              className={`mb-4 p-3 rounded-lg ${message.type === 'success' ? 'bg-green-900/30 border border-green-600/50 text-green-200' : 'bg-red-900/30 border border-red-600/50 text-red-200'}`}
             >
               {message.text}
             </div>
@@ -1290,7 +1290,7 @@ export function Settings() {
                     <input
                       type="text"
                       value={ollamaUrl}
-                      onChange={(e) => setOllamaUrl(e.target.value)}
+                      onChange={e => setOllamaUrl(e.target.value)}
                       placeholder="http://localhost:11434"
                       className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
                     />
@@ -1302,7 +1302,7 @@ export function Settings() {
                     <input
                       type="text"
                       value={ollamaModel}
-                      onChange={(e) => setOllamaModel(e.target.value)}
+                      onChange={e => setOllamaModel(e.target.value)}
                       placeholder="llama3.2"
                       className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
                     />

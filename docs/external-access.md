@@ -131,9 +131,9 @@ services:
   lunaschal:
     build: .
     ports:
-      - "127.0.0.1:5000:5000"   # bind to localhost only — Caddy proxies in
+      - '127.0.0.1:5000:5000' # bind to localhost only — Caddy proxies in
     volumes:
-      - ./data:/app/data         # only the SQLite DB is shared with the host
+      - ./data:/app/data # only the SQLite DB is shared with the host
     environment:
       - NETWORK_MODE=1
       - LUNASCHAL_PASSWORD=${LUNASCHAL_PASSWORD}
@@ -154,25 +154,26 @@ For a personal desktop machine you want to protect from remote access without yo
 
 1. An unknown remote IP hits the server with no valid JWT.
 2. Instead of a plain 401, the backend creates a short-lived **pending approval** record (keyed by a one-time token) and returns `202 Pending` to the remote client.
-3. An SSE event is pushed to the locally-running Lunaschal UI, which pops up a modal: *"Connection request from 1.2.3.4 — approve? (auto-reject in 5 s)"* with a countdown.
+3. An SSE event is pushed to the locally-running Lunaschal UI, which pops up a modal: _"Connection request from 1.2.3.4 — approve? (auto-reject in 5 s)"_ with a countdown.
 4. The remote client polls a `/api/auth/approval-status/<token>` endpoint.
 5. **Approved** (user clicks the button): backend issues a JWT bound to a device fingerprint; the remote client stores it and future connections skip re-approval.  
    **Rejected or timeout**: the pending record is deleted, the remote client receives 401.
 
 **Device fingerprint** (stored in `localStorage` on the remote browser):
+
 - A random UUID generated on first visit and sent as a custom header `X-Device-Id`.
 - The backend stores approved device IDs in the `settings` table (or a dedicated `approved_devices` table) so subsequent connections from the same device are recognised without re-approval.
 
 **Key implementation pieces:**
 
-| Piece | Location |
-|-------|----------|
-| Pending approvals dict (in-memory, TTL 30 s) | `backend/auth.py` |
-| `POST /api/auth/request-approval` | new route in `backend/routes/auth.py` |
-| `GET /api/auth/approval-status/<token>` | same file |
-| `POST /api/auth/approve/<token>` | same file, localhost-only |
-| SSE push to local UI | reuse existing SSE infrastructure |
-| Approval modal with countdown | new component in `src/components/` |
+| Piece                                        | Location                              |
+| -------------------------------------------- | ------------------------------------- |
+| Pending approvals dict (in-memory, TTL 30 s) | `backend/auth.py`                     |
+| `POST /api/auth/request-approval`            | new route in `backend/routes/auth.py` |
+| `GET /api/auth/approval-status/<token>`      | same file                             |
+| `POST /api/auth/approve/<token>`             | same file, localhost-only             |
+| SSE push to local UI                         | reuse existing SSE infrastructure     |
+| Approval modal with countdown                | new component in `src/components/`    |
 
 **Timeout is configurable** — 5 s is aggressive (good for security; you must be at the machine), but 30 s is friendlier if you might be a few steps away.
 

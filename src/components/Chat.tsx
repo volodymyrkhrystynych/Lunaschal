@@ -1,8 +1,8 @@
-import { useState, useRef, useEffect } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "../hooks/api";
-import { MessageMarkdown } from "./MessageMarkdown";
-import { ChatNav } from "./ChatNav";
+import { useState, useRef, useEffect } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { api } from '../hooks/api';
+import { MessageMarkdown } from './MessageMarkdown';
+import { ChatNav } from './ChatNav';
 
 interface ChatProps {
   conversationId: string | null;
@@ -10,7 +10,7 @@ interface ChatProps {
 }
 
 interface PendingSave {
-  type: "journal" | "calendar";
+  type: 'journal' | 'calendar';
   messageId: string;
   data: {
     title: string;
@@ -29,11 +29,7 @@ interface PendingQuiz {
 
 interface ClassifyResult {
   intent:
-    | "journal"
-    | "calendar"
-    | "flashcard_request"
-    | "question"
-    | "conversation";
+    'journal' | 'calendar' | 'flashcard_request' | 'question' | 'conversation';
   confidence: number;
   journalEntry?: { title: string; content: string; tags: string[] };
   calendarEvent?: {
@@ -47,8 +43,8 @@ interface ClassifyResult {
 }
 
 export function Chat({ conversationId, onConversationChange }: ChatProps) {
-  const [input, setInput] = useState("");
-  const [streamingContent, setStreamingContent] = useState("");
+  const [input, setInput] = useState('');
+  const [streamingContent, setStreamingContent] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
@@ -58,20 +54,20 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
   const queryClient = useQueryClient();
 
   const { data: conversation } = useQuery({
-    queryKey: ["chat", "conversation", conversationId],
+    queryKey: ['chat', 'conversation', conversationId],
     queryFn: () => api.chat.getConversation(conversationId!),
     enabled: !!conversationId,
   });
 
   const { data: settings } = useQuery({
-    queryKey: ["settings"],
+    queryKey: ['settings'],
     queryFn: api.settings.get,
   });
 
   const createConversation = useMutation({
     mutationFn: api.chat.createConversation,
-    onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ["chat", "conversations"] });
+    onSuccess: data => {
+      queryClient.invalidateQueries({ queryKey: ['chat', 'conversations'] });
       onConversationChange(data.id);
     },
   });
@@ -88,7 +84,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
     }) => api.chat.addMessage(convId, { role, content }),
     onSuccess: (_, vars) =>
       queryClient.invalidateQueries({
-        queryKey: ["chat", "conversation", vars.convId],
+        queryKey: ['chat', 'conversation', vars.convId],
       }),
   });
 
@@ -100,9 +96,9 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
     mutationFn: api.chat.saveJournal,
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({
-        queryKey: ["chat", "conversation", vars.conversationId],
+        queryKey: ['chat', 'conversation', vars.conversationId],
       });
-      queryClient.invalidateQueries({ queryKey: ["journal"] });
+      queryClient.invalidateQueries({ queryKey: ['journal'] });
       setPendingSave(null);
     },
   });
@@ -111,19 +107,19 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
     mutationFn: api.chat.saveCalendar,
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({
-        queryKey: ["chat", "conversation", vars.conversationId],
+        queryKey: ['chat', 'conversation', vars.conversationId],
       });
-      queryClient.invalidateQueries({ queryKey: ["calendar"] });
+      queryClient.invalidateQueries({ queryKey: ['calendar'] });
       setPendingSave(null);
     },
   });
 
   const generateForTopic = useMutation({
     mutationFn: (topic: string) => api.learning.generateForTopic(topic),
-    onSuccess: (result) => {
+    onSuccess: result => {
       setQueuedCards(result.count);
       setPendingQuiz(null);
-      queryClient.invalidateQueries({ queryKey: ["learning"] });
+      queryClient.invalidateQueries({ queryKey: ['learning'] });
       setTimeout(() => setQueuedCards(null), 8000);
     },
   });
@@ -131,14 +127,14 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
   const messages = conversation?.messages || [];
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingContent, pendingSave, pendingQuiz, queuedCards]);
 
   const sendMessage = async () => {
     if (!input.trim() || isStreaming) return;
 
     const userMessage = input.trim();
-    setInput("");
+    setInput('');
 
     let convId = conversationId;
 
@@ -151,17 +147,17 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
 
     const userMsgResult = await addMessage.mutateAsync({
       convId,
-      role: "user",
+      role: 'user',
       content: userMessage,
     });
 
     classifyMessage.mutate(userMessage, {
-      onSuccess: (result) => {
+      onSuccess: result => {
         const r = result as ClassifyResult;
         if (r.confidence >= 0.7) {
-          if (r.intent === "journal" && r.journalEntry) {
+          if (r.intent === 'journal' && r.journalEntry) {
             setPendingSave({
-              type: "journal",
+              type: 'journal',
               messageId: userMsgResult.id,
               data: {
                 title: r.journalEntry.title,
@@ -169,9 +165,9 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
                 tags: r.journalEntry.tags,
               },
             });
-          } else if (r.intent === "calendar" && r.calendarEvent) {
+          } else if (r.intent === 'calendar' && r.calendarEvent) {
             setPendingSave({
-              type: "calendar",
+              type: 'calendar',
               messageId: userMsgResult.id,
               data: {
                 title: r.calendarEvent.title,
@@ -181,7 +177,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
                 tags: r.calendarEvent.tags,
               },
             });
-          } else if (r.intent === "flashcard_request" && r.flashcardRequest) {
+          } else if (r.intent === 'flashcard_request' && r.flashcardRequest) {
             setPendingQuiz({
               topic: r.flashcardRequest.topic,
               messageId: userMsgResult.id,
@@ -192,12 +188,12 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
     });
 
     const chatMessages = [
-      ...messages.map((m) => ({ role: m.role, content: m.content })),
-      { role: "user" as const, content: userMessage },
+      ...messages.map(m => ({ role: m.role, content: m.content })),
+      { role: 'user' as const, content: userMessage },
     ];
 
     setIsStreaming(true);
-    setStreamingContent("");
+    setStreamingContent('');
     setRagContextUsed(0);
 
     try {
@@ -212,33 +208,33 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
         // RAG is optional
       }
 
-      const response = await fetch("/api/chat/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
+      const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ messages: chatMessages, ragContext }),
       });
 
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || "Failed to get response");
+        throw new Error(error.error || 'Failed to get response');
       }
 
       const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response body");
+      if (!reader) throw new Error('No response body');
 
       const decoder = new TextDecoder();
-      let fullContent = "";
+      let fullContent = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const lines = decoder.decode(value).split("\n");
+        const lines = decoder.decode(value).split('\n');
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
+          if (line.startsWith('data: ')) {
             const data = line.slice(6);
-            if (data === "[DONE]") continue;
+            if (data === '[DONE]') continue;
             try {
               const parsed = JSON.parse(data);
               if (parsed.content) {
@@ -255,27 +251,27 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
 
       await addMessage.mutateAsync({
         convId: convId!,
-        role: "assistant",
+        role: 'assistant',
         content: fullContent,
       });
     } catch (error) {
       setStreamingContent(
-        `Error: ${error instanceof Error ? error.message : "Failed to get response"}`,
+        `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`
       );
     } finally {
       setIsStreaming(false);
-      setStreamingContent("");
+      setStreamingContent('');
     }
   };
 
   const handleSave = () => {
     if (!pendingSave || !conversationId) return;
-    if (pendingSave.type === "journal") {
+    if (pendingSave.type === 'journal') {
       saveJournal.mutate({
         conversationId,
         messageId: pendingSave.messageId,
         title: pendingSave.data.title,
-        content: pendingSave.data.content || "",
+        content: pendingSave.data.content || '',
         tags: pendingSave.data.tags,
       });
     } else {
@@ -283,8 +279,8 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
         conversationId,
         messageId: pendingSave.messageId,
         title: pendingSave.data.title,
-        description: pendingSave.data.description || "",
-        date: pendingSave.data.date || new Date().toISOString().split("T")[0],
+        description: pendingSave.data.description || '',
+        date: pendingSave.data.date || new Date().toISOString().split('T')[0],
         time: pendingSave.data.time,
         tags: pendingSave.data.tags,
       });
@@ -292,7 +288,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendMessage();
     }
@@ -326,7 +322,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
               </p>
             </div>
           )}
-          {messages.map((message) => {
+          {messages.map(message => {
             const metadata = message.metadata
               ? JSON.parse(message.metadata)
               : null;
@@ -335,13 +331,13 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
             return (
               <div
                 key={message.id}
-                className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
               >
                 <div className="max-w-[80%]">
                   <div
-                    className={`rounded-lg px-4 py-2 ${message.role === "user" ? "bg-[var(--color-primary)] text-white" : "bg-[var(--color-surface)] text-[var(--color-text)]"}`}
+                    className={`rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-surface)] text-[var(--color-text)]'}`}
                   >
-                    {message.role === "user" ? (
+                    {message.role === 'user' ? (
                       <div className="whitespace-pre-wrap">
                         {message.content}
                       </div>
@@ -352,8 +348,8 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
                   {hasSaved && (
                     <div className="mt-1 text-xs text-[var(--color-text-muted)] text-right">
                       {metadata.savedAsJournal
-                        ? "Saved to journal"
-                        : "Saved to calendar"}
+                        ? 'Saved to journal'
+                        : 'Saved to calendar'}
                     </div>
                   )}
                 </div>
@@ -366,7 +362,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
                 {ragContextUsed > 0 && (
                   <div className="text-xs text-[var(--color-text-muted)] mb-1 flex items-center gap-1">
                     <span className="inline-block w-2 h-2 bg-green-500 rounded-full"></span>
-                    Using {ragContextUsed} source{ragContextUsed > 1 ? "s" : ""}{" "}
+                    Using {ragContextUsed} source{ragContextUsed > 1 ? 's' : ''}{' '}
                     from your knowledge base
                   </div>
                 )}
@@ -380,8 +376,8 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
             <div className="flex justify-start">
               <div className="bg-[var(--color-surface)] rounded-lg px-4 py-2 text-[var(--color-text-muted)]">
                 {ragContextUsed > 0
-                  ? "Searching knowledge base..."
-                  : "Thinking..."}
+                  ? 'Searching knowledge base...'
+                  : 'Thinking...'}
               </div>
             </div>
           )}
@@ -422,7 +418,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
                   disabled={generateForTopic.isPending}
                   className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
                 >
-                  {generateForTopic.isPending ? "Generating..." : "Queue Cards"}
+                  {generateForTopic.isPending ? 'Generating...' : 'Queue Cards'}
                 </button>
               </div>
             </div>
@@ -434,19 +430,19 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
             <div className="flex items-start gap-3">
               <div className="flex-1">
                 <div className="text-sm font-medium text-[var(--color-text)]">
-                  {pendingSave.type === "journal"
-                    ? "Save as journal entry?"
-                    : "Save as calendar event?"}
+                  {pendingSave.type === 'journal'
+                    ? 'Save as journal entry?'
+                    : 'Save as calendar event?'}
                 </div>
                 <div className="text-sm text-[var(--color-text-muted)] mt-1">
                   <span className="font-medium">{pendingSave.data.title}</span>
-                  {pendingSave.type === "calendar" && pendingSave.data.date && (
+                  {pendingSave.type === 'calendar' && pendingSave.data.date && (
                     <span className="ml-2">({pendingSave.data.date})</span>
                   )}
                 </div>
                 {pendingSave.data.tags.length > 0 && (
                   <div className="flex gap-1 mt-2">
-                    {pendingSave.data.tags.map((tag) => (
+                    {pendingSave.data.tags.map(tag => (
                       <span
                         key={tag}
                         className="px-2 py-0.5 text-xs bg-white/10 rounded text-[var(--color-text-muted)]"
@@ -470,7 +466,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
                   disabled={isSaving}
                   className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
                 >
-                  {isSaving ? "Saving..." : "Save"}
+                  {isSaving ? 'Saving...' : 'Save'}
                 </button>
               </div>
             </div>
@@ -481,12 +477,12 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
           <div className="flex gap-2">
             <textarea
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={e => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={
                 isConfigured
-                  ? "Type a message..."
-                  : "Configure AI provider first..."
+                  ? 'Type a message...'
+                  : 'Configure AI provider first...'
               }
               disabled={!isConfigured || isStreaming}
               rows={1}

@@ -15,16 +15,25 @@ export function Tasks() {
     queryFn: api.tasks.list,
   });
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['tasks'] });
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['tasks'] });
 
   const createTask = useMutation({
     mutationFn: (title: string) => api.tasks.create(title),
-    onSuccess: () => { invalidate(); setNewTitle(''); setShowAdd(false); },
+    onSuccess: () => {
+      invalidate();
+      setNewTitle('');
+      setShowAdd(false);
+    },
   });
 
   const updateTask = useMutation({
-    mutationFn: ({ id, title }: { id: string; title: string }) => api.tasks.update(id, title),
-    onSuccess: () => { invalidate(); setEditingId(null); },
+    mutationFn: ({ id, title }: { id: string; title: string }) =>
+      api.tasks.update(id, title),
+    onSuccess: () => {
+      invalidate();
+      setEditingId(null);
+    },
   });
 
   const reorderTasks = useMutation({
@@ -50,7 +59,7 @@ export function Tasks() {
     const target = index + direction;
     if (target < 0 || target >= swapped.length) return;
     [swapped[index], swapped[target]] = [swapped[target], swapped[index]];
-    reorderTasks.mutate(swapped.map((t) => t.id));
+    reorderTasks.mutate(swapped.map(t => t.id));
   };
 
   const startEdit = (task: DailyTask) => {
@@ -69,7 +78,9 @@ export function Tasks() {
     <div className="flex-1 overflow-y-auto p-6">
       <div className="max-w-xl mx-auto">
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-[var(--color-text)]">Daily Tasks</h2>
+          <h2 className="text-xl font-semibold text-[var(--color-text)]">
+            Daily Tasks
+          </h2>
           {tasks.length < 4 && !showAdd && (
             <button
               onClick={() => setShowAdd(true)}
@@ -99,7 +110,9 @@ export function Tasks() {
               </span>
 
               <button
-                onClick={() => toggleComplete.mutate({ id: task.id, done: task.done })}
+                onClick={() =>
+                  toggleComplete.mutate({ id: task.id, done: task.done })
+                }
                 className={`w-5 h-5 rounded border shrink-0 flex items-center justify-center transition-colors ${
                   task.done
                     ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
@@ -114,9 +127,9 @@ export function Tasks() {
                   <input
                     autoFocus
                     value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
+                    onChange={e => setEditTitle(e.target.value)}
                     onBlur={saveEdit}
-                    onKeyDown={(e) => {
+                    onKeyDown={e => {
                       if (e.key === 'Enter') saveEdit();
                       if (e.key === 'Escape') setEditingId(null);
                     }}
@@ -176,23 +189,32 @@ export function Tasks() {
             <input
               autoFocus
               value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newTitle.trim()) createTask.mutate(newTitle.trim());
-                if (e.key === 'Escape') { setShowAdd(false); setNewTitle(''); }
+              onChange={e => setNewTitle(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && newTitle.trim())
+                  createTask.mutate(newTitle.trim());
+                if (e.key === 'Escape') {
+                  setShowAdd(false);
+                  setNewTitle('');
+                }
               }}
               placeholder="Task title…"
               className="flex-1 bg-[var(--color-surface)] border border-white/20 rounded px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]"
             />
             <button
-              onClick={() => { if (newTitle.trim()) createTask.mutate(newTitle.trim()); }}
+              onClick={() => {
+                if (newTitle.trim()) createTask.mutate(newTitle.trim());
+              }}
               disabled={!newTitle.trim() || createTask.isPending}
               className="px-3 py-2 rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/30 disabled:opacity-40 transition-colors text-sm"
             >
               Add
             </button>
             <button
-              onClick={() => { setShowAdd(false); setNewTitle(''); }}
+              onClick={() => {
+                setShowAdd(false);
+                setNewTitle('');
+              }}
               className="px-3 py-2 rounded text-[var(--color-text-muted)] hover:bg-white/10 transition-colors text-sm"
             >
               Cancel
@@ -218,17 +240,30 @@ function TodoSection() {
     queryFn: api.todos.list,
   });
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['todos'] });
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['todos'] });
 
   const createTodo = useMutation({
     mutationFn: (title: string) => api.todos.create(title),
-    onSuccess: () => { invalidate(); setNewTitle(''); },
+    onSuccess: () => {
+      invalidate();
+      setNewTitle('');
+    },
   });
 
   const updateTodo = useMutation({
-    mutationFn: ({ id, ...data }: { id: string; title?: string; done?: boolean }) =>
-      api.todos.update(id, data),
-    onSuccess: () => { invalidate(); setEditingId(null); },
+    mutationFn: ({
+      id,
+      ...data
+    }: {
+      id: string;
+      title?: string;
+      done?: boolean;
+    }) => api.todos.update(id, data),
+    onSuccess: () => {
+      invalidate();
+      setEditingId(null);
+    },
   });
 
   const deleteTodo = useMutation({
@@ -275,9 +310,9 @@ function TodoSection() {
           <input
             autoFocus
             value={editTitle}
-            onChange={(e) => setEditTitle(e.target.value)}
+            onChange={e => setEditTitle(e.target.value)}
             onBlur={saveEdit}
-            onKeyDown={(e) => {
+            onKeyDown={e => {
               if (e.key === 'Enter') saveEdit();
               if (e.key === 'Escape') setEditingId(null);
             }}
@@ -315,7 +350,9 @@ function TodoSection() {
 
   return (
     <div className="mt-10">
-      <h2 className="text-xl font-semibold text-[var(--color-text)] mb-6">To-Do</h2>
+      <h2 className="text-xl font-semibold text-[var(--color-text)] mb-6">
+        To-Do
+      </h2>
 
       {isLoading && (
         <div className="text-[var(--color-text-muted)] text-sm">Loading…</div>
@@ -336,16 +373,19 @@ function TodoSection() {
       <div className="mt-3 flex gap-2">
         <input
           value={newTitle}
-          onChange={(e) => setNewTitle(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && newTitle.trim()) createTodo.mutate(newTitle.trim());
+          onChange={e => setNewTitle(e.target.value)}
+          onKeyDown={e => {
+            if (e.key === 'Enter' && newTitle.trim())
+              createTodo.mutate(newTitle.trim());
             if (e.key === 'Escape') setNewTitle('');
           }}
           placeholder="Add a to-do…"
           className="flex-1 bg-[var(--color-surface)] border border-white/20 rounded px-3 py-2 text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] outline-none focus:border-[var(--color-primary)]"
         />
         <button
-          onClick={() => { if (newTitle.trim()) createTodo.mutate(newTitle.trim()); }}
+          onClick={() => {
+            if (newTitle.trim()) createTodo.mutate(newTitle.trim());
+          }}
           disabled={!newTitle.trim() || createTodo.isPending}
           className="px-3 py-2 rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/30 disabled:opacity-40 transition-colors text-sm"
         >
@@ -356,7 +396,7 @@ function TodoSection() {
       {completed.length > 0 && (
         <div className="mt-6">
           <button
-            onClick={() => setShowCompleted((v) => !v)}
+            onClick={() => setShowCompleted(v => !v)}
             className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           >
             {showCompleted

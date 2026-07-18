@@ -21,8 +21,22 @@ vi.mock('../../hooks/api', () => ({
         id: 'd1',
         title: 'Plot talk',
         messages: [
-          { id: 'm1', conversationId: 'd1', role: 'user', content: 'What if?', metadata: null, createdAt: '' },
-          { id: 'm2', conversationId: 'd1', role: 'assistant', content: 'Then this.', metadata: null, createdAt: '' },
+          {
+            id: 'm1',
+            conversationId: 'd1',
+            role: 'user',
+            content: 'What if?',
+            metadata: null,
+            createdAt: '',
+          },
+          {
+            id: 'm2',
+            conversationId: 'd1',
+            role: 'assistant',
+            content: 'Then this.',
+            metadata: null,
+            createdAt: '',
+          },
         ],
       }),
       updateTitle: vi.fn(),
@@ -33,7 +47,11 @@ vi.mock('../../hooks/api', () => ({
 }));
 
 const project: WritingProject = {
-  id: 'p1', title: 'My Story', description: null, createdAt: '', updatedAt: '',
+  id: 'p1',
+  title: 'My Story',
+  description: null,
+  createdAt: '',
+  updatedAt: '',
 };
 
 beforeEach(() => {
@@ -41,13 +59,15 @@ beforeEach(() => {
 });
 
 function renderWithProviders(children: ReactNode) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="writing" onViewChange={() => {}}>
         {children}
       </ShortcutProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
@@ -57,10 +77,25 @@ describe('assistant markdown rendering', () => {
       id: 'd3',
       title: 'Markdown talk',
       messages: [
-        { id: 'm1', conversationId: 'd3', role: 'user', content: 'use **plain** please', metadata: null, createdAt: '' },
-        { id: 'm2', conversationId: 'd3', role: 'assistant', content: 'A **bold** idea', metadata: null, createdAt: '' },
+        {
+          id: 'm1',
+          conversationId: 'd3',
+          role: 'user',
+          content: 'use **plain** please',
+          metadata: null,
+          createdAt: '',
+        },
+        {
+          id: 'm2',
+          conversationId: 'd3',
+          role: 'assistant',
+          content: 'A **bold** idea',
+          metadata: null,
+          createdAt: '',
+        },
       ],
-      createdAt: '', updatedAt: '',
+      createdAt: '',
+      updatedAt: '',
     });
     renderWithProviders(<DiscussionView project={project} discussionId="d3" />);
 
@@ -74,10 +109,22 @@ describe('assistant markdown rendering', () => {
 describe('discussion summarize', () => {
   it('saves a summary note and offers to open it', async () => {
     vi.mocked(api.writing.summarizeDiscussion).mockResolvedValue({
-      id: 'n9', projectId: 'p1', title: 'Villain twist decision', content: '- twist', docType: 'note', createdAt: '', updatedAt: '',
+      id: 'n9',
+      projectId: 'p1',
+      title: 'Villain twist decision',
+      content: '- twist',
+      docType: 'note',
+      createdAt: '',
+      updatedAt: '',
     });
     const onNoteCreated = vi.fn();
-    renderWithProviders(<DiscussionView project={project} discussionId="d1" onNoteCreated={onNoteCreated} />);
+    renderWithProviders(
+      <DiscussionView
+        project={project}
+        discussionId="d1"
+        onNoteCreated={onNoteCreated}
+      />
+    );
 
     await screen.findByText('What if?'); // wait for the transcript so the button enables
     fireEvent.click(screen.getByText('Summarize'));
@@ -90,19 +137,27 @@ describe('discussion summarize', () => {
   });
 
   it('shows the server error when summarization fails', async () => {
-    vi.mocked(api.writing.summarizeDiscussion).mockRejectedValue(new Error('AI provider not configured'));
+    vi.mocked(api.writing.summarizeDiscussion).mockRejectedValue(
+      new Error('AI provider not configured')
+    );
     renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
 
     await screen.findByText('What if?');
     fireEvent.click(screen.getByText('Summarize'));
 
-    expect(await screen.findByText('AI provider not configured')).not.toBeNull();
+    expect(
+      await screen.findByText('AI provider not configured')
+    ).not.toBeNull();
     expect(screen.queryByText(/Summary saved to Notes/)).toBeNull();
   });
 
   it('disables the button while the discussion has no messages', async () => {
     vi.mocked(api.chat.getConversation).mockResolvedValueOnce({
-      id: 'd2', title: 'Empty', messages: [], createdAt: '', updatedAt: '',
+      id: 'd2',
+      title: 'Empty',
+      messages: [],
+      createdAt: '',
+      updatedAt: '',
     });
     renderWithProviders(<DiscussionView project={project} discussionId="d2" />);
 

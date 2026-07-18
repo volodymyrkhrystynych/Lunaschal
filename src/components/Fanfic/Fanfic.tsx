@@ -32,5 +32,5 @@ export function Fanfic({ target, onTargetConsumed }: FanficProps) {
       />
     );
   }
-  return <Library onOpen={(ficId) => setOpenFic({ ficId })} />;
+  return <Library onOpen={ficId => setOpenFic({ ficId })} />;
 }

@@ -21,17 +21,28 @@ export function CuratedTagsSection() {
     return () => clearInterval(id);
   }, [tags, refetch]);
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['curatedTags'] });
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['curatedTags'] });
 
   const createTag = useMutation({
     mutationFn: (name: string) => api.curatedTags.create(name),
-    onSuccess: () => { setNewTagName(''); setError(null); invalidate(); },
+    onSuccess: () => {
+      setNewTagName('');
+      setError(null);
+      invalidate();
+    },
     onError: (e: Error) => setError(e.message),
   });
 
   const renameTag = useMutation({
-    mutationFn: ({ id, name }: { id: string; name: string }) => api.curatedTags.rename(id, name),
-    onSuccess: () => { setEditingId(null); setEditingName(''); setError(null); invalidate(); },
+    mutationFn: ({ id, name }: { id: string; name: string }) =>
+      api.curatedTags.rename(id, name),
+    onSuccess: () => {
+      setEditingId(null);
+      setEditingName('');
+      setError(null);
+      invalidate();
+    },
     onError: (e: Error) => setError(e.message),
   });
 
@@ -47,9 +58,13 @@ export function CuratedTagsSection() {
 
   return (
     <section className="mb-8">
-      <h2 className="text-lg font-medium text-[var(--color-text)] mb-2">Curated Tags</h2>
+      <h2 className="text-lg font-medium text-[var(--color-text)] mb-2">
+        Curated Tags
+      </h2>
       <p className="text-sm text-[var(--color-text-muted)] mb-4">
-        Tags you define here appear as filter buttons in the Journal. When you add a tag, the AI scans all existing entries and applies it automatically.
+        Tags you define here appear as filter buttons in the Journal. When you
+        add a tag, the AI scans all existing entries and applies it
+        automatically.
       </p>
 
       <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 mb-4">
@@ -57,8 +72,13 @@ export function CuratedTagsSection() {
           <input
             type="text"
             value={newTagName}
-            onChange={(e) => { setNewTagName(e.target.value); setError(null); }}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
+            onChange={e => {
+              setNewTagName(e.target.value);
+              setError(null);
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleAdd();
+            }}
             placeholder="New tag name..."
             className="flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
           />
@@ -76,28 +96,43 @@ export function CuratedTagsSection() {
       {tags && tags.length > 0 ? (
         <div className="space-y-2">
           {tags.map(tag => (
-            <div key={tag.id} className="flex items-center gap-3 p-3 bg-[var(--color-surface)] rounded-lg border border-white/10">
+            <div
+              key={tag.id}
+              className="flex items-center gap-3 p-3 bg-[var(--color-surface)] rounded-lg border border-white/10"
+            >
               {editingId === tag.id ? (
                 <>
                   <input
                     autoFocus
                     value={editingName}
-                    onChange={(e) => setEditingName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') renameTag.mutate({ id: tag.id, name: editingName.trim() });
-                      if (e.key === 'Escape') { setEditingId(null); setError(null); }
+                    onChange={e => setEditingName(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter')
+                        renameTag.mutate({
+                          id: tag.id,
+                          name: editingName.trim(),
+                        });
+                      if (e.key === 'Escape') {
+                        setEditingId(null);
+                        setError(null);
+                      }
                     }}
                     className="flex-1 bg-transparent text-[var(--color-text)] border border-white/10 rounded px-2 py-1 focus:outline-none focus:border-[var(--color-primary)]"
                   />
                   <button
-                    onClick={() => renameTag.mutate({ id: tag.id, name: editingName.trim() })}
+                    onClick={() =>
+                      renameTag.mutate({ id: tag.id, name: editingName.trim() })
+                    }
                     disabled={renameTag.isPending || !editingName.trim()}
                     className="text-sm text-[var(--color-primary)] hover:text-[var(--color-primary)]/80 disabled:opacity-50"
                   >
                     Save
                   </button>
                   <button
-                    onClick={() => { setEditingId(null); setError(null); }}
+                    onClick={() => {
+                      setEditingId(null);
+                      setError(null);
+                    }}
                     className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                   >
                     Cancel
@@ -105,14 +140,20 @@ export function CuratedTagsSection() {
                 </>
               ) : (
                 <>
-                  <span className="flex-1 text-[var(--color-text)] font-medium">#{tag.name}</span>
+                  <span className="flex-1 text-[var(--color-text)] font-medium">
+                    #{tag.name}
+                  </span>
                   <span className="text-xs text-[var(--color-text-muted)]">
                     {tag.scanProgress && !tag.scanProgress.done
                       ? `Scanning: ${tag.scanProgress.processed} / ${tag.scanProgress.total}`
                       : `${tag.entryCount} ${tag.entryCount === 1 ? 'entry' : 'entries'}`}
                   </span>
                   <button
-                    onClick={() => { setEditingId(tag.id); setEditingName(tag.name); setError(null); }}
+                    onClick={() => {
+                      setEditingId(tag.id);
+                      setEditingName(tag.name);
+                      setError(null);
+                    }}
                     className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                   >
                     Rename

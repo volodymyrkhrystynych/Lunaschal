@@ -3,8 +3,10 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import {
-  CHAPTER_FONT_SIZE_DEFAULT, CHAPTER_FONT_SIZE_STEP,
-  getStoredChapterFontSize, setStoredChapterFontSize,
+  CHAPTER_FONT_SIZE_DEFAULT,
+  CHAPTER_FONT_SIZE_STEP,
+  getStoredChapterFontSize,
+  setStoredChapterFontSize,
 } from '../../lib/fontSize';
 
 interface Props {
@@ -21,13 +23,15 @@ export function ChapterEditor({ chapterId }: Props) {
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('');
   const [editingTitle, setEditingTitle] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>(
+    'saved'
+  );
   const [fontSize, setFontSize] = useState(getStoredChapterFontSize);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedChapterRef = useRef<string | null>(null);
 
   const adjustFontSize = (delta: number) => {
-    setFontSize((px) => setStoredChapterFontSize(px + delta));
+    setFontSize(px => setStoredChapterFontSize(px + delta));
   };
 
   useShortcutScope(1, {
@@ -57,7 +61,9 @@ export function ChapterEditor({ chapterId }: Props) {
   }, [chapter, chapterId]);
 
   useEffect(() => {
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
   }, []);
 
   const handleContentChange = (value: string) => {
@@ -79,12 +85,24 @@ export function ChapterEditor({ chapterId }: Props) {
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">Loading…</div>
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
+        Loading…
+      </div>
     );
   }
 
-  const statusLabel = saveStatus === 'saved' ? 'Saved' : saveStatus === 'saving' ? 'Saving…' : 'Unsaved';
-  const statusColor = saveStatus === 'saved' ? 'text-green-500' : saveStatus === 'saving' ? 'text-yellow-400' : 'text-[var(--color-text-muted)]';
+  const statusLabel =
+    saveStatus === 'saved'
+      ? 'Saved'
+      : saveStatus === 'saving'
+        ? 'Saving…'
+        : 'Unsaved';
+  const statusColor =
+    saveStatus === 'saved'
+      ? 'text-green-500'
+      : saveStatus === 'saving'
+        ? 'text-yellow-400'
+        : 'text-[var(--color-text-muted)]';
   const wordCount = countWords(content);
 
   return (
@@ -96,7 +114,13 @@ export function ChapterEditor({ chapterId }: Props) {
             value={title}
             onChange={e => setTitle(e.target.value)}
             onBlur={handleTitleSave}
-            onKeyDown={e => { if (e.key === 'Enter') handleTitleSave(); if (e.key === 'Escape') { setTitle(chapter?.title ?? ''); setEditingTitle(false); } }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleTitleSave();
+              if (e.key === 'Escape') {
+                setTitle(chapter?.title ?? '');
+                setEditingTitle(false);
+              }
+            }}
             className="flex-1 bg-transparent text-sm font-medium text-[var(--color-text)] border-b border-[var(--color-primary)] focus:outline-none"
           />
         ) : (
@@ -110,7 +134,9 @@ export function ChapterEditor({ chapterId }: Props) {
         )}
         <div className="flex items-center gap-3 shrink-0 text-xs text-[var(--color-text-muted)]">
           {fontSize !== CHAPTER_FONT_SIZE_DEFAULT && <span>{fontSize}px</span>}
-          <span>{wordCount.toLocaleString()} {wordCount === 1 ? 'word' : 'words'}</span>
+          <span>
+            {wordCount.toLocaleString()} {wordCount === 1 ? 'word' : 'words'}
+          </span>
           <span className={statusColor}>{statusLabel}</span>
         </div>
       </div>

@@ -18,15 +18,15 @@ A self-hosted personal knowledge management desktop app with local AI. Journal, 
 
 ## Stack
 
-| Layer | Tech |
-|---|---|
-| Desktop shell | PyWebView |
-| Frontend | React 19, Vite, Tailwind CSS v4 |
-| Backend | Flask (Python) |
-| API layer | REST (JSON over HTTP) + React Query |
-| Database | SQLite (`sqlite3` built-in, FTS5, sqlite-vec) |
-| AI / LLM | `openai`, `google-generativeai`, `ollama` Python SDKs |
-| STT/TTS | faster-whisper + kokoro-onnx (local) or OpenAI API |
+| Layer         | Tech                                                  |
+| ------------- | ----------------------------------------------------- |
+| Desktop shell | PyWebView                                             |
+| Frontend      | React 19, Vite, Tailwind CSS v4                       |
+| Backend       | Flask (Python)                                        |
+| API layer     | REST (JSON over HTTP) + React Query                   |
+| Database      | SQLite (`sqlite3` built-in, FTS5, sqlite-vec)         |
+| AI / LLM      | `openai`, `google-generativeai`, `ollama` Python SDKs |
+| STT/TTS       | faster-whisper + kokoro-onnx (local) or OpenAI API    |
 
 ## Getting Started
 
@@ -77,11 +77,11 @@ Flask serves the built `dist/` from `http://127.0.0.1:5000` and PyWebView opens 
 
 Configure your provider in the Settings page. The active provider and model are stored in the database and can be changed at any time.
 
-| Provider | Env var (fallback) | Notes |
-|---|---|---|
-| OpenAI | `OPENAI_API_KEY` | Also used by STT/TTS when `STT_BACKEND=openai` |
-| Google Gemini | `GOOGLE_API_KEY` | — |
-| Ollama | — (set URL in Settings) | No embeddings support yet |
+| Provider      | Env var (fallback)      | Notes                                          |
+| ------------- | ----------------------- | ---------------------------------------------- |
+| OpenAI        | `OPENAI_API_KEY`        | Also used by STT/TTS when `STT_BACKEND=openai` |
+| Google Gemini | `GOOGLE_API_KEY`        | —                                              |
+| Ollama        | — (set URL in Settings) | No embeddings support yet                      |
 
 > RAG (vector embeddings) requires OpenAI or Gemini. Ollama embeddings are not yet supported.
 
@@ -89,19 +89,21 @@ Configure your provider in the Settings page. The active provider and model are 
 
 A Python sidecar on port 8765 handles speech-to-text and text-to-speech. Two backends are available:
 
-| Backend | Best for | What gets installed |
-|---------|----------|---------------------|
-| `local` | GPU machine, fully offline | faster-whisper (~1.5 GB), kokoro-onnx (~80 MB), openwakeword |
-| `openai` | Low-power/laptop, cloud | openai Python client only |
+| Backend  | Best for                   | What gets installed                                          |
+| -------- | -------------------------- | ------------------------------------------------------------ |
+| `local`  | GPU machine, fully offline | faster-whisper (~1.5 GB), kokoro-onnx (~80 MB), openwakeword |
+| `openai` | Low-power/laptop, cloud    | openai Python client only                                    |
 
 Backends can be mixed — e.g. `STT_BACKEND=openai TTS_BACKEND=local`.
 
 **System packages** (Arch Linux):
+
 ```bash
 sudo pacman -S wtype portaudio
 ```
 
 **Setup** (one time):
+
 ```bash
 # Local GPU setup
 bash stt/setup.sh
@@ -111,6 +113,7 @@ bash stt/setup.sh --api
 ```
 
 **Run:**
+
 ```bash
 # Terminal 1 — STT+TTS service
 ./stt/run_service.sh
@@ -123,6 +126,7 @@ npm run stt
 ```
 
 **Shortcuts:**
+
 - **F1** — record → transcribe → paste at cursor (system-wide)
 - **Right Alt** — record → AI chat → spoken reply (voice assistant)
 - **"Hey Luna"** — wake word → voice conversation (see below)
@@ -132,11 +136,13 @@ The in-app STT bar (always visible at the bottom of the window) records from the
 ### Wake Word ("Hey Luna")
 
 **One-time model generation** (~5–10 min):
+
 ```bash
 ./stt/.venv/bin/python stt/generate_wake_word.py
 ```
 
 This writes `stt/models/hey_luna.onnx`. Enable it:
+
 ```bash
 WAKE_WORD_MODEL=stt/models/hey_luna.onnx ./stt/run_listener.sh
 ```
@@ -158,6 +164,7 @@ When the computer wakes from sleep between 8 AM and 11 AM, the daemon starts a s
 The Files view browses files under `FILES_ROOT` (default: `~/notes`, created automatically). Files can be created, renamed, and soft-deleted (moved to `~/notes/.trash`). The editor auto-detects language from the file extension and auto-saves after 1.5 s of inactivity.
 
 Override the root:
+
 ```bash
 FILES_ROOT=/home/you/documents python main.py
 ```
@@ -167,6 +174,7 @@ FILES_ROOT=/home/you/documents python main.py
 Expose Lunaschal on your LAN so a laptop browser can connect.
 
 **On the server machine:**
+
 ```bash
 export NETWORK_MODE=1
 export LUNASCHAL_PASSWORD=your-password
@@ -177,6 +185,7 @@ python main.py
 **On the laptop:** navigate to `http://<server-ip>:5000`.
 
 The login form asks for:
+
 1. **Password** — the `LUNASCHAL_PASSWORD` env var set on the server
 2. **Display code** — the 6-digit code shown in Settings → Network Access on the server machine
 
@@ -192,32 +201,32 @@ SQLite stored at `./data/lunaschal.db` (override with `DATABASE_URL`). Schema mi
 
 **Flask backend:**
 
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `./data/lunaschal.db` | SQLite file path |
-| `JWT_SECRET` | dev default | Set in production to a random string |
-| `NETWORK_MODE` | — | Set to `1` to bind `0.0.0.0` and enforce auth |
-| `LUNASCHAL_PASSWORD` | — | Required when `NETWORK_MODE=1` |
-| `STT_SERVICE_URL` | `http://127.0.0.1:8765` | STT sidecar base URL |
-| `STT_AUTH_TOKEN` | — | Bearer token forwarded to the STT sidecar |
-| `FILES_ROOT` | `~/notes` | Root directory for the file editor |
-| `OPENAI_API_KEY` | — | Fallback if not set in Settings |
-| `GOOGLE_API_KEY` | — | Fallback if not set in Settings |
+| Variable             | Default                 | Description                                   |
+| -------------------- | ----------------------- | --------------------------------------------- |
+| `DATABASE_URL`       | `./data/lunaschal.db`   | SQLite file path                              |
+| `JWT_SECRET`         | dev default             | Set in production to a random string          |
+| `NETWORK_MODE`       | —                       | Set to `1` to bind `0.0.0.0` and enforce auth |
+| `LUNASCHAL_PASSWORD` | —                       | Required when `NETWORK_MODE=1`                |
+| `STT_SERVICE_URL`    | `http://127.0.0.1:8765` | STT sidecar base URL                          |
+| `STT_AUTH_TOKEN`     | —                       | Bearer token forwarded to the STT sidecar     |
+| `FILES_ROOT`         | `~/notes`               | Root directory for the file editor            |
+| `OPENAI_API_KEY`     | —                       | Fallback if not set in Settings               |
+| `GOOGLE_API_KEY`     | —                       | Fallback if not set in Settings               |
 
 **STT/TTS sidecar:**
 
-| Variable | Default | Description |
-|---|---|---|
-| `STT_BACKEND` | `local` | `local` or `openai` |
-| `TTS_BACKEND` | `local` | `local` or `openai` |
-| `OPENAI_API_KEY` | — | Required for openai backends |
-| `OPENAI_TTS_VOICE` | `nova` | alloy / echo / fable / onyx / nova / shimmer |
-| `WHISPER_MODEL` | `large-v3-turbo` | Local STT model |
-| `WHISPER_DEVICE` | `cuda` | `cuda` or `cpu` |
-| `WAKE_WORD_MODEL` | — | Path to `.onnx` wake word model; disabled if unset |
-| `WAKE_WORD_THRESHOLD` | `0.5` | Wake word detection confidence (0–1) |
-| `WAKE_SILENCE_RMS` | `0.015` | Silence energy threshold for auto-stop |
-| `WAKE_SILENCE_SECS` | `1.5` | Seconds of silence before recording stops |
-| `LUNASCHAL_URL` | `http://127.0.0.1:5000` | Chat server URL (used by listener) |
-| `MORNING_START_HOUR` | `8` | Morning check-in window start |
-| `MORNING_END_HOUR` | `11` | Morning check-in window end |
+| Variable              | Default                 | Description                                        |
+| --------------------- | ----------------------- | -------------------------------------------------- |
+| `STT_BACKEND`         | `local`                 | `local` or `openai`                                |
+| `TTS_BACKEND`         | `local`                 | `local` or `openai`                                |
+| `OPENAI_API_KEY`      | —                       | Required for openai backends                       |
+| `OPENAI_TTS_VOICE`    | `nova`                  | alloy / echo / fable / onyx / nova / shimmer       |
+| `WHISPER_MODEL`       | `large-v3-turbo`        | Local STT model                                    |
+| `WHISPER_DEVICE`      | `cuda`                  | `cuda` or `cpu`                                    |
+| `WAKE_WORD_MODEL`     | —                       | Path to `.onnx` wake word model; disabled if unset |
+| `WAKE_WORD_THRESHOLD` | `0.5`                   | Wake word detection confidence (0–1)               |
+| `WAKE_SILENCE_RMS`    | `0.015`                 | Silence energy threshold for auto-stop             |
+| `WAKE_SILENCE_SECS`   | `1.5`                   | Seconds of silence before recording stops          |
+| `LUNASCHAL_URL`       | `http://127.0.0.1:5000` | Chat server URL (used by listener)                 |
+| `MORNING_START_HOUR`  | `8`                     | Morning check-in window start                      |
+| `MORNING_END_HOUR`    | `11`                    | Morning check-in window end                        |

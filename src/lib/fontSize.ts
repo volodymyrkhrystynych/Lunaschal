@@ -42,7 +42,12 @@ export function setStoredFontSize(px: number): number {
 // independent of the base UI size so prose can be scaled with shortcuts
 // without touching the chrome. Also localStorage: a per-screen ergonomic
 // preference, like the base size.
-function createProseFontSizeStore(storageKey: string, min: number, max: number, defaultPx: number) {
+function createProseFontSizeStore(
+  storageKey: string,
+  min: number,
+  max: number,
+  defaultPx: number
+) {
   const clampProse = (px: number) => Math.min(max, Math.max(min, px));
   return {
     getStored(): number {
@@ -64,7 +69,10 @@ export const CHAPTER_FONT_SIZE_DEFAULT = 16;
 export const CHAPTER_FONT_SIZE_STEP = 1;
 
 const chapterFontSizeStore = createProseFontSizeStore(
-  'lunaschal:chapterFontSize', CHAPTER_FONT_SIZE_MIN, CHAPTER_FONT_SIZE_MAX, CHAPTER_FONT_SIZE_DEFAULT,
+  'lunaschal:chapterFontSize',
+  CHAPTER_FONT_SIZE_MIN,
+  CHAPTER_FONT_SIZE_MAX,
+  CHAPTER_FONT_SIZE_DEFAULT
 );
 export const getStoredChapterFontSize = chapterFontSizeStore.getStored;
 export const setStoredChapterFontSize = chapterFontSizeStore.setStored;
@@ -75,7 +83,10 @@ export const READING_FONT_SIZE_DEFAULT = 17; // matches .fanfic-prose's 1.05rem 
 export const READING_FONT_SIZE_STEP = 1;
 
 const readingFontSizeStore = createProseFontSizeStore(
-  'lunaschal:readingFontSize', READING_FONT_SIZE_MIN, READING_FONT_SIZE_MAX, READING_FONT_SIZE_DEFAULT,
+  'lunaschal:readingFontSize',
+  READING_FONT_SIZE_MIN,
+  READING_FONT_SIZE_MAX,
+  READING_FONT_SIZE_DEFAULT
 );
 export const getStoredReadingFontSize = readingFontSizeStore.getStored;
 export const setStoredReadingFontSize = readingFontSizeStore.setStored;

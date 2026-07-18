@@ -19,11 +19,25 @@ import { Meetings } from './components/Meetings';
 import { api } from './hooks/api';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 
-type View = 'chat' | 'journal' | 'meetings' | 'calendar' | 'learning' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic' | 'newspapers';
+type View =
+  | 'chat'
+  | 'journal'
+  | 'meetings'
+  | 'calendar'
+  | 'learning'
+  | 'settings'
+  | 'files'
+  | 'writing'
+  | 'tasks'
+  | 'cookbook'
+  | 'fanfic'
+  | 'newspapers';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [currentConversationId, setCurrentConversationId] = useState<
+    string | null
+  >(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [pendingInsert, setPendingInsert] = useState<string | null>(null);
   const [ficTarget, setFicTarget] = useState<FicTarget | null>(null);
@@ -52,15 +66,33 @@ export default function App() {
   }
 
   if (!authStatus?.authenticated) {
-    return <Login onSuccess={() => queryClient.invalidateQueries({ queryKey: ['auth', 'status'] })} />;
+    return (
+      <Login
+        onSuccess={() =>
+          queryClient.invalidateQueries({ queryKey: ['auth', 'status'] })
+        }
+      />
+    );
   }
 
   const renderView = () => {
     switch (currentView) {
       case 'chat':
-        return <Chat conversationId={currentConversationId} onConversationChange={setCurrentConversationId} />;
+        return (
+          <Chat
+            conversationId={currentConversationId}
+            onConversationChange={setCurrentConversationId}
+          />
+        );
       case 'journal':
-        return <Journal onOpenFic={(target) => { setFicTarget(target); setCurrentView('fanfic'); }} />;
+        return (
+          <Journal
+            onOpenFic={target => {
+              setFicTarget(target);
+              setCurrentView('fanfic');
+            }}
+          />
+        );
       case 'calendar':
         return <Calendar />;
       case 'learning':
@@ -68,7 +100,12 @@ export default function App() {
       case 'settings':
         return <Settings />;
       case 'files':
-        return <Editor pendingInsert={pendingInsert} onInsertDone={() => setPendingInsert(null)} />;
+        return (
+          <Editor
+            pendingInsert={pendingInsert}
+            onInsertDone={() => setPendingInsert(null)}
+          />
+        );
       case 'writing':
         return <Writing />;
       case 'tasks':
@@ -76,7 +113,12 @@ export default function App() {
       case 'cookbook':
         return <Cookbook />;
       case 'fanfic':
-        return <Fanfic target={ficTarget} onTargetConsumed={() => setFicTarget(null)} />;
+        return (
+          <Fanfic
+            target={ficTarget}
+            onTargetConsumed={() => setFicTarget(null)}
+          />
+        );
       case 'newspapers':
         return <Newspapers />;
       case 'meetings':
@@ -87,7 +129,11 @@ export default function App() {
   };
 
   return (
-    <ShortcutProvider currentView={currentView} onViewChange={setCurrentView} onToggleSidebar={() => setSidebarOpen((o) => !o)}>
+    <ShortcutProvider
+      currentView={currentView}
+      onViewChange={setCurrentView}
+      onToggleSidebar={() => setSidebarOpen(o => !o)}
+    >
       <div className="h-screen flex flex-col bg-[var(--color-bg)]">
         <div className="flex flex-1 overflow-hidden">
           <Sidebar
@@ -96,9 +142,14 @@ export default function App() {
             isOpen={sidebarOpen}
             onToggle={() => setSidebarOpen(!sidebarOpen)}
           />
-          <main className="flex-1 flex flex-col overflow-hidden">{renderView()}</main>
+          <main className="flex-1 flex flex-col overflow-hidden">
+            {renderView()}
+          </main>
         </div>
-        <SttPanel onTranscribed={handleTranscribed} onMeetingUploaded={() => setCurrentView('meetings')} />
+        <SttPanel
+          onTranscribed={handleTranscribed}
+          onMeetingUploaded={() => setCurrentView('meetings')}
+        />
       </div>
     </ShortcutProvider>
   );

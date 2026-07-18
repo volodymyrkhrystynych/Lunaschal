@@ -21,7 +21,12 @@ vi.mock('../../hooks/api', () => ({
 }));
 
 const folder = (id: string, name: string, position: number) => ({
-  id, name, position, ficCount: 0, createdAt: '', updatedAt: '',
+  id,
+  name,
+  position,
+  ficCount: 0,
+  createdAt: '',
+  updatedAt: '',
 });
 
 beforeEach(() => {
@@ -33,12 +38,17 @@ beforeEach(() => {
   ]);
 });
 
-function renderBar(folderId: string | null, onSelect: (id: string | null) => void = () => {}) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+function renderBar(
+  folderId: string | null,
+  onSelect: (id: string | null) => void = () => {}
+) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <FolderBar folderId={folderId} onSelect={onSelect} />
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
@@ -47,25 +57,43 @@ describe('FolderBar reordering', () => {
     renderBar('f2');
     fireEvent.click(await screen.findByTitle(/Move folder earlier/));
     await waitFor(() =>
-      expect(api.fanfic.folders.reorder).toHaveBeenCalledWith(['f2', 'f1', 'f3']));
+      expect(api.fanfic.folders.reorder).toHaveBeenCalledWith([
+        'f2',
+        'f1',
+        'f3',
+      ])
+    );
   });
 
   it('moves the active folder later with the full new order', async () => {
     renderBar('f2');
     fireEvent.click(await screen.findByTitle(/Move folder later/));
     await waitFor(() =>
-      expect(api.fanfic.folders.reorder).toHaveBeenCalledWith(['f1', 'f3', 'f2']));
+      expect(api.fanfic.folders.reorder).toHaveBeenCalledWith([
+        'f1',
+        'f3',
+        'f2',
+      ])
+    );
   });
 
   it('disables the edge buttons for the first and last folder', async () => {
     const { unmount } = renderBar('f1');
-    expect((await screen.findByTitle(/Move folder earlier/)).hasAttribute('disabled')).toBe(true);
-    expect((await screen.findByTitle(/Move folder later/)).hasAttribute('disabled')).toBe(false);
+    expect(
+      (await screen.findByTitle(/Move folder earlier/)).hasAttribute('disabled')
+    ).toBe(true);
+    expect(
+      (await screen.findByTitle(/Move folder later/)).hasAttribute('disabled')
+    ).toBe(false);
     unmount();
 
     renderBar('f3');
-    expect((await screen.findByTitle(/Move folder later/)).hasAttribute('disabled')).toBe(true);
-    expect((await screen.findByTitle(/Move folder earlier/)).hasAttribute('disabled')).toBe(false);
+    expect(
+      (await screen.findByTitle(/Move folder later/)).hasAttribute('disabled')
+    ).toBe(true);
+    expect(
+      (await screen.findByTitle(/Move folder earlier/)).hasAttribute('disabled')
+    ).toBe(false);
   });
 
   it('shows no move buttons when no folder is selected', async () => {

@@ -10,14 +10,21 @@ export type FeedItem =
 
 // Merge entries and transcriptions into one feed sorted by createdAt
 // descending. Both inputs are already newest-first; entries win exact ties.
-export function buildFeed(entries: JournalEntry[], transcriptions: Transcription[]): FeedItem[] {
+export function buildFeed(
+  entries: JournalEntry[],
+  transcriptions: Transcription[]
+): FeedItem[] {
   const feed: FeedItem[] = [];
   let e = 0;
   let t = 0;
   while (e < entries.length || t < transcriptions.length) {
     const entry = entries[e];
     const tr = transcriptions[t];
-    if (entry && (!tr || new Date(entry.createdAt).getTime() >= new Date(tr.createdAt).getTime())) {
+    if (
+      entry &&
+      (!tr ||
+        new Date(entry.createdAt).getTime() >= new Date(tr.createdAt).getTime())
+    ) {
       feed.push({ kind: 'entry', entry, entryIndex: e });
       e++;
     } else {

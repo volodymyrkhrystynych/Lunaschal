@@ -37,24 +37,42 @@ vi.mock('../../hooks/api', () => ({
 }));
 
 function renderLearning() {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="learning" onViewChange={() => {}}>
         <Learning />
       </ShortcutProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.getStats.mockResolvedValue({ total: 10, due: 3, pending: 2, mastered: 4, learning: 6 });
+  mocks.getStats.mockResolvedValue({
+    total: 10,
+    due: 3,
+    pending: 2,
+    mastered: 4,
+    learning: 6,
+  });
   mocks.getTags.mockResolvedValue([{ name: 'python', count: 5 }]);
-  mocks.listFolders.mockResolvedValue([{
-    id: 'f1', name: 'Python', position: 0, evidenceProviderId: null, evidenceProviderName: null,
-    activeCount: 5, pendingCount: 0, dueCount: 2, createdAt: '', updatedAt: '',
-  }]);
+  mocks.listFolders.mockResolvedValue([
+    {
+      id: 'f1',
+      name: 'Python',
+      position: 0,
+      evidenceProviderId: null,
+      evidenceProviderName: null,
+      activeCount: 5,
+      pendingCount: 0,
+      dueCount: 2,
+      createdAt: '',
+      updatedAt: '',
+    },
+  ]);
   mocks.listQueue.mockResolvedValue([]);
   mocks.getDue.mockResolvedValue([]);
   mocks.listCards.mockResolvedValue([]);
@@ -79,7 +97,9 @@ describe('Learning', () => {
     fireEvent.click(screen.getByText('+ Create'));
     expect(await screen.findByText('Generate Cards')).toBeTruthy();
     fireEvent.click(screen.getByText('Folders'));
-    expect(await screen.findByText('Evidence providers (MCP servers)')).toBeTruthy();
+    expect(
+      await screen.findByText('Evidence providers (MCP servers)')
+    ).toBeTruthy();
   });
 
   it('cycles modes with the keyboard after drilling in', async () => {

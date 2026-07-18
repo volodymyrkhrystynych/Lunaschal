@@ -7,7 +7,9 @@ describe('DEFAULT_BINDINGS', () => {
   });
 
   it('has no scroll actions — W/S scroll content-only scopes instead', () => {
-    expect(Object.keys(DEFAULT_BINDINGS).some((k) => k.startsWith('scroll.'))).toBe(false);
+    expect(
+      Object.keys(DEFAULT_BINDINGS).some(k => k.startsWith('scroll.'))
+    ).toBe(false);
   });
 
   it('has no two actions on the same combo', () => {

@@ -19,7 +19,9 @@ export function useRecorder(onTranscript: (text: string) => void) {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       chunksRef.current = [];
       const mr = new MediaRecorder(stream);
-      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
+      mr.ondataavailable = e => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
       mr.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
         setStatus('transcribing');
@@ -27,7 +29,10 @@ export function useRecorder(onTranscript: (text: string) => void) {
           const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
           const fd = new FormData();
           fd.append('audio', blob, 'recording.webm');
-          const r = await fetch('/api/transcribe', { method: 'POST', body: fd });
+          const r = await fetch('/api/transcribe', {
+            method: 'POST',
+            body: fd,
+          });
           const data = await r.json();
           if (!r.ok) throw new Error(data.error || 'Transcription failed');
           if (data.text) onTranscript(data.text);

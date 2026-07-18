@@ -2,7 +2,8 @@
 
 import type { FicChapterSummary } from '@/hooks/api';
 
-export type FicSite = 'spacebattles' | 'sufficientvelocity' | 'questionablequesting';
+export type FicSite =
+  'spacebattles' | 'sufficientvelocity' | 'questionablequesting';
 
 const SITE_HOSTS: Record<string, FicSite> = {
   'forums.spacebattles.com': 'spacebattles',
@@ -41,26 +42,32 @@ function categoryRank(category: string): number {
   return c === 'threadmarks' || c === 'chapters' ? 0 : 1;
 }
 
-export function orderChapters(chapters: FicChapterSummary[]): FicChapterSummary[] {
-  return [...chapters].sort((a, b) =>
-    categoryRank(a.category) - categoryRank(b.category) ||
-    a.category.localeCompare(b.category) ||
-    a.position - b.position);
+export function orderChapters(
+  chapters: FicChapterSummary[]
+): FicChapterSummary[] {
+  return [...chapters].sort(
+    (a, b) =>
+      categoryRank(a.category) - categoryRank(b.category) ||
+      a.category.localeCompare(b.category) ||
+      a.position - b.position
+  );
 }
 
 export function adjacentChapter(
   chapters: FicChapterSummary[],
   currentId: string,
-  dir: 1 | -1,
+  dir: 1 | -1
 ): FicChapterSummary | null {
   const ordered = orderChapters(chapters);
-  const idx = ordered.findIndex((c) => c.id === currentId);
+  const idx = ordered.findIndex(c => c.id === currentId);
   if (idx === -1) return null;
   return ordered[idx + dir] ?? null;
 }
 
 /** Group ordered chapters by category, preserving order. */
-export function groupChaptersByCategory(chapters: FicChapterSummary[]): [string, FicChapterSummary[]][] {
+export function groupChaptersByCategory(
+  chapters: FicChapterSummary[]
+): [string, FicChapterSummary[]][] {
   const groups: [string, FicChapterSummary[]][] = [];
   for (const ch of orderChapters(chapters)) {
     const last = groups[groups.length - 1];
@@ -72,11 +79,14 @@ export function groupChaptersByCategory(chapters: FicChapterSummary[]): [string,
 
 /** Ids of all chapters up to and including the target, in reading order —
  * powers "mark read up to here". Unknown target returns []. */
-export function chapterIdsUpTo(chapters: FicChapterSummary[], chapterId: string): string[] {
+export function chapterIdsUpTo(
+  chapters: FicChapterSummary[],
+  chapterId: string
+): string[] {
   const ordered = orderChapters(chapters);
-  const idx = ordered.findIndex((c) => c.id === chapterId);
+  const idx = ordered.findIndex(c => c.id === chapterId);
   if (idx === -1) return [];
-  return ordered.slice(0, idx + 1).map((c) => c.id);
+  return ordered.slice(0, idx + 1).map(c => c.id);
 }
 
 /** "★★★☆☆"-style string for a 1–5 rating; null when unrated. */

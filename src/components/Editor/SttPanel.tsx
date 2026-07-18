@@ -21,7 +21,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const [error, setError] = useState('');
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const recorder = useRecorder((text) => {
+  const recorder = useRecorder(text => {
     setLastText(text);
     onTranscribed(text);
     if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
@@ -33,7 +33,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const [audioFile, setAudioFile] = useState<File | null>(null);
   const [groundTruth, setGroundTruth] = useState('');
   const [correctStatus, setCorrectStatus] = useState<CorrectStatus>('idle');
-  const [correctResult, setCorrectResult] = useState<CorrectResult | null>(null);
+  const [correctResult, setCorrectResult] = useState<CorrectResult | null>(
+    null
+  );
   const [correctError, setCorrectError] = useState('');
   const audioInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -60,7 +62,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
     const startedMs = new Date(activeMeeting.startedAt).getTime();
     const tick = () => {
       const s = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
-      setMeetingElapsed(`${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`);
+      setMeetingElapsed(
+        `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+      );
     };
     tick();
     const timer = setInterval(tick, 1000);
@@ -75,34 +79,45 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const startMeeting = useMutation({
     mutationFn: api.meetings.start,
     onSuccess: invalidateMeetings,
-    onError: (err) => setError(err instanceof Error ? err.message : 'Failed to start meeting'),
+    onError: err =>
+      setError(err instanceof Error ? err.message : 'Failed to start meeting'),
   });
 
   const stopMeeting = useMutation({
     mutationFn: (id: string) => api.meetings.stop(id),
     onSuccess: invalidateMeetings,
-    onError: (err) => setError(err instanceof Error ? err.message : 'Failed to stop meeting'),
+    onError: err =>
+      setError(err instanceof Error ? err.message : 'Failed to stop meeting'),
   });
 
   const meetingPending = startMeeting.isPending || stopMeeting.isPending;
 
   const uploadMeeting = useMutation({
     mutationFn: () => api.meetings.upload(audioFile!),
-    onSuccess: (data) => {
+    onSuccess: data => {
       setAudioFile(null);
       setCorrectResult(null);
       if (audioInputRef.current) audioInputRef.current.value = '';
       invalidateMeetings();
       onMeetingUploaded(data.id);
     },
-    onError: (err) => setCorrectError(err instanceof Error ? err.message : 'Failed to upload meeting'),
+    onError: err =>
+      setCorrectError(
+        err instanceof Error ? err.message : 'Failed to upload meeting'
+      ),
   });
 
-  useEffect(() => () => {
-    if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
+    },
+    []
+  );
 
-  const startRecording = () => { setError(''); void recorder.start(); };
+  const startRecording = () => {
+    setError('');
+    void recorder.start();
+  };
   const stopRecording = recorder.stop;
 
   const handleCorrect = async () => {
@@ -114,7 +129,10 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
       const fd = new FormData();
       fd.append('audio', audioFile);
       if (groundTruth.trim()) fd.append('ground_truth', groundTruth.trim());
-      const r = await fetch('/api/transcribe/correct', { method: 'POST', body: fd });
+      const r = await fetch('/api/transcribe/correct', {
+        method: 'POST',
+        body: fd,
+      });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Failed');
       setCorrectResult({ raw: data.raw, corrected: data.corrected });
@@ -125,26 +143,36 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
     }
   };
 
-  const listenerRecording    = listenerState?.recording    ?? false;
+  const listenerRecording = listenerState?.recording ?? false;
   const listenerTranscribing = listenerState?.transcribing ?? false;
-  const listenerMode         = listenerState?.mode         ?? null;
-  const isListenerActive     = listenerRecording || listenerTranscribing;
+  const listenerMode = listenerState?.mode ?? null;
+  const isListenerActive = listenerRecording || listenerTranscribing;
   const effectiveStatus: Status =
-    status !== 'idle'      ? status :
-    listenerRecording      ? 'recording' :
-    listenerTranscribing   ? 'transcribing' :
-    'idle';
+    status !== 'idle'
+      ? status
+      : listenerRecording
+        ? 'recording'
+        : listenerTranscribing
+          ? 'transcribing'
+          : 'idle';
 
   const isListenerControlling = isListenerActive && status === 'idle';
   const isJournalMode = isListenerControlling && listenerMode === 'journal';
   const buttonDisabled =
-    effectiveStatus === 'transcribing' ||
-    isListenerControlling;
+    effectiveStatus === 'transcribing' || isListenerControlling;
 
   const buttonLabel =
-    effectiveStatus === 'recording'    ? (isJournalMode ? 'Journal…' : isListenerControlling ? 'Recording…' : 'Stop') :
-    effectiveStatus === 'transcribing' ? (isJournalMode ? 'Saving journal…' : 'Transcribing…') :
-    'Record';
+    effectiveStatus === 'recording'
+      ? isJournalMode
+        ? 'Journal…'
+        : isListenerControlling
+          ? 'Recording…'
+          : 'Stop'
+      : effectiveStatus === 'transcribing'
+        ? isJournalMode
+          ? 'Saving journal…'
+          : 'Transcribing…'
+        : 'Record';
 
   return (
     <div className="shrink-0 border-t border-white/10 bg-[var(--color-surface)]">
@@ -152,7 +180,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
         <div className="p-4 border-b border-white/10 flex flex-col gap-3">
           <div className="flex gap-3 items-start">
             <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-              <label className="text-xs text-[var(--color-text-muted)]">Audio file</label>
+              <label className="text-xs text-[var(--color-text-muted)]">
+                Audio file
+              </label>
               <div className="flex gap-2 items-center">
                 <button
                   onClick={() => audioInputRef.current?.click()}
@@ -162,7 +192,12 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
                 </button>
                 {audioFile && (
                   <button
-                    onClick={() => { setAudioFile(null); setCorrectResult(null); if (audioInputRef.current) audioInputRef.current.value = ''; }}
+                    onClick={() => {
+                      setAudioFile(null);
+                      setCorrectResult(null);
+                      if (audioInputRef.current)
+                        audioInputRef.current.value = '';
+                    }}
                     className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                   >
                     ✕
@@ -174,7 +209,11 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
                 type="file"
                 accept="audio/*"
                 className="hidden"
-                onChange={e => { setAudioFile(e.target.files?.[0] ?? null); setCorrectResult(null); setCorrectError(''); }}
+                onChange={e => {
+                  setAudioFile(e.target.files?.[0] ?? null);
+                  setCorrectResult(null);
+                  setCorrectError('');
+                }}
               />
             </div>
             <button
@@ -182,7 +221,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
               disabled={!audioFile || correctStatus === 'working'}
               className="mt-5 px-3 py-1 rounded text-sm font-medium bg-white/10 hover:bg-white/20 text-[var(--color-text)] transition-colors disabled:opacity-40"
             >
-              {correctStatus === 'working' ? 'Working…' : 'Transcribe & Correct'}
+              {correctStatus === 'working'
+                ? 'Working…'
+                : 'Transcribe & Correct'}
             </button>
             <button
               onClick={() => uploadMeeting.mutate()}
@@ -195,7 +236,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs text-[var(--color-text-muted)]">Ground truth reference (paste document text)</label>
+            <label className="text-xs text-[var(--color-text-muted)]">
+              Ground truth reference (paste document text)
+            </label>
             <textarea
               value={groundTruth}
               onChange={e => setGroundTruth(e.target.value)}
@@ -213,7 +256,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
             <div className="flex flex-col gap-3">
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-[var(--color-text-muted)]">Raw transcription</span>
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    Raw transcription
+                  </span>
                   <button
                     onClick={() => onTranscribed(correctResult.raw)}
                     className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
@@ -221,11 +266,15 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
                     Use raw ↑
                   </button>
                 </div>
-                <pre className="text-xs text-[var(--color-text-muted)] bg-white/5 rounded p-2 whitespace-pre-wrap break-words">{correctResult.raw}</pre>
+                <pre className="text-xs text-[var(--color-text-muted)] bg-white/5 rounded p-2 whitespace-pre-wrap break-words">
+                  {correctResult.raw}
+                </pre>
               </div>
               <div className="flex flex-col gap-1.5">
                 <div className="flex items-center justify-between">
-                  <span className="text-xs text-[var(--color-text-muted)]">Corrected</span>
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    Corrected
+                  </span>
                   <button
                     onClick={() => onTranscribed(correctResult.corrected)}
                     className="text-xs font-medium text-[var(--color-text)] hover:opacity-80 transition-opacity"
@@ -233,7 +282,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
                     Use corrected ↑
                   </button>
                 </div>
-                <pre className="text-xs text-[var(--color-text)] bg-white/5 rounded p-2 whitespace-pre-wrap break-words border border-white/10">{correctResult.corrected}</pre>
+                <pre className="text-xs text-[var(--color-text)] bg-white/5 rounded p-2 whitespace-pre-wrap break-words border border-white/10">
+                  {correctResult.corrected}
+                </pre>
               </div>
             </div>
           )}
@@ -242,61 +293,100 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
 
       <div className="h-10 flex items-center gap-3 px-4">
         <button
-          onClick={effectiveStatus === 'recording' && !isListenerControlling ? stopRecording : startRecording}
+          onClick={
+            effectiveStatus === 'recording' && !isListenerControlling
+              ? stopRecording
+              : startRecording
+          }
           disabled={buttonDisabled}
           className={`flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
             effectiveStatus === 'recording' && isJournalMode
               ? 'bg-amber-600 hover:bg-amber-700 text-white'
               : effectiveStatus === 'recording'
-              ? 'bg-red-600 hover:bg-red-700 text-white'
-              : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
+                ? 'bg-red-600 hover:bg-red-700 text-white'
+                : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
           }`}
         >
-          <span className={`w-2 h-2 rounded-full ${
-            effectiveStatus === 'recording' && isJournalMode ? 'bg-white animate-pulse' :
-            effectiveStatus === 'recording'                  ? 'bg-white animate-pulse' :
-            effectiveStatus === 'transcribing'               ? 'bg-yellow-400' :
-            'bg-[var(--color-text-muted)]'
-          }`} />
+          <span
+            className={`w-2 h-2 rounded-full ${
+              effectiveStatus === 'recording' && isJournalMode
+                ? 'bg-white animate-pulse'
+                : effectiveStatus === 'recording'
+                  ? 'bg-white animate-pulse'
+                  : effectiveStatus === 'transcribing'
+                    ? 'bg-yellow-400'
+                    : 'bg-[var(--color-text-muted)]'
+            }`}
+          />
           {buttonLabel}
         </button>
 
         <button
           onClick={() => {
             setError('');
-            if (meetingActive && activeMeeting?.id) stopMeeting.mutate(activeMeeting.id);
+            if (meetingActive && activeMeeting?.id)
+              stopMeeting.mutate(activeMeeting.id);
             else startMeeting.mutate();
           }}
           disabled={meetingPending}
-          title={meetingActive ? 'Stop the meeting recording and start transcription' : 'Record a meeting (mic + system audio)'}
+          title={
+            meetingActive
+              ? 'Stop the meeting recording and start transcription'
+              : 'Record a meeting (mic + system audio)'
+          }
           className={`flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
             meetingActive
               ? 'bg-red-600 hover:bg-red-700 text-white'
               : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
           }`}
         >
-          <span className={`w-2 h-2 rounded-full ${
-            meetingActive ? 'bg-white animate-pulse' : 'bg-[var(--color-text-muted)]'
-          }`} />
+          <span
+            className={`w-2 h-2 rounded-full ${
+              meetingActive
+                ? 'bg-white animate-pulse'
+                : 'bg-[var(--color-text-muted)]'
+            }`}
+          />
           {meetingActive ? `Stop meeting ${meetingElapsed}` : 'Meeting'}
         </button>
 
-        {(error || recorder.error) && <span className="text-xs text-red-400 truncate">{error || recorder.error}</span>}
+        {(error || recorder.error) && (
+          <span className="text-xs text-red-400 truncate">
+            {error || recorder.error}
+          </span>
+        )}
         {!error && !recorder.error && lastText && (
-          <span className="text-xs text-[var(--color-text-muted)] truncate">"{lastText}"</span>
+          <span className="text-xs text-[var(--color-text-muted)] truncate">
+            "{lastText}"
+          </span>
         )}
-        {!error && !recorder.error && !lastText && effectiveStatus === 'idle' && (
-          <span className="text-xs text-[var(--color-text-muted)]">Voice input — transcribes into active editor or clipboard</span>
-        )}
+        {!error &&
+          !recorder.error &&
+          !lastText &&
+          effectiveStatus === 'idle' && (
+            <span className="text-xs text-[var(--color-text-muted)]">
+              Voice input — transcribes into active editor or clipboard
+            </span>
+          )}
 
         <button
-          onClick={() => { setExpanded(e => !e); setCorrectResult(null); setCorrectError(''); }}
+          onClick={() => {
+            setExpanded(e => !e);
+            setCorrectResult(null);
+            setCorrectError('');
+          }}
           className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
-            expanded ? 'bg-white/15 text-[var(--color-text)]' : 'bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
+            expanded
+              ? 'bg-white/15 text-[var(--color-text)]'
+              : 'bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
           }`}
         >
           File
-          <span className={`transition-transform ${expanded ? 'rotate-180' : ''}`}>▲</span>
+          <span
+            className={`transition-transform ${expanded ? 'rotate-180' : ''}`}
+          >
+            ▲
+          </span>
         </button>
       </div>
     </div>

@@ -18,10 +18,22 @@ export function CoverageResult({ coverage, normalizedAnswer }: Props) {
               <span className={c.covered ? 'text-green-400' : 'text-red-400'}>
                 {c.covered ? '✓' : '✗'}
               </span>
-              <span className={c.covered ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}>
+              <span
+                className={
+                  c.covered
+                    ? 'text-[var(--color-text)]'
+                    : 'text-[var(--color-text-muted)]'
+                }
+              >
                 {c.text}
-                {!c.essential && <span className="ml-1.5 text-xs opacity-60">nuance</span>}
-                {c.note && <span className="ml-1.5 text-xs text-orange-300">({c.note})</span>}
+                {!c.essential && (
+                  <span className="ml-1.5 text-xs opacity-60">nuance</span>
+                )}
+                {c.note && (
+                  <span className="ml-1.5 text-xs text-orange-300">
+                    ({c.note})
+                  </span>
+                )}
               </span>
             </li>
           ))}
@@ -29,7 +41,8 @@ export function CoverageResult({ coverage, normalizedAnswer }: Props) {
       )}
       {coverage.gated && (
         <p className="text-xs text-[var(--color-text-muted)]">
-          Quick check: your answer didn't resemble the stored one, so no detailed comparison was run.
+          Quick check: your answer didn't resemble the stored one, so no
+          detailed comparison was run.
         </p>
       )}
       {normalizedAnswer && (

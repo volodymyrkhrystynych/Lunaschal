@@ -12,7 +12,10 @@
 body {
   background-color: var(--color-bg);
   color: var(--color-text);
-  font-family: system-ui, -apple-system, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
 }
 
 /* Scrollbars follow the theme colors instead of the OS default. */
@@ -46,8 +49,12 @@ body {
 .fanfic-prose div {
   margin-bottom: 0.9em;
 }
-.fanfic-prose h1, .fanfic-prose h2, .fanfic-prose h3,
-.fanfic-prose h4, .fanfic-prose h5, .fanfic-prose h6 {
+.fanfic-prose h1,
+.fanfic-prose h2,
+.fanfic-prose h3,
+.fanfic-prose h4,
+.fanfic-prose h5,
+.fanfic-prose h6 {
   font-weight: 700;
   margin: 1.2em 0 0.6em;
 }
@@ -74,7 +81,8 @@ body {
   display: block;
   overflow-x: auto;
 }
-.fanfic-prose td, .fanfic-prose th {
+.fanfic-prose td,
+.fanfic-prose th {
   border: 1px solid rgba(255, 255, 255, 0.15);
   padding: 0.35em 0.7em;
 }
@@ -82,12 +90,17 @@ body {
   border-color: rgba(255, 255, 255, 0.15);
   margin: 1.5em 0;
 }
-.fanfic-prose ul, .fanfic-prose ol {
+.fanfic-prose ul,
+.fanfic-prose ol {
   padding-left: 1.5em;
   margin-bottom: 0.9em;
 }
-.fanfic-prose ul { list-style: disc; }
-.fanfic-prose ol { list-style: decimal; }
+.fanfic-prose ul {
+  list-style: disc;
+}
+.fanfic-prose ol {
+  list-style: decimal;
+}
 .fanfic-prose pre {
   background: rgba(255, 255, 255, 0.05);
   border-radius: 4px;

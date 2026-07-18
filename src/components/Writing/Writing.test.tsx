@@ -15,16 +15,28 @@ vi.mock('../../hooks/api', () => ({
     settings: { get: vi.fn().mockResolvedValue({}) },
     writing: {
       listProjects: vi.fn().mockResolvedValue([]),
-      getProject: vi.fn().mockResolvedValue({ id: 'p1', title: 'My Story', description: null }),
+      getProject: vi
+        .fn()
+        .mockResolvedValue({ id: 'p1', title: 'My Story', description: null }),
       createProject: vi.fn(),
       deleteProject: vi.fn(),
       listChapters: vi.fn().mockResolvedValue([]),
-      getChapter: vi.fn().mockResolvedValue({ id: 'ch1', title: 'Chapter One', content: 'hello world' }),
+      getChapter: vi.fn().mockResolvedValue({
+        id: 'ch1',
+        title: 'Chapter One',
+        content: 'hello world',
+      }),
       updateChapter: vi.fn().mockResolvedValue({}),
       createChapter: vi.fn(),
       deleteChapter: vi.fn(),
       listNotes: vi.fn().mockResolvedValue([]),
-      getNote: vi.fn().mockResolvedValue({ id: 'n1', projectId: 'p1', title: 'Villain ideas', content: 'so evil', docType: 'note' }),
+      getNote: vi.fn().mockResolvedValue({
+        id: 'n1',
+        projectId: 'p1',
+        title: 'Villain ideas',
+        content: 'so evil',
+        docType: 'note',
+      }),
       createNote: vi.fn(),
       updateNote: vi.fn().mockResolvedValue({}),
       deleteNote: vi.fn(),
@@ -33,7 +45,9 @@ vi.mock('../../hooks/api', () => ({
       summarizeDiscussion: vi.fn(),
     },
     chat: {
-      getConversation: vi.fn().mockResolvedValue({ id: 'd1', title: 'Plot talk', messages: [] }),
+      getConversation: vi
+        .fn()
+        .mockResolvedValue({ id: 'd1', title: 'Plot talk', messages: [] }),
       updateTitle: vi.fn(),
       deleteConversation: vi.fn(),
       addMessage: vi.fn(),
@@ -46,25 +60,47 @@ beforeEach(() => {
 });
 
 function renderWithProviders(children: ReactNode) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="writing" onViewChange={() => {}}>
         {children}
       </ShortcutProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
 function mockProjectWithItems() {
   vi.mocked(api.writing.listProjects).mockResolvedValue([
-    { id: 'p1', title: 'My Story', description: null, createdAt: '', updatedAt: '' },
+    {
+      id: 'p1',
+      title: 'My Story',
+      description: null,
+      createdAt: '',
+      updatedAt: '',
+    },
   ]);
   vi.mocked(api.writing.listChapters).mockResolvedValue([
-    { id: 'ch1', projectId: 'p1', title: 'Chapter One', position: 0, createdAt: '', updatedAt: '' },
+    {
+      id: 'ch1',
+      projectId: 'p1',
+      title: 'Chapter One',
+      position: 0,
+      createdAt: '',
+      updatedAt: '',
+    },
   ]);
   vi.mocked(api.writing.listNotes).mockResolvedValue([
-    { id: 'n1', projectId: 'p1', title: 'Villain ideas', docType: 'note', createdAt: '', updatedAt: '' },
+    {
+      id: 'n1',
+      projectId: 'p1',
+      title: 'Villain ideas',
+      docType: 'note',
+      createdAt: '',
+      updatedAt: '',
+    },
   ]);
   vi.mocked(api.writing.listDiscussions).mockResolvedValue([
     { id: 'd1', title: 'Plot talk', createdAt: '', updatedAt: '' },
@@ -88,7 +124,10 @@ describe('chapter font size shortcuts', () => {
   });
 
   it('starts from the stored size and clamps at the maximum', async () => {
-    localStorage.setItem('lunaschal:chapterFontSize', String(CHAPTER_FONT_SIZE_MAX));
+    localStorage.setItem(
+      'lunaschal:chapterFontSize',
+      String(CHAPTER_FONT_SIZE_MAX)
+    );
     renderWithProviders(<ChapterEditor chapterId="ch1" />);
     const textarea = await screen.findByPlaceholderText('Start writing…');
     expect(textarea.style.fontSize).toBe(`${CHAPTER_FONT_SIZE_MAX}px`);
@@ -144,11 +183,15 @@ describe('writing nav sections', () => {
     expect(await screen.findByPlaceholderText('Start writing…')).not.toBeNull();
 
     fireEvent.click(screen.getByText('Villain ideas'));
-    expect(await screen.findByPlaceholderText('Write your note…')).not.toBeNull();
+    expect(
+      await screen.findByPlaceholderText('Write your note…')
+    ).not.toBeNull();
     expect(screen.queryByPlaceholderText('Start writing…')).toBeNull();
 
     fireEvent.click(screen.getByText('Plot talk'));
-    expect(await screen.findByPlaceholderText('Discuss your story… (Enter to send)')).not.toBeNull();
+    expect(
+      await screen.findByPlaceholderText('Discuss your story… (Enter to send)')
+    ).not.toBeNull();
     expect(screen.queryByPlaceholderText('Write your note…')).toBeNull();
   });
 
@@ -168,10 +211,14 @@ describe('writing nav sections', () => {
 
     // Next step crosses from the last chapter into the first note
     fireEvent.keyDown(window, { code: 'KeyS' });
-    expect(await screen.findByPlaceholderText('Write your note…')).not.toBeNull();
+    expect(
+      await screen.findByPlaceholderText('Write your note…')
+    ).not.toBeNull();
 
     // And from the last note into the first discussion
     fireEvent.keyDown(window, { code: 'KeyS' });
-    expect(await screen.findByPlaceholderText('Discuss your story… (Enter to send)')).not.toBeNull();
+    expect(
+      await screen.findByPlaceholderText('Discuss your story… (Enter to send)')
+    ).not.toBeNull();
   });
 });

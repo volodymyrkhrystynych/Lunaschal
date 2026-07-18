@@ -67,7 +67,8 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'nav.in': 'Go in (drill into tab / item)',
   'action.new': 'New item (entry, file, project…)',
   'action.newAlt': 'New folder (Files)',
-  'action.annotate': 'Write commentary (reader) / steer regeneration (Learning queue)',
+  'action.annotate':
+    'Write commentary (reader) / steer regeneration (Learning queue)',
   'action.search': 'Focus search (Library)',
   'tab.chat': 'Go to Chat',
   'tab.tasks': 'Go to Tasks',
@@ -86,12 +87,19 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'learning.record': 'Toggle voice recording (Learning)',
   'reader.fontUp': 'Increase reading/chapter text size',
   'reader.fontDown': 'Decrease reading/chapter text size',
-  'reader.toggleList': 'Toggle list panel (Writing chapters / Library chapters)',
+  'reader.toggleList':
+    'Toggle list panel (Writing chapters / Library chapters)',
 };
 
 const MODIFIER_CODES = new Set([
-  'ControlLeft', 'ControlRight', 'AltLeft', 'AltRight',
-  'ShiftLeft', 'ShiftRight', 'MetaLeft', 'MetaRight',
+  'ControlLeft',
+  'ControlRight',
+  'AltLeft',
+  'AltRight',
+  'ShiftLeft',
+  'ShiftRight',
+  'MetaLeft',
+  'MetaRight',
 ]);
 
 export function isModifierCode(code: string): boolean {
@@ -111,7 +119,7 @@ export function comboFromEvent(e: KeyboardEvent): string {
 export function displayCombo(combo: string): string {
   return combo
     .split('+')
-    .map((part) => {
+    .map(part => {
       if (part === 'ctrl') return 'Ctrl';
       if (part === 'alt') return 'Alt';
       if (part === 'shift') return 'Shift';
@@ -129,7 +137,12 @@ export function displayCombo(combo: string): string {
 export function isEditableTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
   const tag = el.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable;
+  return (
+    tag === 'INPUT' ||
+    tag === 'TEXTAREA' ||
+    tag === 'SELECT' ||
+    el.isContentEditable
+  );
 }
 
 // Set to true while a key-recorder is listening so the global handler stays quiet.

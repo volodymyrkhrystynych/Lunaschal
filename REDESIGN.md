@@ -14,15 +14,15 @@ Rebuild Lunaschal as a native desktop app with a Python backend. PyWebView opens
 
 ## Stack
 
-| Layer | Current | New |
-|-------|---------|-----|
-| Desktop shell | — | PyWebView |
-| Backend | Hono (Node.js) | Flask (Python) |
-| API layer | tRPC | REST (JSON over HTTP) |
-| Database | Drizzle + better-sqlite3 | Python `sqlite3` (built-in) |
-| AI | Vercel AI SDK | OpenAI / google-generativeai / ollama Python SDKs |
-| Frontend | React + Vite + Tailwind | React + Vite + Tailwind (unchanged) |
-| STT service | stt/service.py (separate) | stt/service.py (kept separate, unchanged) |
+| Layer         | Current                   | New                                               |
+| ------------- | ------------------------- | ------------------------------------------------- |
+| Desktop shell | —                         | PyWebView                                         |
+| Backend       | Hono (Node.js)            | Flask (Python)                                    |
+| API layer     | tRPC                      | REST (JSON over HTTP)                             |
+| Database      | Drizzle + better-sqlite3  | Python `sqlite3` (built-in)                       |
+| AI            | Vercel AI SDK             | OpenAI / google-generativeai / ollama Python SDKs |
+| Frontend      | React + Vite + Tailwind   | React + Vite + Tailwind (unchanged)               |
+| STT service   | stt/service.py (separate) | stt/service.py (kept separate, unchanged)         |
 
 ---
 
@@ -96,6 +96,7 @@ backend/
 **Drop tRPC.** The tRPC client (`src/hooks/trpc.ts`) and all `trpc.*` hook calls in components are replaced with React Query + plain `fetch`. React Query (`@tanstack/react-query`) is already installed — only the query functions change.
 
 Example migration:
+
 ```ts
 // Before (tRPC)
 const { data } = trpc.journal.list.useQuery();
@@ -127,13 +128,13 @@ Python's built-in `sqlite3` module — no ORM for MVP. Raw SQL keeps the depende
 
 ## AI Layer
 
-| Feature | Python library |
-|---------|---------------|
-| OpenAI (chat + embeddings) | `openai` |
-| Google Gemini | `google-generativeai` |
-| Ollama | `ollama` (or direct HTTP) |
-| Streaming chat | Flask `Response` with a generator + `stream_with_context` |
-| Intent classification | `openai` / `google-generativeai` with structured output (same logic as current `classifier.ts`) |
+| Feature                    | Python library                                                                                  |
+| -------------------------- | ----------------------------------------------------------------------------------------------- |
+| OpenAI (chat + embeddings) | `openai`                                                                                        |
+| Google Gemini              | `google-generativeai`                                                                           |
+| Ollama                     | `ollama` (or direct HTTP)                                                                       |
+| Streaming chat             | Flask `Response` with a generator + `stream_with_context`                                       |
+| Intent classification      | `openai` / `google-generativeai` with structured output (same logic as current `classifier.ts`) |
 
 ---
 
@@ -158,6 +159,7 @@ npm run dev:client
 ```
 
 PyWebView is only needed when testing the packaged desktop experience:
+
 ```bash
 python main.py --dev   # opens PyWebView window loading localhost:5173
 ```
@@ -182,6 +184,7 @@ The STT service and model weights are not bundled (too large, GPU-dependent). `m
 ## Phased Delivery
 
 ### Phase 1 ✅ — Flask shell + PyWebView window (1 day)
+
 - Create `backend/app.py` with a single `/api/health` route
 - `main.py`: start Flask in a thread, poll health, open PyWebView window
 - Serve the existing `dist/` from Flask
@@ -189,6 +192,7 @@ The STT service and model weights are not bundled (too large, GPU-dependent). `m
 - Set up `pyproject.toml` / `requirements.txt` for the Python side
 
 ### Phase 2 ✅ — Port all backend routes (2–3 days)
+
 - `db/connection.py` + `schema.sql` (SQLite setup, migrations)
 - All blueprints: journal, calendar, flashcard, settings, rag, chat (SSE)
 - Auth (PyJWT + bcrypt)
@@ -196,6 +200,7 @@ The STT service and model weights are not bundled (too large, GPU-dependent). `m
 - Delete `server/` (Node.js)
 
 ### Phase 3 ✅ — File editor + STT panel (1–2 days)
+
 - `routes/files.py` (list/read/write/rename/soft-delete, path traversal guard)
 - `src/components/Editor/` (FileTree, EditorPane with CodeMirror 6, SttPanel)
 - Add Files view to sidebar
@@ -203,6 +208,7 @@ The STT service and model weights are not bundled (too large, GPU-dependent). `m
 - Auto-save with debounce
 
 ### Phase 4 ✅ — Network / server mode (half day)
+
 - Bind Flask to `0.0.0.0` via settings toggle
 - `STT_AUTH_TOKEN` shared secret forwarded through the transcribe proxy
 - Laptop opens browser, gets full UI

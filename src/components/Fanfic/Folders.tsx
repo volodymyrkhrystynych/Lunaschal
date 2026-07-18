@@ -6,7 +6,10 @@ import type { Fic } from '../../hooks/api';
 const pillBase = 'px-3 py-1 text-sm rounded-full border transition-colors';
 
 /** Folder filter pills shown above the library list. */
-export function FolderBar({ folderId, onSelect }: {
+export function FolderBar({
+  folderId,
+  onSelect,
+}: {
   folderId: string | null;
   onSelect: (id: string | null) => void;
 }) {
@@ -14,7 +17,8 @@ export function FolderBar({ folderId, onSelect }: {
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState('');
   const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['fanfic'] });
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['fanfic'] });
 
   const { data: folders } = useQuery({
     queryKey: ['fanfic', 'folders'],
@@ -23,7 +27,7 @@ export function FolderBar({ folderId, onSelect }: {
 
   const createFolder = useMutation({
     mutationFn: (n: string) => api.fanfic.folders.create(n),
-    onSuccess: (result) => {
+    onSuccess: result => {
       invalidate();
       setCreating(false);
       setName('');
@@ -32,7 +36,8 @@ export function FolderBar({ folderId, onSelect }: {
   });
 
   const renameFolder = useMutation({
-    mutationFn: ({ id, n }: { id: string; n: string }) => api.fanfic.folders.rename(id, n),
+    mutationFn: ({ id, n }: { id: string; n: string }) =>
+      api.fanfic.folders.rename(id, n),
     onSuccess: () => {
       invalidate();
       setRenaming(false);
@@ -53,90 +58,165 @@ export function FolderBar({ folderId, onSelect }: {
     onSuccess: invalidate,
   });
 
-  const active = folders?.find((f) => f.id === folderId);
-  const activeIndex = folders?.findIndex((f) => f.id === folderId) ?? -1;
+  const active = folders?.find(f => f.id === folderId);
+  const activeIndex = folders?.findIndex(f => f.id === folderId) ?? -1;
 
   const moveActive = (dir: -1 | 1) => {
     if (!folders || activeIndex < 0) return;
     const target = activeIndex + dir;
     if (target < 0 || target >= folders.length) return;
-    const ids = folders.map((f) => f.id);
+    const ids = folders.map(f => f.id);
     [ids[activeIndex], ids[target]] = [ids[target], ids[activeIndex]];
     reorderFolders.mutate(ids);
   };
 
-  const nameInput = (onSubmit: (n: string) => void, onCancel: () => void, placeholder: string) => (
-    <input value={name} autoFocus placeholder={placeholder}
-      onChange={(e) => setName(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') { onCancel(); setName(''); }
+  const nameInput = (
+    onSubmit: (n: string) => void,
+    onCancel: () => void,
+    placeholder: string
+  ) => (
+    <input
+      value={name}
+      autoFocus
+      placeholder={placeholder}
+      onChange={e => setName(e.target.value)}
+      onKeyDown={e => {
+        if (e.key === 'Escape') {
+          onCancel();
+          setName('');
+        }
         if (e.key === 'Enter' && name.trim()) onSubmit(name.trim());
       }}
-      onBlur={() => { onCancel(); setName(''); }}
-      className="w-32 px-3 py-1 text-sm rounded-full bg-transparent border border-[var(--color-primary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none" />
+      onBlur={() => {
+        onCancel();
+        setName('');
+      }}
+      className="w-32 px-3 py-1 text-sm rounded-full bg-transparent border border-[var(--color-primary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+    />
   );
 
   return (
     <div className="flex flex-wrap items-center gap-2 mb-4">
-      <button onClick={() => onSelect(null)}
-        className={`${pillBase} ${folderId === null
-          ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-          : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+      <button
+        onClick={() => onSelect(null)}
+        className={`${pillBase} ${
+          folderId === null
+            ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+            : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+        }`}
+      >
         All
       </button>
-      <button onClick={() => onSelect(folderId === 'recent' ? null : 'recent')}
+      <button
+        onClick={() => onSelect(folderId === 'recent' ? null : 'recent')}
         title="All fics, sorted only by the latest threadmark's forum post date"
-        className={`${pillBase} ${folderId === 'recent'
-          ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-          : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+        className={`${pillBase} ${
+          folderId === 'recent'
+            ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+            : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+        }`}
+      >
         Recent
       </button>
-      <button onClick={() => onSelect(folderId === 'unsorted' ? null : 'unsorted')}
+      <button
+        onClick={() => onSelect(folderId === 'unsorted' ? null : 'unsorted')}
         title="Show fics not in any folder"
-        className={`${pillBase} ${folderId === 'unsorted'
-          ? 'border-amber-400/60 bg-amber-400/10 text-amber-300'
-          : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+        className={`${pillBase} ${
+          folderId === 'unsorted'
+            ? 'border-amber-400/60 bg-amber-400/10 text-amber-300'
+            : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+        }`}
+      >
         Unsorted
       </button>
-      {folders?.map((f) =>
+      {folders?.map(f =>
         renaming && f.id === folderId ? (
           <span key={f.id}>
-            {nameInput((n) => renameFolder.mutate({ id: f.id, n }), () => setRenaming(false), f.name)}
+            {nameInput(
+              n => renameFolder.mutate({ id: f.id, n }),
+              () => setRenaming(false),
+              f.name
+            )}
           </span>
         ) : (
-          <button key={f.id} onClick={() => onSelect(f.id)}
-            className={`${pillBase} ${f.id === folderId
-              ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-              : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}>
+          <button
+            key={f.id}
+            onClick={() => onSelect(f.id)}
+            className={`${pillBase} ${
+              f.id === folderId
+                ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+                : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+            }`}
+          >
             {f.name} <span className="opacity-60">{f.ficCount}</span>
           </button>
-        ))}
+        )
+      )}
       {creating ? (
-        nameInput((n) => createFolder.mutate(n), () => setCreating(false), 'Folder name…')
+        nameInput(
+          n => createFolder.mutate(n),
+          () => setCreating(false),
+          'Folder name…'
+        )
       ) : (
-        <button onClick={() => { setCreating(true); setName(''); }}
+        <button
+          onClick={() => {
+            setCreating(true);
+            setName('');
+          }}
           className={`${pillBase} border-dashed border-white/20 text-[var(--color-text-muted)] hover:text-[var(--color-text)]`}
-          title="New folder">+ folder</button>
+          title="New folder"
+        >
+          + folder
+        </button>
       )}
       {active && !renaming && (
         <span className="flex gap-1 text-xs text-[var(--color-text-muted)]">
-          <button onClick={() => moveActive(-1)}
+          <button
+            onClick={() => moveActive(-1)}
             disabled={activeIndex <= 0 || reorderFolders.isPending}
             className="hover:text-[var(--color-text)] disabled:opacity-30"
-            title="Move folder earlier — its fics sort higher in the All view">◀</button>
-          <button onClick={() => moveActive(1)}
-            disabled={activeIndex >= (folders?.length ?? 0) - 1 || reorderFolders.isPending}
+            title="Move folder earlier — its fics sort higher in the All view"
+          >
+            ◀
+          </button>
+          <button
+            onClick={() => moveActive(1)}
+            disabled={
+              activeIndex >= (folders?.length ?? 0) - 1 ||
+              reorderFolders.isPending
+            }
             className="hover:text-[var(--color-text)] disabled:opacity-30"
-            title="Move folder later — its fics sort lower in the All view">▶</button>
+            title="Move folder later — its fics sort lower in the All view"
+          >
+            ▶
+          </button>
           <span>·</span>
-          <button onClick={() => { setRenaming(true); setName(active.name); }}
-            className="hover:text-[var(--color-text)]" title="Rename folder">rename</button>
+          <button
+            onClick={() => {
+              setRenaming(true);
+              setName(active.name);
+            }}
+            className="hover:text-[var(--color-text)]"
+            title="Rename folder"
+          >
+            rename
+          </button>
           <span>·</span>
-          <button onClick={() => {
-            if (window.confirm(`Delete folder "${active.name}"? Fics inside are kept.`))
-              deleteFolder.mutate(active.id);
-          }}
-            className="hover:text-red-400" title="Delete folder">delete</button>
+          <button
+            onClick={() => {
+              if (
+                window.confirm(
+                  `Delete folder "${active.name}"? Fics inside are kept.`
+                )
+              )
+                deleteFolder.mutate(active.id);
+            }}
+            className="hover:text-red-400"
+            title="Delete folder"
+          >
+            delete
+          </button>
         </span>
       )}
     </div>
@@ -147,7 +227,8 @@ export function FolderBar({ folderId, onSelect }: {
 export function FolderPicker({ fic }: { fic: Fic }) {
   const [open, setOpen] = useState(false);
   const queryClient = useQueryClient();
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['fanfic'] });
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['fanfic'] });
 
   const { data: folders } = useQuery({
     queryKey: ['fanfic', 'folders'],
@@ -156,7 +237,13 @@ export function FolderPicker({ fic }: { fic: Fic }) {
   });
 
   const toggle = useMutation({
-    mutationFn: ({ folderId, member }: { folderId: string; member: boolean }) =>
+    mutationFn: ({
+      folderId,
+      member,
+    }: {
+      folderId: string;
+      member: boolean;
+    }) =>
       member
         ? api.fanfic.removeFromFolder(fic.id, folderId)
         : api.fanfic.addToFolder(fic.id, folderId),
@@ -165,9 +252,13 @@ export function FolderPicker({ fic }: { fic: Fic }) {
 
   return (
     <span className="relative">
-      <button onClick={() => setOpen(!open)}
+      <button
+        onClick={() => setOpen(!open)}
         className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-        title="Add to folders">Folders ▾</button>
+        title="Add to folders"
+      >
+        Folders ▾
+      </button>
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
@@ -177,13 +268,18 @@ export function FolderPicker({ fic }: { fic: Fic }) {
                 No folders yet — create one above the list.
               </div>
             )}
-            {folders?.map((f) => {
+            {folders?.map(f => {
               const member = fic.folderIds?.includes(f.id) ?? false;
               return (
-                <label key={f.id}
-                  className="flex items-center gap-2 px-2 py-1 text-sm text-[var(--color-text)] rounded hover:bg-white/5 cursor-pointer whitespace-nowrap">
-                  <input type="checkbox" checked={member}
-                    onChange={() => toggle.mutate({ folderId: f.id, member })} />
+                <label
+                  key={f.id}
+                  className="flex items-center gap-2 px-2 py-1 text-sm text-[var(--color-text)] rounded hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                >
+                  <input
+                    type="checkbox"
+                    checked={member}
+                    onChange={() => toggle.mutate({ folderId: f.id, member })}
+                  />
                   {f.name}
                 </label>
               );

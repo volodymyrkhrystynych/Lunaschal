@@ -9,12 +9,26 @@ import type { JournalEntry } from '../hooks/api';
 const { ENTRIES } = vi.hoisted(() => {
   const ENTRIES: JournalEntry[] = [
     {
-      id: 'e1', content: 'First entry', rawContent: null, title: null, tags: null,
-      curatedTags: [], ficRefs: [], createdAt: '2026-07-02T10:00:00Z', updatedAt: '',
+      id: 'e1',
+      content: 'First entry',
+      rawContent: null,
+      title: null,
+      tags: null,
+      curatedTags: [],
+      ficRefs: [],
+      createdAt: '2026-07-02T10:00:00Z',
+      updatedAt: '',
     },
     {
-      id: 'e2', content: 'Second entry', rawContent: null, title: null, tags: null,
-      curatedTags: [], ficRefs: [], createdAt: '2026-07-01T10:00:00Z', updatedAt: '',
+      id: 'e2',
+      content: 'Second entry',
+      rawContent: null,
+      title: null,
+      tags: null,
+      curatedTags: [],
+      ficRefs: [],
+      createdAt: '2026-07-01T10:00:00Z',
+      updatedAt: '',
     },
   ];
   return { ENTRIES };
@@ -49,7 +63,7 @@ function renderJournal() {
       <ShortcutProvider currentView="journal" onViewChange={() => {}}>
         <Journal />
       </ShortcutProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
 }
 
@@ -82,7 +96,9 @@ describe('Journal keyboard editing', () => {
     await screen.findByText('First entry');
 
     openEditWithKeyboard();
-    fireEvent.keyDown(screen.getByDisplayValue('First entry'), { key: 'Escape' });
+    fireEvent.keyDown(screen.getByDisplayValue('First entry'), {
+      key: 'Escape',
+    });
 
     expect(screen.queryByDisplayValue('First entry')).toBeNull();
     expect(screen.getByText('First entry')).toBeTruthy(); // back to the read view

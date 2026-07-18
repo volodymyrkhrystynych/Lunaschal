@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type FileEntry } from '../../hooks/api';
-import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import {
+  useShortcuts,
+  useShortcutScope,
+} from '../../shortcuts/ShortcutProvider';
 
 interface Props {
   selectedPath: string | null;
@@ -25,20 +28,34 @@ interface RowProps {
   onRenameStart: (entry: FileEntry) => void;
 }
 
-function FileTreeRow({ entry, depth, isExpanded, isSelected, isFocused, onToggleDir, onSelectFile, onDelete, onRenameStart }: RowProps) {
+function FileTreeRow({
+  entry,
+  depth,
+  isExpanded,
+  isSelected,
+  isFocused,
+  onToggleDir,
+  onSelectFile,
+  onDelete,
+  onRenameStart,
+}: RowProps) {
   const [hovered, setHovered] = useState(false);
   const indent = depth * 12 + 8;
 
   return (
     <div
-      ref={(el) => { if (el && isFocused) el.scrollIntoView({ block: 'nearest' }); }}
+      ref={el => {
+        if (el && isFocused) el.scrollIntoView({ block: 'nearest' });
+      }}
       className={`flex items-center gap-1 py-0.5 pr-1 cursor-pointer rounded text-sm select-none group ${
         isSelected
           ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
           : 'text-[var(--color-text)] hover:bg-white/5'
       } ${isFocused ? 'ring-1 ring-[var(--color-primary)]' : ''}`}
       style={{ paddingLeft: indent }}
-      onClick={() => entry.isDir ? onToggleDir(entry.path) : onSelectFile(entry.path)}
+      onClick={() =>
+        entry.isDir ? onToggleDir(entry.path) : onSelectFile(entry.path)
+      }
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
@@ -47,17 +64,24 @@ function FileTreeRow({ entry, depth, isExpanded, isSelected, isFocused, onToggle
       </span>
       <span className="truncate flex-1">{entry.name}</span>
       {hovered && (
-        <div className="flex items-center gap-1 shrink-0" onClick={e => e.stopPropagation()}>
+        <div
+          className="flex items-center gap-1 shrink-0"
+          onClick={e => e.stopPropagation()}
+        >
           <button
             className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] text-xs"
             title="Rename"
             onClick={() => onRenameStart(entry)}
-          >✎</button>
+          >
+            ✎
+          </button>
           <button
             className="p-0.5 text-[var(--color-text-muted)] hover:text-red-400 text-xs"
             title="Delete"
             onClick={() => onDelete(entry)}
-          >✕</button>
+          >
+            ✕
+          </button>
         </div>
       )}
     </div>
@@ -76,10 +100,13 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
   const [focusedIdx, setFocusedIdx] = useState(0);
   const { level } = useShortcuts();
 
-  const dirPaths = useMemo(() => ['', ...Array.from(expandedDirs)], [expandedDirs]);
+  const dirPaths = useMemo(
+    () => ['', ...Array.from(expandedDirs)],
+    [expandedDirs]
+  );
 
   const dirQueries = useQueries({
-    queries: dirPaths.map((p) => ({
+    queries: dirPaths.map(p => ({
       queryKey: ['files', 'list', p],
       queryFn: () => api.files.list(p || undefined),
     })),
@@ -98,7 +125,8 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
     if (!children) return;
     for (const entry of children) {
       visibleNodes.push({ entry, depth });
-      if (entry.isDir && expandedDirs.has(entry.path)) walk(entry.path, depth + 1);
+      if (entry.isDir && expandedDirs.has(entry.path))
+        walk(entry.path, depth + 1);
     }
   };
   walk('', 0);
@@ -106,7 +134,7 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
   const rootEntries = childrenByDir.get('');
 
   useEffect(() => {
-    setFocusedIdx((i) => Math.min(i, Math.max(visibleNodes.length - 1, 0)));
+    setFocusedIdx(i => Math.min(i, Math.max(visibleNodes.length - 1, 0)));
   }, [visibleNodes.length]);
 
   const deleteMutation = useMutation({
@@ -118,7 +146,8 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
   });
 
   const renameMutation = useMutation({
-    mutationFn: ({ from, to }: { from: string; to: string }) => api.files.rename(from, to),
+    mutationFn: ({ from, to }: { from: string; to: string }) =>
+      api.files.rename(from, to),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['files', 'list'] });
       setRenamingEntry(null);
@@ -163,8 +192,9 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
   };
 
   useShortcutScope(1, {
-    next: () => setFocusedIdx((i) => Math.min(i + 1, Math.max(visibleNodes.length - 1, 0))),
-    prev: () => setFocusedIdx((i) => Math.max(i - 1, 0)),
+    next: () =>
+      setFocusedIdx(i => Math.min(i + 1, Math.max(visibleNodes.length - 1, 0))),
+    prev: () => setFocusedIdx(i => Math.max(i - 1, 0)),
     drillIn: () => {
       const node = visibleNodes[focusedIdx];
       if (!node) return false;
@@ -221,24 +251,33 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
     const dir = renamingEntry.path.includes('/')
       ? renamingEntry.path.substring(0, renamingEntry.path.lastIndexOf('/') + 1)
       : '';
-    renameMutation.mutate({ from: renamingEntry.path, to: dir + renameValue.trim() });
+    renameMutation.mutate({
+      from: renamingEntry.path,
+      to: dir + renameValue.trim(),
+    });
   };
 
   return (
     <div className="flex flex-col h-full">
       <div className="p-2 border-b border-white/10 flex items-center justify-between">
-        <span className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wide">Files</span>
+        <span className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wide">
+          Files
+        </span>
         <div className="flex items-center gap-1">
           <button
             onClick={() => setShowNewFolder(true)}
             className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1"
             title="New folder"
-          >+ Folder</button>
+          >
+            + Folder
+          </button>
           <button
             onClick={() => setShowNewFile(true)}
             className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1"
             title="New file"
-          >+ New</button>
+          >
+            + New
+          </button>
         </div>
       </div>
 
@@ -250,10 +289,17 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
               value={newFileName}
               onChange={e => setNewFileName(e.target.value)}
               onKeyDown={e => {
-                if (e.key === 'Enter' && newFileName.trim()) createFile.mutate(newFileName.trim());
-                if (e.key === 'Escape') { setShowNewFile(false); setNewFileName(''); }
+                if (e.key === 'Enter' && newFileName.trim())
+                  createFile.mutate(newFileName.trim());
+                if (e.key === 'Escape') {
+                  setShowNewFile(false);
+                  setNewFileName('');
+                }
               }}
-              onBlur={() => { setShowNewFile(false); setNewFileName(''); }}
+              onBlur={() => {
+                setShowNewFile(false);
+                setNewFileName('');
+              }}
               placeholder="filename.md"
               className="w-full bg-[var(--color-bg)] border border-[var(--color-primary)] rounded px-2 py-0.5 text-sm text-[var(--color-text)] focus:outline-none"
             />
@@ -267,10 +313,17 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
               value={newFolderName}
               onChange={e => setNewFolderName(e.target.value)}
               onKeyDown={e => {
-                if (e.key === 'Enter' && newFolderName.trim()) createFolder.mutate(newFolderName.trim());
-                if (e.key === 'Escape') { setShowNewFolder(false); setNewFolderName(''); }
+                if (e.key === 'Enter' && newFolderName.trim())
+                  createFolder.mutate(newFolderName.trim());
+                if (e.key === 'Escape') {
+                  setShowNewFolder(false);
+                  setNewFolderName('');
+                }
               }}
-              onBlur={() => { setShowNewFolder(false); setNewFolderName(''); }}
+              onBlur={() => {
+                setShowNewFolder(false);
+                setNewFolderName('');
+              }}
               placeholder="folder name"
               className="w-full bg-[var(--color-bg)] border border-[var(--color-primary)] rounded px-2 py-0.5 text-sm text-[var(--color-text)] focus:outline-none"
             />

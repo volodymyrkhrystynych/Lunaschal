@@ -1,6 +1,6 @@
 # TODO — next three updates
 
-The first three items to build, picked from [ROADMAP.md](./ROADMAP.md) as the best mix of *easiest* and *most impactful* right now. All three are self-contained (no OAuth, no external APIs, no new infrastructure), fully coverable by automated tests, and pay off daily.
+The first three items to build, picked from [ROADMAP.md](./ROADMAP.md) as the best mix of _easiest_ and _most impactful_ right now. All three are self-contained (no OAuth, no external APIs, no new infrastructure), fully coverable by automated tests, and pay off daily.
 
 ## 1. Local encrypted backups
 
@@ -11,7 +11,7 @@ The first three items to build, picked from [ROADMAP.md](./ROADMAP.md) as the be
 - Trigger: on app startup once per day, plus a manual "Back up now" button in Settings.
 - Retention: keep last 7 daily + 4 weekly snapshots in a configurable backup directory (ideally another disk).
 - Tests: round-trip a backup → restore → verify DB contents; retention pruning; key-file permissions.
-- *Phase 2 (later):* encrypted upload to Dropbox/Google Drive.
+- _Phase 2 (later):_ encrypted upload to Dropbox/Google Drive.
 
 ## 2. Todos: due dates, priorities, overdue view
 
@@ -22,7 +22,7 @@ The first three items to build, picked from [ROADMAP.md](./ROADMAP.md) as the be
 - Frontend: grouping (Overdue / Today / Upcoming / Someday), priority indicator, overdue highlighting.
 - Teach the voice-command parser (`backend/ai/commands.py`) to extract due dates ("remind me Friday").
 - Tests: route filters/sorting, overdue computation around date boundaries, parser date extraction.
-- *Phase 2 (later):* recurring todos, subtasks.
+- _Phase 2 (later):_ recurring todos, subtasks.
 
 ## 3. Habit tracking with streaks
 

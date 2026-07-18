@@ -1,16 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { adjacentChapter, chapterIdsUpTo, detectFicSite, formatRating, groupChaptersByCategory, orderChapters } from './fanfic';
+import {
+  adjacentChapter,
+  chapterIdsUpTo,
+  detectFicSite,
+  formatRating,
+  groupChaptersByCategory,
+  orderChapters,
+} from './fanfic';
 import type { FicChapterSummary } from '@/hooks/api';
 
 describe('detectFicSite', () => {
   it('detects all three forums', () => {
-    expect(detectFicSite('https://forums.spacebattles.com/threads/x.1/')).toBe('spacebattles');
-    expect(detectFicSite('https://forums.sufficientvelocity.com/threads/x.1/')).toBe('sufficientvelocity');
-    expect(detectFicSite('https://forum.questionablequesting.com/threads/x.1/')).toBe('questionablequesting');
+    expect(detectFicSite('https://forums.spacebattles.com/threads/x.1/')).toBe(
+      'spacebattles'
+    );
+    expect(
+      detectFicSite('https://forums.sufficientvelocity.com/threads/x.1/')
+    ).toBe('sufficientvelocity');
+    expect(
+      detectFicSite('https://forum.questionablequesting.com/threads/x.1/')
+    ).toBe('questionablequesting');
   });
 
   it('handles www prefixes', () => {
-    expect(detectFicSite('https://www.forums.spacebattles.com/threads/x.1/')).toBe('spacebattles');
+    expect(
+      detectFicSite('https://www.forums.spacebattles.com/threads/x.1/')
+    ).toBe('spacebattles');
   });
 
   it('returns null for other URLs and garbage', () => {
@@ -21,7 +36,16 @@ describe('detectFicSite', () => {
 });
 
 function ch(id: string, category: string, position: number): FicChapterSummary {
-  return { id, ficId: 'f', position, title: id, category, wordCount: 0, postedAt: null, isRead: false };
+  return {
+    id,
+    ficId: 'f',
+    position,
+    title: id,
+    category,
+    wordCount: 0,
+    postedAt: null,
+    isRead: false,
+  };
 }
 
 const CHAPTERS = [
@@ -34,13 +58,18 @@ const CHAPTERS = [
 
 describe('orderChapters', () => {
   it('puts the main category first, then others alphabetically, by position', () => {
-    expect(orderChapters(CHAPTERS).map((c) => c.id)).toEqual(
-      ['main1', 'main2', 'main3', 'apoc1', 'side1']);
+    expect(orderChapters(CHAPTERS).map(c => c.id)).toEqual([
+      'main1',
+      'main2',
+      'main3',
+      'apoc1',
+      'side1',
+    ]);
   });
 
   it('is case-insensitive about the main category and handles file fics', () => {
     const file = [ch('b', 'chapters', 2), ch('a', 'chapters', 1)];
-    expect(orderChapters(file).map((c) => c.id)).toEqual(['a', 'b']);
+    expect(orderChapters(file).map(c => c.id)).toEqual(['a', 'b']);
   });
 
   it('handles empty input', () => {
@@ -81,9 +110,19 @@ describe('chapterIdsUpTo', () => {
   });
 
   it('crosses category boundaries in display order', () => {
-    expect(chapterIdsUpTo(CHAPTERS, 'apoc1')).toEqual(['main1', 'main2', 'main3', 'apoc1']);
-    expect(chapterIdsUpTo(CHAPTERS, 'side1')).toEqual(
-      ['main1', 'main2', 'main3', 'apoc1', 'side1']);
+    expect(chapterIdsUpTo(CHAPTERS, 'apoc1')).toEqual([
+      'main1',
+      'main2',
+      'main3',
+      'apoc1',
+    ]);
+    expect(chapterIdsUpTo(CHAPTERS, 'side1')).toEqual([
+      'main1',
+      'main2',
+      'main3',
+      'apoc1',
+      'side1',
+    ]);
   });
 
   it('returns [] for unknown ids and empty input', () => {

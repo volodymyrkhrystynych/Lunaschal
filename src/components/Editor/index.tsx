@@ -13,10 +13,7 @@ export function Editor({ pendingInsert, onInsertDone }: Props) {
   return (
     <div className="flex-1 flex overflow-hidden">
       <div className="w-56 shrink-0 border-r border-white/10 bg-[var(--color-surface)] overflow-hidden flex flex-col">
-        <FileTree
-          selectedPath={selectedPath}
-          onSelectFile={setSelectedPath}
-        />
+        <FileTree selectedPath={selectedPath} onSelectFile={setSelectedPath} />
       </div>
       <div className="flex-1 flex flex-col overflow-hidden">
         {selectedPath ? (

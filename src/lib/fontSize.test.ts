@@ -1,12 +1,22 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  FONT_SIZE_DEFAULT, FONT_SIZE_MAX, FONT_SIZE_MIN,
-  CHAPTER_FONT_SIZE_DEFAULT, CHAPTER_FONT_SIZE_MAX, CHAPTER_FONT_SIZE_MIN,
-  READING_FONT_SIZE_DEFAULT, READING_FONT_SIZE_MAX, READING_FONT_SIZE_MIN,
-  applyFontSize, getStoredFontSize, setStoredFontSize,
-  getStoredChapterFontSize, setStoredChapterFontSize,
-  getStoredReadingFontSize, setStoredReadingFontSize,
+  FONT_SIZE_DEFAULT,
+  FONT_SIZE_MAX,
+  FONT_SIZE_MIN,
+  CHAPTER_FONT_SIZE_DEFAULT,
+  CHAPTER_FONT_SIZE_MAX,
+  CHAPTER_FONT_SIZE_MIN,
+  READING_FONT_SIZE_DEFAULT,
+  READING_FONT_SIZE_MAX,
+  READING_FONT_SIZE_MIN,
+  applyFontSize,
+  getStoredFontSize,
+  setStoredFontSize,
+  getStoredChapterFontSize,
+  setStoredChapterFontSize,
+  getStoredReadingFontSize,
+  setStoredReadingFontSize,
 } from './fontSize';
 
 beforeEach(() => {

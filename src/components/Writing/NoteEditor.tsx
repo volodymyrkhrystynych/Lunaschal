@@ -13,7 +13,9 @@ export function NoteEditor({ noteId }: Props) {
   const [content, setContent] = useState('');
   const [title, setTitle] = useState('');
   const [editingTitle, setEditingTitle] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>('saved');
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>(
+    'saved'
+  );
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedNoteRef = useRef<string | null>(null);
   const queryClient = useQueryClient();
@@ -25,11 +27,17 @@ export function NoteEditor({ noteId }: Props) {
   });
 
   const updateNote = useMutation({
-    mutationFn: (data: { title?: string; content?: string; docType?: string }) =>
-      api.writing.updateNote(noteId, data),
+    mutationFn: (data: {
+      title?: string;
+      content?: string;
+      docType?: string;
+    }) => api.writing.updateNote(noteId, data),
     onSuccess: () => {
       setSaveStatus('saved');
-      if (note) queryClient.invalidateQueries({ queryKey: ['writing', 'notes', note.projectId] });
+      if (note)
+        queryClient.invalidateQueries({
+          queryKey: ['writing', 'notes', note.projectId],
+        });
       queryClient.invalidateQueries({ queryKey: ['writing', 'note', noteId] });
     },
   });
@@ -44,7 +52,9 @@ export function NoteEditor({ noteId }: Props) {
   }, [note, noteId]);
 
   useEffect(() => {
-    return () => { if (saveTimerRef.current) clearTimeout(saveTimerRef.current); };
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
   }, []);
 
   const handleContentChange = (value: string) => {
@@ -66,12 +76,24 @@ export function NoteEditor({ noteId }: Props) {
 
   if (isLoading) {
     return (
-      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">Loading…</div>
+      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
+        Loading…
+      </div>
     );
   }
 
-  const statusLabel = saveStatus === 'saved' ? 'Saved' : saveStatus === 'saving' ? 'Saving…' : 'Unsaved';
-  const statusColor = saveStatus === 'saved' ? 'text-green-500' : saveStatus === 'saving' ? 'text-yellow-400' : 'text-[var(--color-text-muted)]';
+  const statusLabel =
+    saveStatus === 'saved'
+      ? 'Saved'
+      : saveStatus === 'saving'
+        ? 'Saving…'
+        : 'Unsaved';
+  const statusColor =
+    saveStatus === 'saved'
+      ? 'text-green-500'
+      : saveStatus === 'saving'
+        ? 'text-yellow-400'
+        : 'text-[var(--color-text-muted)]';
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -82,7 +104,13 @@ export function NoteEditor({ noteId }: Props) {
             value={title}
             onChange={e => setTitle(e.target.value)}
             onBlur={handleTitleSave}
-            onKeyDown={e => { if (e.key === 'Enter') handleTitleSave(); if (e.key === 'Escape') { setTitle(note?.title ?? ''); setEditingTitle(false); } }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') handleTitleSave();
+              if (e.key === 'Escape') {
+                setTitle(note?.title ?? '');
+                setEditingTitle(false);
+              }
+            }}
             className="flex-1 bg-transparent text-sm font-medium text-[var(--color-text)] border-b border-[var(--color-primary)] focus:outline-none"
           />
         ) : (
@@ -101,9 +129,13 @@ export function NoteEditor({ noteId }: Props) {
             aria-label="Note type"
             className="px-2 py-1 rounded bg-white/5 border border-white/20 text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
           >
-            {(Object.entries(DOC_TYPE_LABELS) as [DocType, string][]).map(([val, label]) => (
-              <option key={val} value={val}>{label}</option>
-            ))}
+            {(Object.entries(DOC_TYPE_LABELS) as [DocType, string][]).map(
+              ([val, label]) => (
+                <option key={val} value={val}>
+                  {label}
+                </option>
+              )
+            )}
           </select>
           <span className={statusColor}>{statusLabel}</span>
         </div>

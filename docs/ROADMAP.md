@@ -8,7 +8,7 @@ Basically mandatory — as email, journals, handwritten pages, and the book libr
 
 - **Local backup**: scheduled snapshot of the SQLite DB (+ media files) to another directory/disk.
 - **Cloud backup**: push to **Dropbox or Google Drive** — but **zipped and encrypted** before upload; the cloud never sees plaintext.
-- **Key management**: random 256-bit key generated once when backups are enabled; archives encrypted with AES-256-GCM (or `age`). Key stored in `~/.config/lunaschal/backup.key` (chmod 600) — *never* in the settings table (it's inside the DB being backed up — lockout after disk loss) and *never* uploaded with the archive. On generation, show the key once so it can be saved in a password manager / printed; that off-machine copy is what makes restore after total machine loss possible.
+- **Key management**: random 256-bit key generated once when backups are enabled; archives encrypted with AES-256-GCM (or `age`). Key stored in `~/.config/lunaschal/backup.key` (chmod 600) — _never_ in the settings table (it's inside the DB being backed up — lockout after disk loss) and _never_ uploaded with the archive. On generation, show the key once so it can be saved in a password manager / printed; that off-machine copy is what makes restore after total machine loss possible.
 - Retention policy (keep N daily / weekly snapshots) and a tested restore path — a backup that's never been restored doesn't count.
 - Plain-format export (Markdown/EPUB) as a secondary escape hatch so nothing is locked into the DB.
 
@@ -16,7 +16,7 @@ Basically mandatory — as email, journals, handwritten pages, and the book libr
 
 Pull email out of cloud providers and into Lunaschal so it can be stored locally and processed by the AI layer.
 
-- Connect to **Gmail** and **Outlook** (OAuth), fetch messages, and save them locally — get the mail *off* the cloud, not just read it there.
+- Connect to **Gmail** and **Outlook** (OAuth), fetch messages, and save them locally — get the mail _off_ the cloud, not just read it there.
 - Store full messages (headers, body, attachments) in SQLite alongside the existing journal/RAG data.
 - AI processing on ingested mail:
   - Summaries (per message and per thread)
@@ -80,7 +80,7 @@ Support pen input in the journal, matching an iPad + stylus "pen on PDF planner"
 
 - View modes: **calendar view**, **list view**, and **day view**.
 - **"On this day last year"** — show past entries from the same date in previous years.
-- Better tag coverage: get good tags on *all* journal entries (backfill with the curated-tags classifier, improve freeform AI tagging quality).
+- Better tag coverage: get good tags on _all_ journal entries (backfill with the curated-tags classifier, improve freeform AI tagging quality).
 
 ## Mobile / tablet access
 

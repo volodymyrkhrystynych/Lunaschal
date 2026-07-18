@@ -6,35 +6,35 @@ import {
   useMemo,
   useRef,
   useState,
-} from "react";
-import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { api } from "../hooks/api";
+} from 'react';
+import type { ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../hooks/api';
 import {
   DEFAULT_BINDINGS,
   comboFromEvent,
   isEditableTarget,
   keyCapture,
-} from "./keymap";
-import type { ActionId } from "./keymap";
+} from './keymap';
+import type { ActionId } from './keymap';
 
 function _evdevToCode(key: string): string | null {
   if (/^KEY_[A-Z]$/.test(key)) return `Key${key[4]}`;
   if (/^KEY_[0-9]$/.test(key)) return `Digit${key[4]}`;
   if (/^KEY_F\d{1,2}$/.test(key)) return key.slice(4);
   const m: Record<string, string> = {
-    KEY_DELETE: "Delete",
-    KEY_HOME: "Home",
-    KEY_END: "End",
-    KEY_PAGEUP: "PageUp",
-    KEY_PAGEDOWN: "PageDown",
-    KEY_INSERT: "Insert",
-    KEY_CAPSLOCK: "CapsLock",
-    KEY_GRAVE: "Backquote",
-    KEY_BACKSLASH: "Backslash",
-    KEY_SCROLLLOCK: "ScrollLock",
-    KEY_PAUSE: "Pause",
-    KEY_SYSRQ: "PrintScreen",
+    KEY_DELETE: 'Delete',
+    KEY_HOME: 'Home',
+    KEY_END: 'End',
+    KEY_PAGEUP: 'PageUp',
+    KEY_PAGEDOWN: 'PageDown',
+    KEY_INSERT: 'Insert',
+    KEY_CAPSLOCK: 'CapsLock',
+    KEY_GRAVE: 'Backquote',
+    KEY_BACKSLASH: 'Backslash',
+    KEY_SCROLLLOCK: 'ScrollLock',
+    KEY_PAUSE: 'Pause',
+    KEY_SYSRQ: 'PrintScreen',
   };
   return m[key] ?? null;
 }
@@ -45,13 +45,13 @@ function evdevComboMatchesEvent(combo: string, e: KeyboardEvent): boolean {
     needsShift = false,
     needsMeta = false;
   let expectedCode: string | null = null;
-  for (const part of combo.split("+")) {
-    if (part === "KEY_LEFTALT" || part === "KEY_RIGHTALT") needsAlt = true;
-    else if (part === "KEY_LEFTCTRL" || part === "KEY_RIGHTCTRL")
+  for (const part of combo.split('+')) {
+    if (part === 'KEY_LEFTALT' || part === 'KEY_RIGHTALT') needsAlt = true;
+    else if (part === 'KEY_LEFTCTRL' || part === 'KEY_RIGHTCTRL')
       needsCtrl = true;
-    else if (part === "KEY_LEFTSHIFT" || part === "KEY_RIGHTSHIFT")
+    else if (part === 'KEY_LEFTSHIFT' || part === 'KEY_RIGHTSHIFT')
       needsShift = true;
-    else if (part === "KEY_LEFTMETA" || part === "KEY_RIGHTMETA")
+    else if (part === 'KEY_LEFTMETA' || part === 'KEY_RIGHTMETA')
       needsMeta = true;
     else expectedCode = _evdevToCode(part);
   }
@@ -65,45 +65,45 @@ function evdevComboMatchesEvent(combo: string, e: KeyboardEvent): boolean {
 }
 
 export type AppView =
-  | "chat"
-  | "journal"
-  | "meetings"
-  | "calendar"
-  | "learning"
-  | "settings"
-  | "files"
-  | "writing"
-  | "tasks"
-  | "cookbook"
-  | "fanfic"
-  | "newspapers";
+  | 'chat'
+  | 'journal'
+  | 'meetings'
+  | 'calendar'
+  | 'learning'
+  | 'settings'
+  | 'files'
+  | 'writing'
+  | 'tasks'
+  | 'cookbook'
+  | 'fanfic'
+  | 'newspapers';
 
 export const VIEW_ORDER: AppView[] = [
-  "chat",
-  "tasks",
-  "journal",
-  "meetings",
-  "writing",
-  "calendar",
-  "learning",
-  "cookbook",
-  "fanfic",
-  "newspapers",
-  "files",
-  "settings",
+  'chat',
+  'tasks',
+  'journal',
+  'meetings',
+  'writing',
+  'calendar',
+  'learning',
+  'cookbook',
+  'fanfic',
+  'newspapers',
+  'files',
+  'settings',
 ];
 
 const TAB_ACTIONS: Partial<Record<ActionId, AppView>> = {
-  "tab.chat": "chat",
-  "tab.tasks": "tasks",
-  "tab.journal": "journal",
-  "tab.writing": "writing",
-  "tab.calendar": "calendar",
-  "tab.learning": "learning",
-  "tab.cookbook": "cookbook",
-  "tab.fanfic": "fanfic",
-  "tab.files": "files",
-  "tab.settings": "settings",
+  'tab.chat': 'chat',
+  'tab.tasks': 'tasks',
+  'tab.journal': 'journal',
+  'tab.writing': 'writing',
+  'tab.calendar': 'calendar',
+  'tab.learning': 'learning',
+  'tab.cookbook': 'cookbook',
+  'tab.fanfic': 'fanfic',
+  'tab.files': 'files',
+  'tab.settings': 'settings',
 };
 
 export interface ScopeHandlers {
@@ -138,7 +138,7 @@ const ShortcutContext = createContext<ShortcutContextValue | null>(null);
 export function useShortcuts(): ShortcutContextValue {
   const ctx = useContext(ShortcutContext);
   if (!ctx)
-    throw new Error("useShortcuts must be used within ShortcutProvider");
+    throw new Error('useShortcuts must be used within ShortcutProvider');
   return ctx;
 }
 
@@ -162,11 +162,11 @@ export function ShortcutProvider({
   currentViewRef.current = currentView;
 
   const { data } = useQuery({
-    queryKey: ["shortcuts"],
+    queryKey: ['shortcuts'],
     queryFn: api.shortcuts.get,
   });
   const { data: settings } = useQuery({
-    queryKey: ["settings"],
+    queryKey: ['settings'],
     queryFn: api.settings.get,
   });
 
@@ -177,7 +177,7 @@ export function ShortcutProvider({
       settings.sttVoiceKey,
       settings.sttJournalKey,
       settings.sttCommandKey,
-    ].filter((k): k is string => typeof k === "string" && k.length > 0);
+    ].filter((k): k is string => typeof k === 'string' && k.length > 0);
   }, [settings]);
   const sttCombosRef = useRef<string[]>([]);
   sttCombosRef.current = sttCombos;
@@ -187,7 +187,7 @@ export function ShortcutProvider({
     const saved = data?.bindings ?? {};
     for (const k of Object.keys(merged) as ActionId[]) {
       const v = saved[k];
-      if (typeof v === "string" && v) merged[k] = v;
+      if (typeof v === 'string' && v) merged[k] = v;
     }
     return merged;
   }, [data]);
@@ -231,13 +231,13 @@ export function ShortcutProvider({
         }
       };
     },
-    [],
+    []
   );
 
   const requestCreate = useCallback((view: AppView) => {
     const handler =
       currentViewRef.current === view
-        ? resolveHandler(scopesRef.current, 1, "create")
+        ? resolveHandler(scopesRef.current, 1, 'create')
         : null;
     if (handler) {
       (handler as () => void)();
@@ -251,20 +251,18 @@ export function ShortcutProvider({
   dispatchRef.current = (e: KeyboardEvent) => {
     if (keyCapture.active || e.defaultPrevented) return;
 
-    if (e.key === "Escape") {
+    if (e.key === 'Escape') {
       const focused = document.activeElement;
       if (isEditableTarget(focused)) {
         (focused as HTMLElement).blur();
         return; // no stopPropagation — per-input Escape handlers still run
       }
-      setLevel((l) => Math.max(0, l - 1));
+      setLevel(l => Math.max(0, l - 1));
       return;
     }
 
     if (isEditableTarget(e.target)) {
-      if (
-        sttCombosRef.current.some((combo) => evdevComboMatchesEvent(combo, e))
-      )
+      if (sttCombosRef.current.some(combo => evdevComboMatchesEvent(combo, e)))
         e.preventDefault();
       return;
     }
@@ -283,17 +281,17 @@ export function ShortcutProvider({
     if (tabView) {
       onViewChange(tabView);
       setLevel(0);
-    } else if (action === "global.newJournalEntry") {
-      onViewChange("journal");
-      requestCreate("journal");
-    } else if (action === "global.toggleSidebar") {
+    } else if (action === 'global.newJournalEntry') {
+      onViewChange('journal');
+      requestCreate('journal');
+    } else if (action === 'global.toggleSidebar') {
       if (onToggleSidebar) onToggleSidebar();
       else handled = false;
-    } else if (action === "nav.up" || action === "nav.down") {
+    } else if (action === 'nav.up' || action === 'nav.down') {
       if (lvl === 0) {
         const idx = VIEW_ORDER.indexOf(currentViewRef.current);
         const next =
-          action === "nav.down"
+          action === 'nav.down'
             ? Math.min(idx + 1, VIEW_ORDER.length - 1)
             : Math.max(idx - 1, 0);
         if (next !== idx) onViewChange(VIEW_ORDER[next]);
@@ -303,72 +301,70 @@ export function ShortcutProvider({
           resolveHandler(
             scopes,
             lvl,
-            action === "nav.down" ? "next" : "prev",
+            action === 'nav.down' ? 'next' : 'prev'
           ) ??
           resolveHandler(
             scopes,
             lvl,
-            action === "nav.down" ? "scrollDown" : "scrollUp",
+            action === 'nav.down' ? 'scrollDown' : 'scrollUp'
           );
         if (handler) (handler as () => void)();
       }
-    } else if (action === "nav.in") {
-      const drillIn = resolveHandler(scopes, lvl, "drillIn") as
-        | (() => boolean | void)
-        | null;
+    } else if (action === 'nav.in') {
+      const drillIn = resolveHandler(scopes, lvl, 'drillIn') as
+        (() => boolean | void) | null;
       const consumed = lvl > 0 && drillIn ? drillIn() : false;
       if (!consumed && scopes.has(lvl + 1)) setLevel(lvl + 1);
-    } else if (action === "nav.out") {
+    } else if (action === 'nav.out') {
       const drillOut =
         lvl > 0
-          ? (resolveHandler(scopes, lvl, "drillOut") as
-              | (() => boolean | void)
-              | null)
+          ? (resolveHandler(scopes, lvl, 'drillOut') as
+              (() => boolean | void) | null)
           : null;
       const consumed = drillOut ? drillOut() : false;
       if (!consumed) setLevel(Math.max(0, lvl - 1));
-    } else if (action === "action.new" || action === "action.newAlt") {
+    } else if (action === 'action.new' || action === 'action.newAlt') {
       const handler = resolveHandler(
         scopes,
         Math.max(lvl, 1),
-        action === "action.new" ? "create" : "createAlt",
+        action === 'action.new' ? 'create' : 'createAlt'
       );
       if (handler) (handler as () => void)();
       else handled = false;
-    } else if (action === "action.annotate") {
-      const handler = resolveHandler(scopes, Math.max(lvl, 1), "annotate");
+    } else if (action === 'action.annotate') {
+      const handler = resolveHandler(scopes, Math.max(lvl, 1), 'annotate');
       if (handler) (handler as () => void)();
       else handled = false;
-    } else if (action === "action.search") {
-      const handler = resolveHandler(scopes, Math.max(lvl, 1), "search");
+    } else if (action === 'action.search') {
+      const handler = resolveHandler(scopes, Math.max(lvl, 1), 'search');
       if (handler) (handler as () => void)();
       else handled = false;
-    } else if (action === "learning.approve" || action === "learning.deny") {
+    } else if (action === 'learning.approve' || action === 'learning.deny') {
       // Only fire at the depth where the selection highlight is visible.
       const handler = resolveHandler(
         scopes,
         Math.max(lvl, 1),
-        action === "learning.approve" ? "approve" : "deny",
+        action === 'learning.approve' ? 'approve' : 'deny'
       );
       if (handler) (handler as () => void)();
       else handled = false;
-    } else if (action === "learning.record") {
+    } else if (action === 'learning.record') {
       // Recording has no selection to disambiguate, so it works from any depth.
       const maxDepth = Math.max(lvl, 1, ...Array.from(scopes.keys()));
-      const handler = resolveHandlerDeep(scopes, maxDepth, "record");
+      const handler = resolveHandlerDeep(scopes, maxDepth, 'record');
       if (handler) (handler as () => void)();
       else handled = false;
     } else if (
-      action === "reader.fontUp" ||
-      action === "reader.fontDown" ||
-      action === "reader.toggleList"
+      action === 'reader.fontUp' ||
+      action === 'reader.fontDown' ||
+      action === 'reader.toggleList'
     ) {
       const method =
-        action === "reader.fontUp"
-          ? "fontUp"
-          : action === "reader.fontDown"
-            ? "fontDown"
-            : "toggleList";
+        action === 'reader.fontUp'
+          ? 'fontUp'
+          : action === 'reader.fontDown'
+            ? 'fontDown'
+            : 'toggleList';
       // These handlers live at depth 1 but should work from any depth in the view.
       const handler = resolveHandlerDeep(scopes, Math.max(lvl, 1), method);
       if (handler) (handler as () => void)();
@@ -385,13 +381,13 @@ export function ShortcutProvider({
 
   useEffect(() => {
     const listener = (e: KeyboardEvent) => dispatchRef.current(e);
-    window.addEventListener("keydown", listener, true);
-    return () => window.removeEventListener("keydown", listener, true);
+    window.addEventListener('keydown', listener, true);
+    return () => window.removeEventListener('keydown', listener, true);
   }, []);
 
   const value = useMemo(
     () => ({ bindings, level, setLevel, registerScope, requestCreate }),
-    [bindings, level, registerScope, requestCreate],
+    [bindings, level, registerScope, requestCreate]
   );
 
   return (
@@ -404,7 +400,7 @@ export function ShortcutProvider({
 function resolveHandler(
   scopes: Map<number, ScopeHandlers[]>,
   depth: number,
-  method: keyof ScopeHandlers,
+  method: keyof ScopeHandlers
 ): ScopeHandlers[keyof ScopeHandlers] | null {
   const list = scopes.get(depth);
   if (!list) return null;
@@ -418,7 +414,7 @@ function resolveHandler(
 function resolveHandlerDeep(
   scopes: Map<number, ScopeHandlers[]>,
   depth: number,
-  method: keyof ScopeHandlers,
+  method: keyof ScopeHandlers
 ): ScopeHandlers[keyof ScopeHandlers] | null {
   for (let d = depth; d >= 1; d--) {
     const fn = resolveHandler(scopes, d, method);

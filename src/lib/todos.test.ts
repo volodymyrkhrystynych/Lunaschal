@@ -14,8 +14,8 @@ describe('partitionTodos', () => {
       todo('b', true, '2026-07-01T10:00:00+00:00'),
       todo('c', false, null),
     ]);
-    expect(active.map((t) => t.id)).toEqual(['a', 'c']);
-    expect(completed.map((t) => t.id)).toEqual(['b']);
+    expect(active.map(t => t.id)).toEqual(['a', 'c']);
+    expect(completed.map(t => t.id)).toEqual(['b']);
   });
 
   it('orders completed most-recent first', () => {
@@ -24,7 +24,7 @@ describe('partitionTodos', () => {
       todo('new', true, '2026-07-05T10:00:00+00:00'),
       todo('mid', true, '2026-06-20T10:00:00+00:00'),
     ]);
-    expect(completed.map((t) => t.id)).toEqual(['new', 'mid', 'old']);
+    expect(completed.map(t => t.id)).toEqual(['new', 'mid', 'old']);
   });
 
   it('puts legacy completed todos without a timestamp last', () => {
@@ -32,7 +32,7 @@ describe('partitionTodos', () => {
       todo('legacy', true, null),
       todo('dated', true, '2026-07-05T10:00:00+00:00'),
     ]);
-    expect(completed.map((t) => t.id)).toEqual(['dated', 'legacy']);
+    expect(completed.map(t => t.id)).toEqual(['dated', 'legacy']);
   });
 
   it('handles an empty list', () => {
