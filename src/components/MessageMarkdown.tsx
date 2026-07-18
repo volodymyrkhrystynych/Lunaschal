@@ -52,7 +52,7 @@ export function MessageMarkdown({ content }: Props) {
             </code>
           ),
           pre: ({ children }) => (
-            <pre className="mb-2 last:mb-0 p-2 rounded bg-black/30 text-left overflow-x-auto text-xs [&_code]:bg-transparent [&_code]:p-0">
+            <pre className="mb-2 last:mb-0 p-2 rounded bg-black/30 text-left overflow-x-auto text-[0.75em] [&_code]:bg-transparent [&_code]:p-0">
               {children}
             </pre>
           ),

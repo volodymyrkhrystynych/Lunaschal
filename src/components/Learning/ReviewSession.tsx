@@ -1,15 +1,19 @@
-import { useState } from 'react';
+import { useState, type RefObject } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type GradeResult, type LearningCard } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import { LEARNING_CARD_FONT_SIZE_DEFAULT } from '../../lib/fontSize';
+import { playCompletionChime } from '../../lib/sound';
 import { MessageMarkdown } from '../MessageMarkdown';
-import { CoverageResult } from './CoverageResult';
+import { CoverageResult, COVERAGE_DEFAULT_FONT_SIZE } from './CoverageResult';
 import { VerificationPanel } from './VerificationPanel';
 
 interface Props {
   folderId: string | null;
   tag: string | null;
+  scrollRef?: RefObject<HTMLDivElement | null>;
+  fontSize?: number;
 }
 
 const RATINGS = [
@@ -19,7 +23,12 @@ const RATINGS = [
   { value: 4, label: 'Easy', color: 'bg-green-500' },
 ];
 
-export function ReviewSession({ folderId, tag }: Props) {
+// Matches Tailwind's max-w-xl at the default card font size — grows
+// proportionally as the card is zoomed in, but never past the available
+// width, so the card widens before its code blocks resort to scrolling.
+const CARD_BASE_MAX_WIDTH_PX = 576;
+
+export function ReviewSession({ folderId, tag, scrollRef, fontSize }: Props) {
   const [index, setIndex] = useState(0);
   const [answer, setAnswer] = useState('');
   const [usedVoice, setUsedVoice] = useState(false);
@@ -54,6 +63,7 @@ export function ReviewSession({ folderId, tag }: Props) {
     onSuccess: g => {
       setGrade(g);
       setSelRating(g.suggestedRating);
+      playCompletionChime();
     },
   });
 
@@ -81,23 +91,13 @@ export function ReviewSession({ folderId, tag }: Props) {
   const answered = grade !== null || flipped;
 
   useShortcutScope(2, {
-    // Move the highlighted rating once the answer is shown.
-    next: () => {
-      if (answered) setSelRating(r => Math.min(r + 1, 4));
-    },
-    prev: () => {
-      if (answered) setSelRating(r => Math.max(r - 1, 1));
-    },
-    // D flips the card, then commits the highlighted rating.
-    drillIn: () => {
-      if (!card) return false;
-      if (!answered) {
-        setFlipped(true);
-      } else if (!review.isPending) {
-        review.mutate(selRating);
-      }
-      return true;
-    },
+    // No next/prev here — rating is chosen with 1-4, so W/S scroll instead.
+    scrollDown: () =>
+      scrollRef?.current?.scrollBy({ top: 120, behavior: 'smooth' }),
+    scrollUp: () =>
+      scrollRef?.current?.scrollBy({ top: -120, behavior: 'smooth' }),
+    // No drillIn here — Space flips and 1-4 rate, so D is left for navigation
+    // only and does nothing extra once already on the card.
     record: () => {
       if (!card || answered || gradeAnswer.isPending) return;
       if (recorder.status === 'recording') recorder.stop();
@@ -131,8 +131,19 @@ export function ReviewSession({ folderId, tag }: Props) {
     );
   }
 
+  const effectiveFontSize = fontSize ?? LEARNING_CARD_FONT_SIZE_DEFAULT;
+  const zoomRatio = effectiveFontSize / LEARNING_CARD_FONT_SIZE_DEFAULT;
+  // Rounded to avoid floating-point noise like 604.8000000000001 in styles.
+  const cardMaxWidthPx =
+    Math.round(CARD_BASE_MAX_WIDTH_PX * zoomRatio * 10) / 10;
+  const assessmentFontSize =
+    Math.round(COVERAGE_DEFAULT_FONT_SIZE * zoomRatio * 100) / 100;
+
   return (
-    <div className="max-w-xl mx-auto">
+    <div
+      className="mx-auto"
+      style={{ maxWidth: `min(${cardMaxWidthPx}px, 100%)` }}
+    >
       <div className="bg-[var(--color-surface)] rounded-lg border border-white/10 overflow-hidden">
         <div className="h-1 bg-white/5">
           <div
@@ -144,7 +155,10 @@ export function ReviewSession({ folderId, tag }: Props) {
           <div className="text-center mb-6 text-sm text-[var(--color-text-muted)]">
             Card {index + 1} of {due?.length}
           </div>
-          <div className="text-xl text-[var(--color-text)] text-center leading-relaxed mb-6">
+          <div
+            className="text-[var(--color-text)] text-center leading-relaxed mb-6"
+            style={{ fontSize: `${effectiveFontSize}px` }}
+          >
             <MessageMarkdown content={card.question} />
           </div>
 
@@ -225,7 +239,10 @@ export function ReviewSession({ folderId, tag }: Props) {
                 <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
                   Answer
                 </div>
-                <div className="text-[var(--color-text)]">
+                <div
+                  className="text-[var(--color-text)]"
+                  style={{ fontSize: `${effectiveFontSize}px` }}
+                >
                   <MessageMarkdown content={card.answer} />
                 </div>
               </div>
@@ -236,6 +253,7 @@ export function ReviewSession({ folderId, tag }: Props) {
                   normalizedAnswer={
                     usedVoice ? grade.normalizedAnswer : undefined
                   }
+                  fontSize={assessmentFontSize}
                 />
               )}
 

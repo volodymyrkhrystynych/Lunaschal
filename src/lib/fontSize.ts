@@ -90,3 +90,19 @@ const readingFontSizeStore = createProseFontSizeStore(
 );
 export const getStoredReadingFontSize = readingFontSizeStore.getStored;
 export const setStoredReadingFontSize = readingFontSizeStore.setStored;
+
+export const LEARNING_CARD_FONT_SIZE_MIN = 14;
+export const LEARNING_CARD_FONT_SIZE_MAX = 32;
+export const LEARNING_CARD_FONT_SIZE_DEFAULT = 20; // matches the question's text-xl default
+export const LEARNING_CARD_FONT_SIZE_STEP = 1;
+
+const learningCardFontSizeStore = createProseFontSizeStore(
+  'lunaschal:learningCardFontSize',
+  LEARNING_CARD_FONT_SIZE_MIN,
+  LEARNING_CARD_FONT_SIZE_MAX,
+  LEARNING_CARD_FONT_SIZE_DEFAULT
+);
+export const getStoredLearningCardFontSize =
+  learningCardFontSizeStore.getStored;
+export const setStoredLearningCardFontSize =
+  learningCardFontSizeStore.setStored;

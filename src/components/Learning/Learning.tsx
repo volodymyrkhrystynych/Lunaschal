@@ -1,10 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import {
   useShortcuts,
   useShortcutScope,
 } from '../../shortcuts/ShortcutProvider';
+import {
+  LEARNING_CARD_FONT_SIZE_STEP,
+  getStoredLearningCardFontSize,
+  setStoredLearningCardFontSize,
+} from '../../lib/fontSize';
 import { ReviewSession } from './ReviewSession';
 import { Queue } from './Queue';
 import { Browse } from './Browse';
@@ -32,6 +37,10 @@ export function Learning() {
   const [folderId, setFolderId] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
   const { level } = useShortcuts();
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [cardFontSize, setCardFontSize] = useState(
+    getStoredLearningCardFontSize
+  );
 
   const filters = { folderId: folderId ?? undefined, tag: tag ?? undefined };
   const { data: stats } = useQuery({
@@ -67,6 +76,14 @@ export function Learning() {
       setMode(m => MODES[Math.min(MODES.indexOf(m) + 1, MODES.length - 1)]),
     prev: () => setMode(m => MODES[Math.max(MODES.indexOf(m) - 1, 0)]),
     create: () => setMode('create'),
+    fontUp: () =>
+      setCardFontSize(px =>
+        setStoredLearningCardFontSize(px + LEARNING_CARD_FONT_SIZE_STEP)
+      ),
+    fontDown: () =>
+      setCardFontSize(px =>
+        setStoredLearningCardFontSize(px - LEARNING_CARD_FONT_SIZE_STEP)
+      ),
   });
 
   return (
@@ -192,8 +209,15 @@ export function Learning() {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto">
-        {mode === 'review' && <ReviewSession folderId={folderId} tag={tag} />}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+        {mode === 'review' && (
+          <ReviewSession
+            folderId={folderId}
+            tag={tag}
+            scrollRef={scrollRef}
+            fontSize={cardFontSize}
+          />
+        )}
         {mode === 'queue' && <Queue />}
         {mode === 'browse' && (
           <Browse folderId={folderId} tag={tag} onSelectTag={setTag} />

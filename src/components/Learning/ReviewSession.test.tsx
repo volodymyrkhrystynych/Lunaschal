@@ -2,11 +2,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
+import { useRef, useState } from 'react';
 import {
   ShortcutProvider,
   useShortcutScope,
 } from '../../shortcuts/ShortcutProvider';
+import {
+  LEARNING_CARD_FONT_SIZE_STEP,
+  getStoredLearningCardFontSize,
+  setStoredLearningCardFontSize,
+} from '../../lib/fontSize';
 import { ReviewSession } from './ReviewSession';
 import type { GradeResult, LearningCard } from '../../hooks/api';
 
@@ -64,11 +69,40 @@ vi.mock('../../hooks/api', () => ({
   },
 }));
 
-// In the app, Learning.tsx owns shortcut scope 1 (the mode bar); this shim
-// stands in for it so D can descend to the review scope at depth 2.
-function Scope1({ children }: { children: ReactNode }) {
-  useShortcutScope(1, {});
-  return <>{children}</>;
+const { playCompletionChime } = vi.hoisted(() => ({
+  playCompletionChime: vi.fn(),
+}));
+vi.mock('../../lib/sound', () => ({ playCompletionChime }));
+
+// In the app, Learning.tsx owns shortcut scope 1 (the mode bar) — including
+// the card font-size shortcuts — plus the scrollable container ref. This
+// shim mirrors both so D can descend to the review scope at depth 2, and
+// so =/- and W/S can be exercised against a real DOM node.
+function LearningShim() {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [fontSize, setFontSize] = useState(getStoredLearningCardFontSize);
+
+  useShortcutScope(1, {
+    fontUp: () =>
+      setFontSize(px =>
+        setStoredLearningCardFontSize(px + LEARNING_CARD_FONT_SIZE_STEP)
+      ),
+    fontDown: () =>
+      setFontSize(px =>
+        setStoredLearningCardFontSize(px - LEARNING_CARD_FONT_SIZE_STEP)
+      ),
+  });
+
+  return (
+    <div ref={scrollRef}>
+      <ReviewSession
+        folderId={null}
+        tag={null}
+        scrollRef={scrollRef}
+        fontSize={fontSize}
+      />
+    </div>
+  );
 }
 
 function renderSession() {
@@ -78,9 +112,7 @@ function renderSession() {
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="learning" onViewChange={() => {}}>
-        <Scope1>
-          <ReviewSession folderId={null} tag={null} />
-        </Scope1>
+        <LearningShim />
       </ShortcutProvider>
     </QueryClientProvider>
   );
@@ -88,6 +120,7 @@ function renderSession() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  localStorage.clear();
   mocks.getDue.mockResolvedValue(DUE);
   mocks.grade.mockResolvedValue(GRADE);
   mocks.review.mockResolvedValue({ due: 'later', state: 'active' });
@@ -109,6 +142,31 @@ describe('ReviewSession', () => {
     );
     expect(await screen.findByText(/missed the captured scope/)).toBeTruthy();
     expect(screen.getByText('It captures lexical scope')).toBeTruthy();
+    expect(playCompletionChime).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not chime on a plain flip — only a graded assessment does', async () => {
+    renderSession();
+    fireEvent.click(await screen.findByText('Flip'));
+    expect(
+      screen.getByText('A function plus its captured lexical scope.')
+    ).toBeTruthy();
+    expect(playCompletionChime).not.toHaveBeenCalled();
+  });
+
+  it('scales the coverage assessment along with the card zoom level', async () => {
+    renderSession();
+    await screen.findByText('What is a closure?');
+    fireEvent.keyDown(window, { code: 'Equal' }); // zoom in one step: 20 -> 21
+
+    fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
+      target: { value: 'a function' },
+    });
+    fireEvent.click(screen.getByText('Check Answer'));
+
+    const summary = await screen.findByText(/missed the captured scope/);
+    // 14px base * (21/20) zoom ratio, same ratio driving the question/answer text.
+    expect(summary.parentElement!.style.fontSize).toBe('14.7px');
   });
 
   it('pre-selects the suggested rating and lets the user override', async () => {
@@ -174,6 +232,23 @@ describe('ReviewSession', () => {
     expect(await screen.findByText(/no evidence provider bound/)).toBeTruthy();
   });
 
+  it('fenced code blocks scale relative to the card, not a fixed root size', async () => {
+    mocks.getDue.mockResolvedValue([
+      {
+        ...DUE[0],
+        question: 'What does this print?\n\n```js\nconsole.log(1);\n```',
+      },
+    ]);
+    renderSession();
+
+    const codeText = await screen.findByText('console.log(1);');
+    const pre = codeText.closest('pre')!;
+    // Relative (em) sizing, not a fixed rem class — so it scales with the
+    // ancestor's font-size instead of staying pinned to the root size.
+    expect(pre.className).toContain('text-[0.75em]');
+    expect(pre.className).not.toContain('text-xs');
+  });
+
   it('renders markdown in the question and answer as formatted elements', async () => {
     mocks.getDue.mockResolvedValue([
       {
@@ -199,24 +274,31 @@ describe('ReviewSession', () => {
     expect(await screen.findByText('All caught up!')).toBeTruthy();
   });
 
-  it('flips and rates with the keyboard: D flips, S moves the rating, D commits', async () => {
+  it('D only navigates: it descends to the card level but does not flip or commit', async () => {
     renderSession();
     await screen.findByText('What is a closure?');
 
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
-    fireEvent.keyDown(window, { code: 'KeyD' }); // flip
+    // Already on the card now — D is a no-op here, not a flip.
+    fireEvent.keyDown(window, { code: 'KeyD' });
+    expect(
+      screen.queryByText('A function plus its captured lexical scope.')
+    ).toBeNull();
+    expect(mocks.grade).not.toHaveBeenCalled();
+    expect(mocks.review).not.toHaveBeenCalled();
+
+    // Space still flips...
+    fireEvent.keyDown(window, { code: 'Space' });
     expect(
       await screen.findByText('A function plus its captured lexical scope.')
     ).toBeTruthy();
-    expect(mocks.grade).not.toHaveBeenCalled();
 
-    // Good (3) is highlighted by default in flip mode; S moves to Easy (4).
-    expect(screen.getByText('Good').className).toContain('ring-2');
-    fireEvent.keyDown(window, { code: 'KeyS' });
-    expect(screen.getByText('Easy').className).toContain('ring-2');
+    // ...and D remains a no-op — it doesn't commit the highlighted rating either.
+    fireEvent.keyDown(window, { code: 'KeyD' });
+    expect(mocks.review).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(window, { code: 'KeyD' }); // commit
+    fireEvent.keyDown(window, { code: 'Digit4' }); // digits still commit
     await waitFor(() =>
       expect(mocks.review).toHaveBeenCalledWith(
         'c1',
@@ -226,6 +308,56 @@ describe('ReviewSession', () => {
         })
       )
     );
+  });
+
+  it('=/- grow and shrink the card text and persist the size, matching the library shortcuts', async () => {
+    const { container } = renderSession();
+    await screen.findByText('What is a closure?');
+    const questionBox = () =>
+      container.querySelector<HTMLElement>('.leading-relaxed')!;
+    // The card wrapper (mx-auto) sits three levels up from the question box.
+    const cardWrapper = () =>
+      questionBox().parentElement!.parentElement!.parentElement!;
+    expect(questionBox().style.fontSize).toBe('20px');
+    expect(cardWrapper().style.maxWidth).toBe('min(576px, 100%)');
+
+    fireEvent.keyDown(window, { code: 'Equal' });
+    expect(questionBox().style.fontSize).toBe('21px');
+    expect(localStorage.getItem('lunaschal:learningCardFontSize')).toBe('21');
+    // The card widens along with the text, so code blocks get more room
+    // before they need to scroll instead of scrolling immediately.
+    expect(cardWrapper().style.maxWidth).toBe('min(604.8px, 100%)');
+
+    fireEvent.keyDown(window, { code: 'Minus' });
+    fireEvent.keyDown(window, { code: 'Minus' });
+    expect(questionBox().style.fontSize).toBe('19px');
+    expect(localStorage.getItem('lunaschal:learningCardFontSize')).toBe('19');
+    expect(cardWrapper().style.maxWidth).toBe('min(547.2px, 100%)');
+  });
+
+  it('W/S scroll the review container instead of changing the rating selection', async () => {
+    Element.prototype.scrollBy = vi.fn();
+    renderSession();
+    await screen.findByText('What is a closure?');
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
+    fireEvent.keyDown(window, { code: 'Space' }); // flip
+    await screen.findByText('A function plus its captured lexical scope.');
+
+    // Good (3) is highlighted by default and stays put — 1-4 rate directly now.
+    expect(screen.getByText('Good').className).toContain('ring-2');
+
+    const scrollSpy = Element.prototype.scrollBy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    fireEvent.keyDown(window, { code: 'KeyS' });
+    expect(scrollSpy).toHaveBeenCalledWith({ top: 120, behavior: 'smooth' });
+    expect(screen.getByText('Good').className).toContain('ring-2');
+
+    fireEvent.keyDown(window, { code: 'KeyW' });
+    expect(scrollSpy).toHaveBeenCalledWith({ top: -120, behavior: 'smooth' });
+    expect(screen.getByText('Good').className).toContain('ring-2');
   });
 
   it('Space flips the card and a digit commits that rating directly', async () => {
@@ -296,7 +428,7 @@ describe('ReviewSession', () => {
     expect(mocks.grade).not.toHaveBeenCalled();
   });
 
-  it('after grading, D commits the suggested rating without extra keys', async () => {
+  it('after grading, D does not commit the suggested rating — a digit is required', async () => {
     renderSession();
     fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
       target: { value: 'a function' },
@@ -306,7 +438,10 @@ describe('ReviewSession', () => {
 
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
-    fireEvent.keyDown(window, { code: 'KeyD' }); // commit highlighted (suggested) rating
+    fireEvent.keyDown(window, { code: 'KeyD' }); // no-op on the card
+    expect(mocks.review).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { code: 'Digit2' }); // suggested (Hard) rating
     await waitFor(() =>
       expect(mocks.review).toHaveBeenCalledWith(
         'c1',
