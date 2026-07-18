@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ShortcutProvider } from '../../shortcuts/ShortcutProvider';
 import { Learning } from './Learning';
 
 const { mocks } = vi.hoisted(() => {
@@ -28,13 +29,20 @@ const { mocks } = vi.hoisted(() => {
   return { mocks };
 });
 
-vi.mock('../../hooks/api', () => ({ api: { learning: mocks } }));
+vi.mock('../../hooks/api', () => ({
+  api: {
+    learning: mocks,
+    shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
+  },
+}));
 
 function renderLearning() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <Learning />
+      <ShortcutProvider currentView="learning" onViewChange={() => {}}>
+        <Learning />
+      </ShortcutProvider>
     </QueryClientProvider>,
   );
 }
@@ -72,5 +80,26 @@ describe('Learning', () => {
     expect(await screen.findByText('Generate Cards')).toBeTruthy();
     fireEvent.click(screen.getByText('Folders'));
     expect(await screen.findByText('Evidence providers (MCP servers)')).toBeTruthy();
+  });
+
+  it('cycles modes with the keyboard after drilling in', async () => {
+    renderLearning();
+    await screen.findByText('Review (3)');
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // sidebar level -> mode bar
+    fireEvent.keyDown(window, { code: 'KeyS' }); // review -> queue
+    expect(await screen.findByText('The approval queue is empty')).toBeTruthy();
+    fireEvent.keyDown(window, { code: 'KeyS' }); // queue -> browse
+    expect(await screen.findByText('No cards here yet')).toBeTruthy();
+    fireEvent.keyDown(window, { code: 'KeyW' }); // browse -> queue
+    expect(await screen.findByText('The approval queue is empty')).toBeTruthy();
+  });
+
+  it('N jumps to the Create (brain-dump) mode', async () => {
+    renderLearning();
+    await screen.findByText('Review (3)');
+
+    fireEvent.keyDown(window, { code: 'KeyN' });
+    expect(await screen.findByText('Generate Cards')).toBeTruthy();
   });
 });

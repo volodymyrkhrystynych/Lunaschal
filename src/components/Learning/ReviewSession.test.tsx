@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
+import { ShortcutProvider, useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { ReviewSession } from './ReviewSession';
 import type { GradeResult, LearningCard } from '../../hooks/api';
 
@@ -44,13 +46,29 @@ const { DUE, GRADE, mocks } = vi.hoisted(() => {
   return { DUE, GRADE, mocks };
 });
 
-vi.mock('../../hooks/api', () => ({ api: { learning: mocks } }));
+vi.mock('../../hooks/api', () => ({
+  api: {
+    learning: mocks,
+    shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
+  },
+}));
+
+// In the app, Learning.tsx owns shortcut scope 1 (the mode bar); this shim
+// stands in for it so D can descend to the review scope at depth 2.
+function Scope1({ children }: { children: ReactNode }) {
+  useShortcutScope(1, {});
+  return <>{children}</>;
+}
 
 function renderSession() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <ReviewSession folderId={null} tag={null} />
+      <ShortcutProvider currentView="learning" onViewChange={() => {}}>
+        <Scope1>
+          <ReviewSession folderId={null} tag={null} />
+        </Scope1>
+      </ShortcutProvider>
     </QueryClientProvider>,
   );
 }
@@ -127,5 +145,45 @@ describe('ReviewSession', () => {
     mocks.getDue.mockResolvedValue([]);
     renderSession();
     expect(await screen.findByText('All caught up!')).toBeTruthy();
+  });
+
+  it('flips and rates with the keyboard: D flips, S moves the rating, D commits', async () => {
+    renderSession();
+    await screen.findByText('What is a closure?');
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
+    fireEvent.keyDown(window, { code: 'KeyD' }); // flip
+    expect(await screen.findByText('A function plus its captured lexical scope.')).toBeTruthy();
+    expect(mocks.grade).not.toHaveBeenCalled();
+
+    // Good (3) is highlighted by default in flip mode; S moves to Easy (4).
+    expect(screen.getByText('Good').className).toContain('ring-2');
+    fireEvent.keyDown(window, { code: 'KeyS' });
+    expect(screen.getByText('Easy').className).toContain('ring-2');
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // commit
+    await waitFor(() => expect(mocks.review).toHaveBeenCalledWith('c1', expect.objectContaining({
+      rating: 4,
+      answerMode: 'self',
+    })));
+  });
+
+  it('after grading, D commits the suggested rating without extra keys', async () => {
+    renderSession();
+    fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
+      target: { value: 'a function' },
+    });
+    fireEvent.click(screen.getByText('Check Answer'));
+    await screen.findByText(/suggestion highlighted/);
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
+    fireEvent.keyDown(window, { code: 'KeyD' }); // commit highlighted (suggested) rating
+    await waitFor(() => expect(mocks.review).toHaveBeenCalledWith('c1', expect.objectContaining({
+      rating: 2,
+      suggestedRating: 2,
+      answerMode: 'typed',
+    })));
   });
 });

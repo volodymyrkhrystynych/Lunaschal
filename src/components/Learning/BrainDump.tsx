@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
+import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { parseTagsInput } from '../../lib/tags';
 
 interface Props {
@@ -17,6 +18,13 @@ export function BrainDump({ folderId, onGenerated }: Props) {
   const queryClient = useQueryClient();
 
   const recorder = useRecorder((t) => setText((prev) => (prev ? `${prev}\n${t}` : t)));
+
+  useShortcutScope(2, {
+    record: () => {
+      if (recorder.status === 'recording') recorder.stop();
+      else if (recorder.status === 'idle') recorder.start();
+    },
+  });
 
   const generate = useMutation({
     mutationFn: () => api.learning.generate({

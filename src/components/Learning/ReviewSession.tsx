@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type GradeResult, type LearningCard } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
+import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { CoverageResult } from './CoverageResult';
 import { VerificationPanel } from './VerificationPanel';
 
@@ -23,6 +24,7 @@ export function ReviewSession({ folderId, tag }: Props) {
   const [usedVoice, setUsedVoice] = useState(false);
   const [flipped, setFlipped] = useState(false);
   const [grade, setGrade] = useState<GradeResult | null>(null);
+  const [selRating, setSelRating] = useState(3);
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
   const queryClient = useQueryClient();
 
@@ -41,7 +43,10 @@ export function ReviewSession({ folderId, tag }: Props) {
   const gradeAnswer = useMutation({
     mutationFn: () =>
       api.learning.grade(card!.id, { answer, answerMode: usedVoice ? 'voice' : 'typed' }),
-    onSuccess: setGrade,
+    onSuccess: (g) => {
+      setGrade(g);
+      setSelRating(g.suggestedRating);
+    },
   });
 
   const review = useMutation({
@@ -60,7 +65,31 @@ export function ReviewSession({ folderId, tag }: Props) {
       setUsedVoice(false);
       setFlipped(false);
       setGrade(null);
+      setSelRating(3);
       setIndex((prev) => (freshDue && prev < freshDue.length ? prev : 0));
+    },
+  });
+
+  const answered = grade !== null || flipped;
+
+  useShortcutScope(2, {
+    // Move the highlighted rating once the answer is shown.
+    next: () => { if (answered) setSelRating((r) => Math.min(r + 1, 4)); },
+    prev: () => { if (answered) setSelRating((r) => Math.max(r - 1, 1)); },
+    // D flips the card, then commits the highlighted rating.
+    drillIn: () => {
+      if (!card) return false;
+      if (!answered) {
+        setFlipped(true);
+      } else if (!review.isPending) {
+        review.mutate(selRating);
+      }
+      return true;
+    },
+    record: () => {
+      if (!card || answered || gradeAnswer.isPending) return;
+      if (recorder.status === 'recording') recorder.stop();
+      else if (recorder.status === 'idle') recorder.start();
     },
   });
 
@@ -73,8 +102,6 @@ export function ReviewSession({ folderId, tag }: Props) {
       </div>
     );
   }
-
-  const answered = grade !== null || flipped;
 
   return (
     <div className="max-w-xl mx-auto">
@@ -104,6 +131,7 @@ export function ReviewSession({ folderId, tag }: Props) {
                 }}
                 placeholder="Type your answer (or record it)…"
                 rows={3}
+                autoFocus
                 className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border border-white/10 rounded-lg p-3 resize-none focus:outline-none focus:border-[var(--color-primary)]"
               />
               {recorder.error && <p className="text-xs text-red-400">{recorder.error}</p>}
@@ -159,7 +187,7 @@ export function ReviewSession({ folderId, tag }: Props) {
                     onClick={() => review.mutate(r.value)}
                     disabled={review.isPending}
                     className={`py-3 ${r.color} text-white rounded-lg hover:opacity-80 transition-all disabled:opacity-50 font-medium ${
-                      grade?.suggestedRating === r.value ? 'ring-2 ring-white' : 'opacity-70'
+                      selRating === r.value ? 'ring-2 ring-white' : 'opacity-70'
                     }`}>
                     {r.label}
                   </button>

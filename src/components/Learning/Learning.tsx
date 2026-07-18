@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { ReviewSession } from './ReviewSession';
 import { Queue } from './Queue';
 import { Browse } from './Browse';
@@ -9,16 +10,19 @@ import { Folders } from './Folders';
 
 export type LearningMode = 'review' | 'queue' | 'browse' | 'create' | 'folders';
 
+const MODES: LearningMode[] = ['review', 'queue', 'browse', 'create', 'folders'];
+
 export const pillClass = (active: boolean) =>
   `px-3 py-1 text-sm rounded-full border transition-colors ${active ? 'bg-[var(--color-primary)] border-[var(--color-primary)] text-white' : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`;
 
-const modeClass = (active: boolean) =>
-  `px-3 py-1 rounded ${active ? 'bg-[var(--color-primary)] text-white' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`;
+const modeClass = (active: boolean, focusRing = false) =>
+  `px-3 py-1 rounded ${active ? 'bg-[var(--color-primary)] text-white' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}${focusRing && active ? ' ring-1 ring-white/70' : ''}`;
 
 export function Learning() {
   const [mode, setMode] = useState<LearningMode>('review');
   const [folderId, setFolderId] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
+  const { level } = useShortcuts();
 
   const filters = { folderId: folderId ?? undefined, tag: tag ?? undefined };
   const { data: stats } = useQuery({
@@ -39,22 +43,28 @@ export function Learning() {
 
   const pendingCount = queue?.length ?? 0;
 
+  useShortcutScope(1, {
+    next: () => setMode((m) => MODES[Math.min(MODES.indexOf(m) + 1, MODES.length - 1)]),
+    prev: () => setMode((m) => MODES[Math.max(MODES.indexOf(m) - 1, 0)]),
+    create: () => setMode('create'),
+  });
+
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-semibold text-[var(--color-text)]">Learning</h1>
         <div className="flex gap-2">
-          <button onClick={() => setMode('review')} className={modeClass(mode === 'review')}>
+          <button onClick={() => setMode('review')} className={modeClass(mode === 'review', level === 1)}>
             Review ({stats?.due ?? 0})
           </button>
-          <button onClick={() => setMode('queue')} className={modeClass(mode === 'queue')}>
+          <button onClick={() => setMode('queue')} className={modeClass(mode === 'queue', level === 1)}>
             Queue{pendingCount > 0 && (
               <span className="ml-1.5 px-1.5 py-0.5 text-xs rounded-full bg-orange-500/30 text-orange-300">{pendingCount}</span>
             )}
           </button>
-          <button onClick={() => setMode('browse')} className={modeClass(mode === 'browse')}>Browse</button>
-          <button onClick={() => setMode('create')} className={modeClass(mode === 'create')}>+ Create</button>
-          <button onClick={() => setMode('folders')} className={modeClass(mode === 'folders')}>Folders</button>
+          <button onClick={() => setMode('browse')} className={modeClass(mode === 'browse', level === 1)}>Browse</button>
+          <button onClick={() => setMode('create')} className={modeClass(mode === 'create', level === 1)}>+ Create</button>
+          <button onClick={() => setMode('folders')} className={modeClass(mode === 'folders', level === 1)}>Folders</button>
         </div>
       </div>
 

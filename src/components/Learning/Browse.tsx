@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type LearningCard } from '../../hooks/api';
 import { parseTagsInput } from '../../lib/tags';
+import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { VerificationPanel } from './VerificationPanel';
 
 interface Props {
@@ -13,7 +14,9 @@ interface Props {
 export function Browse({ folderId, tag, onSelectTag }: Props) {
   const [editing, setEditing] = useState<LearningCard | null>(null);
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
+  const [selIndex, setSelIndex] = useState(0);
   const queryClient = useQueryClient();
+  const { level } = useShortcuts();
 
   const { data: cards } = useQuery({
     queryKey: ['learning', 'cards', folderId, tag],
@@ -29,14 +32,38 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['learning'] }),
   });
 
+  useEffect(() => {
+    setSelIndex((i) => Math.min(i, Math.max((cards?.length ?? 1) - 1, 0)));
+  }, [cards]);
+
+  useShortcutScope(2, {
+    next: () => setSelIndex((i) => Math.min(i + 1, Math.max((cards?.length ?? 1) - 1, 0))),
+    prev: () => setSelIndex((i) => Math.max(i - 1, 0)),
+    drillIn: () => {
+      const c = cards?.[selIndex];
+      if (!c) return false;
+      setEditing(c);
+      return true;
+    },
+    drillOut: () => {
+      if (editing) { setEditing(null); return true; }
+      if (verifying) { setVerifying(null); return true; }
+      return false;
+    },
+  });
+
   return (
     <>
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {cards?.map((card) => {
+        {cards?.map((card, idx) => {
           const isDue = card.due !== null && new Date(card.due) <= new Date();
+          const selected = level >= 2 && idx === selIndex;
           return (
             <div key={card.id}
-              className={`p-4 bg-[var(--color-surface)] rounded-lg border transition-colors ${isDue ? 'border-orange-500/50' : 'border-white/10'}`}>
+              ref={(el) => { if (el && selected) el.scrollIntoView({ block: 'nearest' }); }}
+              className={`p-4 bg-[var(--color-surface)] rounded-lg border transition-colors ${
+                selected ? 'border-[var(--color-primary)]' : isDue ? 'border-orange-500/50' : 'border-white/10'
+              }`}>
               <div className="flex items-center justify-between mb-3">
                 {isDue ? (
                   <span className="px-2 py-0.5 text-xs bg-orange-500/20 text-orange-400 rounded">Due</span>

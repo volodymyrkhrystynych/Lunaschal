@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ApproveResult, type LearningCard } from '../../hooks/api';
+import { useShortcuts, useShortcutScope } from '../../shortcuts/ShortcutProvider';
 
 interface HintState {
   card: LearningCard;
@@ -12,7 +13,9 @@ export function Queue() {
   const [regenFor, setRegenFor] = useState<string | null>(null);
   const [direction, setDirection] = useState('');
   const [hint, setHint] = useState<HintState | null>(null);
+  const [selIndex, setSelIndex] = useState(0);
   const queryClient = useQueryClient();
+  const { level } = useShortcuts();
 
   const { data: queue } = useQuery({ queryKey: ['learning', 'queue'], queryFn: api.learning.listQueue });
 
@@ -49,6 +52,32 @@ export function Queue() {
     },
   });
 
+  useEffect(() => {
+    setSelIndex((i) => Math.min(i, Math.max((queue?.length ?? 1) - 1, 0)));
+  }, [queue]);
+
+  useShortcutScope(2, {
+    next: () => setSelIndex((i) => Math.min(i + 1, Math.max((queue?.length ?? 1) - 1, 0))),
+    prev: () => setSelIndex((i) => Math.max(i - 1, 0)),
+    approve: () => {
+      const c = queue?.[selIndex];
+      if (c && !approve.isPending) approve.mutate({ id: c.id });
+    },
+    deny: () => {
+      const c = queue?.[selIndex];
+      if (c && !deny.isPending) deny.mutate(c.id);
+    },
+    annotate: () => {
+      const c = queue?.[selIndex];
+      if (c) { setRegenFor(c.id); setDirection(''); }
+    },
+    drillOut: () => {
+      if (hint) { setHint(null); return true; }
+      if (regenFor) { setRegenFor(null); setDirection(''); return true; }
+      return false;
+    },
+  });
+
   if (!queue || queue.length === 0) {
     return (
       <div className="text-center text-[var(--color-text-muted)] py-12">
@@ -61,8 +90,12 @@ export function Queue() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-4">
-      {queue.map((card) => (
-        <div key={card.id} className="bg-[var(--color-surface)] rounded-lg border border-white/10 p-4">
+      {queue.map((card, idx) => (
+        <div key={card.id}
+          ref={(el) => { if (el && level >= 2 && idx === selIndex) el.scrollIntoView({ block: 'nearest' }); }}
+          className={`bg-[var(--color-surface)] rounded-lg border p-4 transition-colors ${
+            level >= 2 && idx === selIndex ? 'border-[var(--color-primary)]' : 'border-white/10'
+          }`}>
           <div className="flex items-center gap-2 mb-3">
             {card.derivedFrom && (
               <span className="px-2 py-0.5 text-xs bg-purple-500/20 text-purple-300 rounded">follow-up</span>

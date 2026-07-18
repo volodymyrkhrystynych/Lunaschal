@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
+import { ShortcutProvider, useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { Queue } from './Queue';
 import type { LearningCard } from '../../hooks/api';
 
@@ -33,13 +35,28 @@ const { QUEUE, mocks } = vi.hoisted(() => {
   return { QUEUE, mocks };
 });
 
-vi.mock('../../hooks/api', () => ({ api: { learning: mocks } }));
+vi.mock('../../hooks/api', () => ({
+  api: {
+    learning: mocks,
+    shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
+  },
+}));
+
+// Stand-in for Learning.tsx's scope 1 so D can descend to the queue scope at depth 2.
+function Scope1({ children }: { children: ReactNode }) {
+  useShortcutScope(1, {});
+  return <>{children}</>;
+}
 
 function renderQueue() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <Queue />
+      <ShortcutProvider currentView="learning" onViewChange={() => {}}>
+        <Scope1>
+          <Queue />
+        </Scope1>
+      </ShortcutProvider>
     </QueryClientProvider>,
   );
 }
@@ -47,6 +64,7 @@ function renderQueue() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.listQueue.mockResolvedValue(QUEUE);
+  Element.prototype.scrollIntoView = vi.fn();
 });
 
 describe('Queue', () => {
@@ -117,5 +135,24 @@ describe('Queue', () => {
     renderQueue();
     fireEvent.click((await screen.findAllByText('Deny'))[0]);
     await waitFor(() => expect(mocks.deny).toHaveBeenCalledWith('c1'));
+  });
+
+  it('drives the queue with the keyboard: S selects, Y approves, X denies, I steers', async () => {
+    mocks.approve.mockResolvedValue({ status: 'approved', due: 'now' });
+    mocks.deny.mockResolvedValue({ success: true });
+    renderQueue();
+    await screen.findByText('Question c1?');
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
+    fireEvent.keyDown(window, { code: 'KeyS' }); // select second card
+    fireEvent.keyDown(window, { code: 'KeyY' });
+    await waitFor(() => expect(mocks.approve).toHaveBeenCalledWith('c2', undefined));
+
+    fireEvent.keyDown(window, { code: 'KeyX' });
+    await waitFor(() => expect(mocks.deny).toHaveBeenCalledWith('c2'));
+
+    fireEvent.keyDown(window, { code: 'KeyI' }); // steer-regenerate the selected card
+    expect(await screen.findByPlaceholderText(/split it/)).toBeTruthy();
   });
 });

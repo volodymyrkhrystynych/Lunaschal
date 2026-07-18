@@ -33,6 +33,9 @@ export interface ScopeHandlers {
   scrollUp?: () => void;
   annotate?: () => void;
   search?: () => void;
+  approve?: () => void;
+  deny?: () => void;
+  record?: () => void;
   fontUp?: () => void;
   fontDown?: () => void;
   toggleList?: () => void;
@@ -190,6 +193,17 @@ export function ShortcutProvider({ currentView, onViewChange, onToggleSidebar, c
       else handled = false;
     } else if (action === 'action.search') {
       const handler = resolveHandler(scopes, Math.max(lvl, 1), 'search');
+      if (handler) (handler as () => void)();
+      else handled = false;
+    } else if (action === 'learning.approve' || action === 'learning.deny') {
+      // Only fire at the depth where the selection highlight is visible.
+      const handler = resolveHandler(scopes, Math.max(lvl, 1), action === 'learning.approve' ? 'approve' : 'deny');
+      if (handler) (handler as () => void)();
+      else handled = false;
+    } else if (action === 'learning.record') {
+      // Recording has no selection to disambiguate, so it works from any depth.
+      const maxDepth = Math.max(lvl, 1, ...Array.from(scopes.keys()));
+      const handler = resolveHandlerDeep(scopes, maxDepth, 'record');
       if (handler) (handler as () => void)();
       else handled = false;
     } else if (action === 'reader.fontUp' || action === 'reader.fontDown' || action === 'reader.toggleList') {

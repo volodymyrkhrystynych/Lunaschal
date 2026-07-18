@@ -24,6 +24,9 @@ export type ActionId =
   | 'tab.settings'
   | 'global.newJournalEntry'
   | 'global.toggleSidebar'
+  | 'learning.approve'
+  | 'learning.deny'
+  | 'learning.record'
   | 'reader.fontUp'
   | 'reader.fontDown'
   | 'reader.toggleList';
@@ -49,6 +52,9 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'tab.settings': 'Digit8',
   'global.newJournalEntry': 'shift+KeyJ',
   'global.toggleSidebar': 'KeyB',
+  'learning.approve': 'KeyY',
+  'learning.deny': 'KeyX',
+  'learning.record': 'KeyV',
   'reader.fontUp': 'Equal',
   'reader.fontDown': 'Minus',
   'reader.toggleList': 'KeyL',
@@ -61,7 +67,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'nav.in': 'Go in (drill into tab / item)',
   'action.new': 'New item (entry, file, project…)',
   'action.newAlt': 'New folder (Files)',
-  'action.annotate': 'Write commentary (reader)',
+  'action.annotate': 'Write commentary (reader) / steer regeneration (Learning queue)',
   'action.search': 'Focus search (Library)',
   'tab.chat': 'Go to Chat',
   'tab.tasks': 'Go to Tasks',
@@ -75,6 +81,9 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'tab.settings': 'Go to Settings',
   'global.newJournalEntry': 'New journal entry (from anywhere)',
   'global.toggleSidebar': 'Toggle sidebar (open/close)',
+  'learning.approve': 'Approve selected card (Learning queue)',
+  'learning.deny': 'Deny selected card (Learning queue)',
+  'learning.record': 'Toggle voice recording (Learning)',
   'reader.fontUp': 'Increase reading/chapter text size',
   'reader.fontDown': 'Decrease reading/chapter text size',
   'reader.toggleList': 'Toggle list panel (Writing chapters / Library chapters)',
