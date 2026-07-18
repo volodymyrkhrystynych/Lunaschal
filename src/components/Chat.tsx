@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, type Flashcard } from '../hooks/api';
+import { api } from '../hooks/api';
 import { MessageMarkdown } from './MessageMarkdown';
 import { ChatNav } from './ChatNav';
 
@@ -41,9 +41,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
-  const [quizCards, setQuizCards] = useState<Flashcard[]>([]);
-  const [quizIndex, setQuizIndex] = useState(0);
-  const [showAnswer, setShowAnswer] = useState(false);
+  const [queuedCards, setQueuedCards] = useState<number | null>(null);
   const [ragContextUsed, setRagContextUsed] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
@@ -97,21 +95,12 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
   });
 
   const generateForTopic = useMutation({
-    mutationFn: (topic: string) => api.flashcard.generateForTopic(topic),
-    onSuccess: async (result) => {
-      const cards = await Promise.all(result.ids.map((id) => api.flashcard.get(id)));
-      setQuizCards(cards.filter((c): c is Flashcard => !!c));
-      setQuizIndex(0);
-      setShowAnswer(false);
+    mutationFn: (topic: string) => api.learning.generateForTopic(topic),
+    onSuccess: (result) => {
+      setQueuedCards(result.count);
       setPendingQuiz(null);
-    },
-  });
-
-  const reviewCard = useMutation({
-    mutationFn: ({ id, grade }: { id: string; grade: number }) => api.flashcard.review(id, grade),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['flashcard', 'due'] });
-      queryClient.invalidateQueries({ queryKey: ['flashcard', 'stats'] });
+      queryClient.invalidateQueries({ queryKey: ['learning'] });
+      setTimeout(() => setQueuedCards(null), 8000);
     },
   });
 
@@ -119,7 +108,7 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent, pendingSave, pendingQuiz, quizCards]);
+  }, [messages, streamingContent, pendingSave, pendingQuiz, queuedCards]);
 
   const sendMessage = async () => {
     if (!input.trim() || isStreaming) return;
@@ -254,35 +243,12 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
     }
   };
 
-  const handleReview = (grade: number) => {
-    const card = quizCards[quizIndex];
-    if (!card) return;
-    reviewCard.mutate({ id: card.id, grade }, {
-      onSuccess: () => {
-        if (quizIndex < quizCards.length - 1) {
-          setQuizIndex(quizIndex + 1);
-          setShowAnswer(false);
-        } else {
-          setQuizCards([]);
-          setQuizIndex(0);
-        }
-      },
-    });
-  };
-
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   };
 
   const isConfigured = settings?.hasOpenaiKey || settings?.hasGoogleKey || settings?.aiProvider === 'ollama';
   const isSaving = saveJournal.isPending || saveCalendar.isPending;
-  const currentCard = quizCards[quizIndex];
-  const grades = [
-    { value: 0, label: 'Again', color: 'bg-red-500' },
-    { value: 1, label: 'Hard', color: 'bg-orange-500' },
-    { value: 2, label: 'Good', color: 'bg-yellow-500' },
-    { value: 3, label: 'Easy', color: 'bg-green-500' },
-  ];
 
   return (
     <div className="flex-1 flex overflow-hidden">
@@ -348,52 +314,33 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
         <div ref={messagesEndRef} />
       </div>
 
-      {currentCard && (
-        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]">
-          <div className="max-w-lg mx-auto">
-            <div className="text-center mb-2 text-sm text-[var(--color-text-muted)]">Card {quizIndex + 1} of {quizCards.length}</div>
-            <div className="bg-white/5 rounded-lg p-6 min-h-[120px] flex items-center justify-center">
-              <div className="text-lg text-[var(--color-text)] text-center">{showAnswer ? currentCard.back : currentCard.front}</div>
-            </div>
-            {!showAnswer ? (
-              <button onClick={() => setShowAnswer(true)} className="w-full mt-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80">
-                Show Answer
-              </button>
-            ) : (
-              <div className="mt-4">
-                <div className="text-center text-sm text-[var(--color-text-muted)] mb-2">How well did you know this?</div>
-                <div className="grid grid-cols-4 gap-2">
-                  {grades.map((g) => (
-                    <button key={g.value} onClick={() => handleReview(g.value)} disabled={reviewCard.isPending}
-                      className={`py-2 ${g.color} text-white rounded hover:opacity-80 disabled:opacity-50`}>{g.label}</button>
-                  ))}
-                </div>
-              </div>
-            )}
-            <button onClick={() => { setQuizCards([]); setQuizIndex(0); }} className="w-full mt-2 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">End Quiz</button>
+      {queuedCards !== null && (
+        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
+          <div className="text-sm text-green-400">
+            Queued {queuedCards} cards for approval — open the Learning tab to review and approve them.
           </div>
         </div>
       )}
 
-      {pendingQuiz && !currentCard && (
+      {pendingQuiz && (
         <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
           <div className="flex items-start gap-3">
             <div className="flex-1">
               <div className="text-sm font-medium text-[var(--color-text)]">Generate flashcards for "{pendingQuiz.topic}"?</div>
-              <div className="text-sm text-[var(--color-text-muted)] mt-1">I'll create flashcards to help you learn about this topic.</div>
+              <div className="text-sm text-[var(--color-text-muted)] mt-1">I'll generate atomic cards and queue them for your approval in the Learning tab.</div>
             </div>
             <div className="flex gap-2">
               <button onClick={() => setPendingQuiz(null)} disabled={generateForTopic.isPending} className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50">Dismiss</button>
               <button onClick={() => generateForTopic.mutate(pendingQuiz.topic)} disabled={generateForTopic.isPending}
                 className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50">
-                {generateForTopic.isPending ? 'Generating...' : 'Start Quiz'}
+                {generateForTopic.isPending ? 'Generating...' : 'Queue Cards'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {pendingSave && !currentCard && (
+      {pendingSave && (
         <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
           <div className="flex items-start gap-3">
             <div className="flex-1">
@@ -423,20 +370,18 @@ export function Chat({ conversationId, onConversationChange }: ChatProps) {
         </div>
       )}
 
-      {!currentCard && (
-        <div className="border-t border-white/10 p-4">
-          <div className="flex gap-2">
-            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
-              placeholder={isConfigured ? 'Type a message...' : 'Configure AI provider first...'}
-              disabled={!isConfigured || isStreaming} rows={1}
-              className="flex-1 bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-50" />
-            <button onClick={sendMessage} disabled={!input.trim() || !isConfigured || isStreaming}
-              className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-              Send
-            </button>
-          </div>
+      <div className="border-t border-white/10 p-4">
+        <div className="flex gap-2">
+          <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
+            placeholder={isConfigured ? 'Type a message...' : 'Configure AI provider first...'}
+            disabled={!isConfigured || isStreaming} rows={1}
+            className="flex-1 bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-50" />
+          <button onClick={sendMessage} disabled={!input.trim() || !isConfigured || isStreaming}
+            className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
+            Send
+          </button>
         </div>
-      )}
+      </div>
       </div>
     </div>
   );

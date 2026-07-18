@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { useRecorder } from '../../hooks/useRecorder';
 
 interface Props {
   onTranscribed: (text: string) => void;
@@ -16,12 +17,17 @@ interface CorrectResult {
 }
 
 export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
-  const [status, setStatus] = useState<Status>('idle');
   const [lastText, setLastText] = useState('');
   const [error, setError] = useState('');
-  const mediaRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const recorder = useRecorder((text) => {
+    setLastText(text);
+    onTranscribed(text);
+    if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
+    clearTimerRef.current = setTimeout(() => setLastText(''), 8000);
+  });
+  const status = recorder.status;
 
   const [expanded, setExpanded] = useState(false);
   const [audioFile, setAudioFile] = useState<File | null>(null);
@@ -96,47 +102,8 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
     if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
   }, []);
 
-  const startRecording = async () => {
-    setError('');
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      chunksRef.current = [];
-      const mr = new MediaRecorder(stream);
-      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      mr.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        setStatus('transcribing');
-        try {
-          const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-          const fd = new FormData();
-          fd.append('audio', blob, 'recording.webm');
-          const r = await fetch('/api/transcribe', { method: 'POST', body: fd });
-          const data = await r.json();
-          if (!r.ok) throw new Error(data.error || 'Transcription failed');
-          const text: string = data.text ?? '';
-          setLastText(text);
-          if (text) onTranscribed(text);
-          if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
-          clearTimerRef.current = setTimeout(() => setLastText(''), 8000);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : 'Transcription failed');
-        } finally {
-          setStatus('idle');
-        }
-      };
-      mr.start();
-      mediaRef.current = mr;
-      setStatus('recording');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Microphone access denied');
-      setStatus('idle');
-    }
-  };
-
-  const stopRecording = () => {
-    mediaRef.current?.stop();
-    mediaRef.current = null;
-  };
+  const startRecording = () => { setError(''); void recorder.start(); };
+  const stopRecording = recorder.stop;
 
   const handleCorrect = async () => {
     if (!audioFile) return;
@@ -314,11 +281,11 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           {meetingActive ? `Stop meeting ${meetingElapsed}` : 'Meeting'}
         </button>
 
-        {error && <span className="text-xs text-red-400 truncate">{error}</span>}
-        {!error && lastText && (
+        {(error || recorder.error) && <span className="text-xs text-red-400 truncate">{error || recorder.error}</span>}
+        {!error && !recorder.error && lastText && (
           <span className="text-xs text-[var(--color-text-muted)] truncate">"{lastText}"</span>
         )}
-        {!error && !lastText && effectiveStatus === 'idle' && (
+        {!error && !recorder.error && !lastText && effectiveStatus === 'idle' && (
           <span className="text-xs text-[var(--color-text-muted)]">Voice input — transcribes into active editor or clipboard</span>
         )}
 

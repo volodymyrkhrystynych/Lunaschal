@@ -110,11 +110,11 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   });
 
   const generateFlashcards = useMutation({
-    mutationFn: ({ journalId }: { journalId: string }) => api.flashcard.generateFromJournal(journalId),
+    mutationFn: ({ journalId }: { journalId: string }) => api.learning.generateFromJournal(journalId),
     onSuccess: (result, vars) => {
       setGeneratingFor(null);
       setGenerationResult({ id: vars.journalId, count: result.count });
-      queryClient.invalidateQueries({ queryKey: ['flashcard'] });
+      queryClient.invalidateQueries({ queryKey: ['learning'] });
       setTimeout(() => setGenerationResult(null), 5000);
     },
     onError: () => setGeneratingFor(null),
@@ -274,7 +274,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
 
             {generationResult?.id === entry.id && (
               <div className="mb-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded text-sm text-green-400">
-                Created {generationResult.count} flashcards from this entry!
+                Queued {generationResult.count} cards for approval in the Learning tab.
               </div>
             )}
 

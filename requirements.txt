@@ -12,6 +12,8 @@ numpy>=2.0.0
 openai-whisper>=20240930
 kokoro-onnx>=0.4.0
 beautifulsoup4>=4.12
+fsrs>=6.0
+mcp>=1.28
 nh3>=0.2
 mammoth>=1.6
 # Speaker diarization for meetings is optional: pip install -r requirements-diarization.txt

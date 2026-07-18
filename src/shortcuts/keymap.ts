@@ -17,13 +17,16 @@ export type ActionId =
   | 'tab.journal'
   | 'tab.writing'
   | 'tab.calendar'
-  | 'tab.flashcards'
+  | 'tab.learning'
   | 'tab.cookbook'
   | 'tab.fanfic'
   | 'tab.files'
   | 'tab.settings'
   | 'global.newJournalEntry'
   | 'global.toggleSidebar'
+  | 'learning.approve'
+  | 'learning.deny'
+  | 'learning.record'
   | 'reader.fontUp'
   | 'reader.fontDown'
   | 'reader.toggleList';
@@ -42,13 +45,16 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'tab.journal': 'Digit3',
   'tab.writing': 'Digit4',
   'tab.calendar': 'Digit5',
-  'tab.flashcards': 'Digit6',
+  'tab.learning': 'Digit6',
   'tab.cookbook': 'Digit9',
   'tab.fanfic': 'Digit0',
   'tab.files': 'Digit7',
   'tab.settings': 'Digit8',
   'global.newJournalEntry': 'shift+KeyJ',
   'global.toggleSidebar': 'KeyB',
+  'learning.approve': 'KeyY',
+  'learning.deny': 'KeyX',
+  'learning.record': 'KeyV',
   'reader.fontUp': 'Equal',
   'reader.fontDown': 'Minus',
   'reader.toggleList': 'KeyL',
@@ -61,20 +67,23 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'nav.in': 'Go in (drill into tab / item)',
   'action.new': 'New item (entry, file, project…)',
   'action.newAlt': 'New folder (Files)',
-  'action.annotate': 'Write commentary (reader)',
+  'action.annotate': 'Write commentary (reader) / steer regeneration (Learning queue)',
   'action.search': 'Focus search (Library)',
   'tab.chat': 'Go to Chat',
   'tab.tasks': 'Go to Tasks',
   'tab.journal': 'Go to Journal',
   'tab.writing': 'Go to Writing',
   'tab.calendar': 'Go to Calendar',
-  'tab.flashcards': 'Go to Flashcards',
+  'tab.learning': 'Go to Learning',
   'tab.cookbook': 'Go to Cookbook',
   'tab.fanfic': 'Go to Library',
   'tab.files': 'Go to Files',
   'tab.settings': 'Go to Settings',
   'global.newJournalEntry': 'New journal entry (from anywhere)',
   'global.toggleSidebar': 'Toggle sidebar (open/close)',
+  'learning.approve': 'Approve selected card (Learning queue)',
+  'learning.deny': 'Deny selected card (Learning queue)',
+  'learning.record': 'Toggle voice recording (Learning)',
   'reader.fontUp': 'Increase reading/chapter text size',
   'reader.fontDown': 'Decrease reading/chapter text size',
   'reader.toggleList': 'Toggle list panel (Writing chapters / Library chapters)',

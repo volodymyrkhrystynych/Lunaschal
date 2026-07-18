@@ -1,6 +1,6 @@
 import { useShortcuts } from '../shortcuts/ShortcutProvider';
 
-type View = 'chat' | 'journal' | 'meetings' | 'calendar' | 'flashcards' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic' | 'newspapers';
+type View = 'chat' | 'journal' | 'meetings' | 'calendar' | 'learning' | 'settings' | 'files' | 'writing' | 'tasks' | 'cookbook' | 'fanfic' | 'newspapers';
 
 interface SidebarProps {
   currentView: View;
@@ -16,7 +16,7 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'meetings', label: 'Meetings', icon: '🎙️' },
   { view: 'writing', label: 'Writing', icon: '✍️' },
   { view: 'calendar', label: 'Calendar', icon: '📅' },
-  { view: 'flashcards', label: 'Flashcards', icon: '🎴' },
+  { view: 'learning', label: 'Learning', icon: '🧠' },
   { view: 'cookbook', label: 'Cookbook', icon: '🍳' },
   { view: 'fanfic', label: 'Library', icon: '📚' },
   { view: 'newspapers', label: 'Newspapers', icon: '📰' },

@@ -29,7 +29,7 @@ fi
 # Start Flask (bound to all interfaces) + Vite dev servers
 ./node_modules/.bin/concurrently \
   ".venv/bin/flask --app backend.app run --host 0.0.0.0 --port 5000 --debug" \
-  "./node_modules/.bin/vite" &
+  "./node_modules/.bin/vite --host" &
 DEV_PID=$!
 
 # Wait for Flask to be ready
