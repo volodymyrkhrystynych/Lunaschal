@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import subprocess
 import tempfile
 import logging
 import threading
@@ -31,6 +32,7 @@ TTS_VOICE        = os.environ.get('TTS_VOICE', 'af_heart')
 OPENAI_STT_MODEL = os.environ.get('OPENAI_STT_MODEL', 'whisper-1')
 OPENAI_TTS_MODEL = os.environ.get('OPENAI_TTS_MODEL', 'tts-1')
 OPENAI_TTS_VOICE = os.environ.get('OPENAI_TTS_VOICE', 'nova')
+GRANITE_STT_MODEL = os.environ.get('GRANITE_STT_MODEL', 'ibm-granite/granite-speech-4.1-2b')
 
 WHISPER_MODELS = [
     {'name': 'tiny',     'vramMb': 1024},
@@ -51,12 +53,13 @@ _transcribe_lock    = threading.Lock()   # serialises Whisper inference — mode
 _tts_lock           = threading.Lock()
 _openai_lock        = threading.Lock()
 _stt_model          = None
+_granite_processor  = None   # AutoProcessor, set alongside _stt_model when _loaded_stt_backend == 'granite'
 _tts_kokoro         = None
 _openai_client      = None
 _stt_ready          = False
 _tts_ready          = False
-_loaded_stt_backend = None   # 'local' or 'openai'
-_loaded_model_name  = None   # whisper model name when _loaded_stt_backend == 'local'
+_loaded_stt_backend = None   # 'local', 'openai', or 'granite'
+_loaded_model_name  = None   # whisper/granite model name when _loaded_stt_backend != 'openai'
 _loaded_tts_backend = None   # 'local' or 'openai'
 _loaded_device      = None   # 'cuda' or 'cpu'
 
@@ -120,9 +123,11 @@ def _ensure_openai():
 
 
 def _load_stt(model_name: str | None = None, backend: str | None = None):
-    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
+    global _stt_model, _granite_processor, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
     backend = backend or _get_active_stt_backend()
     model_name = model_name or _get_active_whisper_model()
+    if backend == 'granite':
+        model_name = GRANITE_STT_MODEL   # single variant in scope — Whisper's size picker doesn't apply
     device = _get_active_stt_device()
 
     # Fast path — already loaded with the right config
@@ -136,6 +141,7 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
                 return
         # Unload whatever is currently in memory
         _stt_model = None
+        _granite_processor = None
         _stt_ready = False
 
         if backend == 'openai':
@@ -143,6 +149,19 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
             _loaded_stt_backend = 'openai'
             _loaded_model_name = None
             _loaded_device = None
+        elif backend == 'granite':
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+            import torch
+            logger.info("Loading Granite Speech on %s…", device)
+            _granite_processor = AutoProcessor.from_pretrained(GRANITE_STT_MODEL)
+            dtype = torch.bfloat16 if device != 'cpu' else torch.float32
+            _stt_model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                GRANITE_STT_MODEL, device_map=device, torch_dtype=dtype,
+            ).eval()
+            _loaded_device = device
+            _loaded_stt_backend = 'granite'
+            _loaded_model_name = model_name
+            logger.info("STT ready.")
         else:
             import whisper
             logger.info("Loading Whisper '%s' on %s…", model_name, device)
@@ -206,9 +225,10 @@ def get_whisper_models():
 
 @bp.post('/api/stt/reload')
 def stt_reload():
-    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name
+    global _stt_model, _granite_processor, _stt_ready, _loaded_stt_backend, _loaded_model_name
     with _stt_lock:
         _stt_model = None
+        _granite_processor = None
         _stt_ready = False
         _loaded_stt_backend = None
         _loaded_model_name = None
@@ -218,15 +238,15 @@ def stt_reload():
 @bp.get('/api/stt/health')
 def stt_health():
     active_stt = _get_active_stt_backend()
-    active_model = _get_active_whisper_model()
+    active_model = GRANITE_STT_MODEL if active_stt == 'granite' else _get_active_whisper_model()
     active_tts = _get_active_tts_backend()
     stt_is_ready = _stt_ready and _loaded_stt_backend == active_stt and (
-        active_stt == 'openai' or _loaded_model_name == active_model
+        active_stt in ('openai', 'granite') or _loaded_model_name == active_model
     )
     return jsonify({
         'status': 'ok',
         'stt_backend': active_stt,
-        'stt_model': active_model if active_stt == 'local' else f'openai/{OPENAI_STT_MODEL}',
+        'stt_model': active_model if active_stt in ('local', 'granite') else f'openai/{OPENAI_STT_MODEL}',
         'stt_device': _loaded_device or DEVICE,
         'stt_ready': stt_is_ready,
         'tts_backend': active_tts,
@@ -235,14 +255,36 @@ def stt_health():
 
 
 def _reset_stt_model() -> None:
-    """Unload the Whisper model so it is reloaded fresh on the next request."""
-    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
+    """Unload the STT model so it is reloaded fresh on the next request."""
+    global _stt_model, _granite_processor, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
     with _stt_lock:
         _stt_model = None
+        _granite_processor = None
         _stt_ready = False
         _loaded_stt_backend = None
         _loaded_model_name = None
         _loaded_device = None
+
+
+def _ffmpeg_decode_16k_mono(src_path: str) -> str:
+    """Decode/resample arbitrary input audio to 16kHz mono WAV.
+
+    Whisper's own ffmpeg pipeline handles this internally; Granite Speech
+    expects a raw waveform via torchaudio.load(), so the browser's WebM/Opus
+    (~48kHz) and the listener's 16kHz WAV both need normalizing first.
+    """
+    fd, dst_path = tempfile.mkstemp(suffix='.wav')
+    os.close(fd)
+    try:
+        subprocess.run(
+            ['ffmpeg', '-y', '-i', src_path, '-ar', '16000', '-ac', '1', '-f', 'wav', dst_path],
+            capture_output=True, check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        os.unlink(dst_path)
+        stderr = e.stderr.decode(errors='replace') if e.stderr else str(e)
+        raise RuntimeError(f'ffmpeg decode failed: {stderr}') from e
+    return dst_path
 
 
 def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
@@ -264,6 +306,40 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
                     response_format='verbose_json',
                 )
             return {'text': result.text.strip(), 'language': result.language or language or 'en'}
+        elif _loaded_stt_backend == 'granite':
+            with _transcribe_lock:
+                try:
+                    import torch
+                    import torchaudio
+                    decoded_path = _ffmpeg_decode_16k_mono(tmp_path)
+                    try:
+                        wav, _sr = torchaudio.load(decoded_path, normalize=True)
+                        tokenizer = _granite_processor.tokenizer
+                        chat = [{
+                            'role': 'user',
+                            'content': '<|audio|>transcribe the speech with proper punctuation and capitalization.',
+                        }]
+                        text_prompt = tokenizer.apply_chat_template(
+                            chat, tokenize=False, add_generation_prompt=True)
+                        model_inputs = _granite_processor(
+                            text_prompt, wav, device=_loaded_device, return_tensors='pt',
+                        ).to(_loaded_device)
+                        with torch.inference_mode():
+                            model_outputs = _stt_model.generate(
+                                **model_inputs, max_new_tokens=200, do_sample=False, num_beams=1,
+                            )
+                        num_input_tokens = model_inputs['input_ids'].shape[-1]
+                        new_tokens = model_outputs[0, num_input_tokens:].unsqueeze(0)
+                        text = tokenizer.batch_decode(
+                            new_tokens, add_special_tokens=False, skip_special_tokens=True,
+                        )[0].strip()
+                    finally:
+                        os.unlink(decoded_path)
+                    return {'text': text, 'language': language or 'en'}
+                except Exception:
+                    # Reset so the next request reloads with a fresh model + processor
+                    _reset_stt_model()
+                    raise
         else:
             opts = {'language': language} if language else {}
             if _loaded_device == 'cpu':

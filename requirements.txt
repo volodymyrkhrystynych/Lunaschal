@@ -11,6 +11,9 @@ soundfile>=0.12.1
 numpy>=2.0.0
 openai-whisper>=20240930
 kokoro-onnx>=0.4.0
+transformers>=4.52.1
+torchaudio
+accelerate>=0.26
 beautifulsoup4>=4.12
 fsrs>=6.0
 mcp>=1.28

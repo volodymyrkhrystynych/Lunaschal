@@ -290,8 +290,9 @@ function STTStatusSection() {
               <div className="mt-3 pt-3 border-t border-white/10 text-xs text-[var(--color-text-muted)] space-y-1">
                 <p>
                   To enable local models:{' '}
-                  <code>pip install faster-whisper kokoro-onnx</code> (requires
-                  GPU)
+                  <code>pip install openai-whisper kokoro-onnx</code> (requires
+                  GPU). Granite Speech also needs{' '}
+                  <code>transformers torchaudio accelerate</code>.
                 </p>
                 <p>
                   To use OpenAI: set{' '}
@@ -546,6 +547,10 @@ const WHISPER_VRAM_TABLE: Record<string, number> = {
   'large-v3': 10240,
 };
 
+// Rough estimate for the 2B-param model in bf16 + KV-cache overhead — not
+// measured yet, correct once Granite is actually running on real hardware.
+const GRANITE_VRAM_MB = 5120;
+
 // Small, GPU-friendly models that leave headroom for STT/TTS in an 8GB
 // budget — shown as pull suggestions for whichever of these aren't
 // installed yet. vramMb figures are measured, not estimated.
@@ -604,9 +609,13 @@ function VRAMSection() {
   const activeSttDevice = settings?.sttDevice ?? 'cuda';
 
   const whisperVram =
-    activeSttBackend === 'local' && activeSttDevice !== 'cpu'
-      ? (WHISPER_VRAM_TABLE[activeWhisperModel] ?? 6144)
-      : 0;
+    activeSttDevice === 'cpu'
+      ? 0
+      : activeSttBackend === 'local'
+        ? (WHISPER_VRAM_TABLE[activeWhisperModel] ?? 6144)
+        : activeSttBackend === 'granite'
+          ? GRANITE_VRAM_MB
+          : 0;
   const kokoroVram = activeTtsBackend === 'local' ? KOKORO_VRAM_MB : 0;
   const ollamaVram = settings?.ollamaModel
     ? (ollamaModels?.find(m => m.name === settings.ollamaModel)?.vramMb ?? 0)
@@ -664,7 +673,7 @@ function VRAMSection() {
             )}
             <span>
               STT:{' '}
-              {activeSttBackend === 'local'
+              {activeSttBackend === 'local' || activeSttBackend === 'granite'
                 ? `${whisperVram} MB`
                 : '0 MB (cloud)'}
             </span>
@@ -694,7 +703,7 @@ function VRAMSection() {
             Speech-to-Text (STT)
           </p>
           <div className="flex gap-2 mb-2">
-            {(['local', 'openai'] as const).map(b => (
+            {(['local', 'granite', 'openai'] as const).map(b => (
               <button
                 key={b}
                 onClick={() => setSttBackend(b)}
@@ -704,7 +713,13 @@ function VRAMSection() {
                     : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
                 }`}
               >
-                {b === 'local' ? 'Local (Whisper)' : 'OpenAI API'}
+                {
+                  {
+                    local: 'Local (Whisper)',
+                    granite: 'Local (Granite)',
+                    openai: 'OpenAI API',
+                  }[b]
+                }
               </button>
             ))}
           </div>
@@ -721,7 +736,7 @@ function VRAMSection() {
               ))}
             </select>
           )}
-          {activeSttBackend === 'local' && (
+          {(activeSttBackend === 'local' || activeSttBackend === 'granite') && (
             <div className="flex gap-2 mt-2">
               {(['cuda', 'cpu'] as const).map(d => (
                 <button
