@@ -47,12 +47,12 @@ export function MessageMarkdown({ content }: Props) {
             </h4>
           ),
           code: ({ children }) => (
-            <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-[0.85em]">
+            <code className="rounded text-left bg-white/10 px-1 py-0.5 font-mono text-[0.85em]">
               {children}
             </code>
           ),
           pre: ({ children }) => (
-            <pre className="mb-2 last:mb-0 p-2 rounded bg-black/30 overflow-x-auto text-xs [&_code]:bg-transparent [&_code]:p-0">
+            <pre className="mb-2 last:mb-0 p-2 rounded bg-black/30 text-left overflow-x-auto text-xs [&_code]:bg-transparent [&_code]:p-0">
               {children}
             </pre>
           ),
