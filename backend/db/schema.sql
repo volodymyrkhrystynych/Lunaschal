@@ -27,18 +27,79 @@ CREATE TABLE IF NOT EXISTS calendar_journal_links (
     created_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS flashcards (
+CREATE TABLE IF NOT EXISTS mcp_servers (
     id TEXT PRIMARY KEY,
-    front TEXT NOT NULL,
-    back TEXT NOT NULL,
+    name TEXT UNIQUE NOT NULL,
+    transport TEXT NOT NULL DEFAULT 'stdio' CHECK(transport IN ('stdio','http')),
+    command TEXT,
+    args TEXT,
+    env TEXT,
+    url TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS learning_folders (
+    id TEXT PRIMARY KEY,
+    name TEXT UNIQUE NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0,
+    evidence_provider_id TEXT REFERENCES mcp_servers(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS learning_cards (
+    id TEXT PRIMARY KEY,
+    folder_id TEXT REFERENCES learning_folders(id) ON DELETE SET NULL,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','active','retired')),
     tags TEXT,
-    source_id TEXT REFERENCES journal_entries(id),
-    easiness REAL DEFAULT 2.5,
-    interval INTEGER DEFAULT 0,
-    repetitions INTEGER DEFAULT 0,
-    next_review INTEGER NOT NULL,
+    claims TEXT,
+    answer_embedding BLOB,
+    source_type TEXT,
+    source_id TEXT,
+    derived_from TEXT REFERENCES learning_cards(id) ON DELETE SET NULL,
+    revised_from TEXT REFERENCES learning_cards(id) ON DELETE SET NULL,
+    generation_context TEXT,
+    fsrs_state TEXT,
+    due INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_cards_due ON learning_cards(state, due);
+CREATE INDEX IF NOT EXISTS idx_learning_cards_folder ON learning_cards(folder_id, state);
+
+CREATE TABLE IF NOT EXISTS learning_reviews (
+    id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL REFERENCES learning_cards(id) ON DELETE CASCADE,
+    rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 4),
+    suggested_rating INTEGER,
+    user_answer TEXT,
+    coverage TEXT,
+    answer_mode TEXT CHECK(answer_mode IN ('typed','voice','self')),
+    review_log TEXT,
     created_at INTEGER NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_learning_reviews_card ON learning_reviews(card_id, created_at);
+
+CREATE TABLE IF NOT EXISTS learning_revisions (
+    id TEXT PRIMARY KEY,
+    old_card_id TEXT REFERENCES learning_cards(id) ON DELETE SET NULL,
+    new_card_id TEXT NOT NULL REFERENCES learning_cards(id) ON DELETE CASCADE,
+    trigger_type TEXT NOT NULL CHECK(trigger_type IN ('manual_edit','web_verification')),
+    old_answer TEXT NOT NULL,
+    new_answer TEXT NOT NULL,
+    diff TEXT,
+    is_semantic INTEGER NOT NULL,
+    sources TEXT,
+    note TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_learning_revisions_new ON learning_revisions(new_card_id);
 
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
@@ -85,7 +146,6 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
 
 CREATE INDEX IF NOT EXISTS idx_journal_created ON journal_entries(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(date);
-CREATE INDEX IF NOT EXISTS idx_flashcard_next_review ON flashcards(next_review);
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_embedding_source ON embedding_metadata(source_type, source_id);
 

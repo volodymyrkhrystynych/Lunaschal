@@ -10,9 +10,10 @@ const GROUPS: { title: string; actions: ActionId[] }[] = [
   { title: 'Navigation', actions: ['nav.up', 'nav.down', 'nav.in', 'nav.out', 'global.toggleSidebar'] },
   { title: 'Actions', actions: ['action.new', 'action.newAlt', 'action.search', 'global.newJournalEntry'] },
   { title: 'Reader / Writing', actions: ['action.annotate', 'reader.fontUp', 'reader.fontDown', 'reader.toggleList'] },
+  { title: 'Learning', actions: ['learning.approve', 'learning.deny', 'learning.record'] },
   {
     title: 'Tabs',
-    actions: ['tab.chat', 'tab.tasks', 'tab.journal', 'tab.writing', 'tab.calendar', 'tab.flashcards', 'tab.cookbook', 'tab.fanfic', 'tab.files', 'tab.settings'],
+    actions: ['tab.chat', 'tab.tasks', 'tab.journal', 'tab.writing', 'tab.calendar', 'tab.learning', 'tab.cookbook', 'tab.fanfic', 'tab.files', 'tab.settings'],
   },
 ];
 

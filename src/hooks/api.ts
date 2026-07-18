@@ -196,29 +196,118 @@ export interface CalendarEvent {
   linkedJournals?: JournalEntry[];
 }
 
-export interface Flashcard {
+export interface LearningCard {
   id: string;
-  front: string;
-  back: string;
+  folderId: string | null;
+  question: string;
+  answer: string;
+  state: 'pending' | 'active' | 'retired';
   tags: string[];
+  sourceType: string | null;
   sourceId: string | null;
-  easiness: number;
-  interval: number;
-  repetitions: number;
-  nextReview: string;
+  derivedFrom: string | null;
+  revisedFrom: string | null;
+  due: string | null;
   createdAt: string;
+  updatedAt: string;
 }
 
-export interface FlashcardStats {
+export interface LearningStats {
   total: number;
   due: number;
+  pending: number;
   mastered: number;
   learning: number;
 }
 
-export interface FlashcardTag {
+export interface LearningTag {
   name: string;
   count: number;
+}
+
+export interface LearningFolder {
+  id: string;
+  name: string;
+  position: number;
+  evidenceProviderId: string | null;
+  evidenceProviderName: string | null;
+  activeCount: number;
+  pendingCount: number;
+  dueCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface McpServer {
+  id: string;
+  name: string;
+  transport: 'stdio' | 'http';
+  command: string | null;
+  args: string[];
+  env: Record<string, string>;
+  url: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CoverageClaim {
+  text: string;
+  essential: boolean;
+  covered: boolean;
+  note: string;
+}
+
+export interface ClaimCoverage {
+  claims: CoverageClaim[];
+  summary: string;
+  gated?: boolean;
+}
+
+export interface GradeResult {
+  coverage: ClaimCoverage;
+  suggestedRating: number;
+  normalizedAnswer: string;
+}
+
+export interface ApproveResult {
+  status: 'approved' | 'duplicateHint';
+  due?: string;
+  similar?: { id: string; question: string; answer: string };
+  score?: number;
+}
+
+export interface VerificationCitation {
+  title: string;
+  source: string;
+  quote: string;
+}
+
+export interface VerificationCase {
+  verdict: 'supports' | 'contradicts' | 'partial' | 'notFound';
+  summary: string;
+  proposedAnswer?: string;
+  citations: VerificationCitation[];
+}
+
+export interface VerifyResult {
+  status: 'ok' | 'notFound' | 'noProvider' | 'providerUnsupported';
+  case: VerificationCase | null;
+  transcript: unknown[];
+  error?: string;
+}
+
+export interface LearningRevision {
+  id: string;
+  oldCardId: string | null;
+  newCardId: string;
+  triggerType: 'manual_edit' | 'web_verification';
+  oldAnswer: string;
+  newAnswer: string;
+  diff: string;
+  isSemantic: boolean;
+  sources: VerificationCitation[];
+  note: string | null;
+  createdAt: string;
 }
 
 export interface Conversation {
@@ -594,32 +683,87 @@ export const api = {
       del<{ success: boolean }>(`/api/calendar/${id}/link/${journalEntryId}`),
   },
 
-  flashcard: {
-    list: (params?: { limit?: number; offset?: number; tag?: string }) => {
+  learning: {
+    listCards: (params?: { limit?: number; offset?: number; tag?: string; folderId?: string; state?: string }) => {
       const qp = new URLSearchParams();
       if (params?.limit !== undefined) qp.set('limit', String(params.limit));
       if (params?.offset !== undefined) qp.set('offset', String(params.offset));
       if (params?.tag) qp.set('tag', params.tag);
-      return get<Flashcard[]>(`/api/flashcards?${qp}`);
+      if (params?.folderId) qp.set('folderId', params.folderId);
+      if (params?.state) qp.set('state', params.state);
+      return get<LearningCard[]>(`/api/learning/cards?${qp}`);
     },
-    getDue: (tag?: string) =>
-      get<Flashcard[]>(`/api/flashcards/due${tag ? `?tag=${encodeURIComponent(tag)}` : ''}`),
-    getStats: (tag?: string) =>
-      get<FlashcardStats>(`/api/flashcards/stats${tag ? `?tag=${encodeURIComponent(tag)}` : ''}`),
-    getTags: () => get<FlashcardTag[]>('/api/flashcards/tags'),
-    get: (id: string) => get<Flashcard>(`/api/flashcards/${id}`),
-    getBySource: (sourceId: string) => get<Flashcard[]>(`/api/flashcards/by-source/${sourceId}`),
-    create: (data: { front: string; back: string; sourceId?: string; tags?: string[] }) =>
-      post<{ id: string }>('/api/flashcards', data),
-    review: (id: string, grade: number) =>
-      post<{ nextReview: string; interval: number }>(`/api/flashcards/${id}/review`, { grade }),
-    update: (id: string, data: { front?: string; back?: string; tags?: string[] }) =>
-      patch<{ success: boolean }>(`/api/flashcards/${id}`, data),
-    delete: (id: string) => del<{ success: boolean }>(`/api/flashcards/${id}`),
-    generateFromJournal: (journalId: string) =>
-      post<{ count: number; ids: string[] }>('/api/flashcards/generate-from-journal', { journalId }),
-    generateForTopic: (topic: string) =>
-      post<{ count: number; ids: string[] }>('/api/flashcards/generate-for-topic', { topic }),
+    getCard: (id: string) => get<LearningCard>(`/api/learning/cards/${id}`),
+    createCard: (data: { question: string; answer: string; folderId?: string; tags?: string[] }) =>
+      post<{ id: string }>('/api/learning/cards', data),
+    updateCard: (id: string, data: { question?: string; answer?: string; tags?: string[]; folderId?: string | null }) =>
+      patch<{ success: boolean }>(`/api/learning/cards/${id}`, data),
+    deleteCard: (id: string) => del<{ success: boolean }>(`/api/learning/cards/${id}`),
+    getDue: (params?: { tag?: string; folderId?: string }) => {
+      const qp = new URLSearchParams();
+      if (params?.tag) qp.set('tag', params.tag);
+      if (params?.folderId) qp.set('folderId', params.folderId);
+      return get<LearningCard[]>(`/api/learning/due?${qp}`);
+    },
+    getStats: (params?: { tag?: string; folderId?: string }) => {
+      const qp = new URLSearchParams();
+      if (params?.tag) qp.set('tag', params.tag);
+      if (params?.folderId) qp.set('folderId', params.folderId);
+      return get<LearningStats>(`/api/learning/stats?${qp}`);
+    },
+    getTags: () => get<LearningTag[]>('/api/learning/tags'),
+
+    grade: (id: string, data: { answer: string; answerMode: 'typed' | 'voice' }) =>
+      post<GradeResult>(`/api/learning/cards/${id}/grade`, data),
+    review: (id: string, data: {
+      rating: number; suggestedRating?: number; userAnswer?: string;
+      coverage?: ClaimCoverage; answerMode?: 'typed' | 'voice' | 'self';
+    }) => post<{ due: string; state: string }>(`/api/learning/cards/${id}/review`, data),
+
+    generate: (data: {
+      text: string; folderId?: string; tags?: string[];
+      sourceType?: string; sourceId?: string; derivedFrom?: string; direction?: string;
+    }) => post<{ count: number; ids: string[] }>('/api/learning/generate', data),
+    generateFromJournal: (journalId: string, folderId?: string) =>
+      post<{ count: number; ids: string[] }>('/api/learning/generate-from-journal', { journalId, folderId }),
+    generateForTopic: (topic: string, folderId?: string) =>
+      post<{ count: number; ids: string[] }>('/api/learning/generate-for-topic', { topic, folderId }),
+
+    listQueue: () => get<LearningCard[]>('/api/learning/queue'),
+    approve: (id: string, force?: boolean) =>
+      post<ApproveResult>(`/api/learning/queue/${id}/approve`, { force }),
+    regenerate: (id: string, direction: string) =>
+      post<{ count: number; ids: string[] }>(`/api/learning/queue/${id}/regenerate`, { direction }),
+    deny: (id: string) => del<{ success: boolean }>(`/api/learning/queue/${id}`),
+
+    verify: (id: string) => post<VerifyResult>(`/api/learning/cards/${id}/verify`, {}),
+    verifyFollowup: (id: string, question: string, transcript: unknown[]) =>
+      post<VerifyResult>(`/api/learning/cards/${id}/verify/followup`, { question, transcript }),
+    revise: (id: string, data: {
+      answer: string; question?: string;
+      triggerType?: 'manual_edit' | 'web_verification';
+      sources?: VerificationCitation[]; note?: string;
+    }) => post<{ newCardId: string; isSemantic: boolean }>(`/api/learning/cards/${id}/revise`, data),
+    getRevisions: (id: string) => get<LearningRevision[]>(`/api/learning/cards/${id}/revisions`),
+
+    listFolders: () => get<LearningFolder[]>('/api/learning/folders'),
+    createFolder: (name: string) => post<{ id: string }>('/api/learning/folders', { name }),
+    updateFolder: (id: string, data: { name?: string; position?: number; evidenceProviderId?: string | null }) =>
+      patch<{ success: boolean }>(`/api/learning/folders/${id}`, data),
+    deleteFolder: (id: string) => del<{ success: boolean }>(`/api/learning/folders/${id}`),
+
+    listMcpServers: () => get<McpServer[]>('/api/learning/mcp-servers'),
+    createMcpServer: (data: {
+      name: string; transport: 'stdio' | 'http';
+      command?: string; args?: string[]; env?: Record<string, string>; url?: string;
+    }) => post<{ id: string }>('/api/learning/mcp-servers', data),
+    updateMcpServer: (id: string, data: Partial<{
+      name: string; transport: 'stdio' | 'http';
+      command: string; args: string[]; env: Record<string, string>; url: string;
+    }>) => patch<{ success: boolean }>(`/api/learning/mcp-servers/${id}`, data),
+    deleteMcpServer: (id: string) => del<{ success: boolean }>(`/api/learning/mcp-servers/${id}`),
+    testMcpServer: (id: string) =>
+      post<{ ok: boolean; tools: string[]; error?: string }>(`/api/learning/mcp-servers/${id}/test`),
   },
 
   chat: {

@@ -117,6 +117,9 @@ export interface ScopeHandlers {
   scrollUp?: () => void;
   annotate?: () => void;
   search?: () => void;
+  approve?: () => void;
+  deny?: () => void;
+  record?: () => void;
   fontUp?: () => void;
   fontDown?: () => void;
   toggleList?: () => void;
