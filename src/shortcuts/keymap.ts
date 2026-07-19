@@ -21,6 +21,7 @@ export type ActionId =
   | 'tab.cookbook'
   | 'tab.fanfic'
   | 'tab.files'
+  | 'tab.notebook'
   | 'tab.settings'
   | 'global.newJournalEntry'
   | 'global.toggleSidebar'
@@ -57,6 +58,7 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'tab.cookbook': '',
   'tab.fanfic': '',
   'tab.files': '',
+  'tab.notebook': '',
   'tab.settings': '',
   'global.newJournalEntry': 'shift+KeyJ',
   'global.toggleSidebar': 'KeyB',
@@ -93,6 +95,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'tab.cookbook': 'Go to Cookbook',
   'tab.fanfic': 'Go to Library',
   'tab.files': 'Go to Files',
+  'tab.notebook': 'Go to Notebook',
   'tab.settings': 'Go to Settings',
   'global.newJournalEntry': 'New journal entry (from anywhere)',
   'global.toggleSidebar': 'Toggle sidebar (open/close)',

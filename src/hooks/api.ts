@@ -390,6 +390,13 @@ export interface FileEntry {
   modified: number;
 }
 
+export interface NotebookReviewState {
+  path: string;
+  enabled: boolean;
+  fsrsState: string | null;
+  due: string | null;
+}
+
 export interface RAGResult {
   sourceId: string;
   sourceType: string;
@@ -1006,6 +1013,52 @@ export const api = {
       del<{ success: boolean }>(`/api/files?path=${encodeURIComponent(path)}`),
     mkdir: (path: string) =>
       post<{ success: boolean }>('/api/files/mkdir', { path }),
+  },
+
+  notebook: {
+    files: {
+      list: (path?: string) =>
+        get<FileEntry[]>(
+          `/api/notebook/files?${path ? `path=${encodeURIComponent(path)}` : ''}`
+        ),
+      read: (path: string) =>
+        get<{ content: string }>(
+          `/api/notebook/files/read?path=${encodeURIComponent(path)}`
+        ),
+      write: (path: string, content: string) =>
+        post<{ success: boolean }>('/api/notebook/files/write', {
+          path,
+          content,
+        }),
+      rename: (from: string, to: string) =>
+        post<{ success: boolean }>('/api/notebook/files/rename', {
+          from,
+          to,
+        }),
+      delete: (path: string) =>
+        del<{ success: boolean }>(
+          `/api/notebook/files?path=${encodeURIComponent(path)}`
+        ),
+      mkdir: (path: string) =>
+        post<{ success: boolean }>('/api/notebook/files/mkdir', { path }),
+    },
+    review: {
+      getState: (path: string) =>
+        get<NotebookReviewState>(
+          `/api/notebook/review/state?path=${encodeURIComponent(path)}`
+        ),
+      toggle: (path: string, enabled: boolean) =>
+        post<{ success: boolean }>('/api/notebook/review/toggle', {
+          path,
+          enabled,
+        }),
+      due: () => get<NotebookReviewState[]>('/api/notebook/review/due'),
+      rate: (path: string, rating: 1 | 2 | 3 | 4) =>
+        post<{ due: string }>('/api/notebook/review/rate', {
+          path,
+          rating,
+        }),
+    },
   },
 
   shortcuts: {

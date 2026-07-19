@@ -7,6 +7,7 @@ import { Calendar } from './components/Calendar';
 import { Learning } from './components/Learning/Learning';
 import { Settings } from './components/Settings';
 import { Editor } from './components/Editor';
+import { Notebook } from './components/Notebook/Notebook';
 import { SttPanel } from './components/Editor/SttPanel';
 import { Login } from './components/Login';
 import { Writing } from './components/Writing';
@@ -27,6 +28,7 @@ type View =
   | 'learning'
   | 'settings'
   | 'files'
+  | 'notebook'
   | 'writing'
   | 'tasks'
   | 'cookbook'
@@ -106,6 +108,8 @@ export default function App() {
             onInsertDone={() => setPendingInsert(null)}
           />
         );
+      case 'notebook':
+        return <Notebook />;
       case 'writing':
         return <Writing />;
       case 'tasks':
