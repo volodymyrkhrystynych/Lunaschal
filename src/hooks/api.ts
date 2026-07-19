@@ -299,6 +299,12 @@ export interface VerifyResult {
   error?: string;
 }
 
+export interface CardChatResult {
+  reply: string;
+  transcript: unknown[];
+  usedMcp: boolean;
+}
+
 export interface LearningRevision {
   id: string;
   oldCardId: string | null;
@@ -865,6 +871,16 @@ export const api = {
       ),
     deny: (id: string) =>
       del<{ success: boolean }>(`/api/learning/queue/${id}`),
+
+    chat: (
+      id: string,
+      data: {
+        message: string;
+        transcript?: unknown[];
+        mcpServerId?: string | null;
+        userAnswer?: string;
+      }
+    ) => post<CardChatResult>(`/api/learning/cards/${id}/chat`, data),
 
     verify: (id: string) =>
       post<VerifyResult>(`/api/learning/cards/${id}/verify`, {}),

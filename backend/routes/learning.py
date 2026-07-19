@@ -290,6 +290,66 @@ def verify_followup(id):
                              transcript=body.get('transcript') or None)
 
 
+# ---------------------------------------------------------------- clarify chat
+
+@bp.post('/cards/<id>/chat')
+def chat_card(id):
+    """One clarify-chat turn about a card, optionally grounded in an MCP source.
+
+    Source selection: an explicit `mcpServerId` picks any registered server
+    (null forces model-only); when the key is absent the folder's evidence
+    provider is used if bound, else the chat runs without tools.
+    """
+    from backend.ai import learning_chat, mcp_client
+    from backend.ai.llm import ToolCallingUnsupported
+
+    body = request.json or {}
+    message = (body.get('message') or '').strip()
+    if not message:
+        return jsonify({'error': 'message required'}), 400
+    row = _get_card(id)
+    if not row or row['state'] != 'active':
+        return jsonify({'error': 'Not found'}), 404
+
+    if 'mcpServerId' in body:
+        server_id = body['mcpServerId']
+        server = None
+        if server_id is not None:
+            server = get_db().execute(
+                'SELECT * FROM mcp_servers WHERE id=?', (server_id,)
+            ).fetchone()
+            if not server:
+                return jsonify({'error': 'Unknown MCP server'}), 400
+    else:
+        server = _resolve_provider(row)
+
+    messages = learning_chat.build_messages(
+        row['question'], row['answer'], message,
+        transcript=body.get('transcript') or None,
+        user_answer=(body.get('userAnswer') or '').strip() or None,
+        with_tools=server is not None,
+    )
+
+    try:
+        if server is None:
+            reply, transcript = learning_chat.plain_turn(messages)
+            used_mcp = False
+        else:
+            async def worker(session):
+                return await learning_chat.tool_turn(session, messages)
+            try:
+                reply, transcript, used_mcp = mcp_client.run_tool_session(server, worker)
+            except ToolCallingUnsupported:
+                # A study chat degrades gracefully: answer without tools
+                # rather than refusing (verification stays strict).
+                reply, transcript = learning_chat.plain_turn(messages)
+                used_mcp = False
+    except Exception as e:
+        return jsonify({'error': f'Chat failed: {e}'}), 502
+
+    return jsonify({'reply': reply, 'transcript': transcript, 'usedMcp': used_mcp})
+
+
 # ---------------------------------------------------------------- generation
 
 @bp.post('/generate')

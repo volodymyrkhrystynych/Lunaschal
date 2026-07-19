@@ -58,17 +58,6 @@ def _parse_case(content: str) -> dict | None:
     return case
 
 
-def _serialize_tool_calls(tool_calls) -> list[dict]:
-    return [
-        {
-            'id': tc.id,
-            'type': 'function',
-            'function': {'name': tc.function.name, 'arguments': tc.function.arguments},
-        }
-        for tc in tool_calls
-    ]
-
-
 async def build_case(
     session,
     question: str,
@@ -82,7 +71,11 @@ async def build_case(
     message list; follow-ups are stateless — the frontend sends it back.
     """
     from backend.ai.llm import chat_with_tools
-    from backend.ai.mcp_client import mcp_tools_to_openai, tool_result_text
+    from backend.ai.mcp_client import (
+        mcp_tools_to_openai,
+        serialize_tool_calls,
+        tool_result_text,
+    )
 
     tools = mcp_tools_to_openai((await session.list_tools()).tools)
     if not tools:
@@ -106,7 +99,7 @@ async def build_case(
             messages.append({
                 'role': 'assistant',
                 'content': msg.content,
-                'tool_calls': _serialize_tool_calls(msg.tool_calls),
+                'tool_calls': serialize_tool_calls(msg.tool_calls),
             })
             for tc in msg.tool_calls:
                 try:

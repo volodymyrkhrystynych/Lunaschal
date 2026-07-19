@@ -24,6 +24,18 @@ def mcp_tools_to_openai(tools) -> list[dict]:
     ]
 
 
+def serialize_tool_calls(tool_calls) -> list[dict]:
+    """Tool calls from a completion message → JSON-serializable transcript form."""
+    return [
+        {
+            'id': tc.id,
+            'type': 'function',
+            'function': {'name': tc.function.name, 'arguments': tc.function.arguments},
+        }
+        for tc in tool_calls
+    ]
+
+
 def tool_result_text(result) -> str:
     """Flatten an MCP call_tool result to plain text for the LLM transcript."""
     parts = []

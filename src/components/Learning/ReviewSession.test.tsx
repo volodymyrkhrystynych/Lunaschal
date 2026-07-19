@@ -52,6 +52,8 @@ const { DUE, GRADE, mocks } = vi.hoisted(() => {
     verifyFollowup: vi.fn(),
     revise: vi.fn(),
     generate: vi.fn(),
+    chat: vi.fn(),
+    listMcpServers: vi.fn(),
   };
   return { DUE, GRADE, mocks };
 });
@@ -91,6 +93,24 @@ beforeEach(() => {
   mocks.getDue.mockResolvedValue(DUE);
   mocks.grade.mockResolvedValue(GRADE);
   mocks.review.mockResolvedValue({ due: 'later', state: 'active' });
+  mocks.listMcpServers.mockResolvedValue([
+    {
+      id: 'srv1',
+      name: 'python-docs',
+      transport: 'stdio',
+      command: 'npx',
+      args: [],
+      env: {},
+      url: null,
+      createdAt: '',
+      updatedAt: '',
+    },
+  ]);
+  mocks.chat.mockResolvedValue({
+    reply: 'A closure *remembers* variables from where it was defined.',
+    transcript: [{ role: 'system', content: 'sys' }],
+    usedMcp: true,
+  });
 });
 
 describe('ReviewSession', () => {
@@ -248,6 +268,102 @@ describe('ReviewSession', () => {
         })
       )
     );
+  });
+
+  describe('discuss chat', () => {
+    async function openChatAfterGrading() {
+      renderSession();
+      fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
+        target: { value: 'a function' },
+      });
+      fireEvent.click(screen.getByText('Check Answer'));
+      fireEvent.click(await screen.findByText('💬 Discuss this card'));
+      return screen.findByPlaceholderText(/Ask for clarification/);
+    }
+
+    it('sends a first message with the graded answer attached', async () => {
+      const input = await openChatAfterGrading();
+      fireEvent.change(input, { target: { value: 'Why does it capture?' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      await waitFor(() =>
+        expect(mocks.chat).toHaveBeenCalledWith('c1', {
+          message: 'Why does it capture?',
+          transcript: undefined,
+          mcpServerId: undefined,
+          userAnswer: 'a function',
+        })
+      );
+      // The user's message and the markdown-rendered reply both appear.
+      expect(await screen.findByText('Why does it capture?')).toBeTruthy();
+      const em = await screen.findByText('remembers');
+      expect(em.tagName).toBe('EM');
+    });
+
+    it('round-trips the transcript on follow-ups without re-sending the answer', async () => {
+      const input = await openChatAfterGrading();
+      fireEvent.change(input, { target: { value: 'first' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await screen.findByText('remembers');
+
+      fireEvent.change(input, { target: { value: 'second' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() =>
+        expect(mocks.chat).toHaveBeenLastCalledWith('c1', {
+          message: 'second',
+          transcript: [{ role: 'system', content: 'sys' }],
+          mcpServerId: undefined,
+          userAnswer: undefined,
+        })
+      );
+    });
+
+    it('the source picker can force a specific server or model-only', async () => {
+      const input = await openChatAfterGrading();
+      const picker = screen.getByTitle(/Knowledge source/);
+      expect(await screen.findByText('python-docs')).toBeTruthy();
+
+      fireEvent.change(picker, { target: { value: 'srv1' } });
+      fireEvent.change(input, { target: { value: 'from docs' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() =>
+        expect(mocks.chat).toHaveBeenLastCalledWith(
+          'c1',
+          expect.objectContaining({ mcpServerId: 'srv1' })
+        )
+      );
+
+      fireEvent.change(picker, { target: { value: 'none' } });
+      fireEvent.change(input, { target: { value: 'no source' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() =>
+        expect(mocks.chat).toHaveBeenLastCalledWith(
+          'c1',
+          expect.objectContaining({ mcpServerId: null })
+        )
+      );
+    });
+
+    it('is available in flip mode without a graded answer', async () => {
+      renderSession();
+      fireEvent.click(await screen.findByText('Flip'));
+      fireEvent.click(await screen.findByText('💬 Discuss this card'));
+      const input = await screen.findByPlaceholderText(/Ask for clarification/);
+      fireEvent.change(input, { target: { value: 'clarify' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() =>
+        expect(mocks.chat).toHaveBeenCalledWith(
+          'c1',
+          expect.objectContaining({ userAnswer: undefined })
+        )
+      );
+    });
+
+    it('typing digits in the chat input does not rate the card', async () => {
+      const input = await openChatAfterGrading();
+      fireEvent.keyDown(input, { code: 'Digit1' });
+      expect(mocks.review).not.toHaveBeenCalled();
+    });
   });
 
   it('digits are inert before the answer is shown', async () => {
