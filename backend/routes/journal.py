@@ -8,6 +8,7 @@ from backend.db.connection import get_db, row_to_dict, search_journal_fts
 from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.rag import sync_journal_embeddings, delete_journal_embeddings, search_for_context
 from backend.ai.journal import polish_journal_entry, generate_journal_metadata
+from backend.ai.background import run_bg
 
 bp = Blueprint('journal', __name__, url_prefix='/api/journal')
 
@@ -255,7 +256,7 @@ def _polish_bg(journal_id: str, raw_content: str) -> None:
             _notify_subscribers(journal_id)
         except Exception as e:
             print(f'Background polish failed for {journal_id}: {e}')
-    threading.Thread(target=_run, daemon=True).start()
+    run_bg(_run)
 
 
 def _generate_metadata_bg(journal_id: str, content: str) -> None:
@@ -281,7 +282,7 @@ def _generate_metadata_bg(journal_id: str, content: str) -> None:
             _notify_subscribers(journal_id)
         except Exception as e:
             print(f'Background metadata generation failed for {journal_id}: {e}')
-    threading.Thread(target=_run, daemon=True).start()
+    run_bg(_run)
 
 
 def _sync_embeddings_bg(journal_id: str) -> None:
@@ -291,4 +292,4 @@ def _sync_embeddings_bg(journal_id: str) -> None:
                 sync_journal_embeddings(journal_id)
         except Exception as e:
             print(f'Embedding sync failed for {journal_id}: {e}')
-    threading.Thread(target=_sync, daemon=True).start()
+    run_bg(_sync)
