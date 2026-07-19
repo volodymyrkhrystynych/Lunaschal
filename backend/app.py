@@ -31,7 +31,15 @@ def _start_listener():
     if not os.path.exists(python) or not os.path.exists(script):
         _listener_log.warning("STT_LISTENER=1 but stt/.venv not found — run: bash stt/setup.sh")
         return
-    proc = subprocess.Popen([python, script])
+    env = os.environ.copy()
+    # Flask serves HTTPS-only in network mode (start-server.sh wires in a
+    # Tailscale cert so iOS Safari can access the mic) — without this the
+    # listener's default http://127.0.0.1:5000 gets a connection reset and
+    # every voice shortcut silently stops working.
+    tailscale_hostname = env.get('TAILSCALE_HOSTNAME')
+    if not env.get('LUNASCHAL_URL') and tailscale_hostname:
+        env['LUNASCHAL_URL'] = f'https://{tailscale_hostname}:5000'
+    proc = subprocess.Popen([python, script], env=env)
     _listener_log.info("Voice listener started (pid=%d)", proc.pid)
     atexit.register(proc.terminate)
 
