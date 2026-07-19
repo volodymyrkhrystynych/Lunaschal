@@ -20,10 +20,22 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const [lastText, setLastText] = useState('');
   const [error, setError] = useState('');
   const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recordModeRef = useRef<'normal' | 'journal'>('normal');
+  const queryClient = useQueryClient();
+
+  const saveJournalFromVoice = useMutation({
+    mutationFn: (text: string) => api.journal.createFromVoice(text),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['journal'] }),
+    onError: err =>
+      setError(
+        err instanceof Error ? err.message : 'Failed to save journal entry'
+      ),
+  });
 
   const recorder = useRecorder(text => {
     setLastText(text);
-    onTranscribed(text);
+    if (recordModeRef.current === 'journal') saveJournalFromVoice.mutate(text);
+    else onTranscribed(text);
     if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
     clearTimerRef.current = setTimeout(() => setLastText(''), 8000);
   });
@@ -45,7 +57,6 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
     refetchInterval: 500,
   });
 
-  const queryClient = useQueryClient();
   const { data: activeMeeting } = useQuery({
     queryKey: ['meetings', 'active'],
     queryFn: api.meetings.active,
@@ -116,6 +127,12 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
 
   const startRecording = () => {
     setError('');
+    recordModeRef.current = 'normal';
+    void recorder.start();
+  };
+  const startJournalRecording = () => {
+    setError('');
+    recordModeRef.current = 'journal';
     void recorder.start();
   };
   const stopRecording = recorder.stop;
@@ -158,11 +175,23 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
 
   const isListenerControlling = isListenerActive && status === 'idle';
   const isJournalMode = isListenerControlling && listenerMode === 'journal';
-  const buttonDisabled =
-    effectiveStatus === 'transcribing' || isListenerControlling;
 
-  const buttonLabel =
-    effectiveStatus === 'recording'
+  // The in-app Journal button shares the same recorder/mic as the Record
+  // button (only one recording can run at a time) — recordModeRef tracks
+  // which one is "holding" it so each button reflects its own state.
+  const inAppJournalActive =
+    status !== 'idle' && recordModeRef.current === 'journal';
+  const inAppNormalActive =
+    status !== 'idle' && recordModeRef.current === 'normal';
+
+  const buttonDisabled =
+    effectiveStatus === 'transcribing' ||
+    isListenerControlling ||
+    inAppJournalActive;
+
+  const buttonLabel = inAppJournalActive
+    ? 'Record'
+    : effectiveStatus === 'recording'
       ? isJournalMode
         ? 'Journal…'
         : isListenerControlling
@@ -173,6 +202,20 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           ? 'Saving journal…'
           : 'Transcribing…'
         : 'Record';
+
+  const journalButtonDisabled =
+    inAppNormalActive ||
+    isListenerControlling ||
+    saveJournalFromVoice.isPending ||
+    (status === 'transcribing' && !inAppJournalActive);
+
+  const journalButtonLabel = inAppJournalActive
+    ? status === 'recording'
+      ? 'Stop'
+      : 'Transcribing…'
+    : saveJournalFromVoice.isPending
+      ? 'Saving…'
+      : 'Journal';
 
   return (
     <div className="shrink-0 border-t border-white/10 bg-[var(--color-surface)]">
@@ -322,32 +365,29 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
         </button>
 
         <button
-          onClick={() => {
-            setError('');
-            if (meetingActive && activeMeeting?.id)
-              stopMeeting.mutate(activeMeeting.id);
-            else startMeeting.mutate();
-          }}
-          disabled={meetingPending}
-          title={
-            meetingActive
-              ? 'Stop the meeting recording and start transcription'
-              : 'Record a meeting (mic + system audio)'
+          onClick={
+            inAppJournalActive && status === 'recording'
+              ? stopRecording
+              : startJournalRecording
           }
+          disabled={journalButtonDisabled}
+          title="Record → transcribe → save as a journal entry (same as the journal voice shortcut)"
           className={`flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
-            meetingActive
-              ? 'bg-red-600 hover:bg-red-700 text-white'
+            inAppJournalActive && status === 'recording'
+              ? 'bg-amber-600 hover:bg-amber-700 text-white'
               : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
           }`}
         >
           <span
             className={`w-2 h-2 rounded-full ${
-              meetingActive
+              inAppJournalActive && status === 'recording'
                 ? 'bg-white animate-pulse'
-                : 'bg-[var(--color-text-muted)]'
+                : inAppJournalActive && status === 'transcribing'
+                  ? 'bg-yellow-400'
+                  : 'bg-[var(--color-text-muted)]'
             }`}
           />
-          {meetingActive ? `Stop meeting ${meetingElapsed}` : 'Meeting'}
+          {journalButtonLabel}
         </button>
 
         {(error || recorder.error) && (
@@ -371,11 +411,40 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
 
         <button
           onClick={() => {
+            setError('');
+            if (meetingActive && activeMeeting?.id)
+              stopMeeting.mutate(activeMeeting.id);
+            else startMeeting.mutate();
+          }}
+          disabled={meetingPending}
+          title={
+            meetingActive
+              ? 'Stop the meeting recording and start transcription'
+              : 'Record a meeting (mic + system audio)'
+          }
+          className={`ml-auto flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
+            meetingActive
+              ? 'bg-red-600 hover:bg-red-700 text-white'
+              : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
+          }`}
+        >
+          <span
+            className={`w-2 h-2 rounded-full ${
+              meetingActive
+                ? 'bg-white animate-pulse'
+                : 'bg-[var(--color-text-muted)]'
+            }`}
+          />
+          {meetingActive ? `Stop meeting ${meetingElapsed}` : 'Meeting'}
+        </button>
+
+        <button
+          onClick={() => {
             setExpanded(e => !e);
             setCorrectResult(null);
             setCorrectError('');
           }}
-          className={`ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
+          className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
             expanded
               ? 'bg-white/15 text-[var(--color-text)]'
               : 'bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'

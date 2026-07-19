@@ -573,6 +573,10 @@ export const api = {
     get: (id: string) => get<JournalEntry>(`/api/journal/${id}`),
     create: (data: { content: string; title?: string; tags?: string[] }) =>
       post<{ id: string }>('/api/journal', data),
+    // Mirrors the STT_JOURNAL_KEY voice shortcut (stt/listener.py): save the
+    // raw transcript immediately, polish it in the background.
+    createFromVoice: (rawContent: string) =>
+      post<{ id: string }>('/api/journal', { raw_content: rawContent }),
     update: (
       id: string,
       data: { content?: string; title?: string; tags?: string[] }
