@@ -38,6 +38,15 @@ def chat_text(prompt: str, system: str | None = None) -> str:
     return resp.choices[0].message.content or ''
 
 
+def chat_messages(messages: list[dict]) -> str:
+    """Blocking plain-text completion over a prebuilt message list."""
+    c = get_provider_config()
+    client = get_ollama_client(c)
+    model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+    resp = client.chat.completions.create(model=model, messages=messages)
+    return resp.choices[0].message.content or ''
+
+
 def chat_with_tools(messages: list[dict], tools: list[dict]):
     """One tool-calling turn via the Ollama OpenAI-compat API; returns the message."""
     c = get_provider_config()

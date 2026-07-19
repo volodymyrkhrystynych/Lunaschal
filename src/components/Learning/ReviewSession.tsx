@@ -4,6 +4,7 @@ import { api, type GradeResult, type LearningCard } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { MessageMarkdown } from '../MessageMarkdown';
+import { CardChat } from './CardChat';
 import { CoverageResult } from './CoverageResult';
 import { VerificationPanel } from './VerificationPanel';
 
@@ -27,6 +28,7 @@ export function ReviewSession({ folderId, tag }: Props) {
   const [grade, setGrade] = useState<GradeResult | null>(null);
   const [selRating, setSelRating] = useState(3);
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
+  const [showChat, setShowChat] = useState(false);
   const queryClient = useQueryClient();
 
   const { data: due, refetch: refetchDue } = useQuery({
@@ -74,6 +76,7 @@ export function ReviewSession({ folderId, tag }: Props) {
       setFlipped(false);
       setGrade(null);
       setSelRating(3);
+      setShowChat(false);
       setIndex(prev => (freshDue && prev < freshDue.length ? prev : 0));
     },
   });
@@ -259,15 +262,31 @@ export function ReviewSession({ folderId, tag }: Props) {
                 ))}
               </div>
 
-              {grade && (
-                <div className="text-center">
+              <div className="flex justify-center gap-4">
+                {!showChat && (
+                  <button
+                    onClick={() => setShowChat(true)}
+                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline"
+                  >
+                    💬 Discuss this card
+                  </button>
+                )}
+                {grade && (
                   <button
                     onClick={() => setVerifying(card)}
                     className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline"
                   >
                     I was right — the card is wrong
                   </button>
-                </div>
+                )}
+              </div>
+
+              {showChat && (
+                <CardChat
+                  key={card.id}
+                  card={card}
+                  userAnswer={grade?.normalizedAnswer}
+                />
               )}
             </div>
           )}
