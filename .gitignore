@@ -13,3 +13,4 @@ stt/lib/
 *.db-wal
 *.db-shm
 scripts/.benchmark_cache/
+certs/

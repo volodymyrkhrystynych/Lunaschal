@@ -3,6 +3,18 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import path from 'path';
+import fs from 'fs';
+
+// Set by start-server.sh when serving network mode over a Tailscale cert —
+// iOS Safari only exposes navigator.mediaDevices on a secure context, so
+// LAN/Tailscale access to the mic (voice input) requires real HTTPS.
+const httpsCert = process.env.VITE_HTTPS_CERT;
+const httpsKey = process.env.VITE_HTTPS_KEY;
+const https =
+  httpsCert && httpsKey
+    ? { cert: fs.readFileSync(httpsCert), key: fs.readFileSync(httpsKey) }
+    : undefined;
+const tailscaleHost = process.env.TAILSCALE_HOSTNAME;
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -20,12 +32,24 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    https,
+    // Without this, the HMR client (which reads window.location.hostname)
+    // still tries to open its websocket to "localhost" by default, which
+    // fails for browsers on other devices connecting via the Tailscale name.
+    hmr: https && tailscaleHost ? { host: tailscaleHost } : undefined,
     proxy: {
       '/api': {
         // Overridden by start-node.sh so a weak machine can run the frontend
         // locally while proxying API calls to the backend on another machine.
-        target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:5000',
+        // Flask itself speaks HTTPS-only once a cert is wired in (start-server.sh),
+        // so the default target must follow suit or every proxied call gets ECONNRESET.
+        target:
+          process.env.VITE_API_PROXY_TARGET ||
+          (https ? 'https://localhost:5000' : 'http://localhost:5000'),
         changeOrigin: true,
+        // The cert's CN is the Tailscale hostname, not "localhost" — this hop
+        // never leaves the machine, so skipping hostname verification is fine.
+        secure: false,
       },
     },
     watch: {

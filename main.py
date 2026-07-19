@@ -1,3 +1,4 @@
+import os
 import sys
 import threading
 import time
@@ -7,24 +8,36 @@ import urllib.error
 import webview
 
 FLASK_PORT = 5000
-DEV_URL = 'http://localhost:5173'
-PROD_URL = f'http://127.0.0.1:{FLASK_PORT}'
+
+# In network mode the dev servers speak HTTPS only (a Tailscale cert bound to
+# TAILSCALE_HOSTNAME, set by start-server.sh) — plain http://localhost can no
+# longer reach them, and the cert wouldn't validate for "localhost" anyway.
+_NETWORK_MODE = os.environ.get('NETWORK_MODE', '').lower() in ('1', 'true', 'yes')
+_TAILSCALE_HOSTNAME = os.environ.get('TAILSCALE_HOSTNAME')
+if _NETWORK_MODE and _TAILSCALE_HOSTNAME:
+    DEV_URL = f'https://{_TAILSCALE_HOSTNAME}:5173'
+    PROD_URL = f'https://{_TAILSCALE_HOSTNAME}:{FLASK_PORT}'
+    _HEALTH_URL = f'https://{_TAILSCALE_HOSTNAME}:{FLASK_PORT}/api/health'
+else:
+    DEV_URL = 'http://localhost:5173'
+    PROD_URL = f'http://127.0.0.1:{FLASK_PORT}'
+    _HEALTH_URL = f'http://127.0.0.1:{FLASK_PORT}/api/health'
 
 
 def _run_flask():
-    import os
     from backend.app import create_app
-    host = '0.0.0.0' if os.environ.get('NETWORK_MODE', '').lower() in ('1', 'true', 'yes') else '127.0.0.1'
+    host = '0.0.0.0' if _NETWORK_MODE else '127.0.0.1'
     app = create_app()
-    app.run(host=host, port=FLASK_PORT, use_reloader=False)
+    cert, key = os.environ.get('VITE_HTTPS_CERT'), os.environ.get('VITE_HTTPS_KEY')
+    ssl_context = (cert, key) if _NETWORK_MODE and cert and key else None
+    app.run(host=host, port=FLASK_PORT, use_reloader=False, ssl_context=ssl_context)
 
 
 def _wait_for_flask(timeout: float = 10.0) -> bool:
-    url = f'http://127.0.0.1:{FLASK_PORT}/api/health'
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            urllib.request.urlopen(url, timeout=1)
+            urllib.request.urlopen(_HEALTH_URL, timeout=1)
             return True
         except (urllib.error.URLError, OSError):
             time.sleep(0.1)

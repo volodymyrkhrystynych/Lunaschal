@@ -15,6 +15,12 @@ export function useRecorder(onTranscript: (text: string) => void) {
 
   const start = async () => {
     setError('');
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError(
+        'Microphone access requires HTTPS on this device — reload the page over the https:// URL.'
+      );
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       chunksRef.current = [];
