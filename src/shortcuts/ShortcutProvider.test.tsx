@@ -215,6 +215,37 @@ describe('learning review shortcuts', () => {
   });
 });
 
+describe('Escape key', () => {
+  it('blurs a plain editable target', () => {
+    const { container } = renderScope({});
+    const input = document.createElement('input');
+    container.appendChild(input);
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.keyDown(input, { key: 'Escape' });
+
+    expect(document.activeElement).not.toBe(input);
+  });
+
+  it('does not blur an editable target inside a [data-vim-editor] container, so Vim keeps focus for its own mode transitions', () => {
+    const { container } = renderScope({});
+    const wrapper = document.createElement('div');
+    wrapper.setAttribute('data-vim-editor', '');
+    const editable = document.createElement('div');
+    editable.contentEditable = 'true';
+    editable.tabIndex = 0;
+    wrapper.appendChild(editable);
+    container.appendChild(wrapper);
+    editable.focus();
+    expect(document.activeElement).toBe(editable);
+
+    fireEvent.keyDown(editable, { key: 'Escape' });
+
+    expect(document.activeElement).toBe(editable);
+  });
+});
+
 describe('F search shortcut', () => {
   it('invokes the search handler even from the sidebar level', () => {
     const search = vi.fn();

@@ -72,6 +72,7 @@ export type AppView =
   | 'learning'
   | 'settings'
   | 'files'
+  | 'notebook'
   | 'writing'
   | 'tasks'
   | 'cookbook'
@@ -82,6 +83,7 @@ export const VIEW_ORDER: AppView[] = [
   'chat',
   'tasks',
   'journal',
+  'notebook',
   'meetings',
   'writing',
   'calendar',
@@ -103,6 +105,7 @@ const TAB_ACTIONS: Partial<Record<ActionId, AppView>> = {
   'tab.cookbook': 'cookbook',
   'tab.fanfic': 'fanfic',
   'tab.files': 'files',
+  'tab.notebook': 'notebook',
   'tab.settings': 'settings',
 };
 
@@ -256,6 +259,14 @@ export function ShortcutProvider({
 
     if (e.key === 'Escape') {
       const focused = document.activeElement;
+      // Vim-modal editors (Notebook) use Escape constantly to leave insert
+      // mode without losing focus — don't blur them out from under Vim.
+      if (
+        focused instanceof HTMLElement &&
+        focused.closest('[data-vim-editor]')
+      ) {
+        return;
+      }
       if (isEditableTarget(focused)) {
         (focused as HTMLElement).blur();
         return; // no stopPropagation — per-input Escape handlers still run

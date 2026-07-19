@@ -8,6 +8,7 @@ type View =
   | 'learning'
   | 'settings'
   | 'files'
+  | 'notebook'
   | 'writing'
   | 'tasks'
   | 'cookbook'
@@ -25,6 +26,7 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'chat', label: 'Chat', icon: '💬' },
   { view: 'tasks', label: 'Tasks', icon: '✅' },
   { view: 'journal', label: 'Journal', icon: '📓' },
+  { view: 'notebook', label: 'Notebook', icon: '🗒️' },
   { view: 'meetings', label: 'Meetings', icon: '🎙️' },
   { view: 'writing', label: 'Writing', icon: '✍️' },
   { view: 'calendar', label: 'Calendar', icon: '📅' },

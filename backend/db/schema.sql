@@ -381,3 +381,19 @@ CREATE TABLE IF NOT EXISTS meetings (
 );
 
 CREATE INDEX IF NOT EXISTS idx_meetings_created ON meetings(created_at DESC);
+
+-- Review-scheduling state for Notebook files. Notebook content itself lives
+-- on disk (see backend/routes/notebook.py); this table only holds the FSRS
+-- state for files the user has opted into spaced-repetition review, keyed by
+-- their path relative to the notebook root. Kept in sync with renames/deletes
+-- by backend/routes/notebook.py's on_rename/on_delete hooks into files.py.
+CREATE TABLE IF NOT EXISTS notebook_review_state (
+    path TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    fsrs_state TEXT,
+    due INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notebook_review_due ON notebook_review_state(enabled, due);
