@@ -338,8 +338,7 @@ def chat_card(id):
             async def worker(session):
                 return await learning_chat.tool_turn(session, messages)
             try:
-                reply, transcript = mcp_client.run_tool_session(server, worker)
-                used_mcp = True
+                reply, transcript, used_mcp = mcp_client.run_tool_session(server, worker)
             except ToolCallingUnsupported:
                 # A study chat degrades gracefully: answer without tools
                 # rather than refusing (verification stays strict).

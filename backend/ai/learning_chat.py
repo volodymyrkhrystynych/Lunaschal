@@ -53,8 +53,13 @@ def plain_turn(messages: list[dict]) -> tuple[str, list[dict]]:
     return reply, messages
 
 
-async def tool_turn(session, messages: list[dict]) -> tuple[str, list[dict]]:
-    """One chat turn against an initialized MCP session, driving the tool loop."""
+async def tool_turn(session, messages: list[dict]) -> tuple[str, list[dict], bool]:
+    """One chat turn against an initialized MCP session, driving the tool loop.
+
+    Returns (reply, transcript, used_tools) — used_tools is True only when a
+    tool was actually invoked this turn, so callers can tell a genuinely
+    grounded reply from one that quietly fell back to the model alone.
+    """
     from backend.ai.mcp_client import (
         mcp_tools_to_openai,
         serialize_tool_calls,
@@ -63,14 +68,17 @@ async def tool_turn(session, messages: list[dict]) -> tuple[str, list[dict]]:
 
     tools = mcp_tools_to_openai((await session.list_tools()).tools)
     if not tools:
-        return plain_turn(messages)
+        reply, transcript = plain_turn(messages)
+        return reply, transcript, False
 
+    used_tools = False
     for _ in range(MAX_TOOL_TURNS):
         msg = llm.chat_with_tools(messages, tools)
         if not msg.tool_calls:
             reply = msg.content or ''
             messages.append({'role': 'assistant', 'content': reply})
-            return reply, messages
+            return reply, messages, used_tools
+        used_tools = True
         messages.append({
             'role': 'assistant',
             'content': msg.content,
@@ -88,6 +96,13 @@ async def tool_turn(session, messages: list[dict]) -> tuple[str, list[dict]]:
                 content = f'Tool error: {e}'
             messages.append({'role': 'tool', 'tool_call_id': tc.id, 'content': content})
 
-    # Tool budget exhausted: force a final plain completion so the user
-    # always gets a reply.
-    return plain_turn(messages)
+    # Tool budget exhausted: force a final reply. Keep `tools` declared on
+    # this call too — the transcript already has tool_calls/tool-result
+    # messages in it, and dropping `tools` now would leave those referencing
+    # a tool schema the request no longer declares.
+    messages.append({'role': 'user', 'content':
+                     'Summarize your answer now without calling any more tools.'})
+    msg = llm.chat_with_tools(messages, tools)
+    reply = msg.content or "I've hit my research limit for this turn, but here's what I have so far."
+    messages.append({'role': 'assistant', 'content': reply})
+    return reply, messages, used_tools

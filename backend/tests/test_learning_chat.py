@@ -135,7 +135,9 @@ def test_chat_explicit_server_overrides_folder(client, monkeypatch):
     r = client.post(f'/api/learning/cards/{cid}/chat',
                     json={'message': 'hi', 'mcpServerId': other})
     assert r.status_code == 200
-    assert r.json['usedMcp'] is True
+    # The model answered directly without calling a tool, so the reply isn't
+    # actually grounded even though the MCP session ran.
+    assert r.json['usedMcp'] is False
     assert used['name'] == 'other'
 
 
@@ -190,14 +192,38 @@ def test_chat_tool_unsupported_falls_back_to_plain(client, monkeypatch):
 
 def test_tool_budget_exhaustion_forces_plain_reply(client, monkeypatch):
     session = FakeSession()
-    _scripted_llm(monkeypatch, [
+    seen = _scripted_llm(monkeypatch, [
         SimpleNamespace(content=None, tool_calls=[_tool_call('search', {'q': 'x'})]),
-    ] * 20)
-    monkeypatch.setattr(llm, 'chat_messages', lambda messages: 'Forced final answer.')
+    ] * 8 + [SimpleNamespace(content='Forced final answer.', tool_calls=None)])
     _fake_session(monkeypatch, session)
 
     cid, _ = _make_card(client, folder_provider=True)
     r = client.post(f'/api/learning/cards/{cid}/chat', json={'message': 'hi'})
     assert r.status_code == 200
     assert r.json['reply'] == 'Forced final answer.'
+    assert r.json['usedMcp'] is True
     assert len(session.calls) == 8  # MAX_TOOL_TURNS
+    # One extra chat_with_tools call for the forced final reply — still with
+    # `tools` declared, since the transcript already carries tool_calls/tool
+    # messages that reference that schema.
+    assert len(seen) == 9
+    assert seen[-1][-1] == {
+        'role': 'user', 'content': 'Summarize your answer now without calling any more tools.',
+    }
+
+
+def test_tool_budget_exhaustion_falls_back_when_model_keeps_calling_tools(client, monkeypatch):
+    """If even the forced final turn tries another tool call, it's ignored."""
+    session = FakeSession()
+    _scripted_llm(monkeypatch, [
+        SimpleNamespace(content=None, tool_calls=[_tool_call('search', {'q': 'x'})]),
+    ] * 9)
+    _fake_session(monkeypatch, session)
+
+    cid, _ = _make_card(client, folder_provider=True)
+    r = client.post(f'/api/learning/cards/{cid}/chat', json={'message': 'hi'})
+    assert r.status_code == 200
+    assert r.json['reply'] == (
+        "I've hit my research limit for this turn, but here's what I have so far."
+    )
+    assert len(session.calls) == 8  # the 9th tool call is never executed
