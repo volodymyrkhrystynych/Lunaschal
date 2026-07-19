@@ -34,11 +34,14 @@ def _start_listener():
     env = os.environ.copy()
     # Flask serves HTTPS-only in network mode (start-server.sh wires in a
     # Tailscale cert so iOS Safari can access the mic) — without this the
-    # listener's default http://127.0.0.1:5000 gets a connection reset and
-    # every voice shortcut silently stops working.
+    # listener's defaults (http://127.0.0.1:5000 for both STT_URL, used by
+    # /api/transcribe + /api/tts, and LUNASCHAL_URL, used by everything else)
+    # get a connection reset and every voice shortcut silently stops working.
     tailscale_hostname = env.get('TAILSCALE_HOSTNAME')
-    if not env.get('LUNASCHAL_URL') and tailscale_hostname:
-        env['LUNASCHAL_URL'] = f'https://{tailscale_hostname}:5000'
+    if tailscale_hostname:
+        https_url = f'https://{tailscale_hostname}:5000'
+        env.setdefault('STT_URL', https_url)
+        env.setdefault('LUNASCHAL_URL', https_url)
     proc = subprocess.Popen([python, script], env=env)
     _listener_log.info("Voice listener started (pid=%d)", proc.pid)
     atexit.register(proc.terminate)

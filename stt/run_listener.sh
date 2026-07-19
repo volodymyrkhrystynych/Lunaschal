@@ -18,12 +18,14 @@ if [ ! -f "$VENV/bin/python" ]; then
 fi
 
 # Flask serves HTTPS-only in network mode (see start-server.sh) — without
-# this, LUNASCHAL_URL's default http://127.0.0.1:5000 gets a connection
-# reset and every voice shortcut silently stops working.
-if [ -z "$LUNASCHAL_URL" ] && [ "$NETWORK_MODE" = "1" ]; then
+# this, STT_URL and LUNASCHAL_URL's shared default http://127.0.0.1:5000
+# gets a connection reset and every voice shortcut silently stops working.
+if [ "$NETWORK_MODE" = "1" ] && { [ -z "$STT_URL" ] || [ -z "$LUNASCHAL_URL" ]; }; then
     CERT_FILE=$(ls "$ROOT_DIR"/certs/*.crt 2>/dev/null | head -1)
     if [ -n "$CERT_FILE" ]; then
-        export LUNASCHAL_URL="https://$(basename "$CERT_FILE" .crt):5000"
+        HTTPS_URL="https://$(basename "$CERT_FILE" .crt):5000"
+        [ -z "$STT_URL" ] && export STT_URL="$HTTPS_URL"
+        [ -z "$LUNASCHAL_URL" ] && export LUNASCHAL_URL="$HTTPS_URL"
     fi
 fi
 
