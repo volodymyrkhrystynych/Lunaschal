@@ -129,6 +129,8 @@ export interface ScopeHandlers {
   fontUp?: () => void;
   fontDown?: () => void;
   toggleList?: () => void;
+  move?: () => void;
+  toggleDone?: () => void;
 }
 
 interface ShortcutContextValue {
@@ -390,6 +392,15 @@ export function ShortcutProvider({
         const rating = Number(action.slice(-1)) as 1 | 2 | 3 | 4;
         (handler as (r: 1 | 2 | 3 | 4) => void)(rating);
       } else handled = false;
+    } else if (action === 'tasks.move' || action === 'tasks.toggleDone') {
+      // Only fire at the depth where the selection highlight is visible.
+      const handler = resolveHandler(
+        scopes,
+        Math.max(lvl, 1),
+        action === 'tasks.move' ? 'move' : 'toggleDone'
+      );
+      if (handler) (handler as () => void)();
+      else handled = false;
     } else if (
       action === 'reader.fontUp' ||
       action === 'reader.fontDown' ||

@@ -201,6 +201,11 @@ CREATE TABLE IF NOT EXISTS todos (
     title TEXT NOT NULL,
     done INTEGER NOT NULL DEFAULT 0,
     completed_at INTEGER,
+    list TEXT NOT NULL DEFAULT 'todo',
+    notes TEXT,
+    due INTEGER,
+    repeat_interval INTEGER,
+    repeat_unit TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

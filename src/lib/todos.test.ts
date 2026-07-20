@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { partitionTodos, formatCompletedAt } from './todos';
+import {
+  partitionTodos,
+  formatCompletedAt,
+  groupTodosByList,
+  formatDue,
+  repeatLabel,
+  dueInputToUnix,
+  dueIsoToInput,
+} from './todos';
 
 const todo = (id: string, done: boolean, completedAt: string | null) => ({
   id,
@@ -37,6 +45,95 @@ describe('partitionTodos', () => {
 
   it('handles an empty list', () => {
     expect(partitionTodos([])).toEqual({ active: [], completed: [] });
+  });
+});
+
+describe('groupTodosByList', () => {
+  it('buckets todos into the three lists', () => {
+    const buckets = groupTodosByList([
+      { id: 'a', list: 'todo' },
+      { id: 'b', list: 'chores' },
+      { id: 'c', list: 'archive' },
+      { id: 'd', list: 'todo' },
+    ]);
+    expect(buckets.todo.map(t => t.id)).toEqual(['a', 'd']);
+    expect(buckets.chores.map(t => t.id)).toEqual(['b']);
+    expect(buckets.archive.map(t => t.id)).toEqual(['c']);
+  });
+
+  it('always returns all three buckets', () => {
+    expect(groupTodosByList([])).toEqual({ todo: [], chores: [], archive: [] });
+  });
+
+  it('sends unknown list values to todo', () => {
+    const buckets = groupTodosByList([{ id: 'x', list: 'someday' }]);
+    expect(buckets.todo.map(t => t.id)).toEqual(['x']);
+  });
+});
+
+describe('formatDue', () => {
+  const now = new Date(2026, 6, 8, 12, 0, 0); // local Jul 8, 2026
+
+  it('returns null for null or invalid input', () => {
+    expect(formatDue(null, now)).toBeNull();
+    expect(formatDue('not-a-date', now)).toBeNull();
+  });
+
+  it('labels current-year dates without the year', () => {
+    const r = formatDue(new Date(2026, 6, 24, 12).toISOString(), now)!;
+    expect(r.label).toMatch(/^Jul \d{1,2}$/);
+    expect(r.overdue).toBe(false);
+  });
+
+  it('includes the year for other years', () => {
+    const r = formatDue(new Date(2025, 11, 31, 12).toISOString(), now)!;
+    expect(r.label).toContain('2025');
+    expect(r.overdue).toBe(true);
+  });
+
+  it('marks yesterday overdue but not today or tomorrow', () => {
+    expect(
+      formatDue(new Date(2026, 6, 7, 23).toISOString(), now)!.overdue
+    ).toBe(true);
+    expect(formatDue(new Date(2026, 6, 8, 0).toISOString(), now)!.overdue).toBe(
+      false
+    );
+    expect(formatDue(new Date(2026, 6, 9, 1).toISOString(), now)!.overdue).toBe(
+      false
+    );
+  });
+});
+
+describe('repeatLabel', () => {
+  it('drops the number for interval 1', () => {
+    expect(repeatLabel(1, 'day')).toBe('every day');
+  });
+
+  it('pluralizes larger intervals', () => {
+    expect(repeatLabel(2, 'week')).toBe('every 2 weeks');
+    expect(repeatLabel(3, 'month')).toBe('every 3 months');
+  });
+
+  it('returns empty for missing values', () => {
+    expect(repeatLabel(null, null)).toBe('');
+    expect(repeatLabel(2, null)).toBe('');
+    expect(repeatLabel(null, 'day')).toBe('');
+  });
+});
+
+describe('due date input round-trip', () => {
+  it('converts a date input value to unix and back preserving the date', () => {
+    const unix = dueInputToUnix('2026-07-25')!;
+    expect(unix).not.toBeNull();
+    const iso = new Date(unix * 1000).toISOString();
+    expect(dueIsoToInput(iso)).toBe('2026-07-25');
+  });
+
+  it('returns null/empty for blank or malformed input', () => {
+    expect(dueInputToUnix('')).toBeNull();
+    expect(dueInputToUnix('tomorrow')).toBeNull();
+    expect(dueIsoToInput(null)).toBe('');
+    expect(dueIsoToInput('junk')).toBe('');
   });
 });
 
