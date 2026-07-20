@@ -71,7 +71,6 @@ def init_db() -> None:
     _ensure_prevent_sleep(db)
     _ensure_nudge_settings(db)
     _ensure_todo_completed_at(db)
-    _ensure_todo_list_columns(db)
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
@@ -137,23 +136,6 @@ def _ensure_todo_completed_at(db: sqlite3.Connection) -> None:
         # Best guess for todos completed before this column existed: their
         # last update was the moment they were checked off.
         db.execute('UPDATE todos SET completed_at=updated_at WHERE done=1')
-        db.commit()
-
-
-def _ensure_todo_list_columns(db: sqlite3.Connection) -> None:
-    cols = {r[1] for r in db.execute('PRAGMA table_info(todos)')}
-    added = False
-    for col, decl in (
-        ('list', "TEXT NOT NULL DEFAULT 'todo'"),
-        ('notes', 'TEXT'),
-        ('due', 'INTEGER'),
-        ('repeat_interval', 'INTEGER'),
-        ('repeat_unit', 'TEXT'),
-    ):
-        if col not in cols:
-            db.execute(f'ALTER TABLE todos ADD COLUMN {col} {decl}')
-            added = True
-    if added:
         db.commit()
 
 
