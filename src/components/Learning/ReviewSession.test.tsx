@@ -10,24 +10,28 @@ import {
 import { ReviewSession } from './ReviewSession';
 import type { GradeResult, LearningCard } from '../../hooks/api';
 
-const { DUE, GRADE, mocks } = vi.hoisted(() => {
-  const DUE: LearningCard[] = [
-    {
-      id: 'c1',
-      folderId: null,
-      question: 'What is a closure?',
-      answer: 'A function plus its captured lexical scope.',
-      state: 'active',
-      tags: [],
-      sourceType: 'manual',
-      sourceId: null,
-      derivedFrom: null,
-      revisedFrom: null,
-      due: '2026-07-17T00:00:00Z',
-      createdAt: '2026-07-01T00:00:00Z',
-      updatedAt: '2026-07-01T00:00:00Z',
-    },
-  ];
+const { CARD1, CARD2, GRADE, mocks } = vi.hoisted(() => {
+  const CARD1: LearningCard = {
+    id: 'c1',
+    folderId: null,
+    question: 'What is a closure?',
+    answer: 'A function plus its captured lexical scope.',
+    state: 'active',
+    tags: [],
+    sourceType: 'manual',
+    sourceId: null,
+    derivedFrom: null,
+    revisedFrom: null,
+    due: '2026-07-17T00:00:00Z',
+    createdAt: '2026-07-01T00:00:00Z',
+    updatedAt: '2026-07-01T00:00:00Z',
+  };
+  const CARD2: LearningCard = {
+    ...CARD1,
+    id: 'c2',
+    question: 'What is hoisting?',
+    answer: 'Declarations are moved to the top of their scope.',
+  };
   const GRADE: GradeResult = {
     coverage: {
       claims: [
@@ -55,7 +59,7 @@ const { DUE, GRADE, mocks } = vi.hoisted(() => {
     chat: vi.fn(),
     listMcpServers: vi.fn(),
   };
-  return { DUE, GRADE, mocks };
+  return { CARD1, CARD2, GRADE, mocks };
 });
 
 vi.mock('../../hooks/api', () => ({
@@ -88,9 +92,17 @@ function renderSession() {
   );
 }
 
+async function typeAndCheck(text: string) {
+  fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
+    target: { value: text },
+  });
+  fireEvent.click(screen.getByText('Check Answer'));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.getDue.mockResolvedValue(DUE);
+  localStorage.clear();
+  mocks.getDue.mockResolvedValue([CARD1]);
   mocks.grade.mockResolvedValue(GRADE);
   mocks.review.mockResolvedValue({ due: 'later', state: 'active' });
   mocks.listMcpServers.mockResolvedValue([
@@ -114,36 +126,63 @@ beforeEach(() => {
 });
 
 describe('ReviewSession', () => {
-  it('grades a typed answer and shows the coverage breakdown', async () => {
-    renderSession();
-    fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
-      target: { value: 'a function' },
-    });
-    fireEvent.click(screen.getByText('Check Answer'));
-
-    await waitFor(() =>
-      expect(mocks.grade).toHaveBeenCalledWith('c1', {
-        answer: 'a function',
-        answerMode: 'typed',
+  it('checking an answer grades in the background and advances immediately', async () => {
+    mocks.getDue.mockResolvedValue([CARD1, CARD2]);
+    let resolveGrade!: (g: GradeResult) => void;
+    mocks.grade.mockReturnValue(
+      new Promise<GradeResult>(res => {
+        resolveGrade = res;
       })
     );
+    renderSession();
+
+    await typeAndCheck('a function');
+    // Next card is shown before the grader responds.
+    expect(await screen.findByText('What is hoisting?')).toBeTruthy();
+    expect(mocks.grade).toHaveBeenCalledWith('c1', {
+      answer: 'a function',
+      answerMode: 'typed',
+    });
+    expect(screen.queryByText(/captured lexical scope/)).toBeNull();
+
+    // Finish the deck; the results pass shows card 1's back plus its grade
+    // once the background call lands.
+    fireEvent.click(screen.getByText('Flip'));
+    expect(await screen.findByText('Result 1 of 2')).toBeTruthy();
+    expect(
+      screen.getByText('A function plus its captured lexical scope.')
+    ).toBeTruthy();
+    expect(screen.getByText('Checking your answer…')).toBeTruthy();
+
+    resolveGrade(GRADE);
     expect(await screen.findByText(/missed the captured scope/)).toBeTruthy();
     expect(screen.getByText('It captures lexical scope')).toBeTruthy();
   });
 
-  it('pre-selects the suggested rating and lets the user override', async () => {
+  it('flip skips ahead without revealing the answer', async () => {
+    mocks.getDue.mockResolvedValue([CARD1, CARD2]);
     renderSession();
-    fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
-      target: { value: 'a function' },
-    });
-    fireEvent.click(screen.getByText('Check Answer'));
+    await screen.findByText('What is a closure?');
+
+    fireEvent.click(screen.getByText('Flip'));
+    expect(await screen.findByText('What is hoisting?')).toBeTruthy();
+    expect(
+      screen.queryByText('A function plus its captured lexical scope.')
+    ).toBeNull();
+    expect(mocks.grade).not.toHaveBeenCalled();
+  });
+
+  it('the results pass posts reviews in order: graded first, then self-rated', async () => {
+    mocks.getDue.mockResolvedValue([CARD1, CARD2]);
+    renderSession();
+
+    await typeAndCheck('a function');
+    await screen.findByText('What is hoisting?');
+    fireEvent.click(screen.getByText('Flip'));
+
+    // Result 1: graded — suggestion (Hard) highlighted, override with Good.
     await screen.findByText(/suggestion highlighted/);
-
-    // Hard (2) is the suggestion → highlighted with a ring.
     expect(screen.getByText('Hard').className).toContain('ring-2');
-    expect(screen.getByText('Good').className).not.toContain('ring-2');
-
-    // Overriding: tapping Good posts rating 3 with the suggestion recorded.
     fireEvent.click(screen.getByText('Good'));
     await waitFor(() =>
       expect(mocks.review).toHaveBeenCalledWith(
@@ -151,29 +190,60 @@ describe('ReviewSession', () => {
         expect.objectContaining({
           rating: 3,
           suggestedRating: 2,
+          userAnswer: 'a function',
           answerMode: 'typed',
         })
       )
     );
+
+    // Result 2: skipped — self-graded, no grader involvement.
+    mocks.getDue.mockResolvedValue([]);
+    expect(await screen.findByText('Result 2 of 2')).toBeTruthy();
+    expect(
+      screen.getByText('Declarations are moved to the top of their scope.')
+    ).toBeTruthy();
+    expect(screen.getByText(/How well did you know this/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Easy'));
+    await waitFor(() =>
+      expect(mocks.review).toHaveBeenLastCalledWith(
+        'c2',
+        expect.objectContaining({ rating: 4, answerMode: 'self' })
+      )
+    );
+
+    // Session over and nothing due anymore.
+    expect(await screen.findByText('All caught up!')).toBeTruthy();
   });
 
-  it('flip mode self-grades without calling the grader', async () => {
+  it('shows the typed answer on the result while grading is pending', async () => {
+    let resolveGrade!: (g: GradeResult) => void;
+    mocks.grade.mockReturnValue(
+      new Promise<GradeResult>(res => {
+        resolveGrade = res;
+      })
+    );
     renderSession();
-    fireEvent.click(await screen.findByText('Flip'));
-    expect(
-      screen.getByText('A function plus its captured lexical scope.')
-    ).toBeTruthy();
-    fireEvent.click(screen.getByText('Easy'));
+
+    await typeAndCheck('a function');
+    expect(await screen.findByText('Result 1 of 1')).toBeTruthy();
+    expect(screen.getByText('Your answer')).toBeTruthy();
+    expect(screen.getByText('a function')).toBeTruthy();
+    expect(screen.getByText('Checking your answer…')).toBeTruthy();
+
+    // Rating before the grade lands still works, with the raw answer.
+    fireEvent.click(screen.getByText('Good'));
     await waitFor(() =>
       expect(mocks.review).toHaveBeenCalledWith(
         'c1',
         expect.objectContaining({
-          rating: 4,
-          answerMode: 'self',
+          rating: 3,
+          userAnswer: 'a function',
+          answerMode: 'typed',
         })
       )
     );
-    expect(mocks.grade).not.toHaveBeenCalled();
+    expect(mocks.review.mock.calls[0][1].coverage).toBeUndefined();
+    resolveGrade(GRADE);
   });
 
   it('opens verification from the "card is wrong" link', async () => {
@@ -183,10 +253,7 @@ describe('ReviewSession', () => {
       transcript: [],
     });
     renderSession();
-    fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
-      target: { value: 'a function' },
-    });
-    fireEvent.click(screen.getByText('Check Answer'));
+    await typeAndCheck('a function');
     fireEvent.click(await screen.findByText('I was right — the card is wrong'));
 
     expect(await screen.findByText('Verify against evidence')).toBeTruthy();
@@ -197,7 +264,7 @@ describe('ReviewSession', () => {
   it('renders markdown in the question and answer as formatted elements', async () => {
     mocks.getDue.mockResolvedValue([
       {
-        ...DUE[0],
+        ...CARD1,
         question: 'What does **hoisting** move?',
         answer: 'Declarations move to the top of their `scope`.',
       },
@@ -219,21 +286,36 @@ describe('ReviewSession', () => {
     expect(await screen.findByText('All caught up!')).toBeTruthy();
   });
 
-  it('flips and rates with the keyboard: Space flips, S moves the rating, Space commits', async () => {
+  it('= and - zoom the card text', async () => {
+    renderSession();
+    const question = await screen.findByText('What is a closure?');
+    const container = question.parentElement!.parentElement!;
+    expect(container.style.fontSize).toBe('20px');
+
+    fireEvent.keyDown(window, { code: 'Equal' });
+    expect(container.style.fontSize).toBe('21px');
+    fireEvent.keyDown(window, { code: 'Minus' });
+    fireEvent.keyDown(window, { code: 'Minus' });
+    expect(container.style.fontSize).toBe('19px');
+  });
+
+  it('Space skips cards, then S moves the rating and Space commits it', async () => {
+    mocks.getDue.mockResolvedValue([CARD1, CARD2]);
     renderSession();
     await screen.findByText('What is a closure?');
 
     // S moves the rating selector only once nav has drilled into this scope;
-    // Space (flip/commit) works regardless, but we need S to work here too.
+    // Space works regardless, but we need S to work here too.
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
-    fireEvent.keyDown(window, { code: 'Space' }); // flip
-    expect(
-      await screen.findByText('A function plus its captured lexical scope.')
-    ).toBeTruthy();
+    fireEvent.keyDown(window, { code: 'Space' }); // skip card 1
+    expect(await screen.findByText('What is hoisting?')).toBeTruthy();
+    fireEvent.keyDown(window, { code: 'Space' }); // skip card 2
+
+    expect(await screen.findByText('Result 1 of 2')).toBeTruthy();
     expect(mocks.grade).not.toHaveBeenCalled();
 
-    // Good (3) is highlighted by default in flip mode; S moves to Easy (4).
+    // Good (3) is highlighted by default for skipped cards; S moves to Easy.
     expect(screen.getByText('Good').className).toContain('ring-2');
     fireEvent.keyDown(window, { code: 'KeyS' });
     expect(screen.getByText('Easy').className).toContain('ring-2');
@@ -242,15 +324,12 @@ describe('ReviewSession', () => {
     await waitFor(() =>
       expect(mocks.review).toHaveBeenCalledWith(
         'c1',
-        expect.objectContaining({
-          rating: 4,
-          answerMode: 'self',
-        })
+        expect.objectContaining({ rating: 4, answerMode: 'self' })
       )
     );
   });
 
-  it('D never flips, commits, or advances the card during review', async () => {
+  it('D never skips, rates, or advances during review', async () => {
     renderSession();
     await screen.findByText('What is a closure?');
 
@@ -259,34 +338,86 @@ describe('ReviewSession', () => {
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
     // ...but once there, it must not touch card state.
     fireEvent.keyDown(window, { code: 'KeyD' });
+    expect(screen.getByText('Card 1 of 1')).toBeTruthy();
     expect(
       screen.queryByText('A function plus its captured lexical scope.')
     ).toBeNull();
-    expect(mocks.review).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(window, { code: 'Space' });
+    fireEvent.keyDown(window, { code: 'Space' }); // skip -> results
     await screen.findByText('A function plus its captured lexical scope.');
     fireEvent.keyDown(window, { code: 'KeyD' });
     expect(mocks.review).not.toHaveBeenCalled();
   });
 
-  it('Space flips the card and a digit commits that rating directly', async () => {
+  it('a digit commits that rating directly on the results pass', async () => {
     renderSession();
     await screen.findByText('What is a closure?');
 
-    fireEvent.keyDown(window, { code: 'Space' });
+    fireEvent.keyDown(window, { code: 'Space' }); // skip -> results
     expect(
       await screen.findByText('A function plus its captured lexical scope.')
     ).toBeTruthy();
-    expect(mocks.grade).not.toHaveBeenCalled();
 
     fireEvent.keyDown(window, { code: 'Digit4' });
     await waitFor(() =>
       expect(mocks.review).toHaveBeenCalledWith(
         'c1',
+        expect.objectContaining({ rating: 4, answerMode: 'self' })
+      )
+    );
+  });
+
+  it('digits are inert while answering', async () => {
+    mocks.getDue.mockResolvedValue([CARD1, CARD2]);
+    renderSession();
+    await screen.findByText('What is a closure?');
+
+    fireEvent.keyDown(window, { code: 'Digit2' });
+
+    expect(mocks.review).not.toHaveBeenCalled();
+    expect(screen.getByText('Card 1 of 2')).toBeTruthy();
+  });
+
+  it('Enter submits the typed answer and advances', async () => {
+    mocks.getDue.mockResolvedValue([CARD1, CARD2]);
+    renderSession();
+    fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
+      target: { value: 'a function' },
+    });
+
+    fireEvent.keyDown(window, { code: 'Enter' });
+    await waitFor(() =>
+      expect(mocks.grade).toHaveBeenCalledWith('c1', {
+        answer: 'a function',
+        answerMode: 'typed',
+      })
+    );
+    expect(await screen.findByText('What is hoisting?')).toBeTruthy();
+  });
+
+  it('Enter does nothing when the answer box is empty', async () => {
+    renderSession();
+    await screen.findByText('What is a closure?');
+
+    fireEvent.keyDown(window, { code: 'Enter' });
+
+    expect(mocks.grade).not.toHaveBeenCalled();
+    expect(screen.getByText('Card 1 of 1')).toBeTruthy();
+  });
+
+  it('after grading, Space commits the suggested rating without extra keys', async () => {
+    renderSession();
+    await typeAndCheck('a function');
+    await screen.findByText(/suggestion highlighted/);
+
+    fireEvent.keyDown(window, { code: 'Space' }); // commit highlighted (suggested) rating
+    await waitFor(() =>
+      expect(mocks.review).toHaveBeenCalledWith(
+        'c1',
         expect.objectContaining({
-          rating: 4,
-          answerMode: 'self',
+          rating: 2,
+          suggestedRating: 2,
+          answerMode: 'typed',
         })
       )
     );
@@ -295,11 +426,9 @@ describe('ReviewSession', () => {
   describe('discuss chat', () => {
     async function openChatAfterGrading() {
       renderSession();
-      fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
-        target: { value: 'a function' },
-      });
-      fireEvent.click(screen.getByText('Check Answer'));
-      fireEvent.click(await screen.findByText('💬 Discuss this card'));
+      await typeAndCheck('a function');
+      await screen.findByText(/suggestion highlighted/);
+      fireEvent.click(screen.getByText('💬 Discuss this card'));
       return screen.findByPlaceholderText(/Ask for clarification/);
     }
 
@@ -366,9 +495,10 @@ describe('ReviewSession', () => {
       );
     });
 
-    it('is available in flip mode without a graded answer', async () => {
+    it('is available on skipped cards without a graded answer', async () => {
       renderSession();
-      fireEvent.click(await screen.findByText('Flip'));
+      await screen.findByText('What is a closure?');
+      fireEvent.click(screen.getByText('Flip'));
       fireEvent.click(await screen.findByText('💬 Discuss this card'));
       const input = await screen.findByPlaceholderText(/Ask for clarification/);
       fireEvent.change(input, { target: { value: 'clarify' } });
@@ -386,72 +516,5 @@ describe('ReviewSession', () => {
       fireEvent.keyDown(input, { code: 'Digit1' });
       expect(mocks.review).not.toHaveBeenCalled();
     });
-  });
-
-  it('digits are inert before the answer is shown', async () => {
-    renderSession();
-    await screen.findByText('What is a closure?');
-
-    fireEvent.keyDown(window, { code: 'Digit2' });
-
-    expect(mocks.review).not.toHaveBeenCalled();
-  });
-
-  it('Enter checks the typed answer, then a digit overrides the suggestion', async () => {
-    renderSession();
-    fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
-      target: { value: 'a function' },
-    });
-
-    fireEvent.keyDown(window, { code: 'Enter' });
-    await waitFor(() =>
-      expect(mocks.grade).toHaveBeenCalledWith('c1', {
-        answer: 'a function',
-        answerMode: 'typed',
-      })
-    );
-    await screen.findByText(/suggestion highlighted/);
-
-    fireEvent.keyDown(window, { code: 'Digit1' });
-    await waitFor(() =>
-      expect(mocks.review).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({
-          rating: 1,
-          suggestedRating: 2,
-          answerMode: 'typed',
-        })
-      )
-    );
-  });
-
-  it('Enter does nothing when the answer box is empty', async () => {
-    renderSession();
-    await screen.findByText('What is a closure?');
-
-    fireEvent.keyDown(window, { code: 'Enter' });
-
-    expect(mocks.grade).not.toHaveBeenCalled();
-  });
-
-  it('after grading, Space commits the suggested rating without extra keys', async () => {
-    renderSession();
-    fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
-      target: { value: 'a function' },
-    });
-    fireEvent.click(screen.getByText('Check Answer'));
-    await screen.findByText(/suggestion highlighted/);
-
-    fireEvent.keyDown(window, { code: 'Space' }); // commit highlighted (suggested) rating
-    await waitFor(() =>
-      expect(mocks.review).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({
-          rating: 2,
-          suggestedRating: 2,
-          answerMode: 'typed',
-        })
-      )
-    );
   });
 });
