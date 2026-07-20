@@ -103,7 +103,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'learning.deny': 'Deny selected card (Learning queue)',
   'learning.record': 'Toggle voice recording (Learning)',
   'learning.check': 'Check answer (Learning review)',
-  'learning.flip': 'Flip card / show answer (Learning review)',
+  'learning.flip': 'Flip card, then accept rating (Learning review)',
   'learning.rate1': 'Rate Again (Learning review)',
   'learning.rate2': 'Rate Hard (Learning review)',
   'learning.rate3': 'Rate Good (Learning review)',

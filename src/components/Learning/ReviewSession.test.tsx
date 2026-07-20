@@ -219,13 +219,15 @@ describe('ReviewSession', () => {
     expect(await screen.findByText('All caught up!')).toBeTruthy();
   });
 
-  it('flips and rates with the keyboard: D flips, S moves the rating, D commits', async () => {
+  it('flips and rates with the keyboard: Space flips, S moves the rating, Space commits', async () => {
     renderSession();
     await screen.findByText('What is a closure?');
 
+    // S moves the rating selector only once nav has drilled into this scope;
+    // Space (flip/commit) works regardless, but we need S to work here too.
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
     fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
-    fireEvent.keyDown(window, { code: 'KeyD' }); // flip
+    fireEvent.keyDown(window, { code: 'Space' }); // flip
     expect(
       await screen.findByText('A function plus its captured lexical scope.')
     ).toBeTruthy();
@@ -236,7 +238,7 @@ describe('ReviewSession', () => {
     fireEvent.keyDown(window, { code: 'KeyS' });
     expect(screen.getByText('Easy').className).toContain('ring-2');
 
-    fireEvent.keyDown(window, { code: 'KeyD' }); // commit
+    fireEvent.keyDown(window, { code: 'Space' }); // commit
     await waitFor(() =>
       expect(mocks.review).toHaveBeenCalledWith(
         'c1',
@@ -246,6 +248,26 @@ describe('ReviewSession', () => {
         })
       )
     );
+  });
+
+  it('D never flips, commits, or advances the card during review', async () => {
+    renderSession();
+    await screen.findByText('What is a closure?');
+
+    // D still drills the nav level down into the review scope...
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
+    // ...but once there, it must not touch card state.
+    fireEvent.keyDown(window, { code: 'KeyD' });
+    expect(
+      screen.queryByText('A function plus its captured lexical scope.')
+    ).toBeNull();
+    expect(mocks.review).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { code: 'Space' });
+    await screen.findByText('A function plus its captured lexical scope.');
+    fireEvent.keyDown(window, { code: 'KeyD' });
+    expect(mocks.review).not.toHaveBeenCalled();
   });
 
   it('Space flips the card and a digit commits that rating directly', async () => {
@@ -412,7 +434,7 @@ describe('ReviewSession', () => {
     expect(mocks.grade).not.toHaveBeenCalled();
   });
 
-  it('after grading, D commits the suggested rating without extra keys', async () => {
+  it('after grading, Space commits the suggested rating without extra keys', async () => {
     renderSession();
     fireEvent.change(await screen.findByPlaceholderText(/Type your answer/), {
       target: { value: 'a function' },
@@ -420,9 +442,7 @@ describe('ReviewSession', () => {
     fireEvent.click(screen.getByText('Check Answer'));
     await screen.findByText(/suggestion highlighted/);
 
-    fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
-    fireEvent.keyDown(window, { code: 'KeyD' }); // level 1 -> 2
-    fireEvent.keyDown(window, { code: 'KeyD' }); // commit highlighted (suggested) rating
+    fireEvent.keyDown(window, { code: 'Space' }); // commit highlighted (suggested) rating
     await waitFor(() =>
       expect(mocks.review).toHaveBeenCalledWith(
         'c1',
