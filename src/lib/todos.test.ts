@@ -46,6 +46,46 @@ describe('partitionTodos', () => {
   it('handles an empty list', () => {
     expect(partitionTodos([])).toEqual({ active: [], completed: [] });
   });
+
+  it('sorts active todos with due dates first, soonest on top', () => {
+    const withDue = (id: string, due: string | null) => ({
+      id,
+      done: false,
+      completedAt: null,
+      due,
+    });
+    const { active } = partitionTodos([
+      withDue('later', '2026-08-01T12:00:00+00:00'),
+      withDue('none1', null),
+      withDue('soon', '2026-07-21T12:00:00+00:00'),
+      withDue('none2', null),
+    ]);
+    expect(active.map(t => t.id)).toEqual(['soon', 'later', 'none1', 'none2']);
+  });
+
+  it('keeps creation order among due-less todos and after equal dues', () => {
+    const withDue = (id: string, due: string | null) => ({
+      id,
+      done: false,
+      completedAt: null,
+      due,
+    });
+    const { active } = partitionTodos([
+      withDue('a', '2026-07-21T12:00:00+00:00'),
+      withDue('b', '2026-07-21T12:00:00+00:00'),
+      withDue('c', null),
+      withDue('d', null),
+    ]);
+    expect(active.map(t => t.id)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('still sorts active todos that lack a due field entirely', () => {
+    const { active } = partitionTodos([
+      todo('x', false, null),
+      todo('y', false, null),
+    ]);
+    expect(active.map(t => t.id)).toEqual(['x', 'y']);
+  });
 });
 
 describe('groupTodosByList', () => {
