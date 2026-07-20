@@ -1,11 +1,19 @@
 // Split todos into the active list and the completed archive.
-// Completed todos are ordered most-recently-finished first; ISO timestamps
-// compare correctly as strings, and legacy rows without a completedAt sink
-// to the bottom.
+// Active todos with a due date come first, soonest due on top; the rest keep
+// their creation order (sort is stable), so new due-less todos still append
+// at the bottom. Completed todos are ordered most-recently-finished first;
+// ISO timestamps compare correctly as strings, and legacy rows without a
+// completedAt sink to the bottom.
 export function partitionTodos<
-  T extends { done: boolean; completedAt: string | null },
+  T extends { done: boolean; completedAt: string | null; due?: string | null },
 >(todos: T[]): { active: T[]; completed: T[] } {
-  const active = todos.filter(t => !t.done);
+  const active = todos
+    .filter(t => !t.done)
+    .sort((a, b) => {
+      if (a.due && b.due) return a.due.localeCompare(b.due);
+      if (a.due || b.due) return a.due ? -1 : 1;
+      return 0;
+    });
   const completed = todos
     .filter(t => t.done)
     .sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''));
