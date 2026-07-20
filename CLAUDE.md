@@ -9,6 +9,7 @@ Development happens on two machines: a desktop (comfortable, full mouse/keyboard
 ### Branch per feature
 
 - **Whenever the user asks for a new feature, start it on a fresh branch** — don't build features on `main`. Create the branch before writing code.
+- **Before creating the branch, ask the user for permission and the branch name** — propose a suggested name but let them confirm or override it. Do this during the planning phase (before implementation starts), since the user often switches to auto mode once planning is done and won't be there to approve a branch created mid-implementation.
 - Branch naming follows the existing convention: `feat/<short-kebab-description>` for features, `fix/<...>` for bug fixes. Match the style of recent branches (e.g. `feat/voice-command-shortcut`).
 - If the user asks for a feature while already on a relevant feature branch, keep working there; otherwise branch off the up-to-date `main`.
 - Only commit or push when the user asks.
