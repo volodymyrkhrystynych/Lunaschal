@@ -36,7 +36,9 @@ export type ActionId =
   | 'learning.rate4'
   | 'reader.fontUp'
   | 'reader.fontDown'
-  | 'reader.toggleList';
+  | 'reader.toggleList'
+  | 'tasks.move'
+  | 'tasks.toggleDone';
 
 export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'nav.up': 'KeyW',
@@ -74,6 +76,8 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'reader.fontUp': 'Equal',
   'reader.fontDown': 'Minus',
   'reader.toggleList': 'KeyL',
+  'tasks.move': 'KeyQ',
+  'tasks.toggleDone': 'KeyE',
 };
 
 export const ACTION_LABELS: Record<ActionId, string> = {
@@ -112,6 +116,8 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'reader.fontDown': 'Decrease reading/chapter text size',
   'reader.toggleList':
     'Toggle list panel (Writing chapters / Library chapters)',
+  'tasks.move': 'Move to-do to/from Archive (Tasks)',
+  'tasks.toggleDone': 'Toggle selected item done (Tasks)',
 };
 
 const MODIFIER_CODES = new Set([
