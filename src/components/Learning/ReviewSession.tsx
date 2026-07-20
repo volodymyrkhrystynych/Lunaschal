@@ -91,16 +91,6 @@ export function ReviewSession({ folderId, tag }: Props) {
     prev: () => {
       if (answered) setSelRating(r => Math.max(r - 1, 1));
     },
-    // D flips the card, then commits the highlighted rating.
-    drillIn: () => {
-      if (!card) return false;
-      if (!answered) {
-        setFlipped(true);
-      } else if (!review.isPending) {
-        review.mutate(selRating);
-      }
-      return true;
-    },
     record: () => {
       if (!card || answered || gradeAnswer.isPending) return;
       if (recorder.status === 'recording') recorder.stop();
@@ -110,9 +100,15 @@ export function ReviewSession({ folderId, tag }: Props) {
       if (!card || answered || gradeAnswer.isPending) return;
       if (answer.trim() && recorder.status === 'idle') gradeAnswer.mutate();
     },
+    // Space flips the card to reveal the answer; pressed again, it commits
+    // the highlighted rating. D is left alone — it must never touch card state.
     flip: () => {
-      if (!card || answered || gradeAnswer.isPending) return;
-      setFlipped(true);
+      if (!card || gradeAnswer.isPending) return;
+      if (!answered) {
+        setFlipped(true);
+      } else if (!review.isPending) {
+        review.mutate(selRating);
+      }
     },
     rate: rating => {
       if (!card || !answered || review.isPending) return;

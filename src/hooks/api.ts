@@ -454,13 +454,31 @@ export interface DailyTask {
   updatedAt: string;
 }
 
+export type TodoList = 'todo' | 'chores' | 'archive';
+export type RepeatUnit = 'day' | 'week' | 'month';
+
 export interface TodoItem {
   id: string;
   title: string;
   done: boolean;
   completedAt: string | null;
+  list: TodoList;
+  notes: string | null;
+  due: string | null;
+  repeatInterval: number | null;
+  repeatUnit: RepeatUnit | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TodoPayload {
+  title?: string;
+  done?: boolean;
+  list?: TodoList;
+  notes?: string | null;
+  due?: number | null;
+  repeatInterval?: number | null;
+  repeatUnit?: RepeatUnit | null;
 }
 
 export interface FrontPage {
@@ -1195,9 +1213,9 @@ export const api = {
 
   todos: {
     list: () => get<TodoItem[]>('/api/tasks/todos'),
-    create: (title: string) =>
-      post<{ id: string }>('/api/tasks/todos', { title }),
-    update: (id: string, data: { title?: string; done?: boolean }) =>
+    create: (data: TodoPayload & { title: string }) =>
+      post<{ id: string }>('/api/tasks/todos', data),
+    update: (id: string, data: TodoPayload) =>
       patch<{ success: boolean }>(`/api/tasks/todos/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/todos/${id}`),
   },
