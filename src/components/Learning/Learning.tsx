@@ -72,9 +72,20 @@ export function Learning() {
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold text-[var(--color-text)]">
-          Learning
-        </h1>
+        <div className="flex items-baseline gap-3">
+          <h1 className="text-2xl font-semibold text-[var(--color-text)]">
+            Learning
+          </h1>
+          {stats && (
+            <div className="flex gap-2.5 text-xs text-[var(--color-text-muted)]">
+              <span>{stats.total} cards</span>
+              <span className="text-orange-400">{stats.due} due</span>
+              <span className="text-purple-400">{stats.pending} queued</span>
+              <span className="text-blue-400">{stats.learning} learning</span>
+              <span className="text-green-400">{stats.mastered} mastered</span>
+            </div>
+          )}
+        </div>
         <div className="flex gap-2">
           <button
             onClick={() => setMode('review')}
@@ -154,46 +165,14 @@ export function Learning() {
         </div>
       )}
 
-      {stats && mode !== 'folders' && (
-        <div className="mb-4 grid grid-cols-5 gap-4">
-          {[
-            {
-              label: 'Total Cards',
-              value: stats.total,
-              color: 'text-[var(--color-text)]',
-            },
-            { label: 'Due Today', value: stats.due, color: 'text-orange-400' },
-            {
-              label: 'In Queue',
-              value: stats.pending,
-              color: 'text-purple-400',
-            },
-            {
-              label: 'Learning',
-              value: stats.learning,
-              color: 'text-blue-400',
-            },
-            {
-              label: 'Mastered',
-              value: stats.mastered,
-              color: 'text-green-400',
-            },
-          ].map(({ label, value, color }) => (
-            <div
-              key={label}
-              className="bg-[var(--color-surface)] rounded-lg border border-white/10 p-4 text-center"
-            >
-              <div className={`text-2xl font-bold ${color}`}>{value}</div>
-              <div className="text-sm text-[var(--color-text-muted)]">
-                {label}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
       <div className="flex-1 overflow-y-auto">
-        {mode === 'review' && <ReviewSession folderId={folderId} tag={tag} />}
+        {mode === 'review' && (
+          <ReviewSession
+            key={`${folderId ?? ''}:${tag ?? ''}`}
+            folderId={folderId}
+            tag={tag}
+          />
+        )}
         {mode === 'queue' && <Queue />}
         {mode === 'browse' && (
           <Browse folderId={folderId} tag={tag} onSelectTag={setTag} />
