@@ -11,6 +11,8 @@ import { matchesQuery } from '../../lib/notebookSearch';
 interface Props {
   selectedPath: string | null;
   onSelectFile: (path: string) => void;
+  /** Reports the keyboard-highlighted node so the pane can preview it. */
+  onFocusEntry?: (entry: FileEntry | null) => void;
 }
 
 interface VisibleNode {
@@ -90,7 +92,11 @@ function NotebookTreeRow({
   );
 }
 
-export function NotebookTree({ selectedPath, onSelectFile }: Props) {
+export function NotebookTree({
+  selectedPath,
+  onSelectFile,
+  onFocusEntry,
+}: Props) {
   const queryClient = useQueryClient();
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [newFileName, setNewFileName] = useState('');
@@ -144,6 +150,14 @@ export function NotebookTree({ selectedPath, onSelectFile }: Props) {
   useEffect(() => {
     setFocusedIdx(i => Math.min(i, Math.max(visibleNodes.length - 1, 0)));
   }, [visibleNodes.length]);
+
+  // Surface the highlighted node to the parent so the pane can preview it.
+  const focusedEntry = visibleNodes[focusedIdx]?.entry ?? null;
+  useEffect(() => {
+    onFocusEntry?.(focusedEntry);
+    // Only re-report when the identity of the highlighted node changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusedEntry?.path, focusedEntry?.isDir]);
 
   const deleteMutation = useMutation({
     mutationFn: (path: string) => api.notebook.files.delete(path),

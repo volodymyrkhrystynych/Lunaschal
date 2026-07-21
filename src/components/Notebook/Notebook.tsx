@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api } from '../../hooks/api';
+import { api, type FileEntry } from '../../hooks/api';
 import { NotebookTree } from './NotebookTree';
 import { NotebookEditorPane } from './NotebookEditorPane';
+import { NotebookPreviewPane } from './NotebookPreviewPane';
 import { NotebookReviewSession } from './NotebookReviewSession';
 
 export function Notebook() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [focusedEntry, setFocusedEntry] = useState<FileEntry | null>(null);
   const [reviewing, setReviewing] = useState(false);
 
   const { data: due } = useQuery({
@@ -40,6 +42,7 @@ export function Notebook() {
         <NotebookTree
           selectedPath={selectedPath}
           onSelectFile={setSelectedPath}
+          onFocusEntry={setFocusedEntry}
         />
       </div>
       <div className="flex-1 flex flex-col overflow-hidden">
@@ -58,9 +61,7 @@ export function Notebook() {
             onExit={() => setSelectedPath(null)}
           />
         ) : (
-          <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
-            Select a file to edit
-          </div>
+          <NotebookPreviewPane entry={focusedEntry} />
         )}
       </div>
     </div>
