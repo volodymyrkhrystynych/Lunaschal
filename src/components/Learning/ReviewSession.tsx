@@ -1,8 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type GradeResult, type LearningCard } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import {
+  LEARNING_FONT_SIZE_STEP,
+  getStoredLearningFontSize,
+  setStoredLearningFontSize,
+} from '../../lib/fontSize';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { CardChat } from './CardChat';
 import { CoverageResult } from './CoverageResult';
@@ -20,15 +25,32 @@ const RATINGS = [
   { value: 4, label: 'Easy', color: 'bg-green-500' },
 ];
 
+// One finished card from the answering pass. 'answered' cards were sent to the
+// grader in the background; 'skipped' cards were flipped past and get
+// self-rated when the results pass reveals their answer.
+interface Attempt {
+  card: LearningCard;
+  mode: 'answered' | 'skipped';
+  answer?: string;
+  usedVoice?: boolean;
+}
+
+type GradeState = GradeResult | 'pending' | 'error';
+
 export function ReviewSession({ folderId, tag }: Props) {
+  // Cards are snapshotted per session so background refetches can't reorder
+  // or shrink the deck mid-pass.
+  const [sessionCards, setSessionCards] = useState<LearningCard[] | null>(null);
   const [index, setIndex] = useState(0);
   const [answer, setAnswer] = useState('');
   const [usedVoice, setUsedVoice] = useState(false);
-  const [flipped, setFlipped] = useState(false);
-  const [grade, setGrade] = useState<GradeResult | null>(null);
-  const [selRating, setSelRating] = useState(3);
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [grades, setGrades] = useState<Record<string, GradeState>>({});
+  const [resultIndex, setResultIndex] = useState(0);
+  const [ratingOverride, setRatingOverride] = useState<number | null>(null);
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
   const [showChat, setShowChat] = useState(false);
+  const [fontSize, setFontSize] = useState(getStoredLearningFontSize);
   const queryClient = useQueryClient();
 
   const { data: due, refetch: refetchDue } = useQuery({
@@ -40,83 +62,134 @@ export function ReviewSession({ folderId, tag }: Props) {
       }),
   });
 
-  const card = due?.[index];
+  useEffect(() => {
+    if (!due) return;
+    setSessionCards(prev =>
+      prev === null || (prev.length === 0 && due.length > 0) ? due : prev
+    );
+  }, [due]);
+
+  const total = sessionCards?.length ?? 0;
+  const phase: 'answer' | 'results' =
+    total > 0 && attempts.length >= total ? 'results' : 'answer';
+  const card = sessionCards?.[index];
+
+  const current = phase === 'results' ? attempts[resultIndex] : undefined;
+  const currentGrade = current ? grades[current.card.id] : undefined;
+  const resolvedGrade =
+    currentGrade && currentGrade !== 'pending' && currentGrade !== 'error'
+      ? currentGrade
+      : null;
+
+  // The grader's suggestion is pre-selected the instant it renders (derived,
+  // not effect-synced, so a fast Space press can't commit a stale default).
+  const selRating = ratingOverride ?? resolvedGrade?.suggestedRating ?? 3;
 
   const recorder = useRecorder(text => {
     setAnswer(prev => (prev ? `${prev} ${text}` : text));
     setUsedVoice(true);
   });
 
-  const gradeAnswer = useMutation({
-    mutationFn: () =>
-      api.learning.grade(card!.id, {
-        answer,
-        answerMode: usedVoice ? 'voice' : 'typed',
-      }),
-    onSuccess: g => {
-      setGrade(g);
-      setSelRating(g.suggestedRating);
-    },
-  });
+  const adjustFontSize = (delta: number) => {
+    setFontSize(px => setStoredLearningFontSize(px + delta));
+  };
+
+  // Fire grading in the background and move straight to the next card.
+  const submitAnswer = () => {
+    if (!card || !answer.trim() || recorder.status !== 'idle') return;
+    const cardId = card.id;
+    setGrades(g => ({ ...g, [cardId]: 'pending' }));
+    api.learning
+      .grade(cardId, { answer, answerMode: usedVoice ? 'voice' : 'typed' })
+      .then(res => setGrades(g => ({ ...g, [cardId]: res })))
+      .catch(() => setGrades(g => ({ ...g, [cardId]: 'error' })));
+    setAttempts(a => [...a, { card, mode: 'answered', answer, usedVoice }]);
+    setAnswer('');
+    setUsedVoice(false);
+    setIndex(i => i + 1);
+  };
+
+  // Flip = skip for now; the answer is revealed in the results pass.
+  const skipCard = () => {
+    if (!card) return;
+    setAttempts(a => [...a, { card, mode: 'skipped' }]);
+    setAnswer('');
+    setUsedVoice(false);
+    setIndex(i => i + 1);
+  };
+
+  const finishSession = async () => {
+    const { data: fresh } = await refetchDue();
+    setSessionCards(fresh ?? []);
+    setAttempts([]);
+    setGrades({});
+    setIndex(0);
+    setResultIndex(0);
+    setShowChat(false);
+  };
+
+  const advanceResult = () => {
+    setShowChat(false);
+    setRatingOverride(null);
+    if (resultIndex + 1 >= attempts.length) void finishSession();
+    else setResultIndex(i => i + 1);
+  };
 
   const review = useMutation({
-    mutationFn: (rating: number) =>
-      api.learning.review(card!.id, {
+    mutationFn: (rating: number) => {
+      const a = attempts[resultIndex];
+      const g = grades[a.card.id];
+      const resolved = g && g !== 'pending' && g !== 'error' ? g : null;
+      return api.learning.review(a.card.id, {
         rating,
-        suggestedRating: grade?.suggestedRating,
-        userAnswer: grade ? grade.normalizedAnswer : undefined,
-        coverage: grade?.coverage,
-        answerMode: grade ? (usedVoice ? 'voice' : 'typed') : 'self',
-      }),
-    onSuccess: async () => {
+        suggestedRating: resolved?.suggestedRating,
+        userAnswer: resolved ? resolved.normalizedAnswer : a.answer,
+        coverage: resolved?.coverage,
+        answerMode:
+          a.mode === 'skipped' ? 'self' : a.usedVoice ? 'voice' : 'typed',
+      });
+    },
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['learning', 'stats'] });
-      const { data: freshDue } = await refetchDue();
-      setAnswer('');
-      setUsedVoice(false);
-      setFlipped(false);
-      setGrade(null);
-      setSelRating(3);
-      setShowChat(false);
-      setIndex(prev => (freshDue && prev < freshDue.length ? prev : 0));
+      advanceResult();
     },
   });
 
-  const answered = grade !== null || flipped;
-
   useShortcutScope(2, {
-    // Move the highlighted rating once the answer is shown.
+    // Move the highlighted rating during the results pass.
     next: () => {
-      if (answered) setSelRating(r => Math.min(r + 1, 4));
+      if (phase === 'results') setRatingOverride(Math.min(selRating + 1, 4));
     },
     prev: () => {
-      if (answered) setSelRating(r => Math.max(r - 1, 1));
+      if (phase === 'results') setRatingOverride(Math.max(selRating - 1, 1));
     },
     record: () => {
-      if (!card || answered || gradeAnswer.isPending) return;
+      if (phase !== 'answer' || !card) return;
       if (recorder.status === 'recording') recorder.stop();
       else if (recorder.status === 'idle') recorder.start();
     },
     check: () => {
-      if (!card || answered || gradeAnswer.isPending) return;
-      if (answer.trim() && recorder.status === 'idle') gradeAnswer.mutate();
+      if (phase === 'answer') submitAnswer();
     },
-    // Space flips the card to reveal the answer; pressed again, it commits
-    // the highlighted rating. D is left alone — it must never touch card state.
+    // Space skips the current card in the answering pass; in the results pass
+    // it commits the highlighted rating. D is left alone — it must never
+    // touch card state.
     flip: () => {
-      if (!card || gradeAnswer.isPending) return;
-      if (!answered) {
-        setFlipped(true);
-      } else if (!review.isPending) {
+      if (phase === 'answer') {
+        skipCard();
+      } else if (current && !review.isPending) {
         review.mutate(selRating);
       }
     },
     rate: rating => {
-      if (!card || !answered || review.isPending) return;
+      if (phase !== 'results' || !current || review.isPending) return;
       review.mutate(rating);
     },
+    fontUp: () => adjustFontSize(LEARNING_FONT_SIZE_STEP),
+    fontDown: () => adjustFontSize(-LEARNING_FONT_SIZE_STEP),
   });
 
-  if (!card) {
+  if (total === 0) {
     return (
       <div className="text-center py-16">
         <div className="text-6xl mb-4">🎉</div>
@@ -130,24 +203,27 @@ export function ReviewSession({ folderId, tag }: Props) {
     );
   }
 
-  return (
-    <div className="max-w-xl mx-auto">
-      <div className="bg-[var(--color-surface)] rounded-lg border border-white/10 overflow-hidden">
-        <div className="h-1 bg-white/5">
-          <div
-            className="h-full bg-[var(--color-primary)] transition-all duration-300"
-            style={{ width: `${((index + 1) / (due?.length || 1)) * 100}%` }}
-          />
-        </div>
-        <div className="p-8">
-          <div className="text-center mb-6 text-sm text-[var(--color-text-muted)]">
-            Card {index + 1} of {due?.length}
+  if (phase === 'answer' && card) {
+    return (
+      <div className="max-w-xl mx-auto">
+        <div className="bg-[var(--color-surface)] rounded-lg border border-white/10 overflow-hidden">
+          <div className="h-1 bg-white/5">
+            <div
+              className="h-full bg-[var(--color-primary)] transition-all duration-300"
+              style={{ width: `${((index + 1) / total) * 100}%` }}
+            />
           </div>
-          <div className="text-xl text-[var(--color-text)] text-center leading-relaxed mb-6">
-            <MessageMarkdown content={card.question} />
-          </div>
+          <div className="p-8">
+            <div className="text-center mb-6 text-sm text-[var(--color-text-muted)]">
+              Card {index + 1} of {total}
+            </div>
+            <div
+              className="text-[var(--color-text)] text-center leading-relaxed mb-6"
+              style={{ fontSize: `${fontSize}px` }}
+            >
+              <MessageMarkdown content={card.question} />
+            </div>
 
-          {!answered && (
             <div className="space-y-3">
               <textarea
                 value={answer}
@@ -155,7 +231,7 @@ export function ReviewSession({ folderId, tag }: Props) {
                 onKeyDown={e => {
                   if (e.key === 'Enter' && !e.shiftKey && answer.trim()) {
                     e.preventDefault();
-                    gradeAnswer.mutate();
+                    submitAnswer();
                   }
                 }}
                 placeholder="Type your answer (or record it)…"
@@ -168,15 +244,11 @@ export function ReviewSession({ folderId, tag }: Props) {
               )}
               <div className="flex gap-2">
                 <button
-                  onClick={() => gradeAnswer.mutate()}
-                  disabled={
-                    !answer.trim() ||
-                    gradeAnswer.isPending ||
-                    recorder.status !== 'idle'
-                  }
+                  onClick={submitAnswer}
+                  disabled={!answer.trim() || recorder.status !== 'idle'}
                   className="flex-1 py-3 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors font-medium disabled:opacity-50"
                 >
-                  {gradeAnswer.isPending ? 'Checking…' : 'Check Answer'}
+                  Check Answer
                 </button>
                 <button
                   onClick={() =>
@@ -184,9 +256,7 @@ export function ReviewSession({ folderId, tag }: Props) {
                       ? recorder.stop()
                       : recorder.start()
                   }
-                  disabled={
-                    recorder.status === 'transcribing' || gradeAnswer.isPending
-                  }
+                  disabled={recorder.status === 'transcribing'}
                   className={`px-4 py-3 rounded-lg font-medium transition-colors disabled:opacity-50 ${
                     recorder.status === 'recording'
                       ? 'bg-red-600 hover:bg-red-700 text-white'
@@ -200,92 +270,134 @@ export function ReviewSession({ folderId, tag }: Props) {
                       : '🎤'}
                 </button>
                 <button
-                  onClick={() => setFlipped(true)}
-                  disabled={gradeAnswer.isPending}
-                  className="px-4 py-3 rounded-lg bg-white/10 hover:bg-white/20 text-[var(--color-text)] font-medium transition-colors disabled:opacity-50"
-                  title="Just show the answer and grade yourself"
+                  onClick={skipCard}
+                  className="px-4 py-3 rounded-lg bg-white/10 hover:bg-white/20 text-[var(--color-text)] font-medium transition-colors"
+                  title="Skip for now — the answer is revealed at the end of the session"
                 >
                   Flip
                 </button>
               </div>
-              {gradeAnswer.isError && (
-                <p className="text-xs text-red-400">
-                  {gradeAnswer.error instanceof Error
-                    ? gradeAnswer.error.message
-                    : 'Grading failed'}
-                </p>
-              )}
+              <p className="text-center text-xs text-[var(--color-text-muted)]">
+                Answers are checked in the background — results after the last
+                card.
+              </p>
             </div>
-          )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-          {answered && (
-            <div className="space-y-4">
+  if (!current) return null;
+
+  return (
+    <div className="max-w-xl mx-auto">
+      <div className="bg-[var(--color-surface)] rounded-lg border border-white/10 overflow-hidden">
+        <div className="h-1 bg-white/5">
+          <div
+            className="h-full bg-green-500 transition-all duration-300"
+            style={{ width: `${((resultIndex + 1) / attempts.length) * 100}%` }}
+          />
+        </div>
+        <div className="p-8">
+          <div className="text-center mb-6 text-sm text-[var(--color-text-muted)]">
+            Result {resultIndex + 1} of {attempts.length}
+          </div>
+          <div
+            className="text-[var(--color-text)] text-center leading-relaxed mb-6"
+            style={{ fontSize: `${fontSize}px` }}
+          >
+            <MessageMarkdown content={current.card.question} />
+          </div>
+
+          <div className="space-y-4">
+            <div className="bg-white/5 rounded-lg p-4">
+              <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
+                Answer
+              </div>
+              <div
+                className="text-[var(--color-text)]"
+                style={{ fontSize: `${fontSize}px` }}
+              >
+                <MessageMarkdown content={current.card.answer} />
+              </div>
+            </div>
+
+            {current.mode === 'answered' && (
               <div className="bg-white/5 rounded-lg p-4">
                 <div className="text-xs text-[var(--color-text-muted)] mb-1 uppercase tracking-wide">
-                  Answer
+                  Your answer
                 </div>
-                <div className="text-[var(--color-text)]">
-                  <MessageMarkdown content={card.answer} />
-                </div>
+                <div className="text-[var(--color-text)]">{current.answer}</div>
               </div>
+            )}
 
-              {grade && (
-                <CoverageResult
-                  coverage={grade.coverage}
-                  normalizedAnswer={
-                    usedVoice ? grade.normalizedAnswer : undefined
-                  }
-                />
-              )}
-
+            {currentGrade === 'pending' && (
               <div className="text-center text-sm text-[var(--color-text-muted)]">
-                {grade
-                  ? 'How hard was it to recall? (suggestion highlighted)'
-                  : 'How well did you know this?'}
+                Checking your answer…
               </div>
-              <div className="grid grid-cols-4 gap-2">
-                {RATINGS.map(r => (
-                  <button
-                    key={r.value}
-                    onClick={() => review.mutate(r.value)}
-                    disabled={review.isPending}
-                    className={`py-3 ${r.color} text-white rounded-lg hover:opacity-80 transition-all disabled:opacity-50 font-medium ${
-                      selRating === r.value ? 'ring-2 ring-white' : 'opacity-70'
-                    }`}
-                  >
-                    {r.label}
-                  </button>
-                ))}
+            )}
+            {currentGrade === 'error' && (
+              <div className="text-center text-sm text-red-400">
+                Automatic grading failed — rate yourself.
               </div>
+            )}
+            {resolvedGrade && (
+              <CoverageResult
+                coverage={resolvedGrade.coverage}
+                normalizedAnswer={
+                  current.usedVoice ? resolvedGrade.normalizedAnswer : undefined
+                }
+              />
+            )}
 
-              <div className="flex justify-center gap-4">
-                {!showChat && (
-                  <button
-                    onClick={() => setShowChat(true)}
-                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline"
-                  >
-                    💬 Discuss this card
-                  </button>
-                )}
-                {grade && (
-                  <button
-                    onClick={() => setVerifying(card)}
-                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline"
-                  >
-                    I was right — the card is wrong
-                  </button>
-                )}
-              </div>
+            <div className="text-center text-sm text-[var(--color-text-muted)]">
+              {resolvedGrade
+                ? 'How hard was it to recall? (suggestion highlighted)'
+                : 'How well did you know this?'}
+            </div>
+            <div className="grid grid-cols-4 gap-2">
+              {RATINGS.map(r => (
+                <button
+                  key={r.value}
+                  onClick={() => review.mutate(r.value)}
+                  disabled={review.isPending}
+                  className={`py-3 ${r.color} text-white rounded-lg hover:opacity-80 transition-all disabled:opacity-50 font-medium ${
+                    selRating === r.value ? 'ring-2 ring-white' : 'opacity-70'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
+            </div>
 
-              {showChat && (
-                <CardChat
-                  key={card.id}
-                  card={card}
-                  userAnswer={grade?.normalizedAnswer}
-                />
+            <div className="flex justify-center gap-4">
+              {!showChat && (
+                <button
+                  onClick={() => setShowChat(true)}
+                  className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline"
+                >
+                  💬 Discuss this card
+                </button>
+              )}
+              {resolvedGrade && (
+                <button
+                  onClick={() => setVerifying(current.card)}
+                  className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline"
+                >
+                  I was right — the card is wrong
+                </button>
               )}
             </div>
-          )}
+
+            {showChat && (
+              <CardChat
+                key={current.card.id}
+                card={current.card}
+                userAnswer={resolvedGrade?.normalizedAnswer ?? current.answer}
+              />
+            )}
+          </div>
         </div>
       </div>
 
@@ -294,12 +406,10 @@ export function ReviewSession({ folderId, tag }: Props) {
           card={verifying}
           onClose={() => setVerifying(null)}
           onRevised={() => {
+            // The card was retired by the revision — skip rating it.
             setVerifying(null);
-            setAnswer('');
-            setUsedVoice(false);
-            setFlipped(false);
-            setGrade(null);
             queryClient.invalidateQueries({ queryKey: ['learning'] });
+            advanceResult();
           }}
         />
       )}

@@ -412,8 +412,10 @@ export function ShortcutProvider({
           : action === 'reader.fontDown'
             ? 'fontDown'
             : 'toggleList';
-      // These handlers live at depth 1 but should work from any depth in the view.
-      const handler = resolveHandlerDeep(scopes, Math.max(lvl, 1), method);
+      // These handlers apply to the whole view, so search every registered
+      // depth — the Learning review card registers its zoom at depth 2.
+      const maxDepth = Math.max(lvl, 1, ...Array.from(scopes.keys()));
+      const handler = resolveHandlerDeep(scopes, maxDepth, method);
       if (handler) (handler as () => void)();
       else handled = false;
     } else {

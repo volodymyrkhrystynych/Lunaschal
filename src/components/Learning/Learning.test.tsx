@@ -81,10 +81,14 @@ beforeEach(() => {
 });
 
 describe('Learning', () => {
-  it('renders stats, folder pills, and the due count in the Review tab', async () => {
+  it('renders compact stats beside the title, folder pills, and the due count', async () => {
     renderLearning();
     expect(await screen.findByText('Review (3)')).toBeTruthy();
-    expect(await screen.findByText('In Queue')).toBeTruthy();
+    expect(await screen.findByText('10 cards')).toBeTruthy();
+    expect(screen.getByText('3 due')).toBeTruthy();
+    expect(screen.getByText('2 queued')).toBeTruthy();
+    expect(screen.getByText('6 learning')).toBeTruthy();
+    expect(screen.getByText('4 mastered')).toBeTruthy();
     expect(await screen.findByText('Python')).toBeTruthy();
     expect(screen.getByText('#python')).toBeTruthy();
   });

@@ -77,6 +77,20 @@ const chapterFontSizeStore = createProseFontSizeStore(
 export const getStoredChapterFontSize = chapterFontSizeStore.getStored;
 export const setStoredChapterFontSize = chapterFontSizeStore.setStored;
 
+export const LEARNING_FONT_SIZE_MIN = 12;
+export const LEARNING_FONT_SIZE_MAX = 32;
+export const LEARNING_FONT_SIZE_DEFAULT = 20; // matches the old text-xl card size
+export const LEARNING_FONT_SIZE_STEP = 1;
+
+const learningFontSizeStore = createProseFontSizeStore(
+  'lunaschal:learningFontSize',
+  LEARNING_FONT_SIZE_MIN,
+  LEARNING_FONT_SIZE_MAX,
+  LEARNING_FONT_SIZE_DEFAULT
+);
+export const getStoredLearningFontSize = learningFontSizeStore.getStored;
+export const setStoredLearningFontSize = learningFontSizeStore.setStored;
+
 export const READING_FONT_SIZE_MIN = 12;
 export const READING_FONT_SIZE_MAX = 32;
 export const READING_FONT_SIZE_DEFAULT = 17; // matches .fanfic-prose's 1.05rem default
