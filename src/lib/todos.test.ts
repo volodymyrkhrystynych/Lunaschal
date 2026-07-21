@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   partitionTodos,
+  isFarOffPeriodic,
   formatCompletedAt,
   groupTodosByList,
   formatDue,
@@ -85,6 +86,72 @@ describe('partitionTodos', () => {
       todo('y', false, null),
     ]);
     expect(active.map(t => t.id)).toEqual(['x', 'y']);
+  });
+});
+
+describe('isFarOffPeriodic', () => {
+  const now = new Date(2026, 6, 8, 12, 0, 0); // local Jul 8, 2026
+  const at = (y: number, m: number, d: number) =>
+    new Date(y, m, d, 12).toISOString();
+  const periodic = (
+    due: string | null,
+    repeatInterval: number | null,
+    repeatUnit: string | null
+  ) => ({ due, repeatInterval, repeatUnit });
+
+  it('is false for non-repeating todos, even far-off ones', () => {
+    expect(isFarOffPeriodic(periodic(at(2026, 6, 30), null, null), now)).toBe(
+      false
+    );
+  });
+
+  it('is false for a repeating todo with no due date', () => {
+    expect(isFarOffPeriodic(periodic(null, 1, 'week'), now)).toBe(false);
+  });
+
+  it('hides a weekly chore due beyond its 1-day window', () => {
+    // 1 week -> threshold ceil(0.7) = 1 day.
+    expect(isFarOffPeriodic(periodic(at(2026, 6, 13), 1, 'week'), now)).toBe(
+      true
+    ); // +5 days
+    expect(isFarOffPeriodic(periodic(at(2026, 6, 10), 1, 'week'), now)).toBe(
+      true
+    ); // +2 days
+    expect(isFarOffPeriodic(periodic(at(2026, 6, 9), 1, 'week'), now)).toBe(
+      false
+    ); // +1 day (within window)
+  });
+
+  it('hides a monthly chore until within ~3 days of due', () => {
+    // 1 month ~30 days -> threshold ceil(3) = 3 days.
+    expect(isFarOffPeriodic(periodic(at(2026, 6, 13), 1, 'month'), now)).toBe(
+      true
+    ); // +5 days
+    expect(isFarOffPeriodic(periodic(at(2026, 6, 10), 1, 'month'), now)).toBe(
+      false
+    ); // +2 days
+  });
+
+  it('always shows due-today and overdue periodic todos', () => {
+    expect(isFarOffPeriodic(periodic(at(2026, 6, 8), 1, 'month'), now)).toBe(
+      false
+    ); // today
+    expect(isFarOffPeriodic(periodic(at(2026, 6, 1), 1, 'month'), now)).toBe(
+      false
+    ); // overdue
+  });
+
+  it('removes hidden periodic todos from the active list', () => {
+    const base = { done: false, completedAt: null };
+    const { active } = partitionTodos(
+      [
+        { id: 'faroff', ...base, ...periodic(at(2026, 6, 30), 1, 'month') },
+        { id: 'soon', ...base, ...periodic(at(2026, 6, 9), 1, 'week') },
+        { id: 'oneoff', ...base, ...periodic(at(2026, 7, 30), null, null) },
+      ],
+      now
+    );
+    expect(active.map(t => t.id)).toEqual(['soon', 'oneoff']);
   });
 });
 

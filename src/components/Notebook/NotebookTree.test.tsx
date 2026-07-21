@@ -113,4 +113,39 @@ describe('NotebookTree', () => {
     expect(screen.getByText('todo.md')).toBeTruthy();
     expect(screen.queryByText('ideas')).toBeNull();
   });
+
+  it('reports the highlighted node via onFocusEntry as focus moves', async () => {
+    const onFocusEntry = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ShortcutProvider currentView="notebook" onViewChange={() => {}}>
+          <NotebookTree
+            selectedPath={null}
+            onSelectFile={vi.fn()}
+            onFocusEntry={onFocusEntry}
+          />
+        </ShortcutProvider>
+      </QueryClientProvider>
+    );
+    await screen.findByText('ideas');
+
+    // Once entries load, the first node ('ideas') is the highlighted node.
+    await waitFor(() =>
+      expect(onFocusEntry).toHaveBeenLastCalledWith(
+        expect.objectContaining({ path: 'ideas', isDir: true })
+      )
+    );
+
+    fireEvent.keyDown(window, { code: 'KeyD' }); // level 0 -> 1
+    fireEvent.keyDown(window, { code: 'KeyS' }); // move focus to 'todo.md'
+
+    await waitFor(() =>
+      expect(onFocusEntry).toHaveBeenLastCalledWith(
+        expect.objectContaining({ path: 'todo.md', isDir: false })
+      )
+    );
+  });
 });

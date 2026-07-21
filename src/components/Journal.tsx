@@ -257,7 +257,17 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
             onChange={e => setNewEntry(e.target.value)}
             autoFocus
             onKeyDown={e => {
-              if (e.key === 'Escape') setShowNewEntry(false);
+              if (e.key === 'Escape') {
+                setShowNewEntry(false);
+                return;
+              }
+              // Enter saves; Shift+Enter inserts a newline.
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                if (newEntry.trim() && !createEntry.isPending) {
+                  createEntry.mutate({ content: newEntry });
+                }
+              }
             }}
             placeholder="Write your journal entry..."
             rows={4}

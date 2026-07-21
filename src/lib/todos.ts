@@ -1,14 +1,55 @@
+// Days-before-due threshold for a periodic todo: 10% of its interval, rounded
+// up, minimum 1 day. Month treated as ~30 days — this only declutters the list,
+// so an approximation is fine.
+const DAYS_PER_UNIT: Record<string, number> = { day: 1, week: 7, month: 30 };
+
+// A repeating todo whose due date is still far off just clutters the active
+// list. Hide it until it comes within ~10% of its repeat interval of the due
+// date; always show it once past due (or due today) or if it has no due date.
+// `now` is injectable for tests, matching formatDue/formatCompletedAt.
+export function isFarOffPeriodic(
+  t: {
+    due?: string | null;
+    repeatInterval?: number | null;
+    repeatUnit?: string | null;
+  },
+  now: Date = new Date()
+): boolean {
+  if (!t.repeatInterval || !t.repeatUnit || !t.due) return false;
+  const d = new Date(t.due);
+  if (isNaN(d.getTime())) return false;
+
+  const intervalDays = t.repeatInterval * (DAYS_PER_UNIT[t.repeatUnit] ?? 1);
+  const threshold = Math.max(1, Math.ceil(intervalDays * 0.1));
+
+  // Whole-day gap between local calendar days (same notion as formatDue's
+  // dayKey), so "due today" and overdue are never hidden.
+  const startOfDay = (x: Date) =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate());
+  const daysUntil = Math.round(
+    (startOfDay(d).getTime() - startOfDay(now).getTime()) / 86_400_000
+  );
+  return daysUntil > threshold;
+}
+
 // Split todos into the active list and the completed archive.
 // Active todos with a due date come first, soonest due on top; the rest keep
 // their creation order (sort is stable), so new due-less todos still append
-// at the bottom. Completed todos are ordered most-recently-finished first;
+// at the bottom. Far-off periodic todos are hidden from the active list (see
+// isFarOffPeriodic). Completed todos are ordered most-recently-finished first;
 // ISO timestamps compare correctly as strings, and legacy rows without a
 // completedAt sink to the bottom.
 export function partitionTodos<
-  T extends { done: boolean; completedAt: string | null; due?: string | null },
->(todos: T[]): { active: T[]; completed: T[] } {
+  T extends {
+    done: boolean;
+    completedAt: string | null;
+    due?: string | null;
+    repeatInterval?: number | null;
+    repeatUnit?: string | null;
+  },
+>(todos: T[], now: Date = new Date()): { active: T[]; completed: T[] } {
   const active = todos
-    .filter(t => !t.done)
+    .filter(t => !t.done && !isFarOffPeriodic(t, now))
     .sort((a, b) => {
       if (a.due && b.due) return a.due.localeCompare(b.due);
       if (a.due || b.due) return a.due ? -1 : 1;

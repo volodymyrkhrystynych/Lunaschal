@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Journal } from './Journal';
 import { ShortcutProvider } from '../shortcuts/ShortcutProvider';
-import type { JournalEntry } from '../hooks/api';
+import { api, type JournalEntry } from '../hooks/api';
 
 const { ENTRIES } = vi.hoisted(() => {
   const ENTRIES: JournalEntry[] = [
@@ -126,5 +126,50 @@ describe('Journal keyboard editing', () => {
 
     expect(screen.getByText('First entry')).toBeTruthy();
     expect(screen.queryByDisplayValue('First entry')).toBeNull();
+  });
+});
+
+describe('Journal new-entry keyboard save', () => {
+  const createMock = api.journal.create as ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    Element.prototype.scrollIntoView = vi.fn();
+    createMock.mockReset();
+    createMock.mockResolvedValue({ id: 'new' });
+  });
+
+  async function openNewEntry() {
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+    return screen.getByPlaceholderText(
+      'Write your journal entry...'
+    ) as HTMLTextAreaElement;
+  }
+
+  it('saves the entry when Enter is pressed', async () => {
+    const textarea = await openNewEntry();
+    fireEvent.change(textarea, { target: { value: 'a thought' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith({ content: 'a thought' })
+    );
+  });
+
+  it('does not save on Shift+Enter (newline instead)', async () => {
+    const textarea = await openNewEntry();
+    fireEvent.change(textarea, { target: { value: 'a thought' } });
+    fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: true });
+
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('does not save a whitespace-only entry on Enter', async () => {
+    const textarea = await openNewEntry();
+    fireEvent.change(textarea, { target: { value: '   ' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    expect(createMock).not.toHaveBeenCalled();
   });
 });
