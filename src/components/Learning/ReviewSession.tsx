@@ -1,8 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type GradeResult, type LearningCard } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
-import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import {
+  useShortcutScope,
+  useShortcuts,
+} from '../../shortcuts/ShortcutProvider';
 import {
   LEARNING_FONT_SIZE_STEP,
   getStoredLearningFontSize,
@@ -51,6 +54,7 @@ export function ReviewSession({ folderId, tag }: Props) {
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
   const [showChat, setShowChat] = useState(false);
   const [fontSize, setFontSize] = useState(getStoredLearningFontSize);
+  const { setLevel } = useShortcuts();
   const queryClient = useQueryClient();
 
   const { data: due, refetch: refetchDue } = useQuery({
@@ -70,6 +74,19 @@ export function ReviewSession({ folderId, tag }: Props) {
   }, [due]);
 
   const total = sessionCards?.length ?? 0;
+
+  // The answer box auto-focuses the moment a card appears; match that by
+  // drilling the shortcut depth straight to the card level (2) so nav keys act
+  // on the card instead of cycling app tabs. One-shot per mount: it fires once
+  // the deck is ready (after the view-entry reset to level 0), and never
+  // re-asserts, so the user can still Escape/A back out.
+  const autoDrilledRef = useRef(false);
+  useEffect(() => {
+    if (!autoDrilledRef.current && total > 0) {
+      autoDrilledRef.current = true;
+      setLevel(2);
+    }
+  }, [total, setLevel]);
   const phase: 'answer' | 'results' =
     total > 0 && attempts.length >= total ? 'results' : 'answer';
   const card = sessionCards?.[index];
