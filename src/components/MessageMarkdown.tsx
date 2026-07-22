@@ -52,7 +52,10 @@ export function MessageMarkdown({ content }: Props) {
             </code>
           ),
           pre: ({ children }) => (
-            <pre className="mb-2 last:mb-0 p-2 rounded bg-black/30 text-left overflow-x-auto text-xs [&_code]:bg-transparent [&_code]:p-0">
+            // em-relative (0.75em == 0.75rem == text-xs at the 16px base) so
+            // code blocks scale with an ambient font-size — e.g. the Learning
+            // card's font-size shortcut — instead of staying fixed.
+            <pre className="mb-2 last:mb-0 p-2 rounded bg-black/30 text-left overflow-x-auto text-[0.75em] [&_code]:bg-transparent [&_code]:p-0">
               {children}
             </pre>
           ),
@@ -74,7 +77,9 @@ export function MessageMarkdown({ content }: Props) {
           hr: () => <hr className="border-white/10 my-2" />,
           table: ({ children }) => (
             <div className="overflow-x-auto mb-2 last:mb-0">
-              <table className="border-collapse text-xs">{children}</table>
+              <table className="border-collapse text-[0.75em]">
+                {children}
+              </table>
             </div>
           ),
           th: ({ children }) => (

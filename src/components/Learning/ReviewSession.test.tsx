@@ -286,11 +286,47 @@ describe('ReviewSession', () => {
     expect(await screen.findByText('All caught up!')).toBeTruthy();
   });
 
+  it('auto-drills to the card scope so nav keys act on the card, not app tabs', async () => {
+    const onViewChange = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ShortcutProvider currentView="learning" onViewChange={onViewChange}>
+          <Scope1>
+            <ReviewSession folderId={null} tag={null} />
+          </Scope1>
+        </ShortcutProvider>
+      </QueryClientProvider>
+    );
+    await screen.findByText('What is a closure?');
+
+    // Skip to the results pass, then move the rating with S — WITHOUT first
+    // pressing D to drill in. That only works if the session already auto-drilled
+    // to the card scope (depth 2); at the app-tab level (0), S would instead
+    // cycle to the next view.
+    fireEvent.keyDown(window, { code: 'Space' }); // skip -> results
+    await screen.findByText('Result 1 of 1');
+    expect(screen.getByText('Good').className).toContain('ring-2');
+    fireEvent.keyDown(window, { code: 'KeyS' }); // move rating Good -> Easy
+
+    expect(screen.getByText('Easy').className).toContain('ring-2');
+    expect(onViewChange).not.toHaveBeenCalled();
+  });
+
   it('= and - zoom the card text', async () => {
     renderSession();
-    const question = await screen.findByText('What is a closure?');
-    const container = question.parentElement!.parentElement!;
-    expect(container.style.fontSize).toBe('20px');
+    await screen.findByText('What is a closure?');
+    // The card first renders at level 0, then the session drills to the card
+    // scope, re-rendering the markdown; wait for that to settle before grabbing
+    // the (stable) font-size container.
+    let container!: HTMLElement;
+    await waitFor(() => {
+      container =
+        screen.getByText('What is a closure?').parentElement!.parentElement!;
+      expect(container.style.fontSize).toBe('20px');
+    });
 
     fireEvent.keyDown(window, { code: 'Equal' });
     expect(container.style.fontSize).toBe('21px');
