@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+import { ulid } from '../lib/ulid';
+import {
+  useJournalCreate,
+  useJournalUpdate,
+} from '../offline/mutationDefaults';
 import { buildFeed } from '../lib/journalFeed';
 import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
 
@@ -67,30 +72,17 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     return () => es.close();
   }, [queryClient]);
 
-  const createEntry = useMutation({
-    mutationFn: ({ content }: { content: string }) =>
-      api.journal.create({ content }),
+  // Offline-queueable: optimistic insert + reconciling invalidation live in the
+  // registered mutation defaults; here we only handle the UI reset.
+  const createEntry = useJournalCreate({
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['journal'] });
       setNewEntry('');
       setShowNewEntry(false);
     },
   });
 
-  const updateEntry = useMutation({
-    mutationFn: ({
-      id,
-      content,
-      title,
-    }: {
-      id: string;
-      content: string;
-      title: string;
-    }) => api.journal.update(id, { content, title }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['journal'] });
-      setEditingId(null);
-    },
+  const updateEntry = useJournalUpdate({
+    onSuccess: () => setEditingId(null),
   });
 
   const deleteEntry = useMutation({
@@ -265,7 +257,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 if (newEntry.trim() && !createEntry.isPending) {
-                  createEntry.mutate({ content: newEntry });
+                  createEntry.mutate({ id: ulid(), content: newEntry });
                 }
               }
             }}
@@ -281,7 +273,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
               Cancel
             </button>
             <button
-              onClick={() => createEntry.mutate({ content: newEntry })}
+              onClick={() =>
+                createEntry.mutate({ id: ulid(), content: newEntry })
+              }
               disabled={!newEntry.trim() || createEntry.isPending}
               className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
             >

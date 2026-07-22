@@ -589,8 +589,14 @@ export const api = {
         `/api/journal/semantic-search?query=${encodeURIComponent(query)}&limit=${limit ?? 5}`
       ),
     get: (id: string) => get<JournalEntry>(`/api/journal/${id}`),
-    create: (data: { content: string; title?: string; tags?: string[] }) =>
-      post<{ id: string }>('/api/journal', data),
+    create: (data: {
+      content: string;
+      title?: string;
+      tags?: string[];
+      // Optional client-supplied ULID so an offline-queued create replays
+      // idempotently (server does INSERT OR IGNORE on this id).
+      id?: string;
+    }) => post<{ id: string }>('/api/journal', data),
     // Mirrors the STT_JOURNAL_KEY voice shortcut (stt/listener.py): save the
     // raw transcript immediately, polish it in the background.
     createFromVoice: (rawContent: string) =>
@@ -862,6 +868,9 @@ export const api = {
         userAnswer?: string;
         coverage?: ClaimCoverage;
         answerMode?: 'typed' | 'voice' | 'self';
+        // Optional client-supplied ULID so an offline-queued review replays
+        // idempotently (server skips re-applying FSRS if it already exists).
+        reviewId?: string;
       }
     ) =>
       post<{ due: string; state: string }>(
@@ -1213,7 +1222,7 @@ export const api = {
 
   todos: {
     list: () => get<TodoItem[]>('/api/tasks/todos'),
-    create: (data: TodoPayload & { title: string }) =>
+    create: (data: TodoPayload & { title: string; id?: string }) =>
       post<{ id: string }>('/api/tasks/todos', data),
     update: (id: string, data: TodoPayload) =>
       patch<{ success: boolean }>(`/api/tasks/todos/${id}`, data),

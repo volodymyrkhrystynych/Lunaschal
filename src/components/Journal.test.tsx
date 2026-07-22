@@ -153,7 +153,14 @@ describe('Journal new-entry keyboard save', () => {
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() =>
-      expect(createMock).toHaveBeenCalledWith({ content: 'a thought' })
+      // A client-generated ULID is included so offline creates replay
+      // idempotently.
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: 'a thought',
+          id: expect.any(String),
+        })
+      )
     );
   });
 

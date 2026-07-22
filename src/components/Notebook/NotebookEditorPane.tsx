@@ -6,6 +6,7 @@ import { oneDark } from '@codemirror/theme-one-dark';
 import { Vim, vim } from '@replit/codemirror-vim';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { useNotebookWrite } from '../../offline/mutationDefaults';
 
 interface Props {
   filePath: string;
@@ -82,9 +83,8 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
     },
   });
 
-  const writeMutation = useMutation({
-    mutationFn: (content: string) =>
-      api.notebook.files.write(filePath, content),
+  // Offline-queueable: an idempotent path-keyed overwrite that replays cleanly.
+  const writeMutation = useNotebookWrite({
     onSuccess: () => setSaveStatus('saved'),
   });
 
@@ -92,7 +92,10 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
     if (!viewRef.current) return;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     setSaveStatus('saving');
-    writeMutation.mutate(viewRef.current.state.doc.toString());
+    writeMutation.mutate({
+      path: filePath,
+      content: viewRef.current.state.doc.toString(),
+    });
   };
 
   // Build/rebuild editor when file or content changes
@@ -117,7 +120,10 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
             if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
             saveTimerRef.current = setTimeout(() => {
               setSaveStatus('saving');
-              writeMutation.mutate(update.state.doc.toString());
+              writeMutation.mutate({
+                path: filePath,
+                content: update.state.doc.toString(),
+              });
             }, SAVE_DEBOUNCE_MS);
           }),
           EditorView.theme({

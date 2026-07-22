@@ -2,6 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import {
+  useFanficProgress,
+  useFanficSetRead,
+} from '../../offline/mutationDefaults';
+import {
   adjacentChapter,
   chapterIdsUpTo,
   groupChaptersByCategory,
@@ -71,26 +75,14 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
     enabled: !!chapterId,
   });
 
-  const saveProgress = useMutation({
-    mutationFn: (chId: string) => api.fanfic.saveProgress(ficId, chId),
-    // Opening a chapter marks it read server-side — refresh the sidebar too.
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['fanfic', 'fic', ficId] });
-      queryClient.invalidateQueries({
-        queryKey: ['fanfic', 'chapters', ficId],
-      });
-    },
-  });
-
-  const setRead = useMutation({
-    mutationFn: ({ ids, read }: { ids: string[]; read: boolean }) =>
-      api.fanfic.setRead(ficId, ids, read),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['fanfic'] }),
-  });
+  // Offline-queueable: idempotent progress/read writes; invalidation lives in
+  // the registered mutation defaults (keyed off ficId in the variables).
+  const saveProgress = useFanficProgress();
+  const setRead = useFanficSetRead();
 
   useEffect(() => {
     if (chapterId) {
-      saveProgress.mutate(chapterId);
+      saveProgress.mutate({ ficId, chapterId });
       contentRef.current?.scrollTo({ top: 0 });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -245,11 +237,16 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                         e.stopPropagation();
                         if (e.shiftKey && chapters && !ch.isRead) {
                           setRead.mutate({
+                            ficId,
                             ids: chapterIdsUpTo(chapters, ch.id),
                             read: true,
                           });
                         } else {
-                          setRead.mutate({ ids: [ch.id], read: !ch.isRead });
+                          setRead.mutate({
+                            ficId,
+                            ids: [ch.id],
+                            read: !ch.isRead,
+                          });
                         }
                       }}
                       className={`px-2 py-1.5 text-xs shrink-0 transition-colors ${

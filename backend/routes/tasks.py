@@ -201,10 +201,12 @@ def create_todo():
         return jsonify({'error': err}), 400
 
     now = int(time.time())
-    todo_id = str(ULID())
+    # Accept a client-supplied ULID so an offline-queued create replays
+    # idempotently (INSERT OR IGNORE makes a duplicate a no-op).
+    todo_id = body.get('id') or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT INTO todos(id, title, done, list, notes, due, repeat_interval, repeat_unit, created_at, updated_at)'
+        'INSERT OR IGNORE INTO todos(id, title, done, list, notes, due, repeat_interval, repeat_unit, created_at, updated_at)'
         ' VALUES (?,?,0,?,?,?,?,?,?,?)',
         (todo_id, title, todo_list, notes, due, repeat[0], repeat[1], now, now),
     )

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, TodoList, TodoPayload } from '../../hooks/api';
+import { useQuery } from '@tanstack/react-query';
+import { api, TodoList } from '../../hooks/api';
+import { useDailyToggle, useTodoUpdate } from '../../offline/mutationDefaults';
 import { groupTodosByList, partitionTodos } from '../../lib/todos';
 import {
   useShortcuts,
@@ -21,7 +22,6 @@ export function Tasks() {
   const [creating, setCreating] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const { level, setLevel } = useShortcuts();
-  const queryClient = useQueryClient();
 
   const { data: tasks = [], isLoading: tasksLoading } = useQuery({
     queryKey: ['tasks'],
@@ -62,16 +62,10 @@ export function Tasks() {
     [section, sortedTasks, visibleTodos]
   );
 
-  const updateTodo = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: TodoPayload }) =>
-      api.todos.update(id, data),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['todos'] }),
-  });
-  const toggleDaily = useMutation({
-    mutationFn: ({ id, done }: { id: string; done: boolean }) =>
-      done ? api.tasks.uncomplete(id) : api.tasks.complete(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['tasks'] }),
-  });
+  // Offline-queueable (optimistic update + invalidation live in the registered
+  // mutation defaults).
+  const updateTodo = useTodoUpdate();
+  const toggleDaily = useDailyToggle();
 
   // Selection belongs to one section; leaving it invalidates the highlight.
   useEffect(() => {
