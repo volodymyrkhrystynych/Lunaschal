@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, RepeatUnit, TodoList } from '../../hooks/api';
+import { RepeatUnit, TodoList } from '../../hooks/api';
+import { ulid } from '../../lib/ulid';
+import { useTodoCreate } from '../../offline/mutationDefaults';
 import { dueInputToUnix } from '../../lib/todos';
 
 interface TodoFormProps {
@@ -18,12 +19,11 @@ export function TodoForm({ list, onCancel }: TodoFormProps) {
   const [repeatN, setRepeatN] = useState('');
   const [repeatUnit, setRepeatUnit] = useState<RepeatUnit>('week');
   const refs = useRef<(HTMLInputElement | HTMLSelectElement | null)[]>([]);
-  const queryClient = useQueryClient();
 
-  const createTodo = useMutation({
-    mutationFn: api.todos.create,
+  // Offline-queueable: optimistic insert + invalidation live in the registered
+  // mutation defaults; here we only reset the form for rapid entry.
+  const createTodo = useTodoCreate({
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['todos'] });
       setTitle('');
       setNotes('');
       setDueInput('');
@@ -37,6 +37,7 @@ export function TodoForm({ list, onCancel }: TodoFormProps) {
     if (!trimmed || createTodo.isPending) return;
     const interval = repeatN ? Number(repeatN) : null;
     createTodo.mutate({
+      id: ulid(),
       title: trimmed,
       list,
       notes: notes.trim() || undefined,

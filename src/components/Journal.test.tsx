@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  QueryClient,
+  QueryClientProvider,
+  onlineManager,
+} from '@tanstack/react-query';
 import { Journal } from './Journal';
 import { ShortcutProvider } from '../shortcuts/ShortcutProvider';
 import { api, type JournalEntry } from '../hooks/api';
@@ -153,7 +157,14 @@ describe('Journal new-entry keyboard save', () => {
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() =>
-      expect(createMock).toHaveBeenCalledWith({ content: 'a thought' })
+      // A client-generated ULID is included so offline creates replay
+      // idempotently.
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          content: 'a thought',
+          id: expect.any(String),
+        })
+      )
     );
   });
 
@@ -171,5 +182,26 @@ describe('Journal new-entry keyboard save', () => {
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it('closes the compose box on submit even while offline (mutation paused)', async () => {
+    // Offline the create mutation is paused, so onSuccess never fires; the form
+    // must still reset on submit or it lingers open showing a duplicate of the
+    // optimistically-inserted entry.
+    onlineManager.setOnline(false);
+    try {
+      const textarea = await openNewEntry();
+      fireEvent.change(textarea, { target: { value: 'offline thought' } });
+      fireEvent.keyDown(textarea, { key: 'Enter' });
+
+      await waitFor(() =>
+        expect(
+          screen.queryByPlaceholderText('Write your journal entry...')
+        ).toBeNull()
+      );
+      expect(createMock).not.toHaveBeenCalled(); // paused, not sent
+    } finally {
+      onlineManager.setOnline(true);
+    }
   });
 });

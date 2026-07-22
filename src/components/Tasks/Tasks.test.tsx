@@ -168,6 +168,8 @@ describe('todo creation', () => {
 
     await waitFor(() => expect(api.todos.create).toHaveBeenCalled());
     expect(vi.mocked(api.todos.create).mock.calls[0][0]).toEqual({
+      // Client-generated ULID for idempotent offline replay.
+      id: expect.any(String),
       title: 'Descale kettle',
       list: 'chores',
       notes: undefined,
@@ -230,6 +232,8 @@ describe('todo creation', () => {
 
     await waitFor(() => expect(api.todos.create).toHaveBeenCalled());
     expect(vi.mocked(api.todos.create).mock.calls[0][0]).toEqual({
+      // Client-generated ULID for idempotent offline replay.
+      id: expect.any(String),
       title: 'Renew passport',
       list: 'todo',
       notes: 'photos first',

@@ -174,12 +174,17 @@ def create_entry():
     tags = body.get('tags') or None
 
     now = int(time.time())
-    id = str(ULID())
-    get_db().execute(
-        'INSERT INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+    # Accept a client-supplied ULID so an offline-queued create replays
+    # idempotently: INSERT OR IGNORE makes a duplicate a no-op, and rowcount==0
+    # means we've already saved this entry — skip the background work.
+    id = body.get('id') or str(ULID())
+    cur = get_db().execute(
+        'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
         (id, content, raw_content, title, json.dumps(tags) if tags is not None else None, now, now),
     )
     get_db().commit()
+    if cur.rowcount == 0:
+        return jsonify({'id': id}), 201
     _notify_subscribers(id)
     _sync_embeddings_bg(id)
     if raw_content:

@@ -820,24 +820,38 @@ def review_card(id):
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
 
+    from datetime import datetime, timezone
+    db = get_db()
+    # Reviews advance FSRS and so aren't idempotent. A client-supplied reviewId
+    # (used by the offline queue) lets a replayed review be a no-op: if we've
+    # already recorded it, return the card's current schedule without advancing.
+    review_id = body.get('reviewId')
+    if review_id and db.execute(
+        'SELECT 1 FROM learning_reviews WHERE id=?', (review_id,)
+    ).fetchone():
+        cur_due = row['due']
+        return jsonify({
+            'due': datetime.fromtimestamp(cur_due, tz=timezone.utc).isoformat()
+            if cur_due else None,
+            'state': 'active',
+        })
+
     new_state, due, review_log = scheduler.review(row['fsrs_state'], rating)
     now = int(time.time())
-    db = get_db()
     db.execute(
         'UPDATE learning_cards SET fsrs_state=?, due=?, updated_at=? WHERE id=?',
         (new_state, due, now, id),
     )
     coverage = body.get('coverage')
     db.execute(
-        'INSERT INTO learning_reviews'
+        'INSERT OR IGNORE INTO learning_reviews'
         ' (id, card_id, rating, suggested_rating, user_answer, coverage, answer_mode, review_log, created_at)'
         ' VALUES (?,?,?,?,?,?,?,?,?)',
-        (str(ULID()), id, rating, body.get('suggestedRating'), body.get('userAnswer'),
+        (review_id or str(ULID()), id, rating, body.get('suggestedRating'), body.get('userAnswer'),
          json.dumps(coverage) if coverage is not None else None,
          body.get('answerMode'), review_log, now),
     )
     db.commit()
-    from datetime import datetime, timezone
     return jsonify({
         'due': datetime.fromtimestamp(due, tz=timezone.utc).isoformat(),
         'state': 'active',

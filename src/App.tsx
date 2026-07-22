@@ -9,6 +9,7 @@ import { Settings } from './components/Settings';
 import { Editor } from './components/Editor';
 import { Notebook } from './components/Notebook/Notebook';
 import { SttPanel } from './components/Editor/SttPanel';
+import { OfflineIndicator } from './components/OfflineIndicator';
 import { Login } from './components/Login';
 import { Writing } from './components/Writing';
 import { Tasks } from './components/Tasks';
@@ -150,6 +151,7 @@ export default function App() {
             {renderView()}
           </main>
         </div>
+        <OfflineIndicator />
         <SttPanel
           onTranscribed={handleTranscribed}
           onMeetingUploaded={() => setCurrentView('meetings')}

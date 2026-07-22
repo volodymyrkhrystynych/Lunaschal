@@ -1,6 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+import { ulid } from '../lib/ulid';
+import {
+  useJournalCreate,
+  useJournalUpdate,
+} from '../offline/mutationDefaults';
 import { buildFeed } from '../lib/journalFeed';
 import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
 
@@ -67,31 +72,25 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     return () => es.close();
   }, [queryClient]);
 
-  const createEntry = useMutation({
-    mutationFn: ({ content }: { content: string }) =>
-      api.journal.create({ content }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['journal'] });
-      setNewEntry('');
-      setShowNewEntry(false);
-    },
-  });
+  // Offline-queueable: optimistic insert + reconciling invalidation live in the
+  // registered mutation defaults. The UI reset must happen on submit, NOT in
+  // onSuccess — offline the mutation is paused and onSuccess never fires until
+  // reconnect, which would leave the compose box open (showing a duplicate of
+  // the entry the optimistic insert already added to the feed).
+  const createEntry = useJournalCreate();
+  const updateEntry = useJournalUpdate();
 
-  const updateEntry = useMutation({
-    mutationFn: ({
-      id,
-      content,
-      title,
-    }: {
-      id: string;
-      content: string;
-      title: string;
-    }) => api.journal.update(id, { content, title }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['journal'] });
-      setEditingId(null);
-    },
-  });
+  const submitNewEntry = () => {
+    if (!newEntry.trim()) return;
+    createEntry.mutate({ id: ulid(), content: newEntry });
+    setNewEntry('');
+    setShowNewEntry(false);
+  };
+
+  const submitEdit = (id: string) => {
+    updateEntry.mutate({ id, content: editContent, title: editTitle });
+    setEditingId(null);
+  };
 
   const deleteEntry = useMutation({
     mutationFn: (id: string) => api.journal.delete(id),
@@ -264,9 +263,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
               // Enter saves; Shift+Enter inserts a newline.
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                if (newEntry.trim() && !createEntry.isPending) {
-                  createEntry.mutate({ content: newEntry });
-                }
+                submitNewEntry();
               }
             }}
             placeholder="Write your journal entry..."
@@ -281,8 +278,8 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
               Cancel
             </button>
             <button
-              onClick={() => createEntry.mutate({ content: newEntry })}
-              disabled={!newEntry.trim() || createEntry.isPending}
+              onClick={submitNewEntry}
+              disabled={!newEntry.trim()}
               className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
             >
               Save
@@ -439,14 +436,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                       Cancel
                     </button>
                     <button
-                      onClick={() =>
-                        updateEntry.mutate({
-                          id: entry.id,
-                          content: editContent,
-                          title: editTitle,
-                        })
-                      }
-                      disabled={updateEntry.isPending}
+                      onClick={() => submitEdit(entry.id)}
                       className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
                     >
                       Save

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { useWritingChapterUpdate } from '../../offline/mutationDefaults';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import {
   CHAPTER_FONT_SIZE_DEFAULT,
@@ -45,9 +46,9 @@ export function ChapterEditor({ chapterId }: Props) {
     enabled: !!chapterId,
   });
 
-  const updateChapter = useMutation({
-    mutationFn: (data: { title?: string; content?: string }) =>
-      api.writing.updateChapter(chapterId, data),
+  // Offline-queueable: debounced autosave is an idempotent last-write-wins
+  // PATCH, so it replays cleanly on reconnect.
+  const updateChapter = useWritingChapterUpdate({
     onSuccess: () => setSaveStatus('saved'),
   });
 
@@ -72,7 +73,7 @@ export function ChapterEditor({ chapterId }: Props) {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       setSaveStatus('saving');
-      updateChapter.mutate({ content: value });
+      updateChapter.mutate({ chapterId, content: value });
     }, SAVE_DEBOUNCE_MS);
   };
 
@@ -80,7 +81,7 @@ export function ChapterEditor({ chapterId }: Props) {
     const trimmed = title.trim();
     if (!trimmed) return;
     setEditingTitle(false);
-    updateChapter.mutate({ title: trimmed });
+    updateChapter.mutate({ chapterId, title: trimmed });
   };
 
   if (isLoading) {

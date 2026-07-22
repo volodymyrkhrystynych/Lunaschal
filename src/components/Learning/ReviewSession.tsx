@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type GradeResult, type LearningCard } from '../../hooks/api';
+import { ulid } from '../../lib/ulid';
+import { useLearningReview } from '../../offline/mutationDefaults';
 import { useRecorder } from '../../hooks/useRecorder';
 import {
   useShortcutScope,
@@ -152,25 +154,34 @@ export function ReviewSession({ folderId, tag }: Props) {
     else setResultIndex(i => i + 1);
   };
 
-  const review = useMutation({
-    mutationFn: (rating: number) => {
-      const a = attempts[resultIndex];
-      const g = grades[a.card.id];
-      const resolved = g && g !== 'pending' && g !== 'error' ? g : null;
-      return api.learning.review(a.card.id, {
-        rating,
-        suggestedRating: resolved?.suggestedRating,
-        userAnswer: resolved ? resolved.normalizedAnswer : a.answer,
-        coverage: resolved?.coverage,
-        answerMode:
-          a.mode === 'skipped' ? 'self' : a.usedVoice ? 'voice' : 'typed',
-      });
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['learning', 'stats'] });
-      advanceResult();
-    },
-  });
+  // Offline-queueable. Reviews advance FSRS and so aren't naturally
+  // idempotent: each carries a client `reviewId` the server dedupes on. Stats
+  // invalidation lives in the registered defaults.
+  const review = useLearningReview();
+  // A paused (offline-queued) mutation stays `isPending`, so gate the UI on
+  // "actively in flight" — otherwise offline you couldn't rate the next card.
+  const reviewBusy = review.isPending && !review.isPaused;
+
+  // Advance the results pass optimistically rather than in the mutation's
+  // onSuccess — offline the mutation is paused, so waiting on it would stall
+  // the session. The rating is safely queued and replays on reconnect.
+  const submitRating = (rating: number) => {
+    const a = attempts[resultIndex];
+    if (!a) return;
+    const g = grades[a.card.id];
+    const resolved = g && g !== 'pending' && g !== 'error' ? g : null;
+    review.mutate({
+      cardId: a.card.id,
+      reviewId: ulid(),
+      rating,
+      suggestedRating: resolved?.suggestedRating,
+      userAnswer: resolved ? resolved.normalizedAnswer : a.answer,
+      coverage: resolved?.coverage,
+      answerMode:
+        a.mode === 'skipped' ? 'self' : a.usedVoice ? 'voice' : 'typed',
+    });
+    advanceResult();
+  };
 
   useShortcutScope(2, {
     // Move the highlighted rating during the results pass.
@@ -194,13 +205,13 @@ export function ReviewSession({ folderId, tag }: Props) {
     flip: () => {
       if (phase === 'answer') {
         skipCard();
-      } else if (current && !review.isPending) {
-        review.mutate(selRating);
+      } else if (current && !reviewBusy) {
+        submitRating(selRating);
       }
     },
     rate: rating => {
-      if (phase !== 'results' || !current || review.isPending) return;
-      review.mutate(rating);
+      if (phase !== 'results' || !current || reviewBusy) return;
+      submitRating(rating);
     },
     fontUp: () => adjustFontSize(LEARNING_FONT_SIZE_STEP),
     fontDown: () => adjustFontSize(-LEARNING_FONT_SIZE_STEP),
@@ -377,8 +388,8 @@ export function ReviewSession({ folderId, tag }: Props) {
               {RATINGS.map(r => (
                 <button
                   key={r.value}
-                  onClick={() => review.mutate(r.value)}
-                  disabled={review.isPending}
+                  onClick={() => submitRating(r.value)}
+                  disabled={reviewBusy}
                   className={`py-3 ${r.color} text-white rounded-lg hover:opacity-80 transition-all disabled:opacity-50 font-medium ${
                     selRating === r.value ? 'ring-2 ring-white' : 'opacity-70'
                   }`}

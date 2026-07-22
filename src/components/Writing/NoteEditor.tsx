@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { useWritingNoteUpdate } from '../../offline/mutationDefaults';
 import { DOC_TYPE_LABELS, type DocType } from './WritingNav';
 
 interface Props {
@@ -18,7 +19,6 @@ export function NoteEditor({ noteId }: Props) {
   );
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadedNoteRef = useRef<string | null>(null);
-  const queryClient = useQueryClient();
 
   const { data: note, isLoading } = useQuery({
     queryKey: ['writing', 'note', noteId],
@@ -26,20 +26,10 @@ export function NoteEditor({ noteId }: Props) {
     enabled: !!noteId,
   });
 
-  const updateNote = useMutation({
-    mutationFn: (data: {
-      title?: string;
-      content?: string;
-      docType?: string;
-    }) => api.writing.updateNote(noteId, data),
-    onSuccess: () => {
-      setSaveStatus('saved');
-      if (note)
-        queryClient.invalidateQueries({
-          queryKey: ['writing', 'notes', note.projectId],
-        });
-      queryClient.invalidateQueries({ queryKey: ['writing', 'note', noteId] });
-    },
+  // Offline-queueable: idempotent last-write-wins PATCH; the registered
+  // defaults invalidate the writing caches on reconnect.
+  const updateNote = useWritingNoteUpdate({
+    onSuccess: () => setSaveStatus('saved'),
   });
 
   useEffect(() => {
@@ -63,7 +53,7 @@ export function NoteEditor({ noteId }: Props) {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
       setSaveStatus('saving');
-      updateNote.mutate({ content: value });
+      updateNote.mutate({ noteId, content: value });
     }, SAVE_DEBOUNCE_MS);
   };
 
@@ -71,7 +61,7 @@ export function NoteEditor({ noteId }: Props) {
     const trimmed = title.trim();
     if (!trimmed) return;
     setEditingTitle(false);
-    updateNote.mutate({ title: trimmed });
+    updateNote.mutate({ noteId, title: trimmed });
   };
 
   if (isLoading) {
@@ -125,7 +115,9 @@ export function NoteEditor({ noteId }: Props) {
         <div className="flex items-center gap-3 shrink-0 text-xs text-[var(--color-text-muted)]">
           <select
             value={note?.docType ?? 'note'}
-            onChange={e => updateNote.mutate({ docType: e.target.value })}
+            onChange={e =>
+              updateNote.mutate({ noteId, docType: e.target.value })
+            }
             aria-label="Note type"
             className="px-2 py-1 rounded bg-white/5 border border-white/20 text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
           >
