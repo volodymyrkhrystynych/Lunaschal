@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { onlineManager, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { recheckOnline } from '../offline/onlineManager';
+import { useOnline } from '../offline/useOnline';
 
 /**
  * Thin status bar shown only when the backend is unreachable, or when queued
@@ -10,10 +11,8 @@ import { recheckOnline } from '../offline/onlineManager';
  */
 export function OfflineIndicator() {
   const queryClient = useQueryClient();
-  const [online, setOnline] = useState(() => onlineManager.isOnline());
+  const online = useOnline();
   const [pending, setPending] = useState(0);
-
-  useEffect(() => onlineManager.subscribe(setOnline), []);
 
   useEffect(() => {
     const cache = queryClient.getMutationCache();

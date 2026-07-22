@@ -5,6 +5,7 @@ import {
   useFanficProgress,
   useFanficSetRead,
 } from '../../offline/mutationDefaults';
+import { FicDownloadButton } from './FicDownloadButton';
 import {
   adjacentChapter,
   chapterIdsUpTo,
@@ -197,6 +198,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                 {fic.author}
               </div>
             )}
+            <FicDownloadButton chapters={chapters} />
           </div>
           <div className="flex-1 overflow-y-auto p-2">
             {groups.map(([category, chs]) => (
