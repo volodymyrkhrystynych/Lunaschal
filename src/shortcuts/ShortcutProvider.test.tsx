@@ -2,8 +2,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ShortcutProvider, useShortcutScope } from './ShortcutProvider';
+import {
+  ShortcutProvider,
+  useShortcutScope,
+  VIEW_ORDER,
+} from './ShortcutProvider';
 import type { ScopeHandlers } from './ShortcutProvider';
+import { navItems } from '../components/Sidebar';
 
 vi.mock('../hooks/api', () => ({
   api: {
@@ -11,6 +16,12 @@ vi.mock('../hooks/api', () => ({
     settings: { get: vi.fn().mockResolvedValue({}) },
   },
 }));
+
+describe('view cycle order', () => {
+  it('matches the sidebar tab order (nav.up/down walks the visible list)', () => {
+    expect(VIEW_ORDER).toEqual(navItems.map(i => i.view));
+  });
+});
 
 // Registers a scope like a view component would (depth 1 unless overridden).
 function Scope({
