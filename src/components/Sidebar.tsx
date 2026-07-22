@@ -23,6 +23,7 @@ interface SidebarProps {
 }
 
 export const navItems: { view: View; label: string; icon: string }[] = [
+  { view: 'learning', label: 'Learning', icon: '🧠' },
   { view: 'chat', label: 'Chat', icon: '💬' },
   { view: 'tasks', label: 'Tasks', icon: '✅' },
   { view: 'journal', label: 'Journal', icon: '📓' },
@@ -30,7 +31,6 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'meetings', label: 'Meetings', icon: '🎙️' },
   { view: 'writing', label: 'Writing', icon: '✍️' },
   { view: 'calendar', label: 'Calendar', icon: '📅' },
-  { view: 'learning', label: 'Learning', icon: '🧠' },
   { view: 'cookbook', label: 'Cookbook', icon: '🍳' },
   { view: 'fanfic', label: 'Library', icon: '📚' },
   { view: 'newspapers', label: 'Newspapers', icon: '📰' },
