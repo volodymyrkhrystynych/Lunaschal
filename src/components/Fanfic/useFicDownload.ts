@@ -53,9 +53,13 @@ export function useFicDownload(
       return;
     }
     setStatus('downloading');
-    setDone(countCached());
 
     const pending = list.filter(ch => !isCached(ch.id));
+    // Count completions directly instead of re-reading the cache each tick, so
+    // the progress bar can't stall on a stale closure or a cache read that
+    // races the write.
+    let completed = total - pending.length;
+    setDone(completed);
     let failed = false;
     let next = 0;
 
@@ -71,10 +75,11 @@ export function useFicDownload(
             // paused fetch; surface it as a failure so status settles.
             networkMode: 'always',
           });
+          completed += 1;
+          setDone(completed);
         } catch {
           failed = true;
         }
-        setDone(countCached());
       }
     };
 

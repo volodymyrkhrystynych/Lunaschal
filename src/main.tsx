@@ -11,6 +11,7 @@ import {
   createIDBPersister,
   PERSIST_BUSTER,
   PERSIST_MAX_AGE,
+  QUERY_GC_TIME,
 } from './offline/persister';
 import { installBackendOnlineManager } from './offline/onlineManager';
 import { registerOfflineMutationDefaults } from './offline/mutationDefaults';
@@ -28,9 +29,10 @@ const queryClient = new QueryClient({
       // unreachable backend; 'online' pauses instead, so a cached list shows
       // instantly and an uncached one resolves to empty rather than a spinner.
       networkMode: 'online',
-      // Must be >= the persister maxAge, or restored entries get GC'd on
-      // hydration before they're ever shown.
-      gcTime: PERSIST_MAX_AGE,
+      // Long enough to survive navigation between views (must stay under the
+      // 32-bit setTimeout ceiling — see QUERY_GC_TIME). A reload is covered by
+      // the persisted cache, not gcTime.
+      gcTime: QUERY_GC_TIME,
     },
     mutations: {
       // Fail-fast default: offline mutations error immediately and are NOT

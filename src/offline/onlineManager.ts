@@ -33,6 +33,17 @@ export async function recheckOnline(): Promise<boolean> {
   return ok;
 }
 
+// Log every transition — whether the app thinks it's offline is the single most
+// important fact when debugging why cached data isn't showing, and it's
+// invisible otherwise.
+let lastLogged: boolean | null = null;
+function logIfChanged(online: boolean) {
+  if (online !== lastLogged) {
+    lastLogged = online;
+    console.info(`[offline] backend ${online ? 'reachable' : 'UNREACHABLE'}`);
+  }
+}
+
 /**
  * Replace react-query's default navigator-based online detection with a
  * backend-reachability poll. Call once at startup. The listener only runs
@@ -47,18 +58,29 @@ export function installBackendOnlineManager(): void {
     onlineManager.setOnline(false);
   }
 
+  // Reachable from the browser console for manual testing:
+  //   await window.__lunaschalRecheckOnline()
+  (window as unknown as Record<string, unknown>).__lunaschalRecheckOnline =
+    recheckOnline;
+
   onlineManager.setEventListener(setOnline => {
     let cancelled = false;
     const update = async () => {
       const ok = await pingBackend();
-      if (!cancelled) setOnline(ok);
+      if (!cancelled) {
+        logIfChanged(ok);
+        setOnline(ok);
+      }
     };
 
     // Browser events are cheap triggers: a reported disconnect is trustworthy
     // (go offline immediately); a reported connect only means "link up", so
     // re-verify against the backend before declaring online.
     const onOnline = () => void update();
-    const onOffline = () => setOnline(false);
+    const onOffline = () => {
+      logIfChanged(false);
+      setOnline(false);
+    };
     window.addEventListener('online', onOnline);
     window.addEventListener('offline', onOffline);
 
