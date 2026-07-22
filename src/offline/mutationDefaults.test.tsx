@@ -17,8 +17,8 @@ import type { DailyTask, JournalEntry } from '../hooks/api';
 function makeClient() {
   const qc = new QueryClient({
     defaultOptions: {
-      queries: { retry: false, networkMode: 'offlineFirst' },
-      mutations: { networkMode: 'offlineFirst' },
+      queries: { retry: false, networkMode: 'online' },
+      mutations: { networkMode: 'always' },
     },
   });
   registerOfflineMutationDefaults(qc);

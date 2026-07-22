@@ -496,8 +496,35 @@ export interface SyncResult {
 
 // --- fetch helpers ---
 
+// A request to an unreachable backend (e.g. the Tailscale link is down in
+// network mode) otherwise hangs until the OS TCP timeout — minutes — leaving
+// React Query stuck `fetching` forever instead of falling back to the persisted
+// cache. A hard client-side timeout turns that into a prompt failure. Reads are
+// quick, so they get a tight bound; writes may hit slow AI endpoints, so theirs
+// is generous.
+const READ_TIMEOUT_MS = 20_000;
+const WRITE_TIMEOUT_MS = 60_000;
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function get<T>(url: string): Promise<T> {
-  const r = await fetch(url, { credentials: 'include' });
+  const r = await fetchWithTimeout(
+    url,
+    { credentials: 'include' },
+    READ_TIMEOUT_MS
+  );
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
     throw new Error(body.error || `HTTP ${r.status}`);
@@ -510,13 +537,17 @@ async function send<T>(
   url: string,
   body?: unknown
 ): Promise<T> {
-  const r = await fetch(url, {
-    method,
-    credentials: 'include',
-    headers:
-      body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  const r = await fetchWithTimeout(
+    url,
+    {
+      method,
+      credentials: 'include',
+      headers:
+        body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    },
+    WRITE_TIMEOUT_MS
+  );
   if (!r.ok) {
     const b = await r.json().catch(() => ({}));
     throw new Error(b.error || `HTTP ${r.status}`);

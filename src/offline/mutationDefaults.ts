@@ -19,9 +19,10 @@ import {
  * These mutations use `networkMode: 'online'`, so while the backend is
  * unreachable react-query *pauses* them (instead of erroring) and replays them
  * via `resumePausedMutations()` on reconnect. Everything NOT listed here keeps
- * react-query's global `networkMode: 'offlineFirst'` default (set in main.tsx),
- * which fails fast offline — that's deliberately how deletes, AI calls and heavy
- * pipelines stay online-only with no per-call work.
+ * react-query's global `networkMode: 'always'` default (set in main.tsx), which
+ * fires and fails fast offline (never pausing/replaying) — that's deliberately
+ * how deletes, AI calls and heavy pipelines stay online-only with no per-call
+ * work.
  *
  * Each mutation's behavior (function, optimistic `onMutate`, reconciling
  * `onSettled`) is defined once as a `*Cfg(qc)` builder. The builder is used in

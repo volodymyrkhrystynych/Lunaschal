@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ReactNode } from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  QueryClient,
+  QueryClientProvider,
+  onlineManager,
+} from '@tanstack/react-query';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { api, type FicChapterSummary, type FicChapter } from '../../hooks/api';
 import { useFicDownload } from './useFicDownload';
@@ -24,7 +28,10 @@ const wrapperFor = (qc: QueryClient) =>
     return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
   };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  onlineManager.setOnline(true);
+});
 
 describe('useFicDownload', () => {
   it('fetches every uncached chapter and caches its content', async () => {
@@ -68,6 +75,25 @@ describe('useFicDownload', () => {
 
     expect(spy).toHaveBeenCalledTimes(2); // only the two uncached chapters
     expect(result.current.done).toBe(3);
+  });
+
+  it('bails immediately when offline instead of hanging on paused fetches', async () => {
+    const spy = vi
+      .spyOn(api.fanfic, 'chapter')
+      .mockImplementation(async (id: string) => ({ id }) as FicChapter);
+    onlineManager.setOnline(false);
+    const qc = new QueryClient();
+
+    const { result } = renderHook(() => useFicDownload(chapters(3)), {
+      wrapper: wrapperFor(qc),
+    });
+
+    await act(async () => {
+      await result.current.start();
+    });
+
+    expect(result.current.status).toBe('error');
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('reports error but keeps the chapters that succeeded', async () => {

@@ -23,17 +23,22 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 1000 * 60,
       retry: 1,
-      // Offline: fall back to the persisted cache instead of hanging.
-      networkMode: 'offlineFirst',
+      // Offline: serve the persisted cache and do NOT attempt a network fetch.
+      // 'offlineFirst' would fire the request anyway and hang against an
+      // unreachable backend; 'online' pauses instead, so a cached list shows
+      // instantly and an uncached one resolves to empty rather than a spinner.
+      networkMode: 'online',
       // Must be >= the persister maxAge, or restored entries get GC'd on
       // hydration before they're ever shown.
       gcTime: PERSIST_MAX_AGE,
     },
     mutations: {
       // Fail-fast default: offline mutations error immediately and are NOT
-      // queued. The offline-queueable writes opt into 'online' (pause + replay)
-      // individually in offline/mutationDefaults.ts.
-      networkMode: 'offlineFirst',
+      // queued ('always' fires without pausing/retrying, unlike 'offlineFirst'
+      // which would pause and later replay — wrong for deletes/AI). The
+      // offline-queueable writes opt into 'online' (pause + replay) individually
+      // in offline/mutationDefaults.ts.
+      networkMode: 'always',
     },
   },
 });

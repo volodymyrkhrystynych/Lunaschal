@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { onlineManager, useQueryClient } from '@tanstack/react-query';
 import { api, type FicChapterSummary } from '../../hooks/api';
 
 // Chapter content is normally cached only when you open a chapter (see Reader).
@@ -45,6 +45,13 @@ export function useFicDownload(
 
   const start = useCallback(async () => {
     if (total === 0) return;
+    // Saving pulls every chapter from the backend — impossible offline. Bail
+    // immediately rather than spawning workers that await paused fetches forever
+    // (which is what stranded the progress bar partway through).
+    if (!onlineManager.isOnline()) {
+      setStatus('error');
+      return;
+    }
     setStatus('downloading');
     setDone(countCached());
 
@@ -60,6 +67,9 @@ export function useFicDownload(
             queryKey: chapterKey(ch.id),
             queryFn: () => api.fanfic.chapter(ch.id),
             staleTime: Infinity, // already-cached chapters are reused, not refetched
+            // Never let a mid-download disconnect leave a worker hanging on a
+            // paused fetch; surface it as a failure so status settles.
+            networkMode: 'always',
           });
         } catch {
           failed = true;

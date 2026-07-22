@@ -40,6 +40,13 @@ export async function recheckOnline(): Promise<boolean> {
  * lifetime of the app), and its cleanup clears the interval + window handlers.
  */
 export function installBackendOnlineManager(): void {
+  // Seed synchronously so a cold boot while offline is known-offline before the
+  // first query runs. `navigator.onLine === false` is trustworthy (no link);
+  // `true` only means "link up", so the ping below re-verifies the backend.
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    onlineManager.setOnline(false);
+  }
+
   onlineManager.setEventListener(setOnline => {
     let cancelled = false;
     const update = async () => {
