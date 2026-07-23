@@ -9,6 +9,26 @@ import webview
 
 FLASK_PORT = 5000
 
+
+def _webview_storage_path() -> str:
+    """Stable per-user dir for the QtWebEngine profile (cookies, localStorage,
+    IndexedDB).
+
+    PyWebView defaults to ``private_mode=True`` — an off-the-record profile whose
+    storage is in-memory and wiped when the window closes. On the Pocket
+    (``start-node.sh`` runs this file, not a browser) that wiped everything on
+    every restart: the network-mode login cookie (forcing a fresh password +
+    display-code login), the remembered display code, and the persisted offline
+    React Query cache. A fixed path under XDG_DATA_HOME keeps them across
+    restarts.
+    """
+    base = os.environ.get('XDG_DATA_HOME') or os.path.join(
+        os.path.expanduser('~'), '.local', 'share'
+    )
+    path = os.path.join(base, 'lunaschal', 'webview')
+    os.makedirs(path, exist_ok=True)
+    return path
+
 # In network mode the dev servers speak HTTPS only (a Tailscale cert bound to
 # TAILSCALE_HOSTNAME, set by start-server.sh) — plain http://localhost can no
 # longer reach them, and the cert wouldn't validate for "localhost" anyway.
@@ -109,7 +129,10 @@ def main():
     )
     webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600),
                           text_select=True)
-    webview.start(gui='qt')
+    # private_mode=False + a persistent storage_path so cookies/localStorage/
+    # IndexedDB survive a restart (see _webview_storage_path). Without this the
+    # network-mode login and all client-side persistence reset every launch.
+    webview.start(gui='qt', private_mode=False, storage_path=_webview_storage_path())
 
 
 if __name__ == '__main__':

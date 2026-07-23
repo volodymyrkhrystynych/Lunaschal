@@ -1,9 +1,6 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import {
-  QueryClient,
-  defaultShouldDehydrateQuery,
-} from '@tanstack/react-query';
+import { QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import App from './App';
 import { applyFontSize, getStoredFontSize } from './lib/fontSize';
@@ -13,6 +10,7 @@ import {
   PERSIST_MAX_AGE,
   QUERY_GC_TIME,
 } from './offline/persister';
+import { shouldPersistQuery } from './offline/shouldPersistQuery';
 import { installBackendOnlineManager } from './offline/onlineManager';
 import { registerOfflineMutationDefaults } from './offline/mutationDefaults';
 import './index.css';
@@ -63,12 +61,7 @@ createRoot(document.getElementById('root')!).render(
         maxAge: PERSIST_MAX_AGE,
         buster: PERSIST_BUSTER,
         dehydrateOptions: {
-          shouldDehydrateQuery: query =>
-            defaultShouldDehydrateQuery(query) &&
-            // Ephemeral recording poll — never worth restoring stale.
-            !(
-              query.queryKey[0] === 'meetings' && query.queryKey[1] === 'active'
-            ),
+          shouldDehydrateQuery: shouldPersistQuery,
         },
       }}
       onSuccess={() => {
