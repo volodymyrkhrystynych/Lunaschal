@@ -98,9 +98,16 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
     });
   };
 
-  // Build/rebuild editor when file or content changes
+  // Build the editor once the file's content has loaded, and rebuild only when
+  // the *file* changes — NOT when `data.content` changes. Each auto-save's
+  // write mutation invalidates ['notebook'], refetching this file; that brings
+  // `data.content` up to the just-saved text (a new value vs. before), so
+  // depending on it would tear down and recreate CodeMirror on every save,
+  // resetting the cursor to the start. `dataReady` flips undefined→defined once
+  // per file, so we seed the editor exactly once and leave it alone thereafter.
+  const dataReady = data !== undefined;
   useEffect(() => {
-    if (!containerRef.current || data === undefined) return;
+    if (!containerRef.current || !dataReady) return;
 
     viewRef.current?.destroy();
 
@@ -144,9 +151,10 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
       editorCallbacks.delete(view);
       view.destroy();
+      viewRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filePath, data?.content]);
+  }, [filePath, dataReady]);
 
   // Keep the exit callback fresh without rebuilding the editor.
   useEffect(() => {
