@@ -1,10 +1,15 @@
-import { type FicChapterSummary } from '../../hooks/api';
+import { useQuery } from '@tanstack/react-query';
+import { api, type FicChapterSummary } from '../../hooks/api';
 import { useOnline } from '../../offline/useOnline';
 import { useFicDownload } from './useFicDownload';
 
 /**
  * "Save this whole fic for offline" — prefetches every chapter's content into
  * the persisted cache so the fic is fully readable without the backend.
+ *
+ * Only meaningful for a remote thin client (network mode): on the machine that
+ * *is* the server every chapter is always reachable, so the count would just be
+ * confusing noise. `networkMode` comes from the already-cached auth status.
  */
 export function FicDownloadButton({
   chapters,
@@ -12,8 +17,15 @@ export function FicDownloadButton({
   chapters?: FicChapterSummary[];
 }) {
   const online = useOnline();
+  const { data: auth } = useQuery({
+    queryKey: ['auth', 'status'],
+    queryFn: api.auth.status,
+  });
   const { status, done, total, start } = useFicDownload(chapters);
 
+  // Hide unless we're an over-the-network client; also hides while auth status
+  // is still loading, so it never flashes on the server.
+  if (!auth?.networkMode) return null;
   if (total === 0) return null;
 
   const complete = done >= total;
