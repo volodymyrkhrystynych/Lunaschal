@@ -19,6 +19,7 @@ import type { FicTarget } from './components/Fanfic/Fanfic';
 import { Newspapers } from './components/Newspapers';
 import { Meetings } from './components/Meetings';
 import { api } from './hooks/api';
+import { resolveAuthGate } from './lib/authGate';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 
 type View =
@@ -46,10 +47,21 @@ export default function App() {
   const [ficTarget, setFicTarget] = useState<FicTarget | null>(null);
   const queryClient = useQueryClient();
 
-  const { data: authStatus, isLoading: authLoading } = useQuery({
+  const {
+    data: authStatus,
+    isLoading: authLoading,
+    isError: authError,
+    refetch: refetchAuth,
+  } = useQuery({
     queryKey: ['auth', 'status'],
     queryFn: api.auth.status,
     retry: false,
+  });
+
+  const authGate = resolveAuthGate({
+    isLoading: authLoading,
+    isError: authError,
+    data: authStatus,
   });
 
   const handleTranscribed = (text: string) => {
@@ -60,7 +72,7 @@ export default function App() {
     }
   };
 
-  if (authLoading) {
+  if (authGate === 'loading') {
     return (
       <div className="h-screen flex items-center justify-center bg-[var(--color-bg)]">
         <div className="text-[var(--color-text-muted)]">Loading…</div>
@@ -68,7 +80,40 @@ export default function App() {
     );
   }
 
-  if (!authStatus?.authenticated) {
+  // Backend unreachable and no known-good session cached — don't mistake this
+  // for a logout (that would bounce the user to Login on every wake-from-sleep
+  // before Tailscale reconnects). Keep the session and retry; refetchOnReconnect
+  // / refetchOnWindowFocus will also self-heal this once the backend answers.
+  if (authGate === 'reconnecting') {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center gap-4 bg-[var(--color-bg)]">
+        <div className="text-[var(--color-text-muted)]">
+          Reconnecting to the server…
+        </div>
+        <button
+          type="button"
+          onClick={() => void refetchAuth()}
+          className="px-4 py-2 bg-[var(--color-surface)] border border-white/10 rounded text-[var(--color-text)] hover:border-[var(--color-primary)] transition-colors"
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            queryClient.setQueryData(['auth', 'status'], {
+              authenticated: false,
+              networkMode: true,
+            })
+          }
+          className="text-sm text-[var(--color-text-muted)] underline hover:text-[var(--color-text)]"
+        >
+          Log in instead
+        </button>
+      </div>
+    );
+  }
+
+  if (authGate === 'login') {
     return (
       <Login
         onSuccess={() =>
