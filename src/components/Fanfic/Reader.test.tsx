@@ -84,6 +84,11 @@ vi.mock('../../hooks/api', () => ({
       get: vi.fn().mockResolvedValue({ bindings: {} }),
     },
     settings: { get: vi.fn().mockResolvedValue({}) },
+    auth: {
+      status: vi
+        .fn()
+        .mockResolvedValue({ authenticated: true, networkMode: false }),
+    },
   },
 }));
 
