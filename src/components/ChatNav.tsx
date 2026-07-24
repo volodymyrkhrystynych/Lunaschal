@@ -4,9 +4,14 @@ import { api } from '../hooks/api';
 interface ChatNavProps {
   currentConversationId: string | null;
   onSelect: (id: string | null) => void;
+  isMobile?: boolean;
 }
 
-export function ChatNav({ currentConversationId, onSelect }: ChatNavProps) {
+export function ChatNav({
+  currentConversationId,
+  onSelect,
+  isMobile = false,
+}: ChatNavProps) {
   const queryClient = useQueryClient();
 
   const { data: conversations } = useQuery({
@@ -30,7 +35,9 @@ export function ChatNav({ currentConversationId, onSelect }: ChatNavProps) {
     }`;
 
   return (
-    <div className="w-64 shrink-0 border-r border-white/10 bg-[var(--color-surface)] flex flex-col">
+    <div
+      className={`${isMobile ? 'w-full' : 'w-64 shrink-0'} border-r border-white/10 bg-[var(--color-surface)] flex flex-col`}
+    >
       <div className="flex items-center justify-between px-2 pt-3 pb-1">
         <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
           Conversations

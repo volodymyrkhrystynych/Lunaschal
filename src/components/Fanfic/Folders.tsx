@@ -96,7 +96,7 @@ export function FolderBar({
   );
 
   return (
-    <div className="flex flex-wrap items-center gap-2 mb-4">
+    <div className="tag-row flex flex-wrap items-center gap-2 mb-4">
       <button
         onClick={() => onSelect(null)}
         className={`${pillBase} ${

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+import { useIsMobile } from '@/hooks/useMediaQuery';
 
 type ViewMode = 'month' | 'week';
 
@@ -234,6 +235,7 @@ export function Calendar() {
     endTime: '',
   });
   const [showNewEvent, setShowNewEvent] = useState(false);
+  const isMobile = useIsMobile();
   const queryClient = useQueryClient();
 
   const startOfMonth = new Date(
@@ -327,7 +329,7 @@ export function Calendar() {
         <h1 className="text-2xl font-semibold text-[var(--color-text)]">
           Calendar
         </h1>
-        <div className="flex gap-2">
+        <div className="hidden md:flex gap-2">
           {(['month', 'week'] as ViewMode[]).map(v => (
             <button
               key={v}
@@ -340,8 +342,10 @@ export function Calendar() {
         </div>
       </div>
 
-      <div className="flex-1 flex gap-4 overflow-hidden">
-        <div className="flex-1 flex flex-col">
+      <div
+        className={`flex-1 gap-4 ${isMobile ? 'flex flex-col overflow-y-auto' : 'flex overflow-hidden'}`}
+      >
+        <div className={`flex flex-col ${isMobile ? 'shrink-0' : 'flex-1'}`}>
           <div className="flex items-center justify-between mb-4">
             <button
               onClick={() => navigate(-1)}
@@ -362,7 +366,7 @@ export function Calendar() {
             </button>
           </div>
 
-          <div className="grid grid-cols-7 gap-1 mb-2">
+          <div className="hidden md:grid grid-cols-7 gap-1 mb-2">
             {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(day => (
               <div
                 key={day}
@@ -373,7 +377,7 @@ export function Calendar() {
             ))}
           </div>
 
-          {viewMode === 'month' && (
+          {!isMobile && viewMode === 'month' && (
             <div className="grid grid-cols-7 gap-1 flex-1">
               {days.map((day, index) => {
                 if (day === null)
@@ -425,7 +429,7 @@ export function Calendar() {
             </div>
           )}
 
-          {viewMode === 'week' && (
+          {!isMobile && viewMode === 'week' && (
             <div className="grid grid-cols-7 gap-2 flex-1">
               {weekDays.map(day => {
                 const dateStr = formatDateISO(day);
@@ -474,9 +478,66 @@ export function Calendar() {
               })}
             </div>
           )}
+
+          {isMobile && (
+            <div className="space-y-1">
+              {days
+                .filter((d): d is number => d !== null)
+                .map(day => {
+                  const d = new Date(
+                    currentDate.getFullYear(),
+                    currentDate.getMonth(),
+                    day
+                  );
+                  const dateStr = formatDateISO(d);
+                  const dayEvents = getEventsForDate(dateStr);
+                  const isSelected = selectedDate === dateStr;
+                  const isToday = dateStr === formatDateISO(new Date());
+                  return (
+                    <button
+                      key={day}
+                      onClick={() => setSelectedDate(dateStr)}
+                      className={`w-full flex items-start gap-3 p-2 rounded-lg border text-left min-h-[44px] transition-colors ${isSelected ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10' : 'border-white/10 hover:border-white/20'} ${isToday ? 'bg-[var(--color-surface)]' : ''}`}
+                    >
+                      <div className="w-10 shrink-0 text-center">
+                        <div
+                          className={`text-lg font-semibold ${isToday ? 'text-[var(--color-primary)]' : 'text-[var(--color-text)]'}`}
+                        >
+                          {day}
+                        </div>
+                        <div className="text-xs text-[var(--color-text-muted)]">
+                          {d.toLocaleDateString('en-US', { weekday: 'short' })}
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-0.5 py-0.5">
+                        {dayEvents.length === 0 ? (
+                          <div className="text-xs text-[var(--color-text-muted)]">
+                            No events
+                          </div>
+                        ) : (
+                          dayEvents.map(e => (
+                            <div
+                              key={e.id}
+                              className="text-xs truncate text-[var(--color-accent)] bg-[var(--color-accent)]/10 rounded px-1 py-0.5"
+                            >
+                              {e.time && (
+                                <span className="opacity-70">{e.time} </span>
+                              )}
+                              {e.title}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+            </div>
+          )}
         </div>
 
-        <div className="w-80 bg-[var(--color-surface)] rounded-lg border border-white/10 p-4 overflow-y-auto">
+        <div
+          className={`${isMobile ? 'w-full shrink-0' : 'w-80'} bg-[var(--color-surface)] rounded-lg border border-white/10 p-4 overflow-y-auto`}
+        >
           {selectedDate ? (
             <>
               <div className="flex items-center justify-between mb-4">

@@ -47,7 +47,7 @@ export function Login({ onSuccess }: Props) {
   };
 
   return (
-    <div className="h-screen flex items-center justify-center bg-[var(--color-bg)]">
+    <div className="h-dvh flex items-center justify-center bg-[var(--color-bg)]">
       <div className="w-full max-w-sm px-4">
         <h1 className="text-2xl font-semibold text-[var(--color-text)] mb-8 text-center">
           Lunaschal

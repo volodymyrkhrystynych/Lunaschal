@@ -128,7 +128,7 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
                 <MessageMarkdown content={card.answer} />
               </div>
               {card.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1 mb-3">
+                <div className="tag-row flex flex-wrap gap-1 mb-3">
                   {card.tags.map(t => (
                     <button
                       key={t}

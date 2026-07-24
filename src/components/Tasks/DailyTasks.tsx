@@ -121,7 +121,7 @@ export function DailyTasks({
                 : ''
             }`}
           >
-            <span className="text-xs font-mono text-[var(--color-text-muted)] w-4 shrink-0">
+            <span className="text-sm font-mono text-[var(--color-text-muted)] w-4 shrink-0">
               {task.position}
             </span>
 

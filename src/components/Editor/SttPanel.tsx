@@ -334,7 +334,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
         </div>
       )}
 
-      <div className="h-10 flex items-center gap-3 px-4">
+      <div className="h-10 flex items-center gap-2 md:gap-3 px-2 md:px-4 overflow-x-auto">
         <button
           onClick={
             effectiveStatus === 'recording' && !isListenerControlling
@@ -342,7 +342,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
               : startRecording
           }
           disabled={buttonDisabled}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
+          className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
             effectiveStatus === 'recording' && isJournalMode
               ? 'bg-amber-600 hover:bg-amber-700 text-white'
               : effectiveStatus === 'recording'
@@ -372,7 +372,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           }
           disabled={journalButtonDisabled}
           title="Record → transcribe → save as a journal entry (same as the journal voice shortcut)"
-          className={`flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
+          className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
             inAppJournalActive && status === 'recording'
               ? 'bg-amber-600 hover:bg-amber-700 text-white'
               : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
@@ -396,7 +396,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           </span>
         )}
         {!error && !recorder.error && lastText && (
-          <span className="text-xs text-[var(--color-text-muted)] truncate">
+          <span className="hidden md:inline text-xs text-[var(--color-text-muted)] truncate">
             "{lastText}"
           </span>
         )}
@@ -404,7 +404,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           !recorder.error &&
           !lastText &&
           effectiveStatus === 'idle' && (
-            <span className="text-xs text-[var(--color-text-muted)]">
+            <span className="hidden md:inline text-xs text-[var(--color-text-muted)]">
               Voice input — transcribes into active editor or clipboard
             </span>
           )}
@@ -422,7 +422,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
               ? 'Stop the meeting recording and start transcription'
               : 'Record a meeting (mic + system audio)'
           }
-          className={`ml-auto flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
+          className={`ml-auto shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
             meetingActive
               ? 'bg-red-600 hover:bg-red-700 text-white'
               : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
@@ -444,7 +444,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
             setCorrectResult(null);
             setCorrectError('');
           }}
-          className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
+          className={`shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
             expanded
               ? 'bg-white/15 text-[var(--color-text)]'
               : 'bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'

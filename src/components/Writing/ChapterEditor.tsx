@@ -4,9 +4,9 @@ import { api } from '../../hooks/api';
 import { useWritingChapterUpdate } from '../../offline/mutationDefaults';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import {
-  CHAPTER_FONT_SIZE_DEFAULT,
   CHAPTER_FONT_SIZE_STEP,
   getStoredChapterFontSize,
+  getStoredFontSize,
   setStoredChapterFontSize,
 } from '../../lib/fontSize';
 
@@ -134,7 +134,7 @@ export function ChapterEditor({ chapterId }: Props) {
           </button>
         )}
         <div className="flex items-center gap-3 shrink-0 text-xs text-[var(--color-text-muted)]">
-          {fontSize !== CHAPTER_FONT_SIZE_DEFAULT && <span>{fontSize}px</span>}
+          {fontSize !== getStoredFontSize() && <span>{fontSize}px</span>}
           <span>
             {wordCount.toLocaleString()} {wordCount === 1 ? 'word' : 'words'}
           </span>

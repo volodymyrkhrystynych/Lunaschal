@@ -7,6 +7,14 @@
   --color-text-muted: #a6adc8;
   --color-primary: #89b4fa;
   --color-accent: #f5c2e7;
+  /* Base size for reading content; overridden by the font-size setting. Only
+     the main content region consumes it, so the chrome never scales. */
+  --content-font-size: 1rem;
+}
+
+html,
+body {
+  height: 100%;
 }
 
 body {
@@ -16,6 +24,12 @@ body {
     system-ui,
     -apple-system,
     sans-serif;
+  /* The app shell is a fixed-height (h-dvh) flex column that manages its own
+     internal scrolling, so the page itself must never scroll. Without this,
+     iOS Safari rubber-band-scrolls the whole document and hides the bottom
+     SttPanel behind the browser toolbar. */
+  overflow: hidden;
+  overscroll-behavior: none;
 }
 
 /* Scrollbars follow the theme colors instead of the OS default. */
@@ -23,20 +37,53 @@ body {
   scrollbar-color: var(--color-surface) var(--color-bg);
 }
 
-*::-webkit-scrollbar {
-  width: 12px;
-  height: 12px;
+/* Chunky themed scrollbars only for mouse/trackpad. On touch (phones), a forced
+   12px gutter permanently wastes horizontal space and disables native overlay
+   scrollbars, so let touch devices fall back to the OS default. */
+@media (pointer: fine) {
+  *::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+  *::-webkit-scrollbar-track {
+    background: var(--color-bg);
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--color-surface);
+    border-radius: 6px;
+    border: 3px solid var(--color-bg);
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: var(--color-text-muted);
+  }
 }
-*::-webkit-scrollbar-track {
-  background: var(--color-bg);
+
+/* Reading content that scales with the Settings font-size control. Applied only
+   to the actual body text (chat messages, journal entries, recipes…) so the
+   chrome around it — buttons, search bars, toolbars — stays a fixed size. */
+.content-text {
+  font-size: var(--content-font-size);
 }
-*::-webkit-scrollbar-thumb {
-  background-color: var(--color-surface);
-  border-radius: 6px;
-  border: 3px solid var(--color-bg);
-}
-*::-webkit-scrollbar-thumb:hover {
-  background-color: var(--color-text-muted);
+
+/* Tag / filter pill rows: on phones a long row wraps into many lines and eats
+   vertical space, so scroll it sideways in a single line instead. Pair with
+   `flex flex-wrap` (kept for desktop) — this unlayered rule wins on mobile. */
+@media (max-width: 767px) {
+  .tag-row {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    /* min-width:0 lets the row shrink below its content width when it's itself
+       a flex item (e.g. the folder bar), so it scrolls instead of overflowing. */
+    min-width: 0;
+    max-width: 100%;
+  }
+  .tag-row::-webkit-scrollbar {
+    display: none;
+  }
+  .tag-row > * {
+    flex-shrink: 0;
+  }
 }
 
 /* Reader pane for imported fanfic chapters (server-sanitized HTML). */

@@ -215,7 +215,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
           placeholder="Search entries..."
           className="w-full bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
         />
-        <div className="flex flex-wrap gap-1.5 mt-2">
+        <div className="tag-row flex flex-wrap gap-1.5 mt-2">
           {curatedTags?.map(tag => (
             <button
               key={tag.id}
@@ -288,7 +288,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto space-y-4">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-4">
         {isLoading && (
           <div className="text-[var(--color-text-muted)]">Loading...</div>
         )}
@@ -450,7 +450,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                       {entry.title}
                     </h3>
                   )}
-                  <div className="text-[var(--color-text)] whitespace-pre-wrap">
+                  <div className="content-text text-[var(--color-text)] whitespace-pre-wrap">
                     {entry.content}
                   </div>
                   {entry.rawContent && (
@@ -469,7 +469,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
               {((entry.ficRefs?.length ?? 0) > 0 ||
                 entry.curatedTags?.length > 0 ||
                 (entry.tags && JSON.parse(entry.tags).length > 0)) && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
+                <div className="tag-row flex flex-wrap gap-1.5 mt-2">
                   {entry.ficRefs?.map(ref => (
                     <button
                       key={`f:${ref.ficId}:${ref.chapterId ?? ''}`}

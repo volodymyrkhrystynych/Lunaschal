@@ -147,23 +147,23 @@ export function Library({ onOpen }: LibraryProps) {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold text-[var(--color-text)]">
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <h1 className="text-xl md:text-2xl font-semibold text-[var(--color-text)]">
           Library
         </h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap justify-end gap-2">
           <button
             onClick={() => refreshAlerts.mutate()}
             disabled={refreshAlerts.isPending}
             title="Check each site's alerts page and queue updates for threads with new activity"
-            className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
+            className="px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
           >
             {refreshAlerts.isPending ? 'Checking…' : '⟳ Refresh'}
           </button>
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploadFile.isPending}
-            className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
+            className="px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
           >
             {uploadFile.isPending ? 'Importing…' : 'Upload file'}
           </button>
@@ -181,7 +181,7 @@ export function Library({ onOpen }: LibraryProps) {
           <button
             onClick={() => setShowDelete(!showDelete)}
             title={showDelete ? 'Hide delete buttons' : 'Show delete buttons'}
-            className={`px-4 py-2 border rounded-lg transition-colors ${
+            className={`px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base border rounded-lg transition-colors ${
               showDelete
                 ? 'border-red-400/50 text-red-400 bg-red-500/10'
                 : 'border-white/20 text-[var(--color-text-muted)] hover:bg-white/10'
@@ -191,9 +191,10 @@ export function Library({ onOpen }: LibraryProps) {
           </button>
           <button
             onClick={() => setShowImport(!showImport)}
-            className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors"
+            className="px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors"
           >
-            + Import from forum
+            <span className="md:hidden">+ Import</span>
+            <span className="hidden md:inline">+ Import from forum</span>
           </button>
         </div>
       </div>
@@ -301,7 +302,10 @@ export function Library({ onOpen }: LibraryProps) {
         </div>
       )}
 
-      <div ref={listRef} className="flex-1 overflow-y-auto space-y-3">
+      <div
+        ref={listRef}
+        className="flex-1 overflow-y-auto overflow-x-hidden space-y-3"
+      >
         {isLoading && (
           <div className="text-[var(--color-text-muted)]">Loading...</div>
         )}
@@ -384,14 +388,14 @@ function FicCard({
           />
         )}
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex flex-wrap items-start justify-between gap-2">
             <button
               onClick={onOpen}
-              className="text-left text-base font-bold text-[var(--color-text)] hover:text-[var(--color-primary)] transition-colors"
+              className="min-w-0 break-words text-left text-base font-bold text-[var(--color-text)] hover:text-[var(--color-primary)] transition-colors"
             >
               {fic.title}
             </button>
-            <div className="flex gap-2 shrink-0">
+            <div className="flex flex-wrap gap-2 shrink-0">
               <FolderPicker fic={fic} />
               <button
                 onClick={() => setShowReview(!showReview)}
@@ -458,7 +462,7 @@ function FicCard({
           </div>
 
           {fic.tags && fic.tags.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-1.5">
+            <div className="tag-row flex flex-wrap gap-1 mt-1.5">
               {fic.tags.map(name => (
                 <button
                   key={name}

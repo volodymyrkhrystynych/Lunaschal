@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Sidebar } from './components/Sidebar';
+import { Sidebar, navItems } from './components/Sidebar';
 import { Chat } from './components/Chat';
 import { Journal } from './components/Journal';
 import { Calendar } from './components/Calendar';
@@ -21,6 +21,7 @@ import { Meetings } from './components/Meetings';
 import { api } from './hooks/api';
 import { resolveAuthGate } from './lib/authGate';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
+import { MOBILE_QUERY } from './lib/breakpoints';
 
 type View =
   | 'chat'
@@ -42,7 +43,12 @@ export default function App() {
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
   >(null);
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Desktop starts with the sidebar pinned open; mobile starts with the drawer
+  // closed. Read matchMedia synchronously so the drawer never flashes open on
+  // a phone's first paint.
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => !window.matchMedia(MOBILE_QUERY).matches
+  );
   const [pendingInsert, setPendingInsert] = useState<string | null>(null);
   const [ficTarget, setFicTarget] = useState<FicTarget | null>(null);
   const queryClient = useQueryClient();
@@ -74,7 +80,7 @@ export default function App() {
 
   if (authGate === 'loading') {
     return (
-      <div className="h-screen flex items-center justify-center bg-[var(--color-bg)]">
+      <div className="h-dvh flex items-center justify-center bg-[var(--color-bg)]">
         <div className="text-[var(--color-text-muted)]">Loading…</div>
       </div>
     );
@@ -86,7 +92,7 @@ export default function App() {
   // / refetchOnWindowFocus will also self-heal this once the backend answers.
   if (authGate === 'reconnecting') {
     return (
-      <div className="h-screen flex flex-col items-center justify-center gap-4 bg-[var(--color-bg)]">
+      <div className="h-dvh flex flex-col items-center justify-center gap-4 bg-[var(--color-bg)]">
         <div className="text-[var(--color-text-muted)]">
           Reconnecting to the server…
         </div>
@@ -184,7 +190,20 @@ export default function App() {
       onViewChange={setCurrentView}
       onToggleSidebar={() => setSidebarOpen(o => !o)}
     >
-      <div className="h-screen flex flex-col bg-[var(--color-bg)]">
+      <div className="h-dvh flex flex-col bg-[var(--color-bg)]">
+        <header className="md:hidden h-11 shrink-0 flex items-center gap-2 px-2 border-b border-white/10 bg-[var(--color-surface)]">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 text-[var(--color-text)]"
+            aria-label="Open menu"
+          >
+            ☰
+          </button>
+          <span className="font-semibold text-[var(--color-text)]">
+            {navItems.find(i => i.view === currentView)?.label ?? 'Lunaschal'}
+          </span>
+        </header>
         <div className="flex flex-1 overflow-hidden">
           <Sidebar
             currentView={currentView}
