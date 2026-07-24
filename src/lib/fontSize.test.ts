@@ -4,10 +4,8 @@ import {
   FONT_SIZE_DEFAULT,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
-  CHAPTER_FONT_SIZE_DEFAULT,
   CHAPTER_FONT_SIZE_MAX,
   CHAPTER_FONT_SIZE_MIN,
-  READING_FONT_SIZE_DEFAULT,
   READING_FONT_SIZE_MAX,
   READING_FONT_SIZE_MIN,
   applyFontSize,
@@ -21,7 +19,7 @@ import {
 
 beforeEach(() => {
   localStorage.clear();
-  document.documentElement.style.fontSize = '';
+  document.documentElement.style.removeProperty('--content-font-size');
 });
 
 describe('getStoredFontSize', () => {
@@ -52,7 +50,9 @@ describe('setStoredFontSize', () => {
     const result = setStoredFontSize(20);
     expect(result).toBe(20);
     expect(getStoredFontSize()).toBe(20);
-    expect(document.documentElement.style.fontSize).toBe('20px');
+    expect(
+      document.documentElement.style.getPropertyValue('--content-font-size')
+    ).toBe('20px');
   });
 
   it('clamps values outside the allowed range', () => {
@@ -62,13 +62,15 @@ describe('setStoredFontSize', () => {
 });
 
 describe('chapter font size', () => {
-  it('falls back to the default when nothing is stored', () => {
-    expect(getStoredChapterFontSize()).toBe(CHAPTER_FONT_SIZE_DEFAULT);
+  it('follows the global content size when nothing is stored', () => {
+    expect(getStoredChapterFontSize()).toBe(FONT_SIZE_DEFAULT);
+    setStoredFontSize(24);
+    expect(getStoredChapterFontSize()).toBe(24);
   });
 
-  it('falls back to the default for garbage values', () => {
+  it('falls back to the global content size for garbage values', () => {
     localStorage.setItem('lunaschal:chapterFontSize', 'not-a-number');
-    expect(getStoredChapterFontSize()).toBe(CHAPTER_FONT_SIZE_DEFAULT);
+    expect(getStoredChapterFontSize()).toBe(FONT_SIZE_DEFAULT);
   });
 
   it('persists the clamped size and reads it back', () => {
@@ -81,7 +83,7 @@ describe('chapter font size', () => {
     expect(setStoredChapterFontSize(-5)).toBe(CHAPTER_FONT_SIZE_MIN);
   });
 
-  it('is stored independently of the base UI font size', () => {
+  it('overrides the global content size once explicitly set', () => {
     setStoredFontSize(14);
     setStoredChapterFontSize(24);
     expect(getStoredFontSize()).toBe(14);
@@ -90,13 +92,15 @@ describe('chapter font size', () => {
 });
 
 describe('reading font size', () => {
-  it('falls back to the default when nothing is stored', () => {
-    expect(getStoredReadingFontSize()).toBe(READING_FONT_SIZE_DEFAULT);
+  it('follows the global content size when nothing is stored', () => {
+    expect(getStoredReadingFontSize()).toBe(FONT_SIZE_DEFAULT);
+    setStoredFontSize(24);
+    expect(getStoredReadingFontSize()).toBe(24);
   });
 
-  it('falls back to the default for garbage values', () => {
+  it('falls back to the global content size for garbage values', () => {
     localStorage.setItem('lunaschal:readingFontSize', 'not-a-number');
-    expect(getStoredReadingFontSize()).toBe(READING_FONT_SIZE_DEFAULT);
+    expect(getStoredReadingFontSize()).toBe(FONT_SIZE_DEFAULT);
   });
 
   it('persists the clamped size and reads it back', () => {
@@ -109,7 +113,7 @@ describe('reading font size', () => {
     expect(setStoredReadingFontSize(-5)).toBe(READING_FONT_SIZE_MIN);
   });
 
-  it('is stored independently of the chapter and base UI font sizes', () => {
+  it('overrides the chapter and global content sizes once explicitly set', () => {
     setStoredFontSize(14);
     setStoredChapterFontSize(24);
     setStoredReadingFontSize(19);
@@ -120,9 +124,11 @@ describe('reading font size', () => {
 });
 
 describe('applyFontSize', () => {
-  it('sets the root element font size without touching storage', () => {
+  it('sets the content font-size variable without touching storage', () => {
     applyFontSize(15);
-    expect(document.documentElement.style.fontSize).toBe('15px');
+    expect(
+      document.documentElement.style.getPropertyValue('--content-font-size')
+    ).toBe('15px');
     expect(localStorage.getItem('lunaschal:fontSize')).toBeNull();
   });
 });

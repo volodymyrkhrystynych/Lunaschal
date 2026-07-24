@@ -230,15 +230,16 @@ describe('Reader chapter list toggle and font size shortcuts', () => {
     const { container } = renderReader();
     await screen.findByRole('heading', { name: 'Chapter 1' });
     const prose = () => container.querySelector<HTMLElement>('.fanfic-prose')!;
-    expect(prose().style.fontSize).toBe('17px');
+    // No per-fic size stored, so it starts at the global content default (16).
+    expect(prose().style.fontSize).toBe('16px');
 
     fireEvent.keyDown(window, { code: 'Equal' });
-    expect(prose().style.fontSize).toBe('18px');
-    expect(localStorage.getItem('lunaschal:readingFontSize')).toBe('18');
+    expect(prose().style.fontSize).toBe('17px');
+    expect(localStorage.getItem('lunaschal:readingFontSize')).toBe('17');
 
     fireEvent.keyDown(window, { code: 'Minus' });
     fireEvent.keyDown(window, { code: 'Minus' });
-    expect(prose().style.fontSize).toBe('16px');
-    expect(localStorage.getItem('lunaschal:readingFontSize')).toBe('16');
+    expect(prose().style.fontSize).toBe('15px');
+    expect(localStorage.getItem('lunaschal:readingFontSize')).toBe('15');
   });
 });

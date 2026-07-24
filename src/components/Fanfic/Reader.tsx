@@ -17,11 +17,13 @@ import {
   useShortcutScope,
 } from '../../shortcuts/ShortcutProvider';
 import {
-  READING_FONT_SIZE_DEFAULT,
   READING_FONT_SIZE_STEP,
+  getStoredFontSize,
   getStoredReadingFontSize,
   setStoredReadingFontSize,
 } from '../../lib/fontSize';
+import { useMasterDetail } from '@/hooks/useMasterDetail';
+import { MasterDetailBack } from '@/components/MasterDetailBack';
 
 interface ReaderProps {
   ficId: string;
@@ -38,6 +40,8 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const [commentarySaved, setCommentarySaved] = useState(false);
   const [navVisible, setNavVisible] = useState(true);
   const [fontSize, setFontSize] = useState(getStoredReadingFontSize);
+  const { isMobile, showList, showDetail, openDetail, openList } =
+    useMasterDetail();
   const contentRef = useRef<HTMLDivElement>(null);
   const commentaryRef = useRef<HTMLTextAreaElement>(null);
   const queryClient = useQueryClient();
@@ -60,6 +64,11 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   });
 
   const isPdf = fic?.sourceType === 'pdf';
+
+  // Desktop keeps the power-user `navVisible` collapse; mobile shows exactly one
+  // of chapter list / reading pane. PDFs have no chapter list, so force the pane.
+  const navShown = !isPdf && (isMobile ? showList : navVisible);
+  const contentShown = !isMobile || isPdf || showDetail;
 
   // Pick the chapter to show: explicit target > last read > first chapter.
   useEffect(() => {
@@ -178,10 +187,10 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* Chapter sidebar */}
-      {!isPdf && navVisible && (
+      {navShown && (
         <aside
           data-reader-nav
-          className="w-64 border-r border-white/10 bg-[var(--color-surface)] flex flex-col shrink-0"
+          className={`${isMobile ? 'w-full' : 'w-64 shrink-0'} border-r border-white/10 bg-[var(--color-surface)] flex flex-col`}
         >
           <div className="p-3 border-b border-white/10">
             <button
@@ -200,7 +209,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
             )}
             <FicDownloadButton chapters={chapters} />
           </div>
-          <div className="flex-1 overflow-y-auto p-2">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden p-2">
             {groups.map(([category, chs]) => (
               <div key={category} className="mb-2">
                 {groups.length > 1 && (
@@ -222,7 +231,10 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                     } ${level === 1 && ch.id === chapterId ? 'ring-1 ring-[var(--color-primary)]' : ''}`}
                   >
                     <button
-                      onClick={() => setChapterId(ch.id)}
+                      onClick={() => {
+                        setChapterId(ch.id);
+                        openDetail();
+                      }}
                       className={`flex-1 min-w-0 text-left px-2 py-1.5 text-sm truncate ${
                         ch.id === chapterId
                           ? 'text-[var(--color-primary)]'
@@ -273,140 +285,143 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
       )}
 
       {/* Content pane */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {isPdf ? (
-          <>
-            <div className="p-2 border-b border-white/10 flex items-center gap-3 bg-[var(--color-surface)]">
-              <button
-                onClick={onBack}
-                className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-              >
-                ← Library
-              </button>
-              <span className="font-semibold text-[var(--color-text)]">
-                {fic?.title}
-              </span>
-            </div>
-            <iframe
-              src={`/api/fanfic/${ficId}/pdf`}
-              title={fic?.title}
-              className="flex-1 w-full border-0"
-            />
-          </>
-        ) : (
-          <div
-            ref={contentRef}
-            className={`flex-1 overflow-y-auto ${level >= 2 ? 'ring-1 ring-inset ring-[var(--color-primary)]' : ''}`}
-          >
-            <div className="max-w-3xl mx-auto px-6 py-6">
-              {chapterNav('top')}
-              {chapters && chapters.length === 0 ? (
-                <div className="text-[var(--color-text-muted)] py-12 text-center">
-                  <p className="mb-2">
-                    No chapters were downloaded for this fic.
-                  </p>
-                  <p className="text-sm">
-                    {fic?.downloadError
-                      ? fic.downloadError
-                      : 'Try "↻ Update" in the library, or re-import the fic\'s URL to retry the download.'}
-                  </p>
-                </div>
-              ) : chapter ? (
-                <>
-                  <h2 className="text-xl font-bold text-[var(--color-text)] mb-1">
-                    {chapter.title}
-                  </h2>
-                  <div className="text-sm text-[var(--color-text-muted)] mb-6 flex gap-3">
-                    <span>{chapter.wordCount} words</span>
-                    {fontSize !== READING_FONT_SIZE_DEFAULT && (
-                      <span>{fontSize}px</span>
-                    )}
-                    {chapter.sourceUrl && (
-                      <a
-                        href={chapter.sourceUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="underline hover:text-[var(--color-text)]"
-                      >
-                        view on forum
-                      </a>
-                    )}
-                  </div>
-                  <div
-                    className="fanfic-prose"
-                    style={{ fontSize: `${fontSize}px` }}
-                    dangerouslySetInnerHTML={{ __html: chapter.contentHtml }}
-                  />
-                  {chapterNav('bottom')}
-                </>
-              ) : (
-                <div className="text-[var(--color-text-muted)]">
-                  Loading chapter…
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Commentary panel */}
-        <div className="border-t border-white/10 bg-[var(--color-surface)]">
-          <button
-            onClick={() => setShowCommentary(!showCommentary)}
-            className="w-full px-4 py-2 text-left text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-          >
-            {showCommentary ? '▾' : '▸'} Write commentary
-            {commentarySaved && (
-              <span className="ml-2 text-green-400">saved to journal ✓</span>
-            )}
-          </button>
-          {showCommentary && (
-            <div className="px-4 pb-3">
-              <textarea
-                ref={commentaryRef}
-                value={commentary}
-                onChange={e => setCommentary(e.target.value)}
-                rows={3}
-                autoFocus
-                onKeyDown={e => {
-                  if (e.key === 'Escape') {
-                    setShowCommentary(false);
-                    return;
-                  }
-                  // Enter submits; Shift+Enter inserts a newline
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    if (commentary.trim() && !saveCommentary.isPending) {
-                      saveCommentary.mutate(commentary.trim());
-                      setShowCommentary(false);
-                      e.currentTarget.blur();
-                    }
-                  }
-                }}
-                placeholder={
-                  isPdf
-                    ? `Your thoughts on ${fic?.title ?? 'this fic'}… (saved as a journal entry linked to the fic)`
-                    : `Your thoughts on ${chapter?.title ?? 'this chapter'}… (saved as a journal entry linked to this chapter)`
-                }
-                className="w-full bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none border border-white/10 rounded p-2 mb-2"
-              />
-              {saveCommentary.isError && (
-                <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
-                  {(saveCommentary.error as Error).message}
-                </div>
-              )}
-              <div className="flex justify-end">
+      {contentShown && (
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {!isPdf && <MasterDetailBack onClick={openList} label="Chapters" />}
+          {isPdf ? (
+            <>
+              <div className="p-2 border-b border-white/10 flex items-center gap-3 bg-[var(--color-surface)]">
                 <button
-                  onClick={() => saveCommentary.mutate(commentary.trim())}
-                  disabled={!commentary.trim() || saveCommentary.isPending}
-                  className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+                  onClick={onBack}
+                  className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                 >
-                  {saveCommentary.isPending ? 'Saving…' : 'Save to journal'}
+                  ← Library
                 </button>
+                <span className="font-semibold text-[var(--color-text)]">
+                  {fic?.title}
+                </span>
+              </div>
+              <iframe
+                src={`/api/fanfic/${ficId}/pdf`}
+                title={fic?.title}
+                className="flex-1 w-full border-0"
+              />
+            </>
+          ) : (
+            <div
+              ref={contentRef}
+              className={`flex-1 overflow-y-auto ${level >= 2 ? 'ring-1 ring-inset ring-[var(--color-primary)]' : ''}`}
+            >
+              <div className="max-w-3xl mx-auto px-6 py-6">
+                {chapterNav('top')}
+                {chapters && chapters.length === 0 ? (
+                  <div className="text-[var(--color-text-muted)] py-12 text-center">
+                    <p className="mb-2">
+                      No chapters were downloaded for this fic.
+                    </p>
+                    <p className="text-sm">
+                      {fic?.downloadError
+                        ? fic.downloadError
+                        : 'Try "↻ Update" in the library, or re-import the fic\'s URL to retry the download.'}
+                    </p>
+                  </div>
+                ) : chapter ? (
+                  <>
+                    <h2 className="text-xl font-bold text-[var(--color-text)] mb-1">
+                      {chapter.title}
+                    </h2>
+                    <div className="text-sm text-[var(--color-text-muted)] mb-6 flex gap-3">
+                      <span>{chapter.wordCount} words</span>
+                      {fontSize !== getStoredFontSize() && (
+                        <span>{fontSize}px</span>
+                      )}
+                      {chapter.sourceUrl && (
+                        <a
+                          href={chapter.sourceUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline hover:text-[var(--color-text)]"
+                        >
+                          view on forum
+                        </a>
+                      )}
+                    </div>
+                    <div
+                      className="fanfic-prose"
+                      style={{ fontSize: `${fontSize}px` }}
+                      dangerouslySetInnerHTML={{ __html: chapter.contentHtml }}
+                    />
+                    {chapterNav('bottom')}
+                  </>
+                ) : (
+                  <div className="text-[var(--color-text-muted)]">
+                    Loading chapter…
+                  </div>
+                )}
               </div>
             </div>
           )}
+
+          {/* Commentary panel */}
+          <div className="border-t border-white/10 bg-[var(--color-surface)]">
+            <button
+              onClick={() => setShowCommentary(!showCommentary)}
+              className="w-full px-4 py-2 text-left text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+            >
+              {showCommentary ? '▾' : '▸'} Write commentary
+              {commentarySaved && (
+                <span className="ml-2 text-green-400">saved to journal ✓</span>
+              )}
+            </button>
+            {showCommentary && (
+              <div className="px-4 pb-3">
+                <textarea
+                  ref={commentaryRef}
+                  value={commentary}
+                  onChange={e => setCommentary(e.target.value)}
+                  rows={3}
+                  autoFocus
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') {
+                      setShowCommentary(false);
+                      return;
+                    }
+                    // Enter submits; Shift+Enter inserts a newline
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      if (commentary.trim() && !saveCommentary.isPending) {
+                        saveCommentary.mutate(commentary.trim());
+                        setShowCommentary(false);
+                        e.currentTarget.blur();
+                      }
+                    }
+                  }}
+                  placeholder={
+                    isPdf
+                      ? `Your thoughts on ${fic?.title ?? 'this fic'}… (saved as a journal entry linked to the fic)`
+                      : `Your thoughts on ${chapter?.title ?? 'this chapter'}… (saved as a journal entry linked to this chapter)`
+                  }
+                  className="w-full bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none border border-white/10 rounded p-2 mb-2"
+                />
+                {saveCommentary.isError && (
+                  <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
+                    {(saveCommentary.error as Error).message}
+                  </div>
+                )}
+                <div className="flex justify-end">
+                  <button
+                    onClick={() => saveCommentary.mutate(commentary.trim())}
+                    disabled={!commentary.trim() || saveCommentary.isPending}
+                    className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+                  >
+                    {saveCommentary.isPending ? 'Saving…' : 'Save to journal'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

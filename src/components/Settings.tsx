@@ -1128,8 +1128,9 @@ function DisplaySection() {
       </h2>
       <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
         <p className="text-sm text-[var(--color-text-muted)] mb-3">
-          Font size for this machine only — not synced across devices, so a
-          laptop and the Pocket 2 can each have their own.
+          Size of reading content (chat, journal, recipes…) — leaves the sidebar
+          and buttons unchanged. For this machine only, not synced across
+          devices, so a laptop and the Pocket 2 can each have their own.
         </p>
         <div className="flex flex-wrap gap-2">
           {FONT_SIZE_PRESETS.map(({ label, px }) => (

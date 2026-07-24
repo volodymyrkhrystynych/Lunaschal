@@ -181,7 +181,7 @@ export function Cookbook() {
           className="w-full bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
         />
         {(recipeTags?.length ?? 0) > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-2">
+          <div className="tag-row flex flex-wrap gap-1.5 mt-2">
             {recipeTags?.map(tag => (
               <button
                 key={tag.name}
@@ -423,14 +423,14 @@ export function Cookbook() {
                 </div>
               ) : (
                 <div
-                  className={`text-[var(--color-text)] whitespace-pre-wrap ${expanded ? '' : 'line-clamp-3'}`}
+                  className={`content-text text-[var(--color-text)] whitespace-pre-wrap ${expanded ? '' : 'line-clamp-3'}`}
                 >
                   {recipe.content}
                 </div>
               )}
 
               {tags.length > 0 && editingId !== recipe.id && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
+                <div className="tag-row flex flex-wrap gap-1.5 mt-2">
                   {tags.map(tag => (
                     <span
                       key={tag}
