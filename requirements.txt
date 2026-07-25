@@ -11,6 +11,10 @@ soundfile>=0.12.1
 numpy>=2.0.0
 openai-whisper>=20240930
 kokoro-onnx>=0.4.0
+# Parakeet TDT CPU STT backend (onnxruntime already comes via kokoro-onnx;
+# [hub] pulls huggingface-hub for model download). Optional — only needed
+# when STT_BACKEND=parakeet.
+onnx-asr[hub]>=0.5.0
 beautifulsoup4>=4.12
 fsrs>=6.0
 mcp>=1.28

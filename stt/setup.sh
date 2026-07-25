@@ -41,6 +41,9 @@ if [ "$MODE" = "local" ]; then
     if [ -f "$ROOT_VENV/bin/pip" ]; then
         echo "Installing kokoro-onnx into main Flask venv ($ROOT_VENV)..."
         "$ROOT_VENV/bin/pip" install "kokoro-onnx>=0.4.0"
+        # Parakeet TDT CPU STT backend — transcription runs in the Flask venv.
+        echo "Installing onnx-asr into main Flask venv ($ROOT_VENV)..."
+        "$ROOT_VENV/bin/pip" install "onnx-asr[hub]>=0.5.0"
     else
         echo "Warning: main .venv not found at $ROOT_VENV"
         echo "  Run: pip install kokoro-onnx>=0.4.0  (in your Flask venv)"

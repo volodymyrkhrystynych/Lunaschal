@@ -2,6 +2,8 @@
 # Install alongside requirements.txt:  pip install -r requirements-local.txt
 openai-whisper>=20240930
 kokoro-onnx>=0.4.0
+# Parakeet TDT CPU STT backend (STT_BACKEND=parakeet)
+onnx-asr[hub]>=0.5.0
 # openwakeword is installed via setup.sh with --no-deps to skip tflite-runtime
 # (no Python 3.14 wheel exists); onnxruntime covers the only backend used.
 tqdm>=4.0.0

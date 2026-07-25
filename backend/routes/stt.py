@@ -27,6 +27,8 @@ STT_BACKEND      = os.environ.get('STT_BACKEND', 'local').lower()
 TTS_BACKEND      = os.environ.get('TTS_BACKEND', 'local').lower()
 MODEL_NAME       = os.environ.get('WHISPER_MODEL', 'turbo')
 DEVICE           = os.environ.get('WHISPER_DEVICE', 'cuda')
+# Parakeet TDT runs on CPU via onnx-asr (onnxruntime). English-only, no VRAM.
+PARAKEET_MODEL   = os.environ.get('PARAKEET_MODEL', 'nemo-parakeet-tdt-0.6b-v2')
 TTS_VOICE        = os.environ.get('TTS_VOICE', 'af_heart')
 OPENAI_STT_MODEL = os.environ.get('OPENAI_STT_MODEL', 'whisper-1')
 OPENAI_TTS_MODEL = os.environ.get('OPENAI_TTS_MODEL', 'tts-1')
@@ -125,14 +127,18 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
     model_name = model_name or _get_active_whisper_model()
     device = _get_active_stt_device()
 
+    # openai (cloud) and parakeet (fixed CPU model) don't depend on the whisper
+    # model/device knobs, so a backend match alone is enough for the fast path.
+    config_free = backend in ('openai', 'parakeet')
+
     # Fast path — already loaded with the right config
     if _stt_ready and _loaded_stt_backend == backend:
-        if backend == 'openai' or (_loaded_model_name == model_name and _loaded_device == device):
+        if config_free or (_loaded_model_name == model_name and _loaded_device == device):
             return
 
     with _stt_lock:
         if _stt_ready and _loaded_stt_backend == backend:
-            if backend == 'openai' or (_loaded_model_name == model_name and _loaded_device == device):
+            if config_free or (_loaded_model_name == model_name and _loaded_device == device):
                 return
         # Unload whatever is currently in memory
         _stt_model = None
@@ -143,6 +149,14 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
             _loaded_stt_backend = 'openai'
             _loaded_model_name = None
             _loaded_device = None
+        elif backend == 'parakeet':
+            import onnx_asr
+            logger.info("Loading Parakeet '%s' on CPU (onnx-asr)…", PARAKEET_MODEL)
+            _stt_model = onnx_asr.load_model(PARAKEET_MODEL)
+            _loaded_stt_backend = 'parakeet'
+            _loaded_model_name = PARAKEET_MODEL
+            _loaded_device = 'cpu'
+            logger.info("STT ready (Parakeet).")
         else:
             import whisper
             logger.info("Loading Whisper '%s' on %s…", model_name, device)
@@ -220,13 +234,22 @@ def stt_health():
     active_stt = _get_active_stt_backend()
     active_model = _get_active_whisper_model()
     active_tts = _get_active_tts_backend()
-    stt_is_ready = _stt_ready and _loaded_stt_backend == active_stt and (
-        active_stt == 'openai' or _loaded_model_name == active_model
-    )
+    if active_stt == 'openai':
+        stt_is_ready = _stt_ready and _loaded_stt_backend == 'openai'
+        stt_model_label = f'openai/{OPENAI_STT_MODEL}'
+    elif active_stt == 'parakeet':
+        stt_is_ready = _stt_ready and _loaded_stt_backend == 'parakeet'
+        stt_model_label = PARAKEET_MODEL
+    else:
+        stt_is_ready = (
+            _stt_ready and _loaded_stt_backend == 'local'
+            and _loaded_model_name == active_model
+        )
+        stt_model_label = active_model
     return jsonify({
         'status': 'ok',
         'stt_backend': active_stt,
-        'stt_model': active_model if active_stt == 'local' else f'openai/{OPENAI_STT_MODEL}',
+        'stt_model': stt_model_label,
         'stt_device': _loaded_device or DEVICE,
         'stt_ready': stt_is_ready,
         'tts_backend': active_tts,
@@ -243,6 +266,24 @@ def _reset_stt_model() -> None:
         _loaded_stt_backend = None
         _loaded_model_name = None
         _loaded_device = None
+
+
+def _decode_to_16k_mono(path: str):
+    """Decode any audio file to a 16 kHz mono float32 numpy array via ffmpeg.
+
+    onnx-asr reads audio through soundfile, which can't decode the webm the
+    browser's MediaRecorder produces (only the listener sends WAV). ffmpeg —
+    already a hard dependency for meetings — normalises every input format to
+    the 16 kHz mono PCM Parakeet expects."""
+    import subprocess
+    import numpy as np
+
+    proc = subprocess.run(
+        ['ffmpeg', '-nostdin', '-loglevel', 'error', '-i', path,
+         '-f', 'f32le', '-ac', '1', '-ar', '16000', '-'],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
+    )
+    return np.frombuffer(proc.stdout, dtype=np.float32)
 
 
 def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
@@ -264,6 +305,17 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
                     response_format='verbose_json',
                 )
             return {'text': result.text.strip(), 'language': result.language or language or 'en'}
+        elif _loaded_stt_backend == 'parakeet':
+            # onnx-asr is not thread-safe; serialise like Whisper. Parakeet TDT
+            # v2 is English-only and does no language detection.
+            waveform = _decode_to_16k_mono(tmp_path)
+            with _transcribe_lock:
+                try:
+                    text = _stt_model.recognize(waveform, sample_rate=16000)
+                except Exception:
+                    _reset_stt_model()
+                    raise
+            return {'text': (text or '').strip(), 'language': language or 'en'}
         else:
             opts = {'language': language} if language else {}
             if _loaded_device == 'cpu':
