@@ -18,6 +18,7 @@ export function TodoForm({ list, onCancel }: TodoFormProps) {
   const [dueInput, setDueInput] = useState('');
   const [repeatN, setRepeatN] = useState('');
   const [repeatUnit, setRepeatUnit] = useState<RepeatUnit>('week');
+  const [priority, setPriority] = useState(3);
   const refs = useRef<(HTMLInputElement | HTMLSelectElement | null)[]>([]);
 
   // Offline-queueable: optimistic insert + invalidation live in the registered
@@ -28,6 +29,7 @@ export function TodoForm({ list, onCancel }: TodoFormProps) {
       setNotes('');
       setDueInput('');
       setRepeatN('');
+      setPriority(3);
       refs.current[0]?.focus();
     },
   });
@@ -44,6 +46,7 @@ export function TodoForm({ list, onCancel }: TodoFormProps) {
       due: dueInputToUnix(dueInput),
       repeatInterval: interval && interval >= 1 ? interval : undefined,
       repeatUnit: interval && interval >= 1 ? repeatUnit : undefined,
+      priority,
     });
   };
 
@@ -86,7 +89,9 @@ export function TodoForm({ list, onCancel }: TodoFormProps) {
         placeholder="More information…"
         className={`${fieldClass} w-full text-xs`}
       />
-      <div className="flex gap-2 items-center">
+      {/* flex-wrap so the date + repeat + priority controls stack instead of
+          overflowing the card on narrow (mobile) screens. */}
+      <div className="flex flex-wrap gap-2 items-center">
         <label className="text-xs text-[var(--color-text-muted)]">Due</label>
         <input
           ref={el => {
@@ -125,6 +130,24 @@ export function TodoForm({ list, onCancel }: TodoFormProps) {
           <option value="day">days</option>
           <option value="week">weeks</option>
           <option value="month">months</option>
+        </select>
+        <label className="text-xs text-[var(--color-text-muted)] ml-2">
+          Priority
+        </label>
+        <select
+          ref={el => {
+            refs.current[5] = el;
+          }}
+          value={priority}
+          onChange={e => setPriority(Number(e.target.value))}
+          onKeyDown={e => handleKey(e, 5)}
+          className={fieldClass}
+        >
+          <option value={1}>1 — Very unimportant</option>
+          <option value={2}>2 — Unimportant</option>
+          <option value={3}>3 — Normal</option>
+          <option value={4}>4 — Important</option>
+          <option value={5}>5 — Very important</option>
         </select>
       </div>
       <div className="flex gap-2 justify-end">

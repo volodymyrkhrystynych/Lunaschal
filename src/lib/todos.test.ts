@@ -87,6 +87,51 @@ describe('partitionTodos', () => {
     ]);
     expect(active.map(t => t.id)).toEqual(['x', 'y']);
   });
+
+  it('breaks equal-due ties by priority, higher first', () => {
+    const p = (id: string, due: string | null, priority: number) => ({
+      id,
+      done: false,
+      completedAt: null,
+      due,
+      priority,
+    });
+    const { active } = partitionTodos([
+      p('low', '2026-07-21T12:00:00+00:00', 2),
+      p('high', '2026-07-21T12:00:00+00:00', 5),
+      p('mid', '2026-07-21T12:00:00+00:00', 3),
+    ]);
+    expect(active.map(t => t.id)).toEqual(['high', 'mid', 'low']);
+  });
+
+  it('orders due-less todos by priority but never over an earlier due date', () => {
+    const p = (id: string, due: string | null, priority: number) => ({
+      id,
+      done: false,
+      completedAt: null,
+      due,
+      priority,
+    });
+    const { active } = partitionTodos([
+      p('undatedLow', null, 1),
+      p('dated', '2026-07-25T12:00:00+00:00', 1),
+      p('undatedHigh', null, 5),
+    ]);
+    // Due date wins overall; among the undated pair, higher priority first.
+    expect(active.map(t => t.id)).toEqual([
+      'dated',
+      'undatedHigh',
+      'undatedLow',
+    ]);
+  });
+
+  it('treats a missing priority as neutral (3), preserving creation order', () => {
+    const { active } = partitionTodos([
+      todo('x', false, null),
+      todo('y', false, null),
+    ]);
+    expect(active.map(t => t.id)).toEqual(['x', 'y']);
+  });
 });
 
 describe('isFarOffPeriodic', () => {

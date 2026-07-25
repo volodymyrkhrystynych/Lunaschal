@@ -138,7 +138,7 @@ def uncomplete_task(task_id):
 
 _TODO_COLS = (
     'id, title, done, completed_at, list, notes, due, '
-    'repeat_interval, repeat_unit, created_at, updated_at'
+    'repeat_interval, repeat_unit, priority, created_at, updated_at'
 )
 
 
@@ -162,6 +162,15 @@ def _parse_repeat(interval, unit):
     if unit not in VALID_UNITS:
         return None, f'repeatUnit must be one of {", ".join(VALID_UNITS)}'
     return (interval, unit), None
+
+
+def _parse_priority(value):
+    """Returns (int_1_to_5, error_or_None). Absent/None -> default 3 (neutral)."""
+    if value is None:
+        return 3, None
+    if isinstance(value, bool) or not isinstance(value, int) or not (1 <= value <= 5):
+        return None, 'priority must be an integer from 1 to 5'
+    return value, None
 
 
 @bp.get('/todos')
@@ -199,6 +208,9 @@ def create_todo():
     repeat, err = _parse_repeat(body.get('repeatInterval'), body.get('repeatUnit'))
     if err:
         return jsonify({'error': err}), 400
+    priority, err = _parse_priority(body.get('priority'))
+    if err:
+        return jsonify({'error': err}), 400
 
     now = int(time.time())
     # Accept a client-supplied ULID so an offline-queued create replays
@@ -206,9 +218,9 @@ def create_todo():
     todo_id = body.get('id') or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT OR IGNORE INTO todos(id, title, done, list, notes, due, repeat_interval, repeat_unit, created_at, updated_at)'
-        ' VALUES (?,?,0,?,?,?,?,?,?,?)',
-        (todo_id, title, todo_list, notes, due, repeat[0], repeat[1], now, now),
+        'INSERT OR IGNORE INTO todos(id, title, done, list, notes, due, repeat_interval, repeat_unit, priority, created_at, updated_at)'
+        ' VALUES (?,?,0,?,?,?,?,?,?,?,?)',
+        (todo_id, title, todo_list, notes, due, repeat[0], repeat[1], priority, now, now),
     )
     db.commit()
     return jsonify({'id': todo_id}), 201
@@ -241,6 +253,12 @@ def update_todo(todo_id):
     if 'notes' in body:
         fields.append('notes=?')
         values.append((body.get('notes') or '').strip() or None)
+    if 'priority' in body:
+        priority, err = _parse_priority(body.get('priority'))
+        if err:
+            return jsonify({'error': err}), 400
+        fields.append('priority=?')
+        values.append(priority)
     if 'due' in body:
         due, err = _parse_due(body.get('due'))
         if err:

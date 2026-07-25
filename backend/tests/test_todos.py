@@ -126,6 +126,7 @@ def test_create_defaults_and_validation(client):
     assert todo['due'] is None
     assert todo['repeatInterval'] is None
     assert todo['repeatUnit'] is None
+    assert todo['priority'] == 3  # neutral default
 
     bad = [
         {'title': 'x', 'list': 'someday'},
@@ -134,10 +135,27 @@ def test_create_defaults_and_validation(client):
         {'title': 'x', 'repeatUnit': 'week'},          # interval missing
         {'title': 'x', 'repeatInterval': 0, 'repeatUnit': 'day'},
         {'title': 'x', 'repeatInterval': 1, 'repeatUnit': 'fortnight'},
+        {'title': 'x', 'priority': 0},                 # below range
+        {'title': 'x', 'priority': 6},                 # above range
+        {'title': 'x', 'priority': 'high'},            # wrong type
     ]
     for body in bad:
         assert client.post('/api/tasks/todos', json=body).status_code == 400
     assert len(client.get('/api/tasks/todos').get_json()) == 1
+
+
+def test_priority_create_and_patch_round_trip(client):
+    todo_id = client.post(
+        '/api/tasks/todos', json={'title': 'urgent', 'priority': 5}
+    ).get_json()['id']
+    assert client.get('/api/tasks/todos').get_json()[0]['priority'] == 5
+
+    assert client.patch(f'/api/tasks/todos/{todo_id}', json={'priority': 1}).status_code == 200
+    assert client.get('/api/tasks/todos').get_json()[0]['priority'] == 1
+
+    # invalid patch is rejected and leaves the value untouched
+    assert client.patch(f'/api/tasks/todos/{todo_id}', json={'priority': 9}).status_code == 400
+    assert client.get('/api/tasks/todos').get_json()[0]['priority'] == 1
 
 
 def test_list_filter_returns_only_that_list(client):

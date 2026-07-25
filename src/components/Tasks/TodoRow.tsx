@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { TodoItem, TodoPayload } from '../../hooks/api';
-import { formatCompletedAt, formatDue, repeatLabel } from '../../lib/todos';
+import {
+  formatCompletedAt,
+  formatDue,
+  priorityFlag,
+  repeatLabel,
+} from '../../lib/todos';
 
 interface TodoRowProps {
   todo: TodoItem;
@@ -35,6 +40,7 @@ export function TodoRow({
 
   const due = formatDue(todo.due);
   const repeat = repeatLabel(todo.repeatInterval, todo.repeatUnit);
+  const flag = priorityFlag(todo.priority);
 
   return (
     <div
@@ -101,6 +107,14 @@ export function TodoRow({
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
+        {flag && !todo.done && (
+          <span
+            className={`text-xs font-medium ${flag.className}`}
+            title={flag.title}
+          >
+            ⚑{flag.label}
+          </span>
+        )}
         {due && (
           <span
             className={`text-xs ${
