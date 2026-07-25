@@ -97,4 +97,6 @@ def create_app():
         return send_from_directory(DIST_DIR, 'index.html')
 
     _start_listener()
+    from backend.chat_title_scheduler import start_title_scheduler
+    start_title_scheduler()
     return app

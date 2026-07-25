@@ -1,6 +1,7 @@
 import {
   useMutation,
   useQueryClient,
+  type InfiniteData,
   type QueryClient,
   type UseMutationOptions,
 } from '@tanstack/react-query';
@@ -116,16 +117,39 @@ const ONLINE = { networkMode: 'online' as const };
 // --- optimistic cache updaters (only for cache-driven UIs whose shapes we
 // know; queue-only mutations reconcile on reconnect via onSettled) ---
 
+// The object-keyed journal list is an infinite query, so its cache is
+// InfiniteData<JournalEntry[]>. `firstPageOnly` (used for inserts) applies fn to
+// the newest page only so a new entry lands once at the top; the default (used
+// for edits) maps every page since the target lives in exactly one of them.
+type JournalListCache = JournalEntry[] | InfiniteData<JournalEntry[]>;
+
+function isInfinite(v: JournalListCache): v is InfiniteData<JournalEntry[]> {
+  return typeof v === 'object' && v !== null && 'pages' in v;
+}
+
 function patchJournalLists(
   qc: QueryClient,
-  fn: (list: JournalEntry[]) => JournalEntry[]
+  fn: (list: JournalEntry[]) => JournalEntry[],
+  opts?: { firstPageOnly?: boolean }
 ) {
-  qc.setQueriesData<JournalEntry[]>(
+  const firstPageOnly = opts?.firstPageOnly ?? false;
+  qc.setQueriesData<JournalListCache>(
     {
       predicate: q =>
         q.queryKey[0] === 'journal' && typeof q.queryKey[1] === 'object',
     },
-    old => (old ? fn(old) : old)
+    old => {
+      if (!old) return old;
+      if (isInfinite(old)) {
+        return {
+          ...old,
+          pages: old.pages.map((p, i) =>
+            firstPageOnly ? (i === 0 ? fn(p) : p) : fn(p)
+          ),
+        };
+      }
+      return fn(old);
+    }
   );
 }
 
@@ -148,7 +172,7 @@ const journalCreateCfg = (
       createdAt: nowIso,
       updatedAt: nowIso,
     };
-    patchJournalLists(qc, list => [entry, ...list]);
+    patchJournalLists(qc, list => [entry, ...list], { firstPageOnly: true });
   },
   onSettled: () => qc.invalidateQueries({ queryKey: ['journal'] }),
 });

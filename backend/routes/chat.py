@@ -3,8 +3,10 @@ import json
 from flask import Blueprint, jsonify, request, Response, stream_with_context
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
+from backend.chat_day import day_key_for
 from backend.ai.provider import is_ai_configured
 from backend.ai.chat import chat_stream, build_chat_system_prompt
+from backend.ai.chat_title import generate_conversation_title
 from backend.ai.classifier import classify_intent, should_classify
 from backend.ai.rag import search_for_context, format_rag_context
 from backend.ai.embeddings import is_embeddings_configured
@@ -16,6 +18,39 @@ bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 def list_conversations():
     rows = get_db().execute(
         'SELECT * FROM conversations WHERE writing_project_id IS NULL ORDER BY updated_at DESC'
+    ).fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
+
+
+@bp.get('/today')
+def get_today():
+    """The current chat day's conversation with its messages, or null if none yet."""
+    db = get_db()
+    row = db.execute(
+        'SELECT * FROM conversations WHERE day_key=? AND writing_project_id IS NULL',
+        (day_key_for(),),
+    ).fetchone()
+    if not row:
+        return jsonify(None)
+    conv = row_to_dict(row)
+    msgs = db.execute(
+        'SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at', (conv['id'],)
+    ).fetchall()
+    conv['messages'] = [row_to_dict(m) for m in msgs]
+    return jsonify(conv)
+
+
+@bp.get('/journal-conversations')
+def journal_conversations():
+    """Past chat days for the Journal feed (excludes the current live day)."""
+    rows = get_db().execute(
+        '''SELECT c.id, c.title, c.day_key, c.created_at, c.updated_at,
+                  (SELECT COUNT(*) FROM messages m
+                   WHERE m.conversation_id = c.id AND m.role IN ('user', 'assistant')) AS message_count
+           FROM conversations c
+           WHERE c.day_key IS NOT NULL AND c.day_key < ? AND c.writing_project_id IS NULL
+           ORDER BY c.day_key DESC''',
+        (day_key_for(),),
     ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
@@ -36,15 +71,40 @@ def get_conversation(id):
 
 @bp.post('/conversations')
 def create_conversation():
-    body = request.json or {}
+    """Find-or-create the current chat day's conversation. Titles stay NULL until
+    the nightly title job fills them in."""
+    db = get_db()
+    dk = day_key_for()
+    existing = db.execute(
+        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL',
+        (dk,),
+    ).fetchone()
+    if existing:
+        return jsonify({'id': existing['id']}), 200
     now = int(time.time())
     id = str(ULID())
-    get_db().execute(
-        'INSERT INTO conversations(id, title, created_at, updated_at) VALUES (?,?,?,?)',
-        (id, body.get('title') or 'New Conversation', now, now),
+    db.execute(
+        'INSERT INTO conversations(id, title, day_key, created_at, updated_at) VALUES (?,?,?,?,?)',
+        (id, None, dk, now, now),
     )
-    get_db().commit()
+    db.commit()
     return jsonify({'id': id}), 201
+
+
+@bp.post('/conversations/<id>/generate-title')
+def generate_title(id):
+    """Synchronously (re)generate an AI title for one conversation."""
+    db = get_db()
+    msgs = db.execute(
+        'SELECT role, content, metadata FROM messages WHERE conversation_id=? ORDER BY created_at',
+        (id,),
+    ).fetchall()
+    title = generate_conversation_title([dict(m) for m in msgs])
+    if not title:
+        return jsonify({'title': None})
+    db.execute('UPDATE conversations SET title=? WHERE id=?', (title, id))
+    db.commit()
+    return jsonify({'title': title})
 
 
 @bp.patch('/conversations/<id>/title')

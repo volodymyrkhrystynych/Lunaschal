@@ -64,6 +64,7 @@ def init_db() -> None:
     _init_vectors(db)
     _ensure_network_code(db)
     _ensure_writing_project_id(db)
+    _ensure_conversation_day_key(db)
     _ensure_stt_shortcuts(db)
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
@@ -347,6 +348,15 @@ def _ensure_writing_project_id(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(conversations)')}
     if 'writing_project_id' not in cols:
         db.execute('ALTER TABLE conversations ADD COLUMN writing_project_id TEXT REFERENCES writing_projects(id)')
+        db.commit()
+
+
+def _ensure_conversation_day_key(db: sqlite3.Connection) -> None:
+    # day_key groups a conversation to a 4am-anchored local day (YYYY-MM-DD).
+    # Left NULL on pre-existing conversations so they stay out of the journal feed.
+    cols = {r[1] for r in db.execute('PRAGMA table_info(conversations)')}
+    if 'day_key' not in cols:
+        db.execute('ALTER TABLE conversations ADD COLUMN day_key TEXT')
         db.commit()
 
 

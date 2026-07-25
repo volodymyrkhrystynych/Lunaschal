@@ -18,7 +18,9 @@ export const QUERY_GC_TIME = 1000 * 60 * 60 * 24 * 20; // 20 days, < 2^31-1 ms
 
 // Bump when the shape of persisted data changes in an incompatible way; a
 // mismatch makes react-query-persist-client discard the old cache on restore.
-export const PERSIST_BUSTER = 'v1';
+// v2: journal list moved from a flat JournalEntry[] to useInfiniteQuery's
+// InfiniteData shape — restoring the old array crashed the Journal feed.
+export const PERSIST_BUSTER = 'v2';
 
 const IDB_KEY = 'lunaschal-react-query';
 

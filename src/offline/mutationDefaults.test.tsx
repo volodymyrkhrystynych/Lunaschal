@@ -83,6 +83,41 @@ describe('offline write queue', () => {
     });
   });
 
+  it('journal create: prepends to the first page of an infinite list without duplicating', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => ({ id: 'server-id' }) }))
+    );
+    const qc = makeClient();
+    const listKey = ['journal', { curatedTagId: null }];
+    const mkEntry = (id: string): JournalEntry => ({
+      id,
+      content: id,
+      rawContent: null,
+      title: null,
+      tags: null,
+      curatedTags: [],
+      createdAt: '',
+      updatedAt: '',
+    });
+    qc.setQueryData(listKey, {
+      pages: [[mkEntry('p0a'), mkEntry('p0b')], [mkEntry('p1a')]],
+      pageParams: [0, 50],
+    });
+
+    const { result } = renderHook(() => useJournalCreate(), {
+      wrapper: wrapperFor(qc),
+    });
+    act(() => result.current.mutate({ id: 'abc', content: 'fresh' }));
+
+    await waitFor(() => {
+      const data = qc.getQueryData<{ pages: JournalEntry[][] }>(listKey);
+      expect(data?.pages[0][0]?.id).toBe('abc'); // newest at top of page 0
+      expect(data?.pages[0]).toHaveLength(3);
+      expect(data?.pages[1].some(e => e.id === 'abc')).toBe(false); // not duplicated
+    });
+  });
+
   it('daily toggle: optimistically flips done offline', async () => {
     vi.stubGlobal(
       'fetch',
