@@ -1,0 +1,17 @@
+"""Day-boundary helper for the daily-chat model.
+
+A "chat day" runs 04:00 -> 04:00 local time: a message sent at 02:00 still
+belongs to the day that started the previous morning. Mirrors the local-date
+convention used for daily tasks (backend/routes/tasks.py), just shifted by 4h.
+"""
+import time
+from datetime import datetime, timedelta
+
+# Hour (local) at which the chat day rolls over.
+DAY_ROLLOVER_HOUR = 4
+
+
+def day_key_for(ts: int | None = None) -> str:
+    """Return the YYYY-MM-DD key of the 4am-anchored local day for a unix ts."""
+    when = datetime.fromtimestamp(ts if ts is not None else time.time())
+    return (when - timedelta(hours=DAY_ROLLOVER_HOUR)).date().isoformat()

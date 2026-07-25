@@ -40,9 +40,6 @@ type View =
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
-  const [currentConversationId, setCurrentConversationId] = useState<
-    string | null
-  >(null);
   // Desktop starts with the sidebar pinned open; mobile starts with the drawer
   // closed. Read matchMedia synchronously so the drawer never flashes open on
   // a phone's first paint.
@@ -132,12 +129,7 @@ export default function App() {
   const renderView = () => {
     switch (currentView) {
       case 'chat':
-        return (
-          <Chat
-            conversationId={currentConversationId}
-            onConversationChange={setCurrentConversationId}
-          />
-        );
+        return <Chat />;
       case 'journal':
         return (
           <Journal

@@ -340,6 +340,16 @@ export interface ConversationWithMessages extends Conversation {
   messages: Message[];
 }
 
+// A past chat day shown in the Journal feed (collapsed, expand to load messages).
+export interface DatedConversation {
+  id: string;
+  title: string | null;
+  dayKey: string;
+  messageCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface AppSettings {
   hasHfToken: boolean;
   ollamaUrl: string | null;
@@ -1020,6 +1030,14 @@ export const api = {
   },
 
   chat: {
+    today: () => get<ConversationWithMessages | null>('/api/chat/today'),
+    journalConversations: () =>
+      get<DatedConversation[]>('/api/chat/journal-conversations'),
+    generateTitle: (id: string) =>
+      post<{ title: string | null }>(
+        `/api/chat/conversations/${id}/generate-title`,
+        {}
+      ),
     listConversations: () => get<Conversation[]>('/api/chat/conversations'),
     getConversation: (id: string) =>
       get<ConversationWithMessages | null>(`/api/chat/conversations/${id}`),

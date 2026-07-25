@@ -1,5 +1,10 @@
-import { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState, useEffect, useRef } from 'react';
+import {
+  useQuery,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { ulid } from '../lib/ulid';
 import {
@@ -7,12 +12,17 @@ import {
   useJournalUpdate,
 } from '../offline/mutationDefaults';
 import { buildFeed } from '../lib/journalFeed';
+import { isBreak } from '../lib/chatSegments';
+import { MessageMarkdown } from './MessageMarkdown';
+import type { DatedConversation } from '../hooks/api';
 import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
 
 interface JournalProps {
   /** Navigate to the fanfic reader (chip on entries linked to a fic chapter). */
   onOpenFic?: (target: { ficId: string; chapterId?: string }) => void;
 }
+
+const JOURNAL_PAGE_SIZE = 50;
 
 export function Journal({ onOpenFic }: JournalProps = {}) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -36,6 +46,8 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   } | null>(null);
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
   const [selIndex, setSelIndex] = useState(0);
+  const feedScrollRef = useRef<HTMLDivElement>(null);
+  const loadMoreRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
   const { level } = useShortcuts();
 
@@ -44,15 +56,40 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     queryFn: api.curatedTags.list,
   });
 
-  const { data: entries, isLoading } = useQuery({
-    queryKey: searchQuery
-      ? ['journal', 'search', searchQuery]
-      : ['journal', { curatedTagId: selectedCuratedTagId }],
-    queryFn: () =>
-      searchQuery
-        ? api.journal.search(searchQuery)
-        : api.journal.list({ curatedTagId: selectedCuratedTagId ?? undefined }),
+  const isSearching = !!searchQuery;
+
+  // Plain/tag-filtered list is infinite-scrolled a page at a time; FTS search is
+  // a single capped result set.
+  const {
+    data: listData,
+    isLoading: listLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ['journal', { curatedTagId: selectedCuratedTagId }],
+    queryFn: ({ pageParam }) =>
+      api.journal.list({
+        curatedTagId: selectedCuratedTagId ?? undefined,
+        limit: JOURNAL_PAGE_SIZE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length < JOURNAL_PAGE_SIZE
+        ? undefined
+        : allPages.length * JOURNAL_PAGE_SIZE,
+    enabled: !isSearching,
   });
+
+  const { data: searchResults, isLoading: searchLoading } = useQuery({
+    queryKey: ['journal', 'search', searchQuery],
+    queryFn: () => api.journal.search(searchQuery),
+    enabled: isSearching,
+  });
+
+  const entries = isSearching ? searchResults : listData?.pages.flat();
+  const isLoading = isSearching ? searchLoading : listLoading;
 
   // Transcriptions only interleave in the plain chronological view — FTS search
   // doesn't cover them and a tag-filtered view is a curation context.
@@ -65,12 +102,41 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     enabled: transcriptionsVisible,
   });
 
+  // Past days' chats interleave in the plain chronological view (like
+  // transcriptions), collapsed by default. Not in search / tag-filtered views.
+  const conversationsVisible = !searchQuery && !selectedCuratedTagId;
+
+  const { data: chatConversations } = useQuery({
+    queryKey: ['chat', 'journal-conversations'],
+    queryFn: () => api.chat.journalConversations(),
+    enabled: conversationsVisible,
+  });
+
   useEffect(() => {
     const es = new EventSource('/api/journal/events');
     es.onmessage = () =>
       queryClient.invalidateQueries({ queryKey: ['journal'] });
     return () => es.close();
   }, [queryClient]);
+
+  // Infinite scroll: load the next page when the sentinel nears the viewport.
+  useEffect(() => {
+    if (isSearching) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    const sentinel = loadMoreRef.current;
+    const root = feedScrollRef.current;
+    if (!sentinel || !root) return;
+    const io = new IntersectionObserver(
+      ([e]) => {
+        if (e.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { root, rootMargin: '400px' }
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [isSearching, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   // Offline-queueable: optimistic insert + reconciling invalidation live in the
   // registered mutation defaults. The UI reset must happen on submit, NOT in
@@ -288,15 +354,27 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto overflow-x-hidden space-y-4">
+      <div
+        ref={feedScrollRef}
+        className="flex-1 overflow-y-auto overflow-x-hidden space-y-4"
+      >
         {isLoading && (
           <div className="text-[var(--color-text-muted)]">Loading...</div>
         )}
 
         {buildFeed(
           entries ?? [],
-          transcriptionsVisible ? (transcriptions ?? []) : []
+          transcriptionsVisible ? (transcriptions ?? []) : [],
+          conversationsVisible ? (chatConversations ?? []) : []
         ).map(item => {
+          if (item.kind === 'conversation') {
+            return (
+              <SavedChatItem
+                key={item.conversation.id}
+                conversation={item.conversation}
+              />
+            );
+          }
           if (item.kind === 'transcription') {
             const t = item.transcription;
             return (
@@ -516,7 +594,83 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
               : 'No journal entries yet. Start writing!'}
           </div>
         )}
+
+        {!isSearching && <div ref={loadMoreRef} className="h-px" aria-hidden />}
+        {isFetchingNextPage && (
+          <div className="text-center text-sm text-[var(--color-text-muted)] py-3">
+            Loading more…
+          </div>
+        )}
       </div>
     </div>
+  );
+}
+
+// A saved chat day in the journal feed: collapsed by default (chats get long),
+// dimmed like transcriptions, with its full transcript lazily fetched on expand.
+function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
+  const [open, setOpen] = useState(false);
+  const { data, isLoading } = useQuery({
+    queryKey: ['chat', 'conversation', conversation.id],
+    queryFn: () => api.chat.getConversation(conversation.id),
+    enabled: open,
+  });
+
+  const dayLabel = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(conversation.dayKey + 'T00:00:00'));
+  const title = conversation.title || `Chat — ${dayLabel}`;
+  const messages = data?.messages ?? [];
+
+  return (
+    <details
+      className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5 opacity-70"
+      onToggle={e => setOpen((e.target as HTMLDetailsElement).open)}
+    >
+      <summary className="cursor-pointer select-none list-none flex items-baseline justify-between gap-2">
+        <span className="text-[var(--color-text)] truncate">💬 {title}</span>
+        <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+          {dayLabel} · {conversation.messageCount} msg
+          {conversation.messageCount === 1 ? '' : 's'}
+        </span>
+      </summary>
+      <div className="mt-3 space-y-2">
+        {isLoading && (
+          <div className="text-sm text-[var(--color-text-muted)]">Loading…</div>
+        )}
+        {messages.map(m => {
+          if (m.role === 'system') {
+            if (!isBreak(m)) return null;
+            return (
+              <div
+                key={m.id}
+                className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)] text-center py-1"
+              >
+                New chat
+              </div>
+            );
+          }
+          return (
+            <div
+              key={m.id}
+              className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              <div
+                className={`content-text max-w-[85%] rounded-lg px-3 py-1.5 text-sm ${m.role === 'user' ? 'bg-[var(--color-primary)]/80 text-white' : 'bg-white/5 text-[var(--color-text)]'}`}
+              >
+                {m.role === 'user' ? (
+                  <div className="whitespace-pre-wrap">{m.content}</div>
+                ) : (
+                  <MessageMarkdown content={m.content} />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </details>
   );
 }

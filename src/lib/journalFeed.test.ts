@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildFeed } from './journalFeed';
-import type { JournalEntry, Transcription } from '../hooks/api';
+import { buildFeed, type FeedItem } from './journalFeed';
+import type {
+  JournalEntry,
+  Transcription,
+  DatedConversation,
+} from '../hooks/api';
 
 function entry(id: string, createdAt: string): JournalEntry {
   return {
@@ -24,6 +28,23 @@ function transcription(id: string, createdAt: string): Transcription {
     app: null,
     detail: null,
   };
+}
+
+function conversation(id: string, updatedAt: string): DatedConversation {
+  return {
+    id,
+    title: `chat ${id}`,
+    dayKey: updatedAt.slice(0, 10),
+    messageCount: 4,
+    createdAt: updatedAt,
+    updatedAt,
+  };
+}
+
+function idOf(i: FeedItem): string {
+  if (i.kind === 'entry') return i.entry.id;
+  if (i.kind === 'transcription') return i.transcription.id;
+  return i.conversation.id;
 }
 
 describe('buildFeed', () => {
@@ -62,9 +83,7 @@ describe('buildFeed', () => {
       transcription('t2', '2026-07-05T12:00:00'),
     ];
     const feed = buildFeed(entries, ts);
-    expect(
-      feed.map(i => (i.kind === 'entry' ? i.entry.id : i.transcription.id))
-    ).toEqual(['e1', 't1', 'e2', 't2']);
+    expect(feed.map(idOf)).toEqual(['e1', 't1', 'e2', 't2']);
   });
 
   it('preserves original entryIndex when transcriptions are interleaved', () => {
@@ -86,5 +105,46 @@ describe('buildFeed', () => {
     const ts = [transcription('t1', '2026-07-08T12:00:00')];
     const feed = buildFeed(entries, ts);
     expect(feed.map(i => i.kind)).toEqual(['entry', 'transcription']);
+  });
+
+  it('interleaves conversations by updatedAt among all three sources', () => {
+    const entries = [
+      entry('e1', '2026-07-08T12:00:00'),
+      entry('e2', '2026-07-05T12:00:00'),
+    ];
+    const ts = [transcription('t1', '2026-07-06T12:00:00')];
+    const convs = [
+      conversation('c1', '2026-07-07T12:00:00'),
+      conversation('c2', '2026-07-04T12:00:00'),
+    ];
+    const feed = buildFeed(entries, ts, convs);
+    expect(feed.map(idOf)).toEqual(['e1', 'c1', 't1', 'e2', 'c2']);
+  });
+
+  it('keeps conversation items non-selectable (no entryIndex)', () => {
+    const convs = [conversation('c1', '2026-07-07T12:00:00')];
+    const feed = buildFeed([], [], convs);
+    expect(feed).toEqual([{ kind: 'conversation', conversation: convs[0] }]);
+    expect('entryIndex' in feed[0]).toBe(false);
+  });
+
+  it('preserves entryIndex when conversations interleave', () => {
+    const entries = [
+      entry('e1', '2026-07-08T12:00:00'),
+      entry('e2', '2026-07-06T12:00:00'),
+    ];
+    const convs = [conversation('c1', '2026-07-07T12:00:00')];
+    const feed = buildFeed(entries, [], convs);
+    expect(feed.filter(i => i.kind === 'entry')).toEqual([
+      { kind: 'entry', entry: entries[0], entryIndex: 0 },
+      { kind: 'entry', entry: entries[1], entryIndex: 1 },
+    ]);
+  });
+
+  it('lets entries win a tie against a conversation', () => {
+    const entries = [entry('e1', '2026-07-08T12:00:00')];
+    const convs = [conversation('c1', '2026-07-08T12:00:00')];
+    const feed = buildFeed(entries, [], convs);
+    expect(feed.map(i => i.kind)).toEqual(['entry', 'conversation']);
   });
 });
