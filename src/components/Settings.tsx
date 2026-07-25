@@ -666,7 +666,9 @@ function VRAMSection() {
               STT:{' '}
               {activeSttBackend === 'local'
                 ? `${whisperVram} MB`
-                : '0 MB (cloud)'}
+                : activeSttBackend === 'parakeet'
+                  ? '0 MB (CPU)'
+                  : '0 MB (cloud)'}
             </span>
             <span>
               TTS:{' '}
@@ -694,7 +696,7 @@ function VRAMSection() {
             Speech-to-Text (STT)
           </p>
           <div className="flex gap-2 mb-2">
-            {(['local', 'openai'] as const).map(b => (
+            {(['local', 'parakeet', 'openai'] as const).map(b => (
               <button
                 key={b}
                 onClick={() => setSttBackend(b)}
@@ -704,7 +706,11 @@ function VRAMSection() {
                     : 'border-white/20 bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'
                 }`}
               >
-                {b === 'local' ? 'Local (Whisper)' : 'OpenAI API'}
+                {b === 'local'
+                  ? 'Local (Whisper)'
+                  : b === 'parakeet'
+                    ? 'Parakeet (CPU)'
+                    : 'OpenAI API'}
               </button>
             ))}
           </div>

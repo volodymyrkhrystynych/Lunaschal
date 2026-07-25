@@ -180,7 +180,7 @@ A Mermaid diagram of the module structure lives in `docs/architecture.md`.
 
 ## STT (Speech-to-Text)
 
-STT/TTS is embedded directly in the Flask backend (`backend/routes/stt.py`). Two backends — local (openai-whisper + kokoro-onnx) or OpenAI API (cloud, no local models).
+STT/TTS is embedded directly in the Flask backend (`backend/routes/stt.py`). STT has three backends — `local` (openai-whisper, GPU/CPU), `parakeet` (NVIDIA Parakeet TDT via onnx-asr, CPU-only, English, 0 VRAM), or `openai` (cloud). TTS has two — local (kokoro-onnx) or OpenAI API. The Parakeet path decodes any input (incl. the browser's webm) to 16 kHz mono via ffmpeg before handing the waveform to `onnx-asr`.
 
 ```bash
 # --- Local setup (GPU machine) ---
@@ -220,15 +220,16 @@ The Flask backend handles `POST /api/transcribe` and `POST /api/tts` directly (n
 
 STT/TTS env vars summary:
 
-| Var                | Default | Notes                                                                 |
-| ------------------ | ------- | --------------------------------------------------------------------- |
-| `STT_BACKEND`      | `local` | `local` or `openai`                                                   |
-| `TTS_BACKEND`      | `local` | `local` or `openai`                                                   |
-| `OPENAI_API_KEY`   | —       | Required for openai backends                                          |
-| `OPENAI_TTS_VOICE` | `nova`  | alloy / echo / fable / onyx / nova / shimmer                          |
-| `WHISPER_MODEL`    | `turbo` | Local STT only (tiny/base/small/medium/large/large-v2/large-v3/turbo) |
-| `WHISPER_DEVICE`   | `cuda`  | Local STT only (`cuda` or `cpu`)                                      |
-| `STT_LISTENER`     | —       | Set to `1` to auto-start the voice listener as a subprocess of Flask  |
+| Var                | Default                     | Notes                                                                 |
+| ------------------ | --------------------------- | --------------------------------------------------------------------- |
+| `STT_BACKEND`      | `local`                     | `local`, `parakeet`, or `openai`                                      |
+| `TTS_BACKEND`      | `local`                     | `local` or `openai`                                                   |
+| `PARAKEET_MODEL`   | `nemo-parakeet-tdt-0.6b-v2` | onnx-asr model id when `STT_BACKEND=parakeet`                         |
+| `OPENAI_API_KEY`   | —                           | Required for openai backends                                          |
+| `OPENAI_TTS_VOICE` | `nova`                      | alloy / echo / fable / onyx / nova / shimmer                          |
+| `WHISPER_MODEL`    | `turbo`                     | Local STT only (tiny/base/small/medium/large/large-v2/large-v3/turbo) |
+| `WHISPER_DEVICE`   | `cuda`                      | Local STT only (`cuda` or `cpu`)                                      |
+| `STT_LISTENER`     | —                           | Set to `1` to auto-start the voice listener as a subprocess of Flask  |
 
 ### Morning Check-in (`stt/morning_checkin.py`)
 
