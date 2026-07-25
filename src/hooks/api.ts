@@ -467,6 +467,7 @@ export interface TodoItem {
   due: string | null;
   repeatInterval: number | null;
   repeatUnit: RepeatUnit | null;
+  priority: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -479,6 +480,7 @@ export interface TodoPayload {
   due?: number | null;
   repeatInterval?: number | null;
   repeatUnit?: RepeatUnit | null;
+  priority?: number;
 }
 
 export interface FrontPage {

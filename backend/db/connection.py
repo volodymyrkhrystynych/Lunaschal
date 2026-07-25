@@ -72,6 +72,7 @@ def init_db() -> None:
     _ensure_nudge_settings(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
+    _ensure_todo_priority(db)
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
@@ -137,6 +138,15 @@ def _ensure_todo_completed_at(db: sqlite3.Connection) -> None:
         # Best guess for todos completed before this column existed: their
         # last update was the moment they were checked off.
         db.execute('UPDATE todos SET completed_at=updated_at WHERE done=1')
+        db.commit()
+
+
+def _ensure_todo_priority(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(todos)')}
+    if 'priority' not in cols:
+        # 1 (very unimportant) … 5 (very important); 3 is neutral so existing
+        # todos keep their relative order until a priority is set.
+        db.execute('ALTER TABLE todos ADD COLUMN priority INTEGER NOT NULL DEFAULT 3')
         db.commit()
 
 

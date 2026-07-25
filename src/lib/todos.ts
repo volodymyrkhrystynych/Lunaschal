@@ -46,14 +46,22 @@ export function partitionTodos<
     due?: string | null;
     repeatInterval?: number | null;
     repeatUnit?: string | null;
+    priority?: number | null;
   },
 >(todos: T[], now: Date = new Date()): { active: T[]; completed: T[] } {
   const active = todos
     .filter(t => !t.done && !isFarOffPeriodic(t, now))
     .sort((a, b) => {
-      if (a.due && b.due) return a.due.localeCompare(b.due);
-      if (a.due || b.due) return a.due ? -1 : 1;
-      return 0;
+      // Primary: due date (soonest first, undated last). Secondary: priority
+      // (higher = more important, first). Sort is stable, so equal-priority
+      // items keep their incoming (creation) order.
+      if (a.due && b.due) {
+        const byDue = a.due.localeCompare(b.due);
+        if (byDue !== 0) return byDue;
+      } else if (a.due || b.due) {
+        return a.due ? -1 : 1;
+      }
+      return (b.priority ?? 3) - (a.priority ?? 3);
     });
   const completed = todos
     .filter(t => t.done)
@@ -95,6 +103,37 @@ export function formatDue(
   const dayKey = (x: Date) =>
     x.getFullYear() * 10000 + x.getMonth() * 100 + x.getDate();
   return { label, overdue: dayKey(d) < dayKey(now) };
+}
+
+// Priority is 1 (very unimportant) … 5 (very important); 3 is neutral. The row
+// shows a colored flag only when priority differs from neutral. Returns null
+// for the neutral case so callers can skip rendering.
+const PRIORITY_LABELS: Record<number, string> = {
+  1: 'Very unimportant',
+  2: 'Unimportant',
+  3: 'Normal',
+  4: 'Important',
+  5: 'Very important',
+};
+
+export function priorityFlag(
+  priority: number | null | undefined
+): { label: string; title: string; className: string } | null {
+  const p = priority ?? 3;
+  if (p === 3) return null;
+  const className =
+    p === 5
+      ? 'text-red-400'
+      : p === 4
+        ? 'text-amber-400'
+        : p === 2
+          ? 'text-sky-400'
+          : 'text-[var(--color-text-muted)]';
+  return {
+    label: `P${p}`,
+    title: PRIORITY_LABELS[p] ?? `Priority ${p}`,
+    className,
+  };
 }
 
 // "every day", "every 2 weeks", "every 3 months".

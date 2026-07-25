@@ -53,6 +53,7 @@ const todo = (
   due: null,
   repeatInterval: null,
   repeatUnit: null,
+  priority: 3,
   createdAt: '',
   updatedAt: '',
   ...extra,
@@ -176,10 +177,11 @@ describe('todo creation', () => {
       due: null,
       repeatInterval: undefined,
       repeatUnit: undefined,
+      priority: 3,
     });
   });
 
-  it('cycles through all five fields with Tab and back with Shift+Tab', async () => {
+  it('cycles through all six fields with Tab and back with Shift+Tab', async () => {
     renderTasks();
     await screen.findByText('Fix the bike');
 
@@ -202,11 +204,16 @@ describe('todo creation', () => {
     fireEvent.keyDown(repeatN, { key: 'Tab' });
     const unit = document.activeElement as HTMLSelectElement;
     expect(unit.tagName).toBe('SELECT');
-    fireEvent.keyDown(unit, { key: 'Tab' }); // wraps around
+    expect(unit.value).toBe('week');
+    fireEvent.keyDown(unit, { key: 'Tab' });
+    const priority = document.activeElement as HTMLSelectElement;
+    expect(priority.tagName).toBe('SELECT');
+    expect(priority.value).toBe('3');
+    fireEvent.keyDown(priority, { key: 'Tab' }); // wraps around
     expect(document.activeElement).toBe(title);
 
     fireEvent.keyDown(title, { key: 'Tab', shiftKey: true });
-    expect(document.activeElement).toBe(unit);
+    expect(document.activeElement).toBe(priority);
   });
 
   it('submits the full payload with Ctrl+Enter from a non-title field', async () => {
@@ -240,6 +247,7 @@ describe('todo creation', () => {
       due: dueInputToUnix('2026-07-25'),
       repeatInterval: 3,
       repeatUnit: 'week',
+      priority: 3,
     });
   });
 

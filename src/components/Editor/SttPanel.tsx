@@ -57,51 +57,10 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
     refetchInterval: 500,
   });
 
-  const { data: activeMeeting } = useQuery({
-    queryKey: ['meetings', 'active'],
-    queryFn: api.meetings.active,
-    refetchInterval: 1000,
-  });
-  const meetingActive = !!activeMeeting?.id;
-  const [meetingElapsed, setMeetingElapsed] = useState('');
-
-  useEffect(() => {
-    if (!meetingActive || !activeMeeting?.startedAt) {
-      setMeetingElapsed('');
-      return;
-    }
-    const startedMs = new Date(activeMeeting.startedAt).getTime();
-    const tick = () => {
-      const s = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
-      setMeetingElapsed(
-        `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
-      );
-    };
-    tick();
-    const timer = setInterval(tick, 1000);
-    return () => clearInterval(timer);
-  }, [meetingActive, activeMeeting?.startedAt]);
-
   const invalidateMeetings = () => {
     queryClient.invalidateQueries({ queryKey: ['meetings'] });
     queryClient.invalidateQueries({ queryKey: ['meetings', 'active'] });
   };
-
-  const startMeeting = useMutation({
-    mutationFn: api.meetings.start,
-    onSuccess: invalidateMeetings,
-    onError: err =>
-      setError(err instanceof Error ? err.message : 'Failed to start meeting'),
-  });
-
-  const stopMeeting = useMutation({
-    mutationFn: (id: string) => api.meetings.stop(id),
-    onSuccess: invalidateMeetings,
-    onError: err =>
-      setError(err instanceof Error ? err.message : 'Failed to stop meeting'),
-  });
-
-  const meetingPending = startMeeting.isPending || stopMeeting.isPending;
 
   const uploadMeeting = useMutation({
     mutationFn: () => api.meetings.upload(audioFile!),
@@ -411,40 +370,11 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
 
         <button
           onClick={() => {
-            setError('');
-            if (meetingActive && activeMeeting?.id)
-              stopMeeting.mutate(activeMeeting.id);
-            else startMeeting.mutate();
-          }}
-          disabled={meetingPending}
-          title={
-            meetingActive
-              ? 'Stop the meeting recording and start transcription'
-              : 'Record a meeting (mic + system audio)'
-          }
-          className={`ml-auto shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
-            meetingActive
-              ? 'bg-red-600 hover:bg-red-700 text-white'
-              : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
-          }`}
-        >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              meetingActive
-                ? 'bg-white animate-pulse'
-                : 'bg-[var(--color-text-muted)]'
-            }`}
-          />
-          {meetingActive ? `Stop meeting ${meetingElapsed}` : 'Meeting'}
-        </button>
-
-        <button
-          onClick={() => {
             setExpanded(e => !e);
             setCorrectResult(null);
             setCorrectError('');
           }}
-          className={`shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
+          className={`ml-auto shrink-0 flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors ${
             expanded
               ? 'bg-white/15 text-[var(--color-text)]'
               : 'bg-white/5 hover:bg-white/10 text-[var(--color-text-muted)]'

@@ -194,6 +194,7 @@ const todoCreateCfg = (
       due: null,
       repeatInterval: vars.repeatInterval ?? null,
       repeatUnit: vars.repeatUnit ?? null,
+      priority: vars.priority ?? 3,
       createdAt: nowIso,
       updatedAt: nowIso,
     };

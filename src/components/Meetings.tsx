@@ -65,6 +65,90 @@ const isIdle = (m: { phase: MeetingPhase }) =>
 const isBusy = (m: Meeting) =>
   (m.status === 'recording' || m.status === 'transcribing') && !isIdle(m);
 
+// Meeting record/stop control — lives top-right in the Meetings header (moved
+// here from the global bottom SttPanel). Owns the active-meeting poll + timer.
+function MeetingRecordButton() {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState('');
+
+  const { data: activeMeeting } = useQuery({
+    queryKey: ['meetings', 'active'],
+    queryFn: api.meetings.active,
+    refetchInterval: 1000,
+  });
+  const meetingActive = !!activeMeeting?.id;
+  const [elapsed, setElapsed] = useState('');
+
+  useEffect(() => {
+    if (!meetingActive || !activeMeeting?.startedAt) {
+      setElapsed('');
+      return;
+    }
+    const startedMs = new Date(activeMeeting.startedAt).getTime();
+    const tick = () => {
+      const s = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+      setElapsed(
+        `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+      );
+    };
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [meetingActive, activeMeeting?.startedAt]);
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['meetings'] });
+    queryClient.invalidateQueries({ queryKey: ['meetings', 'active'] });
+  };
+  const startMeeting = useMutation({
+    mutationFn: api.meetings.start,
+    onSuccess: invalidate,
+    onError: err =>
+      setError(err instanceof Error ? err.message : 'Failed to start meeting'),
+  });
+  const stopMeeting = useMutation({
+    mutationFn: (id: string) => api.meetings.stop(id),
+    onSuccess: invalidate,
+    onError: err =>
+      setError(err instanceof Error ? err.message : 'Failed to stop meeting'),
+  });
+  const pending = startMeeting.isPending || stopMeeting.isPending;
+
+  return (
+    <div className="flex items-center gap-2">
+      {error && <span className="text-xs text-red-400">{error}</span>}
+      <button
+        onClick={() => {
+          setError('');
+          if (meetingActive && activeMeeting?.id)
+            stopMeeting.mutate(activeMeeting.id);
+          else startMeeting.mutate();
+        }}
+        disabled={pending}
+        title={
+          meetingActive
+            ? 'Stop the meeting recording and start transcription'
+            : 'Record a meeting (mic + system audio)'
+        }
+        className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
+          meetingActive
+            ? 'bg-red-600 hover:bg-red-700 text-white'
+            : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
+        }`}
+      >
+        <span
+          className={`w-2 h-2 rounded-full ${
+            meetingActive
+              ? 'bg-white animate-pulse'
+              : 'bg-[var(--color-text-muted)]'
+          }`}
+        />
+        {meetingActive ? `Stop meeting ${elapsed}` : 'Meeting'}
+      </button>
+    </div>
+  );
+}
+
 export function Meetings() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selIndex, setSelIndex] = useState(0);
@@ -112,6 +196,7 @@ export function Meetings() {
         <h1 className="text-2xl font-semibold text-[var(--color-text)]">
           Meetings
         </h1>
+        <MeetingRecordButton />
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-3">

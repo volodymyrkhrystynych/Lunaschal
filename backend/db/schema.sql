@@ -206,6 +206,7 @@ CREATE TABLE IF NOT EXISTS todos (
     due INTEGER,
     repeat_interval INTEGER,
     repeat_unit TEXT,
+    priority INTEGER NOT NULL DEFAULT 3,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
