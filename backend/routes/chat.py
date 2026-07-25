@@ -49,6 +49,8 @@ def journal_conversations():
                    WHERE m.conversation_id = c.id AND m.role IN ('user', 'assistant')) AS message_count
            FROM conversations c
            WHERE c.day_key IS NOT NULL AND c.day_key < ? AND c.writing_project_id IS NULL
+             AND EXISTS (SELECT 1 FROM messages m2
+                         WHERE m2.conversation_id = c.id AND m2.role IN ('user', 'assistant'))
            ORDER BY c.day_key DESC''',
         (day_key_for(),),
     ).fetchall()

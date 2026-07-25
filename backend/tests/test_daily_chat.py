@@ -96,11 +96,17 @@ def test_journal_conversations_filters_and_shape(client):
     # Writing-project chat — excluded.
     _insert_conv('c_writing', '2026-01-01', writing='wp1')
     _insert_msg('m4', 'c_writing')
+    # Message-less past day — excluded (never actually chatted).
+    _insert_conv('c_empty', '2026-01-01')
+    # Past day with only a break marker (no real turns) — excluded.
+    _insert_conv('c_break_only', '2026-01-01')
+    _insert_msg('m5', 'c_break_only', 'system', '')
     db.commit()
 
     rows = client.get('/api/chat/journal-conversations').get_json()
     ids = [r['id'] for r in rows]
-    assert ids == ['c_newer', 'c_old']  # excludes today + writing, day_key DESC
+    # excludes today + writing + empty + break-only, day_key DESC
+    assert ids == ['c_newer', 'c_old']
     old = next(r for r in rows if r['id'] == 'c_old')
     assert old['messageCount'] == 2
     assert old['dayKey'] == '2026-01-01'
