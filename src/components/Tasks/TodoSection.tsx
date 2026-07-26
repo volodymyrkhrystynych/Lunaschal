@@ -16,16 +16,13 @@ interface TodoSectionProps {
   level: number;
   counts: Record<TodoList, number>;
   active: TodoItem[];
-  completed: TodoItem[];
   isLoading: boolean;
   selectedId: string | null;
   creating: boolean;
-  showCompleted: boolean;
   onSelectList: (list: TodoList) => void;
   onSelectTodo: (id: string) => void;
   onStartCreate: () => void;
   onCancelCreate: () => void;
-  onToggleCompleted: () => void;
   onUpdateTodo: (id: string, data: TodoPayload) => void;
 }
 
@@ -35,22 +32,23 @@ export function TodoSection({
   level,
   counts,
   active,
-  completed,
   isLoading,
   selectedId,
   creating,
-  showCompleted,
   onSelectList,
   onSelectTodo,
   onStartCreate,
   onCancelCreate,
-  onToggleCompleted,
   onUpdateTodo,
 }: TodoSectionProps) {
   const queryClient = useQueryClient();
   const deleteTodo = useMutation({
     mutationFn: (id: string) => api.todos.remove(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['todos'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['todos'] });
+      // Deleting an active todo logs a "removed" notification in the Journal.
+      queryClient.invalidateQueries({ queryKey: ['taskEvents'] });
+    },
   });
 
   const pillClass = (list: TodoList) => {
@@ -119,29 +117,10 @@ export function TodoSection({
 
         {active.length === 0 && !isLoading && (
           <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
-            {completed.length > 0
-              ? `All done — ${completed.length} completed.`
-              : 'Nothing on the list.'}
+            Nothing on the list.
           </div>
         )}
       </div>
-
-      {completed.length > 0 && (
-        <div className="mt-6">
-          <button
-            onClick={onToggleCompleted}
-            className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-          >
-            {showCompleted
-              ? `Hide completed (${completed.length})`
-              : `Show completed (${completed.length})`}
-          </button>
-
-          {showCompleted && (
-            <div className="space-y-2 mt-3">{completed.map(renderTodo)}</div>
-          )}
-        </div>
-      )}
     </div>
   );
 }

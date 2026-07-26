@@ -75,6 +75,7 @@ def init_db() -> None:
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
+    _ensure_task_event_columns(db)
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
@@ -139,6 +140,22 @@ def _ensure_todo_completed_at(db: sqlite3.Connection) -> None:
         # Best guess for todos completed before this column existed: their
         # last update was the moment they were checked off.
         db.execute('UPDATE todos SET completed_at=updated_at WHERE done=1')
+        db.commit()
+
+
+def _ensure_task_event_columns(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(task_events)')}
+    added = False
+    # Which list the task lived on ('todo'/'chores'/'archive' or 'daily'), shown
+    # as a qualifier on the Journal notification.
+    if 'task_list' not in cols:
+        db.execute('ALTER TABLE task_events ADD COLUMN task_list TEXT')
+        added = True
+    # Snapshot of the task's notes, revealed when the notification is expanded.
+    if 'detail' not in cols:
+        db.execute('ALTER TABLE task_events ADD COLUMN detail TEXT')
+        added = True
+    if added:
         db.commit()
 
 

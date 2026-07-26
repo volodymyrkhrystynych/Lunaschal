@@ -467,6 +467,22 @@ export interface DailyTask {
   updatedAt: string;
 }
 
+export type TaskEventKind =
+  'todo_completed' | 'daily_completed' | 'task_deleted';
+
+// Which list the task came from: a todo list, or 'daily' for a daily task.
+export type TaskListSource = 'todo' | 'chores' | 'archive' | 'daily';
+
+export interface TaskEvent {
+  id: string;
+  kind: TaskEventKind;
+  title: string;
+  refId: string | null;
+  taskList: TaskListSource | null;
+  detail: string | null;
+  createdAt: string;
+}
+
 export type TodoList = 'todo' | 'chores' | 'archive';
 export type RepeatUnit = 'day' | 'week' | 'month';
 
@@ -1411,6 +1427,7 @@ export const api = {
       post<{ success: boolean }>(`/api/tasks/${id}/complete`),
     uncomplete: (id: string) =>
       del<{ success: boolean }>(`/api/tasks/${id}/complete`),
+    events: () => get<TaskEvent[]>('/api/tasks/events'),
   },
 
   todos: {

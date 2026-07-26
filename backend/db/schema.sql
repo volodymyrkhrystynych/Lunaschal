@@ -211,6 +211,22 @@ CREATE TABLE IF NOT EXISTS todos (
     updated_at INTEGER NOT NULL
 );
 
+-- Append-only log of task lifecycle events (completions, deletions) surfaced as
+-- small notifications in the Journal feed. `title` is a snapshot so a deleted
+-- task's event survives; `ref_id` links back to the todo/daily-task so an
+-- un-complete can retract its matching completion event.
+CREATE TABLE IF NOT EXISTS task_events (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    ref_id TEXT,
+    task_list TEXT,
+    detail TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_task_events_created ON task_events(created_at);
+
 CREATE TABLE IF NOT EXISTS curated_tags (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,

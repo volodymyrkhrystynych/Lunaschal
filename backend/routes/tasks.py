@@ -16,6 +16,28 @@ def _today() -> str:
     return date.today().isoformat()
 
 
+def _log_event(
+    db,
+    kind: str,
+    title: str,
+    ref_id: str | None = None,
+    task_list: str | None = None,
+    detail: str | None = None,
+) -> None:
+    """Append a task lifecycle event (surfaced in the Journal feed).
+
+    `task_list` records which list the task came from ('todo'/'chores'/'archive'
+    for todos, 'daily' for daily tasks) so the notification can show it. `detail`
+    snapshots the task's notes so the expanded notification can recall what it was
+    even after the task is gone.
+    """
+    db.execute(
+        'INSERT INTO task_events(id, kind, title, ref_id, task_list, detail, created_at)'
+        ' VALUES (?,?,?,?,?,?,?)',
+        (str(ULID()), kind, title, ref_id, task_list, detail or None, int(time.time())),
+    )
+
+
 @bp.get('')
 def list_tasks():
     today = _today()
@@ -93,11 +115,14 @@ def reorder_tasks():
 @bp.delete('/<task_id>')
 def delete_task(task_id):
     db = get_db()
-    row = db.execute('SELECT position FROM daily_tasks WHERE id=?', (task_id,)).fetchone()
+    row = db.execute(
+        'SELECT position, title FROM daily_tasks WHERE id=?', (task_id,)
+    ).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
 
     deleted_pos = row['position']
+    _log_event(db, 'task_deleted', row['title'], task_id, 'daily')
     db.execute('DELETE FROM daily_tasks WHERE id=?', (task_id,))
     db.execute(
         'UPDATE daily_tasks SET position=position-1, updated_at=? WHERE position > ?',
@@ -111,14 +136,19 @@ def delete_task(task_id):
 def complete_task(task_id):
     today = _today()
     db = get_db()
-    try:
-        db.execute(
-            'INSERT INTO daily_task_completions(id, task_id, date, created_at) VALUES (?,?,?,?)',
-            (str(ULID()), task_id, today, int(time.time())),
-        )
-        db.commit()
-    except Exception:
-        pass  # UNIQUE constraint: already done today
+    cur = db.execute(
+        'INSERT OR IGNORE INTO daily_task_completions(id, task_id, date, created_at)'
+        ' VALUES (?,?,?,?)',
+        (str(ULID()), task_id, today, int(time.time())),
+    )
+    # Only log when this call actually recorded a completion (not a repeat POST).
+    if cur.rowcount:
+        task = db.execute(
+            'SELECT title FROM daily_tasks WHERE id=?', (task_id,)
+        ).fetchone()
+        if task:
+            _log_event(db, 'daily_completed', task['title'], task_id, 'daily')
+    db.commit()
     return jsonify({'success': True})
 
 
@@ -129,6 +159,12 @@ def uncomplete_task(task_id):
     db.execute(
         'DELETE FROM daily_task_completions WHERE task_id=? AND date=?',
         (task_id, today),
+    )
+    # Retract today's completion notification so toggling off leaves no phantom.
+    db.execute(
+        "DELETE FROM task_events WHERE kind='daily_completed' AND ref_id=?"
+        " AND created_at >= ?",
+        (task_id, int(time.mktime(date.today().timetuple()))),
     )
     db.commit()
     return jsonify({'success': True})
@@ -231,7 +267,9 @@ def update_todo(todo_id):
     body = request.json or {}
     db = get_db()
     row = db.execute(
-        'SELECT due, repeat_interval, repeat_unit FROM todos WHERE id=?', (todo_id,)
+        'SELECT title, done, list, notes, due, repeat_interval, repeat_unit'
+        ' FROM todos WHERE id=?',
+        (todo_id,),
     ).fetchone()
     if row is None:
         return jsonify({'error': 'not found'}), 404
@@ -273,11 +311,15 @@ def update_todo(todo_id):
         values.append(repeat[0])
         fields.append('repeat_unit=?')
         values.append(repeat[1])
+    # 'complete' -> log a completion event; 'uncomplete' -> retract it. Left None
+    # when `done` isn't part of this update. Applied after the UPDATE below.
+    completion_change = None
     if 'done' in body:
         if body['done']:
             if row['repeat_interval'] and row['repeat_unit']:
                 # Repeating todo: completing it schedules the next occurrence
-                # instead of marking it done.
+                # instead of marking it done. Each occurrence is a real
+                # completion, so always log it.
                 now = int(time.time())
                 fields.append('done=0')
                 fields.append('completed_at=NULL')
@@ -285,20 +327,34 @@ def update_todo(todo_id):
                 values.append(
                     next_due(row['due'], row['repeat_interval'], row['repeat_unit'], now)
                 )
+                completion_change = 'complete'
             else:
                 fields.append('done=1')
                 # Keep the original completion time if it was already done
                 fields.append('completed_at=COALESCE(completed_at, ?)')
                 values.append(int(time.time()))
+                # Only log when it wasn't already done (avoids a duplicate event).
+                if not row['done']:
+                    completion_change = 'complete'
         else:
             fields.append('done=0')
             fields.append('completed_at=NULL')
+            completion_change = 'uncomplete'
     if not fields:
         return jsonify({'error': 'nothing to update'}), 400
 
     fields.append('updated_at=?')
     values.extend([int(time.time()), todo_id])
     db.execute(f'UPDATE todos SET {", ".join(fields)} WHERE id=?', values)
+    if completion_change == 'complete':
+        _log_event(
+            db, 'todo_completed', row['title'], todo_id, row['list'], row['notes']
+        )
+    elif completion_change == 'uncomplete':
+        db.execute(
+            "DELETE FROM task_events WHERE kind='todo_completed' AND ref_id=?",
+            (todo_id,),
+        )
     db.commit()
     return jsonify({'success': True})
 
@@ -306,6 +362,31 @@ def update_todo(todo_id):
 @bp.delete('/todos/<todo_id>')
 def delete_todo(todo_id):
     db = get_db()
+    row = db.execute(
+        'SELECT title, done, list, notes FROM todos WHERE id=?', (todo_id,)
+    ).fetchone()
+    # Log removals of still-active items only — deleting an already-done todo is
+    # cleanup, not a "removed from my list" event.
+    if row and not row['done']:
+        _log_event(
+            db, 'task_deleted', row['title'], todo_id, row['list'], row['notes']
+        )
     db.execute('DELETE FROM todos WHERE id=?', (todo_id,))
     db.commit()
     return jsonify({'success': True})
+
+
+@bp.get('/events')
+def list_task_events():
+    """Recent task lifecycle events (completions/deletions) for the Journal feed."""
+    try:
+        limit = min(max(int(request.args.get('limit', 200)), 1), 1000)
+    except (TypeError, ValueError):
+        limit = 200
+    db = get_db()
+    rows = db.execute(
+        'SELECT id, kind, title, ref_id, task_list, detail, created_at FROM task_events'
+        ' ORDER BY created_at DESC, id DESC LIMIT ?',
+        (limit,),
+    ).fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
