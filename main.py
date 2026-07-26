@@ -6,8 +6,10 @@ import urllib.request
 import urllib.error
 
 import webview
+from qtpy.QtWidgets import QApplication
 
 FLASK_PORT = 5000
+ICON_PATH = os.path.join(os.path.dirname(__file__), 'public', 'icons', 'icon.png')
 
 
 def _webview_storage_path() -> str:
@@ -127,12 +129,21 @@ def main():
         '--disable-gpu --disable-gpu-compositing --disable-vulkan '
         '--disable-background-networking --disable-sync',
     )
+
+    # Give the Qt app a stable identity so the window manager can match the
+    # .desktop entry (and set the window icon from the PNG generated from SVG).
+    _qt_app = QApplication.instance()
+    if _qt_app is None:
+        _qt_app = QApplication(sys.argv)
+    _qt_app.setApplicationName('lunaschal')
+    _qt_app.setApplicationDisplayName('Lunaschal')
+
     webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600),
                           text_select=True)
     # private_mode=False + a persistent storage_path so cookies/localStorage/
     # IndexedDB survive a restart (see _webview_storage_path). Without this the
     # network-mode login and all client-side persistence reset every launch.
-    webview.start(gui='qt', private_mode=False, storage_path=_webview_storage_path())
+    webview.start(gui='qt', private_mode=False, storage_path=_webview_storage_path(), icon=ICON_PATH)
 
 
 if __name__ == '__main__':

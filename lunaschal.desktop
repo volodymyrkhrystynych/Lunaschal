@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Lunaschal
+Comment=Privacy-first personal AI knowledge assistant
+Exec=/home/volodya/workspace/Lunaschal/start.sh
+Path=/home/volodya/workspace/Lunaschal
+Icon=/home/volodya/workspace/Lunaschal/public/icons/icon.png
+Terminal=false
+Type=Application
+Categories=Office;
+StartupWMClass=lunaschal
+StartupNotify=true
