@@ -368,6 +368,10 @@ export interface AppSettings {
   meetingEchoCancel: boolean;
   nudgeEnabled: boolean;
   nudgeIntervalMinutes: number;
+  briefingEnabled: boolean;
+  briefingHour: number;
+  briefingModel: string | null;
+  briefingGoals: string;
 }
 
 export interface WhisperModel {
@@ -1186,6 +1190,11 @@ export const api = {
       id: string,
       data: { role: string; content: string; metadata?: string }
     ) => post<{ id: string }>(`/api/chat/conversations/${id}/messages`, data),
+    runBriefing: () =>
+      post<{ conversationId: string; briefing: string; todosCreated: number }>(
+        '/api/chat/briefing/run',
+        {}
+      ),
     classify: (message: string) =>
       post<{ intent: string; confidence: number; [key: string]: unknown }>(
         '/api/chat/classify',

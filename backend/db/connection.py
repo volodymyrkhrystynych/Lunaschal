@@ -71,6 +71,7 @@ def init_db() -> None:
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
     _ensure_nudge_settings(db)
+    _ensure_briefing_settings(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -325,6 +326,27 @@ def _ensure_nudge_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN nudge_enabled INTEGER DEFAULT 1')
     if 'nudge_interval_minutes' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN nudge_interval_minutes INTEGER DEFAULT 45')
+    db.commit()
+
+
+def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'briefing_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN briefing_enabled INTEGER DEFAULT 1')
+    if 'briefing_hour' not in cols:
+        # Local hour the overnight briefing fires in; must be >= the 4am chat-day
+        # rollover so the message lands in today's fresh conversation.
+        db.execute('ALTER TABLE settings ADD COLUMN briefing_hour INTEGER DEFAULT 5')
+    if 'briefing_model' not in cols:
+        # Optional model override for the overnight briefing. NULL falls back to
+        # the default chat model; the briefing runs while the user sleeps, so a
+        # slower/larger model is fine here.
+        db.execute('ALTER TABLE settings ADD COLUMN briefing_model TEXT')
+    if 'briefing_goals' not in cols:
+        # Free-text personal goals / current focus the user maintains; fed into
+        # the briefing as standing context so the secretary knows what they're
+        # working towards.
+        db.execute('ALTER TABLE settings ADD COLUMN briefing_goals TEXT')
     db.commit()
 
 

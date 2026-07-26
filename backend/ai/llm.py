@@ -16,11 +16,12 @@ def _messages(prompt: str, system: str | None = None) -> list[dict]:
     return messages
 
 
-def chat_json(prompt: str, system: str | None = None) -> dict:
-    """Blocking JSON-mode completion; returns the parsed object."""
+def chat_json(prompt: str, system: str | None = None, model: str | None = None) -> dict:
+    """Blocking JSON-mode completion; returns the parsed object. Pass `model` to
+    override the default chat model for this call."""
     c = get_provider_config()
     client = get_ollama_client(c)
-    model = c['ollama_model'] or DEFAULT_MODELS['ollama']
+    model = model or c['ollama_model'] or DEFAULT_MODELS['ollama']
     resp = client.chat.completions.create(
         model=model,
         messages=_messages(prompt, system),

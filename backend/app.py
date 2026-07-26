@@ -99,4 +99,6 @@ def create_app():
     _start_listener()
     from backend.chat_title_scheduler import start_title_scheduler
     start_title_scheduler()
+    from backend.briefing_scheduler import start_briefing_scheduler
+    start_briefing_scheduler()
     return app
