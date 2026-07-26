@@ -354,6 +354,9 @@ export interface AppSettings {
   hasHfToken: boolean;
   ollamaUrl: string | null;
   ollamaModel: string | null;
+  llmReasoningEffort: 'none' | 'low' | 'medium' | 'high' | 'max';
+  llmMaxTokens: number;
+  llmNumCtx: number;
   networkMode: boolean;
   networkCode: string | null;
   sttPasteKey: string | null;
@@ -372,6 +375,9 @@ export interface AppSettings {
   briefingHour: number;
   briefingModel: string | null;
   briefingGoals: string;
+  briefingReasoningEffort: 'none' | 'low' | 'medium' | 'high' | 'max';
+  briefingMaxTokens: number;
+  briefingNumCtx: number;
 }
 
 export interface WhisperModel {

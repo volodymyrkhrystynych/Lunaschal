@@ -96,8 +96,9 @@ def test_gather_context_includes_and_excludes(client):
 def test_generate_briefing_uses_model_override(client, monkeypatch):
     captured = {}
 
-    def fake_chat_json(prompt, system=None, model=None):
+    def fake_chat_json(prompt, system=None, model=None, **kwargs):
         captured['model'] = model
+        captured['max_tokens'] = kwargs.get('max_tokens')
         return {'briefing': 'hi', 'todos': []}
 
     monkeypatch.setattr(briefing_mod, 'chat_json', fake_chat_json)
@@ -107,6 +108,8 @@ def test_generate_briefing_uses_model_override(client, monkeypatch):
                                     'daily_tasks': [], 'todos': [], 'calendar': [],
                                     'learning_due': 0})
     assert captured['model'] is None
+    # The overnight briefing gets a generous token ceiling, not the tight default.
+    assert captured['max_tokens'] == briefing_mod.BRIEFING_MAX_TOKENS
 
     # Setting present -> that model is used.
     db = connection.get_db()
@@ -122,6 +125,41 @@ def test_generate_briefing_uses_model_override(client, monkeypatch):
                                     'daily_tasks': [], 'todos': [], 'calendar': [],
                                     'learning_due': 0})
     assert captured['model'] == 'llama3.1:70b'
+
+
+def test_generate_briefing_passes_reasoning_and_max_tokens_from_settings(client, monkeypatch):
+    captured = {}
+
+    def fake_chat_json(prompt, system=None, model=None, **kwargs):
+        captured.update(kwargs)
+        return {'briefing': 'hi', 'todos': []}
+
+    monkeypatch.setattr(briefing_mod, 'chat_json', fake_chat_json)
+    ctx = {'now': NOW, 'today': TODAY, 'journal': [], 'daily_tasks': [],
+           'todos': [], 'calendar': [], 'learning_due': 0}
+
+    # Defaults: no thinking, generous ceiling, roomy context window.
+    briefing_mod.generate_briefing(ctx)
+    assert captured['reasoning_effort'] == 'none'
+    assert captured['max_tokens'] == briefing_mod.BRIEFING_MAX_TOKENS
+    assert captured['num_ctx'] == 8192  # LLM_NUM_CTX * 2
+
+    # User-configured values flow through.
+    db = connection.get_db()
+    db.execute(
+        'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,?,?)',
+        (NOW, NOW),
+    )
+    db.execute(
+        'UPDATE settings SET briefing_reasoning_effort=?, briefing_max_tokens=?,'
+        ' briefing_num_ctx=? WHERE id=1',
+        ('high', 8000, 32768),
+    )
+    db.commit()
+    briefing_mod.generate_briefing(ctx)
+    assert captured['reasoning_effort'] == 'high'
+    assert captured['max_tokens'] == 8000
+    assert captured['num_ctx'] == 32768
 
 
 def test_build_prompt_is_pure_and_mentions_data(client):
@@ -268,3 +306,16 @@ def test_run_briefing_route_forces(client, monkeypatch):
     body = r.get_json()
     assert body['todosCreated'] == 1
     assert body['briefing'] == _FAKE['briefing']
+
+
+def test_run_briefing_route_reports_empty_completion(client, monkeypatch):
+    """An empty JSON-mode completion surfaces as a readable 502, not a 500."""
+    from backend.ai.llm import EmptyCompletion
+
+    def boom(ctx):
+        raise EmptyCompletion('model returned empty content for a JSON request')
+
+    monkeypatch.setattr(briefing_job, 'generate_briefing', boom)
+    r = client.post('/api/chat/briefing/run')
+    assert r.status_code == 502
+    assert 'no usable briefing' in r.get_json()['error']

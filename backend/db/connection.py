@@ -72,6 +72,7 @@ def init_db() -> None:
     _ensure_prevent_sleep(db)
     _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
+    _ensure_llm_generation_settings(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -364,6 +365,41 @@ def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
         # the briefing as standing context so the secretary knows what they're
         # working towards.
         db.execute('ALTER TABLE settings ADD COLUMN briefing_goals TEXT')
+    if 'briefing_reasoning_effort' not in cols:
+        # How hard the briefing model "thinks" before answering: one of
+        # none/low/medium/high/max (Ollama's reasoning_effort levels). 'none' by
+        # default — reasoning models otherwise spend their whole output budget on
+        # chain-of-thought, leaving the JSON empty/truncated.
+        db.execute(
+            "ALTER TABLE settings ADD COLUMN briefing_reasoning_effort TEXT DEFAULT 'none'"
+        )
+    if 'briefing_max_tokens' not in cols:
+        # Output-token ceiling for the briefing completion. The briefing runs
+        # overnight, so this is deliberately generous.
+        db.execute('ALTER TABLE settings ADD COLUMN briefing_max_tokens INTEGER DEFAULT 16384')
+    if 'briefing_num_ctx' not in cols:
+        # Context window for the briefing. Bigger than the chat default: if the
+        # user turns on thinking, the reasoning needs to fit alongside the (large)
+        # briefing prompt and the answer without evicting any of it.
+        db.execute('ALTER TABLE settings ADD COLUMN briefing_num_ctx INTEGER DEFAULT 8192')
+    db.commit()
+
+
+def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
+    """Reasoning level + output ceiling applied to the default (conversational)
+    model — the one the user chats with. Kept deliberately simple: one standard
+    pair that applies the same way to every model, thinking or not."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'llm_reasoning_effort' not in cols:
+        db.execute(
+            "ALTER TABLE settings ADD COLUMN llm_reasoning_effort TEXT DEFAULT 'none'"
+        )
+    if 'llm_max_tokens' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN llm_max_tokens INTEGER DEFAULT 4096')
+    if 'llm_num_ctx' not in cols:
+        # Context window (num_ctx). Ollama's own default is 4096; raise it when a
+        # thinking model needs room for prompt + reasoning + answer together.
+        db.execute('ALTER TABLE settings ADD COLUMN llm_num_ctx INTEGER DEFAULT 4096')
     db.commit()
 
 

@@ -7,6 +7,7 @@ import time
 import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
+from backend.ai.llm import REASONING_EFFORTS
 from backend.db.connection import get_db
 
 _sleep_inhibitor: subprocess.Popen | None = None
@@ -65,6 +66,9 @@ def get_settings():
     return jsonify({
         'ollamaUrl': s.get('ollama_url'),
         'ollamaModel': s.get('ollama_model'),
+        'llmReasoningEffort': s.get('llm_reasoning_effort') or 'none',
+        'llmMaxTokens': s.get('llm_max_tokens') or 4096,
+        'llmNumCtx': s.get('llm_num_ctx') or 4096,
         'hasHfToken': bool(s.get('hf_token')),
         'networkMode': NETWORK_MODE,
         'networkCode': s.get('network_code') if NETWORK_MODE else None,
@@ -84,6 +88,9 @@ def get_settings():
         'briefingHour': s.get('briefing_hour') if s.get('briefing_hour') is not None else 5,
         'briefingModel': s.get('briefing_model'),
         'briefingGoals': s.get('briefing_goals') or '',
+        'briefingReasoningEffort': s.get('briefing_reasoning_effort') or 'none',
+        'briefingMaxTokens': s.get('briefing_max_tokens') or 16384,
+        'briefingNumCtx': s.get('briefing_num_ctx') or 8192,
     })
 
 
@@ -92,6 +99,9 @@ def update_ai():
     body = request.json or {}
     field_map = {
         'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model',
+        'llmReasoningEffort': 'llm_reasoning_effort',
+        'llmMaxTokens': 'llm_max_tokens',
+        'llmNumCtx': 'llm_num_ctx',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
         'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
         'whisperModel': 'whisper_model', 'sttDevice': 'stt_device',
@@ -105,11 +115,34 @@ def update_ai():
         'briefingHour': 'briefing_hour',
         'briefingModel': 'briefing_model',
         'briefingGoals': 'briefing_goals',
+        'briefingReasoningEffort': 'briefing_reasoning_effort',
+        'briefingMaxTokens': 'briefing_max_tokens',
+        'briefingNumCtx': 'briefing_num_ctx',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
         if camel in body:
-            updates[snake] = body[camel]
+            value = body[camel]
+            if camel in ('briefingReasoningEffort', 'llmReasoningEffort'):
+                # Reject anything outside Ollama's accepted levels rather than
+                # storing a value the endpoint would 400 on later.
+                if value not in REASONING_EFFORTS:
+                    continue
+            elif camel in ('briefingMaxTokens', 'llmMaxTokens'):
+                # Clamp to a sane range; guards against a fat-fingered 0 that
+                # would truncate every reply, or an absurd value.
+                try:
+                    value = max(256, min(65536, int(value)))
+                except (TypeError, ValueError):
+                    continue
+            elif camel in ('briefingNumCtx', 'llmNumCtx'):
+                # Context window; clamp to a range Ollama will accept without
+                # blowing up VRAM. 512 floor keeps short prompts working.
+                try:
+                    value = max(512, min(131072, int(value)))
+                except (TypeError, ValueError):
+                    continue
+            updates[snake] = value
     db = get_db()
     s = _get_settings()
     now = int(time.time())

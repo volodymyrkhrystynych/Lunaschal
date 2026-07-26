@@ -94,6 +94,84 @@ def test_patch_settings_updates_nudge_fields(client):
     assert data['nudgeIntervalMinutes'] == 20
 
 
+def test_get_settings_llm_generation_defaults(client):
+    data = client.get('/api/settings').get_json()
+    assert data['llmReasoningEffort'] == 'none'
+    assert data['llmMaxTokens'] == 4096
+    assert data['llmNumCtx'] == 4096
+
+
+def test_patch_settings_updates_llm_reasoning_max_tokens_and_num_ctx(client):
+    resp = client.patch(
+        '/api/settings/ai',
+        json={'llmReasoningEffort': 'low', 'llmMaxTokens': 2000, 'llmNumCtx': 12288},
+    )
+    assert resp.status_code == 200
+
+    data = client.get('/api/settings').get_json()
+    assert data['llmReasoningEffort'] == 'low'
+    assert data['llmMaxTokens'] == 2000
+    assert data['llmNumCtx'] == 12288
+
+
+def test_patch_settings_clamps_num_ctx(client):
+    client.patch('/api/settings/ai', json={'llmNumCtx': 10})
+    assert client.get('/api/settings').get_json()['llmNumCtx'] == 512  # floor
+    client.patch('/api/settings/ai', json={'briefingNumCtx': 9_999_999})
+    assert client.get('/api/settings').get_json()['briefingNumCtx'] == 131072  # ceiling
+
+
+def test_patch_settings_rejects_invalid_llm_reasoning_and_clamps_tokens(client):
+    client.patch('/api/settings/ai', json={'llmReasoningEffort': 'high'})
+    client.patch('/api/settings/ai', json={'llmReasoningEffort': 'ludicrous'})
+    assert client.get('/api/settings').get_json()['llmReasoningEffort'] == 'high'
+
+    client.patch('/api/settings/ai', json={'llmMaxTokens': 0})
+    assert client.get('/api/settings').get_json()['llmMaxTokens'] == 256
+
+
+def test_get_settings_briefing_generation_defaults(client):
+    data = client.get('/api/settings').get_json()
+    # Thinking is off by default (reasoning models otherwise blank the JSON);
+    # the token ceiling is generous since the briefing runs overnight.
+    assert data['briefingReasoningEffort'] == 'none'
+    assert data['briefingMaxTokens'] == 16384
+    assert data['briefingNumCtx'] == 8192
+
+
+def test_patch_settings_updates_briefing_reasoning_and_max_tokens(client):
+    resp = client.patch(
+        '/api/settings/ai',
+        json={'briefingReasoningEffort': 'high', 'briefingMaxTokens': 8000},
+    )
+    assert resp.status_code == 200
+
+    data = client.get('/api/settings').get_json()
+    assert data['briefingReasoningEffort'] == 'high'
+    assert data['briefingMaxTokens'] == 8000
+
+
+def test_patch_settings_rejects_invalid_reasoning_effort(client):
+    client.patch('/api/settings/ai', json={'briefingReasoningEffort': 'medium'})
+    assert client.get('/api/settings').get_json()['briefingReasoningEffort'] == 'medium'
+
+    # An out-of-range value is ignored, leaving the prior valid value intact.
+    client.patch('/api/settings/ai', json={'briefingReasoningEffort': 'turbo'})
+    assert client.get('/api/settings').get_json()['briefingReasoningEffort'] == 'medium'
+
+
+def test_patch_settings_clamps_briefing_max_tokens(client):
+    client.patch('/api/settings/ai', json={'briefingMaxTokens': 0})
+    assert client.get('/api/settings').get_json()['briefingMaxTokens'] == 256
+
+    client.patch('/api/settings/ai', json={'briefingMaxTokens': 999999})
+    assert client.get('/api/settings').get_json()['briefingMaxTokens'] == 65536
+
+    # Garbage is ignored, leaving the prior valid value in place.
+    client.patch('/api/settings/ai', json={'briefingMaxTokens': 'nope'})
+    assert client.get('/api/settings').get_json()['briefingMaxTokens'] == 65536
+
+
 def test_gpu_vram_route_serves_cached_snapshot(client):
     settings._gpu_base_vram_mb = 3303
     settings._gpu_total_vram_mb = 8192

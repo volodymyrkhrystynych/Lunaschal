@@ -14,6 +14,10 @@ from backend.ai.llm import chat_json
 CALENDAR_LOOKAHEAD_DAYS = 3
 # Hard cap on how many todos a single briefing may create.
 MAX_BRIEFING_TODOS = 5
+# The briefing runs overnight (or on a manual trigger), so latency is a
+# non-issue — give the model plenty of room to finish the JSON rather than risk
+# truncating a longer check-in. This is a ceiling, not a target.
+BRIEFING_MAX_TOKENS = 16384
 
 
 def _pending_daily_tasks(db, today: str) -> list[dict]:
@@ -163,11 +167,25 @@ def _briefing_model() -> str | None:
     return (s.get('briefing_model') if s else None) or None
 
 
+def _briefing_generation_opts() -> dict:
+    """User-tunable generation knobs for the briefing (reasoning level, output
+    ceiling, context window), falling back to the module defaults when unset."""
+    from backend.ai.provider import get_settings
+    from backend.ai.llm import LLM_NUM_CTX
+    s = get_settings() or {}
+    return {
+        'reasoning_effort': s.get('briefing_reasoning_effort') or 'none',
+        'max_tokens': s.get('briefing_max_tokens') or BRIEFING_MAX_TOKENS,
+        'num_ctx': s.get('briefing_num_ctx') or (LLM_NUM_CTX * 2),
+    }
+
+
 def generate_briefing(context: dict) -> dict:
     """Call the model; returns {"briefing": str, "todos": [...]}. The only part
     of this module that touches the LLM."""
     result = chat_json(
-        build_briefing_prompt(context), system=SYSTEM_PROMPT, model=_briefing_model()
+        build_briefing_prompt(context), system=SYSTEM_PROMPT, model=_briefing_model(),
+        **_briefing_generation_opts(),
     )
     if not isinstance(result, dict):
         return {'briefing': '', 'todos': []}

@@ -147,7 +147,12 @@ def add_message(id):
 def run_briefing_now():
     """Generate today's overnight briefing on demand (also used by the daemon)."""
     from backend.briefing_job import run_briefing
-    result = run_briefing(force=True)
+    from backend.ai.llm import EmptyCompletion
+    try:
+        result = run_briefing(force=True)
+    except EmptyCompletion as e:
+        return jsonify({'error': f'The model returned no usable briefing ({e}). '
+                                 'Try a different chat/briefing model.'}), 502
     if result is None:
         return jsonify({'error': 'AI provider not configured or nothing to brief'}), 400
     return jsonify(result)

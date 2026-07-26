@@ -1,7 +1,8 @@
 import time
 from datetime import datetime
 
-from backend.ai.provider import get_provider_config, get_ollama_client, DEFAULT_MODELS
+from backend.ai.provider import get_provider_config, DEFAULT_MODELS
+from backend.ai.llm import default_generation_opts, _native_chat_stream
 
 SYSTEM_PROMPT = """You are Lunaschal, a warm, curious companion the user chats with throughout the day.
 
@@ -73,7 +74,6 @@ def build_chat_system_prompt(now: int | None = None) -> str:
 
 def chat_stream(messages: list[dict], rag_context: str = '', system_prompt: str = ''):
     c = get_provider_config()
-    client = get_ollama_client(c)
     model = c['ollama_model'] or DEFAULT_MODELS['ollama']
 
     system = system_prompt or SYSTEM_PROMPT
@@ -81,8 +81,4 @@ def chat_stream(messages: list[dict], rag_context: str = '', system_prompt: str 
         system = f"{system}\n\n{rag_context}"
 
     all_messages = [{'role': 'system', 'content': system}] + messages
-    stream = client.chat.completions.create(model=model, messages=all_messages, stream=True)
-    for chunk in stream:
-        delta = chunk.choices[0].delta.content
-        if delta:
-            yield delta
+    yield from _native_chat_stream(all_messages, model=model, **default_generation_opts())

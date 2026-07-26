@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../hooks/api';
+import { api, type AppSettings } from '../hooks/api';
 import { CuratedTagsSection } from './CuratedTagsSection';
 import { ShortcutSettings } from './ShortcutSettings';
 import { vramColors } from '../lib/vram';
@@ -531,12 +531,16 @@ function BriefingSection() {
   });
   const [hourInput, setHourInput] = useState('5');
   const [goalsInput, setGoalsInput] = useState('');
+  const [maxTokensInput, setMaxTokensInput] = useState('16384');
+  const [numCtxInput, setNumCtxInput] = useState('8192');
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     if (settings) {
       setHourInput(String(settings.briefingHour ?? 5));
       setGoalsInput(settings.briefingGoals ?? '');
+      setMaxTokensInput(String(settings.briefingMaxTokens ?? 16384));
+      setNumCtxInput(String(settings.briefingNumCtx ?? 8192));
     }
   }, [settings]);
 
@@ -563,6 +567,24 @@ function BriefingSection() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
+  const saveReasoningEffort = useMutation({
+    mutationFn: (effort: AppSettings['briefingReasoningEffort']) =>
+      api.settings.updateAI({ briefingReasoningEffort: effort }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  });
+
+  const saveMaxTokens = useMutation({
+    mutationFn: (maxTokens: number) =>
+      api.settings.updateAI({ briefingMaxTokens: maxTokens }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  });
+
+  const saveNumCtx = useMutation({
+    mutationFn: (numCtx: number) =>
+      api.settings.updateAI({ briefingNumCtx: numCtx }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  });
+
   const generateNow = useMutation({
     mutationFn: api.chat.runBriefing,
     onSuccess: result => {
@@ -581,10 +603,34 @@ function BriefingSection() {
 
   const briefingEnabled = settings?.briefingEnabled ?? true;
 
+  const briefingReasoningEffort = settings?.briefingReasoningEffort ?? 'none';
+
   const commitHour = () => {
     const hour = Math.min(23, Math.max(4, parseInt(hourInput, 10) || 5));
     setHourInput(String(hour));
     saveHour.mutate(hour);
+  };
+
+  const commitMaxTokens = () => {
+    const tokens = Math.min(
+      65536,
+      Math.max(256, parseInt(maxTokensInput, 10) || 16384)
+    );
+    setMaxTokensInput(String(tokens));
+    if (tokens !== (settings?.briefingMaxTokens ?? 16384)) {
+      saveMaxTokens.mutate(tokens);
+    }
+  };
+
+  const commitNumCtx = () => {
+    const ctx = Math.min(
+      131072,
+      Math.max(512, parseInt(numCtxInput, 10) || 8192)
+    );
+    setNumCtxInput(String(ctx));
+    if (ctx !== (settings?.briefingNumCtx ?? 8192)) {
+      saveNumCtx.mutate(ctx);
+    }
   };
 
   return (
@@ -653,6 +699,73 @@ function BriefingSection() {
               </select>
               <p className="text-xs text-[var(--color-text-muted)] mt-1">
                 Runs overnight, so a larger, slower model is fine here.
+              </p>
+            </div>
+            <div>
+              <label className="text-sm text-[var(--color-text-muted)]">
+                Thinking effort
+              </label>
+              <select
+                value={briefingReasoningEffort}
+                onChange={e =>
+                  saveReasoningEffort.mutate(
+                    e.target.value as AppSettings['briefingReasoningEffort']
+                  )
+                }
+                className="mt-1 w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+              >
+                <option value="none">None — don't think (default)</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="max">Max</option>
+              </select>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                How hard the model reasons before writing. Keep it <em>None</em>{' '}
+                unless the briefing model supports thinking — reasoning models
+                otherwise spend their whole output budget thinking and return an
+                empty briefing. If you enable it, give it plenty of tokens
+                below. (Not every model honours the graded levels; some only
+                distinguish on/off.)
+              </p>
+            </div>
+            <div>
+              <label className="text-sm text-[var(--color-text-muted)]">
+                Output token limit (256–65536)
+              </label>
+              <input
+                type="number"
+                min={256}
+                max={65536}
+                step={256}
+                value={maxTokensInput}
+                onChange={e => setMaxTokensInput(e.target.value)}
+                onBlur={commitMaxTokens}
+                className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+              />
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                Ceiling on the briefing's length. Generous by default since it
+                runs overnight; raise it if long briefings get cut off.
+              </p>
+            </div>
+            <div>
+              <label className="text-sm text-[var(--color-text-muted)]">
+                Context window (512–131072)
+              </label>
+              <input
+                type="number"
+                min={512}
+                max={131072}
+                step={512}
+                value={numCtxInput}
+                onChange={e => setNumCtxInput(e.target.value)}
+                onBlur={commitNumCtx}
+                className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+              />
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                Prompt + thinking + briefing must all fit here. If you turn
+                thinking on above, keep this well above the default (16384+) so
+                the reasoning doesn't crowd out the briefing itself.
               </p>
             </div>
             <div>
@@ -745,6 +858,15 @@ function VRAMSection() {
 
   const [saved, setSaved] = useState(false);
   const [hfToken, setHfToken] = useState('');
+  const [llmMaxTokensInput, setLlmMaxTokensInput] = useState('4096');
+  const [llmNumCtxInput, setLlmNumCtxInput] = useState('4096');
+
+  useEffect(() => {
+    if (settings) {
+      setLlmMaxTokensInput(String(settings.llmMaxTokens ?? 4096));
+      setLlmNumCtxInput(String(settings.llmNumCtx ?? 4096));
+    }
+  }, [settings]);
 
   const updateAI = useMutation({
     mutationFn: api.settings.updateAI,
@@ -754,6 +876,28 @@ function VRAMSection() {
       setTimeout(() => setSaved(false), 2500);
     },
   });
+
+  const commitLlmMaxTokens = () => {
+    const tokens = Math.min(
+      65536,
+      Math.max(256, parseInt(llmMaxTokensInput, 10) || 4096)
+    );
+    setLlmMaxTokensInput(String(tokens));
+    if (tokens !== (settings?.llmMaxTokens ?? 4096)) {
+      updateAI.mutate({ llmMaxTokens: tokens });
+    }
+  };
+
+  const commitLlmNumCtx = () => {
+    const ctx = Math.min(
+      131072,
+      Math.max(512, parseInt(llmNumCtxInput, 10) || 4096)
+    );
+    setLlmNumCtxInput(String(ctx));
+    if (ctx !== (settings?.llmNumCtx ?? 4096)) {
+      updateAI.mutate({ llmNumCtx: ctx });
+    }
+  };
 
   const reloadStt = useMutation({
     mutationFn: api.stt.reload,
@@ -1030,6 +1174,73 @@ function VRAMSection() {
               </div>
             );
           })()}
+
+        <div>
+          <p className="text-sm font-medium text-[var(--color-text)] mb-2">
+            Thinking effort
+          </p>
+          <select
+            value={settings?.llmReasoningEffort ?? 'none'}
+            onChange={e =>
+              updateAI.mutate({
+                llmReasoningEffort: e.target
+                  .value as AppSettings['llmReasoningEffort'],
+              })
+            }
+            className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+          >
+            <option value="none">None — don't think (default)</option>
+            <option value="low">Low</option>
+            <option value="medium">Medium</option>
+            <option value="high">High</option>
+            <option value="max">Max</option>
+          </select>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+            How hard the model reasons before replying. Applies to the model
+            above regardless of whether it's a thinking model — non-reasoning
+            models simply ignore it. Keep it <em>None</em> unless this model
+            supports thinking, and raise the token limit below if you turn it
+            up.
+          </p>
+        </div>
+        <div>
+          <p className="text-sm font-medium text-[var(--color-text)] mb-2">
+            Output token limit (256–65536)
+          </p>
+          <input
+            type="number"
+            min={256}
+            max={65536}
+            step={256}
+            value={llmMaxTokensInput}
+            onChange={e => setLlmMaxTokensInput(e.target.value)}
+            onBlur={commitLlmMaxTokens}
+            className="w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+          />
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+            Ceiling on each reply's length. Also caps runaway repetition loops.
+          </p>
+        </div>
+        <div>
+          <p className="text-sm font-medium text-[var(--color-text)] mb-2">
+            Context window (512–131072)
+          </p>
+          <input
+            type="number"
+            min={512}
+            max={131072}
+            step={512}
+            value={llmNumCtxInput}
+            onChange={e => setLlmNumCtxInput(e.target.value)}
+            onBlur={commitLlmNumCtx}
+            className="w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+          />
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+            How many tokens (prompt + thinking + reply) the model can hold at
+            once. Ollama's default is 4096; raise it if you turn thinking on, so
+            reasoning doesn't crowd out the answer. Bigger uses more VRAM.
+          </p>
+        </div>
 
         {saved && <p className="text-xs text-green-400">Saved</p>}
       </div>

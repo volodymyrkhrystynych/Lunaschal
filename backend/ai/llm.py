@@ -1,11 +1,93 @@
-"""Shared Ollama LLM helpers for the learning feature."""
+"""Shared Ollama LLM helpers.
+
+These talk to Ollama's **native** `/api/chat` endpoint (over `requests`) rather
+than the OpenAI-compat `/v1` shim, because only the native API lets us set
+`num_ctx` (the context window) per request — and a too-small window is what makes
+a reasoning model's thinking crowd out its actual answer. Tool calling
+(`chat_with_tools`) still uses the OpenAI-compat client; it doesn't need these
+knobs and its message shape is consumed elsewhere.
+"""
 import json
+import re
+
+import requests
 
 from backend.ai.provider import get_provider_config, get_ollama_client, DEFAULT_MODELS
 
 
 class ToolCallingUnsupported(Exception):
     """Raised when the active provider cannot drive an OpenAI-style tool loop."""
+
+
+class EmptyCompletion(ValueError):
+    """Raised when a JSON-mode completion comes back with no usable content."""
+
+
+# Ceiling for JSON-mode completions. Without a cap a model that falls into a
+# degenerate repetition loop keeps emitting until the context fills; this keeps
+# the call bounded while staying far above any real briefing/flashcard payload.
+JSON_MAX_TOKENS = 4096
+
+# Reasoning levels accepted by Ollama (mapped to the native `think` field).
+# 'none' disables thinking; the rest enable it at that level. Validate before
+# sending so a bad value can't reach the model.
+REASONING_EFFORTS = ('none', 'low', 'medium', 'high', 'max')
+
+# Fallbacks for the default conversational model when the user hasn't set them.
+LLM_MAX_TOKENS = 4096   # num_predict — output length ceiling
+LLM_NUM_CTX = 4096      # num_ctx — Ollama's own default context window
+
+# How long to wait on a blocking generation. The briefing model can be large and
+# slow, especially when thinking, so this is deliberately roomy.
+_NATIVE_TIMEOUT = 900
+
+
+def default_generation_opts() -> dict:
+    """Reasoning level + context window + output ceiling for the default
+    (conversational) model, read from user settings. One standard set applied the
+    same way to every model, thinking or not. Structured `chat_json` calls manage
+    these themselves (they must default to 'none', or the JSON gets crowded out by
+    reasoning)."""
+    from backend.ai.provider import get_settings
+    s = get_settings() or {}
+    effort = s.get('llm_reasoning_effort') or 'none'
+    if effort not in REASONING_EFFORTS:
+        effort = 'none'
+    return {
+        'reasoning_effort': effort,
+        'num_ctx': s.get('llm_num_ctx') or LLM_NUM_CTX,
+        'num_predict': s.get('llm_max_tokens') or LLM_MAX_TOKENS,
+    }
+
+
+_FENCE_RE = re.compile(r'^```(?:json)?\s*|\s*```$', re.IGNORECASE)
+_THINK_RE = re.compile(r'<think>.*?</think>', re.IGNORECASE | re.DOTALL)
+
+
+def _parse_json_response(content: str | None) -> dict:
+    """Best-effort parse of a JSON completion.
+
+    Some models (reasoning models especially) return empty content or wrap the
+    object in a ```json fence, which makes a bare `json.loads` blow up with an
+    opaque "Expecting value" error. Coalesce None, strip fences/whitespace, and
+    fall back to extracting the first {...} object before giving up with a clear
+    error that says *why*.
+    """
+    text = _THINK_RE.sub('', content or '').strip()
+    if not text:
+        raise EmptyCompletion('model returned empty content for a JSON request')
+    stripped = _FENCE_RE.sub('', text).strip()
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r'\{.*\}', stripped, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+    raise EmptyCompletion(f'model returned non-JSON content: {text[:200]!r}')
 
 
 def _messages(prompt: str, system: str | None = None) -> list[dict]:
@@ -16,36 +98,112 @@ def _messages(prompt: str, system: str | None = None) -> list[dict]:
     return messages
 
 
-def chat_json(prompt: str, system: str | None = None, model: str | None = None) -> dict:
-    """Blocking JSON-mode completion; returns the parsed object. Pass `model` to
-    override the default chat model for this call."""
+def _native_url() -> str:
     c = get_provider_config()
-    client = get_ollama_client(c)
+    return c['ollama_url'].rstrip('/') + '/api/chat'
+
+
+def _think_value(reasoning_effort: str):
+    """Map our reasoning level to Ollama's native `think` field: False disables
+    thinking (safe even on non-reasoning models), a level string enables it."""
+    return False if reasoning_effort == 'none' else reasoning_effort
+
+
+def _native_body(messages, *, model, reasoning_effort, num_ctx, num_predict,
+                 json_format=False, stream=False) -> dict:
+    body = {
+        'model': model,
+        'messages': messages,
+        'stream': stream,
+        'think': _think_value(reasoning_effort),
+    }
+    # JSON grammar mode and thinking don't mix — a reasoning model answers inside
+    # its thinking channel and satisfies the grammar with an empty `{}`. Only
+    # constrain to JSON when we're NOT thinking; otherwise rely on the prompt plus
+    # `_parse_json_response`.
+    if json_format and reasoning_effort == 'none':
+        body['format'] = 'json'
+    options = {}
+    if num_ctx:
+        options['num_ctx'] = num_ctx
+    if num_predict:
+        options['num_predict'] = num_predict
+    if options:
+        body['options'] = options
+    return body
+
+
+def _native_chat(messages, *, model, reasoning_effort='none', num_ctx=None,
+                 num_predict=None, json_format=False) -> str:
+    """Blocking native `/api/chat`; returns the assistant message content."""
+    body = _native_body(messages, model=model, reasoning_effort=reasoning_effort,
+                        num_ctx=num_ctx, num_predict=num_predict,
+                        json_format=json_format, stream=False)
+    r = requests.post(_native_url(), json=body, timeout=_NATIVE_TIMEOUT)
+    r.raise_for_status()
+    data = r.json()
+    if data.get('error'):
+        raise EmptyCompletion(f"ollama error: {data['error']}")
+    return (data.get('message') or {}).get('content') or ''
+
+
+def _native_chat_stream(messages, *, model, reasoning_effort='none', num_ctx=None,
+                        num_predict=None):
+    """Streaming native `/api/chat`; yields assistant content deltas (thinking,
+    which arrives in a separate `thinking` field, is intentionally not yielded)."""
+    body = _native_body(messages, model=model, reasoning_effort=reasoning_effort,
+                        num_ctx=num_ctx, num_predict=num_predict, stream=True)
+    with requests.post(_native_url(), json=body, stream=True,
+                       timeout=_NATIVE_TIMEOUT) as r:
+        r.raise_for_status()
+        for line in r.iter_lines():
+            if not line:
+                continue
+            obj = json.loads(line)
+            if obj.get('error'):
+                raise EmptyCompletion(f"ollama error: {obj['error']}")
+            delta = (obj.get('message') or {}).get('content')
+            if delta:
+                yield delta
+
+
+def chat_json(prompt: str, system: str | None = None, model: str | None = None,
+              max_tokens: int = JSON_MAX_TOKENS, reasoning_effort: str = 'none',
+              num_ctx: int | None = None) -> dict:
+    """Blocking JSON completion; returns the parsed object. Pass `model` to
+    override the default chat model, `num_ctx` to widen the context window.
+
+    Reasoning is off by default (`reasoning_effort='none'`), and only then is the
+    response constrained to JSON grammar. Pass 'low'/'medium'/'high'/'max' for
+    graded reasoning — the grammar constraint is dropped and the JSON is recovered
+    from the prose the model writes. Give thinking a big enough `num_ctx`: a
+    reasoning model's thinking can otherwise fill the window before it writes the
+    answer, yielding empty content."""
+    if reasoning_effort not in REASONING_EFFORTS:
+        reasoning_effort = 'none'
+    c = get_provider_config()
     model = model or c['ollama_model'] or DEFAULT_MODELS['ollama']
-    resp = client.chat.completions.create(
-        model=model,
-        messages=_messages(prompt, system),
-        response_format={'type': 'json_object'},
+    content = _native_chat(
+        _messages(prompt, system), model=model, reasoning_effort=reasoning_effort,
+        num_ctx=num_ctx, num_predict=max_tokens, json_format=True,
     )
-    return json.loads(resp.choices[0].message.content)
+    return _parse_json_response(content)
 
 
 def chat_text(prompt: str, system: str | None = None) -> str:
-    """Blocking plain-text completion."""
+    """Blocking plain-text completion (default model's reasoning/ctx/token settings)."""
     c = get_provider_config()
-    client = get_ollama_client(c)
     model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-    resp = client.chat.completions.create(model=model, messages=_messages(prompt, system))
-    return resp.choices[0].message.content or ''
+    return _native_chat(_messages(prompt, system), model=model,
+                        **default_generation_opts())
 
 
 def chat_messages(messages: list[dict]) -> str:
-    """Blocking plain-text completion over a prebuilt message list."""
+    """Blocking plain-text completion over a prebuilt message list (default
+    model's reasoning/ctx/token settings)."""
     c = get_provider_config()
-    client = get_ollama_client(c)
     model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-    resp = client.chat.completions.create(model=model, messages=messages)
-    return resp.choices[0].message.content or ''
+    return _native_chat(messages, model=model, **default_generation_opts())
 
 
 def chat_with_tools(messages: list[dict], tools: list[dict]):
