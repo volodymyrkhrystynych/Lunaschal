@@ -506,6 +506,45 @@ export interface SyncResult {
   error?: string;
 }
 
+export interface PaperDoc {
+  id: string;
+  title: string;
+  pageCount: number;
+  firstPageImageUrl: string | null;
+  pendingArchive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaperPageMeta {
+  id: string;
+  position: number;
+  imageUrl: string | null;
+}
+
+export interface PaperDetail {
+  id: string;
+  title: string;
+  archiveRequested: boolean;
+  createdAt: string;
+  updatedAt: string;
+  pages: PaperPageMeta[];
+}
+
+export interface JournalPaper {
+  id: string;
+  title: string;
+  journalDate: string;
+  archivedAt: string;
+  pages: { id: string; imageUrl: string | null }[];
+}
+
+export interface PaperPageContent {
+  strokes: string;
+  width: number | null;
+  height: number | null;
+}
+
 // --- fetch helpers ---
 
 // A request to an unreachable backend (e.g. the Tailscale link is down in
@@ -1284,5 +1323,48 @@ export const api = {
     getByDate: (date: string) =>
       get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
     sync: () => post<SyncResult[]>('/api/newspapers/sync'),
+  },
+  paper: {
+    list: (params: { limit?: number; offset?: number } = {}) => {
+      const q = new URLSearchParams();
+      if (params.limit != null) q.set('limit', String(params.limit));
+      if (params.offset != null) q.set('offset', String(params.offset));
+      const qs = q.toString();
+      return get<PaperDoc[]>(`/api/paper${qs ? `?${qs}` : ''}`);
+    },
+    get: (id: string) => get<PaperDetail>(`/api/paper/${id}`),
+    journal: () => get<JournalPaper[]>('/api/paper/journal'),
+    create: () => post<{ id: string }>('/api/paper'),
+    updateTitle: (id: string, title: string) =>
+      patch<{ success: boolean }>(`/api/paper/${id}`, { title }),
+    setArchiveRequested: (id: string, archiveRequested: boolean) =>
+      patch<{ success: boolean }>(`/api/paper/${id}`, { archiveRequested }),
+    remove: (id: string) => del<{ success: boolean }>(`/api/paper/${id}`),
+    addPage: (id: string) =>
+      post<{ id: string; position: number }>(`/api/paper/${id}/pages`),
+    getPage: (pageId: string) =>
+      get<PaperPageContent>(`/api/paper/pages/${pageId}`),
+    savePage: async (
+      pageId: string,
+      data: { strokes: string; width: number; height: number; snapshot: Blob }
+    ) => {
+      const form = new FormData();
+      form.set('strokes', data.strokes);
+      form.set('width', String(data.width));
+      form.set('height', String(data.height));
+      form.set('snapshot', data.snapshot, 'snapshot.png');
+      const r = await fetch(`/api/paper/pages/${pageId}`, {
+        method: 'PUT',
+        credentials: 'include',
+        body: form,
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(b.error || `HTTP ${r.status}`);
+      }
+      return r.json() as Promise<{ success: boolean }>;
+    },
+    removePage: (pageId: string) =>
+      del<{ success: boolean }>(`/api/paper/pages/${pageId}`),
   },
 };

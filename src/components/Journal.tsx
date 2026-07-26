@@ -14,7 +14,7 @@ import {
 import { buildFeed } from '../lib/journalFeed';
 import { isBreak } from '../lib/chatSegments';
 import { MessageMarkdown } from './MessageMarkdown';
-import type { DatedConversation } from '../hooks/api';
+import type { DatedConversation, JournalPaper } from '../hooks/api';
 import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
 
 interface JournalProps {
@@ -110,6 +110,14 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     queryKey: ['chat', 'journal-conversations'],
     queryFn: () => api.chat.journalConversations(),
     enabled: conversationsVisible,
+  });
+
+  // Archived papers (drawings) interleave in the plain chronological view too.
+  const papersVisible = !searchQuery && !selectedCuratedTagId;
+  const { data: journalPapers } = useQuery({
+    queryKey: ['paper', 'journal'],
+    queryFn: () => api.paper.journal(),
+    enabled: papersVisible,
   });
 
   useEffect(() => {
@@ -365,7 +373,8 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
         {buildFeed(
           entries ?? [],
           transcriptionsVisible ? (transcriptions ?? []) : [],
-          conversationsVisible ? (chatConversations ?? []) : []
+          conversationsVisible ? (chatConversations ?? []) : [],
+          papersVisible ? (journalPapers ?? []) : []
         ).map(item => {
           if (item.kind === 'conversation') {
             return (
@@ -374,6 +383,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                 conversation={item.conversation}
               />
             );
+          }
+          if (item.kind === 'paper') {
+            return <JournalPaperItem key={item.paper.id} paper={item.paper} />;
           }
           if (item.kind === 'transcription') {
             const t = item.transcription;
@@ -672,5 +684,74 @@ function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
         })}
       </div>
     </details>
+  );
+}
+
+// An archived paper (drawings) in the journal feed: a header with the day and a
+// horizontal filmstrip of page thumbnails. Tapping a page opens it full-screen.
+// View-only here — the paper is a record of what was drawn that day.
+function JournalPaperItem({ paper }: { paper: JournalPaper }) {
+  const [zoom, setZoom] = useState<string | null>(null);
+
+  const dayLabel = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(paper.journalDate + 'T00:00:00'));
+  const title = paper.title || `Drawings — ${dayLabel}`;
+  const pages = paper.pages.filter(pg => pg.imageUrl);
+
+  return (
+    <div className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5">
+      <div className="flex items-baseline justify-between gap-2 mb-2">
+        <span className="text-[var(--color-text)] truncate">🖊 {title}</span>
+        <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+          {dayLabel} · {paper.pages.length} page
+          {paper.pages.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {pages.map(pg => (
+          <button
+            key={pg.id}
+            onClick={() => setZoom(pg.imageUrl)}
+            className="shrink-0 w-24 aspect-[3/4] rounded-md overflow-hidden border border-white/10 bg-white hover:border-[var(--color-primary)] transition-colors"
+            title="View"
+          >
+            <img
+              src={pg.imageUrl!}
+              alt=""
+              className="w-full h-full object-cover object-top"
+            />
+          </button>
+        ))}
+        {pages.length === 0 && (
+          <span className="text-sm text-[var(--color-text-muted)] italic">
+            No pages
+          </span>
+        )}
+      </div>
+
+      {zoom && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+          onClick={() => setZoom(null)}
+        >
+          <img
+            src={zoom}
+            alt=""
+            className="max-w-full max-h-full rounded-lg shadow-2xl bg-white"
+            onClick={e => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setZoom(null)}
+            className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

@@ -403,3 +403,33 @@ CREATE TABLE IF NOT EXISTS notebook_review_state (
 );
 
 CREATE INDEX IF NOT EXISTS idx_notebook_review_due ON notebook_review_state(enabled, due);
+
+-- Paper: freeform handwriting/drawing documents (Apple Pencil on iPad). A
+-- "paper" is a document; its ordered "pages" each hold vector strokes (JSON,
+-- the source of truth for editing) plus a rendered PNG snapshot on disk (used
+-- for the grid thumbnail / quick view). See backend/paper/storage.py.
+CREATE TABLE IF NOT EXISTS papers (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    -- When set, the user has flagged this paper to move out of the Paper
+    -- explorer and into the Journal. The move happens lazily once the next 4am
+    -- boundary passes (see backend/routes/paper.py); until then it stays in the
+    -- explorer, marked pending, and the flag can be toggled back off.
+    archive_requested_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_pages (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    strokes TEXT NOT NULL DEFAULT '[]',
+    width INTEGER,
+    height INTEGER,
+    image_path TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_pages_paper ON paper_pages(paper_id, position);

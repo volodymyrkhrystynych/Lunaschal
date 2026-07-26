@@ -14,7 +14,8 @@ type View =
   | 'tasks'
   | 'cookbook'
   | 'fanfic'
-  | 'newspapers';
+  | 'newspapers'
+  | 'paper';
 
 interface SidebarProps {
   currentView: View;
@@ -35,6 +36,7 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'cookbook', label: 'Cookbook', icon: '🍳' },
   { view: 'fanfic', label: 'Library', icon: '📚' },
   { view: 'newspapers', label: 'Newspapers', icon: '📰' },
+  { view: 'paper', label: 'Paper', icon: '🖊️' },
   { view: 'files', label: 'Files', icon: '📁' },
   { view: 'settings', label: 'Settings', icon: '⚙️' },
 ];

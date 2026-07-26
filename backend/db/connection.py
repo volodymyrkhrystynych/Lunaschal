@@ -77,6 +77,7 @@ def init_db() -> None:
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
+    _ensure_paper_archive_requested(db)
     _ensure_hf_token(db)
     _ensure_meeting_speaker_names(db)
     _ensure_meeting_echo_cancel(db)
@@ -192,6 +193,15 @@ def _ensure_fic_update_pending(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
     if 'update_pending' not in cols:
         db.execute('ALTER TABLE fics ADD COLUMN update_pending INTEGER NOT NULL DEFAULT 0')
+        db.commit()
+
+
+def _ensure_paper_archive_requested(db: sqlite3.Connection) -> None:
+    if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='papers'").fetchone():
+        return
+    cols = {r[1] for r in db.execute('PRAGMA table_info(papers)')}
+    if 'archive_requested_at' not in cols:
+        db.execute('ALTER TABLE papers ADD COLUMN archive_requested_at INTEGER')
         db.commit()
 
 
