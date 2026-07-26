@@ -18,7 +18,7 @@ export type ActionId =
   | 'tab.writing'
   | 'tab.calendar'
   | 'tab.learning'
-  | 'tab.cookbook'
+  | 'tab.food'
   | 'tab.fanfic'
   | 'tab.files'
   | 'tab.notebook'
@@ -57,7 +57,7 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   'tab.writing': '',
   'tab.calendar': '',
   'tab.learning': '',
-  'tab.cookbook': '',
+  'tab.food': '',
   'tab.fanfic': '',
   'tab.files': '',
   'tab.notebook': '',
@@ -96,7 +96,7 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'tab.writing': 'Go to Writing',
   'tab.calendar': 'Go to Calendar',
   'tab.learning': 'Go to Learning',
-  'tab.cookbook': 'Go to Cookbook',
+  'tab.food': 'Go to Food',
   'tab.fanfic': 'Go to Library',
   'tab.files': 'Go to Files',
   'tab.notebook': 'Go to Notebook',

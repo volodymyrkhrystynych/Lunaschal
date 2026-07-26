@@ -75,9 +75,10 @@ export type AppView =
   | 'notebook'
   | 'writing'
   | 'tasks'
-  | 'cookbook'
+  | 'food'
   | 'fanfic'
-  | 'newspapers';
+  | 'newspapers'
+  | 'paper';
 
 // Must stay in the same order as the sidebar's navItems (src/components/Sidebar
 // .tsx), since nav.up/down walks this list — a mismatch means the shortcut cycle
@@ -91,9 +92,10 @@ export const VIEW_ORDER: AppView[] = [
   'meetings',
   'writing',
   'calendar',
-  'cookbook',
+  'food',
   'fanfic',
   'newspapers',
+  'paper',
   'files',
   'settings',
 ];
@@ -105,7 +107,7 @@ const TAB_ACTIONS: Partial<Record<ActionId, AppView>> = {
   'tab.writing': 'writing',
   'tab.calendar': 'calendar',
   'tab.learning': 'learning',
-  'tab.cookbook': 'cookbook',
+  'tab.food': 'food',
   'tab.fanfic': 'fanfic',
   'tab.files': 'files',
   'tab.notebook': 'notebook',

@@ -13,10 +13,11 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { Login } from './components/Login';
 import { Writing } from './components/Writing';
 import { Tasks } from './components/Tasks';
-import { Cookbook } from './components/Cookbook';
+import { Food } from './components/Food/Food';
 import { Fanfic } from './components/Fanfic/Fanfic';
 import type { FicTarget } from './components/Fanfic/Fanfic';
 import { Newspapers } from './components/Newspapers';
+import { Paper } from './components/Paper/Paper';
 import { Meetings } from './components/Meetings';
 import { api } from './hooks/api';
 import { resolveAuthGate } from './lib/authGate';
@@ -34,9 +35,10 @@ type View =
   | 'notebook'
   | 'writing'
   | 'tasks'
-  | 'cookbook'
+  | 'food'
   | 'fanfic'
-  | 'newspapers';
+  | 'newspapers'
+  | 'paper';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>('chat');
@@ -158,8 +160,8 @@ export default function App() {
         return <Writing />;
       case 'tasks':
         return <Tasks />;
-      case 'cookbook':
-        return <Cookbook />;
+      case 'food':
+        return <Food />;
       case 'fanfic':
         return (
           <Fanfic
@@ -169,6 +171,8 @@ export default function App() {
         );
       case 'newspapers':
         return <Newspapers />;
+      case 'paper':
+        return <Paper />;
       case 'meetings':
         return <Meetings />;
       default:

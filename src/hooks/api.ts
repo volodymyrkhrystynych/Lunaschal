@@ -506,6 +506,83 @@ export interface SyncResult {
   error?: string;
 }
 
+export interface PaperDoc {
+  id: string;
+  title: string;
+  pageCount: number;
+  firstPageImageUrl: string | null;
+  pendingArchive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaperPageMeta {
+  id: string;
+  position: number;
+  imageUrl: string | null;
+}
+
+export interface PaperDetail {
+  id: string;
+  title: string;
+  archiveRequested: boolean;
+  createdAt: string;
+  updatedAt: string;
+  pages: PaperPageMeta[];
+}
+
+export interface JournalPaper {
+  id: string;
+  title: string;
+  journalDate: string;
+  archivedAt: string;
+  pages: { id: string; imageUrl: string | null }[];
+}
+
+export interface PaperPageContent {
+  strokes: string;
+  width: number | null;
+  height: number | null;
+}
+
+export interface FoodMedia {
+  id: string;
+  kind: 'image' | 'video';
+  position: number;
+  url: string;
+}
+
+export interface FoodEntry {
+  id: string;
+  rawContent: string | null;
+  dish: string | null;
+  place: string | null;
+  notes: string | null;
+  rating: number | null;
+  tags: string | null;
+  recipeId: string | null;
+  recipe: { id: string; title: string } | null;
+  media: FoodMedia[];
+  latitude: number | null;
+  longitude: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// A food entry shaped for the Journal feed.
+export interface FoodJournalItem {
+  id: string;
+  dish: string | null;
+  place: string | null;
+  rating: number | null;
+  notes: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  createdAt: string;
+  recipe: { id: string; title: string } | null;
+  media: FoodMedia[];
+}
+
 // --- fetch helpers ---
 
 // A request to an unreachable backend (e.g. the Tailscale link is down in
@@ -731,6 +808,64 @@ export const api = {
     delete: (id: string) => del<{ success: boolean }>(`/api/cookbook/${id}`),
     importRecipe: (data: { text?: string; url?: string }) =>
       post<{ id: string; recipe: Recipe }>('/api/cookbook/import', data),
+  },
+
+  food: {
+    list: (params?: { limit?: number; offset?: number; tag?: string }) => {
+      const qp = new URLSearchParams();
+      if (params?.limit !== undefined) qp.set('limit', String(params.limit));
+      if (params?.offset !== undefined) qp.set('offset', String(params.offset));
+      if (params?.tag) qp.set('tag', params.tag);
+      return get<FoodEntry[]>(`/api/food?${qp}`);
+    },
+    journal: () => get<FoodJournalItem[]>('/api/food/journal'),
+    tags: () => get<RecipeTag[]>('/api/food/tags'),
+    get: (id: string) => get<FoodEntry>(`/api/food/${id}`),
+    // Create an entry from raw text + optional photos/videos (one multipart POST).
+    create: (data: {
+      text?: string;
+      dish?: string;
+      place?: string;
+      notes?: string;
+      rating?: number;
+      tags?: string[];
+      media?: File[];
+      latitude?: number;
+      longitude?: number;
+    }) => {
+      const form = new FormData();
+      if (data.text) form.set('text', data.text);
+      if (data.dish) form.set('dish', data.dish);
+      if (data.place) form.set('place', data.place);
+      if (data.notes) form.set('notes', data.notes);
+      if (data.rating !== undefined) form.set('rating', String(data.rating));
+      if (data.tags) form.set('tags', JSON.stringify(data.tags));
+      if (data.latitude !== undefined)
+        form.set('latitude', String(data.latitude));
+      if (data.longitude !== undefined)
+        form.set('longitude', String(data.longitude));
+      for (const f of data.media ?? []) form.append('media', f);
+      return upload<FoodEntry>('/api/food', form);
+    },
+    update: (
+      id: string,
+      data: {
+        dish?: string | null;
+        place?: string | null;
+        notes?: string | null;
+        rating?: number | null;
+        tags?: string[];
+        recipeId?: string | null;
+      }
+    ) => patch<{ success: boolean }>(`/api/food/${id}`, data),
+    delete: (id: string) => del<{ success: boolean }>(`/api/food/${id}`),
+    addMedia: (id: string, media: File[]) => {
+      const form = new FormData();
+      for (const f of media) form.append('media', f);
+      return upload<{ media: FoodMedia[] }>(`/api/food/${id}/media`, form);
+    },
+    deleteMedia: (mediaId: string) =>
+      del<{ success: boolean }>(`/api/food/media/${mediaId}`),
   },
 
   fanfic: {
@@ -1284,5 +1419,48 @@ export const api = {
     getByDate: (date: string) =>
       get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
     sync: () => post<SyncResult[]>('/api/newspapers/sync'),
+  },
+  paper: {
+    list: (params: { limit?: number; offset?: number } = {}) => {
+      const q = new URLSearchParams();
+      if (params.limit != null) q.set('limit', String(params.limit));
+      if (params.offset != null) q.set('offset', String(params.offset));
+      const qs = q.toString();
+      return get<PaperDoc[]>(`/api/paper${qs ? `?${qs}` : ''}`);
+    },
+    get: (id: string) => get<PaperDetail>(`/api/paper/${id}`),
+    journal: () => get<JournalPaper[]>('/api/paper/journal'),
+    create: () => post<{ id: string }>('/api/paper'),
+    updateTitle: (id: string, title: string) =>
+      patch<{ success: boolean }>(`/api/paper/${id}`, { title }),
+    setArchiveRequested: (id: string, archiveRequested: boolean) =>
+      patch<{ success: boolean }>(`/api/paper/${id}`, { archiveRequested }),
+    remove: (id: string) => del<{ success: boolean }>(`/api/paper/${id}`),
+    addPage: (id: string) =>
+      post<{ id: string; position: number }>(`/api/paper/${id}/pages`),
+    getPage: (pageId: string) =>
+      get<PaperPageContent>(`/api/paper/pages/${pageId}`),
+    savePage: async (
+      pageId: string,
+      data: { strokes: string; width: number; height: number; snapshot: Blob }
+    ) => {
+      const form = new FormData();
+      form.set('strokes', data.strokes);
+      form.set('width', String(data.width));
+      form.set('height', String(data.height));
+      form.set('snapshot', data.snapshot, 'snapshot.png');
+      const r = await fetch(`/api/paper/pages/${pageId}`, {
+        method: 'PUT',
+        credentials: 'include',
+        body: form,
+      });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        throw new Error(b.error || `HTTP ${r.status}`);
+      }
+      return r.json() as Promise<{ success: boolean }>;
+    },
+    removePage: (pageId: string) =>
+      del<{ success: boolean }>(`/api/paper/pages/${pageId}`),
   },
 };

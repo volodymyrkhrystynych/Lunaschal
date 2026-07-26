@@ -239,6 +239,37 @@ CREATE TABLE IF NOT EXISTS recipes (
 
 CREATE INDEX IF NOT EXISTS idx_recipes_created ON recipes(created_at DESC);
 
+-- Food log: what was eaten, where, whether it was good, plus photos/videos.
+-- Shown in both the Food tab and the Journal feed; stored once here.
+CREATE TABLE IF NOT EXISTS food_entries (
+    id TEXT PRIMARY KEY,
+    raw_content TEXT,                     -- exactly as typed/spoken
+    dish TEXT,                            -- AI-extracted or manual
+    place TEXT,
+    notes TEXT,                           -- cleaned commentary
+    rating INTEGER,                       -- 1..5, nullable
+    tags TEXT,                            -- JSON array (see backend/tags.py)
+    recipe_id TEXT REFERENCES recipes(id) ON DELETE SET NULL,
+    latitude REAL,                        -- device GPS captured at log time
+    longitude REAL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_food_entries_created ON food_entries(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS food_media (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES food_entries(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,                   -- 'image' | 'video'
+    path TEXT NOT NULL,
+    mime TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_food_media_entry ON food_media(entry_id);
+
 CREATE TABLE IF NOT EXISTS transcriptions (
     id TEXT PRIMARY KEY,
     text TEXT NOT NULL,
@@ -403,3 +434,33 @@ CREATE TABLE IF NOT EXISTS notebook_review_state (
 );
 
 CREATE INDEX IF NOT EXISTS idx_notebook_review_due ON notebook_review_state(enabled, due);
+
+-- Paper: freeform handwriting/drawing documents (Apple Pencil on iPad). A
+-- "paper" is a document; its ordered "pages" each hold vector strokes (JSON,
+-- the source of truth for editing) plus a rendered PNG snapshot on disk (used
+-- for the grid thumbnail / quick view). See backend/paper/storage.py.
+CREATE TABLE IF NOT EXISTS papers (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    -- When set, the user has flagged this paper to move out of the Paper
+    -- explorer and into the Journal. The move happens lazily once the next 4am
+    -- boundary passes (see backend/routes/paper.py); until then it stays in the
+    -- explorer, marked pending, and the flag can be toggled back off.
+    archive_requested_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paper_pages (
+    id TEXT PRIMARY KEY,
+    paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    strokes TEXT NOT NULL DEFAULT '[]',
+    width INTEGER,
+    height INTEGER,
+    image_path TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_pages_paper ON paper_pages(paper_id, position);
