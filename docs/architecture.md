@@ -40,7 +40,7 @@ flowchart LR
             R_JOURNAL["journal · calendar · curated_tags · transcriptions"]
             R_LEARN["learning"]
             R_WRITE["writing"]
-            R_TASKS["tasks · voice_command"]
+            R_TASKS["tasks"]
             R_COOK["cookbook"]
             R_FIC["fanfic"]
             R_NEWS["newspapers"]
@@ -116,7 +116,7 @@ flowchart LR
     P_MEET -.-> PYANNOTE
     R_STT --> WHISPER
 
-    LISTENER -->|"transcribe · chat/stream<br/>voice-command · tts"| APPFACTORY
+    LISTENER -->|"transcribe · chat/stream<br/>tts"| APPFACTORY
     CHECKIN --> APPFACTORY
 ```
 
@@ -124,11 +124,10 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    KEY["evdev hotkey<br/>(paste / voice / journal / command)"] --> REC["record mic"]
+    KEY["evdev hotkey<br/>(paste / voice / journal)"] --> REC["record mic"]
     REC --> TR["POST /api/transcribe<br/>(Whisper: local or OpenAI)"]
     TR --> PASTE["paste via wtype"]
     TR --> CHAT["POST /api/chat/stream → TTS reply"]
     TR --> JRNL["save journal entry"]
-    TR --> CMD["POST /api/voice-command<br/>LLM parse → todo / event / journal<br/>(clarifying rounds via TTS)"]
     TR --> LOG[("transcriptions table<br/>→ Journal feed")]
 ```

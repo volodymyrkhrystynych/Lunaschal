@@ -20,7 +20,6 @@ The first three items to build, picked from [ROADMAP.md](./ROADMAP.md) as the be
 - Add `due_date` and `priority` columns (ALTER TABLE migration in `backend/db/connection.py`, matching the existing `writing_project_id` pattern).
 - API: filter/sort by due date and priority; an "overdue" flag computed server-side.
 - Frontend: grouping (Overdue / Today / Upcoming / Someday), priority indicator, overdue highlighting.
-- Teach the voice-command parser (`backend/ai/commands.py`) to extract due dates ("remind me Friday").
 - Tests: route filters/sorting, overdue computation around date boundaries, parser date extraction.
 - _Phase 2 (later):_ recurring todos, subtasks.
 

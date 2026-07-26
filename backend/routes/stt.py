@@ -341,7 +341,7 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
 
 # Sources whose transcriptions are kept in the transcription log (Journal view,
 # hidden behind a toggle). Journal-key transcriptions already persist as journal
-# entries; voice/command modes are conversational and intentionally not logged.
+# entries; voice mode is conversational and intentionally not logged.
 _LOGGED_SOURCES = {'paste'}
 
 # Window classes treated as browsers: their page title is stored as extra

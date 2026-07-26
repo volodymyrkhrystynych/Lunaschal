@@ -71,7 +71,7 @@ Lunaschal is a single-user personal life-management desktop app with AI integrat
 
 ### Backend Structure (`backend/`)
 
-Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `rag`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `voice_command`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`.
+Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `rag`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`.
 
 Feature-logic packages (kept out of the route files so they can be unit-tested):
 
@@ -101,7 +101,6 @@ Long-running work (fic downloads, curated-tag scans, meeting transcription) runs
 - `classifier.py` — classifies chat messages into intents: `journal | calendar | question | flashcard_request | conversation`; extracts structured data when saving entries
 - `embeddings.py` — text embeddings for RAG and Learning answer-dedup; OpenAI (`text-embedding-3-small`), Gemini (`text-embedding-004`), Ollama (`nomic-embed-text`)
 - `rag.py` — syncs journal entries and recipes to embeddings, semantic search, context formatting
-- `commands.py` — voice-command parser (todo / calendar event / journal entry, with clarifying-question rounds)
 - `journal.py` — entry polish/metadata; `classify_entry_for_tag(content, tag_name) -> bool` for the curated-tag background scan (CPU-pinned for Ollama via `_CPU_OPTIONS`)
 - `learning_generation.py` / `learning_grading.py` / `learning_verification.py` — flashcard generation, claim-coverage grading, MCP-grounded verification (see Learning below)
 - `mcp_client.py` — asyncio bridge to the `mcp` SDK (per-request sessions, stdio/http transports), MCP→OpenAI tool mapping
@@ -210,9 +209,8 @@ Shortcuts:
 - **F1** (`STT_PASTE_KEY`) — record → transcribe → paste text at cursor via `wtype`
 - **Right Alt** (`STT_VOICE_KEY`) — record → transcribe → AI chat (Lunaschal `/api/chat/stream`) → TTS reply spoken aloud
 - (`STT_JOURNAL_KEY`) — record → transcribe → save as journal entry
-- (`STT_COMMAND_KEY`) — record → transcribe → LLM parses the command (`POST /api/voice-command`, parser in `backend/ai/commands.py`) and creates a todo, calendar event, or journal entry; if essential details are missing the LLM asks a clarifying question via TTS and the listener records the answer (max 3 rounds)
 
-All four shortcuts are rebindable in Settings → Voice Shortcuts (stored in the `settings` table; env vars are fallbacks). The listener also runs the task-nudge loop (see Tasks above). Every transcription is logged to the `transcriptions` table; `POST /api/transcribe/correct` re-runs a transcript through the LLM for cleanup.
+All three shortcuts are rebindable in Settings → Voice Shortcuts (stored in the `settings` table; env vars are fallbacks). The listener also runs the task-nudge loop (see Tasks above). Every transcription is logged to the `transcriptions` table; `POST /api/transcribe/correct` re-runs a transcript through the LLM for cleanup.
 
 The Flask backend handles `POST /api/transcribe` and `POST /api/tts` directly (no separate port 8765 service). The Whisper model loads lazily on the first transcription request. `stt/service.py` still exists as a standalone FastAPI server but is no longer used by default.
 

@@ -17,7 +17,8 @@ def test_create_trims_title_and_defaults_undone(client):
     assert todo_id
 
     todos = client.get('/api/tasks/todos').get_json()
-    assert len(todos) == 1
+    assert len(todos) == 1 
+    
     assert todos[0]['id'] == todo_id
     assert todos[0]['title'] == 'buy milk'  # surrounding whitespace stripped
     assert todos[0]['done'] is False        # coerced to a JSON boolean, not 0
@@ -238,15 +239,6 @@ def test_patch_clears_due_notes_and_repeat(client):
         f'/api/tasks/todos/{todo_id}', json={'repeatInterval': 2}
     ).status_code == 400
 
-
-def test_voice_command_todo_lands_in_the_default_list(client):
-    from backend.routes import voice_command
-
-    todo_id = voice_command._create_todo({'title': 'from a voice command'})
-    assert todo_id
-    todo = client.get('/api/tasks/todos').get_json()[0]
-    assert todo['list'] == 'todo'
-    assert todo['title'] == 'from a voice command'
 
 
 def test_migration_adds_list_columns_to_legacy_dbs(tmp_path):

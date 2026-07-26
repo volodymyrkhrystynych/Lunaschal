@@ -320,7 +320,6 @@ function ShortcutsSection() {
   const [pasteKey, setPasteKey] = useState<string | null>(null);
   const [voiceKey, setVoiceKey] = useState<string | null>(null);
   const [journalKey, setJournalKey] = useState<string | null>(null);
-  const [commandKey, setCommandKey] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -328,7 +327,6 @@ function ShortcutsSection() {
       setPasteKey(settings.sttPasteKey ?? null);
       setVoiceKey(settings.sttVoiceKey ?? null);
       setJournalKey(settings.sttJournalKey ?? null);
-      setCommandKey(settings.sttCommandKey ?? null);
     }
   }, [settings]);
 
@@ -338,7 +336,6 @@ function ShortcutsSection() {
         sttPasteKey: pasteKey ?? undefined,
         sttVoiceKey: voiceKey ?? undefined,
         sttJournalKey: journalKey ?? undefined,
-        sttCommandKey: commandKey ?? undefined,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -402,19 +399,6 @@ function ShortcutsSection() {
             <KeyRecorder value={journalKey} onChange={setJournalKey} />
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
               env: <code>STT_JOURNAL_KEY</code>
-            </p>
-          </div>
-          <div>
-            <p className="text-sm text-[var(--color-text)] mb-1.5">
-              Command shortcut
-            </p>
-            <p className="text-xs text-[var(--color-text-muted)] mb-2">
-              Record → AI parses command → creates todo / event / journal (asks
-              for clarification via TTS)
-            </p>
-            <KeyRecorder value={commandKey} onChange={setCommandKey} />
-            <p className="text-xs text-[var(--color-text-muted)] mt-1">
-              env: <code>STT_COMMAND_KEY</code>
             </p>
           </div>
         </div>

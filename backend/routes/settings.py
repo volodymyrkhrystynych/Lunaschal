@@ -71,7 +71,6 @@ def get_settings():
         'sttPasteKey': s.get('stt_paste_key'),
         'sttVoiceKey': s.get('stt_voice_key'),
         'sttJournalKey': s.get('stt_journal_key'),
-        'sttCommandKey': s.get('stt_command_key'),
         'sttBackend': s.get('stt_backend'),
         'ttsBackend': s.get('tts_backend'),
         'whisperModel': s.get('whisper_model'),
@@ -90,7 +89,6 @@ def update_ai():
     field_map = {
         'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
-        'sttCommandKey': 'stt_command_key',
         'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
         'whisperModel': 'whisper_model', 'sttDevice': 'stt_device',
         'hfToken': 'hf_token',
