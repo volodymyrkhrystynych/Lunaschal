@@ -16,6 +16,10 @@ kokoro-onnx>=0.4.0
 # when STT_BACKEND=parakeet.
 onnx-asr[hub]>=0.5.0
 beautifulsoup4>=4.12
+# Pillow reads EXIF (capture date + GPS) from food-log photos; pillow-heif lets
+# it read/transcode iPhone HEIC/HEIF so those photos aren't missed.
+Pillow>=10.0
+pillow-heif>=0.16
 fsrs>=6.0
 mcp>=1.28
 nh3>=0.2

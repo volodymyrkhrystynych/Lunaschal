@@ -13,7 +13,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import { Login } from './components/Login';
 import { Writing } from './components/Writing';
 import { Tasks } from './components/Tasks';
-import { Cookbook } from './components/Cookbook';
+import { Food } from './components/Food/Food';
 import { Fanfic } from './components/Fanfic/Fanfic';
 import type { FicTarget } from './components/Fanfic/Fanfic';
 import { Newspapers } from './components/Newspapers';
@@ -35,7 +35,7 @@ type View =
   | 'notebook'
   | 'writing'
   | 'tasks'
-  | 'cookbook'
+  | 'food'
   | 'fanfic'
   | 'newspapers'
   | 'paper';
@@ -160,8 +160,8 @@ export default function App() {
         return <Writing />;
       case 'tasks':
         return <Tasks />;
-      case 'cookbook':
-        return <Cookbook />;
+      case 'food':
+        return <Food />;
       case 'fanfic':
         return (
           <Fanfic

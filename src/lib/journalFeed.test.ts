@@ -5,6 +5,7 @@ import type {
   Transcription,
   DatedConversation,
   JournalPaper,
+  FoodJournalItem,
 } from '../hooks/api';
 
 function entry(id: string, createdAt: string): JournalEntry {
@@ -52,10 +53,26 @@ function paper(id: string, archivedAt: string): JournalPaper {
   };
 }
 
+function food(id: string, createdAt: string): FoodJournalItem {
+  return {
+    id,
+    dish: `dish ${id}`,
+    place: null,
+    rating: 4,
+    notes: null,
+    latitude: null,
+    longitude: null,
+    createdAt,
+    recipe: null,
+    media: [],
+  };
+}
+
 function idOf(i: FeedItem): string {
   if (i.kind === 'entry') return i.entry.id;
   if (i.kind === 'transcription') return i.transcription.id;
   if (i.kind === 'paper') return i.paper.id;
+  if (i.kind === 'food') return i.food.id;
   return i.conversation.id;
 }
 
@@ -177,5 +194,32 @@ describe('buildFeed', () => {
     const feed = buildFeed([], [], [], papers);
     expect(feed).toEqual([{ kind: 'paper', paper: papers[0] }]);
     expect('entryIndex' in feed[0]).toBe(false);
+  });
+
+  it('interleaves food entries by createdAt across all five sources', () => {
+    const entries = [entry('e1', '2026-07-08T12:00:00')];
+    const ts = [transcription('t1', '2026-07-06T12:00:00')];
+    const convs = [conversation('c1', '2026-07-05T12:00:00')];
+    const papers = [paper('p1', '2026-07-04T12:00:00')];
+    const foods = [
+      food('f1', '2026-07-07T12:00:00'),
+      food('f2', '2026-07-03T12:00:00'),
+    ];
+    const feed = buildFeed(entries, ts, convs, papers, foods);
+    expect(feed.map(idOf)).toEqual(['e1', 'f1', 't1', 'c1', 'p1', 'f2']);
+  });
+
+  it('keeps food items non-selectable (no entryIndex)', () => {
+    const foods = [food('f1', '2026-07-07T12:00:00')];
+    const feed = buildFeed([], [], [], [], foods);
+    expect(feed).toEqual([{ kind: 'food', food: foods[0] }]);
+    expect('entryIndex' in feed[0]).toBe(false);
+  });
+
+  it('lets entries win a tie against a food entry', () => {
+    const entries = [entry('e1', '2026-07-08T12:00:00')];
+    const foods = [food('f1', '2026-07-08T12:00:00')];
+    const feed = buildFeed(entries, [], [], [], foods);
+    expect(feed.map(i => i.kind)).toEqual(['entry', 'food']);
   });
 });

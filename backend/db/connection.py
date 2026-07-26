@@ -78,6 +78,7 @@ def init_db() -> None:
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
     _ensure_paper_archive_requested(db)
+    _ensure_food_location(db)
     _ensure_hf_token(db)
     _ensure_meeting_speaker_names(db)
     _ensure_meeting_echo_cancel(db)
@@ -203,6 +204,17 @@ def _ensure_paper_archive_requested(db: sqlite3.Connection) -> None:
     if 'archive_requested_at' not in cols:
         db.execute('ALTER TABLE papers ADD COLUMN archive_requested_at INTEGER')
         db.commit()
+
+
+def _ensure_food_location(db: sqlite3.Connection) -> None:
+    if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='food_entries'").fetchone():
+        return
+    cols = {r[1] for r in db.execute('PRAGMA table_info(food_entries)')}
+    if 'latitude' not in cols:
+        db.execute('ALTER TABLE food_entries ADD COLUMN latitude REAL')
+    if 'longitude' not in cols:
+        db.execute('ALTER TABLE food_entries ADD COLUMN longitude REAL')
+    db.commit()
 
 
 def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:

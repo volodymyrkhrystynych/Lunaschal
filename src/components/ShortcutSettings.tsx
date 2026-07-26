@@ -63,7 +63,7 @@ const GROUPS: { title: string; actions: ActionId[] }[] = [
       'tab.writing',
       'tab.calendar',
       'tab.learning',
-      'tab.cookbook',
+      'tab.food',
       'tab.fanfic',
       'tab.files',
       'tab.settings',

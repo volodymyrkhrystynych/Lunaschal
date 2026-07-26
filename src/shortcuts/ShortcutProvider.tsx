@@ -75,7 +75,7 @@ export type AppView =
   | 'notebook'
   | 'writing'
   | 'tasks'
-  | 'cookbook'
+  | 'food'
   | 'fanfic'
   | 'newspapers'
   | 'paper';
@@ -92,7 +92,7 @@ export const VIEW_ORDER: AppView[] = [
   'meetings',
   'writing',
   'calendar',
-  'cookbook',
+  'food',
   'fanfic',
   'newspapers',
   'paper',
@@ -107,7 +107,7 @@ const TAB_ACTIONS: Partial<Record<ActionId, AppView>> = {
   'tab.writing': 'writing',
   'tab.calendar': 'calendar',
   'tab.learning': 'learning',
-  'tab.cookbook': 'cookbook',
+  'tab.food': 'food',
   'tab.fanfic': 'fanfic',
   'tab.files': 'files',
   'tab.notebook': 'notebook',

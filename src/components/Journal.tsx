@@ -14,7 +14,12 @@ import {
 import { buildFeed } from '../lib/journalFeed';
 import { isBreak } from '../lib/chatSegments';
 import { MessageMarkdown } from './MessageMarkdown';
-import type { DatedConversation, JournalPaper } from '../hooks/api';
+import type {
+  DatedConversation,
+  JournalPaper,
+  FoodJournalItem,
+} from '../hooks/api';
+import { ratingStars, foodTitle, mapLink } from '../lib/food';
 import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
 
 interface JournalProps {
@@ -118,6 +123,14 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     queryKey: ['paper', 'journal'],
     queryFn: () => api.paper.journal(),
     enabled: papersVisible,
+  });
+
+  // Food-log entries interleave in the plain chronological view too.
+  const foodVisible = !searchQuery && !selectedCuratedTagId;
+  const { data: journalFood } = useQuery({
+    queryKey: ['food', 'journal'],
+    queryFn: () => api.food.journal(),
+    enabled: foodVisible,
   });
 
   useEffect(() => {
@@ -374,7 +387,8 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
           entries ?? [],
           transcriptionsVisible ? (transcriptions ?? []) : [],
           conversationsVisible ? (chatConversations ?? []) : [],
-          papersVisible ? (journalPapers ?? []) : []
+          papersVisible ? (journalPapers ?? []) : [],
+          foodVisible ? (journalFood ?? []) : []
         ).map(item => {
           if (item.kind === 'conversation') {
             return (
@@ -386,6 +400,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
           }
           if (item.kind === 'paper') {
             return <JournalPaperItem key={item.paper.id} paper={item.paper} />;
+          }
+          if (item.kind === 'food') {
+            return <JournalFoodItem key={item.food.id} food={item.food} />;
           }
           if (item.kind === 'transcription') {
             const t = item.transcription;
@@ -742,6 +759,118 @@ function JournalPaperItem({ paper }: { paper: JournalPaper }) {
             src={zoom}
             alt=""
             className="max-w-full max-h-full rounded-lg shadow-2xl bg-white"
+            onClick={e => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setZoom(null)}
+            className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// A food-log entry in the journal feed: dish/place/rating with a media
+// filmstrip. View-only here — editing happens in the Food tab.
+function JournalFoodItem({ food }: { food: FoodJournalItem }) {
+  const [zoom, setZoom] = useState<string | null>(null);
+  const stars = ratingStars(food.rating);
+  const geoLink = mapLink(food.latitude, food.longitude);
+
+  const dayLabel = new Intl.DateTimeFormat('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(food.createdAt));
+
+  return (
+    <div className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5">
+      <div className="flex items-baseline justify-between gap-2 mb-2">
+        <span className="text-[var(--color-text)] truncate">
+          🍽 {foodTitle(food)}
+          {food.place && (
+            <span className="text-[var(--color-text-muted)]">
+              {' '}
+              · 📍 {food.place}
+            </span>
+          )}
+          {geoLink && (
+            <a
+              href={geoLink}
+              target="_blank"
+              rel="noreferrer"
+              onClick={e => e.stopPropagation()}
+              className="text-[var(--color-text-muted)] underline hover:text-[var(--color-text)]"
+            >
+              {' '}
+              · 🗺️ map
+            </a>
+          )}
+        </span>
+        <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+          {stars && (
+            <span className="text-[var(--color-primary)] mr-2">{stars}</span>
+          )}
+          {dayLabel}
+        </span>
+      </div>
+
+      {food.notes && (
+        <div className="text-sm text-[var(--color-text)] whitespace-pre-wrap mb-2">
+          {food.notes}
+        </div>
+      )}
+
+      {food.media.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {food.media.map(m =>
+            m.kind === 'video' ? (
+              <video
+                key={m.id}
+                src={m.url}
+                controls
+                className="shrink-0 h-28 rounded-md border border-white/10"
+              />
+            ) : (
+              <button
+                key={m.id}
+                onClick={() => setZoom(m.url)}
+                className="shrink-0 h-28 aspect-square rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
+                title="View"
+              >
+                <img
+                  src={m.url}
+                  alt=""
+                  className="w-full h-full object-cover"
+                />
+              </button>
+            )
+          )}
+        </div>
+      )}
+
+      {food.recipe && (
+        <div className="mt-2">
+          <span className="px-2 py-0.5 text-xs rounded border border-[var(--color-primary)]/40 text-[var(--color-primary)] bg-[var(--color-primary)]/10">
+            🍳 {food.recipe.title}
+          </span>
+        </div>
+      )}
+
+      {zoom && (
+        <div
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
+          onClick={() => setZoom(null)}
+        >
+          <img
+            src={zoom}
+            alt=""
+            className="max-w-full max-h-full rounded-lg shadow-2xl"
             onClick={e => e.stopPropagation()}
           />
           <button

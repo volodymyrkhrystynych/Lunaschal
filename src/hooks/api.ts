@@ -545,6 +545,44 @@ export interface PaperPageContent {
   height: number | null;
 }
 
+export interface FoodMedia {
+  id: string;
+  kind: 'image' | 'video';
+  position: number;
+  url: string;
+}
+
+export interface FoodEntry {
+  id: string;
+  rawContent: string | null;
+  dish: string | null;
+  place: string | null;
+  notes: string | null;
+  rating: number | null;
+  tags: string | null;
+  recipeId: string | null;
+  recipe: { id: string; title: string } | null;
+  media: FoodMedia[];
+  latitude: number | null;
+  longitude: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// A food entry shaped for the Journal feed.
+export interface FoodJournalItem {
+  id: string;
+  dish: string | null;
+  place: string | null;
+  rating: number | null;
+  notes: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  createdAt: string;
+  recipe: { id: string; title: string } | null;
+  media: FoodMedia[];
+}
+
 // --- fetch helpers ---
 
 // A request to an unreachable backend (e.g. the Tailscale link is down in
@@ -770,6 +808,64 @@ export const api = {
     delete: (id: string) => del<{ success: boolean }>(`/api/cookbook/${id}`),
     importRecipe: (data: { text?: string; url?: string }) =>
       post<{ id: string; recipe: Recipe }>('/api/cookbook/import', data),
+  },
+
+  food: {
+    list: (params?: { limit?: number; offset?: number; tag?: string }) => {
+      const qp = new URLSearchParams();
+      if (params?.limit !== undefined) qp.set('limit', String(params.limit));
+      if (params?.offset !== undefined) qp.set('offset', String(params.offset));
+      if (params?.tag) qp.set('tag', params.tag);
+      return get<FoodEntry[]>(`/api/food?${qp}`);
+    },
+    journal: () => get<FoodJournalItem[]>('/api/food/journal'),
+    tags: () => get<RecipeTag[]>('/api/food/tags'),
+    get: (id: string) => get<FoodEntry>(`/api/food/${id}`),
+    // Create an entry from raw text + optional photos/videos (one multipart POST).
+    create: (data: {
+      text?: string;
+      dish?: string;
+      place?: string;
+      notes?: string;
+      rating?: number;
+      tags?: string[];
+      media?: File[];
+      latitude?: number;
+      longitude?: number;
+    }) => {
+      const form = new FormData();
+      if (data.text) form.set('text', data.text);
+      if (data.dish) form.set('dish', data.dish);
+      if (data.place) form.set('place', data.place);
+      if (data.notes) form.set('notes', data.notes);
+      if (data.rating !== undefined) form.set('rating', String(data.rating));
+      if (data.tags) form.set('tags', JSON.stringify(data.tags));
+      if (data.latitude !== undefined)
+        form.set('latitude', String(data.latitude));
+      if (data.longitude !== undefined)
+        form.set('longitude', String(data.longitude));
+      for (const f of data.media ?? []) form.append('media', f);
+      return upload<FoodEntry>('/api/food', form);
+    },
+    update: (
+      id: string,
+      data: {
+        dish?: string | null;
+        place?: string | null;
+        notes?: string | null;
+        rating?: number | null;
+        tags?: string[];
+        recipeId?: string | null;
+      }
+    ) => patch<{ success: boolean }>(`/api/food/${id}`, data),
+    delete: (id: string) => del<{ success: boolean }>(`/api/food/${id}`),
+    addMedia: (id: string, media: File[]) => {
+      const form = new FormData();
+      for (const f of media) form.append('media', f);
+      return upload<{ media: FoodMedia[] }>(`/api/food/${id}/media`, form);
+    },
+    deleteMedia: (mediaId: string) =>
+      del<{ success: boolean }>(`/api/food/media/${mediaId}`),
   },
 
   fanfic: {

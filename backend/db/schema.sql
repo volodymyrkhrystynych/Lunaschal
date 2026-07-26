@@ -239,6 +239,37 @@ CREATE TABLE IF NOT EXISTS recipes (
 
 CREATE INDEX IF NOT EXISTS idx_recipes_created ON recipes(created_at DESC);
 
+-- Food log: what was eaten, where, whether it was good, plus photos/videos.
+-- Shown in both the Food tab and the Journal feed; stored once here.
+CREATE TABLE IF NOT EXISTS food_entries (
+    id TEXT PRIMARY KEY,
+    raw_content TEXT,                     -- exactly as typed/spoken
+    dish TEXT,                            -- AI-extracted or manual
+    place TEXT,
+    notes TEXT,                           -- cleaned commentary
+    rating INTEGER,                       -- 1..5, nullable
+    tags TEXT,                            -- JSON array (see backend/tags.py)
+    recipe_id TEXT REFERENCES recipes(id) ON DELETE SET NULL,
+    latitude REAL,                        -- device GPS captured at log time
+    longitude REAL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_food_entries_created ON food_entries(created_at DESC);
+
+CREATE TABLE IF NOT EXISTS food_media (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES food_entries(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,                   -- 'image' | 'video'
+    path TEXT NOT NULL,
+    mime TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_food_media_entry ON food_media(entry_id);
+
 CREATE TABLE IF NOT EXISTS transcriptions (
     id TEXT PRIMARY KEY,
     text TEXT NOT NULL,

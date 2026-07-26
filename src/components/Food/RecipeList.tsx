@@ -1,8 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../hooks/api';
-import type { Recipe } from '../hooks/api';
-import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
+import { api } from '../../hooks/api';
+import type { Recipe } from '../../hooks/api';
+import {
+  useShortcuts,
+  useShortcutScope,
+} from '../../shortcuts/ShortcutProvider';
 
 const parseTags = (tags: string | null): string[] => {
   if (!tags) return [];
@@ -20,7 +23,12 @@ const splitTagInput = (input: string): string[] =>
     .map(t => t.trim().toLowerCase())
     .filter(Boolean);
 
-export function Cookbook() {
+/**
+ * The recipe collection — the "Recipes" section of the Food tab. Recipes still
+ * live behind the `/api/cookbook` endpoints (see api.cookbook.*); the rename to
+ * "Food" is a UI grouping, not a backend change.
+ */
+export function RecipeList() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -142,31 +150,26 @@ export function Cookbook() {
     }).format(new Date(date));
 
   return (
-    <div className="flex-1 flex flex-col p-4 overflow-hidden">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold text-[var(--color-text)]">
-          Cookbook
-        </h1>
-        <div className="flex gap-2">
-          <button
-            onClick={() => {
-              setShowImport(!showImport);
-              setShowNewRecipe(false);
-            }}
-            className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors"
-          >
-            Import
-          </button>
-          <button
-            onClick={() => {
-              setShowNewRecipe(!showNewRecipe);
-              setShowImport(false);
-            }}
-            className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors"
-          >
-            + New Recipe
-          </button>
-        </div>
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+      <div className="flex items-center justify-end gap-2 mb-4">
+        <button
+          onClick={() => {
+            setShowImport(!showImport);
+            setShowNewRecipe(false);
+          }}
+          className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors"
+        >
+          Import
+        </button>
+        <button
+          onClick={() => {
+            setShowNewRecipe(!showNewRecipe);
+            setShowImport(false);
+          }}
+          className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors"
+        >
+          + New Recipe
+        </button>
       </div>
 
       <div className="mb-4">
@@ -449,7 +452,7 @@ export function Cookbook() {
           <div className="text-center text-[var(--color-text-muted)] py-12">
             {searchQuery
               ? 'No recipes found'
-              : 'No recipes yet. Add one by hand or import from a page!'}
+              : 'No recipes yet. Add one by hand, import from a page, or describe cooking one in a food log entry.'}
           </div>
         )}
       </div>
