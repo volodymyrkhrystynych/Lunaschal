@@ -6,6 +6,7 @@ import type {
   DatedConversation,
   JournalPaper,
   FoodJournalItem,
+  TaskEvent,
 } from '../hooks/api';
 
 function entry(id: string, createdAt: string): JournalEntry {
@@ -68,11 +69,28 @@ function food(id: string, createdAt: string): FoodJournalItem {
   };
 }
 
+function taskEvent(
+  id: string,
+  createdAt: string,
+  kind: TaskEvent['kind'] = 'todo_completed'
+): TaskEvent {
+  return {
+    id,
+    kind,
+    title: `task ${id}`,
+    refId: null,
+    taskList: 'todo',
+    detail: null,
+    createdAt,
+  };
+}
+
 function idOf(i: FeedItem): string {
   if (i.kind === 'entry') return i.entry.id;
   if (i.kind === 'transcription') return i.transcription.id;
   if (i.kind === 'paper') return i.paper.id;
   if (i.kind === 'food') return i.food.id;
+  if (i.kind === 'taskEvent') return i.taskEvent.id;
   return i.conversation.id;
 }
 
@@ -221,5 +239,31 @@ describe('buildFeed', () => {
     const foods = [food('f1', '2026-07-08T12:00:00')];
     const feed = buildFeed(entries, [], [], [], foods);
     expect(feed.map(i => i.kind)).toEqual(['entry', 'food']);
+  });
+
+  it('interleaves task events by createdAt across all six sources', () => {
+    const entries = [
+      entry('e1', '2026-07-08T12:00:00'),
+      entry('e2', '2026-07-04T12:00:00'),
+    ];
+    const events = [
+      taskEvent('k1', '2026-07-07T12:00:00'),
+      taskEvent('k2', '2026-07-03T12:00:00', 'task_deleted'),
+    ];
+    const feed = buildFeed(entries, [], [], [], [], events);
+    expect(feed.map(idOf)).toEqual(['e1', 'k1', 'e2', 'k2']);
+  });
+
+  it('keeps task-event items non-selectable (no entryIndex)', () => {
+    const events = [taskEvent('k1', '2026-07-07T12:00:00')];
+    const feed = buildFeed([], [], [], [], [], events);
+    expect(feed).toEqual([{ kind: 'taskEvent', taskEvent: events[0] }]);
+  });
+
+  it('lets entries win a tie against a task event', () => {
+    const entries = [entry('e1', '2026-07-08T12:00:00')];
+    const events = [taskEvent('k1', '2026-07-08T12:00:00')];
+    const feed = buildFeed(entries, [], [], [], [], events);
+    expect(feed.map(i => i.kind)).toEqual(['entry', 'taskEvent']);
   });
 });

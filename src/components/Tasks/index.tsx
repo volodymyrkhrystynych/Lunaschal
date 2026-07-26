@@ -20,7 +20,6 @@ export function Tasks() {
   const [activeList, setActiveList] = useState<TodoList>('todo');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const [showCompleted, setShowCompleted] = useState(false);
   const { level, setLevel } = useShortcuts();
 
   const { data: tasks = [], isLoading: tasksLoading } = useQuery({
@@ -37,7 +36,9 @@ export function Tasks() {
     [tasks]
   );
   const buckets = useMemo(() => groupTodosByList(todos), [todos]);
-  const { active, completed } = useMemo(
+  // Completed todos no longer live in a list here — completing one drops a small
+  // notification into the Journal feed instead (see task_events).
+  const { active } = useMemo(
     () => partitionTodos(buckets[activeList]),
     [buckets, activeList]
   );
@@ -50,10 +51,7 @@ export function Tasks() {
     [buckets]
   );
 
-  const visibleTodos = useMemo(
-    () => (showCompleted ? [...active, ...completed] : active),
-    [active, completed, showCompleted]
-  );
+  const visibleTodos = active;
   const visibleIds = useMemo(
     () =>
       section === 'daily'
@@ -191,11 +189,9 @@ export function Tasks() {
           level={level}
           counts={counts}
           active={active}
-          completed={completed}
           isLoading={todosLoading}
           selectedId={section !== 'daily' ? selectedId : null}
           creating={creating}
-          showCompleted={showCompleted}
           onSelectList={selectList}
           onSelectTodo={id => {
             setSection(activeList);
@@ -206,7 +202,6 @@ export function Tasks() {
             setLevel(2);
           }}
           onCancelCreate={cancelCreate}
-          onToggleCompleted={() => setShowCompleted(v => !v)}
           onUpdateTodo={(id, data) => updateTodo.mutate({ id, data })}
         />
       </div>

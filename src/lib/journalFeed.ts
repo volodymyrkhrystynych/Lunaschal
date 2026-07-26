@@ -4,6 +4,7 @@ import type {
   DatedConversation,
   JournalPaper,
   FoodJournalItem,
+  TaskEvent,
 } from '../hooks/api';
 
 // A journal feed item: a real entry, an interleaved STT transcription, a saved
@@ -16,18 +17,20 @@ export type FeedItem =
   | { kind: 'transcription'; transcription: Transcription }
   | { kind: 'conversation'; conversation: DatedConversation }
   | { kind: 'paper'; paper: JournalPaper }
-  | { kind: 'food'; food: FoodJournalItem };
+  | { kind: 'food'; food: FoodJournalItem }
+  | { kind: 'taskEvent'; taskEvent: TaskEvent };
 
-// Merge entries, transcriptions, saved chats, archived papers, and food-log
-// entries into one feed sorted by time descending (conversations sort by
-// updatedAt, papers by the moment they were archived, food by createdAt). All
-// inputs are already newest-first; entries win exact ties.
+// Merge entries, transcriptions, saved chats, archived papers, food-log entries,
+// and task events into one feed sorted by time descending (conversations sort by
+// updatedAt, papers by the moment they were archived, food and task events by
+// createdAt). All inputs are already newest-first; entries win exact ties.
 export function buildFeed(
   entries: JournalEntry[],
   transcriptions: Transcription[],
   conversations: DatedConversation[] = [],
   papers: JournalPaper[] = [],
-  food: FoodJournalItem[] = []
+  food: FoodJournalItem[] = [],
+  taskEvents: TaskEvent[] = []
 ): FeedItem[] {
   const feed: FeedItem[] = [];
   let e = 0;
@@ -35,24 +38,28 @@ export function buildFeed(
   let c = 0;
   let p = 0;
   let f = 0;
+  let k = 0;
   const ms = (v: string) => new Date(v).getTime();
   while (
     e < entries.length ||
     t < transcriptions.length ||
     c < conversations.length ||
     p < papers.length ||
-    f < food.length
+    f < food.length ||
+    k < taskEvents.length
   ) {
     const entry = entries[e];
     const tr = transcriptions[t];
     const conv = conversations[c];
     const paper = papers[p];
     const foodItem = food[f];
+    const taskEvent = taskEvents[k];
     const entryTime = entry ? ms(entry.createdAt) : -Infinity;
     const trTime = tr ? ms(tr.createdAt) : -Infinity;
     const convTime = conv ? ms(conv.updatedAt) : -Infinity;
     const paperTime = paper ? ms(paper.archivedAt) : -Infinity;
     const foodTime = foodItem ? ms(foodItem.createdAt) : -Infinity;
+    const taskTime = taskEvent ? ms(taskEvent.createdAt) : -Infinity;
 
     // Entries win ties over the other sources.
     if (
@@ -60,7 +67,8 @@ export function buildFeed(
       entryTime >= trTime &&
       entryTime >= convTime &&
       entryTime >= paperTime &&
-      entryTime >= foodTime
+      entryTime >= foodTime &&
+      entryTime >= taskTime
     ) {
       feed.push({ kind: 'entry', entry, entryIndex: e });
       e++;
@@ -68,19 +76,28 @@ export function buildFeed(
       tr &&
       trTime >= convTime &&
       trTime >= paperTime &&
-      trTime >= foodTime
+      trTime >= foodTime &&
+      trTime >= taskTime
     ) {
       feed.push({ kind: 'transcription', transcription: tr });
       t++;
-    } else if (conv && convTime >= paperTime && convTime >= foodTime) {
+    } else if (
+      conv &&
+      convTime >= paperTime &&
+      convTime >= foodTime &&
+      convTime >= taskTime
+    ) {
       feed.push({ kind: 'conversation', conversation: conv });
       c++;
-    } else if (paper && paperTime >= foodTime) {
+    } else if (paper && paperTime >= foodTime && paperTime >= taskTime) {
       feed.push({ kind: 'paper', paper });
       p++;
-    } else {
+    } else if (foodItem && foodTime >= taskTime) {
       feed.push({ kind: 'food', food: foodItem });
       f++;
+    } else {
+      feed.push({ kind: 'taskEvent', taskEvent });
+      k++;
     }
   }
   return feed;

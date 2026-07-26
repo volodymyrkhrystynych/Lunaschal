@@ -241,7 +241,11 @@ const todoUpdateCfg = (
       old?.map(t => (t.id === vars.id ? { ...t, ...rest } : t))
     );
   },
-  onSettled: () => qc.invalidateQueries({ queryKey: ['todos'] }),
+  onSettled: () => {
+    qc.invalidateQueries({ queryKey: ['todos'] });
+    // Completing/un-completing a todo adds/retracts a Journal notification.
+    qc.invalidateQueries({ queryKey: ['taskEvents'] });
+  },
 });
 
 const dailyToggleCfg = (
@@ -255,7 +259,11 @@ const dailyToggleCfg = (
       old?.map(t => (t.id === vars.id ? { ...t, done: !vars.done } : t))
     );
   },
-  onSettled: () => qc.invalidateQueries({ queryKey: ['tasks'] }),
+  onSettled: () => {
+    qc.invalidateQueries({ queryKey: ['tasks'] });
+    // Completing/un-completing a daily task adds/retracts a Journal notification.
+    qc.invalidateQueries({ queryKey: ['taskEvents'] });
+  },
 });
 
 const fanficProgressCfg = (

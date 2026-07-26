@@ -26,6 +26,10 @@ export function DailyTasks({
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ['tasks'] });
 
+  // Completing or deleting a daily task drops a notification in the Journal feed.
+  const invalidateEvents = () =>
+    queryClient.invalidateQueries({ queryKey: ['taskEvents'] });
+
   const createTask = useMutation({
     mutationFn: (title: string) => api.tasks.create(title),
     onSuccess: () => {
@@ -51,13 +55,19 @@ export function DailyTasks({
 
   const deleteTask = useMutation({
     mutationFn: (id: string) => api.tasks.remove(id),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      invalidateEvents();
+    },
   });
 
   const toggleComplete = useMutation({
     mutationFn: ({ id, done }: { id: string; done: boolean }) =>
       done ? api.tasks.uncomplete(id) : api.tasks.complete(id),
-    onSuccess: invalidate,
+    onSuccess: () => {
+      invalidate();
+      invalidateEvents();
+    },
   });
 
   const moveTask = (index: number, direction: -1 | 1) => {

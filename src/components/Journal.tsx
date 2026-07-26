@@ -18,6 +18,7 @@ import type {
   DatedConversation,
   JournalPaper,
   FoodJournalItem,
+  TaskEvent,
 } from '../hooks/api';
 import { ratingStars, foodTitle, mapLink } from '../lib/food';
 import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
@@ -131,6 +132,14 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     queryKey: ['food', 'journal'],
     queryFn: () => api.food.journal(),
     enabled: foodVisible,
+  });
+
+  // Task completions/deletions surface as small notifications in the feed.
+  const taskEventsVisible = !searchQuery && !selectedCuratedTagId;
+  const { data: taskEvents } = useQuery({
+    queryKey: ['taskEvents'],
+    queryFn: () => api.tasks.events(),
+    enabled: taskEventsVisible,
   });
 
   useEffect(() => {
@@ -388,7 +397,8 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
           transcriptionsVisible ? (transcriptions ?? []) : [],
           conversationsVisible ? (chatConversations ?? []) : [],
           papersVisible ? (journalPapers ?? []) : [],
-          foodVisible ? (journalFood ?? []) : []
+          foodVisible ? (journalFood ?? []) : [],
+          taskEventsVisible ? (taskEvents ?? []) : []
         ).map(item => {
           if (item.kind === 'conversation') {
             return (
@@ -403,6 +413,15 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
           }
           if (item.kind === 'food') {
             return <JournalFoodItem key={item.food.id} food={item.food} />;
+          }
+          if (item.kind === 'taskEvent') {
+            return (
+              <JournalTaskEventItem
+                key={item.taskEvent.id}
+                event={item.taskEvent}
+                formatDate={formatDate}
+              />
+            );
           }
           if (item.kind === 'transcription') {
             const t = item.transcription;
@@ -770,6 +789,67 @@ function JournalPaperItem({ paper }: { paper: JournalPaper }) {
         </div>
       )}
     </div>
+  );
+}
+
+const TASK_LIST_LABELS: Record<string, string> = {
+  todo: 'To-Do',
+  chores: 'Chores',
+  archive: 'Archive',
+  daily: 'Daily',
+};
+
+// A task completion/deletion in the journal feed: a small one-line notification,
+// deliberately much smaller than an entry card. Non-selectable (a passive log).
+// The list it came from (To-Do / Chores / Archive / Daily) is shown as a pill.
+// Clicking expands it (like a to-do row) to reveal the task's saved notes.
+function JournalTaskEventItem({
+  event,
+  formatDate,
+}: {
+  event: TaskEvent;
+  formatDate: (date: string) => string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const removed = event.kind === 'task_deleted';
+  const listLabel = event.taskList ? TASK_LIST_LABELS[event.taskList] : null;
+  return (
+    <button
+      type="button"
+      onClick={() => setExpanded(v => !v)}
+      className="w-full text-left px-3 py-1.5 rounded hover:bg-white/5 transition-colors"
+    >
+      <div className="flex items-baseline gap-2 text-xs text-[var(--color-text-muted)]">
+        <span
+          className={
+            removed ? 'text-red-400/70' : 'text-[var(--color-primary)]'
+          }
+        >
+          {removed ? '✕' : '✓'}
+        </span>
+        <span className="min-w-0 truncate">
+          {removed ? 'Removed' : 'Completed'}:{' '}
+          <span className="text-[var(--color-text)]">{event.title}</span>
+        </span>
+        {listLabel && (
+          <span className="shrink-0 px-1.5 py-0.5 rounded border border-white/15 text-[10px] uppercase tracking-wide opacity-80">
+            {listLabel}
+          </span>
+        )}
+        <span className="ml-auto shrink-0 opacity-70">
+          {formatDate(event.createdAt)}
+        </span>
+      </div>
+      {expanded && (
+        <div className="mt-1 pl-5 text-xs text-[var(--color-text-muted)]">
+          {event.detail ? (
+            <span className="whitespace-pre-wrap">{event.detail}</span>
+          ) : (
+            <span className="italic opacity-70">No additional notes.</span>
+          )}
+        </div>
+      )}
+    </button>
   );
 }
 
