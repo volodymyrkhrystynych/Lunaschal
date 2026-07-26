@@ -61,7 +61,7 @@ Lunaschal is a single-user personal life-management desktop app with AI integrat
 - **Backend**: Flask (Python) — in `backend/`
 - **API layer**: REST JSON + React Query; typed client in `src/hooks/api.ts` (one `api.*` namespace per feature)
 - **Database**: SQLite via Python's built-in `sqlite3`; stored at `./data/lunaschal.db`
-- **AI**: `openai`, `google-generativeai`, and `ollama` Python SDKs
+- **AI**: `openai` and `google-generativeai` Python SDKs. Ollama is reached two ways: the OpenAI-compat `/v1` client (embeddings, `chat_with_tools`) and — for the main generation helpers — its **native `/api/chat`** endpoint over `requests`, because only the native API exposes `num_ctx` and `think` per request (see [docs/learnings/ollama-reasoning-empty-output.md](docs/learnings/ollama-reasoning-empty-output.md))
 - `drizzle.config.ts` is vestigial (points at a `server/db/schema.ts` that no longer exists) — the schema source of truth is `backend/db/schema.sql`
 
 ### Entry Points
@@ -96,7 +96,7 @@ Long-running work (fic downloads, curated-tag scans, meeting transcription) runs
 ### AI Layer (`backend/ai/`)
 
 - `provider.py` — resolves the active AI provider and model from DB settings (or env vars `OPENAI_API_KEY`, `GOOGLE_API_KEY`); supports `openai`, `gemini`, `ollama`
-- `llm.py` — shared provider-aware helpers: `chat_json` (JSON mode), `chat_text`, `chat_with_tools` (OpenAI-compat tool calling; raises `ToolCallingUnsupported` for gemini)
+- `llm.py` — shared generation helpers over Ollama's **native `/api/chat`** (`requests`): `chat_json` (JSON mode), `chat_text`, `chat_messages`, plus `_native_chat`/`_native_chat_stream`. Each takes reasoning level + `num_ctx` + `num_predict` (`default_generation_opts()` reads these from settings). The JSON grammar constraint is **dropped when thinking is on** (it otherwise makes reasoning models emit an empty `{}`); `_parse_json_response` tolerates fenced/prose JSON. `chat_with_tools` stays on the OpenAI-compat client (raises `ToolCallingUnsupported` for gemini)
 - `chat.py` — streaming chat generator consumed by the `/api/chat/stream` route
 - `classifier.py` — classifies chat messages into intents: `journal | calendar | question | flashcard_request | conversation`; extracts structured data when saving entries
 - `embeddings.py` — text embeddings for RAG and Learning answer-dedup; OpenAI (`text-embedding-3-small`), Gemini (`text-embedding-004`), Ollama (`nomic-embed-text`)
