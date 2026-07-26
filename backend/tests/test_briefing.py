@@ -1,0 +1,270 @@
+"""Tests for the overnight briefing: context gathering (pure DB reads) and the
+run_briefing sweep (find-or-create day chat, briefing message, todo creation,
+idempotency)."""
+import json
+from datetime import datetime
+
+from backend.db import connection
+from backend.chat_day import day_key_for
+from backend.ai import briefing as briefing_mod
+from backend import briefing_job
+
+# A fixed "now": Tuesday 2026-07-14 09:00 local.
+NOW = int(datetime(2026, 7, 14, 9, 0).timestamp())
+TODAY = datetime.fromtimestamp(NOW).date().isoformat()
+
+
+# --- fixtures ---
+
+def _insert_journal(id, content, created_at):
+    connection.get_db().execute(
+        'INSERT INTO journal_entries(id, content, created_at, updated_at) VALUES (?,?,?,?)',
+        (id, content, created_at, created_at),
+    )
+
+
+def _insert_daily_task(id, title, position):
+    connection.get_db().execute(
+        'INSERT INTO daily_tasks(id, title, position, created_at, updated_at) VALUES (?,?,?,?,?)',
+        (id, title, position, NOW, NOW),
+    )
+
+
+def _complete_daily_task(id, task_id, date):
+    connection.get_db().execute(
+        'INSERT INTO daily_task_completions(id, task_id, date, created_at) VALUES (?,?,?,?)',
+        (id, task_id, date, NOW),
+    )
+
+
+def _insert_todo(id, title, done=0, priority=3, due=None, todo_list='todo'):
+    connection.get_db().execute(
+        'INSERT INTO todos(id, title, done, list, priority, due, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?)',
+        (id, title, done, todo_list, priority, due, NOW, NOW),
+    )
+
+
+def _insert_event(id, title, date, time=None):
+    connection.get_db().execute(
+        'INSERT INTO calendar_events(id, title, date, time, created_at) VALUES (?,?,?,?,?)',
+        (id, title, date, time, NOW),
+    )
+
+
+def _insert_card(id, due, state='active'):
+    connection.get_db().execute(
+        'INSERT INTO learning_cards(id, question, answer, state, due, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?)',
+        (id, 'q', 'a', state, due, NOW, NOW),
+    )
+
+
+# --- gather_briefing_context ---
+
+def test_gather_context_includes_and_excludes(client):
+    _insert_journal('j_recent', 'Working on the overnight agent.', NOW - 3600)
+    _insert_journal('j_old', 'Ancient history.', NOW - 5 * 86400)
+
+    _insert_daily_task('dt_pending', 'Meditate', 1)
+    _insert_daily_task('dt_done', 'Exercise', 2)
+    _complete_daily_task('c1', 'dt_done', TODAY)
+
+    _insert_todo('todo_open', 'Buy milk', done=0)
+    _insert_todo('todo_done', 'Old thing', done=1)
+    _insert_todo('todo_chore', 'Sweep floor', done=0, todo_list='chores')
+    _insert_todo('todo_archived', 'Set aside', done=0, todo_list='archive')
+
+    _insert_event('e_today', 'Standup', TODAY)
+    _insert_event('e_far', 'Someday', '2027-01-01')
+
+    _insert_card('card_due', NOW - 10)      # due
+    _insert_card('card_future', NOW + 86400)  # not due
+    _insert_card('card_pending', NOW - 10, state='pending')  # not active
+    connection.get_db().commit()
+
+    ctx = briefing_mod.gather_briefing_context(NOW)
+
+    assert [e['content'] for e in ctx['journal']] == ['Working on the overnight agent.']
+    assert [t['title'] for t in ctx['daily_tasks']] == ['Meditate']
+    # Open todos + chores are included; done and archived are excluded.
+    assert sorted(t['title'] for t in ctx['todos']) == ['Buy milk', 'Sweep floor']
+    assert [e['title'] for e in ctx['calendar']] == ['Standup']
+    assert ctx['learning_due'] == 1
+
+
+def test_generate_briefing_uses_model_override(client, monkeypatch):
+    captured = {}
+
+    def fake_chat_json(prompt, system=None, model=None):
+        captured['model'] = model
+        return {'briefing': 'hi', 'todos': []}
+
+    monkeypatch.setattr(briefing_mod, 'chat_json', fake_chat_json)
+
+    # No setting -> falls back to the default chat model (None passed).
+    briefing_mod.generate_briefing({'now': NOW, 'today': TODAY, 'journal': [],
+                                    'daily_tasks': [], 'todos': [], 'calendar': [],
+                                    'learning_due': 0})
+    assert captured['model'] is None
+
+    # Setting present -> that model is used.
+    db = connection.get_db()
+    if db.execute('SELECT 1 FROM settings LIMIT 1').fetchone():
+        db.execute('UPDATE settings SET briefing_model=? WHERE id=1', ('llama3.1:70b',))
+    else:
+        db.execute(
+            'INSERT INTO settings(id, briefing_model, created_at, updated_at) VALUES (1,?,?,?)',
+            ('llama3.1:70b', NOW, NOW),
+        )
+    db.commit()
+    briefing_mod.generate_briefing({'now': NOW, 'today': TODAY, 'journal': [],
+                                    'daily_tasks': [], 'todos': [], 'calendar': [],
+                                    'learning_due': 0})
+    assert captured['model'] == 'llama3.1:70b'
+
+
+def test_build_prompt_is_pure_and_mentions_data(client):
+    ctx = {
+        'now': NOW, 'today': TODAY, 'goals': '',
+        'journal': [], 'daily_tasks': [{'title': 'Meditate'}],
+        'todos': [{'title': 'Buy milk', 'due': None, 'priority': 3, 'list': 'todo'}],
+        'calendar': [], 'learning_due': 2,
+    }
+    prompt = briefing_mod.build_briefing_prompt(ctx)
+    assert 'Meditate' in prompt
+    assert 'Buy milk' in prompt
+    assert '2' in prompt  # learning due count
+
+
+def test_goals_flow_into_context_and_prompt(client):
+    db = connection.get_db()
+    db.execute(
+        'UPDATE settings SET briefing_goals=? WHERE id=1',
+        ('Ship the overnight agent; get back into running.',),
+    )
+    db.commit()
+
+    ctx = briefing_mod.gather_briefing_context(NOW)
+    assert ctx['goals'] == 'Ship the overnight agent; get back into running.'
+
+    prompt = briefing_mod.build_briefing_prompt(ctx)
+    assert 'get back into running' in prompt
+
+
+def test_empty_goals_omitted_from_prompt(client):
+    ctx = {
+        'now': NOW, 'today': TODAY, 'goals': '   ',
+        'journal': [], 'daily_tasks': [], 'todos': [], 'calendar': [],
+        'learning_due': 0,
+    }
+    prompt = briefing_mod.build_briefing_prompt(ctx)
+    assert 'stated goals' not in prompt
+
+
+# --- run_briefing ---
+
+_FAKE = {
+    'briefing': '## Morning\n- Do the thing',
+    'todos': [
+        {'title': 'Draft the report', 'priority': 4, 'list': 'todo', 'due': None},
+    ],
+}
+
+
+def _briefing_msgs(conv_id):
+    return connection.get_db().execute(
+        "SELECT content, metadata FROM messages WHERE conversation_id=? AND role='assistant'",
+        (conv_id,),
+    ).fetchall()
+
+
+def test_run_briefing_writes_message_and_todos(client, monkeypatch):
+    monkeypatch.setattr(briefing_job, 'generate_briefing', lambda ctx: dict(_FAKE))
+    result = briefing_job.run_briefing(now=NOW)
+
+    assert result is not None
+    assert result['todosCreated'] == 1
+    conv_id = result['conversationId']
+
+    # The conversation is keyed to today's chat day.
+    row = connection.get_db().execute(
+        'SELECT day_key FROM conversations WHERE id=?', (conv_id,)
+    ).fetchone()
+    assert row['day_key'] == day_key_for(NOW)
+
+    msgs = _briefing_msgs(conv_id)
+    assert len(msgs) == 1
+    assert msgs[0]['content'] == _FAKE['briefing']
+    assert json.loads(msgs[0]['metadata'])['briefing'] is True
+
+    todos = connection.get_db().execute(
+        'SELECT title, priority FROM todos WHERE done=0'
+    ).fetchall()
+    assert [(t['title'], t['priority']) for t in todos] == [('Draft the report', 4)]
+
+
+def test_run_briefing_is_idempotent(client, monkeypatch):
+    monkeypatch.setattr(briefing_job, 'generate_briefing', lambda ctx: dict(_FAKE))
+    first = briefing_job.run_briefing(now=NOW)
+    assert first is not None
+
+    second = briefing_job.run_briefing(now=NOW)
+    assert second is None  # already briefed today
+
+    conv_id = first['conversationId']
+    assert len(_briefing_msgs(conv_id)) == 1
+    count = connection.get_db().execute(
+        'SELECT COUNT(*) FROM todos'
+    ).fetchone()[0]
+    assert count == 1  # no duplicate todos
+
+    # force=True re-runs.
+    forced = briefing_job.run_briefing(now=NOW, force=True)
+    assert forced is not None
+    assert len(_briefing_msgs(conv_id)) == 2
+
+
+def test_run_briefing_validates_dedupes_and_caps(client, monkeypatch):
+    _insert_todo('existing', 'buy MILK', done=0)  # case-insensitive dupe target
+    connection.get_db().commit()
+
+    fake = {
+        'briefing': 'hi',
+        'todos': [
+            {'title': 'Buy milk'},                       # dupe of existing -> skip
+            {'title': '   '},                            # blank -> skip
+            {'title': 'A', 'priority': 99, 'list': 'x', 'due': 'nope'},  # clamped
+            {'title': 'B'}, {'title': 'C'}, {'title': 'D'},
+            {'title': 'E'}, {'title': 'F'},              # cap at 5 new
+        ],
+    }
+    monkeypatch.setattr(briefing_job, 'generate_briefing', lambda ctx: fake)
+    result = briefing_job.run_briefing(now=NOW)
+
+    assert result['todosCreated'] == 5  # A,B,C,D,E (F dropped by cap)
+    row = connection.get_db().execute(
+        "SELECT priority, list, due FROM todos WHERE title='A'"
+    ).fetchone()
+    assert row['priority'] == 3      # bad priority -> default
+    assert row['list'] == 'todo'     # bad list -> default
+    assert row['due'] is None        # bad due -> None
+    # The pre-existing 'buy MILK' was not duplicated.
+    milk = connection.get_db().execute(
+        "SELECT COUNT(*) FROM todos WHERE lower(title)='buy milk'"
+    ).fetchone()[0]
+    assert milk == 1
+
+
+def test_run_briefing_skips_when_ai_unconfigured(client, monkeypatch):
+    monkeypatch.setattr(briefing_job, 'is_ai_configured', lambda: False)
+    assert briefing_job.run_briefing(now=NOW) is None
+
+
+def test_run_briefing_route_forces(client, monkeypatch):
+    monkeypatch.setattr(briefing_job, 'generate_briefing', lambda ctx: dict(_FAKE))
+    r = client.post('/api/chat/briefing/run')
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body['todosCreated'] == 1
+    assert body['briefing'] == _FAKE['briefing']

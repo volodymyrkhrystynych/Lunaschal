@@ -80,6 +80,10 @@ def get_settings():
         'meetingEchoCancel': bool(s.get('meeting_echo_cancel', 0)),
         'nudgeEnabled': bool(s.get('nudge_enabled', 1)),
         'nudgeIntervalMinutes': s.get('nudge_interval_minutes') or 45,
+        'briefingEnabled': bool(s.get('briefing_enabled', 1)),
+        'briefingHour': s.get('briefing_hour') if s.get('briefing_hour') is not None else 5,
+        'briefingModel': s.get('briefing_model'),
+        'briefingGoals': s.get('briefing_goals') or '',
     })
 
 
@@ -97,6 +101,10 @@ def update_ai():
         'meetingEchoCancel': 'meeting_echo_cancel',
         'nudgeEnabled': 'nudge_enabled',
         'nudgeIntervalMinutes': 'nudge_interval_minutes',
+        'briefingEnabled': 'briefing_enabled',
+        'briefingHour': 'briefing_hour',
+        'briefingModel': 'briefing_model',
+        'briefingGoals': 'briefing_goals',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():

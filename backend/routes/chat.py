@@ -143,6 +143,16 @@ def add_message(id):
     return jsonify({'id': msg_id}), 201
 
 
+@bp.post('/briefing/run')
+def run_briefing_now():
+    """Generate today's overnight briefing on demand (also used by the daemon)."""
+    from backend.briefing_job import run_briefing
+    result = run_briefing(force=True)
+    if result is None:
+        return jsonify({'error': 'AI provider not configured or nothing to brief'}), 400
+    return jsonify(result)
+
+
 @bp.post('/classify')
 def classify():
     body = request.json or {}
