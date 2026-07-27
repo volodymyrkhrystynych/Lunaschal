@@ -1,5 +1,5 @@
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from backend.ai.provider import get_provider_config, DEFAULT_MODELS
 from backend.ai.llm import default_generation_opts, _native_chat_stream
@@ -19,11 +19,19 @@ user has recently been living and thinking about. Let them inform the conversati
 follow up on them naturally when relevant, but don't recite them back or announce that
 you can see them.
 
+If the user's schedule is included below, use it to know when they're busy or free —
+so you can suggest things that actually fit their day and not pester them mid-commitment.
+Same rule: let it shape what you say, don't read it back to them.
+
 When extra context from the user's knowledge base is provided, weave it in naturally."""
 
 JOURNAL_WINDOW_SECONDS = 86400
 JOURNAL_MAX_ENTRIES = 10
 JOURNAL_MAX_CHARS = 2000
+
+# How far ahead the schedule block reaches (today plus this many days).
+SCHEDULE_LOOKAHEAD_DAYS = 3
+SCHEDULE_MAX_EVENTS = 20
 
 
 def get_recent_journal_entries(now: int | None = None) -> list[dict]:
@@ -67,9 +75,58 @@ def format_journal_context(entries: list[dict], now: int | None = None) -> str:
     )
 
 
+def get_upcoming_schedule(now: int | None = None) -> list[dict]:
+    """Calendar events from today through the lookahead horizon, with recurring
+    series expanded into concrete occurrences."""
+    from backend.calendar_query import events_in_range
+    from backend.db.connection import get_db
+    now = now if now is not None else int(time.time())
+    today = datetime.fromtimestamp(now).date()
+    horizon = today + timedelta(days=SCHEDULE_LOOKAHEAD_DAYS)
+    events = events_in_range(get_db(), today.isoformat(), horizon.isoformat())
+    return events[:SCHEDULE_MAX_EVENTS]
+
+
+def _format_event_day(iso: str, today) -> str:
+    try:
+        d = date.fromisoformat(iso)
+    except (TypeError, ValueError):
+        return iso
+    days = (d - today).days
+    if days == 0:
+        return 'today'
+    if days == 1:
+        return 'tomorrow'
+    return d.strftime('%a %b %d')
+
+
+def format_schedule_context(events: list[dict], now: int | None = None) -> str:
+    if not events:
+        return ''
+    now = now if now is not None else int(time.time())
+    today = datetime.fromtimestamp(now).date()
+    lines = []
+    for e in events:
+        when = _format_event_day(e['date'], today)
+        span = ''
+        if e.get('time'):
+            span = f" {e['time']}"
+            if e.get('end_time'):
+                span += f"–{e['end_time']}"
+        desc = f" — {e['description']}" if e.get('description') else ''
+        lines.append(f"- {when}{span}: {e['title']}{desc}")
+    return (
+        "The user's schedule for today and the next few days:\n\n" + '\n'.join(lines)
+    )
+
+
 def build_chat_system_prompt(now: int | None = None) -> str:
-    context = format_journal_context(get_recent_journal_entries(now), now)
-    return f"{SYSTEM_PROMPT}\n\n{context}" if context else SYSTEM_PROMPT
+    blocks = [
+        format_journal_context(get_recent_journal_entries(now), now),
+        format_schedule_context(get_upcoming_schedule(now), now),
+    ]
+    parts = [SYSTEM_PROMPT] + [b for b in blocks if b]
+    return '\n\n'.join(parts)
 
 
 def chat_stream(messages: list[dict], rag_context: str = '', system_prompt: str = ''):

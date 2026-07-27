@@ -44,13 +44,14 @@ def _open_todos(db) -> list[dict]:
 
 
 def _upcoming_calendar(db, today: str, horizon: str) -> list[dict]:
-    rows = db.execute(
-        '''SELECT title, description, date, time FROM calendar_events
-           WHERE date >= ? AND date <= ?
-           ORDER BY date, time''',
-        (today, horizon),
-    ).fetchall()
-    return [dict(r) for r in rows]
+    # Via events_in_range, not a raw SELECT: a recurring series only sits in the
+    # table on its anchor date, so a plain date-range query would hide the
+    # user's standing commitments on every other day.
+    from backend.calendar_query import events_in_range
+    return [
+        {k: e.get(k) for k in ('title', 'description', 'date', 'time', 'end_time')}
+        for e in events_in_range(db, today, horizon)
+    ]
 
 
 def _learning_due_count(db, now: int) -> int:
@@ -120,7 +121,13 @@ def build_briefing_prompt(context: dict) -> str:
     if context['calendar']:
         lines.append('Calendar (today and the next few days):')
         for e in context['calendar']:
-            when = e['date'] + (f" {e['time']}" if e.get('time') else '')
+            when = e['date']
+            if e.get('time'):
+                # A standing block is defined by its span — "09:00 Work" loses
+                # the part that says the rest of the day is spoken for.
+                when += f" {e['time']}"
+                if e.get('end_time'):
+                    when += f"–{e['end_time']}"
             desc = f" — {e['description']}" if e.get('description') else ''
             lines.append(f"- {when}: {e['title']}{desc}")
         lines.append('')
