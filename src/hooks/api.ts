@@ -196,7 +196,24 @@ export interface CalendarEvent {
   tags: string | null;
   journalId: string | null;
   createdAt: string;
+  // Recurrence rule. repeatFreq null = a one-off event.
+  repeatFreq: 'daily' | 'weekly' | 'monthly' | null;
+  repeatInterval: number | null;
+  repeatByweekday: string | null; // CSV of 0-6, Sunday=0
+  repeatUntil: string | null;
+  // Set on events returned by the range/date/week endpoints, which expand
+  // recurring series: `id` stays the series id, `occurrenceDate` identifies
+  // this instance. Absent from the single-event GET, which returns the series.
+  occurrenceDate?: string;
+  isRecurring?: boolean;
   linkedJournals?: JournalEntry[];
+}
+
+export interface CalendarRepeat {
+  repeatFreq?: 'daily' | 'weekly' | 'monthly' | null;
+  repeatInterval?: number | null;
+  repeatByweekday?: number[] | null;
+  repeatUntil?: string | null;
 }
 
 export interface LearningCard {
@@ -992,18 +1009,45 @@ export const api = {
     get: (id: string) => get<CalendarEvent>(`/api/calendar/${id}`),
     findRelatedJournals: (date: string) =>
       get<JournalEntry[]>(`/api/calendar/related-journals/${date}`),
-    create: (data: {
-      title: string;
-      date: string;
-      description?: string;
-      time?: string;
-      endTime?: string;
-      tags?: string[];
-      journalId?: string;
-    }) => post<{ id: string }>('/api/calendar', data),
+    create: (
+      data: {
+        title: string;
+        date: string;
+        description?: string;
+        time?: string;
+        endTime?: string;
+        tags?: string[];
+        journalId?: string;
+      } & CalendarRepeat
+    ) => post<{ id: string }>('/api/calendar', data),
+    // Edits/erases every occurrence, past ones included.
     update: (id: string, data: Record<string, unknown>) =>
       patch<{ success: boolean }>(`/api/calendar/${id}`, data),
     delete: (id: string) => del<{ success: boolean }>(`/api/calendar/${id}`),
+    // "This and future": what already happened is left exactly as it was.
+    // endSeries caps the rule the day before; updateFrom splits the series,
+    // returning the new row's id (or the original when nothing was split).
+    endSeries: (id: string, date: string) =>
+      del<{ success: boolean; deleted: boolean }>(
+        `/api/calendar/${id}/from/${date}`
+      ),
+    updateFrom: (id: string, date: string, data: Record<string, unknown>) =>
+      patch<{ id: string; split: boolean }>(
+        `/api/calendar/${id}/from/${date}`,
+        data
+      ),
+    // Drop or reschedule a single occurrence, leaving the rest of the series.
+    skipOccurrence: (id: string, date: string) =>
+      del<{ success: boolean }>(`/api/calendar/${id}/occurrence/${date}`),
+    moveOccurrence: (
+      id: string,
+      date: string,
+      data: { newDate?: string; newTime?: string; newEndTime?: string }
+    ) =>
+      patch<{ success: boolean }>(
+        `/api/calendar/${id}/occurrence/${date}`,
+        data
+      ),
     linkJournal: (id: string, journalEntryId: string) =>
       post<{ id: string }>(`/api/calendar/${id}/link`, { journalEntryId }),
     unlinkJournal: (id: string, journalEntryId: string) =>

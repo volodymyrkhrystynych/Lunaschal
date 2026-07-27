@@ -17,7 +17,30 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     end_time TEXT,
     tags TEXT,
     journal_id TEXT REFERENCES journal_entries(id),
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    -- Recurrence rule. NULL repeat_freq = a one-off event; `date` is the anchor.
+    repeat_freq TEXT,          -- 'daily' | 'weekly' | 'monthly'
+    repeat_interval INTEGER,   -- every N units (default 1)
+    repeat_byweekday TEXT,     -- CSV of 0-6, Sunday=0 (matches JS getDay and the UI grid)
+    repeat_until TEXT,         -- 'YYYY-MM-DD' inclusive; NULL = forever
+    -- Set when a series was split by a "this and future" edit: this row starts
+    -- where the referenced one was capped. A breadcrumb only, like
+    -- learning_cards.revised_from.
+    split_from TEXT REFERENCES calendar_events(id) ON DELETE SET NULL
+);
+
+-- Per-occurrence edits to a recurring series: a template row plus dated
+-- exception rows joined at read time (same shape as daily_task_completions).
+CREATE TABLE IF NOT EXISTS calendar_event_exceptions (
+    id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL REFERENCES calendar_events(id) ON DELETE CASCADE,
+    date TEXT NOT NULL,        -- the occurrence date being modified
+    action TEXT NOT NULL CHECK(action IN ('skip','move')),
+    new_date TEXT,
+    new_time TEXT,
+    new_end_time TEXT,
+    created_at INTEGER NOT NULL,
+    UNIQUE(event_id, date)
 );
 
 CREATE TABLE IF NOT EXISTS calendar_journal_links (
@@ -146,6 +169,7 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
 
 CREATE INDEX IF NOT EXISTS idx_journal_created ON journal_entries(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(date);
+CREATE INDEX IF NOT EXISTS idx_calendar_exc_event ON calendar_event_exceptions(event_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_embedding_source ON embedding_metadata(source_type, source_id);
 

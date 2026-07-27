@@ -23,14 +23,19 @@ def _to_camel(s: str) -> str:
     return CAMEL_CACHE[s]
 
 
-def row_to_dict(row: sqlite3.Row) -> dict:
+def mapping_to_dict(m: dict) -> dict:
+    """Same conversion as `row_to_dict`, for plain dicts that never came
+    straight off a cursor (e.g. calendar occurrences built by the expander)."""
     d = {}
-    for key in row.keys():
-        val = row[key]
+    for key, val in m.items():
         if key in TIMESTAMP_COLS and val is not None:
             val = datetime.fromtimestamp(val, tz=timezone.utc).isoformat()
         d[_to_camel(key)] = val
     return d
+
+
+def row_to_dict(row: sqlite3.Row) -> dict:
+    return mapping_to_dict({key: row[key] for key in row.keys()})
 
 
 def get_db() -> sqlite3.Connection:
@@ -77,6 +82,7 @@ def init_db() -> None:
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
     _ensure_task_event_columns(db)
+    _ensure_calendar_recurrence(db)
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
@@ -181,6 +187,30 @@ def _ensure_todo_list_columns(db: sqlite3.Connection) -> None:
     ):
         if col not in cols:
             db.execute(f'ALTER TABLE todos ADD COLUMN {col} {decl}')
+            added = True
+    if added:
+        db.commit()
+
+
+def _ensure_calendar_recurrence(db: sqlite3.Connection) -> None:
+    """Recurrence rule columns on calendar_events.
+
+    The exceptions table itself is a plain CREATE TABLE IF NOT EXISTS in
+    schema.sql; only the added columns need the ALTER dance.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(calendar_events)')}
+    added = False
+    for col, decl in (
+        ('repeat_freq', 'TEXT'),
+        ('repeat_interval', 'INTEGER'),
+        ('repeat_byweekday', 'TEXT'),
+        ('repeat_until', 'TEXT'),
+        # No REFERENCES here: SQLite can't add an FK constraint to an existing
+        # table via ALTER, and the column is a breadcrumb, not an invariant.
+        ('split_from', 'TEXT'),
+    ):
+        if col not in cols:
+            db.execute(f'ALTER TABLE calendar_events ADD COLUMN {col} {decl}')
             added = True
     if added:
         db.commit()

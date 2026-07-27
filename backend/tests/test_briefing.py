@@ -45,10 +45,12 @@ def _insert_todo(id, title, done=0, priority=3, due=None, todo_list='todo'):
     )
 
 
-def _insert_event(id, title, date, time=None):
+def _insert_event(id, title, date, time=None, end_time=None,
+                  freq=None, byweekday=None):
     connection.get_db().execute(
-        'INSERT INTO calendar_events(id, title, date, time, created_at) VALUES (?,?,?,?,?)',
-        (id, title, date, time, NOW),
+        'INSERT INTO calendar_events(id, title, date, time, end_time, created_at,'
+        ' repeat_freq, repeat_byweekday) VALUES (?,?,?,?,?,?,?,?)',
+        (id, title, date, time, end_time, NOW, freq, byweekday),
     )
 
 
@@ -91,6 +93,37 @@ def test_gather_context_includes_and_excludes(client):
     assert sorted(t['title'] for t in ctx['todos']) == ['Buy milk', 'Sweep floor']
     assert [e['title'] for e in ctx['calendar']] == ['Standup']
     assert ctx['learning_due'] == 1
+
+
+def test_gather_context_expands_recurring_events(client):
+    """A weekday series is a single row; the briefing must still see it on the
+    days it actually falls on, not only on its anchor date."""
+    # Anchored on Wednesday 2026-07-01, repeating Mon-Fri.
+    _insert_event('work', 'Work', '2026-07-01', '09:00', '17:00',
+                  freq='weekly', byweekday='1,2,3,4,5')
+    connection.get_db().commit()
+
+    ctx = briefing_mod.gather_briefing_context(NOW)
+    # NOW is Tuesday the 14th; the lookahead reaches Friday the 17th.
+    assert [(e['date'], e['title']) for e in ctx['calendar']] == [
+        ('2026-07-14', 'Work'), ('2026-07-15', 'Work'),
+        ('2026-07-16', 'Work'), ('2026-07-17', 'Work'),
+    ]
+
+    prompt = briefing_mod.build_briefing_prompt(ctx)
+    assert '- 2026-07-14 09:00–17:00: Work' in prompt
+
+
+def test_gather_context_honours_skipped_occurrences(client):
+    _insert_event('work', 'Work', '2026-07-01', '09:00', '17:00',
+                  freq='weekly', byweekday='1,2,3,4,5')
+    connection.get_db().execute(
+        "INSERT INTO calendar_event_exceptions(id, event_id, date, action, created_at)"
+        " VALUES ('x','work','2026-07-15','skip',?)", (NOW,))
+    connection.get_db().commit()
+
+    ctx = briefing_mod.gather_briefing_context(NOW)
+    assert '2026-07-15' not in [e['date'] for e in ctx['calendar']]
 
 
 def test_generate_briefing_uses_model_override(client, monkeypatch):
