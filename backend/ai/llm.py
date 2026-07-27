@@ -41,6 +41,11 @@ LLM_NUM_CTX = 4096      # num_ctx — Ollama's own default context window
 # slow, especially when thinking, so this is deliberately roomy.
 _NATIVE_TIMEOUT = 900
 
+# Keep the model loaded in memory for a while after each request. Ollama's
+# default is 5m; large reasoning models can take much longer to load, so this
+# reduces the chance that a tabbed-away chat has to wait for a full reload.
+_KEEP_ALIVE = '2h'
+
 
 def default_generation_opts() -> dict:
     """Reasoning level + context window + output ceiling for the default
@@ -116,6 +121,7 @@ def _native_body(messages, *, model, reasoning_effort, num_ctx, num_predict,
         'messages': messages,
         'stream': stream,
         'think': _think_value(reasoning_effort),
+        'keep_alive': _KEEP_ALIVE,
     }
     # JSON grammar mode and thinking don't mix — a reasoning model answers inside
     # its thinking channel and satisfies the grammar with an empty `{}`. Only
