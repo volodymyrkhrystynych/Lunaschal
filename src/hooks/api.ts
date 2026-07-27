@@ -289,6 +289,22 @@ export interface GradeResult {
   normalizedAnswer: string;
 }
 
+/** A card answered (or flipped past) but not yet rated — the persisted state
+ *  of an in-progress review session. Deleted when the rating is committed. */
+export interface LearningAttempt {
+  id: string;
+  cardId: string;
+  mode: 'answered' | 'skipped';
+  answer: string | null;
+  answerMode: 'typed' | 'voice' | 'self' | null;
+  gradeStatus: 'pending' | 'done' | 'error' | 'skipped';
+  coverage: ClaimCoverage | null;
+  suggestedRating: number | null;
+  normalizedAnswer: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ApproveResult {
   status: 'approved' | 'duplicateHint';
   due?: string;
@@ -355,6 +371,27 @@ export interface Message {
 
 export interface ConversationWithMessages extends Conversation {
   messages: Message[];
+}
+
+// A to-do the briefing suggested. It lives in the briefing message's metadata
+// until the user accepts it (which creates the real todo, reusing this id) or
+// rejects it.
+export interface ProposedTodo {
+  id: string;
+  title: string;
+  list: TodoList;
+  priority: number;
+  due: number | null;
+  status: 'pending' | 'accepted' | 'rejected' | 'duplicate';
+}
+
+export interface BriefingTodoDecision {
+  id: string;
+  action: 'accept' | 'reject';
+  title?: string;
+  priority?: number;
+  due?: number | null;
+  list?: TodoList;
 }
 
 // A past chat day shown in the Journal feed (collapsed, expand to load messages).
@@ -1102,10 +1139,24 @@ export const api = {
     },
     getTags: () => get<LearningTag[]>('/api/learning/tags'),
 
-    grade: (
-      id: string,
-      data: { answer: string; answerMode: 'typed' | 'voice' }
-    ) => post<GradeResult>(`/api/learning/cards/${id}/grade`, data),
+    listAttempts: (params?: { tag?: string; folderId?: string }) => {
+      const qp = new URLSearchParams();
+      if (params?.tag) qp.set('tag', params.tag);
+      if (params?.folderId) qp.set('folderId', params.folderId);
+      return get<LearningAttempt[]>(`/api/learning/attempts?${qp}`);
+    },
+    // Saves an answered/flipped card so the session survives leaving the view.
+    // Returns immediately; the AI grade lands on the row in the background and
+    // shows up on the next listAttempts.
+    saveAttempt: (data: {
+      // Client-supplied ULID, so an offline-queued save replays idempotently.
+      id: string;
+      cardId: string;
+      mode: 'answered' | 'skipped';
+      answer?: string;
+      answerMode?: 'typed' | 'voice';
+    }) =>
+      post<{ success: boolean; id: string }>('/api/learning/attempts', data),
     review: (
       id: string,
       data: {
@@ -1257,9 +1308,19 @@ export const api = {
       data: { role: string; content: string; metadata?: string }
     ) => post<{ id: string }>(`/api/chat/conversations/${id}/messages`, data),
     runBriefing: () =>
-      post<{ conversationId: string; briefing: string; todosCreated: number }>(
-        '/api/chat/briefing/run',
-        {}
+      post<{
+        conversationId: string;
+        messageId: string;
+        briefing: string;
+        todosProposed: number;
+      }>('/api/chat/briefing/run', {}),
+    decideBriefingTodos: (
+      messageId: string,
+      decisions: BriefingTodoDecision[]
+    ) =>
+      post<{ proposedTodos: ProposedTodo[]; created: number }>(
+        `/api/chat/briefing/${messageId}/todos`,
+        { decisions }
       ),
     classify: (message: string) =>
       post<{ intent: string; confidence: number; [key: string]: unknown }>(

@@ -12,6 +12,10 @@ bp = Blueprint('learning', __name__, url_prefix='/api/learning')
 
 _TAG_FILTER_SQL = 'EXISTS (SELECT 1 FROM json_each(learning_cards.tags) WHERE json_each.value = ?)'
 
+# Cards handed out per review session. Small on purpose: a session you can
+# finish in one sitting is one you don't abandon half-answered.
+DECK_SIZE = 10
+
 # Internal columns never sent to the client.
 _PRIVATE_CARD_KEYS = ('answerEmbedding', 'claims', 'fsrsState', 'generationContext')
 
@@ -729,9 +733,13 @@ def _review_filters() -> tuple[str, list]:
 @bp.get('/due')
 def get_due():
     clause, params = _review_filters()
+    # Cards with an open attempt sort first so a resumed session's already-
+    # answered cards are always inside the deck, never pushed out by the LIMIT.
     rows = get_db().execute(
-        f"SELECT * FROM learning_cards WHERE state='active' AND due <= ?{clause}"
-        ' ORDER BY due LIMIT 20',
+        'SELECT learning_cards.* FROM learning_cards'
+        ' LEFT JOIN learning_attempts a ON a.card_id = learning_cards.id'
+        f" WHERE state='active' AND due <= ?{clause}"
+        f' ORDER BY (a.id IS NULL), due LIMIT {DECK_SIZE}',
         [int(time.time()), *params],
     ).fetchall()
     return jsonify([_card_to_dict(r) for r in rows])
@@ -758,52 +766,101 @@ def get_stats():
     })
 
 
-def _card_claims(row) -> list[dict]:
-    """Cached claim decomposition; computed at first grade, stored on the card."""
-    from backend.ai.learning_grading import decompose_claims
-    if row['claims']:
-        return json.loads(row['claims'])
-    claims = decompose_claims(row['question'], row['answer'])
-    db = get_db()
-    db.execute('UPDATE learning_cards SET claims=? WHERE id=?', (json.dumps(claims), row['id']))
-    db.commit()
-    return claims
+def _attempt_to_dict(row) -> dict:
+    d = row_to_dict(row)
+    d['coverage'] = json.loads(d['coverage']) if d.get('coverage') else None
+    return d
 
 
-@bp.post('/cards/<id>/grade')
-def grade_card(id):
-    from backend.ai import learning_grading
-    from backend.learning.dedup import cosine
+# Attempts whose grade is already queued on the background worker. A restart
+# (or the dev-server autoreloader) empties this while leaving 'pending' rows
+# behind, so listing re-queues anything that isn't accounted for here.
+_grading_queued: set[str] = set()
+
+
+def _queue_grade(attempt_id: str) -> None:
+    from backend.ai.background import run_bg
+    from backend.learning.attempts import grade_attempt
+    _grading_queued.add(attempt_id)
+
+    def _run():
+        try:
+            grade_attempt(attempt_id)
+        finally:
+            _grading_queued.discard(attempt_id)
+
+    run_bg(_run)
+
+
+@bp.post('/attempts')
+def save_attempt():
+    """Record an answered (or flipped-past) card so the session can be resumed.
+
+    Returns without waiting on the grader — the AI coverage is filled in by a
+    background worker and picked up by the next GET.
+    """
     body = request.json or {}
-    answer = (body.get('answer') or '').strip()
-    if not answer:
-        return jsonify({'error': 'answer required'}), 400
-    row = _get_card(id)
+    card_id = body.get('cardId')
+    mode = body.get('mode')
+    if mode not in ('answered', 'skipped'):
+        return jsonify({'error': "mode must be 'answered' or 'skipped'"}), 400
+    row = _get_card(card_id) if card_id else None
     if not row or row['state'] != 'active':
         return jsonify({'error': 'Not found'}), 404
 
-    if body.get('answerMode') == 'voice':
-        from backend.ai.learning_generation import normalize_transcript
-        answer = normalize_transcript(answer)
+    answer = (body.get('answer') or '').strip() or None
+    if mode == 'answered' and not answer:
+        return jsonify({'error': 'answer required'}), 400
+    # A flipped card is always self-rated; a typed answer is the default.
+    answer_mode = (body.get('answerMode') or 'typed') if mode == 'answered' else 'self'
+    grade_status = 'pending' if mode == 'answered' else 'skipped'
 
-    # Cheap gate: an answer nowhere near the stored one is graded Again
-    # without the claim-check LLM call.
-    if row['answer_embedding'] is not None:
-        sim = cosine(embed_answer(answer), row['answer_embedding'])
-        if sim is not None and sim < learning_grading.GATE_LOW:
-            coverage = learning_grading.gated_coverage()
-            return jsonify({
-                'coverage': coverage,
-                'suggestedRating': learning_grading.suggest_rating(coverage),
-                'normalizedAnswer': answer,
-            })
+    id = body.get('id') or str(ULID())
+    now = int(time.time())
+    db = get_db()
+    # One open attempt per card: re-answering the same card replaces it, and a
+    # replayed (offline-queued) save with the same id is a no-op.
+    db.execute(
+        'INSERT INTO learning_attempts'
+        ' (id, card_id, mode, answer, answer_mode, grade_status, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?)'
+        ' ON CONFLICT(card_id) DO UPDATE SET'
+        '  id=excluded.id, mode=excluded.mode, answer=excluded.answer,'
+        '  answer_mode=excluded.answer_mode, grade_status=excluded.grade_status,'
+        '  coverage=NULL, suggested_rating=NULL, normalized_answer=NULL,'
+        '  updated_at=excluded.updated_at'
+        ' WHERE learning_attempts.id != excluded.id',
+        (id, card_id, mode, answer, answer_mode, grade_status, now, now),
+    )
+    db.commit()
+    stored = db.execute(
+        'SELECT * FROM learning_attempts WHERE card_id=?', (card_id,)
+    ).fetchone()
+    if (stored['id'] == id and stored['grade_status'] == 'pending'
+            and id not in _grading_queued):
+        _queue_grade(id)
+    return jsonify({'success': True, 'id': stored['id']})
 
-    coverage = learning_grading.check_coverage(_card_claims(row), answer)
-    return jsonify({
-        'coverage': coverage,
-        'suggestedRating': learning_grading.suggest_rating(coverage),
-        'normalizedAnswer': answer,
-    })
+
+@bp.get('/attempts')
+def list_attempts():
+    """Open attempts for the current review filter, oldest first (the order
+    they were answered in, which is the order the results pass replays)."""
+    clause, params = _review_filters()
+    rows = get_db().execute(
+        'SELECT a.* FROM learning_attempts a'
+        ' JOIN learning_cards ON learning_cards.id = a.card_id'
+        f" WHERE learning_cards.state='active'{clause}"
+        ' ORDER BY a.created_at',
+        params,
+    ).fetchall()
+    out = []
+    for row in rows:
+        # Self-heal grades orphaned by a restart mid-flight.
+        if row['grade_status'] == 'pending' and row['id'] not in _grading_queued:
+            _queue_grade(row['id'])
+        out.append(_attempt_to_dict(row))
+    return jsonify(out)
 
 
 @bp.post('/cards/<id>/review')
@@ -829,6 +886,8 @@ def review_card(id):
     if review_id and db.execute(
         'SELECT 1 FROM learning_reviews WHERE id=?', (review_id,)
     ).fetchone():
+        db.execute('DELETE FROM learning_attempts WHERE card_id=?', (id,))
+        db.commit()
         cur_due = row['due']
         return jsonify({
             'due': datetime.fromtimestamp(cur_due, tz=timezone.utc).isoformat()
@@ -851,6 +910,9 @@ def review_card(id):
          json.dumps(coverage) if coverage is not None else None,
          body.get('answerMode'), review_log, now),
     )
+    # The rating closes the attempt: same transaction, so a session can never
+    # be left showing a card that has already been scheduled.
+    db.execute('DELETE FROM learning_attempts WHERE card_id=?', (id,))
     db.commit()
     return jsonify({
         'due': datetime.fromtimestamp(due, tz=timezone.utc).isoformat(),

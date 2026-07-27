@@ -56,7 +56,7 @@ flowchart LR
             MCP["mcp_client.py"]
         end
         subgraph PKGS["Feature packages"]
-            P_LEARN["learning/<br/>FSRS scheduler + dedup"]
+            P_LEARN["learning/<br/>FSRS scheduler + dedup<br/>deferred attempt grading"]
             P_FIC["fanfic/<br/>xenforo parser · download<br/>epub/docx · sanitize"]
             P_MEET["meetings/<br/>recorder · pipeline · merge"]
             P_NEWS["newspapers/<br/>scraper · sync"]

@@ -95,3 +95,31 @@ def test_due_ordering_and_future_exclusion(client):
     get_db().execute('UPDATE learning_cards SET due=? WHERE id=?', (now + 9999, future))
     get_db().commit()
     assert [c['id'] for c in client.get('/api/learning/due').json] == [early, late]
+
+
+def test_due_is_capped_at_one_deck(client):
+    from backend.routes.learning import DECK_SIZE
+    for _ in range(DECK_SIZE + 3):
+        _make_card(client)
+    assert len(client.get('/api/learning/due').json) == DECK_SIZE
+
+
+def test_answered_cards_stay_in_the_deck(client):
+    """An already-answered card must never be pushed out of the deck by the
+    limit — that would strand its saved answer and re-ask it later."""
+    from backend.db.connection import get_db
+    from backend.routes.learning import DECK_SIZE
+    now = int(time.time())
+    cards = [_make_card(client) for _ in range(DECK_SIZE + 2)]
+    # Answer the card due last, which the limit would otherwise cut.
+    last = cards[-1]
+    get_db().execute('UPDATE learning_cards SET due=? WHERE id=?', (now - 1, last))
+    for i, cid in enumerate(cards[:-1]):
+        get_db().execute('UPDATE learning_cards SET due=? WHERE id=?', (now - 500 + i, cid))
+    get_db().commit()
+    assert last not in [c['id'] for c in client.get('/api/learning/due').json]
+
+    client.post('/api/learning/attempts',
+                json={'cardId': last, 'mode': 'skipped'})
+    due = [c['id'] for c in client.get('/api/learning/due').json]
+    assert due[0] == last and len(due) == DECK_SIZE

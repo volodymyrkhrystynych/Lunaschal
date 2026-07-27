@@ -1,10 +1,15 @@
-"""Grading pipeline: claim caching, embedding gate, rating mapping, voice path."""
+"""Grading pipeline: claim caching, embedding gate, rating mapping, voice path.
+
+Grading runs on the background worker now, so these drive it through
+POST /attempts with run_bg made synchronous, then read the graded attempt back.
+"""
 import json
 import struct
 
 import pytest
 
-from backend.ai import learning_generation, learning_grading
+from backend.ai import background, learning_generation, learning_grading
+from backend.learning import dedup
 from backend.routes import learning as learning_routes
 
 
@@ -16,6 +21,21 @@ def _make_card(client, question='What is X?', answer='X is a thing.'):
     r = client.post('/api/learning/cards', json={'question': question, 'answer': answer})
     assert r.status_code == 201
     return r.json['id']
+
+
+def _grade(client, card_id, answer, **extra):
+    """Answer a card and return its graded attempt."""
+    r = client.post('/api/learning/attempts',
+                    json={'cardId': card_id, 'mode': 'answered', 'answer': answer, **extra})
+    assert r.status_code == 200
+    return next(a for a in client.get('/api/learning/attempts').json
+                if a['cardId'] == card_id)
+
+
+@pytest.fixture(autouse=True)
+def inline_bg(monkeypatch):
+    """Run background grading inline so tests can assert on the result."""
+    monkeypatch.setattr(background, 'run_bg', lambda fn: fn())
 
 
 @pytest.fixture
@@ -46,18 +66,18 @@ def stub_llm(monkeypatch):
 
 def test_grade_returns_coverage_and_suggestion(client, stub_llm):
     cid = _make_card(client)
-    r = client.post(f'/api/learning/cards/{cid}/grade', json={'answer': 'X is a thing'})
-    assert r.status_code == 200
-    assert r.json['suggestedRating'] == 4
-    assert r.json['coverage']['claims'][0]['covered'] is True
-    assert r.json['normalizedAnswer'] == 'X is a thing'
+    attempt = _grade(client, cid, 'X is a thing')
+    assert attempt['gradeStatus'] == 'done'
+    assert attempt['suggestedRating'] == 4
+    assert attempt['coverage']['claims'][0]['covered'] is True
+    assert attempt['normalizedAnswer'] == 'X is a thing'
     assert stub_llm['normalize'] == 0
 
 
 def test_claims_cached_after_first_grade(client, stub_llm):
     cid = _make_card(client)
-    client.post(f'/api/learning/cards/{cid}/grade', json={'answer': 'a'})
-    client.post(f'/api/learning/cards/{cid}/grade', json={'answer': 'b'})
+    _grade(client, cid, 'a')
+    _grade(client, cid, 'b')
     assert stub_llm['decompose'] == 1
     assert stub_llm['coverage'] == 2
 
@@ -68,46 +88,78 @@ def test_claims_cached_after_first_grade(client, stub_llm):
 
 def test_voice_answers_normalized_before_grading(client, stub_llm):
     cid = _make_card(client)
-    r = client.post(f'/api/learning/cards/{cid}/grade',
-                    json={'answer': 'um so X is a thing', 'answerMode': 'voice'})
+    attempt = _grade(client, cid, 'um so X is a thing', answerMode='voice')
     assert stub_llm['normalize'] == 1
-    assert r.json['normalizedAnswer'] == 'normalized um so X is a thing'
+    assert attempt['normalizedAnswer'] == 'normalized um so X is a thing'
 
 
 def test_embedding_gate_short_circuits_llm(client, stub_llm, monkeypatch):
     # Stored answer embeds to (1,0,0); user answer to (0,1,0) → cosine 0 < gate.
     monkeypatch.setattr(learning_routes, 'embed_answer', lambda text: _vec(1.0, 0.0, 0.0))
     cid = _make_card(client)
-    monkeypatch.setattr(learning_routes, 'embed_answer', lambda text: _vec(0.0, 1.0, 0.0))
+    monkeypatch.setattr(dedup, 'embed_answer', lambda text: _vec(0.0, 1.0, 0.0))
 
-    r = client.post(f'/api/learning/cards/{cid}/grade', json={'answer': 'total nonsense'})
-    assert r.status_code == 200
-    assert r.json['suggestedRating'] == 1
-    assert r.json['coverage']['gated'] is True
+    attempt = _grade(client, cid, 'total nonsense')
+    assert attempt['suggestedRating'] == 1
+    assert attempt['coverage']['gated'] is True
     assert stub_llm['coverage'] == 0 and stub_llm['decompose'] == 0
 
 
 def test_similar_embedding_still_runs_llm(client, stub_llm, monkeypatch):
     # High similarity must NOT skip the claim check (negation blindness).
     monkeypatch.setattr(learning_routes, 'embed_answer', lambda text: _vec(1.0, 0.0, 0.0))
+    monkeypatch.setattr(dedup, 'embed_answer', lambda text: _vec(1.0, 0.0, 0.0))
     cid = _make_card(client)
-    r = client.post(f'/api/learning/cards/{cid}/grade', json={'answer': 'X is not a thing'})
+    attempt = _grade(client, cid, 'X is not a thing')
     assert stub_llm['coverage'] == 1
-    assert 'gated' not in r.json['coverage']
+    assert 'gated' not in attempt['coverage']
 
 
 def test_grade_unconfigured_embeddings_falls_through(client, stub_llm):
     # embed_answer returns None without a provider; gate silently disabled.
     cid = _make_card(client)
-    r = client.post(f'/api/learning/cards/{cid}/grade', json={'answer': 'whatever'})
-    assert r.status_code == 200
+    attempt = _grade(client, cid, 'whatever')
+    assert attempt['gradeStatus'] == 'done'
     assert stub_llm['coverage'] == 1
 
 
-def test_grade_validation(client, stub_llm):
+def test_grade_failure_marks_attempt_error(client, stub_llm, monkeypatch):
+    def _boom(claims, user_answer):
+        raise RuntimeError('model exploded')
+
+    monkeypatch.setattr(learning_grading, 'check_coverage', _boom)
     cid = _make_card(client)
-    assert client.post(f'/api/learning/cards/{cid}/grade', json={}).status_code == 400
-    assert client.post('/api/learning/cards/nope/grade', json={'answer': 'x'}).status_code == 404
+    attempt = _grade(client, cid, 'whatever')
+    assert attempt['gradeStatus'] == 'error'
+    assert attempt['coverage'] is None
+
+
+def test_grade_after_rating_is_a_noop(client, stub_llm, monkeypatch):
+    """Rating a card deletes its attempt; a grade still in flight must not
+    resurrect the row."""
+    from backend.db.connection import get_db
+    from backend.learning.attempts import grade_attempt
+
+    cid = _make_card(client)
+    monkeypatch.setattr(background, 'run_bg', lambda fn: None)  # defer the grade
+    client.post('/api/learning/attempts',
+                json={'cardId': cid, 'mode': 'answered', 'answer': 'x'})
+    attempt_id = get_db().execute(
+        'SELECT id FROM learning_attempts WHERE card_id=?', (cid,)).fetchone()['id']
+    client.post(f'/api/learning/cards/{cid}/review', json={'rating': 3})
+
+    grade_attempt(attempt_id)  # the deferred worker finally runs
+    assert get_db().execute('SELECT COUNT(*) c FROM learning_attempts').fetchone()['c'] == 0
+
+
+def test_attempt_validation(client, stub_llm):
+    cid = _make_card(client)
+    assert client.post('/api/learning/attempts',
+                       json={'cardId': cid, 'mode': 'answered'}).status_code == 400
+    assert client.post('/api/learning/attempts',
+                       json={'cardId': cid, 'mode': 'nonsense'}).status_code == 400
+    assert client.post('/api/learning/attempts',
+                       json={'cardId': 'nope', 'mode': 'skipped'}).status_code == 404
 
 
 @pytest.mark.parametrize('claims,expected', [

@@ -591,7 +591,7 @@ function BriefingSection() {
       queryClient.invalidateQueries({ queryKey: ['chat', 'today'] });
       queryClient.invalidateQueries({ queryKey: ['todos'] });
       setStatus(
-        `Briefing ready — ${result.todosCreated} to-do${result.todosCreated === 1 ? '' : 's'} added.`
+        `Briefing ready — ${result.todosProposed} to-do${result.todosProposed === 1 ? '' : 's'} proposed; accept them in today's chat.`
       );
       setTimeout(() => setStatus(null), 5000);
     },

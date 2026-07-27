@@ -2,7 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type GradeResult, type LearningCard } from '../../hooks/api';
 import { ulid } from '../../lib/ulid';
-import { useLearningReview } from '../../offline/mutationDefaults';
+import {
+  useLearningAttempt,
+  useLearningReview,
+} from '../../offline/mutationDefaults';
 import { useRecorder } from '../../hooks/useRecorder';
 import {
   useShortcutScope,
@@ -33,7 +36,13 @@ const RATINGS = [
 // One finished card from the answering pass. 'answered' cards were sent to the
 // grader in the background; 'skipped' cards were flipped past and get
 // self-rated when the results pass reveals their answer.
+//
+// Every attempt is persisted server-side the moment it's made, so leaving the
+// view (or reloading) never means answering the same cards again. `id` is the
+// client-generated ULID of that row; it doubles as the review's idempotency key
+// when the rating is finally committed.
 interface Attempt {
+  id: string;
   card: LearningCard;
   mode: 'answered' | 'skipped';
   answer?: string;
@@ -50,7 +59,6 @@ export function ReviewSession({ folderId, tag }: Props) {
   const [answer, setAnswer] = useState('');
   const [usedVoice, setUsedVoice] = useState(false);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
-  const [grades, setGrades] = useState<Record<string, GradeState>>({});
   const [resultIndex, setResultIndex] = useState(0);
   const [ratingOverride, setRatingOverride] = useState<number | null>(null);
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
@@ -68,12 +76,50 @@ export function ReviewSession({ folderId, tag }: Props) {
       }),
   });
 
+  // Answers already given this session. Polled while a grade is outstanding —
+  // grading runs on the server's background worker now, so the result arrives
+  // here rather than on the submit call.
+  const { data: saved, refetch: refetchAttempts } = useQuery({
+    queryKey: ['learning', 'attempts', folderId, tag],
+    queryFn: () =>
+      api.learning.listAttempts({
+        folderId: folderId ?? undefined,
+        tag: tag ?? undefined,
+      }),
+    refetchInterval: q =>
+      q.state.data?.some(a => a.gradeStatus === 'pending') ? 2000 : false,
+  });
+
+  // Restore the session from the server: the deck, plus the cards already
+  // answered in it. `/due` sorts open attempts first, so they're always inside
+  // the deck. Seeds once, and re-seeds if the deck was empty and cards have
+  // since come due.
+  const seeded = useRef(false);
   useEffect(() => {
-    if (!due) return;
-    setSessionCards(prev =>
-      prev === null || (prev.length === 0 && due.length > 0) ? due : prev
-    );
-  }, [due]);
+    if (!due || !saved) return;
+    if (seeded.current && !(sessionCards?.length === 0 && due.length > 0))
+      return;
+    seeded.current = true;
+    const byId = new Map(due.map(c => [c.id, c]));
+    const restored: Attempt[] = [];
+    for (const a of saved) {
+      const card = byId.get(a.cardId);
+      if (card)
+        restored.push({
+          id: a.id,
+          card,
+          mode: a.mode,
+          answer: a.answer ?? undefined,
+          usedVoice: a.answerMode === 'voice',
+        });
+    }
+    setSessionCards(due);
+    setAttempts(restored);
+    // Answered cards sort to the front of the deck, so the first unanswered
+    // card is at their count.
+    setIndex(restored.length);
+    setResultIndex(0);
+  }, [due, saved, sessionCards]);
 
   const total = sessionCards?.length ?? 0;
 
@@ -93,8 +139,25 @@ export function ReviewSession({ folderId, tag }: Props) {
     total > 0 && attempts.length >= total ? 'results' : 'answer';
   const card = sessionCards?.[index];
 
+  // The grade lives on the saved attempt row, not in component state — that's
+  // what lets it survive a reload and keep filling in while you're away.
+  // An attempt the server hasn't acknowledged yet (offline, queued) reads as
+  // pending, which is exactly what it is.
+  const gradeOf = (a: Attempt | undefined): GradeState | undefined => {
+    if (!a || a.mode === 'skipped') return undefined;
+    const row = saved?.find(s => s.cardId === a.card.id);
+    if (row?.gradeStatus === 'error') return 'error';
+    if (row?.gradeStatus === 'done' && row.coverage)
+      return {
+        coverage: row.coverage,
+        suggestedRating: row.suggestedRating ?? 3,
+        normalizedAnswer: row.normalizedAnswer ?? row.answer ?? '',
+      };
+    return 'pending';
+  };
+
   const current = phase === 'results' ? attempts[resultIndex] : undefined;
-  const currentGrade = current ? grades[current.card.id] : undefined;
+  const currentGrade = gradeOf(current);
   const resolvedGrade =
     currentGrade && currentGrade !== 'pending' && currentGrade !== 'error'
       ? currentGrade
@@ -113,16 +176,27 @@ export function ReviewSession({ folderId, tag }: Props) {
     setFontSize(px => setStoredLearningFontSize(px + delta));
   };
 
-  // Fire grading in the background and move straight to the next card.
+  // Save the answer (the server grades it in the background) and move straight
+  // to the next card. Offline-queueable, so the local push is optimistic.
+  const saveAttempt = useLearningAttempt();
+
   const submitAnswer = () => {
     if (!card || !answer.trim() || recorder.status !== 'idle') return;
-    const cardId = card.id;
-    setGrades(g => ({ ...g, [cardId]: 'pending' }));
-    api.learning
-      .grade(cardId, { answer, answerMode: usedVoice ? 'voice' : 'typed' })
-      .then(res => setGrades(g => ({ ...g, [cardId]: res })))
-      .catch(() => setGrades(g => ({ ...g, [cardId]: 'error' })));
-    setAttempts(a => [...a, { card, mode: 'answered', answer, usedVoice }]);
+    const attempt: Attempt = {
+      id: ulid(),
+      card,
+      mode: 'answered',
+      answer,
+      usedVoice,
+    };
+    saveAttempt.mutate({
+      id: attempt.id,
+      cardId: card.id,
+      mode: 'answered',
+      answer,
+      answerMode: usedVoice ? 'voice' : 'typed',
+    });
+    setAttempts(a => [...a, attempt]);
     setAnswer('');
     setUsedVoice(false);
     setIndex(i => i + 1);
@@ -131,17 +205,21 @@ export function ReviewSession({ folderId, tag }: Props) {
   // Flip = skip for now; the answer is revealed in the results pass.
   const skipCard = () => {
     if (!card) return;
-    setAttempts(a => [...a, { card, mode: 'skipped' }]);
+    const attempt: Attempt = { id: ulid(), card, mode: 'skipped' };
+    saveAttempt.mutate({ id: attempt.id, cardId: card.id, mode: 'skipped' });
+    setAttempts(a => [...a, attempt]);
     setAnswer('');
     setUsedVoice(false);
     setIndex(i => i + 1);
   };
 
   const finishSession = async () => {
-    const { data: fresh } = await refetchDue();
+    const [{ data: fresh }] = await Promise.all([
+      refetchDue(),
+      refetchAttempts(),
+    ]);
     setSessionCards(fresh ?? []);
     setAttempts([]);
-    setGrades({});
     setIndex(0);
     setResultIndex(0);
     setShowChat(false);
@@ -155,8 +233,8 @@ export function ReviewSession({ folderId, tag }: Props) {
   };
 
   // Offline-queueable. Reviews advance FSRS and so aren't naturally
-  // idempotent: each carries a client `reviewId` the server dedupes on. Stats
-  // invalidation lives in the registered defaults.
+  // idempotent: each carries the attempt's id as `reviewId`, which the server
+  // dedupes on. Stats invalidation lives in the registered defaults.
   const review = useLearningReview();
   // A paused (offline-queued) mutation stays `isPending`, so gate the UI on
   // "actively in flight" — otherwise offline you couldn't rate the next card.
@@ -168,11 +246,11 @@ export function ReviewSession({ folderId, tag }: Props) {
   const submitRating = (rating: number) => {
     const a = attempts[resultIndex];
     if (!a) return;
-    const g = grades[a.card.id];
+    const g = gradeOf(a);
     const resolved = g && g !== 'pending' && g !== 'error' ? g : null;
     review.mutate({
       cardId: a.card.id,
-      reviewId: ulid(),
+      reviewId: a.id,
       rating,
       suggestedRating: resolved?.suggestedRating,
       userAnswer: resolved ? resolved.normalizedAnswer : a.answer,
