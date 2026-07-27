@@ -158,6 +158,96 @@ def run_briefing_now():
     return jsonify(result)
 
 
+def _apply_briefing_decision(db, item: dict, decision: dict, now: int) -> bool:
+    """Resolve one proposed todo in place. Returns True if a todo was inserted."""
+    from backend.routes.tasks import _parse_priority, _parse_due
+    from backend.todo_recurrence import VALID_LISTS
+
+    if decision.get('action') == 'reject':
+        item['status'] = 'rejected'
+        return False
+
+    # Accepting may carry inline edits from the card.
+    title = (decision.get('title') if 'title' in decision else item.get('title')) or ''
+    title = title.strip()
+    if not title:
+        return False
+    if 'priority' in decision:
+        priority, err = _parse_priority(decision.get('priority'))
+        if err:
+            priority = item.get('priority') or 3
+    else:
+        priority = item.get('priority') or 3
+    if 'due' in decision:
+        due, err = _parse_due(decision.get('due'))
+        if err:
+            due = item.get('due')
+    else:
+        due = item.get('due')
+    todo_list = decision.get('list', item.get('list')) or 'todo'
+    if todo_list not in VALID_LISTS:
+        todo_list = 'todo'
+
+    item.update({'title': title, 'priority': priority, 'due': due, 'list': todo_list})
+
+    # Re-check for a same-titled open todo at accept time: the list may have
+    # moved on since the briefing was written.
+    dupe = db.execute(
+        'SELECT 1 FROM todos WHERE done=0 AND lower(title)=? AND id!=?',
+        (title.lower(), item['id']),
+    ).fetchone()
+    if dupe:
+        item['status'] = 'duplicate'
+        return False
+
+    # The proposal's own id becomes the todo id, so a double-accept is a no-op.
+    db.execute(
+        'INSERT OR IGNORE INTO todos(id, title, done, list, notes, due, repeat_interval,'
+        ' repeat_unit, priority, created_at, updated_at) VALUES (?,?,0,?,?,?,?,?,?,?,?)',
+        (item['id'], title, todo_list, None, due, None, None, priority, now, now),
+    )
+    item['status'] = 'accepted'
+    return True
+
+
+@bp.post('/briefing/<message_id>/todos')
+def decide_briefing_todos(message_id):
+    """Accept (optionally with edits) or reject the to-dos a briefing proposed.
+    Decisions are written back into the message metadata so the chat cards stay
+    resolved across reloads."""
+    body = request.json or {}
+    decisions = body.get('decisions')
+    if not isinstance(decisions, list) or not decisions:
+        return jsonify({'error': 'decisions required'}), 400
+
+    db = get_db()
+    row = db.execute('SELECT metadata FROM messages WHERE id=?', (message_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'not found'}), 404
+    meta = json.loads(row['metadata']) if row['metadata'] else {}
+    proposed = meta.get('proposedTodos')
+    if not isinstance(proposed, list):
+        return jsonify({'error': 'message has no proposed to-dos'}), 400
+
+    by_id = {i.get('id'): i for i in proposed if isinstance(i, dict)}
+    now = int(time.time())
+    created = 0
+    for decision in decisions:
+        if not isinstance(decision, dict):
+            continue
+        item = by_id.get(decision.get('id'))
+        # Only pending proposals are actionable — a resolved card can't flip.
+        if not item or item.get('status') != 'pending':
+            continue
+        if _apply_briefing_decision(db, item, decision, now):
+            created += 1
+
+    meta['proposedTodos'] = proposed
+    db.execute('UPDATE messages SET metadata=? WHERE id=?', (json.dumps(meta), message_id))
+    db.commit()
+    return jsonify({'proposedTodos': proposed, 'created': created})
+
+
 @bp.post('/classify')
 def classify():
     body = request.json or {}

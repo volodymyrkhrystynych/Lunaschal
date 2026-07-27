@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../hooks/api';
+import { api, ProposedTodo } from '../hooks/api';
 import { MessageMarkdown } from './MessageMarkdown';
+import { BriefingTodos } from './BriefingTodos';
 import { contextMessages, isBreak } from '@/lib/chatSegments';
 
 interface PendingSave {
@@ -441,6 +442,13 @@ export function Chat() {
             : null;
           const hasSaved =
             metadata?.savedAsJournal || metadata?.savedAsCalendar;
+          // The overnight briefing proposes to-dos; they only reach the list
+          // once accepted here.
+          const proposedTodos: ProposedTodo[] = Array.isArray(
+            metadata?.proposedTodos
+          )
+            ? metadata.proposedTodos
+            : [];
           return (
             <div
               key={message.id}
@@ -456,6 +464,12 @@ export function Chat() {
                     <MessageMarkdown content={message.content} />
                   )}
                 </div>
+                {proposedTodos.length > 0 && (
+                  <BriefingTodos
+                    messageId={message.id}
+                    proposals={proposedTodos}
+                  />
+                )}
                 {hasSaved && (
                   <div className="mt-1 text-xs text-[var(--color-text-muted)] text-right">
                     {metadata.savedAsJournal

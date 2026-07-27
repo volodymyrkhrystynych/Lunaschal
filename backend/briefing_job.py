@@ -2,8 +2,10 @@
 
 A plain function (no Flask request, no thread) so it can be called directly by
 the scheduler thread, by the manual-trigger route, and by tests. It find-or-
-creates today's chat, drops in the AI briefing as the first assistant message,
-and creates the proposed to-dos (capped, validated, deduped).
+creates today's chat and drops in the AI briefing as the first assistant
+message. The to-dos it suggests are *proposals*: they ride along in the
+message metadata and only become real todos when the user accepts them in the
+chat (see `POST /api/chat/briefing/<message_id>/todos`).
 """
 import json
 import time
@@ -49,15 +51,17 @@ def _has_briefing(db, conv_id: str) -> bool:
     return False
 
 
-def _create_todos(db, proposed: list, now: int) -> int:
-    """Validate/clamp, dedupe against open todos, cap, and insert. Returns count."""
+def _propose_todos(db, proposed: list) -> list[dict]:
+    """Validate/clamp, drop titles that already exist as open todos, and cap.
+    Returns pending proposals for the message metadata — nothing is inserted.
+    Each carries its own id so accepting is idempotent."""
     existing = {
         r['title'].strip().lower()
         for r in db.execute('SELECT title FROM todos WHERE done=0').fetchall()
     }
-    created = 0
+    items: list[dict] = []
     for item in proposed:
-        if created >= MAX_BRIEFING_TODOS:
+        if len(items) >= MAX_BRIEFING_TODOS:
             break
         if not isinstance(item, dict):
             continue
@@ -75,15 +79,16 @@ def _create_todos(db, proposed: list, now: int) -> int:
         if err:
             due = None
 
-        db.execute(
-            'INSERT INTO todos(id, title, done, list, notes, due, repeat_interval,'
-            ' repeat_unit, priority, created_at, updated_at)'
-            ' VALUES (?,?,0,?,?,?,?,?,?,?,?)',
-            (str(ULID()), title, todo_list, None, due, None, None, priority, now, now),
-        )
+        items.append({
+            'id': str(ULID()),
+            'title': title,
+            'list': todo_list,
+            'priority': priority,
+            'due': due,
+            'status': 'pending',
+        })
         existing.add(title.lower())
-        created += 1
-    return created
+    return items
 
 
 def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
@@ -107,17 +112,19 @@ def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         db.commit()
         return None
 
+    proposed = _propose_todos(db, result.get('todos', []))
+    message_id = str(ULID())
     db.execute(
         'INSERT INTO messages(id, conversation_id, role, content, metadata, created_at)'
         ' VALUES (?,?,?,?,?,?)',
-        (str(ULID()), conv_id, 'assistant', briefing,
-         json.dumps({'briefing': True}), now),
+        (message_id, conv_id, 'assistant', briefing,
+         json.dumps({'briefing': True, 'proposedTodos': proposed}), now),
     )
-    todos_created = _create_todos(db, result.get('todos', []), now)
     db.execute('UPDATE conversations SET updated_at=? WHERE id=?', (now, conv_id))
     db.commit()
     return {
         'conversationId': conv_id,
+        'messageId': message_id,
         'briefing': briefing,
-        'todosCreated': todos_created,
+        'todosProposed': len(proposed),
     }

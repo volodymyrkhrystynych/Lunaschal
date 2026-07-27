@@ -1,6 +1,6 @@
-"""Tests for the overnight briefing: context gathering (pure DB reads) and the
-run_briefing sweep (find-or-create day chat, briefing message, todo creation,
-idempotency)."""
+"""Tests for the overnight briefing: context gathering (pure DB reads), the
+run_briefing sweep (find-or-create day chat, briefing message, proposed todos,
+idempotency), and the accept/reject decisions route."""
 import json
 from datetime import datetime
 
@@ -250,12 +250,12 @@ def _briefing_msgs(conv_id):
     ).fetchall()
 
 
-def test_run_briefing_writes_message_and_todos(client, monkeypatch):
+def test_run_briefing_writes_message_and_proposes_todos(client, monkeypatch):
     monkeypatch.setattr(briefing_job, 'generate_briefing', lambda ctx: dict(_FAKE))
     result = briefing_job.run_briefing(now=NOW)
 
     assert result is not None
-    assert result['todosCreated'] == 1
+    assert result['todosProposed'] == 1
     conv_id = result['conversationId']
 
     # The conversation is keyed to today's chat day.
@@ -267,12 +267,15 @@ def test_run_briefing_writes_message_and_todos(client, monkeypatch):
     msgs = _briefing_msgs(conv_id)
     assert len(msgs) == 1
     assert msgs[0]['content'] == _FAKE['briefing']
-    assert json.loads(msgs[0]['metadata'])['briefing'] is True
+    meta = json.loads(msgs[0]['metadata'])
+    assert meta['briefing'] is True
+    assert [(p['title'], p['priority'], p['status']) for p in meta['proposedTodos']] == [
+        ('Draft the report', 4, 'pending')
+    ]
 
-    todos = connection.get_db().execute(
-        'SELECT title, priority FROM todos WHERE done=0'
-    ).fetchall()
-    assert [(t['title'], t['priority']) for t in todos] == [('Draft the report', 4)]
+    # Nothing lands in the to-do list until the user accepts.
+    count = connection.get_db().execute('SELECT COUNT(*) FROM todos').fetchone()[0]
+    assert count == 0
 
 
 def test_run_briefing_is_idempotent(client, monkeypatch):
@@ -285,10 +288,6 @@ def test_run_briefing_is_idempotent(client, monkeypatch):
 
     conv_id = first['conversationId']
     assert len(_briefing_msgs(conv_id)) == 1
-    count = connection.get_db().execute(
-        'SELECT COUNT(*) FROM todos'
-    ).fetchone()[0]
-    assert count == 1  # no duplicate todos
 
     # force=True re-runs.
     forced = briefing_job.run_briefing(now=NOW, force=True)
@@ -313,18 +312,15 @@ def test_run_briefing_validates_dedupes_and_caps(client, monkeypatch):
     monkeypatch.setattr(briefing_job, 'generate_briefing', lambda ctx: fake)
     result = briefing_job.run_briefing(now=NOW)
 
-    assert result['todosCreated'] == 5  # A,B,C,D,E (F dropped by cap)
-    row = connection.get_db().execute(
-        "SELECT priority, list, due FROM todos WHERE title='A'"
-    ).fetchone()
-    assert row['priority'] == 3      # bad priority -> default
-    assert row['list'] == 'todo'     # bad list -> default
-    assert row['due'] is None        # bad due -> None
-    # The pre-existing 'buy MILK' was not duplicated.
-    milk = connection.get_db().execute(
-        "SELECT COUNT(*) FROM todos WHERE lower(title)='buy milk'"
-    ).fetchone()[0]
-    assert milk == 1
+    assert result['todosProposed'] == 5  # A,B,C,D,E (F dropped by cap)
+    proposals = _proposals(result['messageId'])
+    assert [p['title'] for p in proposals] == ['A', 'B', 'C', 'D', 'E']
+    a = proposals[0]
+    assert a['priority'] == 3      # bad priority -> default
+    assert a['list'] == 'todo'     # bad list -> default
+    assert a['due'] is None        # bad due -> None
+    # 'Buy milk' duplicated an open todo, so it was never proposed.
+    assert 'Buy milk' not in [p['title'] for p in proposals]
 
 
 def test_run_briefing_skips_when_ai_unconfigured(client, monkeypatch):
@@ -337,7 +333,7 @@ def test_run_briefing_route_forces(client, monkeypatch):
     r = client.post('/api/chat/briefing/run')
     assert r.status_code == 200
     body = r.get_json()
-    assert body['todosCreated'] == 1
+    assert body['todosProposed'] == 1
     assert body['briefing'] == _FAKE['briefing']
 
 
@@ -352,3 +348,120 @@ def test_run_briefing_route_reports_empty_completion(client, monkeypatch):
     r = client.post('/api/chat/briefing/run')
     assert r.status_code == 502
     assert 'no usable briefing' in r.get_json()['error']
+
+
+# --- accepting / rejecting the proposals ---
+
+def _proposals(message_id):
+    row = connection.get_db().execute(
+        'SELECT metadata FROM messages WHERE id=?', (message_id,)
+    ).fetchone()
+    return json.loads(row['metadata'])['proposedTodos']
+
+
+def _run(monkeypatch, fake=None):
+    monkeypatch.setattr(briefing_job, 'generate_briefing',
+                        lambda ctx: dict(fake or _FAKE))
+    return briefing_job.run_briefing(now=NOW)
+
+
+def test_accepting_a_proposal_creates_the_todo(client, monkeypatch):
+    result = _run(monkeypatch)
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    r = client.post(f'/api/chat/briefing/{msg_id}/todos',
+                    json={'decisions': [{'id': pid, 'action': 'accept'}]})
+    assert r.status_code == 200
+    assert r.get_json()['created'] == 1
+
+    todos = connection.get_db().execute(
+        'SELECT id, title, priority FROM todos'
+    ).fetchall()
+    # The proposal id becomes the todo id, so a re-accept can't duplicate it.
+    assert [(t['id'], t['title'], t['priority']) for t in todos] == [
+        (pid, 'Draft the report', 4)
+    ]
+    assert _proposals(msg_id)[0]['status'] == 'accepted'
+
+    # A resolved card is inert.
+    again = client.post(f'/api/chat/briefing/{msg_id}/todos',
+                        json={'decisions': [{'id': pid, 'action': 'accept'}]})
+    assert again.get_json()['created'] == 0
+    assert connection.get_db().execute('SELECT COUNT(*) FROM todos').fetchone()[0] == 1
+
+
+def test_accepting_applies_inline_edits(client, monkeypatch):
+    result = _run(monkeypatch)
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    client.post(f'/api/chat/briefing/{msg_id}/todos', json={'decisions': [{
+        'id': pid, 'action': 'accept', 'title': 'Draft the Q3 report',
+        'priority': 2, 'due': NOW + 86400, 'list': 'chores',
+    }]})
+
+    row = connection.get_db().execute(
+        'SELECT title, priority, due, list FROM todos WHERE id=?', (pid,)
+    ).fetchone()
+    assert (row['title'], row['priority'], row['due'], row['list']) == (
+        'Draft the Q3 report', 2, NOW + 86400, 'chores'
+    )
+    assert _proposals(msg_id)[0]['title'] == 'Draft the Q3 report'
+
+
+def test_rejecting_a_proposal_creates_nothing(client, monkeypatch):
+    result = _run(monkeypatch)
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    r = client.post(f'/api/chat/briefing/{msg_id}/todos',
+                    json={'decisions': [{'id': pid, 'action': 'reject'}]})
+    assert r.get_json()['created'] == 0
+    assert connection.get_db().execute('SELECT COUNT(*) FROM todos').fetchone()[0] == 0
+    assert _proposals(msg_id)[0]['status'] == 'rejected'
+
+
+def test_accept_dedupes_against_a_todo_added_after_the_briefing(client, monkeypatch):
+    result = _run(monkeypatch)
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+    # The user added the same thing by hand in the meantime.
+    _insert_todo('manual', 'draft the REPORT', done=0)
+    connection.get_db().commit()
+
+    r = client.post(f'/api/chat/briefing/{msg_id}/todos',
+                    json={'decisions': [{'id': pid, 'action': 'accept'}]})
+    assert r.get_json()['created'] == 0
+    assert _proposals(msg_id)[0]['status'] == 'duplicate'
+    assert connection.get_db().execute('SELECT COUNT(*) FROM todos').fetchone()[0] == 1
+
+
+def test_bulk_accept_resolves_every_pending_proposal(client, monkeypatch):
+    fake = {'briefing': 'hi', 'todos': [{'title': 'A'}, {'title': 'B'}, {'title': 'C'}]}
+    result = _run(monkeypatch, fake)
+    msg_id = result['messageId']
+    ids = [p['id'] for p in _proposals(msg_id)]
+
+    r = client.post(f'/api/chat/briefing/{msg_id}/todos', json={
+        'decisions': [{'id': ids[0], 'action': 'reject'}]
+    })
+    assert r.get_json()['created'] == 0
+
+    r = client.post(f'/api/chat/briefing/{msg_id}/todos', json={
+        'decisions': [{'id': i, 'action': 'accept'} for i in ids]
+    })
+    # The already-rejected one stays rejected.
+    assert r.get_json()['created'] == 2
+    assert [p['status'] for p in _proposals(msg_id)] == [
+        'rejected', 'accepted', 'accepted'
+    ]
+
+
+def test_decisions_route_rejects_bad_input(client, monkeypatch):
+    result = _run(monkeypatch)
+    msg_id = result['messageId']
+    assert client.post(f'/api/chat/briefing/{msg_id}/todos', json={}).status_code == 400
+    assert client.post('/api/chat/briefing/nope/todos',
+                       json={'decisions': [{'id': 'x', 'action': 'accept'}]}
+                       ).status_code == 404
