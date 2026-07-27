@@ -47,12 +47,16 @@ export function Chat() {
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
   const [queuedCards, setQueuedCards] = useState<number | null>(null);
   const [ragContextUsed, setRagContextUsed] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const lastBreakRef = useRef<HTMLDivElement>(null);
   // When set, the next scroll effect pins the newest break divider to the top
   // (the "New chat" clear) instead of scrolling to the bottom.
   const justBrokeRef = useRef(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const queryClient = useQueryClient();
 
   // The single conversation for the current chat day (4am -> 4am).
@@ -155,11 +159,11 @@ export function Chat() {
     });
   };
 
-  const sendMessage = async () => {
-    if (!input.trim() || isStreaming) return;
+  const sendMessage = async (messageText?: string) => {
+    const userMessage = (messageText ?? input).trim();
+    if (!userMessage || isStreaming) return;
 
-    const userMessage = input.trim();
-    setInput('');
+    if (messageText === undefined) setInput('');
 
     let convId = conversationId;
 
@@ -312,6 +316,62 @@ export function Chat() {
         time: pendingSave.data.time,
         tags: pendingSave.data.tags,
       });
+    }
+  };
+
+  const toggleRecording = async () => {
+    if (isRecording) {
+      mediaRecorderRef.current?.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : 'audio/ogg';
+      const recorder = new MediaRecorder(stream, { mimeType });
+      audioChunksRef.current = [];
+      recorder.ondataavailable = e => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach(t => t.stop());
+        setIsRecording(false);
+        const blob = new Blob(audioChunksRef.current, { type: mimeType });
+        if (blob.size < 1000) return;
+        setIsTranscribing(true);
+        try {
+          const ext = mimeType.includes('webm') ? '.webm' : '.ogg';
+          const form = new FormData();
+          form.append('audio', blob, `chat${ext}`);
+          const r = await fetch('/api/transcribe', {
+            method: 'POST',
+            credentials: 'include',
+            body: form,
+          });
+          if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            throw new Error(
+              (err as { error?: string }).error || 'Transcription failed'
+            );
+          }
+          const data = (await r.json()) as { text?: string };
+          if (data.text?.trim()) {
+            await sendMessage(data.text.trim());
+          }
+        } catch (err) {
+          console.error('Voice transcription error:', err);
+        } finally {
+          setIsTranscribing(false);
+        }
+      };
+      recorder.start();
+      mediaRecorderRef.current = recorder;
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Microphone access error:', err);
     }
   };
 
@@ -543,7 +603,50 @@ export function Chat() {
             className="flex-1 bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-50"
           />
           <button
-            onClick={sendMessage}
+            onClick={toggleRecording}
+            disabled={!isConfigured || isStreaming || isTranscribing}
+            title={isRecording ? 'Stop recording' : 'Speak to send'}
+            className={`px-3 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              isRecording
+                ? 'bg-red-500 text-white animate-pulse hover:bg-red-500'
+                : 'bg-[var(--color-surface)] border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20'
+            }`}
+          >
+            {isTranscribing ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="animate-spin"
+              >
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+              </svg>
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="22" />
+              </svg>
+            )}
+          </button>
+          <button
+            onClick={() => sendMessage()}
             disabled={!input.trim() || !isConfigured || isStreaming}
             className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
