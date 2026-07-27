@@ -8,9 +8,14 @@ import {
   useShortcutScope,
 } from '../../shortcuts/ShortcutProvider';
 import { ReviewSession } from './ReviewSession';
-import type { GradeResult, LearningCard } from '../../hooks/api';
+import type {
+  GradeResult,
+  LearningAttempt,
+  LearningCard,
+} from '../../hooks/api';
 
-const { CARD1, CARD2, GRADE, mocks } = vi.hoisted(() => {
+// prettier-ignore
+const { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks } = vi.hoisted(() => {
   const CARD1: LearningCard = {
     id: 'c1',
     folderId: null,
@@ -48,9 +53,31 @@ const { CARD1, CARD2, GRADE, mocks } = vi.hoisted(() => {
     suggestedRating: 2,
     normalizedAnswer: 'a function',
   };
+  // The persisted answer for CARD1, before and after the background grade.
+  const PENDING_ATTEMPT: LearningAttempt = {
+    id: 'a1',
+    cardId: 'c1',
+    mode: 'answered',
+    answer: 'a function',
+    answerMode: 'typed',
+    gradeStatus: 'pending',
+    coverage: null,
+    suggestedRating: null,
+    normalizedAnswer: null,
+    createdAt: '2026-07-17T00:00:00Z',
+    updatedAt: '2026-07-17T00:00:00Z',
+  };
+  const GRADED_ATTEMPT: LearningAttempt = {
+    ...PENDING_ATTEMPT,
+    gradeStatus: 'done',
+    coverage: GRADE.coverage,
+    suggestedRating: GRADE.suggestedRating,
+    normalizedAnswer: GRADE.normalizedAnswer,
+  };
   const mocks = {
     getDue: vi.fn(),
-    grade: vi.fn(),
+    listAttempts: vi.fn(),
+    saveAttempt: vi.fn(),
     review: vi.fn(),
     verify: vi.fn(),
     verifyFollowup: vi.fn(),
@@ -59,7 +86,7 @@ const { CARD1, CARD2, GRADE, mocks } = vi.hoisted(() => {
     chat: vi.fn(),
     listMcpServers: vi.fn(),
   };
-  return { CARD1, CARD2, GRADE, mocks };
+  return { CARD1, CARD2, GRADE, PENDING_ATTEMPT, GRADED_ATTEMPT, mocks };
 });
 
 vi.mock('../../hooks/api', () => ({
@@ -81,15 +108,20 @@ function renderSession() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <ShortcutProvider currentView="learning" onViewChange={() => {}}>
-        <Scope1>
-          <ReviewSession folderId={null} tag={null} />
-        </Scope1>
-      </ShortcutProvider>
-    </QueryClientProvider>
-  );
+  return {
+    // Returned so a test can stand in for the background-grade poll by
+    // invalidating the attempts query on demand.
+    queryClient,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <ShortcutProvider currentView="learning" onViewChange={() => {}}>
+          <Scope1>
+            <ReviewSession folderId={null} tag={null} />
+          </Scope1>
+        </ShortcutProvider>
+      </QueryClientProvider>
+    ),
+  };
 }
 
 async function typeAndCheck(text: string) {
@@ -99,11 +131,22 @@ async function typeAndCheck(text: string) {
   fireEvent.click(screen.getByText('Check Answer'));
 }
 
+// Answer card 1 with its background grade already landed: saving an attempt
+// invalidates the attempts query, so the next fetch returns the graded row.
+// Waits for the deck first so the mock can't be picked up by the initial
+// (session-seeding) fetch, which would start the session already answered.
+async function typeAndGrade(text: string) {
+  await screen.findByPlaceholderText(/Type your answer/);
+  mocks.listAttempts.mockResolvedValue([GRADED_ATTEMPT]);
+  await typeAndCheck(text);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   mocks.getDue.mockResolvedValue([CARD1]);
-  mocks.grade.mockResolvedValue(GRADE);
+  mocks.listAttempts.mockResolvedValue([]);
+  mocks.saveAttempt.mockResolvedValue({ success: true, id: 'a1' });
   mocks.review.mockResolvedValue({ due: 'later', state: 'active' });
   mocks.listMcpServers.mockResolvedValue([
     {
@@ -126,27 +169,25 @@ beforeEach(() => {
 });
 
 describe('ReviewSession', () => {
-  it('checking an answer grades in the background and advances immediately', async () => {
+  it('checking an answer saves it for grading and advances immediately', async () => {
     mocks.getDue.mockResolvedValue([CARD1, CARD2]);
-    let resolveGrade!: (g: GradeResult) => void;
-    mocks.grade.mockReturnValue(
-      new Promise<GradeResult>(res => {
-        resolveGrade = res;
-      })
-    );
-    renderSession();
+    const { queryClient } = renderSession();
 
     await typeAndCheck('a function');
-    // Next card is shown before the grader responds.
+    // Next card is shown without waiting on the grader.
     expect(await screen.findByText('What is hoisting?')).toBeTruthy();
-    expect(mocks.grade).toHaveBeenCalledWith('c1', {
-      answer: 'a function',
-      answerMode: 'typed',
-    });
+    expect(mocks.saveAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cardId: 'c1',
+        mode: 'answered',
+        answer: 'a function',
+        answerMode: 'typed',
+      })
+    );
     expect(screen.queryByText(/captured lexical scope/)).toBeNull();
 
-    // Finish the deck; the results pass shows card 1's back plus its grade
-    // once the background call lands.
+    // Finish the deck; the results pass shows card 1's back, and its grade
+    // as soon as the background worker's result is polled in.
     fireEvent.click(screen.getByText('Flip'));
     expect(await screen.findByText('Result 1 of 2')).toBeTruthy();
     expect(
@@ -154,12 +195,13 @@ describe('ReviewSession', () => {
     ).toBeTruthy();
     expect(screen.getByText('Checking your answer…')).toBeTruthy();
 
-    resolveGrade(GRADE);
+    mocks.listAttempts.mockResolvedValue([GRADED_ATTEMPT]);
+    await queryClient.invalidateQueries({ queryKey: ['learning', 'attempts'] });
     expect(await screen.findByText(/missed the captured scope/)).toBeTruthy();
     expect(screen.getByText('It captures lexical scope')).toBeTruthy();
   });
 
-  it('flip skips ahead without revealing the answer', async () => {
+  it('flip saves a skipped attempt without revealing the answer', async () => {
     mocks.getDue.mockResolvedValue([CARD1, CARD2]);
     renderSession();
     await screen.findByText('What is a closure?');
@@ -169,14 +211,37 @@ describe('ReviewSession', () => {
     expect(
       screen.queryByText('A function plus its captured lexical scope.')
     ).toBeNull();
-    expect(mocks.grade).not.toHaveBeenCalled();
+    expect(mocks.saveAttempt).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: 'c1', mode: 'skipped' })
+    );
+    expect(mocks.saveAttempt.mock.calls[0][0].answer).toBeUndefined();
+  });
+
+  it('resumes a session left half-answered instead of re-asking', async () => {
+    // Coming back to the view: the deck still has both cards, but c1 was
+    // already answered and graded before leaving.
+    mocks.getDue.mockResolvedValue([CARD1, CARD2]);
+    mocks.listAttempts.mockResolvedValue([GRADED_ATTEMPT]);
+    renderSession();
+
+    // Straight to the unanswered card — c1 is not asked again.
+    expect(await screen.findByText('What is hoisting?')).toBeTruthy();
+    expect(screen.getByText('Card 2 of 2')).toBeTruthy();
+    expect(mocks.saveAttempt).not.toHaveBeenCalled();
+
+    // ...and the restored answer and its grade are still there at the end.
+    fireEvent.click(screen.getByText('Flip'));
+    expect(await screen.findByText('Result 1 of 2')).toBeTruthy();
+    expect(screen.getByText('a function')).toBeTruthy();
+    expect(screen.getByText(/missed the captured scope/)).toBeTruthy();
+    expect(screen.getByText('Hard').className).toContain('ring-2');
   });
 
   it('the results pass posts reviews in order: graded first, then self-rated', async () => {
     mocks.getDue.mockResolvedValue([CARD1, CARD2]);
     renderSession();
 
-    await typeAndCheck('a function');
+    await typeAndGrade('a function');
     await screen.findByText('What is hoisting?');
     fireEvent.click(screen.getByText('Flip'));
 
@@ -216,12 +281,6 @@ describe('ReviewSession', () => {
   });
 
   it('shows the typed answer on the result while grading is pending', async () => {
-    let resolveGrade!: (g: GradeResult) => void;
-    mocks.grade.mockReturnValue(
-      new Promise<GradeResult>(res => {
-        resolveGrade = res;
-      })
-    );
     renderSession();
 
     await typeAndCheck('a function');
@@ -243,7 +302,6 @@ describe('ReviewSession', () => {
       )
     );
     expect(mocks.review.mock.calls[0][1].coverage).toBeUndefined();
-    resolveGrade(GRADE);
   });
 
   it('opens verification from the "card is wrong" link', async () => {
@@ -253,7 +311,7 @@ describe('ReviewSession', () => {
       transcript: [],
     });
     renderSession();
-    await typeAndCheck('a function');
+    await typeAndGrade('a function');
     fireEvent.click(await screen.findByText('I was right — the card is wrong'));
 
     expect(await screen.findByText('Verify against evidence')).toBeTruthy();
@@ -349,7 +407,9 @@ describe('ReviewSession', () => {
     fireEvent.keyDown(window, { code: 'Space' }); // skip card 2
 
     expect(await screen.findByText('Result 1 of 2')).toBeTruthy();
-    expect(mocks.grade).not.toHaveBeenCalled();
+    expect(
+      mocks.saveAttempt.mock.calls.every(c => c[0].mode === 'skipped')
+    ).toBe(true);
 
     // Good (3) is highlighted by default for skipped cards; S moves to Easy.
     expect(screen.getByText('Good').className).toContain('ring-2');
@@ -423,10 +483,14 @@ describe('ReviewSession', () => {
 
     fireEvent.keyDown(window, { code: 'Enter' });
     await waitFor(() =>
-      expect(mocks.grade).toHaveBeenCalledWith('c1', {
-        answer: 'a function',
-        answerMode: 'typed',
-      })
+      expect(mocks.saveAttempt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cardId: 'c1',
+          mode: 'answered',
+          answer: 'a function',
+          answerMode: 'typed',
+        })
+      )
     );
     expect(await screen.findByText('What is hoisting?')).toBeTruthy();
   });
@@ -437,13 +501,13 @@ describe('ReviewSession', () => {
 
     fireEvent.keyDown(window, { code: 'Enter' });
 
-    expect(mocks.grade).not.toHaveBeenCalled();
+    expect(mocks.saveAttempt).not.toHaveBeenCalled();
     expect(screen.getByText('Card 1 of 1')).toBeTruthy();
   });
 
   it('after grading, Space commits the suggested rating without extra keys', async () => {
     renderSession();
-    await typeAndCheck('a function');
+    await typeAndGrade('a function');
     await screen.findByText(/suggestion highlighted/);
 
     fireEvent.keyDown(window, { code: 'Space' }); // commit highlighted (suggested) rating
@@ -462,7 +526,7 @@ describe('ReviewSession', () => {
   describe('discuss chat', () => {
     async function openChatAfterGrading() {
       renderSession();
-      await typeAndCheck('a function');
+      await typeAndGrade('a function');
       await screen.findByText(/suggestion highlighted/);
       fireEvent.click(screen.getByText('💬 Discuss this card'));
       return screen.findByPlaceholderText(/Ask for clarification/);

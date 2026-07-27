@@ -108,6 +108,25 @@ CREATE TABLE IF NOT EXISTS learning_reviews (
 
 CREATE INDEX IF NOT EXISTS idx_learning_reviews_card ON learning_reviews(card_id, created_at);
 
+-- Answered-but-not-yet-rated cards: the live state of a review session, so
+-- leaving the view (or reloading) doesn't make you answer the same cards again.
+-- A row is deleted the moment its rating is committed to learning_reviews, so
+-- this table only ever holds open attempts — never review history.
+CREATE TABLE IF NOT EXISTS learning_attempts (
+    id TEXT PRIMARY KEY,
+    card_id TEXT NOT NULL UNIQUE REFERENCES learning_cards(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK(mode IN ('answered','skipped')),
+    answer TEXT,
+    answer_mode TEXT CHECK(answer_mode IN ('typed','voice','self')),
+    grade_status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(grade_status IN ('pending','done','error','skipped')),
+    coverage TEXT,
+    suggested_rating INTEGER,
+    normalized_answer TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS learning_revisions (
     id TEXT PRIMARY KEY,
     old_card_id TEXT REFERENCES learning_cards(id) ON DELETE SET NULL,

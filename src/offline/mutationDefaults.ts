@@ -45,6 +45,7 @@ export const MUTATION_KEYS = {
   fanficSetRead: ['fanfic', 'setRead'] as const,
   writingChapterUpdate: ['writing', 'chapter', 'update'] as const,
   writingNoteUpdate: ['writing', 'note', 'update'] as const,
+  learningAttempt: ['learning', 'attempt'] as const,
   learningReview: ['learning', 'review'] as const,
   notebookWrite: ['notebook', 'write'] as const,
 };
@@ -90,6 +91,13 @@ export interface WritingNoteUpdateVars {
   title?: string;
   content?: string;
   docType?: string;
+}
+export interface LearningAttemptVars {
+  id: string;
+  cardId: string;
+  mode: 'answered' | 'skipped';
+  answer?: string;
+  answerMode?: 'typed' | 'voice';
 }
 export interface LearningReviewVars {
   cardId: string;
@@ -310,6 +318,21 @@ const writingNoteUpdateCfg = (
   onSettled: () => qc.invalidateQueries({ queryKey: ['writing'] }),
 });
 
+const learningAttemptCfg = (
+  qc: QueryClient
+): Cfg<{ success: boolean; id: string }, LearningAttemptVars> => ({
+  ...ONLINE,
+  mutationFn: vars =>
+    api.learning.saveAttempt({
+      id: vars.id,
+      cardId: vars.cardId,
+      mode: vars.mode,
+      answer: vars.answer,
+      answerMode: vars.answerMode,
+    }),
+  onSettled: () => qc.invalidateQueries({ queryKey: ['learning', 'attempts'] }),
+});
+
 const learningReviewCfg = (
   qc: QueryClient
 ): Cfg<{ due: string; state: string }, LearningReviewVars> => ({
@@ -358,6 +381,10 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
     [
       MUTATION_KEYS.writingNoteUpdate,
       writingNoteUpdateCfg(qc) as Cfg<unknown, never>,
+    ],
+    [
+      MUTATION_KEYS.learningAttempt,
+      learningAttemptCfg(qc) as Cfg<unknown, never>,
     ],
     [
       MUTATION_KEYS.learningReview,
@@ -430,6 +457,10 @@ export const useWritingNoteUpdate = (
   o?: CallerOptions<{ success: boolean }, WritingNoteUpdateVars>
 ) =>
   useOfflineMutation(MUTATION_KEYS.writingNoteUpdate, writingNoteUpdateCfg, o);
+
+export const useLearningAttempt = (
+  o?: CallerOptions<{ success: boolean; id: string }, LearningAttemptVars>
+) => useOfflineMutation(MUTATION_KEYS.learningAttempt, learningAttemptCfg, o);
 
 export const useLearningReview = (
   o?: CallerOptions<{ due: string; state: string }, LearningReviewVars>
