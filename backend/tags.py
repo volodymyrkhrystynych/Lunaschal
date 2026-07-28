@@ -25,3 +25,21 @@ def tags_json(raw) -> str | None:
     """Serialize tags for a TEXT column; empty normalizes to NULL, not '[]'."""
     tags = normalize_tags(raw)
     return json.dumps(tags) if tags else None
+
+
+def tag_counts(rows, column: str = 'tags') -> list[dict]:
+    """Count tag occurrences across rows with a JSON-array tags column into
+    the {name, count} shape used by tag-filter pill endpoints (recipes, food
+    log, etc), sorted by count descending then name."""
+    counts: dict[str, int] = {}
+    for r in rows:
+        try:
+            for tag in json.loads(r[column]):
+                if isinstance(tag, str) and tag.strip():
+                    counts[tag] = counts.get(tag, 0) + 1
+        except (json.JSONDecodeError, TypeError):
+            continue
+    return [
+        {'name': name, 'count': count}
+        for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    ]
