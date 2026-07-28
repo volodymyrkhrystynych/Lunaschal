@@ -4,9 +4,8 @@ Follows the graceful-degrade convention used across backend/ai/*: guard with
 is_ai_configured() and return None on any failure so the caller can fall back to
 a date-based label.
 """
-import json
-
-from backend.ai.provider import get_provider_config, get_ollama_client, is_ai_configured, DEFAULT_MODELS
+from backend.ai.llm import chat_json
+from backend.ai.provider import is_ai_configured
 
 _MAX_INPUT_CHARS = 16000
 
@@ -44,19 +43,7 @@ def generate_conversation_title(messages: list[dict]) -> str | None:
     try:
         if not is_ai_configured():
             return None
-        c = get_provider_config()
-        client = get_ollama_client(c)
-        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {'role': 'system', 'content': _TITLE_SYSTEM},
-                {'role': 'user', 'content': transcript},
-            ],
-            response_format={'type': 'json_object'},
-            stream=False,
-        )
-        data = json.loads(resp.choices[0].message.content)
+        data = chat_json(transcript, system=_TITLE_SYSTEM)
         title = data.get('title')
         if isinstance(title, str) and title.strip():
             return title.strip()

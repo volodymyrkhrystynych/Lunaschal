@@ -1,4 +1,5 @@
-from backend.ai.provider import get_provider_config, get_ollama_client, is_ai_configured, DEFAULT_MODELS
+from backend.ai.llm import chat_text
+from backend.ai.provider import is_ai_configured
 
 _MAX_INPUT_CHARS = 48000
 
@@ -22,15 +23,7 @@ def summarize_meeting(transcript: str) -> str | None:
     try:
         if not is_ai_configured():
             return None
-        c = get_provider_config()
-        messages = [
-            {'role': 'system', 'content': _SUMMARY_SYSTEM},
-            {'role': 'user', 'content': transcript},
-        ]
-        client = get_ollama_client(c)
-        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-        resp = client.chat.completions.create(model=model, messages=messages, stream=False)
-        text = resp.choices[0].message.content
+        text = chat_text(transcript, system=_SUMMARY_SYSTEM)
         text = (text or '').strip()
         return text or None
     except Exception as e:

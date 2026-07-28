@@ -1,8 +1,8 @@
-import json
 import logging
 import re
 
-from backend.ai.provider import get_provider_config, get_ollama_client, is_ai_configured, DEFAULT_MODELS
+from backend.ai.llm import chat_json, chat_text
+from backend.ai.provider import is_ai_configured
 
 logger = logging.getLogger(__name__)
 
@@ -84,19 +84,7 @@ def generate_journal_metadata(content: str) -> dict:
     try:
         if not is_ai_configured():
             return {}
-        c = get_provider_config()
-        client = get_ollama_client(c)
-        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {'role': 'system', 'content': _METADATA_SYSTEM},
-                {'role': 'user', 'content': content},
-            ],
-            response_format={'type': 'json_object'},
-            stream=False,
-        )
-        data = json.loads(resp.choices[0].message.content)
+        data = chat_json(content, system=_METADATA_SYSTEM)
         valid_tags = [t.strip() for t in (data.get('tags') or []) if isinstance(t, str) and t.strip()][:3]
         title = (data.get('title') or '').strip() or None
         return {'title': title, 'tags': valid_tags or None}
@@ -113,17 +101,10 @@ def classify_entry_for_tag(content: str, tag_name: str) -> bool:
     try:
         if not is_ai_configured():
             return False
-        c = get_provider_config()
         system = "You are a strict binary classifier. Reply ONLY with 'yes' or 'no', nothing else."
         user = f"Does this journal entry relate to the topic '{tag_name}'?\n\n{content}"
-        client = get_ollama_client(c)
-        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{'role': 'system', 'content': system}, {'role': 'user', 'content': user}],
-            stream=False,
-        )
-        return resp.choices[0].message.content.lower().strip().startswith('yes')
+        result = chat_text(user, system=system)
+        return result.lower().strip().startswith('yes')
     except Exception as e:
         print(f'Tag classification failed for "{tag_name}": {e}')
 
@@ -136,18 +117,8 @@ def polish_journal_entry(raw_text: str) -> str:
     try:
         if not is_ai_configured():
             return raw_text
-        c = get_provider_config()
-        client = get_ollama_client(c)
-        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[
-                {'role': 'system', 'content': _SYSTEM},
-                {'role': 'user', 'content': raw_text},
-            ],
-            stream=False,
-        )
-        return _clean_polish_output(resp.choices[0].message.content) or raw_text
+        result = chat_text(raw_text, system=_SYSTEM)
+        return _clean_polish_output(result) or raw_text
     except Exception as e:
         logger.error('Journal polish failed, using raw text: %s', e)
 
