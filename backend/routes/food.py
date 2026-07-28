@@ -10,7 +10,7 @@ from backend.ai.background import run_bg
 from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.food import parse_food_entry
 from backend.ai.rag import sync_recipe_embeddings
-from backend.db.connection import get_db, row_to_dict
+from backend.db.connection import build_update, get_db, row_to_dict
 from backend.food import storage
 from backend.food.exif import extract_photo_meta
 from backend.routes.cookbook import _insert_recipe
@@ -195,8 +195,7 @@ def structure_food_entry(entry_id: str, text: str) -> None:
 
     if updates:
         updates['updated_at'] = int(time.time())
-        set_clause = ', '.join(f'{k}=?' for k in updates)
-        db.execute(f'UPDATE food_entries SET {set_clause} WHERE id=?', [*updates.values(), entry_id])
+        build_update(db, 'food_entries', updates, 'id=?', (entry_id,))
         db.commit()
 
     if new_recipe_id and is_embeddings_configured():
@@ -317,8 +316,7 @@ def create_entry():
         overrides['latitude'] = meta['latitude']
         overrides['longitude'] = meta['longitude']
     if overrides:
-        set_clause = ', '.join(f'{k}=?' for k in overrides)
-        db.execute(f'UPDATE food_entries SET {set_clause} WHERE id=?', [*overrides.values(), entry_id])
+        build_update(db, 'food_entries', overrides, 'id=?', (entry_id,))
 
     db.commit()
 
@@ -350,8 +348,7 @@ def update_entry(id):
         updates['tags'] = tags_json(body['tags'])
     if 'recipeId' in body:
         updates['recipe_id'] = body['recipeId'] or None
-    set_clause = ', '.join(f'{k}=?' for k in updates)
-    db.execute(f'UPDATE food_entries SET {set_clause} WHERE id=?', [*updates.values(), id])
+    build_update(db, 'food_entries', updates, 'id=?', (id,))
     db.commit()
     return jsonify({'success': True})
 

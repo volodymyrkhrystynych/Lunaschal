@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 
-from backend.db.connection import get_db
+from backend.db.connection import build_update, get_db
 from backend.meetings import storage
 from backend.meetings.merge import merge_segments, render_transcript
 
@@ -51,9 +51,7 @@ def _set_phase(meeting_id: str, phase: str, *, status: str | None = None, **cols
     if status is not None:
         updates['status'] = status
     db = get_db()
-    set_clause = ', '.join(f'{k}=?' for k in updates)
-    db.execute(f'UPDATE meetings SET {set_clause} WHERE id=?',
-               [*updates.values(), meeting_id])
+    build_update(db, 'meetings', updates, 'id=?', (meeting_id,))
     db.commit()
 
 

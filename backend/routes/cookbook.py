@@ -10,7 +10,7 @@ from ulid import ULID
 from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.rag import delete_recipe_embeddings, sync_recipe_embeddings
 from backend.ai.recipes import parse_recipe
-from backend.db.connection import get_db, row_to_dict, search_recipes_fts
+from backend.db.connection import build_update, get_db, row_to_dict, search_recipes_fts
 from backend.tags import tag_counts
 
 bp = Blueprint('cookbook', __name__, url_prefix='/api/cookbook')
@@ -106,9 +106,8 @@ def update_recipe(id):
         updates['tags'] = json.dumps(body['tags']) if body['tags'] else None
     if 'sourceUrl' in body:
         updates['source_url'] = body['sourceUrl']
-    set_clause = ', '.join(f'{k}=?' for k in updates)
     db = get_db()
-    db.execute(f'UPDATE recipes SET {set_clause} WHERE id=?', [*updates.values(), id])
+    build_update(db, 'recipes', updates, 'id=?', (id,))
     db.commit()
     if 'title' in updates or 'content' in updates:
         _sync_embeddings_bg(id)

@@ -8,7 +8,7 @@ import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
 from backend.ai.llm import REASONING_EFFORTS
-from backend.db.connection import get_db
+from backend.db.connection import build_update, get_db
 
 _sleep_inhibitor: subprocess.Popen | None = None
 _INHIBIT_WHO = 'Lunaschal'
@@ -147,8 +147,7 @@ def update_ai():
     s = _get_settings()
     now = int(time.time())
     if s:
-        set_clause = ', '.join(f'{k}=?' for k in updates)
-        db.execute(f'UPDATE settings SET {set_clause} WHERE id=1', list(updates.values()))
+        build_update(db, 'settings', updates, 'id=1')
     else:
         updates['created_at'] = now
         updates['id'] = 1

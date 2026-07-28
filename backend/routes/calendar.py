@@ -5,7 +5,7 @@ from flask import Blueprint, jsonify, request
 from ulid import ULID
 from backend.calendar_query import events_in_range
 from backend.calendar_recurrence import VALID_FREQS, format_byweekday
-from backend.db.connection import get_db, mapping_to_dict, row_to_dict
+from backend.db.connection import build_update, get_db, mapping_to_dict, row_to_dict
 
 bp = Blueprint('calendar', __name__, url_prefix='/api/calendar')
 
@@ -228,8 +228,7 @@ def update_event(id):
         return jsonify({'error': err}), 400
     if not updates:
         return jsonify({'success': True})
-    set_clause = ', '.join(f'{k}=?' for k in updates)
-    db.execute(f'UPDATE calendar_events SET {set_clause} WHERE id=?', [*updates.values(), id])
+    build_update(db, 'calendar_events', updates, 'id=?', (id,))
     db.commit()
     return jsonify({'success': True})
 
@@ -329,9 +328,7 @@ def update_series_from(id, date):
     if row['repeat_freq'] is None or cutoff is None:
         # A one-off, or a cut with no earlier occurrences: nothing to preserve,
         # so edit in place rather than leaving an empty husk of a series behind.
-        set_clause = ', '.join(f'{k}=?' for k in updates)
-        db.execute(f'UPDATE calendar_events SET {set_clause} WHERE id=?',
-                   [*updates.values(), id])
+        build_update(db, 'calendar_events', updates, 'id=?', (id,))
         db.commit()
         return jsonify({'id': id, 'split': False})
 
