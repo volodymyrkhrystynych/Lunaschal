@@ -4,6 +4,7 @@ import { api, ProposedTodo } from '../hooks/api';
 import { MessageMarkdown } from './MessageMarkdown';
 import { BriefingTodos } from './BriefingTodos';
 import { contextMessages, isBreak } from '@/lib/chatSegments';
+import { formatMessageTime } from '@/lib/chatTime';
 
 interface PendingSave {
   type: 'journal' | 'calendar';
@@ -217,12 +218,19 @@ export function Chat() {
 
     // Only the current segment (since the last "New chat") is sent to the model,
     // so the button acts as a true clear while history stays visible/saved.
+    // createdAt rides along so the backend can prefix each turn with when it
+    // was sent — the model is otherwise blind to gaps in the conversation.
     const chatMessages = [
       ...contextMessages(messages).map(m => ({
         role: m.role,
         content: m.content,
+        createdAt: m.createdAt,
       })),
-      { role: 'user' as const, content: userMessage },
+      {
+        role: 'user' as const,
+        content: userMessage,
+        createdAt: new Date().toISOString(),
+      },
     ];
 
     setIsStreaming(true);
@@ -433,6 +441,9 @@ export function Chat() {
               >
                 <div className="flex-1 h-px bg-white/10" />
                 New chat
+                {formatMessageTime(message.createdAt) && (
+                  <span>· {formatMessageTime(message.createdAt)}</span>
+                )}
                 <div className="flex-1 h-px bg-white/10" />
               </div>
             );
@@ -449,6 +460,7 @@ export function Chat() {
           )
             ? metadata.proposedTodos
             : [];
+          const sentAt = formatMessageTime(message.createdAt);
           return (
             <div
               key={message.id}
@@ -470,11 +482,20 @@ export function Chat() {
                     proposals={proposedTodos}
                   />
                 )}
-                {hasSaved && (
-                  <div className="mt-1 text-xs text-[var(--color-text-muted)] text-right">
-                    {metadata.savedAsJournal
-                      ? 'Saved to journal'
-                      : 'Saved to calendar'}
+                {(hasSaved || sentAt) && (
+                  <div
+                    className={`mt-1 flex items-center gap-2 text-xs text-[var(--color-text-muted)] ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+                  >
+                    {hasSaved && (
+                      <span>
+                        {metadata.savedAsJournal
+                          ? 'Saved to journal'
+                          : 'Saved to calendar'}
+                      </span>
+                    )}
+                    {sentAt && (
+                      <time dateTime={message.createdAt}>{sentAt}</time>
+                    )}
                   </div>
                 )}
               </div>

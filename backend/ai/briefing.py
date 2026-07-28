@@ -183,7 +183,12 @@ def _briefing_generation_opts() -> dict:
     return {
         'reasoning_effort': s.get('briefing_reasoning_effort') or 'none',
         'max_tokens': s.get('briefing_max_tokens') or BRIEFING_MAX_TOKENS,
-        'num_ctx': s.get('briefing_num_ctx') or (LLM_NUM_CTX * 2),
+        # Matches the chat window rather than doubling it: the briefing shares
+        # the chat model by default, and Ollama re-allocates the KV cache (a
+        # full model reload — tens of GB for a large local model) whenever
+        # num_ctx changes between requests. A wider briefing window would cost
+        # a reload at 4am and another on the user's next message.
+        'num_ctx': s.get('briefing_num_ctx') or LLM_NUM_CTX,
     }
 
 

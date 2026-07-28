@@ -9,6 +9,7 @@ from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.rag import sync_journal_embeddings, delete_journal_embeddings, search_for_context
 from backend.ai.journal import polish_journal_entry, generate_journal_metadata
 from backend.ai.background import run_bg
+from backend.tags import tags_json
 
 bp = Blueprint('journal', __name__, url_prefix='/api/journal')
 
@@ -180,7 +181,7 @@ def create_entry():
     id = body.get('id') or str(ULID())
     cur = get_db().execute(
         'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-        (id, content, raw_content, title, json.dumps(tags) if tags is not None else None, now, now),
+        (id, content, raw_content, title, tags_json(tags), now, now),
     )
     get_db().commit()
     if cur.rowcount == 0:
@@ -226,7 +227,7 @@ def update_entry(id):
     if 'title' in body:
         updates['title'] = body['title']
     if 'tags' in body:
-        updates['tags'] = json.dumps(body['tags'])
+        updates['tags'] = tags_json(body['tags'])
     set_clause = ', '.join(f'{k}=?' for k in updates)
     get_db().execute(
         f'UPDATE journal_entries SET {set_clause} WHERE id=?',
@@ -274,7 +275,7 @@ def _generate_metadata_bg(journal_id: str, content: str) -> None:
             if meta.get('title'):
                 updates['title'] = meta['title']
             if meta.get('tags'):
-                updates['tags'] = json.dumps(meta['tags'])
+                updates['tags'] = tags_json(meta['tags'])
             if not updates:
                 return
             db = get_db()

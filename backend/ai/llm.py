@@ -34,12 +34,21 @@ JSON_MAX_TOKENS = 4096
 REASONING_EFFORTS = ('none', 'low', 'medium', 'high', 'max')
 
 # Fallbacks for the default conversational model when the user hasn't set them.
+# num_predict is a hard stop, not a reservation, so it costs nothing until a
+# generation actually runs long — but it has to stay reachable within
+# _NATIVE_TIMEOUT. On a large MoE served mostly from system RAM (~10-15 tok/s),
+# anything past a few thousand tokens can't finish before the request times out,
+# which turns a runaway generation into a lost reply rather than a capped one.
 LLM_MAX_TOKENS = 4096   # num_predict — output length ceiling
-LLM_NUM_CTX = 4096      # num_ctx — Ollama's own default context window
+# num_ctx, unlike num_predict, is allocated up front: Ollama sizes the KV cache
+# for the full window at load time. Ollama's own default is 4096; 8192 leaves a
+# thinking model room for prompt + reasoning + answer without reserving VRAM the
+# conversation will never use.
+LLM_NUM_CTX = 8192
 
 # How long to wait on a blocking generation. The briefing model can be large and
 # slow, especially when thinking, so this is deliberately roomy.
-_NATIVE_TIMEOUT = 900
+_NATIVE_TIMEOUT = 1800
 
 # Keep the model loaded in memory for a while after each request. Ollama's
 # default is 5m; large reasoning models can take much longer to load, so this

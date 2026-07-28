@@ -100,12 +100,14 @@ def test_chat_json_coerces_invalid_reasoning_effort_to_none(monkeypatch):
 
 
 def test_default_generation_opts_reads_settings(client):
-    from backend.ai.llm import default_generation_opts
+    from backend.ai.llm import LLM_MAX_TOKENS, LLM_NUM_CTX, default_generation_opts
     from backend.db import connection
 
     # No settings row -> hard defaults.
     assert default_generation_opts() == {
-        'reasoning_effort': 'none', 'num_ctx': 4096, 'num_predict': 4096,
+        'reasoning_effort': 'none',
+        'num_ctx': LLM_NUM_CTX,
+        'num_predict': LLM_MAX_TOKENS,
     }
 
     db = connection.get_db()
