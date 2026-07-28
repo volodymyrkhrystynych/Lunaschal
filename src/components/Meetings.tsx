@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import type { Meeting, MeetingPhase } from '../hooks/api';
-import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
+import { useShortcutScope } from '../shortcuts/ShortcutProvider';
+import { useListSelection } from '../shortcuts/useListSelection';
 
 const PHASE_LABELS: Partial<Record<MeetingPhase, string>> = {
   recording: 'Recording…',
@@ -151,9 +152,7 @@ function MeetingRecordButton() {
 
 export function Meetings() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selIndex, setSelIndex] = useState(0);
   const queryClient = useQueryClient();
-  const { level } = useShortcuts();
 
   const { data: meetings, isLoading } = useQuery({
     queryKey: ['meetings'],
@@ -161,16 +160,12 @@ export function Meetings() {
     refetchInterval: q => (q.state.data?.some(isBusy) ? 1500 : false),
   });
 
-  useEffect(() => {
-    setSelIndex(i => Math.min(i, Math.max((meetings?.length ?? 1) - 1, 0)));
-  }, [meetings]);
+  const { selIndex, next, prev, isSelected, scrollSelectedIntoView } =
+    useListSelection(meetings?.length, 1);
 
   useShortcutScope(1, {
-    next: () =>
-      setSelIndex(i =>
-        Math.min(i + 1, Math.max((meetings?.length ?? 1) - 1, 0))
-      ),
-    prev: () => setSelIndex(i => Math.max(i - 1, 0)),
+    next,
+    prev,
     drillIn: () => {
       const m = meetings?.[selIndex];
       if (!m) return false;
@@ -208,12 +203,9 @@ export function Meetings() {
           <button
             key={m.id}
             onClick={() => setSelectedId(m.id)}
-            ref={el => {
-              if (el && level >= 1 && idx === selIndex)
-                el.scrollIntoView({ block: 'nearest' });
-            }}
+            ref={scrollSelectedIntoView(idx)}
             className={`w-full text-left p-4 bg-[var(--color-surface)] rounded-lg border transition-colors hover:border-white/30 ${
-              level >= 1 && idx === selIndex
+              isSelected(idx)
                 ? 'border-[var(--color-primary)]'
                 : 'border-white/10'
             }`}

@@ -1,11 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { FoodEntry } from '../../hooks/api';
-import {
-  useShortcuts,
-  useShortcutScope,
-} from '../../shortcuts/ShortcutProvider';
+import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import { useListSelection } from '../../shortcuts/useListSelection';
 import { ratingStars, foodTitle, mapLink } from '../../lib/food';
 import { FoodCapture } from './FoodCapture';
 
@@ -277,8 +275,6 @@ export function FoodLog() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [showCapture, setShowCapture] = useState(true);
   const [zoom, setZoom] = useState<string | null>(null);
-  const [selIndex, setSelIndex] = useState(0);
-  const { level } = useShortcuts();
 
   const { data: tags } = useQuery({
     queryKey: ['food', 'tags'],
@@ -290,16 +286,14 @@ export function FoodLog() {
     queryFn: () => api.food.list({ tag: selectedTag ?? undefined }),
   });
 
-  useEffect(() => {
-    setSelIndex(i => Math.min(i, Math.max((entries?.length ?? 1) - 1, 0)));
-  }, [entries]);
+  const { next, prev, isSelected, scrollSelectedIntoView } = useListSelection(
+    entries?.length,
+    1
+  );
 
   useShortcutScope(1, {
-    next: () =>
-      setSelIndex(i =>
-        Math.min(i + 1, Math.max((entries?.length ?? 1) - 1, 0))
-      ),
-    prev: () => setSelIndex(i => Math.max(i - 1, 0)),
+    next,
+    prev,
     create: () => setShowCapture(true),
   });
 
@@ -342,16 +336,10 @@ export function FoodLog() {
           <div className="text-[var(--color-text-muted)]">Loading...</div>
         )}
         {entries?.map((entry, idx) => (
-          <div
-            key={entry.id}
-            ref={el => {
-              if (el && level >= 1 && idx === selIndex)
-                el.scrollIntoView({ block: 'nearest' });
-            }}
-          >
+          <div key={entry.id} ref={scrollSelectedIntoView(idx)}>
             <FoodEntryCard
               entry={entry}
-              selected={level >= 1 && idx === selIndex}
+              selected={isSelected(idx)}
               onZoom={setZoom}
             />
           </div>

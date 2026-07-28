@@ -21,7 +21,8 @@ import type {
   TaskEvent,
 } from '../hooks/api';
 import { ratingStars, foodTitle, mapLink } from '../lib/food';
-import { useShortcuts, useShortcutScope } from '../shortcuts/ShortcutProvider';
+import { useShortcutScope } from '../shortcuts/ShortcutProvider';
+import { useListSelection } from '../shortcuts/useListSelection';
 
 interface JournalProps {
   /** Navigate to the fanfic reader (chip on entries linked to a fic chapter). */
@@ -51,11 +52,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     count: number;
   } | null>(null);
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
-  const [selIndex, setSelIndex] = useState(0);
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
-  const { level } = useShortcuts();
 
   const { data: curatedTags } = useQuery({
     queryKey: ['curatedTags'],
@@ -237,16 +236,12 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     onError: () => setGeneratingFor(null),
   });
 
-  useEffect(() => {
-    setSelIndex(i => Math.min(i, Math.max((entries?.length ?? 1) - 1, 0)));
-  }, [entries]);
+  const { selIndex, next, prev, isSelected, scrollSelectedIntoView } =
+    useListSelection(entries?.length, 1);
 
   useShortcutScope(1, {
-    next: () =>
-      setSelIndex(i =>
-        Math.min(i + 1, Math.max((entries?.length ?? 1) - 1, 0))
-      ),
-    prev: () => setSelIndex(i => Math.max(i - 1, 0)),
+    next,
+    prev,
     create: () => setShowNewEntry(true),
     drillIn: () => {
       const entry = entries?.[selIndex];
@@ -469,12 +464,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
           return (
             <div
               key={entry.id}
-              ref={el => {
-                if (el && level >= 1 && idx === selIndex)
-                  el.scrollIntoView({ block: 'nearest' });
-              }}
+              ref={scrollSelectedIntoView(idx)}
               className={`p-4 bg-[var(--color-surface)] rounded-lg border ${
-                level >= 1 && idx === selIndex
+                isSelected(idx)
                   ? 'border-[var(--color-primary)]'
                   : 'border-white/10'
               }`}

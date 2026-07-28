@@ -1,11 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { Recipe } from '../../hooks/api';
-import {
-  useShortcuts,
-  useShortcutScope,
-} from '../../shortcuts/ShortcutProvider';
+import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import { useListSelection } from '../../shortcuts/useListSelection';
 
 const parseTags = (tags: string | null): string[] => {
   if (!tags) return [];
@@ -44,9 +42,7 @@ export function RecipeList() {
   const [importText, setImportText] = useState('');
   const [importUrl, setImportUrl] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
-  const [selIndex, setSelIndex] = useState(0);
   const queryClient = useQueryClient();
-  const { level } = useShortcuts();
 
   const { data: recipeTags } = useQuery({
     queryKey: ['cookbook', 'tags'],
@@ -116,16 +112,12 @@ export function RecipeList() {
     onError: (e: Error) => setImportError(e.message),
   });
 
-  useEffect(() => {
-    setSelIndex(i => Math.min(i, Math.max((recipes?.length ?? 1) - 1, 0)));
-  }, [recipes]);
+  const { selIndex, next, prev, isSelected, scrollSelectedIntoView } =
+    useListSelection(recipes?.length, 1);
 
   useShortcutScope(1, {
-    next: () =>
-      setSelIndex(i =>
-        Math.min(i + 1, Math.max((recipes?.length ?? 1) - 1, 0))
-      ),
-    prev: () => setSelIndex(i => Math.max(i - 1, 0)),
+    next,
+    prev,
     create: () => setShowNewRecipe(true),
     drillIn: () => {
       const recipe = recipes?.[selIndex];
@@ -335,12 +327,9 @@ export function RecipeList() {
           return (
             <div
               key={recipe.id}
-              ref={el => {
-                if (el && level >= 1 && idx === selIndex)
-                  el.scrollIntoView({ block: 'nearest' });
-              }}
+              ref={scrollSelectedIntoView(idx)}
               className={`p-4 bg-[var(--color-surface)] rounded-lg border ${
-                level >= 1 && idx === selIndex
+                isSelected(idx)
                   ? 'border-[var(--color-primary)]'
                   : 'border-white/10'
               }`}
