@@ -327,7 +327,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                   </div>
                 ) : chapter ? (
                   <>
-                    <h2 className="text-xl font-bold text-[var(--color-text)] mb-1">
+                    <h2 className="text-xl font-bold text-[var(--color-text)] mb-1 break-words">
                       {chapter.title}
                     </h2>
                     <div className="text-sm text-[var(--color-text-muted)] mb-6 flex gap-3">
