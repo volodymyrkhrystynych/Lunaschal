@@ -46,6 +46,23 @@ def test_polish_uses_configured_model_no_cpu_options(monkeypatch):
     assert 'extra_body' not in captured['kwargs']
 
 
+def test_polish_sends_the_system_prompt_and_keeps_paragraphs(monkeypatch):
+    # The whole point of the polish pass is turning a dictated wall of text into
+    # paragraphs, and the journal view renders with whitespace-pre-wrap — so the
+    # blank lines have to survive the output cleaning untouched.
+    polished = 'So today was rough. I barely slept.\n\nAnyway, the parser works.'
+    captured = _fake_openai(monkeypatch, polished)
+    monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(journal, 'get_provider_config', lambda: _ollama_config())
+
+    result = journal.polish_journal_entry('so today was rough i barely slept')
+
+    assert result == polished
+    system, user = captured['kwargs']['messages']
+    assert system == {'role': 'system', 'content': journal._SYSTEM}
+    assert user['content'] == 'so today was rough i barely slept'
+
+
 def test_metadata_uses_configured_model_no_cpu_options(monkeypatch):
     captured = _fake_openai(monkeypatch, '{"title": "A title", "tags": ["work"]}')
     monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
@@ -57,6 +74,35 @@ def test_metadata_uses_configured_model_no_cpu_options(monkeypatch):
     assert captured['kwargs']['model'] == 'llama3.2'
     assert 'extra_body' not in captured['kwargs']
     assert captured['kwargs']['response_format'] == {'type': 'json_object'}
+
+
+class TestMetadataTagNormalization:
+    """Tags reach the frontend as React keys, so duplicates are a render bug.
+    Normalization is the backend's job (see src/lib/tags.ts)."""
+
+    def _meta(self, monkeypatch, payload):
+        _fake_openai(monkeypatch, payload)
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+        monkeypatch.setattr(journal, 'get_provider_config', lambda: _ollama_config())
+        return journal.generate_journal_metadata('some content')
+
+    def test_dedupes_repeated_tags(self, monkeypatch):
+        result = self._meta(monkeypatch, '{"title": "T", "tags": ["reading", "reading", "mood"]}')
+        assert result['tags'] == ['reading', 'mood']
+
+    def test_dedupes_case_variants(self, monkeypatch):
+        result = self._meta(monkeypatch, '{"title": "T", "tags": ["Reading", "reading"]}')
+        assert result['tags'] == ['reading']
+
+    def test_caps_at_three_after_deduping(self, monkeypatch):
+        # Dedupe first, so repeats don't burn slots real tags could have used.
+        result = self._meta(
+            monkeypatch, '{"title": "T", "tags": ["a", "a", "b", "c", "d"]}')
+        assert result['tags'] == ['a', 'b', 'c']
+
+    def test_bare_string_is_not_iterated_by_character(self, monkeypatch):
+        result = self._meta(monkeypatch, '{"title": "T", "tags": "reading"}')
+        assert result['tags'] is None
 
 
 def test_classify_uses_configured_model_no_cpu_options(monkeypatch):
