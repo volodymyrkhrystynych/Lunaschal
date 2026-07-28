@@ -1,9 +1,6 @@
-import os
-import re
-import shutil
 from pathlib import Path
 
-_SAFE_NAME = re.compile(r'^[A-Za-z0-9._-]+$')
+from backend.storage import IdScopedStorage, is_safe_name
 
 # Extensions we accept for food media, keyed to the two kinds we track.
 IMAGE_EXTS = {'jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'}
@@ -23,22 +20,18 @@ _MIME_EXT = {
     'video/x-m4v': 'm4v',
 }
 
+_storage = IdScopedStorage('FOOD_ROOT', './data/food')
 
-def food_root() -> Path:
-    return Path(os.environ.get('FOOD_ROOT', './data/food')).expanduser().resolve()
-
-
-def entry_dir(entry_id: str) -> Path | None:
-    # Dot-only names like '..' pass _SAFE_NAME but escape the root.
-    if not _SAFE_NAME.match(entry_id) or set(entry_id) == {'.'}:
-        return None
-    return food_root() / entry_id
+food_root = _storage.root
+entry_dir = _storage.dir
+delete_entry_dir = _storage.delete_dir
+resolve_stored_path = _storage.resolve_stored_path
 
 
 def media_path(entry_id: str, media_id: str, ext: str) -> Path | None:
     d = entry_dir(entry_id)
     ext = ext.lower().lstrip('.')
-    if d is None or not _SAFE_NAME.match(media_id) or set(media_id) == {'.'}:
+    if d is None or not is_safe_name(media_id):
         return None
     if ext not in IMAGE_EXTS and ext not in VIDEO_EXTS:
         return None
@@ -59,25 +52,3 @@ def resolve_ext(mime: str | None, filename: str | None) -> str | None:
 
 def kind_for_ext(ext: str) -> str:
     return 'video' if ext.lower().lstrip('.') in VIDEO_EXTS else 'image'
-
-
-def resolve_stored_path(path_str: str) -> Path | None:
-    """Only serve a path that's still a direct grandchild of the food root
-    (i.e. <root>/<entry_id>/<media_id>.<ext>), as defence in depth against a
-    stored path that has since been tampered with."""
-    path = Path(path_str)
-    if path.parent.parent != food_root():
-        return None
-    return path
-
-
-def delete_entry_dir(entry_id: str) -> None:
-    d = entry_dir(entry_id)
-    if d is None:
-        return
-    # Belt and braces: only ever delete a direct child of the food root.
-    d = d.resolve()
-    if d.parent != food_root():
-        return
-    if d.is_dir():
-        shutil.rmtree(d, ignore_errors=True)
