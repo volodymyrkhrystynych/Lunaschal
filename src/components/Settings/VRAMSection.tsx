@@ -431,7 +431,10 @@ export function VRAMSection() {
           <p className="text-xs text-[var(--color-text-muted)] mt-1">
             How many tokens (prompt + thinking + reply) the model can hold at
             once. Ollama's default is 4096; raise it if you turn thinking on, so
-            reasoning doesn't crowd out the answer. Bigger uses more VRAM.
+            reasoning doesn't crowd out the answer. Bigger uses more VRAM. This
+            one window applies to every AI call — chat, the overnight briefing,
+            and background helpers — because Ollama reloads the model whenever
+            the context size changes between requests.
           </p>
         </div>
 

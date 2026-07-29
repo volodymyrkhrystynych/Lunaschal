@@ -171,13 +171,13 @@ def test_generate_briefing_passes_reasoning_and_max_tokens_from_settings(client,
     ctx = {'now': NOW, 'today': TODAY, 'journal': [], 'daily_tasks': [],
            'todos': [], 'calendar': [], 'learning_due': 0}
 
-    # Defaults: no thinking, generous ceiling, roomy context window.
+    # Defaults: no thinking, generous ceiling.
     briefing_mod.generate_briefing(ctx)
     assert captured['reasoning_effort'] == 'none'
     assert captured['max_tokens'] == briefing_mod.BRIEFING_MAX_TOKENS
-    # Same window as the chat model, so sharing it costs no KV re-allocation.
-    from backend.ai.llm import LLM_NUM_CTX
-    assert captured['num_ctx'] == LLM_NUM_CTX
+    # The context window is never passed: chat_json fills in the one shared
+    # window, so the briefing can't leave the chat runner needing a reload.
+    assert 'num_ctx' not in captured
 
     # User-configured values flow through.
     db = connection.get_db()
@@ -187,14 +187,14 @@ def test_generate_briefing_passes_reasoning_and_max_tokens_from_settings(client,
     )
     db.execute(
         'UPDATE settings SET briefing_reasoning_effort=?, briefing_max_tokens=?,'
-        ' briefing_num_ctx=? WHERE id=1',
+        ' llm_num_ctx=? WHERE id=1',
         ('high', 8000, 32768),
     )
     db.commit()
     briefing_mod.generate_briefing(ctx)
     assert captured['reasoning_effort'] == 'high'
     assert captured['max_tokens'] == 8000
-    assert captured['num_ctx'] == 32768
+    assert 'num_ctx' not in captured
 
 
 def test_build_prompt_is_pure_and_mentions_data(client):

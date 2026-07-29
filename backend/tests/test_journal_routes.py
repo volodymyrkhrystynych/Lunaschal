@@ -14,11 +14,11 @@ from backend.routes import journal as journal_routes
 
 @pytest.fixture(autouse=True)
 def _no_background_work(monkeypatch):
-    """Creating an entry normally kicks off embedding sync, polish and metadata
-    threads. They outlive the per-test DB (the fixture closes the connection at
-    teardown, which the threads then use), and none of them are under test here.
+    """Creating an entry normally kicks off polish and metadata threads. They
+    outlive the per-test DB (the fixture closes the connection at teardown,
+    which the threads then use), and neither is under test here.
     """
-    for name in ('_sync_embeddings_bg', '_polish_bg', '_generate_metadata_bg'):
+    for name in ('_polish_bg', '_generate_metadata_bg'):
         monkeypatch.setattr(journal_routes, name, lambda *a, **k: None)
 
 

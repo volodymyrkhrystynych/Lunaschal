@@ -177,20 +177,10 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS embedding_metadata (
-    id TEXT PRIMARY KEY,
-    source_type TEXT NOT NULL,
-    source_id TEXT NOT NULL,
-    chunk_index INTEGER NOT NULL DEFAULT 0,
-    chunk_text TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-);
-
 CREATE INDEX IF NOT EXISTS idx_journal_created ON journal_entries(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(date);
 CREATE INDEX IF NOT EXISTS idx_calendar_exc_event ON calendar_event_exceptions(event_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_embedding_source ON embedding_metadata(source_type, source_id);
 
 CREATE TABLE IF NOT EXISTS writing_projects (
     id TEXT PRIMARY KEY,

@@ -8,7 +8,6 @@ A self-hosted personal knowledge management desktop app with local AI. Journal, 
 - **Journal** — Write and search personal entries. Full-text search powered by SQLite FTS5. Define curated tags in Settings → Tags; the AI scans all existing entries to apply each new tag retroactively. Filter the journal by curated tag via pill buttons above the entry list.
 - **Calendar** — Activity log for events and appointments, linked to journal entries.
 - **Flashcards** — Spaced repetition (SM-2 algorithm) with AI-generated cards from your journal entries or any topic.
-- **RAG** — The chat retrieves semantically relevant journal entries as context for each message using vector embeddings.
 - **Writing** — Creative writing workspace with projects, ordered chapters, and a context document library (character sheets, outlines, world-building notes, etc.). A scoped AI chat sidebar lets you discuss plot and story; you choose which context docs the AI can see via checkboxes.
 - **File Editor** — Browse, create, edit, and rename files under a configurable root directory (`~/notes` by default). CodeMirror 6 editor with syntax highlighting for Markdown, JavaScript/TypeScript, and Python. Auto-saves after 1.5 s of inactivity.
 - **Voice Input** — Record audio from the browser mic and transcribe it into the active editor or clipboard via the persistent bottom bar. Global keyboard shortcuts (F1, Right Alt) work system-wide via the background listener.
@@ -24,7 +23,7 @@ A self-hosted personal knowledge management desktop app with local AI. Journal, 
 | Frontend      | React 19, Vite, Tailwind CSS v4                       |
 | Backend       | Flask (Python)                                        |
 | API layer     | REST (JSON over HTTP) + React Query                   |
-| Database      | SQLite (`sqlite3` built-in, FTS5, sqlite-vec)         |
+| Database      | SQLite (`sqlite3` built-in, FTS5)                     |
 | AI / LLM      | `openai`, `google-generativeai`, `ollama` Python SDKs |
 | STT/TTS       | faster-whisper + kokoro-onnx (local) or OpenAI API    |
 
@@ -82,8 +81,6 @@ Configure your provider in the Settings page. The active provider and model are 
 | OpenAI        | `OPENAI_API_KEY`        | Also used by STT/TTS when `STT_BACKEND=openai` |
 | Google Gemini | `GOOGLE_API_KEY`        | —                                              |
 | Ollama        | — (set URL in Settings) | No embeddings support yet                      |
-
-> RAG (vector embeddings) requires OpenAI or Gemini. Ollama embeddings are not yet supported.
 
 ## Voice Input (STT + TTS)
 

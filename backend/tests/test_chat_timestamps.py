@@ -108,12 +108,11 @@ def test_chat_stream_skips_the_note_without_timestamps(captured):
     assert user == {'role': 'user', 'content': 'hi'}
 
 
-def test_chat_stream_keeps_caller_prompt_and_rag(captured):
-    list(chat_stream([{'role': 'user', 'content': 'hi'}], 'RAG BLOCK', 'CALLER PROMPT'))
+def test_chat_stream_keeps_caller_prompt(captured):
+    list(chat_stream([{'role': 'user', 'content': 'hi'}], 'CALLER PROMPT'))
     system = captured['messages'][0]['content']
 
     assert 'CALLER PROMPT' in system
-    assert 'RAG BLOCK' in system
     assert SYSTEM_PROMPT not in system
 
 

@@ -9,7 +9,6 @@ import { NudgeSection } from './NudgeSection';
 import { BriefingSection } from './BriefingSection';
 import { VRAMSection } from './VRAMSection';
 import { NetworkSection } from './NetworkSection';
-import { KnowledgeBaseSection } from './KnowledgeBaseSection';
 import { FanficCookiesSection } from './FanficCookiesSection';
 import { DisplaySection } from './DisplaySection';
 import { OllamaConfigSection } from './OllamaConfigSection';
@@ -78,8 +77,6 @@ export function Settings() {
           <NudgeSection />
 
           <BriefingSection />
-
-          <KnowledgeBaseSection />
 
           <FanficCookiesSection />
 

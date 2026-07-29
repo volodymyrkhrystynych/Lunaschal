@@ -420,6 +420,8 @@ export interface AppSettings {
   ollamaModel: string | null;
   llmReasoningEffort: 'none' | 'low' | 'medium' | 'high' | 'max';
   llmMaxTokens: number;
+  /** The one context window, shared by chat, the briefing and every structured
+   * helper — a per-feature window would make Ollama reload the model. */
   llmNumCtx: number;
   networkMode: boolean;
   networkCode: string | null;
@@ -441,7 +443,6 @@ export interface AppSettings {
   briefingGoals: string;
   briefingReasoningEffort: 'none' | 'low' | 'medium' | 'high' | 'max';
   briefingMaxTokens: number;
-  briefingNumCtx: number;
 }
 
 export interface WhisperModel {
@@ -478,20 +479,6 @@ export interface NotebookReviewState {
   enabled: boolean;
   fsrsState: string | null;
   due: string | null;
-}
-
-export interface RAGResult {
-  sourceId: string;
-  sourceType: string;
-  title?: string;
-  score: number;
-  preview: string;
-}
-
-export interface RAGContext {
-  context: string;
-  results: RAGResult[];
-  isConfigured: boolean;
 }
 
 export interface WritingProject {
@@ -791,10 +778,6 @@ export const api = {
     search: (query: string, limit?: number) =>
       get<JournalEntry[]>(
         `/api/journal/search?query=${encodeURIComponent(query)}&limit=${limit ?? 50}`
-      ),
-    semanticSearch: (query: string, limit?: number) =>
-      get<JournalEntry[]>(
-        `/api/journal/semantic-search?query=${encodeURIComponent(query)}&limit=${limit ?? 5}`
       ),
     get: (id: string) => get<JournalEntry>(`/api/journal/${id}`),
     create: (data: {
@@ -1353,8 +1336,6 @@ export const api = {
       time?: string;
       tags: string[];
     }) => post<{ id: string }>('/api/chat/save-calendar', data),
-    ragContext: (message: string, limit?: number) =>
-      post<RAGContext>('/api/chat/rag-context', { message, limit: limit ?? 3 }),
   },
 
   files: {
@@ -1445,25 +1426,6 @@ export const api = {
     listenerState: () =>
       get<{ recording: boolean; transcribing: boolean; mode: string | null }>(
         '/api/stt/listener-state'
-      ),
-  },
-
-  rag: {
-    isConfigured: () => get<boolean>('/api/rag/configured'),
-    getStats: () =>
-      get<{
-        totalJournals: number;
-        indexedJournals: number;
-        totalChunks: number;
-        isConfigured: boolean;
-      }>('/api/rag/stats'),
-    syncJournal: (journalId: string) =>
-      post<{ chunks: number }>(`/api/rag/sync/${journalId}`),
-    syncAll: () =>
-      post<{ synced: number; chunks: number }>('/api/rag/sync-all'),
-    search: (query: string, limit?: number) =>
-      get<RAGResult[]>(
-        `/api/rag/search?query=${encodeURIComponent(query)}&limit=${limit ?? 5}`
       ),
   },
 

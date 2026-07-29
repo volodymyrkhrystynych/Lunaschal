@@ -92,6 +92,42 @@ def test_chat_json_forwards_reasoning_and_num_ctx(monkeypatch):
     assert captured['json_format'] is True
 
 
+def test_chat_json_defaults_to_the_shared_num_ctx(client, monkeypatch):
+    """The bug this guards: `chat_json` used to default num_ctx to None, so the
+    option was omitted and Ollama fell back to its own 4096. Every classify /
+    title / metadata call then disagreed with the chat window, and Ollama
+    evicted and reloaded the model — twice per chat message."""
+    captured = {}
+    _stub_native(monkeypatch, captured)
+    from backend.db import connection
+    db = connection.get_db()
+    db.execute(
+        'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)'
+    )
+    db.execute('UPDATE settings SET llm_num_ctx=? WHERE id=1', (32768,))
+    db.commit()
+
+    chat_json('hi')
+    assert captured['num_ctx'] == 32768
+    # ...and it matches what the streaming chat asks for, which is the point.
+    assert llm.default_generation_opts()['num_ctx'] == 32768
+
+
+def test_chat_json_num_ctx_falls_back_when_settings_unreachable(monkeypatch):
+    """Callers without a DB context (background threads, one-off scripts) must
+    still send an explicit window rather than inheriting Ollama's 4096."""
+    from backend.ai import provider
+
+    def boom():
+        raise RuntimeError('no application context')
+
+    monkeypatch.setattr(provider, 'get_settings', boom)
+    captured = {}
+    _stub_native(monkeypatch, captured)
+    chat_json('hi')
+    assert captured['num_ctx'] == llm.LLM_NUM_CTX
+
+
 def test_chat_json_coerces_invalid_reasoning_effort_to_none(monkeypatch):
     captured = {}
     _stub_native(monkeypatch, captured)

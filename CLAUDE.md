@@ -52,7 +52,7 @@ npm run test:watch       # vitest in watch mode
 
 ## Architecture
 
-Lunaschal is a single-user personal life-management desktop app with AI integration. Views (in sidebar order): AI chat with RAG, daily tasks + todos, journal, meeting recorder/transcriber, creative-writing workspace, calendar, spaced-repetition learning, cookbook, fanfic library/reader, newspaper front pages, file editor, settings. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
+Lunaschal is a single-user personal life-management desktop app with AI integration. Views (in sidebar order): AI chat, daily tasks + todos, journal, meeting recorder/transcriber, creative-writing workspace, calendar, spaced-repetition learning, cookbook, fanfic library/reader, newspaper front pages, file editor, settings. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
 
 ### Stack
 
@@ -71,7 +71,7 @@ Lunaschal is a single-user personal life-management desktop app with AI integrat
 
 ### Backend Structure (`backend/`)
 
-Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `rag`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`.
+Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`.
 
 Feature-logic packages (kept out of the route files so they can be unit-tested):
 
@@ -90,7 +90,6 @@ Long-running work (fic downloads, curated-tag scans, meeting transcription) runs
 - `schema.sql` — raw SQL `CREATE TABLE IF NOT EXISTS` statements; all IDs are ULIDs; timestamps are unix ints (converted to ISO strings by `row_to_dict`, which also camelCases column names — see `TIMESTAMP_COLS`)
 - `connection.py` — opens a single WAL-mode SQLite connection (`get_db()`), runs `schema.sql` on startup, then a long list of `_ensure_*` helpers: **migrations are idempotent ALTER TABLEs guarded by `PRAGMA table_info` checks** — follow that pattern for new columns
 - Three FTS5 virtual tables maintained by SQL triggers: `journal_fts`, `recipes_fts`, `fic_chapters_fts`
-- `sqlite-vec` extension for vector similarity search (RAG); silently skipped if not installed
 - Binary/media files live next to the DB under `./data/`: `fanfic/<fic_id>/` (images, PDFs), `meetings/<id>/` (WAV tracks), `newspapers/`, plus `shortcuts.json` (in-app key bindings). Roots overridable via `FANFIC_ROOT` / `MEETINGS_ROOT` / `NEWSPAPERS_ROOT` / `SHORTCUTS_PATH`.
 
 ### AI Layer (`backend/ai/`)
@@ -99,8 +98,7 @@ Long-running work (fic downloads, curated-tag scans, meeting transcription) runs
 - `llm.py` — shared generation helpers over Ollama's **native `/api/chat`** (`requests`): `chat_json` (JSON mode), `chat_text`, `chat_messages`, plus `_native_chat`/`_native_chat_stream`. Each takes reasoning level + `num_ctx` + `num_predict` (`default_generation_opts()` reads these from settings). The JSON grammar constraint is **dropped when thinking is on** (it otherwise makes reasoning models emit an empty `{}`); `_parse_json_response` tolerates fenced/prose JSON. `chat_with_tools` stays on the OpenAI-compat client (raises `ToolCallingUnsupported` for gemini)
 - `chat.py` — streaming chat generator consumed by the `/api/chat/stream` route
 - `classifier.py` — classifies chat messages into intents: `journal | calendar | question | flashcard_request | conversation`; extracts structured data when saving entries
-- `embeddings.py` — text embeddings for RAG and Learning answer-dedup; OpenAI (`text-embedding-3-small`), Gemini (`text-embedding-004`), Ollama (`nomic-embed-text`)
-- `rag.py` — syncs journal entries and recipes to embeddings, semantic search, context formatting
+- `embeddings.py` — text embeddings for Learning answer-dedup; OpenAI (`text-embedding-3-small`), Gemini (`text-embedding-004`), Ollama (`nomic-embed-text`)
 - `journal.py` — entry polish/metadata; `classify_entry_for_tag(content, tag_name) -> bool` for the curated-tag background scan (CPU-pinned for Ollama via `_CPU_OPTIONS`)
 - `learning_generation.py` / `learning_grading.py` / `learning_verification.py` — flashcard generation, claim-coverage grading, MCP-grounded verification (see Learning below)
 - `mcp_client.py` — asyncio bridge to the `mcp` SDK (per-request sessions, stdio/http transports), MCP→OpenAI tool mapping
@@ -150,7 +148,7 @@ Records two PulseAudio/PipeWire streams via ffmpeg — mic + default sink `.moni
 
 #### Cookbook (`backend/routes/cookbook.py`, `backend/ai/recipes.py`, `src/components/Cookbook.tsx`)
 
-Recipe collection. Paste text or a URL — the page is fetched and stripped, then `parse_recipe` extracts title/markdown-content/tags via LLM JSON mode. FTS search (`recipes_fts`), tag filtering, optional RAG embeddings.
+Recipe collection. Paste text or a URL — the page is fetched and stripped, then `parse_recipe` extracts title/markdown-content/tags via LLM JSON mode. FTS search (`recipes_fts`), tag filtering.
 
 #### Tasks & todos (`backend/routes/tasks.py`, `src/components/Tasks.tsx`)
 
@@ -167,8 +165,7 @@ Append-only log of everything the STT pipeline transcribed (source/app/detail). 
 ### Key Behaviors
 
 - **Curated tags** — user-defined tags managed in Settings → Tags tab. Each new tag triggers a background daemon thread that calls `classify_entry_for_tag` per journal entry and writes matches to `journal_entry_curated_tags`. Progress tracked in-memory (`_scan_progress` dict in `curated_tags.py`); the list endpoint merges it in. Tags appear as filter pill buttons in the Journal view; entries display curated tags (`#name`, neutral style) separately from freeform AI tags (accent color).
-- **Journal entries** keep `raw_content` (as typed/spoken) alongside AI-polished `content`; polish, metadata generation, and embedding sync run as background threads after save. The Journal feed also interleaves fic-reading commentary via `journal_entry_fic_refs`.
-- **RAG** is optional — silently disabled when embeddings aren't configured (Ollama provider, or missing API key)
+- **Journal entries** keep `raw_content` (as typed/spoken) alongside AI-polished `content`; polish and metadata generation run as background threads after save. The Journal feed also interleaves fic-reading commentary via `journal_entry_fic_refs`.
 - **Settings** owns more than AI keys: STT/TTS backends and Whisper model/device, voice + in-app shortcuts, curated tags, fanfic site cookies, HF token (diarization), meeting echo-cancel, task nudges, prevent-sleep (a `systemd-inhibit` subprocess), and a GPU **VRAM budget** view (baseline measured at startup, thresholds in `src/lib/vram.ts`)
 - **DB path** defaults to `./data/lunaschal.db`; override with `DATABASE_URL` env var
 - **JWT secret** defaults to a hardcoded dev string; set `JWT_SECRET` env var in production

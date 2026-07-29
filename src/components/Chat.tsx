@@ -53,7 +53,6 @@ export function Chat() {
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
   const [queuedCards, setQueuedCards] = useState<number | null>(null);
-  const [ragContextUsed, setRagContextUsed] = useState(0);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -103,6 +102,43 @@ export function Chat() {
   const classifyMessage = useMutation({
     mutationFn: (message: string) => api.chat.classify(message),
   });
+
+  /** Ask the model whether the message was really a journal entry, a calendar
+   * event or a flashcard request, and offer to save it if so. Fire-and-forget:
+   * a failed classification just means no offer. */
+  const classifyUserMessage = (message: string, messageId: string) => {
+    classifyMessage.mutate(message, {
+      onSuccess: result => {
+        const r = result as ClassifyResult;
+        if (r.confidence < 0.7) return;
+        if (r.intent === 'journal' && r.journalEntry) {
+          setPendingSave({
+            type: 'journal',
+            messageId,
+            data: {
+              title: r.journalEntry.title,
+              content: r.journalEntry.content,
+              tags: r.journalEntry.tags,
+            },
+          });
+        } else if (r.intent === 'calendar' && r.calendarEvent) {
+          setPendingSave({
+            type: 'calendar',
+            messageId,
+            data: {
+              title: r.calendarEvent.title,
+              description: r.calendarEvent.description,
+              date: r.calendarEvent.date,
+              time: r.calendarEvent.time,
+              tags: r.calendarEvent.tags,
+            },
+          });
+        } else if (r.intent === 'flashcard_request' && r.flashcardRequest) {
+          setPendingQuiz({ topic: r.flashcardRequest.topic, messageId });
+        }
+      },
+    });
+  };
 
   const saveJournal = useMutation({
     mutationFn: api.chat.saveJournal,
@@ -185,42 +221,6 @@ export function Chat() {
       content: userMessage,
     });
 
-    classifyMessage.mutate(userMessage, {
-      onSuccess: result => {
-        const r = result as ClassifyResult;
-        if (r.confidence >= 0.7) {
-          if (r.intent === 'journal' && r.journalEntry) {
-            setPendingSave({
-              type: 'journal',
-              messageId: userMsgResult.id,
-              data: {
-                title: r.journalEntry.title,
-                content: r.journalEntry.content,
-                tags: r.journalEntry.tags,
-              },
-            });
-          } else if (r.intent === 'calendar' && r.calendarEvent) {
-            setPendingSave({
-              type: 'calendar',
-              messageId: userMsgResult.id,
-              data: {
-                title: r.calendarEvent.title,
-                description: r.calendarEvent.description,
-                date: r.calendarEvent.date,
-                time: r.calendarEvent.time,
-                tags: r.calendarEvent.tags,
-              },
-            });
-          } else if (r.intent === 'flashcard_request' && r.flashcardRequest) {
-            setPendingQuiz({
-              topic: r.flashcardRequest.topic,
-              messageId: userMsgResult.id,
-            });
-          }
-        }
-      },
-    });
-
     // Only the current segment (since the last "New chat") is sent to the model,
     // so the button acts as a true clear while history stays visible/saved.
     // createdAt rides along so the backend can prefix each turn with when it
@@ -240,25 +240,13 @@ export function Chat() {
 
     setIsStreaming(true);
     setStreamingContent('');
-    setRagContextUsed(0);
 
     try {
-      let ragContext: string | undefined;
-      try {
-        const ragResult = await api.chat.ragContext(userMessage, 3);
-        if (ragResult.isConfigured && ragResult.context) {
-          ragContext = ragResult.context;
-          setRagContextUsed(ragResult.results.length);
-        }
-      } catch {
-        // RAG is optional
-      }
-
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ messages: chatMessages, ragContext }),
+        body: JSON.stringify({ messages: chatMessages }),
       });
 
       if (!response.ok) {
@@ -290,6 +278,12 @@ export function Chat() {
     } finally {
       setIsStreaming(false);
       setStreamingContent('');
+      // Deliberately *after* the reply, not alongside it. Ollama serves one
+      // request at a time per model, so a classify fired in parallel simply
+      // wins the queue and the user waits out a whole second generation before
+      // their first token. The save/quiz prompts it produces are offered after
+      // the reply anyway.
+      classifyUserMessage(userMessage, userMsgResult.id);
     }
   };
 
@@ -489,13 +483,6 @@ export function Chat() {
         {isStreaming && streamingContent && (
           <div className="flex justify-start">
             <div className="max-w-[80%]">
-              {ragContextUsed > 0 && (
-                <div className="text-xs text-[var(--color-text-muted)] mb-1 flex items-center gap-1">
-                  <span className="inline-block w-2 h-2 bg-green-500 rounded-full"></span>
-                  Using {ragContextUsed} source
-                  {ragContextUsed > 1 ? 's' : ''} from your knowledge base
-                </div>
-              )}
               <div className="content-text rounded-lg px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text)]">
                 <MessageMarkdown content={streamingContent} />
               </div>
@@ -505,9 +492,7 @@ export function Chat() {
         {isStreaming && !streamingContent && (
           <div className="flex justify-start">
             <div className="bg-[var(--color-surface)] rounded-lg px-4 py-2 text-[var(--color-text-muted)]">
-              {ragContextUsed > 0
-                ? 'Searching knowledge base...'
-                : 'Thinking...'}
+              Thinking...
             </div>
           </div>
         )}

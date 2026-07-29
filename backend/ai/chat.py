@@ -172,7 +172,6 @@ def stamp_messages(messages: list[dict], now: int | None = None) -> list[dict]:
 
 def chat_stream(
     messages: list[dict],
-    rag_context: str = '',
     system_prompt: str = '',
     with_time_context: bool = True,
 ):
@@ -182,8 +181,6 @@ def chat_stream(
     model = c['ollama_model'] or DEFAULT_MODELS['ollama']
 
     system = system_prompt or SYSTEM_PROMPT
-    if rag_context:
-        system = f"{system}\n\n{rag_context}"
     if with_time_context:
         system = f"{system}\n\n{format_now_context()}"
         if any(_parse_iso(m.get('createdAt')) is not None for m in messages):

@@ -4,15 +4,8 @@ LLM parsing and URL fetching are mocked so these tests cover the routes' own
 logic — CRUD, FTS search (including the index triggers), tag aggregation and
 filtering, and the import endpoint's validation — with no network calls.
 """
-import pytest
-
 from backend.db.connection import get_db
 from backend.routes import cookbook
-
-
-@pytest.fixture(autouse=True)
-def _no_bg_embeddings(monkeypatch):
-    monkeypatch.setattr(cookbook, '_sync_embeddings_bg', lambda recipe_id: None)
 
 
 def _create(client, title='Borscht', content='Beets, beef, simmer.', tags=None):

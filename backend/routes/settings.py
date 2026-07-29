@@ -90,7 +90,6 @@ def get_settings():
         'briefingGoals': s.get('briefing_goals') or '',
         'briefingReasoningEffort': s.get('briefing_reasoning_effort') or 'none',
         'briefingMaxTokens': s.get('briefing_max_tokens') or 16384,
-        'briefingNumCtx': s.get('briefing_num_ctx') or 8192,
     })
 
 
@@ -117,7 +116,8 @@ def update_ai():
         'briefingGoals': 'briefing_goals',
         'briefingReasoningEffort': 'briefing_reasoning_effort',
         'briefingMaxTokens': 'briefing_max_tokens',
-        'briefingNumCtx': 'briefing_num_ctx',
+        # No briefingNumCtx: the context window is a single shared setting
+        # (llmNumCtx). See backend.ai.llm.default_num_ctx.
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
@@ -135,8 +135,9 @@ def update_ai():
                     value = max(256, min(65536, int(value)))
                 except (TypeError, ValueError):
                     continue
-            elif camel in ('briefingNumCtx', 'llmNumCtx'):
-                # Context window; clamp to a range Ollama will accept without
+            elif camel == 'llmNumCtx':
+                # The one context window, shared by chat, the briefing and every
+                # structured helper. Clamp to a range Ollama will accept without
                 # blowing up VRAM. 512 floor keeps short prompts working.
                 try:
                     value = max(512, min(131072, int(value)))

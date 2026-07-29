@@ -16,7 +16,6 @@ export function BriefingSection() {
   const [hourInput, setHourInput] = useState('5');
   const [goalsInput, setGoalsInput] = useState('');
   const [maxTokensInput, setMaxTokensInput] = useState('16384');
-  const [numCtxInput, setNumCtxInput] = useState('8192');
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
@@ -24,7 +23,6 @@ export function BriefingSection() {
       setHourInput(String(settings.briefingHour ?? 5));
       setGoalsInput(settings.briefingGoals ?? '');
       setMaxTokensInput(String(settings.briefingMaxTokens ?? 16384));
-      setNumCtxInput(String(settings.briefingNumCtx ?? 8192));
     }
   }, [settings]);
 
@@ -63,12 +61,6 @@ export function BriefingSection() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
-  const saveNumCtx = useMutation({
-    mutationFn: (numCtx: number) =>
-      api.settings.updateAI({ briefingNumCtx: numCtx }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
-  });
-
   const generateNow = useMutation({
     mutationFn: api.chat.runBriefing,
     onSuccess: result => {
@@ -103,17 +95,6 @@ export function BriefingSection() {
     setMaxTokensInput(String(tokens));
     if (tokens !== (settings?.briefingMaxTokens ?? 16384)) {
       saveMaxTokens.mutate(tokens);
-    }
-  };
-
-  const commitNumCtx = () => {
-    const ctx = Math.min(
-      131072,
-      Math.max(512, parseInt(numCtxInput, 10) || 8192)
-    );
-    setNumCtxInput(String(ctx));
-    if (ctx !== (settings?.briefingNumCtx ?? 8192)) {
-      saveNumCtx.mutate(ctx);
     }
   };
 
@@ -232,26 +213,13 @@ export function BriefingSection() {
                 runs overnight; raise it if long briefings get cut off.
               </p>
             </div>
-            <div>
-              <label className="text-sm text-[var(--color-text-muted)]">
-                Context window (512–131072)
-              </label>
-              <input
-                type="number"
-                min={512}
-                max={131072}
-                step={512}
-                value={numCtxInput}
-                onChange={e => setNumCtxInput(e.target.value)}
-                onBlur={commitNumCtx}
-                className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
-              />
-              <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Prompt + thinking + briefing must all fit here. If you turn
-                thinking on above, keep this well above the default (16384+) so
-                the reasoning doesn't crowd out the briefing itself.
-              </p>
-            </div>
+            <p className="text-xs text-[var(--color-text-muted)]">
+              The briefing uses the shared context window from{' '}
+              <em>Model &amp; VRAM</em> above. It isn't tunable separately:
+              Ollama reloads the whole model whenever the context size changes
+              between requests, so a briefing-only window would cost a reload
+              overnight and another on your next chat message.
+            </p>
             <div>
               <label className="text-sm text-[var(--color-text-muted)]">
                 Goals &amp; current focus
