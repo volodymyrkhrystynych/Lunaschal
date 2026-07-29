@@ -243,3 +243,50 @@ describe('Reader chapter list toggle and font size shortcuts', () => {
     expect(localStorage.getItem('lunaschal:readingFontSize')).toBe('15');
   });
 });
+
+describe('Reader commentary microphone', () => {
+  beforeEach(() => {
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.scrollTo = vi.fn();
+  });
+
+  it('records and drops the transcript into the commentary box', async () => {
+    class FakeMediaRecorder {
+      onstop: (() => void) | null = null;
+      ondataavailable: ((e: { data: Blob }) => void) | null = null;
+      start() {}
+      stop() {
+        this.onstop?.();
+      }
+    }
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      mediaDevices: {
+        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [] }),
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ text: 'loved this chapter' }),
+      })
+    );
+
+    renderReader();
+    fireEvent.click(await screen.findByText(/Write commentary/));
+    fireEvent.click(screen.getByRole('button', { name: '🎤' }));
+
+    const stop = await screen.findByRole('button', { name: '■ Stop' });
+    fireEvent.click(stop);
+
+    await waitFor(() => {
+      expect(
+        (screen.getByPlaceholderText(/Your thoughts on/) as HTMLTextAreaElement)
+          .value
+      ).toBe('loved this chapter');
+    });
+    vi.unstubAllGlobals();
+  });
+});

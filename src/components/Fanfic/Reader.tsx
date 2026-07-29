@@ -24,6 +24,7 @@ import {
 } from '../../lib/fontSize';
 import { useMasterDetail } from '@/hooks/useMasterDetail';
 import { MasterDetailBack } from '@/components/MasterDetailBack';
+import { useRecorder } from '../../hooks/useRecorder';
 
 interface ReaderProps {
   ficId: string;
@@ -46,6 +47,11 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const commentaryRef = useRef<HTMLTextAreaElement>(null);
   const queryClient = useQueryClient();
   const { setLevel, level } = useShortcuts();
+
+  // Speak the commentary instead of typing it — appended to whatever is there.
+  const recorder = useRecorder(t =>
+    setCommentary(prev => (prev ? `${prev}\n${t}` : t))
+  );
 
   // Opening a fic (even by mouse) puts keyboard focus inside the reader so
   // W/S move between chapters instead of switching app tabs.
@@ -408,7 +414,29 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                     {(saveCommentary.error as Error).message}
                   </div>
                 )}
-                <div className="flex justify-end">
+                {recorder.error && (
+                  <p className="mb-2 text-xs text-red-400">{recorder.error}</p>
+                )}
+                <div className="flex justify-end gap-2">
+                  <button
+                    onClick={() =>
+                      recorder.status === 'recording'
+                        ? recorder.stop()
+                        : recorder.start()
+                    }
+                    disabled={recorder.status === 'transcribing'}
+                    className={`px-3 py-1 rounded disabled:opacity-50 ${
+                      recorder.status === 'recording'
+                        ? 'bg-red-600 hover:bg-red-700 text-white'
+                        : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
+                    }`}
+                  >
+                    {recorder.status === 'recording'
+                      ? '■ Stop'
+                      : recorder.status === 'transcribing'
+                        ? 'Transcribing…'
+                        : '🎤'}
+                  </button>
                   <button
                     onClick={() => saveCommentary.mutate(commentary.trim())}
                     disabled={!commentary.trim() || saveCommentary.isPending}
