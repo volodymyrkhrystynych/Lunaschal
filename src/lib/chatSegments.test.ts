@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { isBreak, splitSegments, contextMessages } from './chatSegments';
+import {
+  isBreak,
+  splitSegments,
+  contextMessages,
+  parseProposedTodos,
+} from './chatSegments';
 import type { Message } from '../hooks/api';
 
 let seq = 0;
@@ -86,5 +91,31 @@ describe('contextMessages', () => {
   it('is empty right after a fresh break', () => {
     const messages = [msg('user', 'a'), brk()];
     expect(contextMessages(messages)).toEqual([]);
+  });
+});
+
+describe('parseProposedTodos', () => {
+  it('pulls the plan out of a briefing message', () => {
+    const meta = JSON.stringify({
+      briefing: true,
+      proposedTodos: [{ id: 'p1', title: 'Draft the report' }],
+    });
+    expect(parseProposedTodos(meta).map(p => p.title)).toEqual([
+      'Draft the report',
+    ]);
+  });
+
+  it('is empty for messages that carry no plan', () => {
+    expect(parseProposedTodos(null)).toEqual([]);
+    expect(parseProposedTodos(undefined)).toEqual([]);
+    expect(parseProposedTodos('{}')).toEqual([]);
+    expect(parseProposedTodos(JSON.stringify({ break: true }))).toEqual([]);
+  });
+
+  it('survives malformed metadata rather than taking the chat down', () => {
+    expect(parseProposedTodos('not json')).toEqual([]);
+    expect(
+      parseProposedTodos(JSON.stringify({ proposedTodos: 'nope' }))
+    ).toEqual([]);
   });
 });

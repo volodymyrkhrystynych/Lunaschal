@@ -376,18 +376,28 @@ export interface ConversationWithMessages extends Conversation {
 // A to-do the briefing suggested. It lives in the briefing message's metadata
 // until the user accepts it (which creates the real todo, reusing this id) or
 // rejects it.
+// One item on the briefing's plan for the day. Lives in the chat message's
+// metadata, not the todos table — only an explicit 'accept' creates a row.
+// `duplicate` is legacy: briefings written before linking existed can still
+// carry it, and the link fields are absent on those.
 export interface ProposedTodo {
   id: string;
   title: string;
   list: TodoList;
   priority: number;
   due: number | null;
-  status: 'pending' | 'accepted' | 'rejected' | 'duplicate';
+  status: 'pending' | 'done' | 'accepted' | 'rejected' | 'duplicate';
+  // The existing to-do / daily task this item restates, when there is one.
+  // Crossing off a linked item completes that row too.
+  linkedType?: 'todo' | 'daily' | null;
+  linkedId?: string | null;
+  linkedTitle?: string | null;
+  resolvedAt?: number | null;
 }
 
 export interface BriefingTodoDecision {
   id: string;
-  action: 'accept' | 'reject';
+  action: 'done' | 'accept' | 'reject';
   title?: string;
   priority?: number;
   due?: number | null;

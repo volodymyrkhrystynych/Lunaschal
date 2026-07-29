@@ -12,7 +12,8 @@ import {
   useJournalUpdate,
 } from '../offline/mutationDefaults';
 import { buildFeed } from '../lib/journalFeed';
-import { isBreak } from '../lib/chatSegments';
+import { isBreak, parseProposedTodos } from '../lib/chatSegments';
+import { BriefingTodos } from './BriefingTodos';
 import { MessageMarkdown } from './MessageMarkdown';
 import type {
   DatedConversation,
@@ -693,6 +694,9 @@ function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
               </div>
             );
           }
+          // The day's plan is the record of what actually got done, so it has
+          // to survive the chat-day rollover into the feed's history.
+          const proposedTodos = parseProposedTodos(m.metadata);
           return (
             <div
               key={m.id}
@@ -705,6 +709,9 @@ function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
                   <div className="whitespace-pre-wrap">{m.content}</div>
                 ) : (
                   <MessageMarkdown content={m.content} />
+                )}
+                {proposedTodos.length > 0 && (
+                  <BriefingTodos messageId={m.id} proposals={proposedTodos} />
                 )}
               </div>
             </div>

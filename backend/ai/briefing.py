@@ -21,9 +21,13 @@ BRIEFING_MAX_TOKENS = 16384
 
 
 def _pending_daily_tasks(db, today: str) -> list[dict]:
-    """Daily tasks not yet completed today (mirrors tasks.list_tasks' join)."""
+    """Daily tasks not yet completed today (mirrors tasks.list_tasks' join).
+
+    The id rides along so the briefing job can link a proposal to the real row;
+    only the title is ever printed into the prompt.
+    """
     rows = db.execute(
-        '''SELECT t.title
+        '''SELECT t.id, t.title
            FROM daily_tasks t
            LEFT JOIN daily_task_completions c ON c.task_id = t.id AND c.date = ?
            WHERE c.id IS NULL
@@ -154,13 +158,21 @@ SYSTEM_PROMPT = (
     "been living and thinking about, then lay out a focused plan for the day as a "
     "short markdown list. Be encouraging, not naggy; prioritise ruthlessly rather "
     "than dumping everything back at them.\n\n"
-    "Also propose the day's actionable to-dos. Only propose genuinely actionable "
-    f"items, at most {MAX_BRIEFING_TODOS}, and never duplicate a to-do that already "
-    "exists in the open to-dos above.\n\n"
+    "Also lay out the day's actionable to-dos. Only propose genuinely actionable "
+    f"items, at most {MAX_BRIEFING_TODOS}. This is the plan for today, so it may "
+    "well include work that is already on their open to-dos or pending daily "
+    "tasks — include those rather than skipping them.\n\n"
+    "Whenever an item restates something already on those lists, copy that "
+    "existing item's title into \"linkedTitle\" **verbatim**, exactly as it "
+    "appears above — that is what ties your item to theirs, so crossing it off "
+    "here also crosses it off their list. Use null when the item is genuinely "
+    "new. Match on meaning, not wording: \"Get groceries\" and \"Buy groceries\" "
+    "are the same task.\n\n"
     "Respond with a JSON object of exactly this shape:\n"
     '{"briefing": "<markdown check-in and plan>", '
     '"todos": [{"title": "string", "priority": 1-5, "list": "todo", '
-    '"due": <unix seconds or null>}]}\n'
+    '"due": <unix seconds or null>, '
+    '"linkedTitle": <existing item title or null>}]}\n'
     "priority is 1 (low) to 5 (high); use 3 when unsure. list is usually \"todo\". "
     "Omit due (or use null) unless a date is clearly implied. If there is nothing "
     "worth doing, return an empty todos array."
