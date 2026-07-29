@@ -1,0 +1,10 @@
+{
+  "editor.formatOnSave": true,
+  "editor.fontSize": 16,
+  "markdown.preview.fontSize": 16,
+  "scm.inputFontSize": 16,
+  "debug.console.fontSize": 16,
+  "editor.minimap.sectionHeaderFontSize": 16,
+  "editor.codeLensFontSize": 16,
+  "notebook.output.fontSize": 16
+}

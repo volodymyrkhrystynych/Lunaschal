@@ -6,6 +6,14 @@ import urllib.request
 import urllib.error
 
 import webview
+
+# QtWebEngine must be imported before *any* QCoreApplication exists — Qt needs to
+# set AA_ShareOpenGLContexts while there is still no app instance. main() creates a
+# QApplication (for the WM identity) before PyWebView loads its qt backend, so
+# without this eager import PyWebView's `from qtpy.QtWebEngineWidgets import ...`
+# raises ImportError, it falls back to PyQt5/WebKit, and startup dies with
+# "You must have either QT or GTK with Python extensions installed".
+import qtpy.QtWebEngineWidgets  # noqa: F401  (import order matters, see above)
 from qtpy.QtWidgets import QApplication
 
 FLASK_PORT = 5000
