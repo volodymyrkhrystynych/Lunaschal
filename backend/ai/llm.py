@@ -53,7 +53,7 @@ _NATIVE_TIMEOUT = 1800
 # Keep the model loaded in memory for a while after each request. Ollama's
 # default is 5m; large reasoning models can take much longer to load, so this
 # reduces the chance that a tabbed-away chat has to wait for a full reload.
-_KEEP_ALIVE = '2h'
+_KEEP_ALIVE = '14h'
 
 
 def default_generation_opts() -> dict:
