@@ -132,22 +132,30 @@ def delete_task(task_id):
     return jsonify({'success': True})
 
 
-@bp.post('/<task_id>/complete')
-def complete_task(task_id):
-    today = _today()
-    db = get_db()
+def complete_daily_task(db, task_id: str, today: str, now: int) -> bool:
+    """Record today's completion of a daily task. Returns True if this call was
+    the one that recorded it (a repeat is a no-op). Does not commit — the caller
+    owns the transaction. Shared with the chat's daily-plan cards."""
     cur = db.execute(
         'INSERT OR IGNORE INTO daily_task_completions(id, task_id, date, created_at)'
         ' VALUES (?,?,?,?)',
-        (str(ULID()), task_id, today, int(time.time())),
+        (str(ULID()), task_id, today, now),
     )
     # Only log when this call actually recorded a completion (not a repeat POST).
-    if cur.rowcount:
-        task = db.execute(
-            'SELECT title FROM daily_tasks WHERE id=?', (task_id,)
-        ).fetchone()
-        if task:
-            _log_event(db, 'daily_completed', task['title'], task_id, 'daily')
+    if not cur.rowcount:
+        return False
+    task = db.execute(
+        'SELECT title FROM daily_tasks WHERE id=?', (task_id,)
+    ).fetchone()
+    if task:
+        _log_event(db, 'daily_completed', task['title'], task_id, 'daily')
+    return True
+
+
+@bp.post('/<task_id>/complete')
+def complete_task(task_id):
+    db = get_db()
+    complete_daily_task(db, task_id, _today(), int(time.time()))
     db.commit()
     return jsonify({'success': True})
 
@@ -262,6 +270,59 @@ def create_todo():
     return jsonify({'id': todo_id}), 201
 
 
+def complete_todo_row(db, todo_id: str, now: int) -> bool:
+    """Mark a todo done — or, when it repeats, advance it to its next occurrence.
+
+    Returns True if this call recorded a completion; re-completing an already-done
+    one-off is a no-op so it can't log a second event. Does not commit — the
+    caller owns the transaction. Shared with the chat's daily-plan cards, which
+    must complete a linked todo exactly the way the Tasks view does."""
+    row = db.execute(
+        'SELECT title, done, list, notes, due, repeat_interval, repeat_unit'
+        ' FROM todos WHERE id=?',
+        (todo_id,),
+    ).fetchone()
+    if row is None:
+        return False
+
+    if row['repeat_interval'] and row['repeat_unit']:
+        # Repeating todo: completing it schedules the next occurrence instead of
+        # marking it done. Each occurrence is a real completion, so always log it.
+        db.execute(
+            'UPDATE todos SET done=0, completed_at=NULL, due=?, updated_at=? WHERE id=?',
+            (
+                next_due(row['due'], row['repeat_interval'], row['repeat_unit'], now),
+                now,
+                todo_id,
+            ),
+        )
+    else:
+        db.execute(
+            # COALESCE keeps the original completion time if it was already done.
+            'UPDATE todos SET done=1, completed_at=COALESCE(completed_at, ?),'
+            ' updated_at=? WHERE id=?',
+            (now, now, todo_id),
+        )
+        # Only log when it wasn't already done (avoids a duplicate event).
+        if row['done']:
+            return False
+
+    _log_event(db, 'todo_completed', row['title'], todo_id, row['list'], row['notes'])
+    return True
+
+
+def _uncomplete_todo_row(db, todo_id: str, now: int) -> None:
+    """Reopen a todo and retract its completion notification."""
+    db.execute(
+        'UPDATE todos SET done=0, completed_at=NULL, updated_at=? WHERE id=?',
+        (now, todo_id),
+    )
+    db.execute(
+        "DELETE FROM task_events WHERE kind='todo_completed' AND ref_id=?",
+        (todo_id,),
+    )
+
+
 @bp.patch('/todos/<todo_id>')
 def update_todo(todo_id):
     body = request.json or {}
@@ -311,50 +372,23 @@ def update_todo(todo_id):
         values.append(repeat[0])
         fields.append('repeat_unit=?')
         values.append(repeat[1])
-    # 'complete' -> log a completion event; 'uncomplete' -> retract it. Left None
-    # when `done` isn't part of this update. Applied after the UPDATE below.
+    # Applied after the field UPDATE below, so completing alongside an edit
+    # (e.g. a new `due` on a repeating todo) advances from the edited values.
     completion_change = None
     if 'done' in body:
-        if body['done']:
-            if row['repeat_interval'] and row['repeat_unit']:
-                # Repeating todo: completing it schedules the next occurrence
-                # instead of marking it done. Each occurrence is a real
-                # completion, so always log it.
-                now = int(time.time())
-                fields.append('done=0')
-                fields.append('completed_at=NULL')
-                fields.append('due=?')
-                values.append(
-                    next_due(row['due'], row['repeat_interval'], row['repeat_unit'], now)
-                )
-                completion_change = 'complete'
-            else:
-                fields.append('done=1')
-                # Keep the original completion time if it was already done
-                fields.append('completed_at=COALESCE(completed_at, ?)')
-                values.append(int(time.time()))
-                # Only log when it wasn't already done (avoids a duplicate event).
-                if not row['done']:
-                    completion_change = 'complete'
-        else:
-            fields.append('done=0')
-            fields.append('completed_at=NULL')
-            completion_change = 'uncomplete'
-    if not fields:
+        completion_change = 'complete' if body['done'] else 'uncomplete'
+    if not fields and completion_change is None:
         return jsonify({'error': 'nothing to update'}), 400
 
-    fields.append('updated_at=?')
-    values.extend([int(time.time()), todo_id])
-    db.execute(f'UPDATE todos SET {", ".join(fields)} WHERE id=?', values)
+    now = int(time.time())
+    if fields:
+        fields.append('updated_at=?')
+        values.extend([now, todo_id])
+        db.execute(f'UPDATE todos SET {", ".join(fields)} WHERE id=?', values)
     if completion_change == 'complete':
-        _log_event(
-            db, 'todo_completed', row['title'], todo_id, row['list'], row['notes']
-        )
+        complete_todo_row(db, todo_id, now)
     elif completion_change == 'uncomplete':
-        db.execute(
-            "DELETE FROM task_events WHERE kind='todo_completed' AND ref_id=?",
-            (todo_id,),
-        )
+        _uncomplete_todo_row(db, todo_id, now)
     db.commit()
     return jsonify({'success': True})
 

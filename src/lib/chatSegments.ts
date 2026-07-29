@@ -1,4 +1,4 @@
-import type { Message } from '../hooks/api';
+import type { Message, ProposedTodo } from '../hooks/api';
 
 // The "New chat" button persists a break marker: a system message whose
 // metadata is {"break": true}. Break markers divide a day's chat into segments;
@@ -11,6 +11,22 @@ export function isBreak(message: Message): boolean {
     return JSON.parse(message.metadata)?.break === true;
   } catch {
     return false;
+  }
+}
+
+// The briefing's plan for the day rides in its message metadata as
+// {"briefing": true, "proposedTodos": [...]}. Returns [] for any message that
+// doesn't carry one — including malformed metadata, which must never take the
+// whole chat down mid-render.
+export function parseProposedTodos(
+  metadata: string | null | undefined
+): ProposedTodo[] {
+  if (!metadata) return [];
+  try {
+    const items = JSON.parse(metadata)?.proposedTodos;
+    return Array.isArray(items) ? items : [];
+  } catch {
+    return [];
   }
 }
 

@@ -2,7 +2,7 @@
 run_briefing sweep (find-or-create day chat, briefing message, proposed todos,
 idempotency), and the accept/reject decisions route."""
 import json
-from datetime import datetime
+from datetime import date, datetime
 
 from backend.db import connection
 from backend.chat_day import day_key_for
@@ -298,31 +298,33 @@ def test_run_briefing_is_idempotent(client, monkeypatch):
 
 
 def test_run_briefing_validates_dedupes_and_caps(client, monkeypatch):
-    _insert_todo('existing', 'buy MILK', done=0)  # case-insensitive dupe target
+    _insert_todo('existing', 'buy MILK', done=0)  # case-insensitive twin target
     connection.get_db().commit()
 
     fake = {
         'briefing': 'hi',
         'todos': [
-            {'title': 'Buy milk'},                       # dupe of existing -> skip
+            {'title': 'Buy milk'},                       # twin of existing -> linked
             {'title': '   '},                            # blank -> skip
             {'title': 'A', 'priority': 99, 'list': 'x', 'due': 'nope'},  # clamped
+            {'title': 'A'},                              # same-batch repeat -> skip
             {'title': 'B'}, {'title': 'C'}, {'title': 'D'},
-            {'title': 'E'}, {'title': 'F'},              # cap at 5 new
+            {'title': 'E'},                              # cap at 5
         ],
     }
     monkeypatch.setattr(briefing_job, 'generate_briefing', lambda ctx: fake)
     result = briefing_job.run_briefing(now=NOW)
 
-    assert result['todosProposed'] == 5  # A,B,C,D,E (F dropped by cap)
+    assert result['todosProposed'] == 5
     proposals = _proposals(result['messageId'])
-    assert [p['title'] for p in proposals] == ['A', 'B', 'C', 'D', 'E']
-    a = proposals[0]
+    assert [p['title'] for p in proposals] == ['Buy milk', 'A', 'B', 'C', 'D']
+    a = proposals[1]
     assert a['priority'] == 3      # bad priority -> default
     assert a['list'] == 'todo'     # bad list -> default
     assert a['due'] is None        # bad due -> None
-    # 'Buy milk' duplicated an open todo, so it was never proposed.
-    assert 'Buy milk' not in [p['title'] for p in proposals]
+    assert a['linkedId'] is None   # genuinely new
+    # 'Buy milk' restates an open todo, so it's kept and tied to it.
+    assert (proposals[0]['linkedType'], proposals[0]['linkedId']) == ('todo', 'existing')
 
 
 def test_run_briefing_skips_when_ai_unconfigured(client, monkeypatch):
@@ -424,7 +426,9 @@ def test_rejecting_a_proposal_creates_nothing(client, monkeypatch):
     assert _proposals(msg_id)[0]['status'] == 'rejected'
 
 
-def test_accept_dedupes_against_a_todo_added_after_the_briefing(client, monkeypatch):
+def test_accept_links_to_a_todo_added_after_the_briefing(client, monkeypatch):
+    """The list moved on since the briefing. Accepting links the card to the new
+    row and leaves it pending — a twin you can cross off beats a dead card."""
     result = _run(monkeypatch)
     msg_id = result['messageId']
     pid = _proposals(msg_id)[0]['id']
@@ -435,8 +439,19 @@ def test_accept_dedupes_against_a_todo_added_after_the_briefing(client, monkeypa
     r = client.post(f'/api/chat/briefing/{msg_id}/todos',
                     json={'decisions': [{'id': pid, 'action': 'accept'}]})
     assert r.get_json()['created'] == 0
-    assert _proposals(msg_id)[0]['status'] == 'duplicate'
+    item = _proposals(msg_id)[0]
+    assert item['status'] == 'pending'
+    assert (item['linkedType'], item['linkedId'], item['linkedTitle']) == (
+        'todo', 'manual', 'draft the REPORT'
+    )
     assert connection.get_db().execute('SELECT COUNT(*) FROM todos').fetchone()[0] == 1
+
+    # And now crossing it off completes the real row.
+    client.post(f'/api/chat/briefing/{msg_id}/todos',
+                json={'decisions': [{'id': pid, 'action': 'done'}]})
+    assert connection.get_db().execute(
+        'SELECT done FROM todos WHERE id=?', ('manual',)
+    ).fetchone()['done'] == 1
 
 
 def test_bulk_accept_resolves_every_pending_proposal(client, monkeypatch):
@@ -458,6 +473,236 @@ def test_bulk_accept_resolves_every_pending_proposal(client, monkeypatch):
     assert [p['status'] for p in _proposals(msg_id)] == [
         'rejected', 'accepted', 'accepted'
     ]
+
+
+# --- linking a proposal to its twin ---
+
+def _events(kind=None):
+    q = 'SELECT kind, title, ref_id, task_list FROM task_events'
+    params = ()
+    if kind:
+        q += ' WHERE kind=?'
+        params = (kind,)
+    return connection.get_db().execute(q + ' ORDER BY created_at', params).fetchall()
+
+
+def test_linked_title_ties_a_proposal_to_an_open_todo(client, monkeypatch):
+    """The model paraphrases; the link is what makes them the same task."""
+    _insert_todo('groceries', 'Get groceries', done=0)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Buy groceries', 'linkedTitle': 'Get groceries'},
+    ]})
+    item = _proposals(result['messageId'])[0]
+    assert item['title'] == 'Buy groceries'
+    assert (item['linkedType'], item['linkedId'], item['linkedTitle']) == (
+        'todo', 'groceries', 'Get groceries'
+    )
+
+
+def test_linked_title_ties_a_proposal_to_a_pending_daily_task(client, monkeypatch):
+    _insert_daily_task('dt_stretch', 'Stretch', 1)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Do your stretches', 'linkedTitle': 'Stretch'},
+    ]})
+    item = _proposals(result['messageId'])[0]
+    assert (item['linkedType'], item['linkedId']) == ('daily', 'dt_stretch')
+
+
+def test_a_daily_task_already_done_today_is_not_a_twin(client, monkeypatch):
+    """Only *pending* daily tasks are candidates — one already ticked off today
+    shouldn't get re-linked and re-completed."""
+    _insert_daily_task('dt_stretch', 'Stretch', 1)
+    _complete_daily_task('c1', 'dt_stretch', TODAY)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Stretch', 'linkedTitle': 'Stretch'},
+    ]})
+    assert _proposals(result['messageId'])[0]['linkedId'] is None
+
+
+def test_unresolvable_linked_title_falls_back_then_gives_up(client, monkeypatch):
+    _insert_todo('report', 'Draft the report', done=0)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        # Hallucinated link, but the title itself matches -> fall back to it.
+        {'title': 'Draft the report', 'linkedTitle': 'Something imaginary'},
+        # Nothing matches either way -> unlinked.
+        {'title': 'Call the vet', 'linkedTitle': 'Also imaginary'},
+    ]})
+    a, b = _proposals(result['messageId'])
+    assert (a['linkedType'], a['linkedId'], a['linkedTitle']) == (
+        'todo', 'report', 'Draft the report'
+    )
+    assert (b['linkedType'], b['linkedId'], b['linkedTitle']) == (None, None, None)
+
+
+def test_a_done_todo_is_not_a_twin(client, monkeypatch):
+    _insert_todo('old', 'Draft the report', done=1)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Draft the report'},
+    ]})
+    assert _proposals(result['messageId'])[0]['linkedId'] is None
+
+
+# --- crossing items off the plan ---
+
+def _cross_off(client, msg_id, pid):
+    return client.post(f'/api/chat/briefing/{msg_id}/todos',
+                       json={'decisions': [{'id': pid, 'action': 'done'}]})
+
+
+def test_crossing_off_a_linked_todo_completes_the_real_row(client, monkeypatch):
+    _insert_todo('groceries', 'Get groceries', done=0)
+    connection.get_db().commit()
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Buy groceries', 'linkedTitle': 'Get groceries'},
+    ]})
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    r = _cross_off(client, msg_id, pid)
+    assert r.status_code == 200
+    assert r.get_json()['created'] == 0
+
+    row = connection.get_db().execute(
+        'SELECT done, completed_at FROM todos WHERE id=?', ('groceries',)
+    ).fetchone()
+    assert row['done'] == 1
+    assert row['completed_at'] is not None
+    # Exactly one completion event, against the real todo.
+    events = _events('todo_completed')
+    assert [(e['title'], e['ref_id']) for e in events] == [('Get groceries', 'groceries')]
+
+    item = _proposals(msg_id)[0]
+    assert item['status'] == 'done'
+    assert item['resolvedAt'] is not None
+    # No second todo row was ever created.
+    assert connection.get_db().execute('SELECT COUNT(*) FROM todos').fetchone()[0] == 1
+
+
+def test_crossing_off_a_linked_daily_task_records_todays_completion(client, monkeypatch):
+    _insert_daily_task('dt_stretch', 'Stretch', 1)
+    connection.get_db().commit()
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Do your stretches', 'linkedTitle': 'Stretch'},
+    ]})
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    _cross_off(client, msg_id, pid)
+
+    rows = connection.get_db().execute(
+        'SELECT task_id, date FROM daily_task_completions'
+    ).fetchall()
+    # Dated by when it was crossed off, not by when the briefing was written —
+    # a daily task completes for the day you actually did it.
+    assert [(r['task_id'], r['date']) for r in rows] == [
+        ('dt_stretch', date.today().isoformat())
+    ]
+    assert [(e['title'], e['task_list']) for e in _events('daily_completed')] == [
+        ('Stretch', 'daily')
+    ]
+    assert _proposals(msg_id)[0]['status'] == 'done'
+
+
+def test_crossing_off_a_linked_repeating_todo_advances_it(client, monkeypatch):
+    connection.get_db().execute(
+        'INSERT INTO todos(id, title, done, list, priority, due, repeat_interval,'
+        ' repeat_unit, created_at, updated_at) VALUES (?,?,0,?,?,?,?,?,?,?)',
+        ('water', 'Water the plants', 'chores', 3, NOW, 1, 'week', NOW, NOW),
+    )
+    connection.get_db().commit()
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Water the plants'},
+    ]})
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    _cross_off(client, msg_id, pid)
+
+    row = connection.get_db().execute(
+        'SELECT done, due FROM todos WHERE id=?', ('water',)
+    ).fetchone()
+    # Repeating: still open, rolled forward a week rather than finished.
+    assert row['done'] == 0
+    assert row['due'] > NOW
+    assert len(_events('todo_completed')) == 1
+
+
+def test_crossing_off_an_unlinked_item_logs_an_event_but_creates_no_todo(client, monkeypatch):
+    """The whole point of the daily plan: today's work counts without bloating
+    the backlog."""
+    result = _run(monkeypatch)
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    _cross_off(client, msg_id, pid)
+
+    assert connection.get_db().execute('SELECT COUNT(*) FROM todos').fetchone()[0] == 0
+    assert [(e['title'], e['ref_id'], e['task_list']) for e in _events('todo_completed')] == [
+        ('Draft the report', None, 'todo')
+    ]
+    assert _proposals(msg_id)[0]['status'] == 'done'
+
+
+def test_a_crossed_off_item_is_inert(client, monkeypatch):
+    _insert_todo('groceries', 'Get groceries', done=0)
+    connection.get_db().commit()
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Buy groceries', 'linkedTitle': 'Get groceries'},
+    ]})
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    _cross_off(client, msg_id, pid)
+    first_resolved = _proposals(msg_id)[0]['resolvedAt']
+    # A second decision can't flip it, re-log it, or re-stamp it.
+    r = client.post(f'/api/chat/briefing/{msg_id}/todos',
+                    json={'decisions': [{'id': pid, 'action': 'reject'}]})
+    assert r.status_code == 200
+    item = _proposals(msg_id)[0]
+    assert item['status'] == 'done'
+    assert item['resolvedAt'] == first_resolved
+    assert len(_events('todo_completed')) == 1
+
+
+def test_rejecting_stamps_resolved_at(client, monkeypatch):
+    result = _run(monkeypatch)
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    client.post(f'/api/chat/briefing/{msg_id}/todos',
+                json={'decisions': [{'id': pid, 'action': 'reject'}]})
+    item = _proposals(msg_id)[0]
+    assert item['status'] == 'rejected'
+    assert item['resolvedAt'] is not None
+    assert _events() == []  # dismissing isn't doing
+
+
+def test_accepting_a_linked_item_is_a_no_op(client, monkeypatch):
+    """It's already on a list — 'add to to-dos' would be the bloat we're avoiding.
+    The card stays pending so it can still be crossed off."""
+    _insert_todo('groceries', 'Get groceries', done=0)
+    connection.get_db().commit()
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Buy groceries', 'linkedTitle': 'Get groceries'},
+    ]})
+    msg_id = result['messageId']
+    pid = _proposals(msg_id)[0]['id']
+
+    r = client.post(f'/api/chat/briefing/{msg_id}/todos',
+                    json={'decisions': [{'id': pid, 'action': 'accept'}]})
+    assert r.get_json()['created'] == 0
+    assert connection.get_db().execute('SELECT COUNT(*) FROM todos').fetchone()[0] == 1
+    assert _proposals(msg_id)[0]['status'] == 'pending'
 
 
 def test_decisions_route_rejects_bad_input(client, monkeypatch):

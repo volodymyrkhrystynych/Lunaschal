@@ -1,5 +1,6 @@
 import time
 import json
+from datetime import date
 from flask import Blueprint, jsonify, request, Response, stream_with_context
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
@@ -158,13 +159,45 @@ def run_briefing_now():
     return jsonify(result)
 
 
+def _cross_off(db, item: dict, now: int) -> None:
+    """Cross off one plan item, completing its linked row when it has one.
+
+    An unlinked item never becomes a `todos` row — that's the whole point of the
+    daily plan — but it still logs an event so the day's work shows up in the
+    Journal feed alongside everything else that got finished."""
+    from backend.routes.tasks import (
+        _log_event, complete_daily_task, complete_todo_row,
+    )
+
+    linked_id = item.get('linkedId')
+    linked_type = item.get('linkedType')
+    if linked_id and linked_type == 'todo':
+        complete_todo_row(db, linked_id, now)
+    elif linked_id and linked_type == 'daily':
+        complete_daily_task(db, linked_id, date.fromtimestamp(now).isoformat(), now)
+    else:
+        _log_event(db, 'todo_completed', item['title'], None, item.get('list'), None)
+
+
 def _apply_briefing_decision(db, item: dict, decision: dict, now: int) -> bool:
-    """Resolve one proposed todo in place. Returns True if a todo was inserted."""
+    """Resolve one plan item in place. Returns True if a todo row was inserted."""
     from backend.routes.tasks import _parse_priority, _parse_due
     from backend.todo_recurrence import VALID_LISTS
 
-    if decision.get('action') == 'reject':
+    action = decision.get('action')
+    if action == 'reject':
         item['status'] = 'rejected'
+        item['resolvedAt'] = now
+        return False
+    if action == 'done':
+        _cross_off(db, item, now)
+        item['status'] = 'done'
+        item['resolvedAt'] = now
+        return False
+
+    # Already on one of the user's lists — there is nothing to add. Left pending
+    # so it can still be crossed off.
+    if item.get('linkedId'):
         return False
 
     # Accepting may carry inline edits from the card.
@@ -191,13 +224,17 @@ def _apply_briefing_decision(db, item: dict, decision: dict, now: int) -> bool:
     item.update({'title': title, 'priority': priority, 'due': due, 'list': todo_list})
 
     # Re-check for a same-titled open todo at accept time: the list may have
-    # moved on since the briefing was written.
+    # moved on since the briefing was written. Link to it and stay pending
+    # rather than resolving the card — a twin you can cross off is more useful
+    # than a dead "already on your list" row.
     dupe = db.execute(
-        'SELECT 1 FROM todos WHERE done=0 AND lower(title)=? AND id!=?',
+        'SELECT id, title FROM todos WHERE done=0 AND lower(title)=? AND id!=?',
         (title.lower(), item['id']),
     ).fetchone()
     if dupe:
-        item['status'] = 'duplicate'
+        item['linkedType'] = 'todo'
+        item['linkedId'] = dupe['id']
+        item['linkedTitle'] = dupe['title']
         return False
 
     # The proposal's own id becomes the todo id, so a double-accept is a no-op.
@@ -207,14 +244,16 @@ def _apply_briefing_decision(db, item: dict, decision: dict, now: int) -> bool:
         (item['id'], title, todo_list, None, due, None, None, priority, now, now),
     )
     item['status'] = 'accepted'
+    item['resolvedAt'] = now
     return True
 
 
 @bp.post('/briefing/<message_id>/todos')
 def decide_briefing_todos(message_id):
-    """Accept (optionally with edits) or reject the to-dos a briefing proposed.
-    Decisions are written back into the message metadata so the chat cards stay
-    resolved across reloads."""
+    """Resolve items on the briefing's plan for the day: cross one off (`done`),
+    dismiss it (`reject`), or add it to the to-do list for later (`accept`,
+    optionally with inline edits). Decisions are written back into the message
+    metadata so the chat cards keep the day's record across reloads."""
     body = request.json or {}
     decisions = body.get('decisions')
     if not isinstance(decisions, list) or not decisions:

@@ -1,9 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, ProposedTodo } from '../hooks/api';
+import { api } from '../hooks/api';
 import { MessageMarkdown } from './MessageMarkdown';
 import { BriefingTodos } from './BriefingTodos';
-import { contextMessages, isBreak } from '@/lib/chatSegments';
+import {
+  contextMessages,
+  isBreak,
+  parseProposedTodos,
+} from '@/lib/chatSegments';
 import { readSSE } from '@/lib/sse';
 import { formatMessageTime } from '@/lib/chatTime';
 
@@ -437,13 +441,9 @@ export function Chat() {
             : null;
           const hasSaved =
             metadata?.savedAsJournal || metadata?.savedAsCalendar;
-          // The overnight briefing proposes to-dos; they only reach the list
-          // once accepted here.
-          const proposedTodos: ProposedTodo[] = Array.isArray(
-            metadata?.proposedTodos
-          )
-            ? metadata.proposedTodos
-            : [];
+          // The overnight briefing's plan for the day — crossed off in place;
+          // only an explicit "add to to-dos" ever reaches the list.
+          const proposedTodos = parseProposedTodos(message.metadata);
           const sentAt = formatMessageTime(message.createdAt);
           return (
             <div

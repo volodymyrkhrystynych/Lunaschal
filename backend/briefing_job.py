@@ -3,9 +3,12 @@
 A plain function (no Flask request, no thread) so it can be called directly by
 the scheduler thread, by the manual-trigger route, and by tests. It find-or-
 creates today's chat and drops in the AI briefing as the first assistant
-message. The to-dos it suggests are *proposals*: they ride along in the
-message metadata and only become real todos when the user accepts them in the
-chat (see `POST /api/chat/briefing/<message_id>/todos`).
+message. The to-dos it suggests are *today's plan*, not backlog: they ride
+along in the message metadata and are crossed off in the chat itself. Only an
+explicit "add to to-dos" ever writes a `todos` row (see
+`POST /api/chat/briefing/<message_id>/todos`). An item that restates something
+already on the user's lists carries a link to that row, so crossing it off here
+completes the real one.
 """
 import json
 import time
@@ -15,7 +18,12 @@ from ulid import ULID
 from backend.db.connection import get_db
 from backend.chat_day import day_key_for
 from backend.ai.provider import is_ai_configured
-from backend.ai.briefing import gather_briefing_context, generate_briefing, MAX_BRIEFING_TODOS
+from backend.ai.briefing import (
+    _pending_daily_tasks,
+    gather_briefing_context,
+    generate_briefing,
+    MAX_BRIEFING_TODOS,
+)
 from backend.routes.tasks import _parse_priority, _parse_due
 from backend.todo_recurrence import VALID_LISTS
 
@@ -51,14 +59,28 @@ def _has_briefing(db, conv_id: str) -> bool:
     return False
 
 
-def _propose_todos(db, proposed: list) -> list[dict]:
-    """Validate/clamp, drop titles that already exist as open todos, and cap.
-    Returns pending proposals for the message metadata — nothing is inserted.
-    Each carries its own id so accepting is idempotent."""
-    existing = {
-        r['title'].strip().lower()
-        for r in db.execute('SELECT title FROM todos WHERE done=0').fetchall()
-    }
+def _twin_lookup(db, today: str) -> dict[str, tuple[str, str]]:
+    """`{lowercased title: (linkedType, id)}` for everything a proposal may be a
+    twin of: open todos and daily tasks still pending today. Todos win a title
+    collision — they're the list the briefing draws most of its plan from."""
+    lookup: dict[str, tuple[str, str]] = {}
+    for r in _pending_daily_tasks(db, today):
+        lookup[r['title'].strip().lower()] = ('daily', r['id'])
+    for r in db.execute('SELECT id, title FROM todos WHERE done=0').fetchall():
+        lookup[r['title'].strip().lower()] = ('todo', r['id'])
+    return lookup
+
+
+def _propose_todos(db, proposed: list, today: str) -> list[dict]:
+    """Validate/clamp, link each item to its existing twin where there is one,
+    and cap. Returns pending proposals for the message metadata — nothing is
+    inserted. Each carries its own id so accepting is idempotent.
+
+    Items that restate an open todo or a pending daily task are deliberately
+    *kept* rather than dropped: today's plan should show the whole day, and the
+    link is what lets crossing one off here cross off the real row too."""
+    twins = _twin_lookup(db, today)
+    seen: set[str] = set()
     items: list[dict] = []
     for item in proposed:
         if len(items) >= MAX_BRIEFING_TODOS:
@@ -66,7 +88,8 @@ def _propose_todos(db, proposed: list) -> list[dict]:
         if not isinstance(item, dict):
             continue
         title = (item.get('title') or '').strip()
-        if not title or title.lower() in existing:
+        # Only same-batch repeats are dropped; twins of existing rows are linked.
+        if not title or title.lower() in seen:
             continue
 
         todo_list = item.get('list', 'todo')
@@ -79,6 +102,17 @@ def _propose_todos(db, proposed: list) -> list[dict]:
         if err:
             due = None
 
+        # Trust the model's declared link first — it sees the same titles we do
+        # and can match on meaning. Fall back to the proposal's own title so a
+        # verbatim restatement links even when the model forgot to say so.
+        declared = item.get('linkedTitle')
+        declared = declared.strip() if isinstance(declared, str) else ''
+        twin = twins.get(declared.lower()) if declared else None
+        matched_title = declared
+        if twin is None:
+            twin = twins.get(title.lower())
+            matched_title = title if twin else ''
+
         items.append({
             'id': str(ULID()),
             'title': title,
@@ -86,8 +120,12 @@ def _propose_todos(db, proposed: list) -> list[dict]:
             'priority': priority,
             'due': due,
             'status': 'pending',
+            'linkedType': twin[0] if twin else None,
+            'linkedId': twin[1] if twin else None,
+            'linkedTitle': matched_title if twin else None,
+            'resolvedAt': None,
         })
-        existing.add(title.lower())
+        seen.add(title.lower())
     return items
 
 
@@ -112,7 +150,7 @@ def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         db.commit()
         return None
 
-    proposed = _propose_todos(db, result.get('todos', []))
+    proposed = _propose_todos(db, result.get('todos', []), context['today'])
     message_id = str(ULID())
     db.execute(
         'INSERT INTO messages(id, conversation_id, role, content, metadata, created_at)'
