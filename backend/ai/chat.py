@@ -129,13 +129,68 @@ def build_chat_system_prompt(now: int | None = None) -> str:
     return '\n\n'.join(parts)
 
 
-def chat_stream(messages: list[dict], rag_context: str = '', system_prompt: str = ''):
+TIME_PREFIX_NOTE = (
+    "Each message in this conversation is prefixed with when it was sent, like "
+    "[today 21:58]. Use them for anything time-sensitive — how long ago something "
+    "was said, whether a plan has already come and gone, whether the user has been "
+    "quiet for hours. The app adds those prefixes: never write one on your own replies."
+)
+
+
+def format_now_context(now: int | None = None) -> str:
+    """Without this the model has no idea what time it is, which makes both the
+    message prefixes and the relative day labels in the context blocks useless."""
+    dt = datetime.fromtimestamp(now if now is not None else int(time.time()))
+    return f"Right now it is {dt.strftime('%A, %d %B %Y, %H:%M')}."
+
+
+def _parse_iso(value) -> int | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(value).timestamp())
+    except ValueError:
+        return None
+
+
+def stamp_messages(messages: list[dict], now: int | None = None) -> list[dict]:
+    """Prefix each message with when it was sent, as `[today 21:58] ...`.
+
+    Callers that don't track timestamps (the voice listener keeps history in
+    memory) simply pass none, and their messages go through untouched.
+    """
+    now = now if now is not None else int(time.time())
+    out = []
+    for m in messages:
+        content = m.get('content', '')
+        ts = _parse_iso(m.get('createdAt'))
+        if ts is not None and m.get('role') != 'system':
+            content = f"[{_format_entry_time(ts, now)}] {content}"
+        out.append({'role': m.get('role'), 'content': content})
+    return out
+
+
+def chat_stream(
+    messages: list[dict],
+    rag_context: str = '',
+    system_prompt: str = '',
+    with_time_context: bool = True,
+):
+    """`with_time_context=False` for one-shot utility calls (transcript cleanup)
+    whose prompts demand an exact output shape and shouldn't carry a clock."""
     c = get_provider_config()
     model = c['ollama_model'] or DEFAULT_MODELS['ollama']
 
     system = system_prompt or SYSTEM_PROMPT
     if rag_context:
         system = f"{system}\n\n{rag_context}"
+    if with_time_context:
+        system = f"{system}\n\n{format_now_context()}"
+        if any(_parse_iso(m.get('createdAt')) is not None for m in messages):
+            system = f"{system}\n\n{TIME_PREFIX_NOTE}"
+        messages = stamp_messages(messages)
+    else:
+        messages = [{'role': m.get('role'), 'content': m.get('content', '')} for m in messages]
 
     all_messages = [{'role': 'system', 'content': system}] + messages
     yield from _native_chat_stream(all_messages, model=model, **default_generation_opts())

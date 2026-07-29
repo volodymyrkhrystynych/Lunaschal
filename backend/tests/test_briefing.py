@@ -175,7 +175,9 @@ def test_generate_briefing_passes_reasoning_and_max_tokens_from_settings(client,
     briefing_mod.generate_briefing(ctx)
     assert captured['reasoning_effort'] == 'none'
     assert captured['max_tokens'] == briefing_mod.BRIEFING_MAX_TOKENS
-    assert captured['num_ctx'] == 8192  # LLM_NUM_CTX * 2
+    # Same window as the chat model, so sharing it costs no KV re-allocation.
+    from backend.ai.llm import LLM_NUM_CTX
+    assert captured['num_ctx'] == LLM_NUM_CTX
 
     # User-configured values flow through.
     db = connection.get_db()

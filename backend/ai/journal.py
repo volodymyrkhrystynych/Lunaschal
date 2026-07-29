@@ -6,22 +6,48 @@ from backend.ai.provider import is_ai_configured
 
 logger = logging.getLogger(__name__)
 
+# Written for a strict instruction-following model. The previous version led with
+# "make only these changes and nothing else" and buried paragraphing as item 4
+# among the prohibitions; a literal-minded model read inserting a blank line as a
+# forbidden change and returned dictation as one unbroken wall of text. Hence the
+# explicit split between words (untouchable) and formatting (the actual job), and
+# the worked example — a demonstration lands harder than a rule.
 _SYSTEM = (
-    "You are a minimal transcription cleaner. "
-    "Make only these changes and nothing else:\n"
-    "1. Fix spelling mistakes and obvious transcription errors (wrong words, misheared sounds).\n"
+    "You clean up spoken-word journal transcripts. The speaker's words are fixed; "
+    "their formatting is what you are here to fix.\n"
+    "\n"
+    "Do all of this:\n"
+    "1. Break the text into paragraphs separated by a blank line, at each shift in "
+    "thought or topic. Dictation arrives as one unbroken block, so returning one "
+    "unbroken block means you have not done the job — anything longer than a few "
+    "sentences becomes two or more paragraphs.\n"
     "2. Add punctuation where it is clearly missing (periods, commas, question marks).\n"
     "3. Capitalise the first word of each sentence.\n"
-    "4. Insert paragraph breaks (a blank line) between distinct thoughts or topic shifts, "
-    "so a long stream-of-consciousness transcript reads as separate paragraphs.\n"
-    "Do NOT remove any words, rephrase any sentence, reorder any sentence, improve vocabulary, "
-    "or make the text sound more formal or polished. "
-    "Every word the speaker said must remain in the output, in the original order. "
-    "Return only the corrected text, no commentary, no lead-in phrase, and no preamble. "
-    "Do NOT start your reply with anything like 'Here is the corrected text:' or 'Sure, here you go:' — "
-    "the very first character of your reply must be the first character of the corrected text itself. "
-    "Do NOT wrap the output — or any paragraph of it — in quotation marks. "
-    "Only include a quotation mark if the speaker was themselves quoting someone."
+    "4. Fix spelling mistakes and obvious transcription errors (wrong words, "
+    "misheard sounds).\n"
+    "\n"
+    "Never do any of this:\n"
+    "- Remove, add, reorder, or rephrase a word. Every word the speaker said must "
+    "appear in your output, in the order they said it.\n"
+    "- Improve the vocabulary, or make the text sound more formal or polished.\n"
+    "\n"
+    "Those restrictions cover WORDS ONLY. Line breaks, blank lines, punctuation and "
+    "capitalisation are exactly what you are being asked to change; adding a blank "
+    "line between two thoughts never counts as altering what the speaker said.\n"
+    "\n"
+    "Example input:\n"
+    "so today was rough i barely slept and then the standup ran long anyway i "
+    "finally got the parser working after lunch which felt great\n"
+    "\n"
+    "Example output:\n"
+    "So today was rough. I barely slept, and then the standup ran long.\n"
+    "\n"
+    "Anyway, I finally got the parser working after lunch, which felt great.\n"
+    "\n"
+    "Return only the cleaned text. The first character of your reply must be the "
+    "first character of the entry — no preamble, no commentary, nothing like "
+    "'Here is the corrected text:'. Do not wrap the output, or any paragraph of it, "
+    "in quotation marks; use them only where the speaker was quoting someone."
 )
 
 _PREAMBLE_RE = re.compile(

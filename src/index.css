@@ -91,6 +91,12 @@ body {
   color: var(--color-text);
   font-size: 1.05rem;
   line-height: 1.75;
+  /* Imported chapters carry unbreakable runs (image URLs, hashes, long alt
+     text). Without this they widen the pane and the whole app scrolls
+     sideways on narrow screens. `anywhere` also shrinks the min-content
+     width, which `break-word` alone does not. */
+  overflow-wrap: anywhere;
+  word-break: break-word; /* iOS Safari < 15 fallback for `anywhere` */
 }
 .fanfic-prose p,
 .fanfic-prose div {

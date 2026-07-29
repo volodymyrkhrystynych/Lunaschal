@@ -463,6 +463,7 @@ def transcribe_correct():
         corrected = ''.join(chat_stream(
             [{'role': 'user', 'content': user_message}],
             system_prompt=system_prompt,
+            with_time_context=False,
         )).strip()
     except Exception as e:
         logger.error('LLM correction error: %s', e)

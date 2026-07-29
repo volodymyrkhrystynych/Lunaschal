@@ -99,6 +99,7 @@ def init_db() -> None:
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
+    _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
     _ensure_food_location(db)
     _ensure_hf_token(db)
@@ -254,6 +255,37 @@ def _ensure_fic_update_pending(db: sqlite3.Connection) -> None:
     if 'update_pending' not in cols:
         db.execute('ALTER TABLE fics ADD COLUMN update_pending INTEGER NOT NULL DEFAULT 0')
         db.commit()
+
+
+def _repair_escaped_image_fallbacks(db: sqlite3.Connection) -> None:
+    """One-time cleanup of XenForo <noscript> image fallbacks left as escaped,
+    visible markup by the pre-`clean_content_tags` sanitizer. The marker column
+    keeps this off the startup path once it has run — the scan is over every
+    chapter's HTML."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'fic_escaped_img_repair' in cols:
+        return
+    db.execute('ALTER TABLE settings ADD COLUMN fic_escaped_img_repair INTEGER NOT NULL DEFAULT 0')
+    db.commit()
+
+    from backend.fanfic.sanitize import (
+        count_words, html_to_text, strip_escaped_image_fallbacks,
+    )
+
+    rows = db.execute(
+        "SELECT id, content_html FROM fic_chapters WHERE content_html LIKE '%&lt;img%'"
+    ).fetchall()
+    for row in rows:
+        fixed = strip_escaped_image_fallbacks(row['content_html'])
+        if fixed == row['content_html']:
+            continue
+        text = html_to_text(fixed)
+        db.execute(
+            'UPDATE fic_chapters SET content_html=?, content_text=?, word_count=? WHERE id=?',
+            (fixed, text, count_words(text), row['id']),
+        )
+    db.execute('UPDATE settings SET fic_escaped_img_repair=1')
+    db.commit()
 
 
 def _ensure_paper_archive_requested(db: sqlite3.Connection) -> None:
@@ -421,9 +453,10 @@ def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
         # overnight, so this is deliberately generous.
         db.execute('ALTER TABLE settings ADD COLUMN briefing_max_tokens INTEGER DEFAULT 16384')
     if 'briefing_num_ctx' not in cols:
-        # Context window for the briefing. Bigger than the chat default: if the
-        # user turns on thinking, the reasoning needs to fit alongside the (large)
-        # briefing prompt and the answer without evicting any of it.
+        # Context window for the briefing. Deliberately the same as the chat
+        # default: the briefing usually shares the chat model, and changing
+        # num_ctx between requests makes Ollama re-allocate the KV cache and
+        # reload the weights. Keep the two in step when tuning either.
         db.execute('ALTER TABLE settings ADD COLUMN briefing_num_ctx INTEGER DEFAULT 8192')
     db.commit()
 
@@ -440,9 +473,11 @@ def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
     if 'llm_max_tokens' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN llm_max_tokens INTEGER DEFAULT 4096')
     if 'llm_num_ctx' not in cols:
-        # Context window (num_ctx). Ollama's own default is 4096; raise it when a
-        # thinking model needs room for prompt + reasoning + answer together.
-        db.execute('ALTER TABLE settings ADD COLUMN llm_num_ctx INTEGER DEFAULT 4096')
+        # Context window (num_ctx). Ollama's own default is 4096; 8192 gives a
+        # thinking model room for prompt + reasoning + answer together. Raise it
+        # for a long-context model, but cost scales with the model's KV shape,
+        # not its size — see docs/learnings/local-model-context-budget.md.
+        db.execute('ALTER TABLE settings ADD COLUMN llm_num_ctx INTEGER DEFAULT 8192')
     db.commit()
 
 
