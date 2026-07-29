@@ -227,7 +227,7 @@ def update_entry(id):
     if 'title' in body:
         updates['title'] = body['title']
     if 'tags' in body:
-        updates['tags'] = json.dumps(body['tags'])
+        updates['tags'] = tags_json(body['tags'])
     build_update(get_db(), 'journal_entries', updates, 'id=?', (id,))
     get_db().commit()
     if 'content' in body or 'title' in body:

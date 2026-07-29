@@ -395,7 +395,7 @@ def test_fetch_retries_transient_403(client, monkeypatch):
             raise_for_status=lambda: None)
 
     monkeypatch.setitem(sys.modules, 'requests', SimpleNamespace(get=fake_get))
-    monkeypatch.setattr(download.time, 'sleep', lambda s: sleeps.append(s))
+    monkeypatch.setattr(download, 'time', SimpleNamespace(sleep=lambda s: sleeps.append(s)))
 
     resp = download._fetch('https://forum.questionablequesting.com/threads/x.1/')
     assert resp.status_code == 200

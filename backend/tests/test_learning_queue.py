@@ -127,10 +127,7 @@ def test_generate_for_topic(client, fake_generate):
 
 
 def test_generation_prompt_parses_and_enforces_shape(monkeypatch):
-    """generate_cards drops malformed entries and hits JSON mode."""
-    openai = pytest.importorskip('openai')
-    from backend.ai import llm
-
+    """generate_cards drops malformed entries and calls chat_json."""
     content = json.dumps({'cards': [
         {'question': 'Q1?', 'answer': 'A1'},
         {'question': '', 'answer': 'dropped'},
@@ -138,23 +135,15 @@ def test_generation_prompt_parses_and_enforces_shape(monkeypatch):
     ]})
     captured = {}
 
-    class FakeCompletions:
-        def create(self, **kwargs):
-            captured['kwargs'] = kwargs
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+    def fake_chat_json(prompt, system=None, **kwargs):
+        captured['prompt'] = prompt
+        captured['system'] = system
+        captured['kwargs'] = kwargs
+        return json.loads(content)
 
-    class FakeOpenAI:
-        def __init__(self, **kwargs):
-            self.chat = SimpleNamespace(completions=FakeCompletions())
-
-    monkeypatch.setattr(openai, 'OpenAI', FakeOpenAI)
-    monkeypatch.setattr(llm, 'get_provider_config', lambda: {
-        'ollama_url': 'http://localhost:11434',
-        'ollama_model': 'llama3.2',
-    })
+    monkeypatch.setattr(learning_generation, 'chat_json', fake_chat_json)
 
     cards = learning_generation.generate_cards('some text', direction='keep it atomic')
     assert cards == [{'question': 'Q1?', 'answer': 'A1'}]
-    assert captured['kwargs']['response_format'] == {'type': 'json_object'}
-    assert 'ONE atomic concept' in captured['kwargs']['messages'][0]['content']
-    assert 'keep it atomic' in captured['kwargs']['messages'][1]['content']
+    assert 'ONE atomic concept' in captured['system']
+    assert 'keep it atomic' in captured['prompt']

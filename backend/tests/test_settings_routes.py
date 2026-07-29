@@ -98,7 +98,7 @@ def test_get_settings_llm_generation_defaults(client):
     data = client.get('/api/settings').get_json()
     assert data['llmReasoningEffort'] == 'none'
     assert data['llmMaxTokens'] == 4096
-    assert data['llmNumCtx'] == 4096
+    assert data['llmNumCtx'] == 8192
 
 
 def test_patch_settings_updates_llm_reasoning_max_tokens_and_num_ctx(client):

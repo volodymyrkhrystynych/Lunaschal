@@ -7,7 +7,7 @@ import time
 import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
-from backend.ai.llm import REASONING_EFFORTS
+from backend.ai.llm import LLM_NUM_CTX, REASONING_EFFORTS
 from backend.db.connection import build_update, get_db
 
 _sleep_inhibitor: subprocess.Popen | None = None
@@ -68,7 +68,7 @@ def get_settings():
         'ollamaModel': s.get('ollama_model'),
         'llmReasoningEffort': s.get('llm_reasoning_effort') or 'none',
         'llmMaxTokens': s.get('llm_max_tokens') or 4096,
-        'llmNumCtx': s.get('llm_num_ctx') or 4096,
+        'llmNumCtx': s.get('llm_num_ctx') or LLM_NUM_CTX,
         'hasHfToken': bool(s.get('hf_token')),
         'networkMode': NETWORK_MODE,
         'networkCode': s.get('network_code') if NETWORK_MODE else None,
