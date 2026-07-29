@@ -9,8 +9,6 @@ from backend.ai.provider import is_ai_configured
 from backend.ai.chat import chat_stream, build_chat_system_prompt
 from backend.ai.chat_title import generate_conversation_title
 from backend.ai.classifier import classify_intent, should_classify
-from backend.ai.rag import search_for_context, format_rag_context
-from backend.ai.embeddings import is_embeddings_configured
 
 bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 
@@ -331,38 +329,12 @@ def save_calendar():
     return jsonify({'id': id}), 201
 
 
-@bp.post('/rag-context')
-def rag_context():
-    body = request.json or {}
-    message = body.get('message', '')
-    limit = min(int(body.get('limit', 3)), 10)
-    if not is_embeddings_configured():
-        return jsonify({'context': '', 'results': [], 'isConfigured': False})
-    results = search_for_context(message, limit)
-    context = format_rag_context(results)
-    return jsonify({
-        'context': context,
-        'results': [
-            {
-                'sourceId': r['sourceId'],
-                'sourceType': r['sourceType'],
-                'title': r.get('metadata', {}).get('title'),
-                'score': r['score'],
-                'preview': r['content'][:200] + ('...' if len(r['content']) > 200 else ''),
-            }
-            for r in results
-        ],
-        'isConfigured': True,
-    })
-
-
 @bp.post('/stream')
 def stream():
     if not is_ai_configured():
         return jsonify({'error': 'AI provider not configured'}), 400
     body = request.json or {}
     messages = body.get('messages', [])
-    rag_context = body.get('ragContext', '')
     system_prompt = body.get('systemPrompt', '')
     if not system_prompt:
         # Plain chat (no caller-supplied prompt, e.g. the Chat tab) gets the
@@ -371,7 +343,7 @@ def stream():
 
     def generate():
         try:
-            for chunk in chat_stream(messages, rag_context, system_prompt):
+            for chunk in chat_stream(messages, system_prompt):
                 yield f'data: {json.dumps({"content": chunk})}\n\n'
             yield 'data: [DONE]\n\n'
         except Exception as e:

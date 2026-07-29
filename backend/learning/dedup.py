@@ -2,7 +2,9 @@
 
 Embeddings are best-effort everywhere: when the embedding provider is
 unconfigured or errors, callers get None and the dedup hint / grading gate
-silently disable (same degradation contract as RAG).
+silently disable. These embeddings live as blobs on `learning_cards` and are
+the only remaining use of `backend/ai/embeddings.py` — the RAG vector store
+they once sat alongside is gone.
 """
 import math
 import struct

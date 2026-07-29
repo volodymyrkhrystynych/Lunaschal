@@ -12,7 +12,6 @@ vi.mock('../hooks/api', () => ({
       createConversation: vi.fn(),
       addMessage: vi.fn(),
       classify: vi.fn(),
-      ragContext: vi.fn(),
       saveJournal: vi.fn(),
       saveCalendar: vi.fn(),
     },
@@ -62,11 +61,6 @@ beforeEach(() => {
   } as never);
   vi.mocked(api.chat.createConversation).mockResolvedValue({ id: 'c1' });
   vi.mocked(api.chat.addMessage).mockResolvedValue({ id: 'm1' });
-  vi.mocked(api.chat.ragContext).mockResolvedValue({
-    context: '',
-    results: [],
-    isConfigured: false,
-  });
   vi.mocked(api.chat.classify).mockResolvedValue({
     intent: 'conversation',
     confidence: 1,

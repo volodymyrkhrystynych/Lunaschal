@@ -1,14 +1,11 @@
 import json
 import re
-import threading
 import time
 from html.parser import HTMLParser
 
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
-from backend.ai.embeddings import is_embeddings_configured
-from backend.ai.rag import delete_recipe_embeddings, sync_recipe_embeddings
 from backend.ai.recipes import parse_recipe
 from backend.db.connection import build_update, get_db, row_to_dict, search_recipes_fts
 from backend.tags import tag_counts
@@ -90,7 +87,6 @@ def create_recipe():
     if not title or not content:
         return jsonify({'error': 'title and content required'}), 400
     id = _insert_recipe(title, content, body.get('tags'))
-    _sync_embeddings_bg(id)
     return jsonify({'id': id}), 201
 
 
@@ -109,17 +105,11 @@ def update_recipe(id):
     db = get_db()
     build_update(db, 'recipes', updates, 'id=?', (id,))
     db.commit()
-    if 'title' in updates or 'content' in updates:
-        _sync_embeddings_bg(id)
     return jsonify({'success': True})
 
 
 @bp.delete('/<id>')
 def delete_recipe(id):
-    try:
-        delete_recipe_embeddings(id)
-    except Exception as e:
-        print(f'Recipe embedding cleanup failed for {id}: {e}')
     db = get_db()
     db.execute('DELETE FROM recipes WHERE id=?', (id,))
     db.commit()
@@ -186,16 +176,5 @@ def import_recipe():
         return jsonify({'error': 'Could not extract a recipe from the provided content'}), 422
 
     id = _insert_recipe(parsed['title'], parsed['content'], parsed.get('tags'), url or None)
-    _sync_embeddings_bg(id)
     row = get_db().execute('SELECT * FROM recipes WHERE id=?', (id,)).fetchone()
     return jsonify({'id': id, 'recipe': row_to_dict(row)}), 201
-
-
-def _sync_embeddings_bg(recipe_id: str) -> None:
-    def _sync():
-        try:
-            if is_embeddings_configured():
-                sync_recipe_embeddings(recipe_id)
-        except Exception as e:
-            print(f'Embedding sync failed for recipe {recipe_id}: {e}')
-    threading.Thread(target=_sync, daemon=True).start()

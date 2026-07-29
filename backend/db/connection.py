@@ -79,7 +79,7 @@ def init_db() -> None:
     _init_fts(db)
     _init_recipes_fts(db)
     _init_fanfic_fts(db)
-    _init_vectors(db)
+    _drop_vector_tables(db)
     _ensure_network_code(db)
     _ensure_writing_project_id(db)
     _ensure_conversation_day_key(db)
@@ -639,21 +639,46 @@ def _init_fanfic_fts(db: sqlite3.Connection) -> None:
     db.commit()
 
 
-def _init_vectors(db: sqlite3.Connection) -> None:
-    try:
-        import sqlite_vec
-        db.enable_load_extension(True)
-        sqlite_vec.load(db)
-        db.enable_load_extension(False)
-        db.execute("""
-            CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
-                id TEXT PRIMARY KEY,
-                embedding FLOAT[1536]
+def _drop_vector_tables(db: sqlite3.Connection) -> None:
+    """Tear down the retired RAG vector store.
+
+    Journal/recipe semantic search is gone, so nothing reads these. The plain
+    tables drop unconditionally; `vec_embeddings` is a vec0 virtual table, and
+    SQLite refuses to drop one whose module isn't loaded — so it only goes when
+    sqlite-vec is still installed (it isn't a dependency any more). Leaving the
+    declaration alone in that case is deliberate: half-dropping a virtual table
+    by deleting its shadow tables leaves a wreck nothing can clean up later.
+
+    Idempotent — after the first run there is nothing left to find.
+
+    Note that `learning_cards.answer_embedding` is unrelated and stays; that's
+    the Learning duplicate-answer hint, which never used this store.
+    """
+    existing = {
+        r[0] for r in db.execute(
+            "SELECT name FROM sqlite_master"
+            " WHERE name IN ('embedding_metadata', 'embeddings', 'vec_embeddings')"
+        )
+    }
+    if not existing:
+        return
+    for table in ('embedding_metadata', 'embeddings'):
+        if table in existing:
+            db.execute(f'DROP TABLE IF EXISTS {table}')
+    if 'vec_embeddings' in existing:
+        try:
+            import sqlite_vec
+            db.enable_load_extension(True)
+            sqlite_vec.load(db)
+            db.enable_load_extension(False)
+            db.execute('DROP TABLE IF EXISTS vec_embeddings')
+        except Exception as e:
+            print(
+                'Left the retired vec_embeddings table in place '
+                f'(sqlite-vec unavailable: {e}). '
+                'pip install sqlite-vec and restart once to drop it.'
             )
-        """)
-        db.commit()
-    except Exception as e:
-        print(f'Vector store init skipped: {e}')
+    db.commit()
 
 
 def search_journal_fts(query: str, limit: int = 50) -> list[dict]:

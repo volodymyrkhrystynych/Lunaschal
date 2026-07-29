@@ -17,7 +17,6 @@ def _no_journal_bg(monkeypatch):
     # connection; stub them so tests stay single-threaded (as other route
     # tests do). We're testing the insert idempotency, not the polish pipeline.
     for name in (
-        '_sync_embeddings_bg',
         '_generate_metadata_bg',
         '_polish_bg',
         '_notify_subscribers',

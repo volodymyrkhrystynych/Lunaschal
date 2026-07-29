@@ -36,7 +36,7 @@ flowchart LR
         AUTH["auth.py<br/>JWT cookie (network mode)"]
         subgraph ROUTES["Blueprints — backend/routes/"]
             R_CORE["auth · settings · files · shortcuts"]
-            R_CHAT["chat (SSE) · rag"]
+            R_CHAT["chat (SSE)"]
             R_JOURNAL["journal · calendar · curated_tags · transcriptions"]
             R_LEARN["learning"]
             R_WRITE["writing"]
@@ -50,7 +50,7 @@ flowchart LR
         subgraph AI["AI layer — backend/ai/"]
             PROVIDER["provider.py + llm.py<br/>openai · gemini · ollama"]
             AI_CHAT["chat · classifier · commands"]
-            AI_RAG["embeddings · rag"]
+            AI_EMBED["embeddings.py"]
             AI_LEARN["learning_generation<br/>learning_grading<br/>learning_verification"]
             AI_MISC["journal · writing<br/>meetings · recipes"]
             MCP["mcp_client.py"]
@@ -61,7 +61,7 @@ flowchart LR
             P_MEET["meetings/<br/>recorder · pipeline · merge"]
             P_NEWS["newspapers/<br/>scraper · sync"]
         end
-        DBLAYER["db/ — schema.sql + connection.py<br/>WAL SQLite · FTS5 ×3 · sqlite-vec<br/>_ensure_* migrations"]
+        DBLAYER["db/ — schema.sql + connection.py<br/>WAL SQLite · FTS5 ×3<br/>_ensure_* migrations"]
     end
 
     subgraph STORE["./data/"]
@@ -94,8 +94,8 @@ flowchart LR
     API_TS -->|"REST /api + SSE"| APPFACTORY
     APPFACTORY --> AUTH & ROUTES
 
-    R_CHAT --> AI_CHAT & AI_RAG
-    R_JOURNAL --> AI_MISC & AI_RAG
+    R_CHAT --> AI_CHAT
+    R_JOURNAL --> AI_MISC
     R_LEARN --> AI_LEARN & P_LEARN
     R_WRITE --> AI_MISC
     R_TASKS --> AI_CHAT
@@ -105,8 +105,9 @@ flowchart LR
     R_MEET --> P_MEET
     P_MEET --> AI_MISC
     AI_LEARN --> MCP --> MCPSRV
+    P_LEARN --> AI_EMBED
 
-    AI_CHAT & AI_RAG & AI_LEARN & AI_MISC --> PROVIDER --> LLMS
+    AI_CHAT & AI_EMBED & AI_LEARN & AI_MISC --> PROVIDER --> LLMS
 
     ROUTES --> DBLAYER --> DB
     P_FIC --> FORUMS

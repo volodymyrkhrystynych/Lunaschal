@@ -7,9 +7,7 @@ from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
 from backend.ai.background import run_bg
-from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.food import parse_food_entry
-from backend.ai.rag import sync_recipe_embeddings
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.food import storage
 from backend.food.exif import extract_photo_meta
@@ -197,12 +195,6 @@ def structure_food_entry(entry_id: str, text: str) -> None:
         updates['updated_at'] = int(time.time())
         build_update(db, 'food_entries', updates, 'id=?', (entry_id,))
         db.commit()
-
-    if new_recipe_id and is_embeddings_configured():
-        try:
-            sync_recipe_embeddings(new_recipe_id)
-        except Exception as e:
-            print(f'Recipe embedding sync failed for {new_recipe_id}: {e}')
 
 
 # --- Entries ---

@@ -43,3 +43,34 @@ def test_returns_the_cursor_so_callers_can_check_rowcount(client):
     hit = build_update(db, 't2', {'a': 'new'}, 'id=?', ('x',))
     db.commit()
     assert hit.rowcount == 1
+
+
+# --- retired RAG vector store ---
+
+def test_drop_vector_tables_removes_the_retired_rag_store(client):
+    """RAG is gone; a DB carried over from before must not keep its tables."""
+    from backend.db.connection import _drop_vector_tables
+    db = get_db()
+    db.execute('CREATE TABLE IF NOT EXISTS embedding_metadata (id TEXT PRIMARY KEY)')
+    db.execute('CREATE TABLE IF NOT EXISTS embeddings (id TEXT PRIMARY KEY)')
+    db.commit()
+
+    _drop_vector_tables(db)
+
+    names = {r[0] for r in db.execute('SELECT name FROM sqlite_master')}
+    assert 'embedding_metadata' not in names
+    assert 'embeddings' not in names
+    # Learning's own answer embeddings are a different thing entirely.
+    assert db.execute('PRAGMA table_info(learning_cards)').fetchall()
+
+
+def test_drop_vector_tables_is_idempotent(client):
+    from backend.db.connection import _drop_vector_tables
+    db = get_db()
+    _drop_vector_tables(db)
+    _drop_vector_tables(db)  # nothing left to find; must not raise
+
+
+def test_fresh_schema_creates_no_embedding_tables(client):
+    names = {r[0] for r in get_db().execute('SELECT name FROM sqlite_master')}
+    assert not {n for n in names if 'embedding' in n and not n.startswith('learning')}

@@ -5,8 +5,6 @@ import time
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
-from backend.ai.embeddings import is_embeddings_configured
-from backend.ai.rag import sync_journal_embeddings, delete_journal_embeddings, search_for_context
 from backend.ai.journal import polish_journal_entry, generate_journal_metadata
 from backend.ai.background import run_bg
 from backend.tags import tags_json
@@ -138,17 +136,6 @@ def search():
     return jsonify(_enrich_with_fic_refs(db, _enrich_with_curated_tags(db, dicts)))
 
 
-@bp.get('/semantic-search')
-def semantic_search():
-    query = request.args.get('query', '').strip()
-    limit = min(int(request.args.get('limit', 5)), 20)
-    if not query:
-        return jsonify([])
-    if not is_embeddings_configured():
-        return jsonify([])
-    return jsonify(search_for_context(query, limit))
-
-
 @bp.get('/<id>')
 def get_entry(id):
     row = get_db().execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
@@ -187,7 +174,6 @@ def create_entry():
     if cur.rowcount == 0:
         return jsonify({'id': id}), 201
     _notify_subscribers(id)
-    _sync_embeddings_bg(id)
     if raw_content:
         _polish_bg(id, raw_content)
     if not title or not tags:
@@ -230,14 +216,11 @@ def update_entry(id):
         updates['tags'] = tags_json(body['tags'])
     build_update(get_db(), 'journal_entries', updates, 'id=?', (id,))
     get_db().commit()
-    if 'content' in body or 'title' in body:
-        _sync_embeddings_bg(id)
     return jsonify({'success': True})
 
 
 @bp.delete('/<id>')
 def delete_entry(id):
-    delete_journal_embeddings(id)
     get_db().execute('DELETE FROM journal_entries WHERE id=?', (id,))
     get_db().commit()
     return jsonify({'success': True})
@@ -283,11 +266,3 @@ def _generate_metadata_bg(journal_id: str, content: str) -> None:
     run_bg(_run)
 
 
-def _sync_embeddings_bg(journal_id: str) -> None:
-    def _sync():
-        try:
-            if is_embeddings_configured():
-                sync_journal_embeddings(journal_id)
-        except Exception as e:
-            print(f'Embedding sync failed for {journal_id}: {e}')
-    run_bg(_sync)

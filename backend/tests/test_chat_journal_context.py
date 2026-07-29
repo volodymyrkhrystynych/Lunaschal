@@ -96,9 +96,8 @@ def test_timestamp_labels(client):
 def _capture_stream(monkeypatch):
     captured = {}
 
-    def fake_chat_stream(messages, rag_context='', system_prompt=''):
+    def fake_chat_stream(messages, system_prompt=''):
         captured['messages'] = messages
-        captured['rag_context'] = rag_context
         captured['system_prompt'] = system_prompt
         yield 'ok'
 
@@ -131,7 +130,9 @@ def test_stream_custom_prompt_untouched(client, monkeypatch):
     assert 'Baked sourdough bread today.' not in captured['system_prompt']
 
 
-def test_stream_passes_rag_context(client, monkeypatch):
+def test_stream_ignores_a_stale_rag_context(client, monkeypatch):
+    """RAG is gone; an old client still sending ragContext must not break the
+    request or leak the field into the prompt."""
     captured = _capture_stream(monkeypatch)
     _post_stream(client, {'messages': [], 'ragContext': 'some rag context'})
-    assert captured['rag_context'] == 'some rag context'
+    assert 'some rag context' not in captured['system_prompt']
