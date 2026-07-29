@@ -4,7 +4,7 @@ import threading
 import time
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from ulid import ULID
-from backend.db.connection import get_db, row_to_dict, search_journal_fts
+from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
 from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.rag import sync_journal_embeddings, delete_journal_embeddings, search_for_context
 from backend.ai.journal import polish_journal_entry, generate_journal_metadata
@@ -228,11 +228,7 @@ def update_entry(id):
         updates['title'] = body['title']
     if 'tags' in body:
         updates['tags'] = tags_json(body['tags'])
-    set_clause = ', '.join(f'{k}=?' for k in updates)
-    get_db().execute(
-        f'UPDATE journal_entries SET {set_clause} WHERE id=?',
-        [*updates.values(), id],
-    )
+    build_update(get_db(), 'journal_entries', updates, 'id=?', (id,))
     get_db().commit()
     if 'content' in body or 'title' in body:
         _sync_embeddings_bg(id)
@@ -279,11 +275,7 @@ def _generate_metadata_bg(journal_id: str, content: str) -> None:
             if not updates:
                 return
             db = get_db()
-            set_clause = ', '.join(f'{k}=?' for k in updates)
-            db.execute(
-                f'UPDATE journal_entries SET {set_clause} WHERE id=?',
-                [*updates.values(), journal_id],
-            )
+            build_update(db, 'journal_entries', updates, 'id=?', (journal_id,))
             db.commit()
             _notify_subscribers(journal_id)
         except Exception as e:

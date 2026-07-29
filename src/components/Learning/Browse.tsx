@@ -1,11 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type LearningCard } from '../../hooks/api';
 import { parseTagsInput } from '../../lib/tags';
-import {
-  useShortcuts,
-  useShortcutScope,
-} from '../../shortcuts/ShortcutProvider';
+import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import { useListSelection } from '../../shortcuts/useListSelection';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { VerificationPanel } from './VerificationPanel';
 
@@ -18,9 +16,7 @@ interface Props {
 export function Browse({ folderId, tag, onSelectTag }: Props) {
   const [editing, setEditing] = useState<LearningCard | null>(null);
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
-  const [selIndex, setSelIndex] = useState(0);
   const queryClient = useQueryClient();
-  const { level } = useShortcuts();
 
   const { data: cards } = useQuery({
     queryKey: ['learning', 'cards', folderId, tag],
@@ -37,14 +33,12 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['learning'] }),
   });
 
-  useEffect(() => {
-    setSelIndex(i => Math.min(i, Math.max((cards?.length ?? 1) - 1, 0)));
-  }, [cards]);
+  const { selIndex, next, prev, isSelected, scrollSelectedIntoView } =
+    useListSelection(cards?.length, 2);
 
   useShortcutScope(2, {
-    next: () =>
-      setSelIndex(i => Math.min(i + 1, Math.max((cards?.length ?? 1) - 1, 0))),
-    prev: () => setSelIndex(i => Math.max(i - 1, 0)),
+    next,
+    prev,
     drillIn: () => {
       const c = cards?.[selIndex];
       if (!c) return false;
@@ -69,13 +63,11 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         {cards?.map((card, idx) => {
           const isDue = card.due !== null && new Date(card.due) <= new Date();
-          const selected = level >= 2 && idx === selIndex;
+          const selected = isSelected(idx);
           return (
             <div
               key={card.id}
-              ref={el => {
-                if (el && selected) el.scrollIntoView({ block: 'nearest' });
-              }}
+              ref={scrollSelectedIntoView(idx)}
               className={`p-4 bg-[var(--color-surface)] rounded-lg border transition-colors ${
                 selected
                   ? 'border-[var(--color-primary)]'

@@ -1,10 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type ApproveResult, type LearningCard } from '../../hooks/api';
-import {
-  useShortcuts,
-  useShortcutScope,
-} from '../../shortcuts/ShortcutProvider';
+import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import { useListSelection } from '../../shortcuts/useListSelection';
 import { MessageMarkdown } from '../MessageMarkdown';
 
 interface HintState {
@@ -17,14 +15,15 @@ export function Queue() {
   const [regenFor, setRegenFor] = useState<string | null>(null);
   const [direction, setDirection] = useState('');
   const [hint, setHint] = useState<HintState | null>(null);
-  const [selIndex, setSelIndex] = useState(0);
   const queryClient = useQueryClient();
-  const { level } = useShortcuts();
 
   const { data: queue } = useQuery({
     queryKey: ['learning', 'queue'],
     queryFn: api.learning.listQueue,
   });
+
+  const { selIndex, next, prev, isSelected, scrollSelectedIntoView } =
+    useListSelection(queue?.length, 2);
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ['learning'] });
@@ -66,14 +65,9 @@ export function Queue() {
     },
   });
 
-  useEffect(() => {
-    setSelIndex(i => Math.min(i, Math.max((queue?.length ?? 1) - 1, 0)));
-  }, [queue]);
-
   useShortcutScope(2, {
-    next: () =>
-      setSelIndex(i => Math.min(i + 1, Math.max((queue?.length ?? 1) - 1, 0))),
-    prev: () => setSelIndex(i => Math.max(i - 1, 0)),
+    next,
+    prev,
     approve: () => {
       const c = queue?.[selIndex];
       if (c && !approve.isPending) approve.mutate({ id: c.id });
@@ -121,12 +115,9 @@ export function Queue() {
       {queue.map((card, idx) => (
         <div
           key={card.id}
-          ref={el => {
-            if (el && level >= 2 && idx === selIndex)
-              el.scrollIntoView({ block: 'nearest' });
-          }}
+          ref={scrollSelectedIntoView(idx)}
           className={`bg-[var(--color-surface)] rounded-lg border p-4 transition-colors ${
-            level >= 2 && idx === selIndex
+            isSelected(idx)
               ? 'border-[var(--color-primary)]'
               : 'border-white/10'
           }`}

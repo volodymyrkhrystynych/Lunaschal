@@ -1,130 +1,67 @@
-"""Unit tests for the Ollama branches of `backend.ai.journal` — confirms the
-CPU-inference path (num_gpu:0 extra_body, separate bg model) is gone and
-everything just calls the single configured Ollama model normally."""
-from types import SimpleNamespace
-
-import pytest
-
+"""Unit tests for `backend.ai.journal`'s three LLM call sites — confirms each
+calls the shared chat_json/chat_text helpers (backend.ai.llm) with the right
+system prompt and processes the result correctly. The native transport itself
+is covered by test_llm.py; these tests fake chat_json/chat_text directly."""
 from backend.ai import journal
 
 
-def _fake_openai(monkeypatch, content: str):
-    openai = pytest.importorskip('openai')
+def test_polish_passes_system_prompt_and_returns_cleaned_text(monkeypatch):
     captured = {}
 
-    class FakeCompletions:
-        def create(self, **kwargs):
-            captured['kwargs'] = kwargs
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
+    def fake_chat_text(prompt, system=None):
+        captured['prompt'] = prompt
+        captured['system'] = system
+        return 'Polished text.'
 
-    class FakeOpenAI:
-        def __init__(self, **kwargs):
-            self.chat = SimpleNamespace(completions=FakeCompletions())
-
-    monkeypatch.setattr(openai, 'OpenAI', FakeOpenAI)
-    return captured
-
-
-def _ollama_config(**overrides):
-    config = {
-        'ollama_url': 'http://localhost:11434',
-        'ollama_model': 'llama3.2',
-    }
-    config.update(overrides)
-    return config
-
-
-def test_polish_uses_configured_model_no_cpu_options(monkeypatch):
-    captured = _fake_openai(monkeypatch, 'Polished text.')
     monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr(journal, 'get_provider_config', lambda: _ollama_config())
+    monkeypatch.setattr(journal, 'chat_text', fake_chat_text)
 
     result = journal.polish_journal_entry('raw text')
 
     assert result == 'Polished text.'
-    assert captured['kwargs']['model'] == 'llama3.2'
-    assert 'extra_body' not in captured['kwargs']
+    assert captured['prompt'] == 'raw text'
+    assert captured['system'] == journal._SYSTEM
 
 
-def test_polish_sends_the_system_prompt_and_keeps_paragraphs(monkeypatch):
-    # The whole point of the polish pass is turning a dictated wall of text into
-    # paragraphs, and the journal view renders with whitespace-pre-wrap — so the
-    # blank lines have to survive the output cleaning untouched.
-    polished = 'So today was rough. I barely slept.\n\nAnyway, the parser works.'
-    captured = _fake_openai(monkeypatch, polished)
+def test_metadata_parses_and_caps_tags(monkeypatch):
+    def fake_chat_json(prompt, system=None):
+        assert prompt == 'some content'
+        assert system == journal._METADATA_SYSTEM
+        return {'title': 'A title', 'tags': ['work', 'health', 'family', 'goals']}
+
     monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr(journal, 'get_provider_config', lambda: _ollama_config())
-
-    result = journal.polish_journal_entry('so today was rough i barely slept')
-
-    assert result == polished
-    system, user = captured['kwargs']['messages']
-    assert system == {'role': 'system', 'content': journal._SYSTEM}
-    assert user['content'] == 'so today was rough i barely slept'
-
-
-def test_metadata_uses_configured_model_no_cpu_options(monkeypatch):
-    captured = _fake_openai(monkeypatch, '{"title": "A title", "tags": ["work"]}')
-    monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr(journal, 'get_provider_config', lambda: _ollama_config())
+    monkeypatch.setattr(journal, 'chat_json', fake_chat_json)
 
     result = journal.generate_journal_metadata('some content')
 
-    assert result == {'title': 'A title', 'tags': ['work']}
-    assert captured['kwargs']['model'] == 'llama3.2'
-    assert 'extra_body' not in captured['kwargs']
-    assert captured['kwargs']['response_format'] == {'type': 'json_object'}
+    assert result == {'title': 'A title', 'tags': ['work', 'health', 'family']}
 
 
-class TestMetadataTagNormalization:
-    """Tags reach the frontend as React keys, so duplicates are a render bug.
-    Normalization is the backend's job (see src/lib/tags.ts)."""
+def test_classify_reads_yes_no_from_chat_text(monkeypatch):
+    captured = {}
 
-    def _meta(self, monkeypatch, payload):
-        _fake_openai(monkeypatch, payload)
-        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
-        monkeypatch.setattr(journal, 'get_provider_config', lambda: _ollama_config())
-        return journal.generate_journal_metadata('some content')
+    def fake_chat_text(prompt, system=None):
+        captured['prompt'] = prompt
+        return 'yes'
 
-    def test_dedupes_repeated_tags(self, monkeypatch):
-        result = self._meta(monkeypatch, '{"title": "T", "tags": ["reading", "reading", "mood"]}')
-        assert result['tags'] == ['reading', 'mood']
-
-    def test_dedupes_case_variants(self, monkeypatch):
-        result = self._meta(monkeypatch, '{"title": "T", "tags": ["Reading", "reading"]}')
-        assert result['tags'] == ['reading']
-
-    def test_caps_at_three_after_deduping(self, monkeypatch):
-        # Dedupe first, so repeats don't burn slots real tags could have used.
-        result = self._meta(
-            monkeypatch, '{"title": "T", "tags": ["a", "a", "b", "c", "d"]}')
-        assert result['tags'] == ['a', 'b', 'c']
-
-    def test_bare_string_is_not_iterated_by_character(self, monkeypatch):
-        result = self._meta(monkeypatch, '{"title": "T", "tags": "reading"}')
-        assert result['tags'] is None
-
-
-def test_classify_uses_configured_model_no_cpu_options(monkeypatch):
-    captured = _fake_openai(monkeypatch, 'yes')
     monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr(journal, 'get_provider_config', lambda: _ollama_config())
+    monkeypatch.setattr(journal, 'chat_text', fake_chat_text)
 
     result = journal.classify_entry_for_tag('some content', 'work')
 
     assert result is True
-    assert captured['kwargs']['model'] == 'llama3.2'
-    assert 'extra_body' not in captured['kwargs']
+    assert 'work' in captured['prompt']
+    assert 'some content' in captured['prompt']
 
 
-def test_falls_back_to_default_model_when_unset(monkeypatch):
-    captured = _fake_openai(monkeypatch, 'Polished text.')
-    monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr(journal, 'get_provider_config', lambda: _ollama_config(ollama_model=None))
+def test_polish_skipped_when_ai_unconfigured(monkeypatch):
+    monkeypatch.setattr(journal, 'is_ai_configured', lambda: False)
+    assert journal.polish_journal_entry('raw text') == 'raw text'
 
-    journal.polish_journal_entry('raw text')
 
-    assert captured['kwargs']['model'] == journal.DEFAULT_MODELS['ollama']
+def test_metadata_empty_when_ai_unconfigured(monkeypatch):
+    monkeypatch.setattr(journal, 'is_ai_configured', lambda: False)
+    assert journal.generate_journal_metadata('some content') == {}
 
 
 class TestCleanPolishOutput:

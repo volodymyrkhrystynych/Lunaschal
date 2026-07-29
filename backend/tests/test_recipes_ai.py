@@ -1,41 +1,21 @@
-"""Unit tests for the Ollama branch of `backend.ai.recipes.parse_recipe` —
-confirms it uses the single configured Ollama model directly (no CPU-forcing
-fallback helper, which recipes.py used to depend on via journal.py)."""
-from types import SimpleNamespace
-
-import pytest
-
+"""Unit tests for `backend.ai.recipes.parse_recipe` — confirms it calls the
+shared chat_json helper (backend.ai.llm) with the recipe system prompt and
+processes the result correctly."""
 from backend.ai import recipes
 
 
-def _fake_openai(monkeypatch, content: str):
-    openai = pytest.importorskip('openai')
-    captured = {}
+def test_parse_recipe_parses_result(monkeypatch):
+    def fake_chat_json(text, system=None):
+        assert text == 'some scraped recipe text'
+        assert system == recipes._RECIPE_SYSTEM
+        return {
+            'title': 'Pasta',
+            'content': '## Ingredients\n- pasta\n\n## Instructions\n1. Boil it',
+            'tags': ['italian', 'dinner'],
+        }
 
-    class FakeCompletions:
-        def create(self, **kwargs):
-            captured['kwargs'] = kwargs
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):
-            self.chat = SimpleNamespace(completions=FakeCompletions())
-
-    monkeypatch.setattr(openai, 'OpenAI', FakeOpenAI)
-    return captured
-
-
-def test_parse_recipe_uses_configured_model_no_cpu_options(monkeypatch):
-    content = (
-        '{"title": "Pasta", "content": "## Ingredients\\n- pasta\\n\\n## Instructions\\n1. Boil it",'
-        ' "tags": ["italian", "dinner"]}'
-    )
-    captured = _fake_openai(monkeypatch, content)
     monkeypatch.setattr(recipes, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr(recipes, 'get_provider_config', lambda: {
-        'ollama_url': 'http://localhost:11434',
-        'ollama_model': 'llama3.2',
-    })
+    monkeypatch.setattr(recipes, 'chat_json', fake_chat_json)
 
     result = recipes.parse_recipe('some scraped recipe text')
 
@@ -44,6 +24,15 @@ def test_parse_recipe_uses_configured_model_no_cpu_options(monkeypatch):
         'content': '## Ingredients\n- pasta\n\n## Instructions\n1. Boil it',
         'tags': ['italian', 'dinner'],
     }
-    assert captured['kwargs']['model'] == 'llama3.2'
-    assert 'extra_body' not in captured['kwargs']
-    assert captured['kwargs']['response_format'] == {'type': 'json_object'}
+
+
+def test_parse_recipe_none_when_no_title(monkeypatch):
+    monkeypatch.setattr(recipes, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(recipes, 'chat_json', lambda text, system=None: {'title': None})
+
+    assert recipes.parse_recipe('no recipe here') is None
+
+
+def test_parse_recipe_none_when_ai_unconfigured(monkeypatch):
+    monkeypatch.setattr(recipes, 'is_ai_configured', lambda: False)
+    assert recipes.parse_recipe('some scraped recipe text') is None

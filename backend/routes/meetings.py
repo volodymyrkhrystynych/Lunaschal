@@ -7,7 +7,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
-from backend.db.connection import get_db, row_to_dict
+from backend.db.connection import build_update, get_db, row_to_dict
 from backend.meetings import recorder, storage
 from backend.meetings.merge import render_transcript
 from backend.meetings.pipeline import start_pipeline
@@ -299,9 +299,7 @@ def update_meeting(id):
             return jsonify({'error': 'speakerNames must be a mapping of speaker label to name'}), 400
         updates['speaker_names'] = json.dumps(names) if names else None
     db = get_db()
-    set_clause = ', '.join(f'{k}=?' for k in updates)
-    cur = db.execute(f'UPDATE meetings SET {set_clause} WHERE id=?',
-                     [*updates.values(), id])
+    cur = build_update(db, 'meetings', updates, 'id=?', (id,))
     db.commit()
     if cur.rowcount == 0:
         return jsonify({'error': 'Meeting not found'}), 404

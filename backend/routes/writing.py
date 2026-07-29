@@ -3,7 +3,7 @@ from flask import Blueprint, jsonify, request
 from ulid import ULID
 from backend.ai.provider import is_ai_configured
 from backend.ai.writing import summarize_discussion
-from backend.db.connection import get_db, row_to_dict
+from backend.db.connection import build_update, get_db, row_to_dict
 
 bp = Blueprint('writing', __name__, url_prefix='/api/writing')
 
@@ -50,11 +50,7 @@ def update_project(project_id):
         updates['title'] = body['title'].strip()
     if 'description' in body:
         updates['description'] = body['description']
-    set_clause = ', '.join(f'{k}=?' for k in updates)
-    get_db().execute(
-        f'UPDATE writing_projects SET {set_clause} WHERE id=?',
-        [*updates.values(), project_id],
-    )
+    build_update(get_db(), 'writing_projects', updates, 'id=?', (project_id,))
     get_db().commit()
     return jsonify({'success': True})
 
@@ -121,12 +117,8 @@ def update_chapter(chapter_id):
         updates['content'] = body['content']
     if 'position' in body:
         updates['position'] = int(body['position'])
-    set_clause = ', '.join(f'{k}=?' for k in updates)
     db = get_db()
-    db.execute(
-        f'UPDATE writing_chapters SET {set_clause} WHERE id=?',
-        [*updates.values(), chapter_id],
-    )
+    build_update(db, 'writing_chapters', updates, 'id=?', (chapter_id,))
     row = db.execute('SELECT project_id FROM writing_chapters WHERE id=?', (chapter_id,)).fetchone()
     if row:
         db.execute('UPDATE writing_projects SET updated_at=? WHERE id=?', (now, row['project_id']))
@@ -186,11 +178,7 @@ def update_note(doc_id):
         updates['content'] = body['content']
     if 'docType' in body:
         updates['doc_type'] = body['docType']
-    set_clause = ', '.join(f'{k}=?' for k in updates)
-    get_db().execute(
-        f'UPDATE writing_context_docs SET {set_clause} WHERE id=?',
-        [*updates.values(), doc_id],
-    )
+    build_update(get_db(), 'writing_context_docs', updates, 'id=?', (doc_id,))
     get_db().commit()
     return jsonify({'success': True})
 

@@ -9,7 +9,7 @@ while every background grade queues behind one shared worker.
 import json
 import time
 
-from backend.db.connection import get_db
+from backend.db.connection import build_update, get_db
 
 
 def card_claims(row) -> list[dict]:
@@ -28,10 +28,8 @@ def _finish(attempt_id: str, **cols) -> None:
     """Write the outcome back. The attempt may be gone — the user can rate a
     card (which deletes it) before its grade lands — and that's a no-op."""
     cols['updated_at'] = int(time.time())
-    set_clause = ', '.join(f'{k}=?' for k in cols)
     db = get_db()
-    db.execute(f'UPDATE learning_attempts SET {set_clause} WHERE id=?',
-               [*cols.values(), attempt_id])
+    build_update(db, 'learning_attempts', cols, 'id=?', (attempt_id,))
     db.commit()
 
 

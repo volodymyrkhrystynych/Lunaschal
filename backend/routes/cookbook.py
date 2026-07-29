@@ -10,7 +10,8 @@ from ulid import ULID
 from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.rag import delete_recipe_embeddings, sync_recipe_embeddings
 from backend.ai.recipes import parse_recipe
-from backend.db.connection import get_db, row_to_dict, search_recipes_fts
+from backend.db.connection import build_update, get_db, row_to_dict, search_recipes_fts
+from backend.tags import tag_counts
 
 bp = Blueprint('cookbook', __name__, url_prefix='/api/cookbook')
 
@@ -59,18 +60,7 @@ def search():
 @bp.get('/tags')
 def list_tags():
     rows = get_db().execute('SELECT tags FROM recipes WHERE tags IS NOT NULL').fetchall()
-    counts: dict[str, int] = {}
-    for r in rows:
-        try:
-            for tag in json.loads(r['tags']):
-                if isinstance(tag, str) and tag.strip():
-                    counts[tag] = counts.get(tag, 0) + 1
-        except (json.JSONDecodeError, TypeError):
-            continue
-    return jsonify([
-        {'name': name, 'count': count}
-        for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    ])
+    return jsonify(tag_counts(rows))
 
 
 @bp.get('/<id>')
@@ -116,9 +106,8 @@ def update_recipe(id):
         updates['tags'] = json.dumps(body['tags']) if body['tags'] else None
     if 'sourceUrl' in body:
         updates['source_url'] = body['sourceUrl']
-    set_clause = ', '.join(f'{k}=?' for k in updates)
     db = get_db()
-    db.execute(f'UPDATE recipes SET {set_clause} WHERE id=?', [*updates.values(), id])
+    build_update(db, 'recipes', updates, 'id=?', (id,))
     db.commit()
     if 'title' in updates or 'content' in updates:
         _sync_embeddings_bg(id)

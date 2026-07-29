@@ -4,7 +4,7 @@ import time
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
-from backend.db.connection import get_db, row_to_dict
+from backend.db.connection import build_update, get_db, row_to_dict
 from backend.learning.dedup import embed_answer
 from backend.tags import tags_json
 
@@ -114,8 +114,7 @@ def update_folder(id):
         updates['evidence_provider_id'] = provider_id
     if updates:
         updates['updated_at'] = int(time.time())
-        set_clause = ', '.join(f'{k}=?' for k in updates)
-        db.execute(f'UPDATE learning_folders SET {set_clause} WHERE id=?', [*updates.values(), id])
+        build_update(db, 'learning_folders', updates, 'id=?', (id,))
         db.commit()
     return jsonify({'success': True})
 
@@ -209,8 +208,7 @@ def update_mcp_server(id):
         return jsonify({'error': err}), 400
     if fields:
         fields['updated_at'] = int(time.time())
-        set_clause = ', '.join(f'{k}=?' for k in fields)
-        db.execute(f'UPDATE mcp_servers SET {set_clause} WHERE id=?', [*fields.values(), id])
+        build_update(db, 'mcp_servers', fields, 'id=?', (id,))
         db.commit()
     return jsonify({'success': True})
 
@@ -614,9 +612,8 @@ def update_card(id):
             updates['claims'] = None
     if updates:
         updates['updated_at'] = int(time.time())
-        set_clause = ', '.join(f'{k}=?' for k in updates)
         db = get_db()
-        db.execute(f'UPDATE learning_cards SET {set_clause} WHERE id=?', [*updates.values(), id])
+        build_update(db, 'learning_cards', updates, 'id=?', (id,))
         db.commit()
     return jsonify({'success': True})
 

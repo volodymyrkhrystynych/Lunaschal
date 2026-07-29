@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { Fic, RefreshAlertsResult } from '../../hooks/api';
@@ -8,10 +8,8 @@ import {
   siteLabel,
   SITE_LABELS,
 } from '../../lib/fanfic';
-import {
-  useShortcuts,
-  useShortcutScope,
-} from '../../shortcuts/ShortcutProvider';
+import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
+import { useListSelection } from '../../shortcuts/useListSelection';
 import { FolderBar, FolderPicker } from './Folders';
 
 interface LibraryProps {
@@ -33,7 +31,6 @@ export function Library({ onOpen }: LibraryProps) {
   const [showImport, setShowImport] = useState(false);
   const [importUrl, setImportUrl] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
-  const [selIndex, setSelIndex] = useState(0);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
   const [showDelete, setShowDelete] = useState(false);
@@ -42,7 +39,6 @@ export function Library({ onOpen }: LibraryProps) {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
-  const { level } = useShortcuts();
 
   const { data: fics, isLoading } = useQuery({
     queryKey: searchQuery
@@ -122,14 +118,14 @@ export function Library({ onOpen }: LibraryProps) {
     onError: (e: Error) => setImportError(e.message),
   });
 
-  useEffect(() => {
-    setSelIndex(i => Math.min(i, Math.max((fics?.length ?? 1) - 1, 0)));
-  }, [fics]);
+  const { selIndex, next, prev, isSelected } = useListSelection(
+    fics?.length,
+    1
+  );
 
   useShortcutScope(1, {
-    next: () =>
-      setSelIndex(i => Math.min(i + 1, Math.max((fics?.length ?? 1) - 1, 0))),
-    prev: () => setSelIndex(i => Math.max(i - 1, 0)),
+    next,
+    prev,
     create: () => setShowImport(true),
     search: () => {
       searchInputRef.current?.focus();
@@ -314,7 +310,7 @@ export function Library({ onOpen }: LibraryProps) {
           <FicCard
             key={fic.id}
             fic={fic}
-            selected={level >= 1 && idx === selIndex}
+            selected={isSelected(idx)}
             showDelete={showDelete}
             onOpen={() => onOpen(fic.id)}
             onCheckUpdates={() => checkUpdates.mutate(fic.id)}

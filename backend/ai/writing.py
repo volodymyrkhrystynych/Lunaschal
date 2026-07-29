@@ -1,6 +1,5 @@
-import json
-
-from backend.ai.provider import get_provider_config, get_ollama_client, is_ai_configured, DEFAULT_MODELS
+from backend.ai.llm import chat_json
+from backend.ai.provider import is_ai_configured
 
 _MAX_INPUT_CHARS = 24000
 
@@ -25,22 +24,9 @@ def summarize_discussion(transcript: str, project_title: str, project_descriptio
     try:
         if not is_ai_configured():
             return None
-        c = get_provider_config()
         description_line = f'\nStory description: {project_description}' if project_description else ''
         system = _SUMMARY_SYSTEM.format(project_title=project_title, description_line=description_line)
-        messages = [
-            {'role': 'system', 'content': system},
-            {'role': 'user', 'content': transcript},
-        ]
-        client = get_ollama_client(c)
-        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            response_format={'type': 'json_object'},
-            stream=False,
-        )
-        data = json.loads(resp.choices[0].message.content)
+        data = chat_json(transcript, system=system)
 
         title = (data.get('title') or '').strip() if isinstance(data.get('title'), str) else ''
         content = (data.get('content') or '').strip() if isinstance(data.get('content'), str) else ''

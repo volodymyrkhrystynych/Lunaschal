@@ -1,80 +1,65 @@
-"""Unit tests for `backend.ai.writing.summarize_discussion` with a faked
-OpenAI-compatible client (Ollama provider config) — no real LLM calls."""
-from types import SimpleNamespace
-
-import pytest
-
+"""Unit tests for `backend.ai.writing.summarize_discussion` — confirms it
+calls the shared chat_json helper (backend.ai.llm) with the right system
+prompt and processes the result correctly. No real LLM calls."""
 from backend.ai import writing
-
-
-def _fake_openai(monkeypatch, content: str):
-    openai = pytest.importorskip('openai')
-    captured = {}
-
-    class FakeCompletions:
-        def create(self, **kwargs):
-            captured['kwargs'] = kwargs
-            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
-
-    class FakeOpenAI:
-        def __init__(self, **kwargs):
-            self.chat = SimpleNamespace(completions=FakeCompletions())
-
-    monkeypatch.setattr(openai, 'OpenAI', FakeOpenAI)
-    return captured
+from backend.ai.llm import EmptyCompletion
 
 
 def _configure_ollama(monkeypatch):
     monkeypatch.setattr(writing, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr(writing, 'get_provider_config', lambda: {
-        'ollama_url': 'http://localhost:11434',
-        'ollama_model': 'llama3.2',
-    })
 
 
 def test_summarize_discussion_parses_result(monkeypatch):
-    captured = _fake_openai(
-        monkeypatch, '{"title": "Villain twist", "content": "- Brother is the villain"}'
-    )
+    captured = {}
+
+    def fake_chat_json(transcript, system=None):
+        captured['transcript'] = transcript
+        captured['system'] = system
+        return {'title': 'Villain twist', 'content': '- Brother is the villain'}
+
     _configure_ollama(monkeypatch)
+    monkeypatch.setattr(writing, 'chat_json', fake_chat_json)
 
     result = writing.summarize_discussion(
         'Author: what if...\n\nAssistant: yes', 'My Story', 'A tale'
     )
 
     assert result == {'title': 'Villain twist', 'content': '- Brother is the villain'}
-    kwargs = captured['kwargs']
-    assert kwargs['model'] == 'llama3.2'
-    assert kwargs['response_format'] == {'type': 'json_object'}
-    system = kwargs['messages'][0]
-    assert system['role'] == 'system'
-    assert 'My Story' in system['content']
-    assert 'A tale' in system['content']
-    assert kwargs['messages'][1]['content'] == 'Author: what if...\n\nAssistant: yes'
+    assert 'My Story' in captured['system']
+    assert 'A tale' in captured['system']
+    assert captured['transcript'] == 'Author: what if...\n\nAssistant: yes'
 
 
 def test_summarize_discussion_truncates_keeping_tail(monkeypatch):
-    captured = _fake_openai(monkeypatch, '{"title": "T", "content": "C"}')
+    captured = {}
+
+    def fake_chat_json(transcript, system=None):
+        captured['transcript'] = transcript
+        return {'title': 'T', 'content': 'C'}
+
     _configure_ollama(monkeypatch)
+    monkeypatch.setattr(writing, 'chat_json', fake_chat_json)
 
     transcript = 'OLD ' * 10000 + 'RECENT DECISION'
     writing.summarize_discussion(transcript, 'My Story')
 
-    sent = captured['kwargs']['messages'][1]['content']
-    assert len(sent) == writing._MAX_INPUT_CHARS
-    assert sent.endswith('RECENT DECISION')
+    assert len(captured['transcript']) == writing._MAX_INPUT_CHARS
+    assert captured['transcript'].endswith('RECENT DECISION')
 
 
 def test_summarize_discussion_malformed_json(monkeypatch):
-    _fake_openai(monkeypatch, 'not json at all')
+    def fake_chat_json(transcript, system=None):
+        raise EmptyCompletion('model returned non-JSON content')
+
     _configure_ollama(monkeypatch)
+    monkeypatch.setattr(writing, 'chat_json', fake_chat_json)
 
     assert writing.summarize_discussion('Author: hi', 'My Story') is None
 
 
 def test_summarize_discussion_missing_fields(monkeypatch):
-    _fake_openai(monkeypatch, '{"title": "Only a title"}')
     _configure_ollama(monkeypatch)
+    monkeypatch.setattr(writing, 'chat_json', lambda t, system=None: {'title': 'Only a title'})
 
     assert writing.summarize_discussion('Author: hi', 'My Story') is None
 

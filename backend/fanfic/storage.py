@@ -1,20 +1,12 @@
-import os
-import re
-import shutil
 from pathlib import Path
 
-_SAFE_NAME = re.compile(r'^[A-Za-z0-9._-]+$')
+from backend.storage import IdScopedStorage, is_safe_name
 
+_storage = IdScopedStorage('FANFIC_ROOT', './data/fanfic')
 
-def fanfic_root() -> Path:
-    return Path(os.environ.get('FANFIC_ROOT', './data/fanfic')).expanduser().resolve()
-
-
-def fic_dir(fic_id: str) -> Path | None:
-    # Dot-only names like '..' pass _SAFE_NAME but escape the root.
-    if not _SAFE_NAME.match(fic_id) or set(fic_id) == {'.'}:
-        return None
-    return fanfic_root() / fic_id
+fanfic_root = _storage.root
+fic_dir = _storage.dir
+delete_fic_dir = _storage.delete_dir
 
 
 def images_dir(fic_id: str) -> Path | None:
@@ -28,7 +20,7 @@ def pdf_path(fic_id: str) -> Path | None:
 
 
 def safe_image_path(fic_id: str, filename: str) -> Path | None:
-    if not _SAFE_NAME.match(filename) or set(filename) == {'.'}:
+    if not is_safe_name(filename):
         return None
     d = images_dir(fic_id)
     if d is None:
@@ -38,15 +30,3 @@ def safe_image_path(fic_id: str, filename: str) -> Path | None:
     if p.parent != base:
         return None
     return p
-
-
-def delete_fic_dir(fic_id: str) -> None:
-    d = fic_dir(fic_id)
-    if d is None:
-        return
-    # Belt and braces: only ever delete a direct child of the fanfic root.
-    d = d.resolve()
-    if d.parent != fanfic_root():
-        return
-    if d.is_dir():
-        shutil.rmtree(d, ignore_errors=True)

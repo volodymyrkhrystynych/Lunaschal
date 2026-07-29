@@ -38,6 +38,19 @@ def row_to_dict(row: sqlite3.Row) -> dict:
     return mapping_to_dict({key: row[key] for key in row.keys()})
 
 
+def build_update(
+    db: sqlite3.Connection, table: str, updates: dict, where: str, params: tuple = ()
+) -> sqlite3.Cursor:
+    """Run `UPDATE {table} SET col=?, ... WHERE {where}` for a dict of column ->
+    new value, appending `params` after the update values (typically the row id
+    referenced by `where`, e.g. `build_update(db, 'recipes', updates, 'id=?', (id,))`).
+    Returns the cursor (e.g. for `.rowcount`); the caller still calls `db.commit()`."""
+    set_clause = ', '.join(f'{k}=?' for k in updates)
+    return db.execute(
+        f'UPDATE {table} SET {set_clause} WHERE {where}', [*updates.values(), *params]
+    )
+
+
 def get_db() -> sqlite3.Connection:
     global _conn
     if _conn is None:

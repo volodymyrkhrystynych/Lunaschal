@@ -4,6 +4,7 @@ import { api, ProposedTodo } from '../hooks/api';
 import { MessageMarkdown } from './MessageMarkdown';
 import { BriefingTodos } from './BriefingTodos';
 import { contextMessages, isBreak } from '@/lib/chatSegments';
+import { readSSE } from '@/lib/sse';
 import { formatMessageTime } from '@/lib/chatTime';
 
 interface PendingSave {
@@ -264,30 +265,13 @@ export function Chat() {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
-      const decoder = new TextDecoder();
       let fullContent = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const lines = decoder.decode(value).split('\n');
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.content) {
-                fullContent += parsed.content;
-                setStreamingContent(fullContent);
-              }
-              if (parsed.error) throw new Error(parsed.error);
-            } catch {
-              /* ignore parse errors */
-            }
-          }
+      for await (const parsed of readSSE(reader)) {
+        if (parsed.content) {
+          fullContent += parsed.content;
+          setStreamingContent(fullContent);
         }
+        if (parsed.error) throw new Error(parsed.error);
       }
 
       await addMessage.mutateAsync({

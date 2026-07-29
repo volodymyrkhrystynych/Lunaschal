@@ -1,6 +1,5 @@
-import json
-
-from backend.ai.provider import get_provider_config, get_ollama_client, is_ai_configured, DEFAULT_MODELS
+from backend.ai.llm import chat_json
+from backend.ai.provider import is_ai_configured
 
 _MAX_INPUT_CHARS = 15000
 
@@ -26,20 +25,7 @@ def parse_recipe(text: str) -> dict | None:
     try:
         if not is_ai_configured():
             return None
-        c = get_provider_config()
-        messages = [
-            {'role': 'system', 'content': _RECIPE_SYSTEM},
-            {'role': 'user', 'content': text},
-        ]
-        client = get_ollama_client(c)
-        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-        resp = client.chat.completions.create(
-            model=model,
-            messages=messages,
-            response_format={'type': 'json_object'},
-            stream=False,
-        )
-        data = json.loads(resp.choices[0].message.content)
+        data = chat_json(text, system=_RECIPE_SYSTEM)
 
         title = (data.get('title') or '').strip() if isinstance(data.get('title'), str) else ''
         content = (data.get('content') or '').strip() if isinstance(data.get('content'), str) else ''

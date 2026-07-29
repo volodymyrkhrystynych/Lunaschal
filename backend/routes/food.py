@@ -10,11 +10,11 @@ from backend.ai.background import run_bg
 from backend.ai.embeddings import is_embeddings_configured
 from backend.ai.food import parse_food_entry
 from backend.ai.rag import sync_recipe_embeddings
-from backend.db.connection import get_db, row_to_dict
+from backend.db.connection import build_update, get_db, row_to_dict
 from backend.food import storage
 from backend.food.exif import extract_photo_meta
 from backend.routes.cookbook import _insert_recipe
-from backend.tags import tags_json
+from backend.tags import tag_counts, tags_json
 
 bp = Blueprint('food', __name__, url_prefix='/api/food')
 
@@ -195,8 +195,7 @@ def structure_food_entry(entry_id: str, text: str) -> None:
 
     if updates:
         updates['updated_at'] = int(time.time())
-        set_clause = ', '.join(f'{k}=?' for k in updates)
-        db.execute(f'UPDATE food_entries SET {set_clause} WHERE id=?', [*updates.values(), entry_id])
+        build_update(db, 'food_entries', updates, 'id=?', (entry_id,))
         db.commit()
 
     if new_recipe_id and is_embeddings_configured():
@@ -255,18 +254,7 @@ def journal_entries():
 @bp.get('/tags')
 def list_tags():
     rows = get_db().execute('SELECT tags FROM food_entries WHERE tags IS NOT NULL').fetchall()
-    counts: dict[str, int] = {}
-    for r in rows:
-        try:
-            for tag in json.loads(r['tags']):
-                if isinstance(tag, str) and tag.strip():
-                    counts[tag] = counts.get(tag, 0) + 1
-        except (json.JSONDecodeError, TypeError):
-            continue
-    return jsonify([
-        {'name': name, 'count': count}
-        for name, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
-    ])
+    return jsonify(tag_counts(rows))
 
 
 @bp.get('/<id>')
@@ -328,8 +316,7 @@ def create_entry():
         overrides['latitude'] = meta['latitude']
         overrides['longitude'] = meta['longitude']
     if overrides:
-        set_clause = ', '.join(f'{k}=?' for k in overrides)
-        db.execute(f'UPDATE food_entries SET {set_clause} WHERE id=?', [*overrides.values(), entry_id])
+        build_update(db, 'food_entries', overrides, 'id=?', (entry_id,))
 
     db.commit()
 
@@ -361,8 +348,7 @@ def update_entry(id):
         updates['tags'] = tags_json(body['tags'])
     if 'recipeId' in body:
         updates['recipe_id'] = body['recipeId'] or None
-    set_clause = ', '.join(f'{k}=?' for k in updates)
-    db.execute(f'UPDATE food_entries SET {set_clause} WHERE id=?', [*updates.values(), id])
+    build_update(db, 'food_entries', updates, 'id=?', (id,))
     db.commit()
     return jsonify({'success': True})
 

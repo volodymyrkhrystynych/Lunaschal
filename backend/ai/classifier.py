@@ -1,6 +1,6 @@
-import json
 from datetime import date
-from backend.ai.provider import get_provider_config, get_ollama_client, DEFAULT_MODELS
+
+from backend.ai.llm import chat_json
 
 CLASSIFIER_PROMPT = """You are an intent classifier. Analyze the user's message and determine its intent.
 
@@ -39,18 +39,10 @@ def should_classify(message: str) -> bool:
 
 
 def classify_intent(message: str) -> dict:
-    c = get_provider_config()
     prompt = CLASSIFIER_PROMPT.replace('{TODAY}', date.today().isoformat()) + f'\n\nUser message:\n{message}'
 
     try:
-        client = get_ollama_client(c)
-        model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-        resp = client.chat.completions.create(
-            model=model,
-            messages=[{'role': 'user', 'content': prompt}],
-            response_format={'type': 'json_object'},
-        )
-        return json.loads(resp.choices[0].message.content)
+        return chat_json(prompt)
     except Exception as e:
         print(f'Classification error: {e}')
 

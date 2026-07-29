@@ -1,6 +1,5 @@
 """Tests for the daily-chat model: 4am day boundary, find-or-create today's
 conversation, the journal-conversations feed, and AI title generation/sweep."""
-import json
 from datetime import datetime
 
 from backend.db import connection
@@ -114,24 +113,12 @@ def test_journal_conversations_filters_and_shape(client):
 
 # --- title generation ---
 
-class _FakeCompletions:
-    def create(self, **kwargs):
-        payload = json.dumps({'title': 'My Great Title'})
-        return type('R', (), {
-            'choices': [type('C', (), {
-                'message': type('M', (), {'content': payload})()
-            })()]
-        })()
-
-
-class _FakeClient:
-    chat = type('Chat', (), {'completions': _FakeCompletions()})()
-
-
 def _mock_llm(monkeypatch):
     monkeypatch.setattr('backend.ai.chat_title.is_ai_configured', lambda: True)
-    monkeypatch.setattr('backend.ai.chat_title.get_provider_config', lambda: {'ollama_model': 'm'})
-    monkeypatch.setattr('backend.ai.chat_title.get_ollama_client', lambda c: _FakeClient())
+    monkeypatch.setattr(
+        'backend.ai.chat_title.chat_json',
+        lambda transcript, system=None: {'title': 'My Great Title'},
+    )
 
 
 def test_generate_conversation_title(monkeypatch):

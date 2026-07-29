@@ -7,8 +7,8 @@ import time
 import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
-from backend.ai.llm import REASONING_EFFORTS
-from backend.db.connection import get_db
+from backend.ai.llm import LLM_NUM_CTX, REASONING_EFFORTS
+from backend.db.connection import build_update, get_db
 
 _sleep_inhibitor: subprocess.Popen | None = None
 _INHIBIT_WHO = 'Lunaschal'
@@ -68,7 +68,7 @@ def get_settings():
         'ollamaModel': s.get('ollama_model'),
         'llmReasoningEffort': s.get('llm_reasoning_effort') or 'none',
         'llmMaxTokens': s.get('llm_max_tokens') or 4096,
-        'llmNumCtx': s.get('llm_num_ctx') or 4096,
+        'llmNumCtx': s.get('llm_num_ctx') or LLM_NUM_CTX,
         'hasHfToken': bool(s.get('hf_token')),
         'networkMode': NETWORK_MODE,
         'networkCode': s.get('network_code') if NETWORK_MODE else None,
@@ -147,8 +147,7 @@ def update_ai():
     s = _get_settings()
     now = int(time.time())
     if s:
-        set_clause = ', '.join(f'{k}=?' for k in updates)
-        db.execute(f'UPDATE settings SET {set_clause} WHERE id=1', list(updates.values()))
+        build_update(db, 'settings', updates, 'id=1')
     else:
         updates['created_at'] = now
         updates['id'] = 1

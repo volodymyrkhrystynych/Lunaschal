@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
-from backend.db.connection import get_db, row_to_dict
+from backend.db.connection import build_update, get_db, row_to_dict
 from backend.paper import storage
 
 bp = Blueprint('paper', __name__, url_prefix='/api/paper')
@@ -158,9 +158,8 @@ def update_paper(paper_id):
         updates['archive_requested_at'] = (
             int(time.time()) if body['archiveRequested'] else None
         )
-    set_clause = ', '.join(f'{k}=?' for k in updates)
     db = get_db()
-    db.execute(f'UPDATE papers SET {set_clause} WHERE id=?', [*updates.values(), paper_id])
+    build_update(db, 'papers', updates, 'id=?', (paper_id,))
     db.commit()
     return jsonify({'success': True})
 
@@ -233,8 +232,7 @@ def save_page(page_id):
     updates: dict = {'strokes': strokes, 'width': width, 'height': height, 'updated_at': now}
     if image_path is not None:
         updates['image_path'] = image_path
-    set_clause = ', '.join(f'{k}=?' for k in updates)
-    db.execute(f'UPDATE paper_pages SET {set_clause} WHERE id=?', [*updates.values(), page_id])
+    build_update(db, 'paper_pages', updates, 'id=?', (page_id,))
     db.execute('UPDATE papers SET updated_at=? WHERE id=?', (now, paper_id))
     db.commit()
     return jsonify({'success': True})
