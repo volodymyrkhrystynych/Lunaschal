@@ -117,8 +117,19 @@ def test_patch_settings_updates_llm_reasoning_max_tokens_and_num_ctx(client):
 def test_patch_settings_clamps_num_ctx(client):
     client.patch('/api/settings/ai', json={'llmNumCtx': 10})
     assert client.get('/api/settings').get_json()['llmNumCtx'] == 512  # floor
-    client.patch('/api/settings/ai', json={'briefingNumCtx': 9_999_999})
-    assert client.get('/api/settings').get_json()['briefingNumCtx'] == 131072  # ceiling
+    client.patch('/api/settings/ai', json={'llmNumCtx': 9_999_999})
+    assert client.get('/api/settings').get_json()['llmNumCtx'] == 131072  # ceiling
+
+
+def test_briefing_has_no_separate_context_window(client):
+    """One shared window only — a per-feature num_ctx would reload the model."""
+    data = client.get('/api/settings').get_json()
+    assert 'briefingNumCtx' not in data
+
+    client.patch('/api/settings/ai', json={'llmNumCtx': 16384})
+    # A stale client still sending the retired knob must not move anything.
+    client.patch('/api/settings/ai', json={'briefingNumCtx': 4096})
+    assert client.get('/api/settings').get_json()['llmNumCtx'] == 16384
 
 
 def test_patch_settings_rejects_invalid_llm_reasoning_and_clamps_tokens(client):
@@ -136,7 +147,6 @@ def test_get_settings_briefing_generation_defaults(client):
     # the token ceiling is generous since the briefing runs overnight.
     assert data['briefingReasoningEffort'] == 'none'
     assert data['briefingMaxTokens'] == 16384
-    assert data['briefingNumCtx'] == 8192
 
 
 def test_patch_settings_updates_briefing_reasoning_and_max_tokens(client):

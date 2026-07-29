@@ -187,20 +187,20 @@ def _briefing_model() -> str | None:
 
 
 def _briefing_generation_opts() -> dict:
-    """User-tunable generation knobs for the briefing (reasoning level, output
-    ceiling, context window), falling back to the module defaults when unset."""
+    """User-tunable generation knobs for the briefing, falling back to the module
+    defaults when unset.
+
+    Reasoning level and output ceiling only — the context window is deliberately
+    *not* one of them. The briefing shares the chat model by default, and Ollama
+    reloads the weights whenever num_ctx changes between requests, so a separate
+    briefing window would cost a reload at 4am and another on the user's next
+    message. `chat_json` fills in the shared `default_num_ctx()`.
+    """
     from backend.ai.provider import get_settings
-    from backend.ai.llm import LLM_NUM_CTX
     s = get_settings() or {}
     return {
         'reasoning_effort': s.get('briefing_reasoning_effort') or 'none',
         'max_tokens': s.get('briefing_max_tokens') or BRIEFING_MAX_TOKENS,
-        # Matches the chat window rather than doubling it: the briefing shares
-        # the chat model by default, and Ollama re-allocates the KV cache (a
-        # full model reload — tens of GB for a large local model) whenever
-        # num_ctx changes between requests. A wider briefing window would cost
-        # a reload at 4am and another on the user's next message.
-        'num_ctx': s.get('briefing_num_ctx') or LLM_NUM_CTX,
     }
 
 

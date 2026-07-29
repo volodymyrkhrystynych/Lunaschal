@@ -104,6 +104,43 @@ export function Chat() {
     mutationFn: (message: string) => api.chat.classify(message),
   });
 
+  /** Ask the model whether the message was really a journal entry, a calendar
+   * event or a flashcard request, and offer to save it if so. Fire-and-forget:
+   * a failed classification just means no offer. */
+  const classifyUserMessage = (message: string, messageId: string) => {
+    classifyMessage.mutate(message, {
+      onSuccess: result => {
+        const r = result as ClassifyResult;
+        if (r.confidence < 0.7) return;
+        if (r.intent === 'journal' && r.journalEntry) {
+          setPendingSave({
+            type: 'journal',
+            messageId,
+            data: {
+              title: r.journalEntry.title,
+              content: r.journalEntry.content,
+              tags: r.journalEntry.tags,
+            },
+          });
+        } else if (r.intent === 'calendar' && r.calendarEvent) {
+          setPendingSave({
+            type: 'calendar',
+            messageId,
+            data: {
+              title: r.calendarEvent.title,
+              description: r.calendarEvent.description,
+              date: r.calendarEvent.date,
+              time: r.calendarEvent.time,
+              tags: r.calendarEvent.tags,
+            },
+          });
+        } else if (r.intent === 'flashcard_request' && r.flashcardRequest) {
+          setPendingQuiz({ topic: r.flashcardRequest.topic, messageId });
+        }
+      },
+    });
+  };
+
   const saveJournal = useMutation({
     mutationFn: api.chat.saveJournal,
     onSuccess: () => {
@@ -185,42 +222,6 @@ export function Chat() {
       content: userMessage,
     });
 
-    classifyMessage.mutate(userMessage, {
-      onSuccess: result => {
-        const r = result as ClassifyResult;
-        if (r.confidence >= 0.7) {
-          if (r.intent === 'journal' && r.journalEntry) {
-            setPendingSave({
-              type: 'journal',
-              messageId: userMsgResult.id,
-              data: {
-                title: r.journalEntry.title,
-                content: r.journalEntry.content,
-                tags: r.journalEntry.tags,
-              },
-            });
-          } else if (r.intent === 'calendar' && r.calendarEvent) {
-            setPendingSave({
-              type: 'calendar',
-              messageId: userMsgResult.id,
-              data: {
-                title: r.calendarEvent.title,
-                description: r.calendarEvent.description,
-                date: r.calendarEvent.date,
-                time: r.calendarEvent.time,
-                tags: r.calendarEvent.tags,
-              },
-            });
-          } else if (r.intent === 'flashcard_request' && r.flashcardRequest) {
-            setPendingQuiz({
-              topic: r.flashcardRequest.topic,
-              messageId: userMsgResult.id,
-            });
-          }
-        }
-      },
-    });
-
     // Only the current segment (since the last "New chat") is sent to the model,
     // so the button acts as a true clear while history stays visible/saved.
     // createdAt rides along so the backend can prefix each turn with when it
@@ -290,6 +291,12 @@ export function Chat() {
     } finally {
       setIsStreaming(false);
       setStreamingContent('');
+      // Deliberately *after* the reply, not alongside it. Ollama serves one
+      // request at a time per model, so a classify fired in parallel simply
+      // wins the queue and the user waits out a whole second generation before
+      // their first token. The save/quiz prompts it produces are offered after
+      // the reply anyway.
+      classifyUserMessage(userMessage, userMsgResult.id);
     }
   };
 

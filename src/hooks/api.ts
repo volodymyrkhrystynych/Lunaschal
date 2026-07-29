@@ -420,6 +420,8 @@ export interface AppSettings {
   ollamaModel: string | null;
   llmReasoningEffort: 'none' | 'low' | 'medium' | 'high' | 'max';
   llmMaxTokens: number;
+  /** The one context window, shared by chat, the briefing and every structured
+   * helper — a per-feature window would make Ollama reload the model. */
   llmNumCtx: number;
   networkMode: boolean;
   networkCode: string | null;
@@ -441,7 +443,6 @@ export interface AppSettings {
   briefingGoals: string;
   briefingReasoningEffort: 'none' | 'low' | 'medium' | 'high' | 'max';
   briefingMaxTokens: number;
-  briefingNumCtx: number;
 }
 
 export interface WhisperModel {

@@ -56,12 +56,37 @@ _NATIVE_TIMEOUT = 1800
 _KEEP_ALIVE = '14h'
 
 
+def default_num_ctx() -> int:
+    """The one context window every request shares.
+
+    Ollama keys a loaded runner on its context size: a request whose `num_ctx`
+    differs from the running one evicts it and reloads the weights from scratch.
+    On a large local model that is tens of seconds of dead time per call — and a
+    single chat message fans out into several calls (classify, then the reply),
+    so a mismatch costs *two* reloads before the user sees a token.
+
+    So there is deliberately one setting, applied to every call: chat, briefing,
+    and every structured `chat_json` helper. What those calls may differ on is
+    output length and reasoning level, neither of which touches the runner.
+
+    Falls back to the module default when settings are unreachable (background
+    threads, tests) rather than letting a helper silently send no `num_ctx` and
+    inherit Ollama's own 4096.
+    """
+    try:
+        from backend.ai.provider import get_settings
+        s = get_settings() or {}
+    except Exception:
+        return LLM_NUM_CTX
+    return s.get('llm_num_ctx') or LLM_NUM_CTX
+
+
 def default_generation_opts() -> dict:
     """Reasoning level + context window + output ceiling for the default
     (conversational) model, read from user settings. One standard set applied the
     same way to every model, thinking or not. Structured `chat_json` calls manage
-    these themselves (they must default to 'none', or the JSON gets crowded out by
-    reasoning)."""
+    reasoning and output length themselves (reasoning must default to 'none', or
+    the JSON gets crowded out) — but they share `default_num_ctx()`."""
     from backend.ai.provider import get_settings
     s = get_settings() or {}
     effort = s.get('llm_reasoning_effort') or 'none'
@@ -69,7 +94,7 @@ def default_generation_opts() -> dict:
         effort = 'none'
     return {
         'reasoning_effort': effort,
-        'num_ctx': s.get('llm_num_ctx') or LLM_NUM_CTX,
+        'num_ctx': default_num_ctx(),
         'num_predict': s.get('llm_max_tokens') or LLM_MAX_TOKENS,
     }
 
@@ -186,21 +211,27 @@ def chat_json(prompt: str, system: str | None = None, model: str | None = None,
               max_tokens: int = JSON_MAX_TOKENS, reasoning_effort: str = 'none',
               num_ctx: int | None = None) -> dict:
     """Blocking JSON completion; returns the parsed object. Pass `model` to
-    override the default chat model, `num_ctx` to widen the context window.
+    override the default chat model.
+
+    `num_ctx` defaults to the shared `default_num_ctx()` and should almost never
+    be overridden — a value that differs from the chat window makes Ollama reload
+    the model (see `default_num_ctx`), which for these short structured calls
+    costs far more than the call itself.
 
     Reasoning is off by default (`reasoning_effort='none'`), and only then is the
     response constrained to JSON grammar. Pass 'low'/'medium'/'high'/'max' for
     graded reasoning — the grammar constraint is dropped and the JSON is recovered
-    from the prose the model writes. Give thinking a big enough `num_ctx`: a
-    reasoning model's thinking can otherwise fill the window before it writes the
-    answer, yielding empty content."""
+    from the prose the model writes. Thinking needs room inside the shared window:
+    a reasoning model's thinking can otherwise fill it before it writes the answer,
+    yielding empty content."""
     if reasoning_effort not in REASONING_EFFORTS:
         reasoning_effort = 'none'
     c = get_provider_config()
     model = model or c['ollama_model'] or DEFAULT_MODELS['ollama']
     content = _native_chat(
         _messages(prompt, system), model=model, reasoning_effort=reasoning_effort,
-        num_ctx=num_ctx, num_predict=max_tokens, json_format=True,
+        num_ctx=num_ctx or default_num_ctx(), num_predict=max_tokens,
+        json_format=True,
     )
     return _parse_json_response(content)
 
