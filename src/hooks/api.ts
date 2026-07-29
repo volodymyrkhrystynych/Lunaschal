@@ -1580,7 +1580,15 @@ export const api = {
       data: { strokes: string; width: number; height: number; snapshot: Blob }
     ) => {
       const form = new FormData();
-      form.set('strokes', data.strokes);
+      // Strokes travel as a *file* part, not a text field: Werkzeug caps
+      // non-file form fields at max_form_memory_size (500kB by default) and a
+      // densely written page can exceed that, which the server rejects with a
+      // 413 before the route ever runs.
+      form.set(
+        'strokes',
+        new Blob([data.strokes], { type: 'application/json' }),
+        'strokes.json'
+      );
       form.set('width', String(data.width));
       form.set('height', String(data.height));
       form.set('snapshot', data.snapshot, 'snapshot.png');

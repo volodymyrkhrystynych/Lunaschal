@@ -76,6 +76,36 @@ Support pen input in the journal, matching an iPad + stylus "pen on PDF planner"
 - Drawing/ink layer usable from a tablet (Apple Pencil on iPad), saved locally with the journal entry.
 - Open questions: render/annotate PDF in-app vs. import annotated PDFs; whether to attempt handwriting OCR so entries become searchable/taggable.
 
+## Paper — handwritten pages
+
+The Paper feature (`src/components/Paper/`, `backend/routes/paper.py`) works but is early. Ordered roughly by value.
+
+**Platform limit to know about:** Apple Pencil's **double-tap and squeeze are not exposed to web browsers** by any API — they're native-app only. Tool switching on iPad therefore relies on the toolbar, a **two-finger tap** on the page, or a keyboard. Styluses with real hardware buttons (Wacom / Surface Pen / XP-Pen) _do_ report an eraser tip (`button 5`) and barrel button (`button 2`), and those are wired up.
+
+### Correctness / must-fix
+
+- **Real eraser.** The eraser currently paints white strokes rather than removing ink. Consequences: erasing _grows_ the saved payload, it bakes white pixels into the snapshot, and it blocks any non-white page background. Should delete or split intersecting strokes instead (pure logic in `src/lib/paper.ts` + tests).
+- **Stroke pruning / compaction.** Even with simplification, pages only ever get heavier. Consider a binary or delta encoding, or gzipping the strokes blob, and cap the per-page size with a clear user-facing warning.
+- **Save conflict handling.** Two devices editing the same page last-write-wins today. Needs at minimum a revision check server-side (the client already tracks a revision for its own in-flight guard).
+- **`list_papers` is N+1** — two extra queries per paper, 60 papers per page of the grid. Fold into a single aggregate query.
+- **No `MAX_CONTENT_LENGTH`** anywhere, so uploads are unbounded in network mode. Needs a per-route limit rather than a global one (meeting audio and book uploads are legitimately large).
+- **`onPointerLeave` ends the stroke**, so dragging past the canvas edge splits one line into two.
+
+### Features
+
+- **Ruled / grid / dot page backgrounds**, and a PDF planner template underlay — ties into the journal drawing section above.
+- **Zoom and pan** (pinch-zoom), plus a wrist-guard / drawing-area offset for comfortable writing on a small screen.
+- **Title editing** — `api.paper.updateTitle` exists and is wired to no UI; the grid shows untitled thumbnails only.
+- **Page management**: reorder, duplicate, and insert a page in the middle (only append exists).
+- **More ink**: colour selection, per-tool colour memory, straight-line/shape snapping, lasso select + move.
+- **Export** a paper to PDF or PNG.
+- **Handwriting OCR** so pages become searchable and taggable — feeds Global search and the journal's tagging.
+
+### Recently fixed
+
+- Save payload exceeded Werkzeug 3.1's 500kB `max_form_memory_size` → `413`, which then made **every** navigation, the new-page button, and Back silently do nothing (the throw aborted them). Strokes now upload as a file part, `simplifyStroke` is actually applied (it was written but never called), save errors surface with a retry, and failures no longer block navigation.
+- Added debounced autosave, an explicit "+ Page" button, revision-guarded save completion, and stylus/keyboard eraser toggling.
+
 ## Journal — views & tagging
 
 - View modes: **calendar view**, **list view**, and **day view**.

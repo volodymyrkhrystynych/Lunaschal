@@ -54,6 +54,14 @@ _EXEMPT_PATHS = {'/api/health', '/api/auth/status', '/api/auth/login', '/api/aut
 def create_app():
     app = Flask(__name__)
 
+    # Werkzeug 3.1 buffers non-file multipart fields in memory and rejects the
+    # request with 413 once they exceed max_form_memory_size (500kB by default).
+    # Handwritten Paper pages post a large strokes payload; it now travels as a
+    # file part (see backend/routes/paper.py), but this headroom keeps any other
+    # oversized text field from failing the same way. MAX_CONTENT_LENGTH is left
+    # unset on purpose — meeting audio and book uploads are legitimately large.
+    app.config['MAX_FORM_MEMORY_SIZE'] = 16 * 1024 * 1024
+
     from backend.db.connection import init_db
     init_db()
 

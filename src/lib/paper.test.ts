@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest';
 import {
   commitStroke,
   emptyStrokeState,
+  eraseStroke,
   isHorizontalSwipe,
+  isTap,
   parseStrokes,
   redo,
   resolveSwipe,
   serializeStrokes,
+  simplifyStroke,
   strokeWidth,
   undo,
   type Stroke,
+  type StrokePoint,
+  type StrokeState,
 } from './paper';
 
 const stroke = (n: number): Stroke => ({
@@ -27,7 +32,7 @@ describe('undo/redo', () => {
     expect(s.redo).toHaveLength(0);
   });
 
-  it('undo moves the last stroke to the redo stack; redo restores it', () => {
+  it('undo restores the previous snapshot; redo restores the undone state', () => {
     let s = commitStroke(
       commitStroke(emptyStrokeState(), stroke(1)),
       stroke(2)
@@ -92,6 +97,162 @@ describe('stroke serialization', () => {
   });
 });
 
+describe('simplifyStroke', () => {
+  const pen = (points: StrokePoint[]): Stroke => ({
+    tool: 'pen',
+    size: 4,
+    points,
+  });
+
+  it('rounds coordinates to a tenth of a pixel and pressure to two places', () => {
+    const s = simplifyStroke(
+      pen([{ x: 1.23456, y: 9.87654, pressure: 0.123456 }])
+    );
+    expect(s.points).toEqual([{ x: 1.2, y: 9.9, pressure: 0.12 }]);
+  });
+
+  it('drops points closer together than the minimum distance', () => {
+    const dense = pen([
+      { x: 0, y: 0, pressure: 0.5 },
+      { x: 0.2, y: 0, pressure: 0.5 },
+      { x: 0.4, y: 0, pressure: 0.5 },
+      { x: 5, y: 0, pressure: 0.5 },
+    ]);
+    expect(simplifyStroke(dense).points).toEqual([
+      { x: 0, y: 0, pressure: 0.5 },
+      { x: 5, y: 0, pressure: 0.5 },
+    ]);
+  });
+
+  it('always keeps the final point so the stroke ends where it was drawn', () => {
+    const s = simplifyStroke(
+      pen([
+        { x: 0, y: 0, pressure: 0.5 },
+        { x: 10, y: 0, pressure: 0.5 },
+        { x: 10.3, y: 0, pressure: 0.5 },
+      ])
+    );
+    expect(s.points[s.points.length - 1]).toEqual({
+      x: 10.3,
+      y: 0,
+      pressure: 0.5,
+    });
+  });
+
+  it('collapses a point that rounding made an exact duplicate', () => {
+    const s = simplifyStroke(
+      pen([
+        { x: 3, y: 3, pressure: 0.5 },
+        { x: 3.01, y: 3.01, pressure: 0.5 },
+      ])
+    );
+    expect(s.points).toEqual([{ x: 3, y: 3, pressure: 0.5 }]);
+  });
+
+  it('clamps and defaults invalid pressure', () => {
+    const s = simplifyStroke(
+      pen([
+        { x: 0, y: 0, pressure: 5 },
+        { x: 20, y: 0, pressure: NaN },
+        { x: 40, y: 0, pressure: -2 },
+      ])
+    );
+    expect(s.points.map(p => p.pressure)).toEqual([1, 0.5, 0]);
+  });
+
+  it('shrinks a realistic dense stroke dramatically', () => {
+    // 2000 sub-pixel samples, as a real pointer firehose produces.
+    const points = Array.from({ length: 2000 }, (_, i) => ({
+      x: i * 0.05,
+      y: Math.sin(i / 50) * 3,
+      pressure: 0.5 + Math.sin(i / 7) * 0.001,
+    }));
+    const before = serializeStrokes([pen(points)]).length;
+    const after = serializeStrokes([simplifyStroke(pen(points))]).length;
+    expect(after).toBeLessThan(before / 4);
+  });
+
+  it('preserves the tool and size', () => {
+    const s = simplifyStroke({
+      tool: 'highlighter',
+      size: 22,
+      points: [{ x: 1, y: 1, pressure: 1 }],
+    });
+    expect(s.tool).toBe('highlighter');
+    expect(s.size).toBe(22);
+  });
+});
+
+describe('eraseStroke', () => {
+  const straightLine: Stroke = {
+    tool: 'pen',
+    size: 4,
+    points: [
+      { x: 0, y: 0, pressure: 0.5 },
+      { x: 10, y: 0, pressure: 0.5 },
+      { x: 20, y: 0, pressure: 0.5 },
+    ],
+  };
+
+  const eraserAcrossMiddle: Stroke = {
+    tool: 'eraser',
+    size: 8,
+    points: [
+      { x: 10, y: -10, pressure: 0.5 },
+      { x: 10, y: 10, pressure: 0.5 },
+    ],
+  };
+
+  it('splits a stroke into two pieces when erased through the middle', () => {
+    const state = commitStroke(emptyStrokeState(), straightLine);
+    const after = eraseStroke(state, eraserAcrossMiddle);
+    expect(after.strokes).toHaveLength(2);
+    expect(
+      after.strokes[0].points[after.strokes[0].points.length - 1].x
+    ).toBeLessThan(10);
+    expect(after.strokes[1].points[0].x).toBeGreaterThan(10);
+  });
+
+  it('removes a stroke entirely when the whole thing is under the eraser', () => {
+    const state = commitStroke(emptyStrokeState(), straightLine);
+    const after = eraseStroke(
+      state,
+      {
+        tool: 'eraser',
+        size: 100,
+        points: [
+          { x: 0, y: 0, pressure: 0.5 },
+          { x: 20, y: 0, pressure: 0.5 },
+        ],
+      },
+      50
+    );
+    expect(after.strokes).toHaveLength(0);
+  });
+
+  it('is undoable as one operation', () => {
+    const state = commitStroke(emptyStrokeState(), straightLine);
+    const after = eraseStroke(state, eraserAcrossMiddle);
+    const back = undo(after);
+    expect(back.strokes).toHaveLength(1);
+    expect(back.strokes[0].points).toEqual(straightLine.points);
+  });
+
+  it('does nothing if the eraser misses', () => {
+    const state = commitStroke(emptyStrokeState(), straightLine);
+    const after = eraseStroke(state, {
+      tool: 'eraser',
+      size: 2,
+      points: [
+        { x: 10, y: 100, pressure: 0.5 },
+        { x: 10, y: 110, pressure: 0.5 },
+      ],
+    });
+    expect(after.strokes).toHaveLength(1);
+    expect(after.strokes[0].points).toEqual(straightLine.points);
+  });
+});
+
 describe('resolveSwipe', () => {
   it('next within range advances without creating', () => {
     expect(resolveSwipe('next', 0, 3)).toEqual({ index: 1, createPage: false });
@@ -113,6 +274,12 @@ describe('gesture + width helpers', () => {
     expect(isHorizontalSwipe(-80, 10)).toBe(true);
     expect(isHorizontalSwipe(30, 10)).toBe(false); // too short
     expect(isHorizontalSwipe(80, 100)).toBe(false); // too vertical
+  });
+
+  it('recognizes a tap only when both still and brief', () => {
+    expect(isTap(2, 3, 100)).toBe(true);
+    expect(isTap(40, 0, 100)).toBe(false); // moved too far
+    expect(isTap(2, 3, 900)).toBe(false); // held too long
   });
 
   it('maps pressure to a clamped width', () => {

@@ -84,6 +84,76 @@ def test_save_page_persists_strokes_and_image(client, paper_root):
     assert first_url and first_url.startswith(f'/api/paper/pages/{page_id}/image')
 
 
+def test_save_page_accepts_strokes_as_a_file_part(client):
+    """The client uploads strokes as a file part, not a text field."""
+    paper_id = _create(client)
+    page_id = client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
+
+    strokes = [{'tool': 'pen', 'size': 4, 'points': [{'x': 1, 'y': 2, 'pressure': 0.5}]}]
+    r = client.put(
+        f'/api/paper/pages/{page_id}',
+        data={
+            'strokes': (io.BytesIO(json.dumps(strokes).encode()), 'strokes.json'),
+            'width': '800',
+            'height': '1000',
+            'snapshot': (io.BytesIO(b'PNG'), 'snapshot.png'),
+        },
+        content_type='multipart/form-data',
+    )
+    assert r.status_code == 200
+    content = client.get(f'/api/paper/pages/{page_id}').get_json()
+    assert json.loads(content['strokes']) == strokes
+
+
+def test_save_page_accepts_payload_larger_than_the_form_field_cap(client):
+    """A densely written page exceeds Werkzeug's 500kB max_form_memory_size.
+    Sent as a file part it must still be accepted (this was a 413)."""
+    paper_id = _create(client)
+    page_id = client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
+
+    strokes = [
+        {
+            'tool': 'pen',
+            'size': 4,
+            'points': [{'x': i / 10, 'y': i / 10, 'pressure': 0.5} for i in range(20000)],
+        }
+    ]
+    payload = json.dumps(strokes).encode()
+    assert len(payload) > 500_000  # would be rejected as a plain form field
+
+    r = client.put(
+        f'/api/paper/pages/{page_id}',
+        data={
+            'strokes': (io.BytesIO(payload), 'strokes.json'),
+            'width': '800',
+            'height': '1000',
+            'snapshot': (io.BytesIO(b'PNG'), 'snapshot.png'),
+        },
+        content_type='multipart/form-data',
+    )
+    assert r.status_code == 200
+    content = client.get(f'/api/paper/pages/{page_id}').get_json()
+    assert len(json.loads(content['strokes'])[0]['points']) == 20000
+
+
+def test_save_page_without_size_keeps_the_stored_coordinate_space(client):
+    """Omitting width/height must not NULL them — strokes are stored in that
+    space, so losing it would misplace every stroke on the next load."""
+    paper_id = _create(client)
+    page_id = client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
+    _save_page(client, page_id, [], width=800, height=1000)
+
+    r = client.put(
+        f'/api/paper/pages/{page_id}',
+        data={'strokes': (io.BytesIO(b'[]'), 'strokes.json')},
+        content_type='multipart/form-data',
+    )
+    assert r.status_code == 200
+    content = client.get(f'/api/paper/pages/{page_id}').get_json()
+    assert content['width'] == 800
+    assert content['height'] == 1000
+
+
 def test_update_title(client):
     paper_id = _create(client)
     r = client.patch(f'/api/paper/{paper_id}', json={'title': 'Sketches'})

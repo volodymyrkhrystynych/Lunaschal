@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import {
@@ -16,6 +16,9 @@ const TOOL_META: { id: StrokeTool; label: string; icon: string }[] = [
   { id: 'eraser', label: 'Eraser', icon: '⌫' },
 ];
 const SIZE_LABELS = ['S', 'M', 'L'];
+
+/** How long the pen must be still before the page is uploaded on its own. */
+const AUTOSAVE_DELAY_MS = 1500;
 
 interface PaperEditorProps {
   paperId: string;
@@ -38,7 +41,21 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     canUndo: false,
     canRedo: false,
     dirty: false,
+    revision: 0,
   });
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+
+  // The tool to return to when the eraser is toggled back off.
+  const prevToolRef = useRef<StrokeTool>('pen');
+  const toggleEraser = useCallback(() => {
+    setTool(current => {
+      if (current === 'eraser') return prevToolRef.current;
+      prevToolRef.current = current;
+      return 'eraser';
+    });
+  }, []);
 
   const { data: paper } = useQuery({
     queryKey: ['paper', paperId],
@@ -69,22 +86,49 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     },
   });
 
-  const saveCurrent = async () => {
-    if (!currentPage) return;
+  /** Upload the current page. Never throws: a save failure must not stop the
+   * caller, because unsaved strokes stay in the canvas's IndexedDB buffer and
+   * trapping the user on a page that won't save only risks losing more work. */
+  const saveCurrent = async (): Promise<boolean> => {
+    if (!currentPage || savingRef.current) return true;
     const data = await canvasRef.current?.getSaveData();
-    if (!data) return;
-    await api.paper.savePage(currentPage.id, data);
-    canvasRef.current?.markSaved();
-    // Refresh the grid thumbnails and this paper's page image URLs.
-    queryClient.invalidateQueries({ queryKey: ['paper'] });
+    if (!data) return true; // nothing dirty
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      await api.paper.savePage(currentPage.id, data);
+      // Guarded by the revision: strokes drawn during the upload stay dirty.
+      canvasRef.current?.markSaved(data.revision);
+      setSaveError(null);
+      // Only the grid needs refreshing. Invalidating the whole 'paper' prefix
+      // would also refetch the page content being drawn on right now.
+      queryClient.invalidateQueries({ queryKey: ['paper'], exact: true });
+      return true;
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Could not save this page');
+      return false;
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+    }
   };
+
+  // Effects and gesture callbacks read the save through a ref so they don't need
+  // to be torn down and re-registered on every render.
+  const saveRef = useRef(saveCurrent);
+  saveRef.current = saveCurrent;
 
   const navigate = async (direction: SwipeDirection) => {
     const res = resolveSwipe(direction, currentIndex, pages.length);
     if (res.index === currentIndex && !res.createPage) return;
     await saveCurrent();
     if (res.createPage) {
-      await addPage.mutateAsync();
+      try {
+        await addPage.mutateAsync();
+      } catch (e) {
+        setSaveError(e instanceof Error ? e.message : 'Could not add a page');
+        return;
+      }
     }
     setCurrentIndex(res.index);
   };
@@ -94,15 +138,71 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     onBack();
   };
 
+  /** Append a page and jump to it. `pages.length` is the pre-insert count, which
+   * is exactly the index the new page lands on. */
+  const addNewPage = async () => {
+    await saveCurrent();
+    const target = pages.length;
+    try {
+      await addPage.mutateAsync();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Could not add a page');
+      return;
+    }
+    setCurrentIndex(target);
+  };
+
+  // Debounced autosave. Every stroke bumps `revision`, which reschedules the
+  // timer, so the upload happens once the pen has been still for a moment.
+  useEffect(() => {
+    if (!canvasState.dirty) return;
+    const timer = setTimeout(() => void saveRef.current(), AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [canvasState.dirty, canvasState.revision]);
+
   // Best-effort save when the tab is hidden (iPad app-switch, screen lock).
   useEffect(() => {
     const onHidden = () => {
-      if (document.visibilityState === 'hidden') void saveCurrent();
+      if (document.visibilityState === 'hidden') void saveRef.current();
     };
     document.addEventListener('visibilitychange', onHidden);
     return () => document.removeEventListener('visibilitychange', onHidden);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage?.id]);
+  }, []);
+
+  // Keyboard tool switching / undo. Apple Pencil's double-tap isn't exposed to
+  // browsers, so this and the canvas's two-finger tap are the ways to reach the
+  // eraser without the toolbar.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (
+        el &&
+        (el.tagName === 'INPUT' ||
+          el.tagName === 'TEXTAREA' ||
+          el.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key.toLowerCase() === 'z') {
+          e.preventDefault();
+          if (e.shiftKey) canvasRef.current?.redo();
+          else canvasRef.current?.undo();
+        }
+        return;
+      }
+      if (e.key === 'e') {
+        e.preventDefault();
+        toggleEraser();
+      } else if (e.key === 'p') {
+        setTool('pen');
+      } else if (e.key === 'h') {
+        setTool('highlighter');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [toggleEraser]);
 
   const initialStrokes = content ? parseStrokes(content.strokes) : [];
   const initialSize =
@@ -194,6 +294,10 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
         </button>
 
         <div className="ml-auto flex items-center gap-2">
+          {saving && <span className="text-xs opacity-60">Saving…</span>}
+          {!saving && canvasState.dirty && (
+            <span className="text-xs opacity-60">Unsaved</span>
+          )}
           <button
             onClick={() => navigate('prev')}
             disabled={currentIndex === 0}
@@ -207,13 +311,37 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
           </span>
           <button
             onClick={() => navigate('next')}
+            disabled={currentIndex >= pages.length - 1}
             className={btn}
             title="Next page"
           >
             ›
           </button>
+          <button
+            onClick={addNewPage}
+            disabled={addPage.isPending}
+            className={btn}
+            title="Add a new page at the end"
+          >
+            ＋ Page
+          </button>
         </div>
       </div>
+
+      {saveError && (
+        <div className="flex items-center gap-3 px-3 py-2 text-sm bg-red-600/20 border-b border-red-600/40 shrink-0">
+          <span className="flex-1">
+            {saveError} — your strokes are still held on this device, so nothing
+            is lost.
+          </span>
+          <button onClick={() => void saveCurrent()} className={btn}>
+            Retry
+          </button>
+          <button onClick={() => setSaveError(null)} className={btn}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Drawing surface */}
       <div className="flex-1 relative overflow-hidden bg-neutral-200 flex items-stretch justify-center p-2">
@@ -228,6 +356,7 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
               tool={tool}
               size={currentSize}
               onSwipe={navigate}
+              onToggleEraser={toggleEraser}
               onStateChange={setCanvasState}
             />
           </div>

@@ -214,7 +214,14 @@ def save_page(page_id):
         return jsonify({'error': 'Not found'}), 404
     paper_id = page['paper_id']
 
-    strokes = request.form.get('strokes', '[]')
+    # The client uploads strokes as a file part so the payload isn't capped by
+    # Werkzeug's max_form_memory_size (500kB) — a densely written page exceeds
+    # that and gets a 413. Fall back to a plain field for older clients.
+    strokes_part = request.files.get('strokes')
+    if strokes_part is not None:
+        strokes = strokes_part.read().decode('utf-8', 'replace')
+    else:
+        strokes = request.form.get('strokes', '[]')
     width = request.form.get('width', type=int)
     height = request.form.get('height', type=int)
 
@@ -229,7 +236,13 @@ def save_page(page_id):
         image_path = str(path)
 
     now = int(time.time())
-    updates: dict = {'strokes': strokes, 'width': width, 'height': height, 'updated_at': now}
+    updates: dict = {'strokes': strokes, 'updated_at': now}
+    # Strokes are stored in the page's logical coordinate space, so blanking the
+    # size would misplace every stroke on the next load — only write real values.
+    if width:
+        updates['width'] = width
+    if height:
+        updates['height'] = height
     if image_path is not None:
         updates['image_path'] = image_path
     build_update(db, 'paper_pages', updates, 'id=?', (page_id,))
