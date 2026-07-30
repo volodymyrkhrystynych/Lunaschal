@@ -5,7 +5,7 @@ from backend.ai import recipes
 
 
 def test_parse_recipe_parses_result(monkeypatch):
-    def fake_chat_json(text, system=None):
+    def fake_chat_json(text, system=None, **kwargs):
         assert text == 'some scraped recipe text'
         assert system == recipes._RECIPE_SYSTEM
         return {

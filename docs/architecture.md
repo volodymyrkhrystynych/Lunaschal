@@ -48,7 +48,7 @@ flowchart LR
             R_STT["stt (transcribe / tts)"]
         end
         subgraph AI["AI layer — backend/ai/"]
-            PROVIDER["provider.py + llm.py<br/>openai · gemini · ollama"]
+            PROVIDER["provider.py + llm.py<br/>OpenAI SDK → llama-server"]
             AI_CHAT["chat · classifier · commands"]
             AI_EMBED["embeddings.py"]
             AI_LEARN["learning_generation<br/>learning_grading<br/>learning_verification"]
@@ -75,7 +75,7 @@ flowchart LR
     end
 
     subgraph EXT["External"]
-        LLMS["OpenAI / Gemini / Ollama"]
+        LLMS["llama-server (router :8080)<br/>gemma4 · gemma4-long · embed"]
         WHISPER["Whisper + Kokoro TTS<br/>(local or OpenAI API)"]
         PYANNOTE["pyannote (HF token)"]
         FORUMS["XenForo forums<br/>(SB / SV / QQ)"]

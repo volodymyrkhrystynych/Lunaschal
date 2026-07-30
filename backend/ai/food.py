@@ -1,4 +1,5 @@
 from backend.ai.llm import chat_json
+from backend.tags import normalize_tags
 from backend.ai.provider import is_ai_configured
 
 _MAX_INPUT_CHARS = 15000
@@ -28,6 +29,34 @@ _FOOD_SYSTEM = (
     "they did not describe."
 )
 
+# Everything but `notes` is nullable — the prompt explicitly asks for null when a
+# detail wasn't mentioned, and inventing a dish name or rating would be worse than
+# omitting it. `rating` gets its 1-5 bound enforced by the grammar, which is
+# exactly the check parse_food_entry has to do by hand below.
+_RECIPE_OBJECT = {
+    'type': 'object',
+    'properties': {
+        'title': {'type': 'string'},
+        'content': {'type': 'string'},
+        'tags': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 5},
+    },
+    'required': ['title', 'content'],
+}
+
+_FOOD_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'notes': {'type': ['string', 'null']},
+        'dish': {'type': ['string', 'null']},
+        'place': {'type': ['string', 'null']},
+        'rating': {'anyOf': [{'type': 'integer', 'minimum': 1, 'maximum': 5},
+                             {'type': 'null'}]},
+        'tags': {'type': 'array', 'items': {'type': 'string'}, 'maxItems': 5},
+        'recipe': {'anyOf': [_RECIPE_OBJECT, {'type': 'null'}]},
+    },
+    'required': ['notes'],
+}
+
 
 def parse_food_entry(text: str) -> dict | None:
     """Structure a raw food note into {dish, place, rating, notes, tags, recipe}.
@@ -40,7 +69,7 @@ def parse_food_entry(text: str) -> dict | None:
         return None
     text = text[:_MAX_INPUT_CHARS]
     try:
-        data = chat_json(text, system=_FOOD_SYSTEM)
+        data = chat_json(text, system=_FOOD_SYSTEM, schema=_FOOD_SCHEMA)
     except Exception as e:
         print(f'Food entry parsing failed: {e}')
         return None
@@ -55,7 +84,7 @@ def parse_food_entry(text: str) -> dict | None:
     if isinstance(rating, bool) or not isinstance(rating, int) or not (1 <= rating <= 5):
         rating = None
 
-    tags = [t.strip().lower() for t in (data.get('tags') or []) if isinstance(t, str) and t.strip()][:5]
+    tags = normalize_tags(data.get('tags'))[:5]
 
     recipe = None
     raw_recipe = data.get('recipe')
@@ -63,7 +92,7 @@ def parse_food_entry(text: str) -> dict | None:
         r_title = raw_recipe.get('title')
         r_content = raw_recipe.get('content')
         if isinstance(r_title, str) and r_title.strip() and isinstance(r_content, str) and r_content.strip():
-            r_tags = [t.strip().lower() for t in (raw_recipe.get('tags') or []) if isinstance(t, str) and t.strip()][:5]
+            r_tags = normalize_tags(raw_recipe.get('tags'))[:5]
             recipe = {'title': r_title.strip(), 'content': r_content.strip(), 'tags': r_tags}
 
     return {

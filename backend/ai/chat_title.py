@@ -16,6 +16,12 @@ _TITLE_SYSTEM = (
     'Return ONLY valid JSON: {"title": "<the title>"}'
 )
 
+_TITLE_SCHEMA = {
+    'type': 'object',
+    'properties': {'title': {'type': 'string'}},
+    'required': ['title'],
+}
+
 
 def _transcript(messages: list[dict]) -> str:
     """Flatten user/assistant messages into a plain transcript, skipping system
@@ -43,7 +49,7 @@ def generate_conversation_title(messages: list[dict]) -> str | None:
     try:
         if not is_ai_configured():
             return None
-        data = chat_json(transcript, system=_TITLE_SYSTEM)
+        data = chat_json(transcript, system=_TITLE_SYSTEM, schema=_TITLE_SCHEMA)
         title = data.get('title')
         if isinstance(title, str) and title.strip():
             return title.strip()

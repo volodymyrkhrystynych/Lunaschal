@@ -17,15 +17,15 @@ A self-hosted personal knowledge management desktop app with local AI. Journal, 
 
 ## Stack
 
-| Layer         | Tech                                                  |
-| ------------- | ----------------------------------------------------- |
-| Desktop shell | PyWebView                                             |
-| Frontend      | React 19, Vite, Tailwind CSS v4                       |
-| Backend       | Flask (Python)                                        |
-| API layer     | REST (JSON over HTTP) + React Query                   |
-| Database      | SQLite (`sqlite3` built-in, FTS5)                     |
-| AI / LLM      | `openai`, `google-generativeai`, `ollama` Python SDKs |
-| STT/TTS       | faster-whisper + kokoro-onnx (local) or OpenAI API    |
+| Layer         | Tech                                                        |
+| ------------- | ----------------------------------------------------------- |
+| Desktop shell | PyWebView                                                   |
+| Frontend      | React 19, Vite, Tailwind CSS v4                             |
+| Backend       | Flask (Python)                                              |
+| API layer     | REST (JSON over HTTP) + React Query                         |
+| Database      | SQLite (`sqlite3` built-in, FTS5)                           |
+| AI / LLM      | llama.cpp `llama-server` (router mode) via the `openai` SDK |
+| STT/TTS       | faster-whisper + kokoro-onnx (local) or OpenAI API          |
 
 ## Getting Started
 
@@ -33,7 +33,7 @@ A self-hosted personal knowledge management desktop app with local AI. Journal, 
 
 - Python 3.11+
 - Node.js 18+ and npm
-- An AI provider: OpenAI API key, Google Gemini API key, or [Ollama](https://ollama.com) running locally
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) built with CUDA, serving Gemma 4 26B A4B — see [docs/learnings/moe-expert-placement.md](docs/learnings/moe-expert-placement.md) for the build and tuning notes
 
 ### Install and run
 
@@ -76,11 +76,11 @@ Flask serves the built `dist/` from `http://127.0.0.1:5000` and PyWebView opens 
 
 Configure your provider in the Settings page. The active provider and model are stored in the database and can be changed at any time.
 
-| Provider      | Env var (fallback)      | Notes                                          |
-| ------------- | ----------------------- | ---------------------------------------------- |
-| OpenAI        | `OPENAI_API_KEY`        | Also used by STT/TTS when `STT_BACKEND=openai` |
-| Google Gemini | `GOOGLE_API_KEY`        | —                                              |
-| Ollama        | — (set URL in Settings) | No embeddings support yet                      |
+| Service                    | Configuration                 | Notes                                        |
+| -------------------------- | ----------------------------- | -------------------------------------------- |
+| llama-server (chat, local) | URL + model alias in Settings | Aliases come from `llama/presets.ini`        |
+| llama-server (embeddings)  | the `embed` preset            | nomic-embed-text-v1.5; powers Learning dedup |
+| OpenAI                     | `OPENAI_API_KEY`              | Only for STT/TTS when `STT_BACKEND=openai`   |
 
 ## Voice Input (STT + TTS)
 

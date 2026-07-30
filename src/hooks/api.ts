@@ -416,13 +416,13 @@ export interface DatedConversation {
 
 export interface AppSettings {
   hasHfToken: boolean;
-  ollamaUrl: string | null;
-  ollamaModel: string | null;
-  llmReasoningEffort: 'none' | 'low' | 'medium' | 'high' | 'max';
+  llamaUrl: string | null;
+  /** A llama-server router alias — a section name in llama/presets.ini, not a
+   * file name. */
+  llamaModel: string | null;
+  /** Gemma 4's thinking channel is on or off; there are no graded levels. */
+  llmThinking: boolean;
   llmMaxTokens: number;
-  /** The one context window, shared by chat, the briefing and every structured
-   * helper — a per-feature window would make Ollama reload the model. */
-  llmNumCtx: number;
   networkMode: boolean;
   networkCode: string | null;
   sttPasteKey: string | null;
@@ -441,7 +441,7 @@ export interface AppSettings {
   briefingHour: number;
   briefingModel: string | null;
   briefingGoals: string;
-  briefingReasoningEffort: 'none' | 'low' | 'medium' | 'high' | 'max';
+  briefingThinking: boolean;
   briefingMaxTokens: number;
 }
 
@@ -450,15 +450,23 @@ export interface WhisperModel {
   vramMb: number;
 }
 
-export interface OllamaModel {
+export interface LlamaModel {
   name: string;
-  vramMb: number;
+  /** Router lifecycle: unloaded | loading | loaded | downloading | sleeping. */
+  status: string;
+  inputModalities: string[];
+  /** Only known once the model is loaded. */
+  contextLength: number | null;
 }
 
 export interface GpuVram {
   available: boolean;
+  /** Non-LLM usage, measured once at backend startup. */
   baseMb?: number;
   totalMb?: number;
+  /** Live total, and the share held by llama-server. */
+  usedMb?: number | null;
+  llmMb?: number;
 }
 
 export interface AuthStatus {
@@ -759,7 +767,7 @@ export const api = {
     }) => patch<{ success: boolean }>('/api/settings/ai', data),
     regenerateCode: () =>
       post<{ networkCode: string }>('/api/settings/regenerate-code'),
-    ollamaModels: () => get<OllamaModel[]>('/api/settings/ollama-models'),
+    llamaModels: () => get<LlamaModel[]>('/api/settings/llama-models'),
     gpuVram: () => get<GpuVram>('/api/settings/gpu-vram'),
   },
 

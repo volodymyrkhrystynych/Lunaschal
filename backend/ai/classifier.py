@@ -27,6 +27,46 @@ Respond with valid JSON matching this schema:
 }"""
 
 
+_TAGS = {'type': 'array', 'items': {'type': 'string'}}
+
+# The intent enum is the whole point of constraining this call: every caller
+# switches on `intent`, and an off-menu value (or a missing key) silently
+# degrades to 'conversation'. The grammar makes those outcomes impossible.
+CLASSIFIER_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'intent': {
+            'type': 'string',
+            'enum': ['journal', 'calendar', 'question', 'conversation',
+                     'flashcard_request'],
+        },
+        'confidence': {'type': 'number', 'minimum': 0, 'maximum': 1},
+        'journalEntry': {'anyOf': [{
+            'type': 'object',
+            'properties': {'title': {'type': 'string'},
+                           'content': {'type': 'string'},
+                           'tags': _TAGS},
+            'required': ['title', 'content'],
+        }, {'type': 'null'}]},
+        'calendarEvent': {'anyOf': [{
+            'type': 'object',
+            'properties': {'title': {'type': 'string'},
+                           'description': {'type': 'string'},
+                           'date': {'type': 'string'},
+                           'time': {'type': 'string'},
+                           'tags': _TAGS},
+            'required': ['title', 'date'],
+        }, {'type': 'null'}]},
+        'flashcardRequest': {'anyOf': [{
+            'type': 'object',
+            'properties': {'topic': {'type': 'string'}},
+            'required': ['topic'],
+        }, {'type': 'null'}]},
+    },
+    'required': ['intent', 'confidence'],
+}
+
+
 def should_classify(message: str) -> bool:
     msg = message.lower().strip()
     if len(msg) < 20:
@@ -42,7 +82,7 @@ def classify_intent(message: str) -> dict:
     prompt = CLASSIFIER_PROMPT.replace('{TODAY}', date.today().isoformat()) + f'\n\nUser message:\n{message}'
 
     try:
-        return chat_json(prompt)
+        return chat_json(prompt, schema=CLASSIFIER_SCHEMA)
     except Exception as e:
         print(f'Classification error: {e}')
 

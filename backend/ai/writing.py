@@ -14,6 +14,12 @@ _SUMMARY_SYSTEM = (
     '- "content": the summary as clean markdown\n'
 )
 
+_SUMMARY_SCHEMA = {
+    'type': 'object',
+    'properties': {'title': {'type': 'string'}, 'content': {'type': 'string'}},
+    'required': ['title', 'content'],
+}
+
 
 def summarize_discussion(transcript: str, project_title: str, project_description: str | None = None) -> dict | None:
     """Summarize a discussion transcript into {title, content}, or None on failure."""
@@ -26,7 +32,7 @@ def summarize_discussion(transcript: str, project_title: str, project_descriptio
             return None
         description_line = f'\nStory description: {project_description}' if project_description else ''
         system = _SUMMARY_SYSTEM.format(project_title=project_title, description_line=description_line)
-        data = chat_json(transcript, system=system)
+        data = chat_json(transcript, system=system, schema=_SUMMARY_SCHEMA)
 
         title = (data.get('title') or '').strip() if isinstance(data.get('title'), str) else ''
         content = (data.get('content') or '').strip() if isinstance(data.get('content'), str) else ''

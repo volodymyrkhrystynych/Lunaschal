@@ -5,19 +5,19 @@ from backend.ai import writing
 from backend.ai.llm import EmptyCompletion
 
 
-def _configure_ollama(monkeypatch):
+def _configure_ai(monkeypatch):
     monkeypatch.setattr(writing, 'is_ai_configured', lambda: True)
 
 
 def test_summarize_discussion_parses_result(monkeypatch):
     captured = {}
 
-    def fake_chat_json(transcript, system=None):
+    def fake_chat_json(transcript, system=None, **kwargs):
         captured['transcript'] = transcript
         captured['system'] = system
         return {'title': 'Villain twist', 'content': '- Brother is the villain'}
 
-    _configure_ollama(monkeypatch)
+    _configure_ai(monkeypatch)
     monkeypatch.setattr(writing, 'chat_json', fake_chat_json)
 
     result = writing.summarize_discussion(
@@ -33,11 +33,11 @@ def test_summarize_discussion_parses_result(monkeypatch):
 def test_summarize_discussion_truncates_keeping_tail(monkeypatch):
     captured = {}
 
-    def fake_chat_json(transcript, system=None):
+    def fake_chat_json(transcript, system=None, **kwargs):
         captured['transcript'] = transcript
         return {'title': 'T', 'content': 'C'}
 
-    _configure_ollama(monkeypatch)
+    _configure_ai(monkeypatch)
     monkeypatch.setattr(writing, 'chat_json', fake_chat_json)
 
     transcript = 'OLD ' * 10000 + 'RECENT DECISION'
@@ -48,24 +48,24 @@ def test_summarize_discussion_truncates_keeping_tail(monkeypatch):
 
 
 def test_summarize_discussion_malformed_json(monkeypatch):
-    def fake_chat_json(transcript, system=None):
+    def fake_chat_json(transcript, system=None, **kwargs):
         raise EmptyCompletion('model returned non-JSON content')
 
-    _configure_ollama(monkeypatch)
+    _configure_ai(monkeypatch)
     monkeypatch.setattr(writing, 'chat_json', fake_chat_json)
 
     assert writing.summarize_discussion('Author: hi', 'My Story') is None
 
 
 def test_summarize_discussion_missing_fields(monkeypatch):
-    _configure_ollama(monkeypatch)
+    _configure_ai(monkeypatch)
     monkeypatch.setattr(writing, 'chat_json', lambda t, system=None: {'title': 'Only a title'})
 
     assert writing.summarize_discussion('Author: hi', 'My Story') is None
 
 
 def test_summarize_discussion_empty_transcript(monkeypatch):
-    _configure_ollama(monkeypatch)
+    _configure_ai(monkeypatch)
     assert writing.summarize_discussion('   ', 'My Story') is None
 
 

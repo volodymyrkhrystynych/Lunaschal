@@ -23,10 +23,17 @@ logger = logging.getLogger(__name__)
 bp = Blueprint('stt', __name__)
 
 # Env-var defaults — used as fallback when no DB setting exists
-STT_BACKEND      = os.environ.get('STT_BACKEND', 'local').lower()
+#
+# `parakeet` is the default backend, and Whisper defaults to CPU, because
+# llama-server now holds most of the 8 GB card for as long as it runs (unlike
+# Ollama, which released VRAM after keep_alive). A CUDA Whisper alongside it
+# means an OOM for whichever loads second — and losing a recording to a failed
+# transcription is worse than a slower one. Both are still selectable in
+# Settings for anyone who unloads the model first.
+STT_BACKEND      = os.environ.get('STT_BACKEND', 'parakeet').lower()
 TTS_BACKEND      = os.environ.get('TTS_BACKEND', 'local').lower()
 MODEL_NAME       = os.environ.get('WHISPER_MODEL', 'turbo')
-DEVICE           = os.environ.get('WHISPER_DEVICE', 'cuda')
+DEVICE           = os.environ.get('WHISPER_DEVICE', 'cpu')
 # Parakeet TDT runs on CPU via onnx-asr (onnxruntime). English-only, no VRAM.
 PARAKEET_MODEL   = os.environ.get('PARAKEET_MODEL', 'nemo-parakeet-tdt-0.6b-v2')
 TTS_VOICE        = os.environ.get('TTS_VOICE', 'af_heart')

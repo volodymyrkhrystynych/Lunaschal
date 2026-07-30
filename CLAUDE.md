@@ -34,8 +34,13 @@ npm run dev:client       # frontend only (vite)
 npm run dev:desktop      # desktop window via PyWebView pointed at the Vite dev server
 python main.py           # production: build first with npm run build, then desktop window
 
+# Local inference (llama.cpp). Prefer the systemd unit — the model takes tens of
+# seconds to load, and Flask's --debug reloader restarts constantly.
+./llama/start-llama.sh   # llama-server, router mode, llama/presets.ini, :8080
+systemctl --user status lunaschal-llama   # see llama/lunaschal-llama.service to install
+
 # Convenience launchers
-./start.sh               # kills stale :5000/:5173, starts ollama if needed, npm run dev
+./start.sh               # kills stale :5000/:5173, starts llama-server if needed, npm run dev
 ./start-server.sh        # network mode (NETWORK_MODE=1, requires LUNASCHAL_PASSWORD)
 ./start-node.sh          # frontend-only on a weak machine; proxies /api to a remote
                          # backend via VITE_API_PROXY_TARGET/LUNASCHAL_URL (Tailscale)
@@ -61,7 +66,7 @@ Lunaschal is a single-user personal life-management desktop app with AI integrat
 - **Backend**: Flask (Python) — in `backend/`
 - **API layer**: REST JSON + React Query; typed client in `src/hooks/api.ts` (one `api.*` namespace per feature)
 - **Database**: SQLite via Python's built-in `sqlite3`; stored at `./data/lunaschal.db`
-- **AI**: `openai` and `google-generativeai` Python SDKs. Ollama is reached two ways: the OpenAI-compat `/v1` client (embeddings, `chat_with_tools`) and — for the main generation helpers — its **native `/api/chat`** endpoint over `requests`, because only the native API exposes `num_ctx` and `think` per request (see [docs/learnings/ollama-reasoning-empty-output.md](docs/learnings/ollama-reasoning-empty-output.md))
+- **AI**: local inference only, via **llama.cpp's `llama-server` in router mode** (`llama/presets.ini`, started by `llama/start-llama.sh` or the systemd unit beside it). It speaks the OpenAI API, so the whole `backend/ai/` layer goes through the `openai` SDK pointed at `http://localhost:8080` — one code path, no native-endpoint shim. The model is **Gemma 4 26B A4B** (MoE, 25.2B total / 3.8B active), served with its routed expert tensors in system RAM and everything else in VRAM; that placement is the single biggest performance decision in the project, and [docs/learnings/moe-expert-placement.md](docs/learnings/moe-expert-placement.md) explains why
 - `drizzle.config.ts` is vestigial (points at a `server/db/schema.ts` that no longer exists) — the schema source of truth is `backend/db/schema.sql`
 
 ### Entry Points
@@ -94,12 +99,12 @@ Long-running work (fic downloads, curated-tag scans, meeting transcription) runs
 
 ### AI Layer (`backend/ai/`)
 
-- `provider.py` — resolves the active AI provider and model from DB settings (or env vars `OPENAI_API_KEY`, `GOOGLE_API_KEY`); supports `openai`, `gemini`, `ollama`
-- `llm.py` — shared generation helpers over Ollama's **native `/api/chat`** (`requests`): `chat_json` (JSON mode), `chat_text`, `chat_messages`, plus `_native_chat`/`_native_chat_stream`. Each takes reasoning level + `num_ctx` + `num_predict` (`default_generation_opts()` reads these from settings). The JSON grammar constraint is **dropped when thinking is on** (it otherwise makes reasoning models emit an empty `{}`); `_parse_json_response` tolerates fenced/prose JSON. `chat_with_tools` stays on the OpenAI-compat client (raises `ToolCallingUnsupported` for gemini)
+- `provider.py` — resolves the llama-server URL and model alias from DB settings (`llama_url` / `llama_model`, defaulting to `http://localhost:8080` and `gemma4`). Model names are **router aliases** — section names in `llama/presets.ini` — not file names or Ollama tags
+- `llm.py` — shared generation helpers over llama-server's OpenAI API: `chat_json`, `chat_text`, `chat_messages`, `chat_stream_deltas`, `chat_with_tools`. Two things to know: **`chat_json` takes a `schema=`** (JSON Schema) which llama-server compiles to a GBNF grammar — every call site passes one, and closed vocabularies like the journal tag list are enforced by the grammar rather than requested in the prompt; and **thinking is a boolean, not a level** (`enable_thinking` via `chat_template_kwargs`), sent explicitly because Gemma 4's template defaults it _on_. There is deliberately **no per-request context window** — llama-server fixes it at load time. `_parse_json_response` remains as a fallback for schema-less calls
 - `chat.py` — streaming chat generator consumed by the `/api/chat/stream` route
 - `classifier.py` — classifies chat messages into intents: `journal | calendar | question | flashcard_request | conversation`; extracts structured data when saving entries
-- `embeddings.py` — text embeddings for Learning answer-dedup; OpenAI (`text-embedding-3-small`), Gemini (`text-embedding-004`), Ollama (`nomic-embed-text`)
-- `journal.py` — entry polish/metadata; `classify_entry_for_tag(content, tag_name) -> bool` for the curated-tag background scan (CPU-pinned for Ollama via `_CPU_OPTIONS`)
+- `embeddings.py` — text embeddings for Learning answer-dedup, via the `embed` router alias. Still **nomic-embed-text-v1.5** on purpose: the float32 vectors already stored on `learning_cards` are compared by cosine similarity, so a different embedding model would silently invalidate every stored vector
+- `journal.py` — entry polish/metadata (tags constrained to the closed `JOURNAL_TAGS` vocabulary by schema enum); `classify_entry_for_tag(content, tag_name) -> bool` for the curated-tag background scan
 - `learning_generation.py` / `learning_grading.py` / `learning_verification.py` — flashcard generation, claim-coverage grading, MCP-grounded verification (see Learning below)
 - `mcp_client.py` — asyncio bridge to the `mcp` SDK (per-request sessions, stdio/http transports), MCP→OpenAI tool mapping
 - `writing.py` — `summarize_discussion` for the Writing module
@@ -166,7 +171,7 @@ Append-only log of everything the STT pipeline transcribed (source/app/detail). 
 
 - **Curated tags** — user-defined tags managed in Settings → Tags tab. Each new tag triggers a background daemon thread that calls `classify_entry_for_tag` per journal entry and writes matches to `journal_entry_curated_tags`. Progress tracked in-memory (`_scan_progress` dict in `curated_tags.py`); the list endpoint merges it in. Tags appear as filter pill buttons in the Journal view; entries display curated tags (`#name`, neutral style) separately from freeform AI tags (accent color).
 - **Journal entries** keep `raw_content` (as typed/spoken) alongside AI-polished `content`; polish and metadata generation run as background threads after save. The Journal feed also interleaves fic-reading commentary via `journal_entry_fic_refs`.
-- **Settings** owns more than AI keys: STT/TTS backends and Whisper model/device, voice + in-app shortcuts, curated tags, fanfic site cookies, HF token (diarization), meeting echo-cancel, task nudges, prevent-sleep (a `systemd-inhibit` subprocess), and a GPU **VRAM budget** view (baseline measured at startup, thresholds in `src/lib/vram.ts`)
+- **Settings** owns more than AI keys: STT/TTS backends and Whisper model/device, voice + in-app shortcuts, curated tags, fanfic site cookies, HF token (diarization), meeting echo-cancel, task nudges, prevent-sleep (a `systemd-inhibit` subprocess), and a GPU **VRAM budget** view (non-LLM baseline measured at startup; the LLM's share and the card total are read **live** from `nvidia-smi`, because with expert tensors split across GPU and RAM a model's footprint can't be derived from its file size — thresholds in `src/lib/vram.ts`)
 - **DB path** defaults to `./data/lunaschal.db`; override with `DATABASE_URL` env var
 - **JWT secret** defaults to a hardcoded dev string; set `JWT_SECRET` env var in production
 - **Flask port** is always 5000; Vite dev server is 5173 and proxies `/api` to Flask (`VITE_API_PROXY_TARGET` overrides the target for split-machine dev). The Vite watcher must keep ignoring `data/**` — WAL files churn on every request and previously OOM'd the dev server.
@@ -176,7 +181,7 @@ A Mermaid diagram of the module structure lives in `docs/architecture.md`.
 
 ## STT (Speech-to-Text)
 
-STT/TTS is embedded directly in the Flask backend (`backend/routes/stt.py`). STT has three backends — `local` (openai-whisper, GPU/CPU), `parakeet` (NVIDIA Parakeet TDT via onnx-asr, CPU-only, English, 0 VRAM), or `openai` (cloud). TTS has two — local (kokoro-onnx) or OpenAI API. The Parakeet path decodes any input (incl. the browser's webm) to 16 kHz mono via ffmpeg before handing the waveform to `onnx-asr`.
+STT/TTS is embedded directly in the Flask backend (`backend/routes/stt.py`). STT has three backends — `parakeet` (NVIDIA Parakeet TDT via onnx-asr, CPU-only, English, 0 VRAM; **the default**), `local` (openai-whisper, GPU/CPU), or `openai` (cloud). Parakeet is the default and Whisper defaults to CPU because llama-server holds most of the 8 GB card for as long as it runs — unlike Ollama, which released VRAM after `keep_alive` — so a CUDA Whisper alongside it means an OOM for whichever loads second. A diarized meeting (pyannote) needs real VRAM and currently requires unloading the model first (`POST /models/unload` on the router). TTS has two — local (kokoro-onnx) or OpenAI API. The Parakeet path decodes any input (incl. the browser's webm) to 16 kHz mono via ffmpeg before handing the waveform to `onnx-asr`.
 
 ```bash
 # --- Local setup (GPU machine) ---
@@ -215,16 +220,16 @@ The Flask backend handles `POST /api/transcribe` and `POST /api/tts` directly (n
 
 STT/TTS env vars summary:
 
-| Var                | Default                     | Notes                                                                 |
-| ------------------ | --------------------------- | --------------------------------------------------------------------- |
-| `STT_BACKEND`      | `local`                     | `local`, `parakeet`, or `openai`                                      |
-| `TTS_BACKEND`      | `local`                     | `local` or `openai`                                                   |
-| `PARAKEET_MODEL`   | `nemo-parakeet-tdt-0.6b-v2` | onnx-asr model id when `STT_BACKEND=parakeet`                         |
-| `OPENAI_API_KEY`   | —                           | Required for openai backends                                          |
-| `OPENAI_TTS_VOICE` | `nova`                      | alloy / echo / fable / onyx / nova / shimmer                          |
-| `WHISPER_MODEL`    | `turbo`                     | Local STT only (tiny/base/small/medium/large/large-v2/large-v3/turbo) |
-| `WHISPER_DEVICE`   | `cuda`                      | Local STT only (`cuda` or `cpu`)                                      |
-| `STT_LISTENER`     | —                           | Set to `1` to auto-start the voice listener as a subprocess of Flask  |
+| Var                | Default                     | Notes                                                                                                                     |
+| ------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `STT_BACKEND`      | `parakeet`                  | `parakeet`, `local`, or `openai`. Defaults to CPU-only Parakeet — see above                                               |
+| `TTS_BACKEND`      | `local`                     | `local` or `openai`                                                                                                       |
+| `PARAKEET_MODEL`   | `nemo-parakeet-tdt-0.6b-v2` | onnx-asr model id when `STT_BACKEND=parakeet`                                                                             |
+| `OPENAI_API_KEY`   | —                           | Required for openai backends                                                                                              |
+| `OPENAI_TTS_VOICE` | `nova`                      | alloy / echo / fable / onyx / nova / shimmer                                                                              |
+| `WHISPER_MODEL`    | `turbo`                     | Local STT only (tiny/base/small/medium/large/large-v2/large-v3/turbo)                                                     |
+| `WHISPER_DEVICE`   | `cpu`                       | Local STT only (`cuda` or `cpu`). Defaults to CPU because llama-server holds most of the 8 GB card for as long as it runs |
+| `STT_LISTENER`     | —                           | Set to `1` to auto-start the voice listener as a subprocess of Flask                                                      |
 
 ### Morning Check-in (`stt/morning_checkin.py`)
 

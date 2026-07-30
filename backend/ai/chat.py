@@ -1,8 +1,7 @@
 import time
 from datetime import date, datetime, timedelta
 
-from backend.ai.provider import get_provider_config, DEFAULT_MODELS
-from backend.ai.llm import default_generation_opts, _native_chat_stream
+from backend.ai.llm import chat_stream_deltas
 
 SYSTEM_PROMPT = """You are Lunaschal, a warm, curious companion the user chats with throughout the day.
 
@@ -177,9 +176,6 @@ def chat_stream(
 ):
     """`with_time_context=False` for one-shot utility calls (transcript cleanup)
     whose prompts demand an exact output shape and shouldn't carry a clock."""
-    c = get_provider_config()
-    model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-
     system = system_prompt or SYSTEM_PROMPT
     if with_time_context:
         system = f"{system}\n\n{format_now_context()}"
@@ -190,4 +186,4 @@ def chat_stream(
         messages = [{'role': m.get('role'), 'content': m.get('content', '')} for m in messages]
 
     all_messages = [{'role': 'system', 'content': system}] + messages
-    yield from _native_chat_stream(all_messages, model=model, **default_generation_opts())
+    yield from chat_stream_deltas(all_messages)

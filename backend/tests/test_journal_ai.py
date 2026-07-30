@@ -24,7 +24,7 @@ def test_polish_passes_system_prompt_and_returns_cleaned_text(monkeypatch):
 
 
 def test_metadata_parses_and_caps_tags(monkeypatch):
-    def fake_chat_json(prompt, system=None):
+    def fake_chat_json(prompt, system=None, **kwargs):
         assert prompt == 'some content'
         assert system == journal._METADATA_SYSTEM
         return {'title': 'A title', 'tags': ['work', 'health', 'family', 'goals']}

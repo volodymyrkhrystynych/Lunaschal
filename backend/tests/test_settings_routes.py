@@ -96,46 +96,45 @@ def test_patch_settings_updates_nudge_fields(client):
 
 def test_get_settings_llm_generation_defaults(client):
     data = client.get('/api/settings').get_json()
-    assert data['llmReasoningEffort'] == 'none'
+    assert data['llmThinking'] is False
     assert data['llmMaxTokens'] == 4096
-    assert data['llmNumCtx'] == 8192
 
 
-def test_patch_settings_updates_llm_reasoning_max_tokens_and_num_ctx(client):
+def test_patch_settings_updates_llm_thinking_and_max_tokens(client):
     resp = client.patch(
         '/api/settings/ai',
-        json={'llmReasoningEffort': 'low', 'llmMaxTokens': 2000, 'llmNumCtx': 12288},
+        json={'llmThinking': True, 'llmMaxTokens': 2000},
     )
     assert resp.status_code == 200
 
     data = client.get('/api/settings').get_json()
-    assert data['llmReasoningEffort'] == 'low'
+    assert data['llmThinking'] is True
     assert data['llmMaxTokens'] == 2000
-    assert data['llmNumCtx'] == 12288
 
 
-def test_patch_settings_clamps_num_ctx(client):
-    client.patch('/api/settings/ai', json={'llmNumCtx': 10})
-    assert client.get('/api/settings').get_json()['llmNumCtx'] == 512  # floor
-    client.patch('/api/settings/ai', json={'llmNumCtx': 9_999_999})
-    assert client.get('/api/settings').get_json()['llmNumCtx'] == 131072  # ceiling
-
-
-def test_briefing_has_no_separate_context_window(client):
-    """One shared window only — a per-feature num_ctx would reload the model."""
+def test_settings_expose_no_context_window(client):
+    """The window is fixed when llama-server loads the model (ctx-size in
+    llama/presets.ini), so it is deliberately not an app setting. A stale client
+    still sending the retired knobs must be ignored rather than 500."""
     data = client.get('/api/settings').get_json()
+    assert 'llmNumCtx' not in data
     assert 'briefingNumCtx' not in data
 
-    client.patch('/api/settings/ai', json={'llmNumCtx': 16384})
-    # A stale client still sending the retired knob must not move anything.
-    client.patch('/api/settings/ai', json={'briefingNumCtx': 4096})
-    assert client.get('/api/settings').get_json()['llmNumCtx'] == 16384
+    assert client.patch(
+        '/api/settings/ai', json={'llmNumCtx': 16384, 'briefingNumCtx': 4096},
+    ).status_code == 200
+    data = client.get('/api/settings').get_json()
+    assert 'llmNumCtx' not in data
+    assert 'briefingNumCtx' not in data
 
 
-def test_patch_settings_rejects_invalid_llm_reasoning_and_clamps_tokens(client):
-    client.patch('/api/settings/ai', json={'llmReasoningEffort': 'high'})
-    client.patch('/api/settings/ai', json={'llmReasoningEffort': 'ludicrous'})
-    assert client.get('/api/settings').get_json()['llmReasoningEffort'] == 'high'
+def test_patch_settings_coerces_thinking_to_bool_and_clamps_tokens(client):
+    # Any truthy/falsy value lands as a real boolean rather than being rejected:
+    # thinking has no enum of valid levels to validate against any more.
+    client.patch('/api/settings/ai', json={'llmThinking': 1})
+    assert client.get('/api/settings').get_json()['llmThinking'] is True
+    client.patch('/api/settings/ai', json={'llmThinking': 0})
+    assert client.get('/api/settings').get_json()['llmThinking'] is False
 
     client.patch('/api/settings/ai', json={'llmMaxTokens': 0})
     assert client.get('/api/settings').get_json()['llmMaxTokens'] == 256
@@ -143,31 +142,22 @@ def test_patch_settings_rejects_invalid_llm_reasoning_and_clamps_tokens(client):
 
 def test_get_settings_briefing_generation_defaults(client):
     data = client.get('/api/settings').get_json()
-    # Thinking is off by default (reasoning models otherwise blank the JSON);
-    # the token ceiling is generous since the briefing runs overnight.
-    assert data['briefingReasoningEffort'] == 'none'
+    # Thinking off by default even here; the token ceiling is generous since the
+    # briefing runs overnight.
+    assert data['briefingThinking'] is False
     assert data['briefingMaxTokens'] == 16384
 
 
-def test_patch_settings_updates_briefing_reasoning_and_max_tokens(client):
+def test_patch_settings_updates_briefing_thinking_and_max_tokens(client):
     resp = client.patch(
         '/api/settings/ai',
-        json={'briefingReasoningEffort': 'high', 'briefingMaxTokens': 8000},
+        json={'briefingThinking': True, 'briefingMaxTokens': 8000},
     )
     assert resp.status_code == 200
 
     data = client.get('/api/settings').get_json()
-    assert data['briefingReasoningEffort'] == 'high'
+    assert data['briefingThinking'] is True
     assert data['briefingMaxTokens'] == 8000
-
-
-def test_patch_settings_rejects_invalid_reasoning_effort(client):
-    client.patch('/api/settings/ai', json={'briefingReasoningEffort': 'medium'})
-    assert client.get('/api/settings').get_json()['briefingReasoningEffort'] == 'medium'
-
-    # An out-of-range value is ignored, leaving the prior valid value intact.
-    client.patch('/api/settings/ai', json={'briefingReasoningEffort': 'turbo'})
-    assert client.get('/api/settings').get_json()['briefingReasoningEffort'] == 'medium'
 
 
 def test_patch_settings_clamps_briefing_max_tokens(client):
@@ -182,13 +172,49 @@ def test_patch_settings_clamps_briefing_max_tokens(client):
     assert client.get('/api/settings').get_json()['briefingMaxTokens'] == 65536
 
 
-def test_gpu_vram_route_serves_cached_snapshot(client):
+def test_gpu_vram_route_serves_snapshot_plus_live_reading(client, monkeypatch):
     settings._gpu_base_vram_mb = 3303
     settings._gpu_total_vram_mb = 8192
+    monkeypatch.setattr(settings, '_gpu_used_total_mb', lambda: (7280, 8192))
+    monkeypatch.setattr(settings, '_llm_server_vram_mb', lambda: 5544)
 
     resp = client.get('/api/settings/gpu-vram')
     assert resp.status_code == 200
-    assert resp.get_json() == {'available': True, 'baseMb': 3303, 'totalMb': 8192}
+    # baseMb is the startup snapshot; usedMb/llmMb are read live, because the
+    # model's GPU share depends on n-cpu-moe and the KV cache rather than on
+    # anything the app can derive.
+    assert resp.get_json() == {
+        'available': True, 'baseMb': 3303, 'totalMb': 8192,
+        'usedMb': 7280, 'llmMb': 5544,
+    }
+
+
+def test_measure_base_gpu_vram_excludes_the_inference_server(monkeypatch):
+    """llama-server is started independently of Flask, so it may already hold
+    VRAM at startup. Counting it as somebody else's "base" usage would blame the
+    browser for the model's 5.5 GB."""
+    settings._gpu_base_vram_mb = None
+    settings._gpu_total_vram_mb = None
+    monkeypatch.setattr(settings, '_gpu_used_total_mb', lambda: (7280, 8192))
+    monkeypatch.setattr(settings, '_llm_server_vram_mb', lambda: 5544)
+
+    settings.measure_base_gpu_vram()
+    assert settings._gpu_base_vram_mb == 7280 - 5544
+    assert settings._gpu_total_vram_mb == 8192
+
+
+def test_llm_server_vram_sums_matching_processes(monkeypatch):
+    def fake_run(*args, **kwargs):
+        return SimpleNamespace(stdout=(
+            '/usr/lib/firefox/firefox, 213\n'
+            '/home/u/.local/opt/llama.cpp/build/bin/llama-server, 5544\n'
+            '/usr/lib/ollama/llama-server, 100\n'
+            'Hyprland, 399\n'
+        ))
+
+    monkeypatch.setattr(settings.subprocess, 'run', fake_run)
+    # Both inference servers count; the desktop apps don't.
+    assert settings._llm_server_vram_mb() == 5644
 
 
 def test_gpu_vram_route_unavailable_when_not_measured(client):

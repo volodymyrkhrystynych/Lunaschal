@@ -2,6 +2,7 @@ import logging
 import re
 
 from backend.ai.llm import chat_json, chat_text
+from backend.tags import normalize_tags
 from backend.ai.provider import is_ai_configured
 
 logger = logging.getLogger(__name__)
@@ -90,18 +91,38 @@ def _clean_polish_output(text: str) -> str:
     return _unwrap_quotes(text)
 
 
+# The closed tag vocabulary. Single source of truth: it is both interpolated into
+# the prompt and used as the schema enum below, so the two can't drift apart.
+JOURNAL_TAGS = (
+    'work', 'health', 'fitness', 'relationships', 'family', 'finances', 'home',
+    'learning', 'mood', 'reflection', 'gratitude', 'anxiety', 'motivation',
+    'growth', 'travel', 'reading', 'creative', 'coding', 'goals', 'plans',
+    'decisions', 'ideas', 'milestone', 'problem', 'memory',
+)
+
 _METADATA_SYSTEM = (
     "You generate metadata for personal journal entries.\n"
     "Return ONLY valid JSON with two fields:\n"
     '- "title": a concise 4-8 word title capturing the main theme\n'
     '- "tags": an array of 1-3 tags chosen ONLY from this exact list:\n'
-    "  work, health, fitness, relationships, family, finances, home, learning,\n"
-    "  mood, reflection, gratitude, anxiety, motivation, growth,\n"
-    "  travel, reading, creative, coding,\n"
-    "  goals, plans, decisions, ideas,\n"
-    "  milestone, problem, memory\n"
+    f"  {', '.join(JOURNAL_TAGS)}\n"
     'Example: {"title": "Productive morning coding session", "tags": ["work", "coding"]}'
 )
+
+# The enum turns "chosen ONLY from this exact list" from a prompt request into a
+# grammar guarantee — an off-vocabulary tag can no longer be emitted at all.
+_METADATA_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'title': {'type': 'string'},
+        'tags': {
+            'type': 'array',
+            'items': {'type': 'string', 'enum': list(JOURNAL_TAGS)},
+            'maxItems': 3,
+        },
+    },
+    'required': ['title', 'tags'],
+}
 
 
 def generate_journal_metadata(content: str) -> dict:
@@ -110,8 +131,11 @@ def generate_journal_metadata(content: str) -> dict:
     try:
         if not is_ai_configured():
             return {}
-        data = chat_json(content, system=_METADATA_SYSTEM)
-        valid_tags = [t.strip() for t in (data.get('tags') or []) if isinstance(t, str) and t.strip()][:3]
+        data = chat_json(content, system=_METADATA_SYSTEM, schema=_METADATA_SCHEMA)
+        # normalize_tags dedupes, which the grammar makes necessary: constrained to
+        # a short enum the model will happily emit ["problem", "problem"] to fill
+        # the array, and nothing downstream would have caught it.
+        valid_tags = normalize_tags(data.get('tags'))[:3]
         title = (data.get('title') or '').strip() or None
         return {'title': title, 'tags': valid_tags or None}
     except Exception as e:

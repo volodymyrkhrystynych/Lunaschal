@@ -32,6 +32,23 @@ or reword actual content — keep the substance verbatim. Return only the cleane
 text, nothing else."""
 
 
+CARDS_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'cards': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {'question': {'type': 'string'},
+                               'answer': {'type': 'string'}},
+                'required': ['question', 'answer'],
+            },
+        },
+    },
+    'required': ['cards'],
+}
+
+
 def _parse_cards(result: dict) -> list[dict]:
     cards = result.get('cards') or []
     return [
@@ -45,7 +62,7 @@ def generate_cards(text: str, direction: str | None = None) -> list[dict]:
     prompt = f'Source material:\n\n{text}'
     if direction:
         prompt += f'\n\nAdditional instructions from the user: {direction}'
-    return _parse_cards(chat_json(prompt, system=GENERATE_SYSTEM))
+    return _parse_cards(chat_json(prompt, system=GENERATE_SYSTEM, schema=CARDS_SCHEMA))
 
 
 def regenerate_cards(
@@ -54,7 +71,7 @@ def regenerate_cards(
     prompt = f'Current card:\nQ: {question}\nA: {answer}\n\nUser direction: {direction}'
     if generation_context:
         prompt += f'\n\nOriginal source material:\n{generation_context}'
-    return _parse_cards(chat_json(prompt, system=REGENERATE_SYSTEM))
+    return _parse_cards(chat_json(prompt, system=REGENERATE_SYSTEM, schema=CARDS_SCHEMA))
 
 
 def normalize_transcript(text: str) -> str:

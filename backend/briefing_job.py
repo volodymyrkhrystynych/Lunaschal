@@ -15,6 +15,7 @@ they have something pending: a model that returns no items (or no usable
 completion at all) falls back to `fallback_plan`, built from their own lists.
 """
 import json
+import re
 import time
 
 from ulid import ULID
@@ -64,6 +65,23 @@ def _has_briefing(db, conv_id: str) -> bool:
         except (ValueError, TypeError):
             continue
     return False
+
+
+# Trailing "(due 2026-07-30)" / "[priority 4/5]" / "[shopping]" groups, as added by
+# backend.ai.briefing._format_todo when it renders the existing lists into the
+# prompt. Anchored to the end and applied repeatedly, so a real title that merely
+# contains brackets ("Fix [urgent] parser bug") keeps them.
+_PROMPT_ANNOTATION_RE = re.compile(r'\s*(?:\([^()]*\)|\[[^\[\]]*\])\s*$')
+
+
+def _strip_prompt_annotations(text: str) -> str:
+    """Undo _format_todo's decorations so a title copied out of the prompt can be
+    matched against the real row."""
+    prev = None
+    while prev != text:
+        prev = text
+        text = _PROMPT_ANNOTATION_RE.sub('', text).strip()
+    return text
 
 
 def _twin_lookup(db, today: str) -> dict[str, tuple[str, str]]:
@@ -116,6 +134,15 @@ def _propose_todos(db, proposed: list, today: str) -> list[dict]:
         declared = declared.strip() if isinstance(declared, str) else ''
         twin = twins.get(declared.lower()) if declared else None
         matched_title = declared
+        if twin is None and declared:
+            # The prompt renders each existing item as "Title (due X) [priority
+            # 4/5]", and asks for the title back "exactly as it appears above" —
+            # so the model quite reasonably hands back the decorated line, which
+            # matches nothing. Retry on the bare title before giving up.
+            bare = _strip_prompt_annotations(declared)
+            if bare != declared:
+                twin = twins.get(bare.lower())
+                matched_title = bare if twin else declared
         if twin is None:
             twin = twins.get(title.lower())
             matched_title = title if twin else ''

@@ -7,7 +7,7 @@ import time
 import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
-from backend.ai.llm import LLM_NUM_CTX, REASONING_EFFORTS
+from backend.ai.provider import DEFAULT_MODEL
 from backend.db.connection import build_update, get_db
 
 _sleep_inhibitor: subprocess.Popen | None = None
@@ -64,11 +64,12 @@ def get_settings():
     if not s:
         return jsonify(None)
     return jsonify({
-        'ollamaUrl': s.get('ollama_url'),
-        'ollamaModel': s.get('ollama_model'),
-        'llmReasoningEffort': s.get('llm_reasoning_effort') or 'none',
+        'llamaUrl': s.get('llama_url'),
+        'llamaModel': s.get('llama_model'),
+        'llmThinking': bool(s.get('llm_thinking', 0)),
         'llmMaxTokens': s.get('llm_max_tokens') or 4096,
-        'llmNumCtx': s.get('llm_num_ctx') or LLM_NUM_CTX,
+        # No llmNumCtx: the context window is fixed when llama-server loads the
+        # model (ctx-size in llama/presets.ini), not settable per request.
         'hasHfToken': bool(s.get('hf_token')),
         'networkMode': NETWORK_MODE,
         'networkCode': s.get('network_code') if NETWORK_MODE else None,
@@ -88,7 +89,7 @@ def get_settings():
         'briefingHour': s.get('briefing_hour') if s.get('briefing_hour') is not None else 5,
         'briefingModel': s.get('briefing_model'),
         'briefingGoals': s.get('briefing_goals') or '',
-        'briefingReasoningEffort': s.get('briefing_reasoning_effort') or 'none',
+        'briefingThinking': bool(s.get('briefing_thinking', 0)),
         'briefingMaxTokens': s.get('briefing_max_tokens') or 16384,
     })
 
@@ -97,10 +98,9 @@ def get_settings():
 def update_ai():
     body = request.json or {}
     field_map = {
-        'ollamaUrl': 'ollama_url', 'ollamaModel': 'ollama_model',
-        'llmReasoningEffort': 'llm_reasoning_effort',
+        'llamaUrl': 'llama_url', 'llamaModel': 'llama_model',
+        'llmThinking': 'llm_thinking',
         'llmMaxTokens': 'llm_max_tokens',
-        'llmNumCtx': 'llm_num_ctx',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
         'sttBackend': 'stt_backend', 'ttsBackend': 'tts_backend',
         'whisperModel': 'whisper_model', 'sttDevice': 'stt_device',
@@ -114,33 +114,25 @@ def update_ai():
         'briefingHour': 'briefing_hour',
         'briefingModel': 'briefing_model',
         'briefingGoals': 'briefing_goals',
-        'briefingReasoningEffort': 'briefing_reasoning_effort',
+        'briefingThinking': 'briefing_thinking',
         'briefingMaxTokens': 'briefing_max_tokens',
-        # No briefingNumCtx: the context window is a single shared setting
-        # (llmNumCtx). See backend.ai.llm.default_num_ctx.
+        # No context-window field at all: llama-server allocates the KV cache when
+        # it loads the model, so the window is a serving-config concern
+        # (llama/presets.ini), not a per-request one.
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
         if camel in body:
             value = body[camel]
-            if camel in ('briefingReasoningEffort', 'llmReasoningEffort'):
-                # Reject anything outside Ollama's accepted levels rather than
-                # storing a value the endpoint would 400 on later.
-                if value not in REASONING_EFFORTS:
-                    continue
+            if camel in ('briefingThinking', 'llmThinking'):
+                # Stored as 0/1 — Gemma 4's thinking channel is on or off, with no
+                # graded levels to validate against.
+                value = 1 if value else 0
             elif camel in ('briefingMaxTokens', 'llmMaxTokens'):
                 # Clamp to a sane range; guards against a fat-fingered 0 that
                 # would truncate every reply, or an absurd value.
                 try:
                     value = max(256, min(65536, int(value)))
-                except (TypeError, ValueError):
-                    continue
-            elif camel == 'llmNumCtx':
-                # The one context window, shared by chat, the briefing and every
-                # structured helper. Clamp to a range Ollama will accept without
-                # blowing up VRAM. 512 floor keeps short prompts working.
-                try:
-                    value = max(512, min(131072, int(value)))
                 except (TypeError, ValueError):
                     continue
             updates[snake] = value
@@ -170,20 +162,35 @@ def regenerate_code():
     return jsonify({'networkCode': code})
 
 
-@bp.get('/ollama-models')
-def ollama_models():
+@bp.get('/llama-models')
+def llama_models():
+    """The router's known presets (llama/presets.ini) and whether each is loaded.
+
+    Deliberately no VRAM estimate per model: with expert tensors split between
+    GPU and system RAM, a model's GPU footprint is set by `n-cpu-moe`, the KV
+    cache and the batch size — not by its file size. The old
+    file-size-times-1.2 heuristic would be off by more than 10 GB here, so the
+    VRAM panel reads the GPU live instead (see `/gpu-vram`).
+    """
     s = _get_settings()
-    ollama_url = (s.get('ollama_url') if s else None) or 'http://localhost:11434'
+    llama_url = (s.get('llama_url') if s else None) or 'http://localhost:8080'
     try:
-        req = urllib.request.Request(f'{ollama_url}/api/tags', headers={'Accept': 'application/json'})
+        req = urllib.request.Request(f'{llama_url}/models',
+                                     headers={'Accept': 'application/json'})
         with urllib.request.urlopen(req, timeout=3) as r:
             data = json.loads(r.read())
-        models = [
-            # size is the on-disk file size; multiply by 1.2 to account for KV cache
-            # and runtime overhead (typical real usage runs 10-30% above weights alone)
-            {'name': m['name'], 'vramMb': round(m.get('size', 0) * 1.2 / (1024 * 1024))}
-            for m in data.get('models', [])
-        ]
+        models = []
+        for m in data.get('data', []):
+            status = m.get('status') or {}
+            arch = m.get('architecture') or {}
+            models.append({
+                'name': m.get('id'),
+                'status': status.get('value') or 'unknown',
+                'inputModalities': arch.get('input_modalities') or ['text'],
+                # Present only once a model is loaded and its child process has
+                # reported back; None otherwise.
+                'contextLength': m.get('n_ctx'),
+            })
         return jsonify(models)
     except Exception:
         return jsonify([])
@@ -193,31 +200,83 @@ _gpu_base_vram_mb: int | None = None
 _gpu_total_vram_mb: int | None = None
 
 
-def measure_base_gpu_vram() -> None:
-    """Capture whatever's already using GPU VRAM (browser, compositor, other
-    apps) once at process startup, before Lunaschal's own models are loaded —
-    that's the "base" cost the VRAM budget in Settings needs to subtract from
-    the card's total. Best-effort; leaves both values unset if nvidia-smi
-    isn't available (e.g. no NVIDIA GPU). Only measures once per process —
-    safe to call repeatedly (e.g. once per test's create_app())."""
-    global _gpu_base_vram_mb, _gpu_total_vram_mb
-    if _gpu_base_vram_mb is not None:
-        return
+def _llm_server_vram_mb() -> int:
+    """VRAM currently held by inference servers, read live.
+
+    Needed because llama-server holds its allocation for as long as it runs and
+    is started independently of Flask (see llama/lunaschal-llama.service), so it
+    may well already be resident when this process starts. Without singling it
+    out it would be counted as somebody else's "base" usage, and the budget panel
+    would blame the browser for 6 GB of model weights.
+
+    Matches Ollama's runner too, which is also called llama-server — during the
+    migration both may be alive, and either way it's the LLM's cost.
+    """
+    try:
+        out = subprocess.run(
+            ['nvidia-smi', '--query-compute-apps=process_name,used_memory',
+             '--format=csv,noheader,nounits'],
+            capture_output=True, text=True, timeout=3, check=True,
+        ).stdout
+    except Exception:
+        return 0
+    total = 0
+    for line in out.splitlines():
+        name, _, mem = line.partition(',')
+        if 'llama-server' in name:
+            try:
+                total += int(mem.strip())
+            except ValueError:
+                pass
+    return total
+
+
+def _gpu_used_total_mb() -> tuple[int, int] | None:
     try:
         out = subprocess.run(
             ['nvidia-smi', '--query-gpu=memory.used,memory.total', '--format=csv,noheader,nounits'],
             capture_output=True, text=True, timeout=3, check=True,
         ).stdout.strip()
         used_mb, total_mb = (int(x.strip()) for x in out.split(','))
-        _gpu_base_vram_mb = used_mb
-        _gpu_total_vram_mb = total_mb
+        return used_mb, total_mb
     except Exception:
+        return None
+
+
+def measure_base_gpu_vram() -> None:
+    """Capture whatever's already using GPU VRAM (browser, compositor, other
+    apps) once at process startup, before Lunaschal's own models are loaded —
+    that's the "base" cost the VRAM budget in Settings needs to subtract from
+    the card's total. Any inference server already running is excluded, since
+    that's the LLM's cost and is reported separately and live. Best-effort;
+    leaves both values unset if nvidia-smi isn't available (e.g. no NVIDIA GPU).
+    Only measures once per process — safe to call repeatedly (e.g. once per
+    test's create_app())."""
+    global _gpu_base_vram_mb, _gpu_total_vram_mb
+    if _gpu_base_vram_mb is not None:
+        return
+    reading = _gpu_used_total_mb()
+    if reading is None:
         _gpu_base_vram_mb = None
         _gpu_total_vram_mb = None
+        return
+    used_mb, total_mb = reading
+    _gpu_base_vram_mb = max(0, used_mb - _llm_server_vram_mb())
+    _gpu_total_vram_mb = total_mb
 
 
 @bp.get('/gpu-vram')
 def gpu_vram():
     if _gpu_base_vram_mb is None:
         return jsonify({'available': False})
-    return jsonify({'available': True, 'baseMb': _gpu_base_vram_mb, 'totalMb': _gpu_total_vram_mb})
+    reading = _gpu_used_total_mb()
+    return jsonify({
+        'available': True,
+        'baseMb': _gpu_base_vram_mb,
+        'totalMb': _gpu_total_vram_mb,
+        # Live, unlike baseMb: the model's GPU share depends on n-cpu-moe, the KV
+        # cache and batch size, so it's measured rather than derived from the
+        # file size the way the Ollama-era panel did it.
+        'usedMb': reading[0] if reading else None,
+        'llmMb': _llm_server_vram_mb(),
+    })

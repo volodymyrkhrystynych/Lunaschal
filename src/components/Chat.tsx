@@ -278,7 +278,7 @@ export function Chat() {
     } finally {
       setIsStreaming(false);
       setStreamingContent('');
-      // Deliberately *after* the reply, not alongside it. Ollama serves one
+      // Deliberately *after* the reply, not alongside it. llama-server serves one
       // request at a time per model, so a classify fired in parallel simply
       // wins the queue and the user waits out a whole second generation before
       // their first token. The save/quiz prompts it produces are offered after
@@ -373,7 +373,7 @@ export function Chat() {
     }
   };
 
-  const isConfigured = !!settings?.ollamaUrl;
+  const isConfigured = !!settings?.llamaUrl;
   const isSaving = saveJournal.isPending || saveCalendar.isPending;
 
   return (
