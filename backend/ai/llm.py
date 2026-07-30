@@ -37,9 +37,9 @@ JSON_MAX_TOKENS = 4096
 # Output length ceiling (`max_tokens`) for the default conversational model. A
 # hard stop, not a reservation, so it costs nothing until a generation runs long —
 # but it has to stay reachable within `_TIMEOUT`. Gemma 4 26B A4B with its experts
-# served from system RAM runs at roughly 15-20 tok/s, so a ceiling in the tens of
-# thousands of tokens could not finish, turning a runaway generation into a lost
-# reply rather than a capped one.
+# served from system RAM measures 25 tok/s, so a ceiling in the tens of thousands
+# of tokens could not finish, turning a runaway generation into a lost reply
+# rather than a capped one.
 LLM_MAX_TOKENS = 4096
 
 # How long to wait on a blocking generation. Deliberately roomy: the model is

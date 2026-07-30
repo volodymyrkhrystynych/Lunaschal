@@ -130,6 +130,27 @@ constant: 1719 MiB measured with browsers idle, and it climbs as tabs open. With
 both `gemma4` and `embed` resident the total sits near 7.3 GB of 8.0 GB, so the
 margin is real but thin.
 
+### What the switch actually bought — and how confident each number is
+
+Be careful quoting a speedup here, because the two sides were never benchmarked
+under the same conditions:
+
+| Setup                           | Generation | Provenance                                 |
+| ------------------------------- | ---------- | ------------------------------------------ |
+| Ollama + qwen3.6:35b (previous) | ~10 tok/s  | operator recollection, **not measured**    |
+| Ollama + gemma-4-26B-A4B        | <10 tok/s  | operator recollection ("slower than qwen") |
+| llama.cpp + gemma-4-26B-A4B     | **25.2**   | `llama-bench`, measured                    |
+
+So roughly **2.5x on generation**, and more than that for Gemma 4 specifically —
+but only the bottom row is a measurement. No Ollama benchmark was ever run: the
+Ollama runner was stopped to free VRAM before the llama.cpp sweep, and by then
+the comparison would also have confounded the engine change with the model change.
+
+If a defensible number is ever needed, the clean experiment is cheap and needs no
+new downloads: Ollama stores plain GGUF blobs under
+`~/.ollama/models/blobs/`, so `llama-bench -m <that blob>` benchmarks _both_
+engines on identical weights and isolates the placement win from the model swap.
+
 ## System RAM is the other constraint
 
 The CPU-resident experts are ~13 GB and are read on every token. If the kernel

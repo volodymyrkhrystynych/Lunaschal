@@ -85,9 +85,9 @@ curve.
 - **Lower `ctx-size` before moving experts to the CPU.** Context costs no quality;
   offloading experts costs throughput.
 - **`max_tokens` has to be reachable inside the client timeout** (`_TIMEOUT`,
-  1800 s in `backend/ai/llm.py`). Gemma 4 with CPU-resident experts runs at
-  roughly 15-20 tok/s, so a ceiling in the tens of thousands of tokens cannot
-  complete — a runaway generation becomes a lost reply instead of a capped one.
+  1800 s in `backend/ai/llm.py`). Gemma 4 with CPU-resident experts measures
+  25 tok/s, so a ceiling in the tens of thousands of tokens cannot complete — a
+  runaway generation becomes a lost reply instead of a capped one.
 - **Sampler settings now live in the preset, not the app.** Ollama baked
   per-model params into its manifest (`application/vnd.ollama.image.params`), so
   the app deliberately sent none. llama.cpp has no equivalent: unset means
