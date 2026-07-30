@@ -14,6 +14,7 @@ import { Login } from './components/Login';
 import { Writing } from './components/Writing';
 import { Tasks } from './components/Tasks';
 import { Food } from './components/Food/Food';
+import { Lifestyle } from './components/Lifestyle/Lifestyle';
 import { Fanfic } from './components/Fanfic/Fanfic';
 import type { FicTarget } from './components/Fanfic/Fanfic';
 import { Newspapers } from './components/Newspapers';
@@ -152,6 +153,8 @@ export default function App() {
         return <Tasks />;
       case 'food':
         return <Food />;
+      case 'lifestyle':
+        return <Lifestyle />;
       case 'fanfic':
         return (
           <Fanfic

@@ -13,6 +13,7 @@ type View =
   | 'writing'
   | 'tasks'
   | 'food'
+  | 'lifestyle'
   | 'fanfic'
   | 'newspapers'
   | 'paper';
@@ -34,6 +35,7 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'writing', label: 'Writing', icon: '✍️' },
   { view: 'calendar', label: 'Calendar', icon: '📅' },
   { view: 'food', label: 'Food', icon: '🍽️' },
+  { view: 'lifestyle', label: 'Lifestyle', icon: '🏋️' },
   { view: 'fanfic', label: 'Library', icon: '📚' },
   { view: 'newspapers', label: 'Newspapers', icon: '📰' },
   { view: 'paper', label: 'Paper', icon: '🖊️' },

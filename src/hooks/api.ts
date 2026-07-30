@@ -667,6 +667,109 @@ export interface FoodJournalItem {
   media: FoodMedia[];
 }
 
+// --- Lifestyle (workouts, heatmap, body weight, selfies, calories) ---
+// Chores are deliberately absent: they're todos with list='chores', so the
+// Lifestyle tab uses api.tasks.todos for them rather than a parallel list.
+
+// The four activity types, in the priority order the heatmap resolves ties by.
+// Kept structurally identical to ACTIVITY_TYPES in src/lib/lifestyle.ts.
+export type ActivityTypeId =
+  'goodlife_brother' | 'goodlife_alone' | 'building' | 'outside';
+
+export interface WorkoutSet {
+  id: string;
+  weight: number | null;
+  reps: number | null;
+  setOrder: number;
+}
+
+export interface WorkoutExercise {
+  id: string;
+  /** As the user wrote it ("curls"). */
+  nameRaw: string;
+  /** What it was folded onto, and what the progression chart groups by. */
+  nameCanonical: string;
+  displayName: string;
+  position: number;
+  sets: WorkoutSet[];
+}
+
+export interface WorkoutSession {
+  id: string;
+  /** Local 'YYYY-MM-DD', not a timestamp. */
+  date: string;
+  locationType: ActivityTypeId;
+  durationMinutes: number | null;
+  intensityRating: number | null;
+  rawText: string | null;
+  notes: string | null;
+  /** 'skipped' when there was no text to parse; 'error' means retry reparse. */
+  parseStatus: 'pending' | 'done' | 'error' | 'skipped';
+  exercises: WorkoutExercise[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HeatmapDayResponse {
+  date: string;
+  activityType: ActivityTypeId;
+  secondary: boolean;
+  durationMinutes: number | null;
+  intensityRating: number | null;
+  sessions: WorkoutSession[];
+}
+
+export interface ExerciseSummary {
+  name: string;
+  displayName: string;
+  sessionCount: number;
+  lastDate: string | null;
+}
+
+export interface ProgressionPoint {
+  date: string;
+  maxWeight: number | null;
+  totalVolume: number | null;
+  totalReps: number | null;
+  setCount: number;
+}
+
+export interface ExerciseProgression {
+  name: string;
+  displayName: string;
+  points: ProgressionPoint[];
+}
+
+export interface BodyWeightLog {
+  id: string;
+  date: string;
+  weight: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Selfie {
+  id: string;
+  date: string;
+  mime: string | null;
+  url: string;
+  createdAt: string;
+}
+
+export interface CalorieLog {
+  id: string;
+  date: string;
+  description: string;
+  calories: number;
+  createdAt: string;
+}
+
+export interface CalorieDay {
+  date: string;
+  entries: CalorieLog[];
+  total: number;
+}
+
 // --- fetch helpers ---
 
 // A request to an unreachable backend (e.g. the Tailscale link is down in
@@ -1585,5 +1688,101 @@ export const api = {
     },
     removePage: (pageId: string) =>
       del<{ success: boolean }>(`/api/paper/pages/${pageId}`),
+  },
+
+  lifestyle: {
+    workouts: {
+      list: (params?: { limit?: number; offset?: number }) => {
+        const qp = new URLSearchParams();
+        if (params?.limit !== undefined) qp.set('limit', String(params.limit));
+        if (params?.offset !== undefined)
+          qp.set('offset', String(params.offset));
+        return get<WorkoutSession[]>(`/api/lifestyle/workouts?${qp}`);
+      },
+      get: (id: string) => get<WorkoutSession>(`/api/lifestyle/workouts/${id}`),
+      create: (data: {
+        date?: string;
+        locationType: ActivityTypeId;
+        durationMinutes?: number | null;
+        intensityRating?: number | null;
+        rawText?: string;
+        notes?: string;
+      }) => post<WorkoutSession>('/api/lifestyle/workouts', data),
+      update: (
+        id: string,
+        data: {
+          date?: string;
+          locationType?: ActivityTypeId;
+          durationMinutes?: number | null;
+          intensityRating?: number | null;
+          rawText?: string;
+          notes?: string;
+        }
+      ) => patch<{ success: boolean }>(`/api/lifestyle/workouts/${id}`, data),
+      // Re-run the AI parse over the raw text, which is never overwritten.
+      reparse: (id: string) =>
+        post<{ success: boolean }>(`/api/lifestyle/workouts/${id}/reparse`),
+      delete: (id: string) =>
+        del<{ success: boolean }>(`/api/lifestyle/workouts/${id}`),
+    },
+    heatmap: (params?: { start?: string; end?: string }) => {
+      const qp = new URLSearchParams();
+      if (params?.start) qp.set('start', params.start);
+      if (params?.end) qp.set('end', params.end);
+      return get<HeatmapDayResponse[]>(`/api/lifestyle/heatmap?${qp}`);
+    },
+    exercises: {
+      list: () => get<ExerciseSummary[]>('/api/lifestyle/exercises'),
+      progression: (name: string) =>
+        get<ExerciseProgression>(
+          `/api/lifestyle/exercises/${encodeURIComponent(name)}/progression`
+        ),
+      merge: (from: string, into: string) =>
+        post<{ success: boolean; moved: number }>(
+          '/api/lifestyle/exercises/merge',
+          { from, into }
+        ),
+    },
+    weight: {
+      list: (params?: { start?: string; end?: string }) => {
+        const qp = new URLSearchParams();
+        if (params?.start) qp.set('start', params.start);
+        if (params?.end) qp.set('end', params.end);
+        return get<BodyWeightLog[]>(`/api/lifestyle/weight?${qp}`);
+      },
+      log: (data: { date?: string; weight: number }) =>
+        post<BodyWeightLog>('/api/lifestyle/weight', data),
+      delete: (id: string) =>
+        del<{ success: boolean }>(`/api/lifestyle/weight/${id}`),
+    },
+    selfies: {
+      list: (limit?: number) =>
+        get<Selfie[]>(
+          `/api/lifestyle/selfies${limit ? `?limit=${limit}` : ''}`
+        ),
+      upload: (image: Blob, date?: string) => {
+        const form = new FormData();
+        // A canvas-captured Blob has no filename; the route falls back to the
+        // mime type, but a name keeps the multipart part well-formed.
+        form.set('image', image, 'selfie.jpg');
+        if (date) form.set('date', date);
+        return upload<Selfie>('/api/lifestyle/selfies', form);
+      },
+      delete: (id: string) =>
+        del<{ success: boolean }>(`/api/lifestyle/selfies/${id}`),
+    },
+    calories: {
+      day: (date?: string) =>
+        get<CalorieDay>(
+          `/api/lifestyle/calories${date ? `?date=${date}` : ''}`
+        ),
+      create: (data: {
+        date?: string;
+        description: string;
+        calories: number;
+      }) => post<CalorieLog>('/api/lifestyle/calories', data),
+      delete: (id: string) =>
+        del<{ success: boolean }>(`/api/lifestyle/calories/${id}`),
+    },
   },
 };

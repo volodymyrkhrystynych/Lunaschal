@@ -1,8 +1,42 @@
 # Lifestyle tab — design doc
 
-**Status: design only, no implementation yet.** This captures the plan discussed for a new
-top-level "Lifestyle" view covering workout tracking, a GitHub-commits-style activity heatmap,
-daily selfies, chores, body weight, and (lightly) calorie tracking.
+**Status: built.** Sections 1–6 ship in `backend/routes/lifestyle.py`, `backend/lifestyle/`,
+`backend/ai/workouts.py` and `src/components/Lifestyle/`; the timelapse export (the doc's
+explicit later phase) is still not built. This document is kept as the design record — where the
+implementation settled a question the doc left open, it's noted inline below.
+
+It captures the plan for a top-level "Lifestyle" view covering workout tracking, a
+GitHub-commits-style activity heatmap, daily selfies, chores, body weight, and (lightly)
+calorie tracking.
+
+## What the build settled
+
+- **Chores reuse the existing list.** They were already todos with `list='chores'`
+  (`backend/todo_recurrence.py`), so the Lifestyle section renders those same rows via
+  `/api/tasks/todos` instead of the parallel `chores` / `chore_completions` tables sketched
+  below. Ticking a chore off here and in Tasks is one action, and completions still reach the
+  Journal feed through `task_events`.
+- **Exercise canonicalization folds one way only.** An abbreviation folds onto a known fuller
+  name ("curls" → "bicep curl"), but a _more specific_ new name starts its own series, because
+  folding "hack squat machine" into "squat" would silently destroy a real distinction.
+  Over-merging is unrecoverable; under-merging costs one `POST /api/lifestyle/exercises/merge`.
+  See `backend/lifestyle/exercises.py`.
+- **No charting library.** Two sparklines didn't justify a dependency — the geometry is pure
+  functions in `src/lib/lifestyle.ts` (`plotSeries`, `nearestPoint`), rendered as inline SVG by
+  `src/components/Lifestyle/Sparkline.tsx`, and unit-tested in the node environment.
+- **Both progression metrics ship.** `/progression` returns top-set weight _and_ volume per day
+  so the chart toggles between them rather than the choice being made blind.
+- **Heatmap shading defaults to duration**, with an intensity toggle — both are logged on every
+  session from day one, as the doc asks, so the question stays open on real data.
+- **Calorie entry is parsed locally, not by the LLM.** "chicken and rice, ~600" splits with a
+  regex (`parseCalorieEntry`); the format is regular, and a calorie note shouldn't wait on a
+  model. Note the pre-existing **Food tab** is the richer photo/review log — this is deliberately
+  the lightweight counter beside it.
+- **The PWA caveat is already handled** — Lunaschal ships an installed PWA (`public/manifest.json`),
+  which is why the localStorage draft save is written as the actual fix rather than a stopgap.
+- **The selfie widget has a fallback.** `getUserMedia` gives a live preview where it works, and a
+  `capture="user"` file input is always offered beside it, so the open Pocket 2 camera question
+  can't block logging a selfie.
 
 ## Why a new tab
 
@@ -160,37 +194,41 @@ A rough interactive sketch of this layout (Catppuccin-Mocha-matched to the app's
 in `src/index.css`) was reviewed alongside this doc — not committed to source, since it's a
 throwaway visualization rather part of the design record itself.
 
-## Suggested data model sketch
+## Data model
 
-Not final — for orientation when this gets built.
+The sketch below is what was proposed; `backend/db/schema.sql` is the source of truth. It landed
+almost unchanged, with two differences: the `chores` / `chore_completions` tables were **not**
+created (see above), and `workout_sessions` gained a `parse_status` column so the UI can show a
+parse in flight and offer a retry on failure.
 
 - `workout_sessions` — id, date, location_type (enum: outside/building/goodlife_alone/goodlife_brother),
-  duration_minutes, intensity_rating, raw_text, notes
-- `workout_exercises` — id, session_id, exercise_name_raw, exercise_name_canonical
+  duration_minutes, intensity_rating, raw_text, notes, parse_status
+- `workout_exercises` — id, session_id, name_raw, name_canonical, position
 - `workout_sets` — id, exercise_id, weight, reps, set_order
-- `body_weight_logs` — id, date, weight
-- `chores` — id, name, archived, created_at (mirrors `daily_tasks` shape)
-- `chore_completions` — chore_id, date (mirrors `daily_task_completions`)
-- `lifestyle_selfies` — id, date, file_path
+- `body_weight_logs` — id, date (unique — re-logging a day corrects it), weight
+- ~~`chores`~~ / ~~`chore_completions`~~ — dropped; chores are `todos` rows with `list='chores'`
+- `lifestyle_selfies` — id, date (unique), path, mime
 - `calorie_logs` — id, date, description, calories
 
 ## Open questions carried forward
 
-- Duration vs. RPE (or a toggle) for heatmap shading — decide once real data exists.
-- Weight vs. volume (weight × reps) for the per-exercise progression chart.
-- Charting library choice.
-- Exercise-name canonicalization strategy in detail (fuzzy match threshold, manual merge UI for
-  mis-canonicalized entries).
-- Whether calorie entries should be freeform-AI-parsed like workouts, or a plain form.
-- Pocket 2 camera viability for the selfie capture widget.
+Still open (both are now toggles in the UI, waiting on real data rather than on a decision):
 
-## Suggested build order (rough, not committed)
+- Duration vs. RPE for heatmap shading — currently a toggle defaulting to duration.
+- Weight vs. volume for the per-exercise progression chart — currently a toggle.
 
-1. Workout log (freeform entry + AI parse + canonical exercise list) — this unlocks both the
-   heatmap and the progression chart, so it's the foundation.
-2. Activity heatmap.
-3. Body weight log + progression charts.
-4. Chores section (straightforward, low risk, high daily value).
-5. Daily selfie capture + archive.
-6. Calorie counter.
-7. _(Later phase)_ Timelapse video export.
+Settled during the build (see "What the build settled" above): charting library (none —
+hand-rolled SVG), canonicalization strategy (one-directional token folding, then fuzzy at
+ratio ≥ 0.87, plus a merge endpoint as the manual escape hatch), calorie entry (local regex
+parse, no LLM), and Pocket 2 camera viability (moot — the file-input fallback always works).
+
+## Build order (1–6 done; 7 not started)
+
+1. ~~Workout log (freeform entry + AI parse + canonical exercise list)~~ — the foundation, as
+   expected: it's what makes both the heatmap and the progression chart possible.
+2. ~~Activity heatmap.~~
+3. ~~Body weight log + progression charts.~~
+4. ~~Chores section~~ — smaller than planned once it became clear the rows already existed.
+5. ~~Daily selfie capture + archive.~~
+6. ~~Calorie counter.~~
+7. _(Later phase)_ Timelapse video export — **not built**, as the doc intended.
