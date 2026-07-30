@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Sidebar, navItems } from './components/Sidebar';
 import { Chat } from './components/Chat';
@@ -23,25 +23,15 @@ import { api } from './hooks/api';
 import { resolveAuthGate } from './lib/authGate';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 import { MOBILE_QUERY } from './lib/breakpoints';
-
-type View =
-  | 'chat'
-  | 'journal'
-  | 'meetings'
-  | 'calendar'
-  | 'learning'
-  | 'settings'
-  | 'files'
-  | 'notebook'
-  | 'writing'
-  | 'tasks'
-  | 'food'
-  | 'fanfic'
-  | 'newspapers'
-  | 'paper';
+import { getStoredView, setStoredView, type View } from './lib/viewPersistence';
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<View>('chat');
+  const [currentView, setCurrentView] = useState<View>(
+    () => getStoredView() ?? 'chat'
+  );
+  useEffect(() => {
+    setStoredView(currentView);
+  }, [currentView]);
   // Desktop starts with the sidebar pinned open; mobile starts with the drawer
   // closed. Read matchMedia synchronously so the drawer never flashes open on
   // a phone's first paint.

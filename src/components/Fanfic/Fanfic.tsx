@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Library } from './Library';
 import { Reader } from './Reader';
+import {
+  getStoredFicTarget,
+  setStoredFicTarget,
+} from '../../lib/fanficPersistence';
 
 export interface FicTarget {
   ficId: string;
@@ -14,7 +18,9 @@ interface FanficProps {
 }
 
 export function Fanfic({ target, onTargetConsumed }: FanficProps) {
-  const [openFic, setOpenFic] = useState<FicTarget | null>(null);
+  const [openFic, setOpenFic] = useState<FicTarget | null>(() =>
+    getStoredFicTarget()
+  );
 
   useEffect(() => {
     if (target) {
@@ -22,6 +28,10 @@ export function Fanfic({ target, onTargetConsumed }: FanficProps) {
       onTargetConsumed?.();
     }
   }, [target, onTargetConsumed]);
+
+  useEffect(() => {
+    setStoredFicTarget(openFic ? { ficId: openFic.ficId } : null);
+  }, [openFic]);
 
   if (openFic) {
     return (
