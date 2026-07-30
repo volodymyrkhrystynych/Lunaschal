@@ -4,6 +4,8 @@ idempotency), and the accept/reject decisions route."""
 import json
 from datetime import date, datetime
 
+import pytest
+
 from backend.db import connection
 from backend.chat_day import day_key_for
 from backend.ai import briefing as briefing_mod
@@ -325,6 +327,142 @@ def test_run_briefing_validates_dedupes_and_caps(client, monkeypatch):
     assert a['linkedId'] is None   # genuinely new
     # 'Buy milk' restates an open todo, so it's kept and tied to it.
     assert (proposals[0]['linkedType'], proposals[0]['linkedId']) == ('todo', 'existing')
+
+
+# --- the plan never comes back empty ---
+
+def test_empty_model_plan_falls_back_to_the_users_lists(client, monkeypatch):
+    """The model sometimes writes its plan into the check-in prose and returns an
+    empty todos array, which renders as no plan at all. Fall back to the lists."""
+    _insert_daily_task('d_job', 'job search', 1)
+    _insert_daily_task('d_code', 'write code constantly', 2)
+    _insert_daily_task('d_done', 'already handled', 3)
+    _complete_daily_task('c1', 'd_done', TODAY)
+    _insert_todo('t_low', 'Someday maybe', priority=1)
+    _insert_todo('t_stale', 'Rotting in the backlog', priority=1, due=NOW - 5 * 86400)
+    _insert_todo('t_due', 'Call the recruiter back', priority=2, due=NOW)
+    _insert_todo('t_high', 'Prep for the interview', priority=5)
+    _insert_todo('t_arch', 'Set aside', priority=5, todo_list='archive')
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'Morning!', 'todos': []})
+
+    assert result['todosProposed'] == 5
+    assert result['degraded'] is False
+    proposals = _proposals(result['messageId'])
+    # Daily tasks first, then to-dos by priority — the week-old P1 doesn't get to
+    # push the P5 out of the plan just for being overdue.
+    assert [p['title'] for p in proposals] == [
+        'job search', 'write code constantly',
+        'Prep for the interview', 'Call the recruiter back',
+        'Rotting in the backlog',
+    ]
+    # Every fallback item ties back to the row it came from, so crossing one off
+    # completes the real one.
+    assert [(p['linkedType'], p['linkedId']) for p in proposals] == [
+        ('daily', 'd_job'), ('daily', 'd_code'),
+        ('todo', 't_high'), ('todo', 't_due'), ('todo', 't_stale'),
+    ]
+    # A completed daily task and the archive list stay out of it.
+    titles = [p['title'] for p in proposals]
+    assert 'already handled' not in titles
+    assert 'Set aside' not in titles
+
+    # Still a proposal, not a to-do: nothing new was written to the lists.
+    assert connection.get_db().execute(
+        'SELECT COUNT(*) FROM todos').fetchone()[0] == 5
+
+
+def test_empty_model_plan_stays_empty_when_nothing_is_pending(client, monkeypatch):
+    """Nothing to do is a real answer — don't invent one."""
+    result = _run(monkeypatch, {'briefing': 'Morning!', 'todos': []})
+    assert result['todosProposed'] == 0
+    assert _proposals(result['messageId']) == []
+
+
+def test_a_partial_model_plan_is_left_alone(client, monkeypatch):
+    """The fallback only fires on an *empty* plan; one real item is a plan."""
+    _insert_daily_task('d_job', 'job search', 1)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [{'title': 'Only this'}]})
+    assert [p['title'] for p in _proposals(result['messageId'])] == ['Only this']
+
+
+def test_fallback_plan_is_pure_and_ordered(client):
+    """Ordering is decided without touching the DB, so it can be reasoned about:
+    daily tasks, then priority, with the due date only breaking ties."""
+    ctx = {
+        'now': NOW, 'today': TODAY, 'goals': '', 'journal': [], 'calendar': [],
+        'learning_due': 0,
+        'daily_tasks': [{'id': 'd1', 'title': 'Meditate'}],
+        'todos': [
+            {'title': 'High, undated', 'priority': 5, 'list': 'todo', 'due': None},
+            {'title': 'Middling', 'priority': 4, 'list': 'todo', 'due': NOW + 86400},
+            {'title': 'Low, due today', 'priority': 1, 'list': 'chores', 'due': NOW},
+            {'title': 'Low, overdue', 'priority': 1, 'list': 'todo',
+             'due': NOW - 86400},
+            {'title': 'Low, undated', 'priority': 1, 'list': 'todo', 'due': None},
+        ],
+    }
+    plan = briefing_mod.fallback_plan(ctx)
+    assert [i['title'] for i in plan] == [
+        'Meditate', 'High, undated', 'Middling',
+        # Equal priority: soonest due first, undated last.
+        'Low, overdue', 'Low, due today', 'Low, undated',
+    ]
+    # Shaped like the model's own output, so it validates and links the same way.
+    assert plan[0] == {'title': 'Meditate', 'priority': 4, 'list': 'todo',
+                       'due': None, 'linkedTitle': 'Meditate'}
+    assert plan[4] == {'title': 'Low, due today', 'priority': 1, 'list': 'chores',
+                       'due': NOW, 'linkedTitle': 'Low, due today'}
+
+
+# --- an unusable completion ---
+
+def _raise_empty(ctx):
+    from backend.ai.llm import EmptyCompletion
+    raise EmptyCompletion('model returned empty content for a JSON request')
+
+
+def test_unusable_completion_still_leaves_a_plan_overnight(client, monkeypatch):
+    """A truncated or empty completion used to mean the 4am run left nothing at
+    all. The check-in says so; the plan is still real."""
+    _insert_daily_task('d_job', 'job search', 1)
+    connection.get_db().commit()
+    monkeypatch.setattr(briefing_job, 'generate_briefing', _raise_empty)
+
+    result = briefing_job.run_briefing(now=NOW)
+
+    assert result is not None
+    assert result['degraded'] is True
+    assert result['briefing'] == briefing_mod.FALLBACK_BRIEFING
+    proposals = _proposals(result['messageId'])
+    assert [(p['title'], p['linkedType']) for p in proposals] == [('job search', 'daily')]
+    meta = json.loads(connection.get_db().execute(
+        'SELECT metadata FROM messages WHERE id=?', (result['messageId'],)
+    ).fetchone()['metadata'])
+    assert meta['briefing'] is True and meta['degraded'] is True
+
+
+def test_unusable_completion_writes_nothing_when_nothing_is_pending(client, monkeypatch):
+    """No prose and no plan is not worth waking up to."""
+    monkeypatch.setattr(briefing_job, 'generate_briefing', _raise_empty)
+    assert briefing_job.run_briefing(now=NOW) is None
+    assert connection.get_db().execute(
+        "SELECT COUNT(*) FROM messages WHERE role='assistant'").fetchone()[0] == 0
+
+
+def test_unusable_completion_still_raises_on_a_manual_run(client, monkeypatch):
+    """The route turns this into a readable 502 — see the route test below."""
+    from backend.ai.llm import EmptyCompletion
+
+    _insert_daily_task('d_job', 'job search', 1)
+    connection.get_db().commit()
+    monkeypatch.setattr(briefing_job, 'generate_briefing', _raise_empty)
+
+    with pytest.raises(EmptyCompletion):
+        briefing_job.run_briefing(now=NOW, force=True)
 
 
 def test_run_briefing_skips_when_ai_unconfigured(client, monkeypatch):

@@ -105,8 +105,13 @@ def create_app():
         return send_from_directory(DIST_DIR, 'index.html')
 
     _start_listener()
-    from backend.chat_title_scheduler import start_title_scheduler
-    start_title_scheduler()
-    from backend.briefing_scheduler import start_briefing_scheduler
-    start_briefing_scheduler()
+    # The sweeps are daemon loops with no stop signal, so every app that starts
+    # them keeps its threads for the life of the process. A process that builds
+    # many apps — the test suite builds one per test — piles up two threads per
+    # app until thread creation fails and Python aborts, so the suite opts out.
+    if not os.environ.get('LUNASCHAL_NO_SCHEDULERS'):
+        from backend.chat_title_scheduler import start_title_scheduler
+        start_title_scheduler()
+        from backend.briefing_scheduler import start_briefing_scheduler
+        start_briefing_scheduler()
     return app

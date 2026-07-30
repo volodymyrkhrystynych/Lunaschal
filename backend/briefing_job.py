@@ -9,6 +9,10 @@ explicit "add to to-dos" ever writes a `todos` row (see
 `POST /api/chat/briefing/<message_id>/todos`). An item that restates something
 already on the user's lists carries a link to that row, so crossing it off here
 completes the real one.
+
+The plan is the part the user actually needs, so it never comes back empty while
+they have something pending: a model that returns no items (or no usable
+completion at all) falls back to `fallback_plan`, built from their own lists.
 """
 import json
 import time
@@ -20,10 +24,13 @@ from backend.chat_day import day_key_for
 from backend.ai.provider import is_ai_configured
 from backend.ai.briefing import (
     _pending_daily_tasks,
+    fallback_plan,
     gather_briefing_context,
     generate_briefing,
+    FALLBACK_BRIEFING,
     MAX_BRIEFING_TODOS,
 )
+from backend.ai.llm import EmptyCompletion
 from backend.routes.tasks import _parse_priority, _parse_due
 from backend.todo_recurrence import VALID_LISTS
 
@@ -144,19 +151,43 @@ def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         return None
 
     context = gather_briefing_context(now)
-    result = generate_briefing(context)
+    degraded = False
+    try:
+        result = generate_briefing(context)
+    except EmptyCompletion:
+        # A completion we can't parse (empty, truncated mid-JSON, prose instead of
+        # JSON) used to mean the 4am run left nothing behind at all, and the user
+        # woke up to no idea what their day held. Keep the plan and say the prose
+        # is missing. A manual run still raises: the user is standing right there
+        # and can retry or switch models.
+        if force:
+            raise
+        result, degraded = {'briefing': FALLBACK_BRIEFING, 'todos': []}, True
+
     briefing = (result.get('briefing') or '').strip()
     if not briefing:
         db.commit()
         return None
 
     proposed = _propose_todos(db, result.get('todos', []), context['today'])
+    if not proposed:
+        # The model dropped the plan — it sometimes writes one into the check-in
+        # prose and then returns an empty array, which renders as nothing at all.
+        # Their own lists are a better answer than silence.
+        proposed = _propose_todos(db, fallback_plan(context), context['today'])
+    if degraded and not proposed:
+        # No prose *and* nothing pending: there's no briefing to leave.
+        db.commit()
+        return None
+
+    metadata = {'briefing': True, 'proposedTodos': proposed}
+    if degraded:
+        metadata['degraded'] = True
     message_id = str(ULID())
     db.execute(
         'INSERT INTO messages(id, conversation_id, role, content, metadata, created_at)'
         ' VALUES (?,?,?,?,?,?)',
-        (message_id, conv_id, 'assistant', briefing,
-         json.dumps({'briefing': True, 'proposedTodos': proposed}), now),
+        (message_id, conv_id, 'assistant', briefing, json.dumps(metadata), now),
     )
     db.execute('UPDATE conversations SET updated_at=? WHERE id=?', (now, conv_id))
     db.commit()
@@ -165,4 +196,5 @@ def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         'messageId': message_id,
         'briefing': briefing,
         'todosProposed': len(proposed),
+        'degraded': degraded,
     }

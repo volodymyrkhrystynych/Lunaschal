@@ -145,7 +145,7 @@ def build_briefing_prompt(context: dict) -> str:
         lines.append('(No recent journal, tasks, to-dos, calendar events, or reviews.)')
 
     lines.append(
-        'Write the morning briefing and propose the to-dos as instructed.'
+        "Write the check-in and lay out today's plan as instructed."
     )
     return '\n'.join(lines)
 
@@ -154,14 +154,19 @@ SYSTEM_PROMPT = (
     "You are Lunaschal acting as the user's personal secretary. Overnight you've "
     "read through their journal, tasks, to-dos, calendar, and study reviews, and "
     "now you leave a short briefing waiting for them in the morning chat.\n\n"
-    "Write a warm, concise check-in (a few sentences) that reflects what they've "
-    "been living and thinking about, then lay out a focused plan for the day as a "
-    "short markdown list. Be encouraging, not naggy; prioritise ruthlessly rather "
-    "than dumping everything back at them.\n\n"
-    "Also lay out the day's actionable to-dos. Only propose genuinely actionable "
-    f"items, at most {MAX_BRIEFING_TODOS}. This is the plan for today, so it may "
-    "well include work that is already on their open to-dos or pending daily "
-    "tasks — include those rather than skipping them.\n\n"
+    "Your answer has two parts and they must not duplicate each other.\n\n"
+    "\"briefing\" is the check-in only: a warm, concise few sentences that reflect "
+    "what they've been living and thinking about and how you're framing their day. "
+    "Be encouraging, not naggy. Do NOT list the day's tasks here.\n\n"
+    "\"todos\" IS the plan for the day. It is rendered as a checklist directly "
+    "under your check-in and it is the only place the day's work appears, so it "
+    "must carry the plan — a check-in with an empty list tells the user nothing "
+    f"about their day. Give them at most {MAX_BRIEFING_TODOS} genuinely actionable "
+    "items, prioritised ruthlessly rather than dumping everything back at them. "
+    "Most of the plan will be work already sitting on their open to-dos or pending "
+    "daily tasks — include those rather than skipping them as redundant. Return an "
+    "empty array only when they have nothing pending at all; whenever the lists "
+    "above have anything on them, the plan must not be empty.\n\n"
     "Whenever an item restates something already on those lists, copy that "
     "existing item's title into \"linkedTitle\" **verbatim**, exactly as it "
     "appears above — that is what ties your item to theirs, so crossing it off "
@@ -169,14 +174,58 @@ SYSTEM_PROMPT = (
     "new. Match on meaning, not wording: \"Get groceries\" and \"Buy groceries\" "
     "are the same task.\n\n"
     "Respond with a JSON object of exactly this shape:\n"
-    '{"briefing": "<markdown check-in and plan>", '
+    '{"briefing": "<markdown check-in>", '
     '"todos": [{"title": "string", "priority": 1-5, "list": "todo", '
     '"due": <unix seconds or null>, '
     '"linkedTitle": <existing item title or null>}]}\n'
     "priority is 1 (low) to 5 (high); use 3 when unsure. list is usually \"todo\". "
-    "Omit due (or use null) unless a date is clearly implied. If there is nothing "
-    "worth doing, return an empty todos array."
+    "Omit due (or use null) unless a date is clearly implied."
 )
+
+# Stands in for the check-in when the model's completion is unusable (empty,
+# truncated mid-JSON, prose instead of JSON). The plan below it is still real.
+FALLBACK_BRIEFING = (
+    "**Good morning.** I couldn't write you a briefing this time — the model "
+    "didn't come back with one. Here's what's on your plate today, straight from "
+    "your own lists."
+)
+
+
+def fallback_plan(context: dict) -> list[dict]:
+    """Today's plan built straight from the user's lists, in the same shape the
+    model is asked for (so it goes through the usual validation and linking).
+
+    Used when the model returns no plan at all. An empty plan is the one failure
+    the user always notices — the check-in reads fine and they still have to go
+    ask what today holds — so it's better to show them their own lists than
+    nothing. Pending daily tasks come first — they're the standing commitments
+    the user asks about by name — then their to-dos. Titles are copied verbatim
+    so each item links back to the row it came from and crossing it off
+    completes the real one; the caller's cap decides how many survive.
+    """
+    items = [
+        {'title': t['title'], 'priority': 4, 'list': 'todo', 'due': None,
+         'linkedTitle': t['title']}
+        for t in context['daily_tasks']
+    ]
+
+    # Priority before due date — the opposite of the Tasks view, which sorts the
+    # whole list rather than picking a handful out of it. Only a few items fit in
+    # a day's plan, and a backlog of long-overdue low-priority to-dos would
+    # otherwise crowd out the work the user themselves flagged as important. Due
+    # date breaks ties (soonest first, undated last); full ties keep
+    # `_open_todos`' creation order, since sorted() is stable.
+    todos = sorted(
+        context['todos'],
+        key=lambda t: (-(t.get('priority') or 3), t.get('due') or float('inf')),
+    )
+    items += [
+        {'title': t['title'], 'priority': t.get('priority') or 3,
+         'list': t.get('list') or 'todo', 'due': t.get('due'),
+         'linkedTitle': t['title']}
+        for t in todos
+    ]
+    return items
 
 
 def _briefing_model() -> str | None:

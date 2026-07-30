@@ -5,9 +5,17 @@ The `client` fixture points that connection at a throwaway per-test database so
 route handlers can be exercised end-to-end against a real (empty) schema without
 touching the developer's `./data/lunaschal.db`.
 """
+import os
+
 import pytest
 
 from backend.db import connection
+
+# `create_app()` starts the chat-title and briefing sweeps as daemon threads that
+# never stop. One app per test means two more threads per test, which exhausts the
+# process partway through the suite ("Fatal Python error: Aborted"). No test needs
+# them — the sweep bodies are called directly where they're under test.
+os.environ.setdefault('LUNASCHAL_NO_SCHEDULERS', '1')
 
 
 @pytest.fixture
