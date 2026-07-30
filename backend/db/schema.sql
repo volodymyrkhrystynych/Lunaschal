@@ -513,3 +513,79 @@ CREATE TABLE IF NOT EXISTS paper_pages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_paper_pages_paper ON paper_pages(paper_id, position);
+
+-- --- Lifestyle tab: workouts, body weight, selfies, calories -----------------
+-- See docs/lifestyle-tab.md. Chores are deliberately absent: they already exist
+-- as todos with list='chores' (backend/todo_recurrence.py) and the Lifestyle tab
+-- renders that same list rather than forking a second one.
+
+-- One logged training session. `raw_text` is the freeform text exactly as typed
+-- and is never overwritten — the AI-parsed exercises/sets below hang off it, so
+-- a bad parse can be re-run (POST .../reparse) without losing what was written.
+-- `date` is the user's local 'YYYY-MM-DD' day (what the heatmap grids on), not a
+-- timestamp, so it stays out of TIMESTAMP_COLS.
+CREATE TABLE IF NOT EXISTS workout_sessions (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    location_type TEXT NOT NULL,          -- see backend/lifestyle/activity.py
+    duration_minutes INTEGER,
+    intensity_rating INTEGER,             -- self-rated 1-10 RPE
+    raw_text TEXT,
+    notes TEXT,
+    parse_status TEXT NOT NULL DEFAULT 'pending',  -- pending|done|error|skipped
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workout_sessions_date ON workout_sessions(date DESC);
+
+-- `name_raw` is what the user wrote ("curls"); `name_canonical` is what it was
+-- folded onto ("bicep curl") so the progression chart can group across spellings.
+CREATE TABLE IF NOT EXISTS workout_exercises (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES workout_sessions(id) ON DELETE CASCADE,
+    name_raw TEXT NOT NULL,
+    name_canonical TEXT NOT NULL,
+    position INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_workout_exercises_session ON workout_exercises(session_id, position);
+CREATE INDEX IF NOT EXISTS idx_workout_exercises_canonical ON workout_exercises(name_canonical);
+
+CREATE TABLE IF NOT EXISTS workout_sets (
+    id TEXT PRIMARY KEY,
+    exercise_id TEXT NOT NULL REFERENCES workout_exercises(id) ON DELETE CASCADE,
+    weight REAL,
+    reps INTEGER,
+    set_order INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_workout_sets_exercise ON workout_sets(exercise_id, set_order);
+
+-- Manual weigh-ins, at most one per day (re-logging the same day overwrites).
+CREATE TABLE IF NOT EXISTS body_weight_logs (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL UNIQUE,
+    weight REAL NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- One selfie per day; the image itself lives under ./data/lifestyle/<id>/.
+CREATE TABLE IF NOT EXISTS lifestyle_selfies (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL UNIQUE,
+    path TEXT NOT NULL,
+    mime TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS calorie_logs (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL,
+    description TEXT NOT NULL,
+    calories INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_calorie_logs_date ON calorie_logs(date);

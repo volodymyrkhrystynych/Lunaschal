@@ -57,7 +57,7 @@ npm run test:watch       # vitest in watch mode
 
 ## Architecture
 
-Lunaschal is a single-user personal life-management desktop app with AI integration. Views (in sidebar order): AI chat, daily tasks + todos, journal, meeting recorder/transcriber, creative-writing workspace, calendar, spaced-repetition learning, cookbook, fanfic library/reader, newspaper front pages, file editor, settings. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
+Lunaschal is a single-user personal life-management desktop app with AI integration. Views (in sidebar order): AI chat, daily tasks + todos, journal, meeting recorder/transcriber, creative-writing workspace, calendar, spaced-repetition learning, cookbook, lifestyle (workouts/heatmap/chores/selfie/calories), fanfic library/reader, newspaper front pages, file editor, settings. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
 
 ### Stack
 
@@ -76,7 +76,7 @@ Lunaschal is a single-user personal life-management desktop app with AI integrat
 
 ### Backend Structure (`backend/`)
 
-Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`.
+Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`, `lifestyle`.
 
 Feature-logic packages (kept out of the route files so they can be unit-tested):
 
@@ -84,6 +84,7 @@ Feature-logic packages (kept out of the route files so they can be unit-tested):
 - `backend/fanfic/` — XenForo parsing/download pipeline, epub/docx import, HTML sanitizing, file storage
 - `backend/meetings/` — ffmpeg recording, resumable Whisper pipeline, transcript merging, file storage
 - `backend/newspapers/` — frontpages.com scraper, sync, file storage
+- `backend/lifestyle/` — the four activity types and per-day heatmap collapse (`activity.py`), exercise-name canonicalization (`exercises.py`), selfie file storage
 - `backend/tags.py` — shared normalization for JSON-array tag columns (use it, don't grow per-feature rules)
 
 The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` using Flask's `Response(stream_with_context(...))`.
@@ -110,6 +111,7 @@ Long-running work (fic downloads, curated-tag scans, meeting transcription) runs
 - `writing.py` — `summarize_discussion` for the Writing module
 - `meetings.py` — meeting-transcript summarization (keeps the transcript tail; returns None when AI unconfigured — never fails the pipeline)
 - `recipes.py` — recipe extraction from pasted text or scraped page text → `{title, content, tags}` JSON
+- `workouts.py` — freeform gym log → `[{name, sets: [{weight, reps}]}]`; returns None on any failure so the route keeps the raw text and can re-run the parse
 
 ### Auth (`backend/auth.py`)
 
@@ -158,6 +160,18 @@ Recipe collection. Paste text or a URL — the page is fetched and stripped, the
 #### Tasks & todos (`backend/routes/tasks.py`, `src/components/Tasks.tsx`)
 
 Two lists in one view: **daily tasks** (max 4, per-day completions in `daily_task_completions`, reset each day) and one-off **todos**. The STT listener runs a **task-nudge loop**: on an interval (Settings → nudges, default 45 min, waking-hours window) it picks a pending daily task and starts a short spoken check-in conversation about it.
+
+#### Lifestyle (`backend/routes/lifestyle.py`, `backend/lifestyle/`, `src/components/Lifestyle/`)
+
+Workouts, activity heatmap, progression charts, chores, daily selfie, calories — one scrollable column. Design record and the decisions the build settled: [docs/lifestyle-tab.md](docs/lifestyle-tab.md). Things to know before touching it:
+
+- **Chores are not a new table.** They're `todos` rows with `list='chores'`, so the Lifestyle section and the Tasks view edit the same rows through `/api/tasks/todos`.
+- **Workout entry is freeform text, parsed in the background** (`backend/ai/workouts.py` → `run_bg`), same pattern as the food/recipe extractors. `raw_text` is never overwritten and `parse_status` tracks the attempt, so a bad parse is retryable via `POST /workouts/<id>/reparse` rather than lost.
+- **Exercise names fold one way only** (`backend/lifestyle/exercises.py`): an abbreviation folds onto a known fuller name, but a more specific name starts its own series. Over-merging can't be undone; splitting costs one `POST /exercises/merge`.
+- **The workout form mirrors itself to `localStorage`** (`src/lib/workoutDraft.ts`) — logging happens mid-set on a phone, and a backgrounded tab reload would otherwise wipe the textarea.
+- **The heatmap's four activity colours were validated, not chosen by eye** — CVD separation and contrast against both surfaces. Re-run the check if they change; identity is never colour-alone (legend + per-day labels).
+- **No charting library**: geometry is pure functions in `src/lib/lifestyle.ts`, rendered as inline SVG.
+- Selfie images live under `./data/lifestyle/<id>/` (`LIFESTYLE_ROOT`), one per day, never as blobs.
 
 #### Newspapers (`backend/routes/newspapers.py`, `backend/newspapers/`)
 
