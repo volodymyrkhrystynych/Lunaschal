@@ -138,6 +138,14 @@ One search box across everything: journal, emails, books, writing projects, file
 - **Streaks** and simple stats over time.
 - Fits alongside the planner-style daily pages and calendar/day views.
 
+## Lifestyle tab
+
+New top-level tab: workout tracking (freeform text, AI-parsed, same pattern as recipes/journal),
+a GitHub-commits-style activity heatmap colored by workout location/type, body weight + per-exercise
+progression charts, chores promoted out of Tasks into their own section, daily selfie capture
+(archive now, timelapse export later), and a light manual calorie counter. Full design in
+[docs/lifestyle-tab.md](./lifestyle-tab.md).
+
 ## Bug fixing
 
 General stability pass — lots of small bugs to track down and fix. (Add specific known bugs here as they're identified.)
