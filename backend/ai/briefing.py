@@ -168,11 +168,14 @@ SYSTEM_PROMPT = (
     "empty array only when they have nothing pending at all; whenever the lists "
     "above have anything on them, the plan must not be empty.\n\n"
     "Whenever an item restates something already on those lists, copy that "
-    "existing item's title into \"linkedTitle\" **verbatim**, exactly as it "
-    "appears above — that is what ties your item to theirs, so crossing it off "
-    "here also crosses it off their list. Use null when the item is genuinely "
-    "new. Match on meaning, not wording: \"Get groceries\" and \"Buy groceries\" "
-    "are the same task.\n\n"
+    "existing item's title into \"linkedTitle\" **verbatim** — that is what ties "
+    "your item to theirs, so crossing it off here also crosses it off their list. "
+    "Copy the title ONLY: the lists above annotate each entry with things like "
+    "\"(due 2026-07-30)\", \"[priority 4/5]\" and \"[shopping]\", and those are "
+    "not part of the title. For \"Buy milk (due 2026-07-30) [priority 4/5]\" the "
+    "linkedTitle is \"Buy milk\". Use null when the item is genuinely new. Match "
+    "on meaning, not wording: \"Get groceries\" and \"Buy groceries\" are the "
+    "same task.\n\n"
     "Respond with a JSON object of exactly this shape:\n"
     '{"briefing": "<markdown check-in>", '
     '"todos": [{"title": "string", "priority": 1-5, "list": "todo", '
@@ -181,6 +184,36 @@ SYSTEM_PROMPT = (
     "priority is 1 (low) to 5 (high); use 3 when unsure. list is usually \"todo\". "
     "Omit due (or use null) unless a date is clearly implied."
 )
+
+# Grammar-enforced shape of the briefing completion. llama-server compiles this
+# into GBNF, so "prose instead of JSON" and "wrong key names" stop being possible
+# failure modes — FALLBACK_BRIEFING below now only covers a genuinely empty or
+# timed-out generation. maxItems enforces the plan cap in the grammar itself
+# rather than trusting the prompt, though the caller still slices defensively.
+BRIEFING_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'briefing': {'type': 'string'},
+        'todos': {
+            'type': 'array',
+            'maxItems': MAX_BRIEFING_TODOS,
+            'items': {
+                'type': 'object',
+                'properties': {
+                    'title': {'type': 'string'},
+                    'priority': {'type': 'integer', 'minimum': 1, 'maximum': 5},
+                    'list': {'type': 'string'},
+                    'due': {'type': ['integer', 'null']},
+                    'linkedTitle': {'type': ['string', 'null']},
+                },
+                'required': ['title', 'priority', 'list', 'due', 'linkedTitle'],
+                'additionalProperties': False,
+            },
+        },
+    },
+    'required': ['briefing', 'todos'],
+    'additionalProperties': False,
+}
 
 # Stands in for the check-in when the model's completion is unusable (empty,
 # truncated mid-JSON, prose instead of JSON). The plan below it is still real.
@@ -239,16 +272,15 @@ def _briefing_generation_opts() -> dict:
     """User-tunable generation knobs for the briefing, falling back to the module
     defaults when unset.
 
-    Reasoning level and output ceiling only — the context window is deliberately
-    *not* one of them. The briefing shares the chat model by default, and Ollama
-    reloads the weights whenever num_ctx changes between requests, so a separate
-    briefing window would cost a reload at 4am and another on the user's next
-    message. `chat_json` fills in the shared `default_num_ctx()`.
+    Thinking and output ceiling only — the context window is not a per-request
+    setting at all, since llama-server allocates the KV cache when it loads the
+    model. Thinking is genuinely worth enabling here even though the chat path
+    leaves it off: the briefing runs overnight, so latency is free.
     """
     from backend.ai.provider import get_settings
     s = get_settings() or {}
     return {
-        'reasoning_effort': s.get('briefing_reasoning_effort') or 'none',
+        'thinking': bool(s.get('briefing_thinking')),
         'max_tokens': s.get('briefing_max_tokens') or BRIEFING_MAX_TOKENS,
     }
 
@@ -258,7 +290,7 @@ def generate_briefing(context: dict) -> dict:
     of this module that touches the LLM."""
     result = chat_json(
         build_briefing_prompt(context), system=SYSTEM_PROMPT, model=_briefing_model(),
-        **_briefing_generation_opts(),
+        schema=BRIEFING_SCHEMA, **_briefing_generation_opts(),
     )
     if not isinstance(result, dict):
         return {'briefing': '', 'todos': []}

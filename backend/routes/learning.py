@@ -262,7 +262,7 @@ def _run_verification(row, followup=None, transcript=None):
     except ToolCallingUnsupported:
         return jsonify({
             'status': 'providerUnsupported', 'case': None, 'transcript': [],
-            'error': 'Verification requires the OpenAI or Ollama provider',
+            'error': 'Verification needs a tool-calling model; this one does not support it',
         })
     except Exception as e:
         return jsonify({'error': f'Evidence provider failed: {e}'}), 502

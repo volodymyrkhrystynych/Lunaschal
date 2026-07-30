@@ -11,7 +11,7 @@ import { VRAMSection } from './VRAMSection';
 import { NetworkSection } from './NetworkSection';
 import { FanficCookiesSection } from './FanficCookiesSection';
 import { DisplaySection } from './DisplaySection';
-import { OllamaConfigSection } from './OllamaConfigSection';
+import { LlamaConfigSection } from './LlamaConfigSection';
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<'general' | 'tags' | 'shortcuts'>(
@@ -68,7 +68,7 @@ export function Settings() {
 
           <VRAMSection />
 
-          <OllamaConfigSection />
+          <LlamaConfigSection />
 
           <STTStatusSection />
 

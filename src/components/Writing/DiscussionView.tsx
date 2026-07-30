@@ -176,7 +176,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
     if (trimmed && trimmed !== conversation?.title) updateTitle.mutate(trimmed);
   };
 
-  const aiConfigured = !!settings?.ollamaUrl;
+  const aiConfigured = !!settings?.llamaUrl;
   const messages = (conversation?.messages || []).filter(
     m => m.role !== 'system'
   );

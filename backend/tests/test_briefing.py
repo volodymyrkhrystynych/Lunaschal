@@ -162,7 +162,7 @@ def test_generate_briefing_uses_model_override(client, monkeypatch):
     assert captured['model'] == 'llama3.1:70b'
 
 
-def test_generate_briefing_passes_reasoning_and_max_tokens_from_settings(client, monkeypatch):
+def test_generate_briefing_passes_thinking_and_max_tokens_from_settings(client, monkeypatch):
     captured = {}
 
     def fake_chat_json(prompt, system=None, model=None, **kwargs):
@@ -175,10 +175,12 @@ def test_generate_briefing_passes_reasoning_and_max_tokens_from_settings(client,
 
     # Defaults: no thinking, generous ceiling.
     briefing_mod.generate_briefing(ctx)
-    assert captured['reasoning_effort'] == 'none'
+    assert captured['thinking'] is False
     assert captured['max_tokens'] == briefing_mod.BRIEFING_MAX_TOKENS
-    # The context window is never passed: chat_json fills in the one shared
-    # window, so the briefing can't leave the chat runner needing a reload.
+    # The completion is grammar-constrained to the briefing's shape, which is what
+    # makes FALLBACK_BRIEFING a rare path rather than a routine one.
+    assert captured['schema'] is briefing_mod.BRIEFING_SCHEMA
+    # No context window is ever passed: llama-server fixes it at load time.
     assert 'num_ctx' not in captured
 
     # User-configured values flow through.
@@ -188,13 +190,12 @@ def test_generate_briefing_passes_reasoning_and_max_tokens_from_settings(client,
         (NOW, NOW),
     )
     db.execute(
-        'UPDATE settings SET briefing_reasoning_effort=?, briefing_max_tokens=?,'
-        ' llm_num_ctx=? WHERE id=1',
-        ('high', 8000, 32768),
+        'UPDATE settings SET briefing_thinking=?, briefing_max_tokens=? WHERE id=1',
+        (1, 8000),
     )
     db.commit()
     briefing_mod.generate_briefing(ctx)
-    assert captured['reasoning_effort'] == 'high'
+    assert captured['thinking'] is True
     assert captured['max_tokens'] == 8000
     assert 'num_ctx' not in captured
 
@@ -678,6 +679,63 @@ def test_unresolvable_linked_title_falls_back_then_gives_up(client, monkeypatch)
         'todo', 'report', 'Draft the report'
     )
     assert (b['linkedType'], b['linkedId'], b['linkedTitle']) == (None, None, None)
+
+
+def test_linked_title_copied_with_prompt_annotations_still_links(client, monkeypatch):
+    """The prompt renders existing items as "Title (due X) [priority 4/5]" and asks
+    for the title back verbatim, so the model hands back the decorated line. Left
+    alone that matches nothing, and the "cross it off here, cross it off there"
+    promise quietly breaks — the title fallback only rescues it when the proposal
+    restates the title word for word, which is exactly when the model paraphrases.
+    """
+    _insert_todo('moe', 'Review the MoE placement doc', done=0)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        # Paraphrased title AND a decorated link — neither lookup works untreated.
+        {'title': 'Read the MoE doc',
+         'linkedTitle': 'Review the MoE placement doc [priority 4/5]'},
+    ]})
+    item = _proposals(result['messageId'])[0]
+    assert (item['linkedType'], item['linkedId'], item['linkedTitle']) == (
+        'todo', 'moe', 'Review the MoE placement doc'
+    )
+
+
+def test_linked_title_strips_several_annotations(client, monkeypatch):
+    _insert_todo('moe', 'Review the MoE placement doc', done=0)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Doc review',
+         'linkedTitle': 'Review the MoE placement doc (due 2026-07-30) [priority 4/5] [work]'},
+    ]})
+    assert _proposals(result['messageId'])[0]['linkedId'] == 'moe'
+
+
+def test_a_title_that_really_contains_brackets_is_not_mangled(client, monkeypatch):
+    """Stripping runs only after an exact match fails, so a genuine bracketed
+    title keeps its brackets rather than being truncated into a wrong match."""
+    _insert_todo('parser', 'Fix [urgent] parser bug', done=0)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Parser fix', 'linkedTitle': 'Fix [urgent] parser bug'},
+    ]})
+    item = _proposals(result['messageId'])[0]
+    assert (item['linkedId'], item['linkedTitle']) == ('parser', 'Fix [urgent] parser bug')
+
+
+def test_annotation_stripping_does_not_invent_a_link(client, monkeypatch):
+    """Stripping must not turn an unmatchable link into a false positive."""
+    _insert_todo('report', 'Draft the report', done=0)
+    connection.get_db().commit()
+
+    result = _run(monkeypatch, {'briefing': 'hi', 'todos': [
+        {'title': 'Call the vet', 'linkedTitle': 'Something imaginary [priority 4/5]'},
+    ]})
+    item = _proposals(result['messageId'])[0]
+    assert (item['linkedType'], item['linkedId'], item['linkedTitle']) == (None, None, None)
 
 
 def test_a_done_todo_is_not_a_twin(client, monkeypatch):

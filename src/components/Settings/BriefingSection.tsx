@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, type AppSettings } from '../../hooks/api';
+import { api } from '../../hooks/api';
 
 export function BriefingSection() {
   const queryClient = useQueryClient();
@@ -8,10 +8,10 @@ export function BriefingSection() {
     queryKey: ['settings'],
     queryFn: api.settings.get,
   });
-  const { data: ollamaModels } = useQuery({
-    queryKey: ['settings', 'ollama-models'],
-    queryFn: api.settings.ollamaModels,
-    enabled: !!settings?.ollamaUrl,
+  const { data: llamaModels } = useQuery({
+    queryKey: ['settings', 'llama-models'],
+    queryFn: api.settings.llamaModels,
+    enabled: !!settings?.llamaUrl,
   });
   const [hourInput, setHourInput] = useState('5');
   const [goalsInput, setGoalsInput] = useState('');
@@ -49,9 +49,9 @@ export function BriefingSection() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
-  const saveReasoningEffort = useMutation({
-    mutationFn: (effort: AppSettings['briefingReasoningEffort']) =>
-      api.settings.updateAI({ briefingReasoningEffort: effort }),
+  const saveThinking = useMutation({
+    mutationFn: (thinking: boolean) =>
+      api.settings.updateAI({ briefingThinking: thinking }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
@@ -79,7 +79,7 @@ export function BriefingSection() {
 
   const briefingEnabled = settings?.briefingEnabled ?? true;
 
-  const briefingReasoningEffort = settings?.briefingReasoningEffort ?? 'none';
+  const briefingThinking = settings?.briefingThinking ?? false;
 
   const commitHour = () => {
     const hour = Math.min(23, Math.max(4, parseInt(hourInput, 10) || 5));
@@ -152,46 +152,44 @@ export function BriefingSection() {
                 className="mt-1 w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
               >
                 <option value="">Same as chat model (default)</option>
-                {ollamaModels && ollamaModels.length > 0 && (
-                  <optgroup label="Installed">
-                    {ollamaModels.map(m => (
+                {llamaModels && llamaModels.length > 0 && (
+                  <optgroup label="Router presets">
+                    {llamaModels.map(m => (
                       <option key={m.name} value={m.name}>
-                        {m.name} — {m.vramMb.toLocaleString()} MB
+                        {m.name} — {m.status}
                       </option>
                     ))}
                   </optgroup>
                 )}
               </select>
               <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Runs overnight, so a larger, slower model is fine here.
+                Runs overnight, so a slower preset is fine here — this is the
+                natural place for <code>gemma4-long</code> if a briefing ever
+                needs the bigger context window.
               </p>
             </div>
             <div>
               <label className="text-sm text-[var(--color-text-muted)]">
-                Thinking effort
+                Thinking
               </label>
-              <select
-                value={briefingReasoningEffort}
-                onChange={e =>
-                  saveReasoningEffort.mutate(
-                    e.target.value as AppSettings['briefingReasoningEffort']
-                  )
-                }
-                className="mt-1 w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
-              >
-                <option value="none">None — don't think (default)</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="max">Max</option>
-              </select>
-              <p className="text-xs text-[var(--color-text-muted)]">
-                How hard the model reasons before writing. Keep it <em>None</em>{' '}
-                unless the briefing model supports thinking — reasoning models
-                otherwise spend their whole output budget thinking and return an
-                empty briefing. If you enable it, give it plenty of tokens
-                below. (Not every model honours the graded levels; some only
-                distinguish on/off.)
+              <label className="mt-1 flex items-center gap-3 cursor-pointer">
+                <div
+                  onClick={() => saveThinking.mutate(!briefingThinking)}
+                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${briefingThinking ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${briefingThinking ? 'translate-x-4' : 'translate-x-0'}`}
+                  />
+                </div>
+                <span className="text-sm text-[var(--color-text)]">
+                  Think before writing
+                </span>
+              </label>
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                Worth turning on here even though chat leaves it off: the
+                briefing runs while you're asleep, so the extra tokens cost you
+                nothing. Give it plenty of output tokens below if you do —
+                thinking and the answer share the same budget.
               </p>
             </div>
             <div>
@@ -214,11 +212,10 @@ export function BriefingSection() {
               </p>
             </div>
             <p className="text-xs text-[var(--color-text-muted)]">
-              The briefing uses the shared context window from{' '}
-              <em>Model &amp; VRAM</em> above. It isn't tunable separately:
-              Ollama reloads the whole model whenever the context size changes
-              between requests, so a briefing-only window would cost a reload
-              overnight and another on your next chat message.
+              The context window isn't an app setting: llama-server allocates
+              the KV cache when it loads the model, so it's fixed per preset in{' '}
+              <code>llama/presets.ini</code>. Pick the <code>gemma4-long</code>{' '}
+              preset above if a briefing needs a bigger one.
             </p>
             <div>
               <label className="text-sm text-[var(--color-text-muted)]">

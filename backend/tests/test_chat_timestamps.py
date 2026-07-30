@@ -79,9 +79,7 @@ def captured(monkeypatch):
         seen['messages'] = messages
         yield 'ok'
 
-    monkeypatch.setattr('backend.ai.chat.get_provider_config', lambda: {'ollama_model': 'm'})
-    monkeypatch.setattr('backend.ai.chat.default_generation_opts', dict)
-    monkeypatch.setattr('backend.ai.chat._native_chat_stream', fake_stream)
+    monkeypatch.setattr('backend.ai.chat.chat_stream_deltas', fake_stream)
     return seen
 
 

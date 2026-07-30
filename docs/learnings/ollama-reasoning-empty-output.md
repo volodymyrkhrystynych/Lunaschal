@@ -189,3 +189,34 @@ num_predict}` from settings.
 | 26B, no format, think=low, ctx 4096 (real prompt)   | 0                           | 9444     | length | ❌ ctx too small |
 | 26B, no format, think=low, ctx 16384 (real prompt)  | 1228                        | 11384    | stop   | ✅ works         |
 | 26B, native path, think=low, ctx 16384 (end-to-end) | 407-char briefing + 3 todos | —        | —      | ✅ shipped       |
+
+---
+
+## Postscript: resolved by the move to llama.cpp (2026-07)
+
+This whole investigation was chasing an Ollama-specific interaction, and the
+migration to llama-server dissolved it rather than fixing it:
+
+- **JSON grammar + thinking no longer collide.** llama-server takes a JSON
+  _schema_ (`response_format: {type: "json_schema"}`), compiles it to GBNF, and
+  applies it to the answer channel only — so a structured call can think and still
+  return valid JSON. Every `chat_json` call site now passes a schema, and the ones
+  with closed vocabularies (the journal tag list, the classifier intent enum) get
+  their constraint enforced by the grammar rather than requested in the prompt.
+- **The context window stopped being a per-request setting**, so "small `num_ctx`
+  - thinking empties the output" can't happen: the window is fixed at load time in
+    `llama/presets.ini` and every request shares it by construction.
+- **Reasoning stopped being graded.** Gemma 4 has one thinking channel, toggled by
+  the `enable_thinking` chat-template kwarg. The none/low/medium/high/max setting
+  collapsed to a boolean (`llm_thinking` / `briefing_thinking`). Note the template
+  defaults thinking **on**, so "off" has to be sent explicitly rather than omitted
+  — there's a test pinning that.
+- **The `/v1`-shim limitation is gone**, which is why `backend/ai/llm.py` no longer
+  hand-rolls `requests` calls against a native endpoint at all.
+- **The doc drift noted above is fixed**: `CLAUDE.md` no longer claims an `ollama`
+  SDK dependency, because there is no longer an Ollama dependency of any kind.
+
+`_parse_json_response` survives as a fallback for schema-less calls and for
+thinking models that leak a `<think>` block or a ```json fence. The empirical
+table below is kept as history — the numbers describe a runtime the app no longer
+uses.

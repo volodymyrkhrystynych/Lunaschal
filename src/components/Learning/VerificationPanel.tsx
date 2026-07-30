@@ -136,7 +136,7 @@ export function VerificationPanel({ card, onClose, onRevised }: Props) {
         {result?.status === 'providerUnsupported' && (
           <p className="text-sm text-[var(--color-text-muted)] py-4">
             {result.error ||
-              'Verification requires the OpenAI or Ollama provider.'}
+              'Verification needs a tool-calling model; this one does not support it.'}
           </p>
         )}
 

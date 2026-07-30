@@ -117,7 +117,7 @@ def _mock_llm(monkeypatch):
     monkeypatch.setattr('backend.ai.chat_title.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.ai.chat_title.chat_json',
-        lambda transcript, system=None: {'title': 'My Great Title'},
+        lambda transcript, system=None, **kwargs: {'title': 'My Great Title'},
     )
 
 

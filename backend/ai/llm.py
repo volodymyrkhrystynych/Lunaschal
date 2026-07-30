@@ -1,18 +1,24 @@
-"""Shared Ollama LLM helpers.
+"""Shared LLM helpers over llama.cpp's `llama-server`.
 
-These talk to Ollama's **native** `/api/chat` endpoint (over `requests`) rather
-than the OpenAI-compat `/v1` shim, because only the native API lets us set
-`num_ctx` (the context window) per request — and a too-small window is what makes
-a reasoning model's thinking crowd out its actual answer. Tool calling
-(`chat_with_tools`) still uses the OpenAI-compat client; it doesn't need these
-knobs and its message shape is consumed elsewhere.
+`llama-server` implements the OpenAI API, including the two things that used to
+force this module onto Ollama's native endpoint — and both are now *better*:
+
+- **Context window.** There is no per-request `num_ctx` to set, because the KV
+  cache is allocated once when the model loads (`ctx-size` in
+  `llama/presets.ini`). The whole "keep one shared num_ctx or the model reloads"
+  problem simply doesn't exist here.
+- **JSON.** Instead of Ollama's all-or-nothing `format: json`, llama-server
+  compiles a JSON *schema* into a GBNF grammar, so a structured call is valid by
+  construction rather than parsed out of prose. And unlike Ollama's grammar mode,
+  it composes with thinking: the grammar applies to the answer channel only.
+
+Thinking is a boolean, not a level. Gemma 4 has one thinking channel, toggled by
+a chat-template kwarg — there is no low/medium/high/max to map onto.
 """
 import json
 import re
 
-import requests
-
-from backend.ai.provider import get_provider_config, get_ollama_client, DEFAULT_MODELS
+from backend.ai.provider import get_llama_client, get_model, get_provider_config
 
 
 class ToolCallingUnsupported(Exception):
@@ -28,74 +34,29 @@ class EmptyCompletion(ValueError):
 # the call bounded while staying far above any real briefing/flashcard payload.
 JSON_MAX_TOKENS = 4096
 
-# Reasoning levels accepted by Ollama (mapped to the native `think` field).
-# 'none' disables thinking; the rest enable it at that level. Validate before
-# sending so a bad value can't reach the model.
-REASONING_EFFORTS = ('none', 'low', 'medium', 'high', 'max')
+# Output length ceiling (`max_tokens`) for the default conversational model. A
+# hard stop, not a reservation, so it costs nothing until a generation runs long —
+# but it has to stay reachable within `_TIMEOUT`. Gemma 4 26B A4B with its experts
+# served from system RAM measures 25 tok/s, so a ceiling in the tens of thousands
+# of tokens could not finish, turning a runaway generation into a lost reply
+# rather than a capped one.
+LLM_MAX_TOKENS = 4096
 
-# Fallbacks for the default conversational model when the user hasn't set them.
-# num_predict is a hard stop, not a reservation, so it costs nothing until a
-# generation actually runs long — but it has to stay reachable within
-# _NATIVE_TIMEOUT. On a large MoE served mostly from system RAM (~10-15 tok/s),
-# anything past a few thousand tokens can't finish before the request times out,
-# which turns a runaway generation into a lost reply rather than a capped one.
-LLM_MAX_TOKENS = 4096   # num_predict — output length ceiling
-# num_ctx, unlike num_predict, is allocated up front: Ollama sizes the KV cache
-# for the full window at load time. Ollama's own default is 4096; 8192 leaves a
-# thinking model room for prompt + reasoning + answer without reserving VRAM the
-# conversation will never use.
-LLM_NUM_CTX = 8192
-
-# How long to wait on a blocking generation. The briefing model can be large and
-# slow, especially when thinking, so this is deliberately roomy.
-_NATIVE_TIMEOUT = 1800
-
-# Keep the model loaded in memory for a while after each request. Ollama's
-# default is 5m; large reasoning models can take much longer to load, so this
-# reduces the chance that a tabbed-away chat has to wait for a full reload.
-_KEEP_ALIVE = '14h'
-
-
-def default_num_ctx() -> int:
-    """The one context window every request shares.
-
-    Ollama keys a loaded runner on its context size: a request whose `num_ctx`
-    differs from the running one evicts it and reloads the weights from scratch.
-    On a large local model that is tens of seconds of dead time per call — and a
-    single chat message fans out into several calls (classify, then the reply),
-    so a mismatch costs *two* reloads before the user sees a token.
-
-    So there is deliberately one setting, applied to every call: chat, briefing,
-    and every structured `chat_json` helper. What those calls may differ on is
-    output length and reasoning level, neither of which touches the runner.
-
-    Falls back to the module default when settings are unreachable (background
-    threads, tests) rather than letting a helper silently send no `num_ctx` and
-    inherit Ollama's own 4096.
-    """
-    try:
-        from backend.ai.provider import get_settings
-        s = get_settings() or {}
-    except Exception:
-        return LLM_NUM_CTX
-    return s.get('llm_num_ctx') or LLM_NUM_CTX
+# How long to wait on a blocking generation. Deliberately roomy: the model is
+# large and mostly CPU-resident, and slower still when thinking.
+_TIMEOUT = 1800
 
 
 def default_generation_opts() -> dict:
-    """Reasoning level + context window + output ceiling for the default
-    (conversational) model, read from user settings. One standard set applied the
-    same way to every model, thinking or not. Structured `chat_json` calls manage
-    reasoning and output length themselves (reasoning must default to 'none', or
-    the JSON gets crowded out) — but they share `default_num_ctx()`."""
+    """Thinking + output ceiling for the default (conversational) model, read from
+    user settings. The context window is deliberately absent — it belongs to the
+    server, not the request. Structured `chat_json` calls manage both themselves.
+    """
     from backend.ai.provider import get_settings
     s = get_settings() or {}
-    effort = s.get('llm_reasoning_effort') or 'none'
-    if effort not in REASONING_EFFORTS:
-        effort = 'none'
     return {
-        'reasoning_effort': effort,
-        'num_ctx': default_num_ctx(),
-        'num_predict': s.get('llm_max_tokens') or LLM_MAX_TOKENS,
+        'thinking': bool(s.get('llm_thinking')),
+        'max_tokens': s.get('llm_max_tokens') or LLM_MAX_TOKENS,
     }
 
 
@@ -106,11 +67,11 @@ _THINK_RE = re.compile(r'<think>.*?</think>', re.IGNORECASE | re.DOTALL)
 def _parse_json_response(content: str | None) -> dict:
     """Best-effort parse of a JSON completion.
 
-    Some models (reasoning models especially) return empty content or wrap the
-    object in a ```json fence, which makes a bare `json.loads` blow up with an
-    opaque "Expecting value" error. Coalesce None, strip fences/whitespace, and
-    fall back to extracting the first {...} object before giving up with a clear
-    error that says *why*.
+    With a schema attached llama-server guarantees well-formed JSON, so this is
+    now a fallback rather than the main path — it still matters for the
+    schema-less calls and for thinking models that leak a <think> block or wrap
+    the object in a ```json fence, which makes a bare `json.loads` blow up with an
+    opaque "Expecting value" error.
     """
     text = _THINK_RE.sub('', content or '').strip()
     if not text:
@@ -137,125 +98,116 @@ def _messages(prompt: str, system: str | None = None) -> list[dict]:
     return messages
 
 
-def _native_url() -> str:
-    c = get_provider_config()
-    return c['ollama_url'].rstrip('/') + '/api/chat'
+def _request_kwargs(*, thinking: bool, max_tokens: int | None,
+                    schema: dict | None = None) -> dict:
+    """The non-message half of a chat request.
 
-
-def _think_value(reasoning_effort: str):
-    """Map our reasoning level to Ollama's native `think` field: False disables
-    thinking (safe even on non-reasoning models), a level string enables it."""
-    return False if reasoning_effort == 'none' else reasoning_effort
-
-
-def _native_body(messages, *, model, reasoning_effort, num_ctx, num_predict,
-                 json_format=False, stream=False) -> dict:
-    body = {
-        'model': model,
-        'messages': messages,
-        'stream': stream,
-        'think': _think_value(reasoning_effort),
-        'keep_alive': _KEEP_ALIVE,
+    `chat_template_kwargs` rides in `extra_body` because it is a llama.cpp
+    extension the OpenAI SDK doesn't model. Thinking is disabled explicitly
+    rather than by omission — Gemma 4's template defaults it *on*.
+    """
+    kwargs: dict = {
+        'extra_body': {'chat_template_kwargs': {'enable_thinking': thinking}},
     }
-    # JSON grammar mode and thinking don't mix — a reasoning model answers inside
-    # its thinking channel and satisfies the grammar with an empty `{}`. Only
-    # constrain to JSON when we're NOT thinking; otherwise rely on the prompt plus
-    # `_parse_json_response`.
-    if json_format and reasoning_effort == 'none':
-        body['format'] = 'json'
-    options = {}
-    if num_ctx:
-        options['num_ctx'] = num_ctx
-    if num_predict:
-        options['num_predict'] = num_predict
-    if options:
-        body['options'] = options
-    return body
+    if max_tokens:
+        kwargs['max_tokens'] = max_tokens
+    if schema is not None:
+        # No `strict` flag: that is an OpenAI-ism whose subset rules would force
+        # every property to be required. llama.cpp converts the schema to GBNF
+        # directly and honours optional properties, which several of these call
+        # sites rely on.
+        kwargs['response_format'] = {
+            'type': 'json_schema',
+            'json_schema': {'name': 'response', 'schema': schema},
+        }
+    return kwargs
 
 
-def _native_chat(messages, *, model, reasoning_effort='none', num_ctx=None,
-                 num_predict=None, json_format=False) -> str:
-    """Blocking native `/api/chat`; returns the assistant message content."""
-    body = _native_body(messages, model=model, reasoning_effort=reasoning_effort,
-                        num_ctx=num_ctx, num_predict=num_predict,
-                        json_format=json_format, stream=False)
-    r = requests.post(_native_url(), json=body, timeout=_NATIVE_TIMEOUT)
-    r.raise_for_status()
-    data = r.json()
-    if data.get('error'):
-        raise EmptyCompletion(f"ollama error: {data['error']}")
-    return (data.get('message') or {}).get('content') or ''
+def _content(message) -> str:
+    """Assistant text, ignoring the thinking channel.
 
-
-def _native_chat_stream(messages, *, model, reasoning_effort='none', num_ctx=None,
-                        num_predict=None):
-    """Streaming native `/api/chat`; yields assistant content deltas (thinking,
-    which arrives in a separate `thinking` field, is intentionally not yielded)."""
-    body = _native_body(messages, model=model, reasoning_effort=reasoning_effort,
-                        num_ctx=num_ctx, num_predict=num_predict, stream=True)
-    with requests.post(_native_url(), json=body, stream=True,
-                       timeout=_NATIVE_TIMEOUT) as r:
-        r.raise_for_status()
-        for line in r.iter_lines():
-            if not line:
-                continue
-            obj = json.loads(line)
-            if obj.get('error'):
-                raise EmptyCompletion(f"ollama error: {obj['error']}")
-            delta = (obj.get('message') or {}).get('content')
-            if delta:
-                yield delta
+    Depending on how it was launched, llama-server either splits reasoning into a
+    `reasoning_content` field or leaves it inline in `content`; we want the answer
+    either way, so read `content` and let `_parse_json_response` strip any inline
+    <think> block that slipped through.
+    """
+    return getattr(message, 'content', None) or ''
 
 
 def chat_json(prompt: str, system: str | None = None, model: str | None = None,
-              max_tokens: int = JSON_MAX_TOKENS, reasoning_effort: str = 'none',
-              num_ctx: int | None = None) -> dict:
-    """Blocking JSON completion; returns the parsed object. Pass `model` to
-    override the default chat model.
+              max_tokens: int = JSON_MAX_TOKENS, thinking: bool = False,
+              schema: dict | None = None) -> dict:
+    """Blocking JSON completion; returns the parsed object.
 
-    `num_ctx` defaults to the shared `default_num_ctx()` and should almost never
-    be overridden — a value that differs from the chat window makes Ollama reload
-    the model (see `default_num_ctx`), which for these short structured calls
-    costs far more than the call itself.
+    Pass `schema` (a JSON Schema object) to have llama-server constrain the output
+    to it via grammar — strongly preferred, since it removes the whole class of
+    "the model wrote prose instead of JSON" failures. Without one the call still
+    works and falls back to `_parse_json_response`.
 
-    Reasoning is off by default (`reasoning_effort='none'`), and only then is the
-    response constrained to JSON grammar. Pass 'low'/'medium'/'high'/'max' for
-    graded reasoning — the grammar constraint is dropped and the JSON is recovered
-    from the prose the model writes. Thinking needs room inside the shared window:
-    a reasoning model's thinking can otherwise fill it before it writes the answer,
-    yielding empty content."""
-    if reasoning_effort not in REASONING_EFFORTS:
-        reasoning_effort = 'none'
+    Thinking is off by default: for these structured calls it only adds latency,
+    and the answer is machine-read rather than shown to the user.
+    """
     c = get_provider_config()
-    model = model or c['ollama_model'] or DEFAULT_MODELS['ollama']
-    content = _native_chat(
-        _messages(prompt, system), model=model, reasoning_effort=reasoning_effort,
-        num_ctx=num_ctx or default_num_ctx(), num_predict=max_tokens,
-        json_format=True,
+    client = get_llama_client(c)
+    resp = client.chat.completions.create(
+        model=model or get_model(c),
+        messages=_messages(prompt, system),
+        timeout=_TIMEOUT,
+        **_request_kwargs(thinking=thinking, max_tokens=max_tokens, schema=schema),
     )
-    return _parse_json_response(content)
+    return _parse_json_response(_content(resp.choices[0].message))
 
 
 def chat_text(prompt: str, system: str | None = None) -> str:
-    """Blocking plain-text completion (default model's reasoning/ctx/token settings)."""
-    c = get_provider_config()
-    model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-    return _native_chat(_messages(prompt, system), model=model,
-                        **default_generation_opts())
+    """Blocking plain-text completion (default model's thinking/token settings)."""
+    return chat_messages(_messages(prompt, system))
 
 
 def chat_messages(messages: list[dict]) -> str:
     """Blocking plain-text completion over a prebuilt message list (default
-    model's reasoning/ctx/token settings)."""
+    model's thinking/token settings)."""
     c = get_provider_config()
-    model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-    return _native_chat(messages, model=model, **default_generation_opts())
+    client = get_llama_client(c)
+    resp = client.chat.completions.create(
+        model=get_model(c), messages=messages, timeout=_TIMEOUT,
+        **_request_kwargs(**default_generation_opts()),
+    )
+    return _content(resp.choices[0].message)
+
+
+def chat_stream_deltas(messages: list[dict]):
+    """Streaming plain-text completion; yields assistant content deltas.
+
+    Thinking deltas are intentionally not yielded — they arrive either as
+    `reasoning_content` or inside a <think> block, and neither belongs in the
+    user-visible stream.
+    """
+    c = get_provider_config()
+    client = get_llama_client(c)
+    stream = client.chat.completions.create(
+        model=get_model(c), messages=messages, stream=True, timeout=_TIMEOUT,
+        **_request_kwargs(**default_generation_opts()),
+    )
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta
+        text = getattr(delta, 'content', None)
+        if text:
+            yield text
 
 
 def chat_with_tools(messages: list[dict], tools: list[dict]):
-    """One tool-calling turn via the Ollama OpenAI-compat API; returns the message."""
+    """One tool-calling turn; returns the assistant message.
+
+    llama-server parses Gemma 4's native `<|tool_call>call:NAME{...}` notation into
+    OpenAI-shaped `tool_calls` via its peg-gemma4 grammar, which requires the
+    server to run with `--jinja` (see llama/start-llama.sh).
+    """
     c = get_provider_config()
-    client = get_ollama_client(c)
-    model = c['ollama_model'] or DEFAULT_MODELS['ollama']
-    resp = client.chat.completions.create(model=model, messages=messages, tools=tools)
+    client = get_llama_client(c)
+    resp = client.chat.completions.create(
+        model=get_model(c), messages=messages, tools=tools, timeout=_TIMEOUT,
+        **_request_kwargs(thinking=False, max_tokens=None),
+    )
     return resp.choices[0].message

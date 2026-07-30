@@ -35,9 +35,48 @@ Respond with valid JSON:
  "summary": "..."}"""
 
 
+CLAIMS_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'claims': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {'text': {'type': 'string'},
+                               'essential': {'type': 'boolean'}},
+                'required': ['text', 'essential'],
+            },
+        },
+    },
+    'required': ['claims'],
+}
+
+# Same claim list plus the grading verdict. `covered` being a real boolean matters:
+# check_coverage feeds it straight into the suggested rating, and a model that
+# answered "partially" in a string field used to read as falsy.
+COVERAGE_SCHEMA = {
+    'type': 'object',
+    'properties': {
+        'claims': {
+            'type': 'array',
+            'items': {
+                'type': 'object',
+                'properties': {'text': {'type': 'string'},
+                               'essential': {'type': 'boolean'},
+                               'covered': {'type': 'boolean'},
+                               'note': {'type': 'string'}},
+                'required': ['text', 'covered'],
+            },
+        },
+        'summary': {'type': 'string'},
+    },
+    'required': ['claims', 'summary'],
+}
+
+
 def decompose_claims(question: str, answer: str) -> list[dict]:
     result = chat_json(f'Question: {question}\n\nGround-truth answer: {answer}',
-                       system=CLAIMS_SYSTEM)
+                       system=CLAIMS_SYSTEM, schema=CLAIMS_SCHEMA)
     claims = []
     for c in result.get('claims') or []:
         if isinstance(c, dict) and c.get('text'):
@@ -53,7 +92,7 @@ def check_coverage(claims: list[dict], user_answer: str) -> dict:
     )
     result = chat_json(
         f"Ground-truth claims:\n{claims_text}\n\nUser's answer:\n{user_answer}",
-        system=COVERAGE_SYSTEM,
+        system=COVERAGE_SYSTEM, schema=COVERAGE_SCHEMA,
     )
     graded = []
     by_text = {c['text']: c for c in claims}

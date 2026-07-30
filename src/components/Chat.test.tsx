@@ -57,7 +57,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   vi.mocked(api.chat.today).mockResolvedValue(null);
   vi.mocked(api.settings.get).mockResolvedValue({
-    ollamaUrl: 'http://localhost:11434',
+    llamaUrl: 'http://localhost:8080',
   } as never);
   vi.mocked(api.chat.createConversation).mockResolvedValue({ id: 'c1' });
   vi.mocked(api.chat.addMessage).mockResolvedValue({ id: 'm1' });
@@ -73,9 +73,10 @@ afterEach(() => {
 
 describe('Chat send ordering', () => {
   it('does not classify until the reply has finished streaming', async () => {
-    // Ollama serves one request at a time per model: a classify fired in
-    // parallel with the reply wins the queue, and the user waits out a whole
-    // second generation before their first token.
+    // Still true on llama-server: the chat model runs with two slots, so a
+    // classify fired in parallel with the reply takes the other one and competes
+    // for the same CPU-resident experts — the user waits out a second generation
+    // before their first token.
     const stream = openStream();
     const fetchMock = vi.fn().mockResolvedValue(stream.response);
     vi.stubGlobal('fetch', fetchMock);

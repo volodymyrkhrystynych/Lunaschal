@@ -1,13 +1,17 @@
-"""Tests for the provider-agnostic JSON-mode parse helper in backend.ai.llm.
+"""Tests for backend.ai.llm: JSON parsing and llama-server request construction.
 
-Reasoning models (and models that ignore JSON mode) can return empty content or
-wrap the object in a ```json fence; a bare json.loads then blows up with an
-opaque "Expecting value" error. `_parse_json_response` normalizes those cases.
+`_parse_json_response` is now a fallback rather than the main path — with a schema
+attached llama-server guarantees well-formed JSON — but it still covers the
+schema-less calls and thinking models that leak a <think> block or a ```json
+fence, either of which makes a bare json.loads blow up with an opaque
+"Expecting value" error.
 """
 import pytest
 
 from backend.ai import llm
-from backend.ai.llm import _parse_json_response, EmptyCompletion, chat_json, _native_body
+from backend.ai.llm import (
+    _parse_json_response, _request_kwargs, EmptyCompletion,
+)
 
 
 def test_parses_plain_json():
@@ -49,101 +53,96 @@ def test_non_json_content_raises_empty_completion():
         _parse_json_response('I cannot help with that.')
 
 
-# --- native /api/chat body construction ---
 
-def test_native_body_json_grammar_when_not_thinking():
-    body = _native_body([], model='m', reasoning_effort='none', num_ctx=8192,
-                        num_predict=2048, json_format=True)
-    assert body['think'] is False
-    assert body['format'] == 'json'          # grammar constraint applied
-    assert body['options'] == {'num_ctx': 8192, 'num_predict': 2048}
+# --- OpenAI-style request construction ---
+#
+# These replace the old Ollama `_native_body` tests. Two things they pin down that
+# the migration could plausibly get wrong: thinking must be sent *explicitly*
+# (Gemma 4's chat template defaults it on, so omitting the kwarg silently enables
+# reasoning on every call), and no request may carry a context-window field —
+# llama-server fixes the window at load time and a stray `num_ctx` would be a
+# leftover from the Ollama design.
 
-
-def test_native_body_drops_grammar_and_sets_think_when_reasoning():
-    body = _native_body([], model='m', reasoning_effort='low', num_ctx=16384,
-                        num_predict=4096, json_format=True)
-    # Grammar dropped (collides with thinking); think carries the level.
-    assert 'format' not in body
-    assert body['think'] == 'low'
-
-
-def test_native_body_omits_options_when_unset():
-    body = _native_body([], model='m', reasoning_effort='none', num_ctx=None,
-                        num_predict=None)
-    assert 'options' not in body
+def test_request_kwargs_disables_thinking_explicitly():
+    kwargs = _request_kwargs(thinking=False, max_tokens=2048)
+    assert kwargs['extra_body']['chat_template_kwargs']['enable_thinking'] is False
+    assert kwargs['max_tokens'] == 2048
+    assert 'response_format' not in kwargs
 
 
-def _stub_native(monkeypatch, captured):
-    """Capture the kwargs chat_* pass into the native transport."""
-    def fake_native_chat(messages, **kwargs):
-        captured.clear()
-        captured.update(kwargs)
-        return '{"ok": true}'
-    monkeypatch.setattr(llm, 'get_provider_config', lambda: {'ollama_model': 'm'})
-    monkeypatch.setattr(llm, '_native_chat', fake_native_chat)
+def test_request_kwargs_enables_thinking():
+    kwargs = _request_kwargs(thinking=True, max_tokens=None)
+    assert kwargs['extra_body']['chat_template_kwargs']['enable_thinking'] is True
+    assert 'max_tokens' not in kwargs
 
 
-def test_chat_json_forwards_reasoning_and_num_ctx(monkeypatch):
-    captured = {}
-    _stub_native(monkeypatch, captured)
-    chat_json('hi', reasoning_effort='high', num_ctx=16384)
-    assert captured['reasoning_effort'] == 'high'
-    assert captured['num_ctx'] == 16384
-    assert captured['json_format'] is True
+def test_request_kwargs_attaches_json_schema():
+    schema = {'type': 'object', 'properties': {'a': {'type': 'string'}}}
+    kwargs = _request_kwargs(thinking=False, max_tokens=64, schema=schema)
+    rf = kwargs['response_format']
+    assert rf['type'] == 'json_schema'
+    assert rf['json_schema']['schema'] is schema
+    # No `strict`: it would impose OpenAI's all-properties-required subset, which
+    # several call sites (recipes, food) deliberately violate with optional keys.
+    assert 'strict' not in rf['json_schema']
 
 
-def test_chat_json_defaults_to_the_shared_num_ctx(client, monkeypatch):
-    """The bug this guards: `chat_json` used to default num_ctx to None, so the
-    option was omitted and Ollama fell back to its own 4096. Every classify /
-    title / metadata call then disagreed with the chat window, and Ollama
-    evicted and reloaded the model — twice per chat message."""
-    captured = {}
-    _stub_native(monkeypatch, captured)
-    from backend.db import connection
-    db = connection.get_db()
-    db.execute(
-        'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)'
-    )
-    db.execute('UPDATE settings SET llm_num_ctx=? WHERE id=1', (32768,))
-    db.commit()
-
-    chat_json('hi')
-    assert captured['num_ctx'] == 32768
-    # ...and it matches what the streaming chat asks for, which is the point.
-    assert llm.default_generation_opts()['num_ctx'] == 32768
+def test_no_request_carries_a_context_window():
+    for kwargs in (_request_kwargs(thinking=False, max_tokens=100),
+                   _request_kwargs(thinking=True, max_tokens=None, schema={})):
+        assert 'num_ctx' not in kwargs
+        assert 'num_ctx' not in kwargs.get('extra_body', {})
 
 
-def test_chat_json_num_ctx_falls_back_when_settings_unreachable(monkeypatch):
-    """Callers without a DB context (background threads, one-off scripts) must
-    still send an explicit window rather than inheriting Ollama's 4096."""
-    from backend.ai import provider
+class _FakeCompletions:
+    """Minimal stand-in for client.chat.completions, capturing the call."""
 
-    def boom():
-        raise RuntimeError('no application context')
+    def __init__(self, captured, content='{"ok": true}'):
+        self.captured = captured
+        self.content = content
 
-    monkeypatch.setattr(provider, 'get_settings', boom)
-    captured = {}
-    _stub_native(monkeypatch, captured)
-    chat_json('hi')
-    assert captured['num_ctx'] == llm.LLM_NUM_CTX
+    def create(self, **kwargs):
+        self.captured.clear()
+        self.captured.update(kwargs)
+        message = type('M', (), {'content': self.content})()
+        choice = type('C', (), {'message': message})()
+        return type('R', (), {'choices': [choice]})()
 
 
-def test_chat_json_coerces_invalid_reasoning_effort_to_none(monkeypatch):
-    captured = {}
-    _stub_native(monkeypatch, captured)
-    chat_json('hi', reasoning_effort='turbo')
-    assert captured['reasoning_effort'] == 'none'
+def _stub_client(monkeypatch, captured, content='{"ok": true}'):
+    completions = _FakeCompletions(captured, content)
+    client = type('Client', (), {'chat': type('Chat', (), {'completions': completions})()})()
+    monkeypatch.setattr(llm, 'get_llama_client', lambda *a, **k: client)
+    monkeypatch.setattr(llm, 'get_provider_config', lambda: {'llama_model': 'gemma4'})
+    monkeypatch.setattr(llm, 'get_model', lambda *a, **k: 'gemma4')
+    return captured
+
+
+def test_chat_json_sends_schema_and_thinking(monkeypatch):
+    captured = _stub_client(monkeypatch, {})
+    schema = {'type': 'object'}
+    assert llm.chat_json('hi', thinking=True, schema=schema) == {'ok': True}
+    assert captured['model'] == 'gemma4'
+    assert captured['response_format']['json_schema']['schema'] is schema
+    assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is True
+
+
+def test_chat_json_defaults_thinking_off(monkeypatch):
+    """Structured calls are machine-read; thinking only adds latency. And since
+    Gemma 4's template defaults it on, "off" has to be sent, not omitted."""
+    captured = _stub_client(monkeypatch, {})
+    llm.chat_json('hi')
+    assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is False
 
 
 def test_default_generation_opts_reads_settings(client):
-    from backend.ai.llm import LLM_MAX_TOKENS, LLM_NUM_CTX, default_generation_opts
+    from backend.ai.llm import LLM_MAX_TOKENS, default_generation_opts
     from backend.db import connection
 
-    # No settings row -> hard defaults.
+    # No settings row -> hard defaults, thinking off.
     assert default_generation_opts() == {
-        'reasoning_effort': 'none',
-        'num_ctx': LLM_NUM_CTX,
-        'num_predict': LLM_MAX_TOKENS,
+        'thinking': False,
+        'max_tokens': LLM_MAX_TOKENS,
     }
 
     db = connection.get_db()
@@ -151,43 +150,25 @@ def test_default_generation_opts_reads_settings(client):
         'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)'
     )
     db.execute(
-        'UPDATE settings SET llm_reasoning_effort=?, llm_max_tokens=?, llm_num_ctx=? WHERE id=1',
-        ('medium', 2048, 12288),
+        'UPDATE settings SET llm_thinking=?, llm_max_tokens=? WHERE id=1',
+        (1, 2048),
     )
     db.commit()
-    assert default_generation_opts() == {
-        'reasoning_effort': 'medium', 'num_ctx': 12288, 'num_predict': 2048,
-    }
+    assert default_generation_opts() == {'thinking': True, 'max_tokens': 2048}
 
 
-def test_default_generation_opts_coerces_invalid_effort(client):
-    from backend.ai.llm import default_generation_opts
-    from backend.db import connection
-
-    db = connection.get_db()
-    db.execute(
-        'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)'
-    )
-    db.execute("UPDATE settings SET llm_reasoning_effort='bogus' WHERE id=1")
-    db.commit()
-    assert default_generation_opts()['reasoning_effort'] == 'none'
-
-
-def test_chat_text_applies_default_generation_opts(client, monkeypatch):
-    captured = {}
-    _stub_native(monkeypatch, captured)
+def test_chat_messages_applies_default_generation_opts(client, monkeypatch):
+    captured = _stub_client(monkeypatch, {}, content='hello there')
     from backend.db import connection
     db = connection.get_db()
     db.execute(
         'INSERT OR IGNORE INTO settings(id, created_at, updated_at) VALUES (1,0,0)'
     )
     db.execute(
-        'UPDATE settings SET llm_reasoning_effort=?, llm_max_tokens=?, llm_num_ctx=? WHERE id=1',
-        ('low', 1234, 9000),
+        'UPDATE settings SET llm_thinking=?, llm_max_tokens=? WHERE id=1', (1, 1234),
     )
     db.commit()
 
-    llm.chat_text('hello')
-    assert captured['reasoning_effort'] == 'low'
-    assert captured['num_predict'] == 1234
-    assert captured['num_ctx'] == 9000
+    assert llm.chat_text('hello') == 'hello there'
+    assert captured['max_tokens'] == 1234
+    assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is True

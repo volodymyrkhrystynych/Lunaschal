@@ -135,6 +135,15 @@ typo fixes, rephrasing, formatting, reordering that leaves every fact intact.
 
 Respond with valid JSON: {"semantic": true or false}"""
 
+# A one-key boolean, but worth constraining: the caller defaults a missing or
+# non-boolean `semantic` to True, which resets the card's FSRS schedule. The
+# grammar makes "the model wrote 'yes'" stop costing the user their review history.
+_SEMANTIC_SCHEMA = {
+    'type': 'object',
+    'properties': {'semantic': {'type': 'boolean'}},
+    'required': ['semantic'],
+}
+
 
 def _normalize(text: str) -> str:
     return ' '.join(re.sub(r'[^\w\s]', '', text.casefold()).split())
@@ -149,7 +158,7 @@ def judge_semantic_change(old_answer: str, new_answer: str) -> bool:
     try:
         result = chat_json(
             f'Old answer:\n{old_answer}\n\nNew answer:\n{new_answer}',
-            system=SEMANTIC_SYSTEM,
+            system=SEMANTIC_SYSTEM, schema=_SEMANTIC_SCHEMA,
         )
         return bool(result.get('semantic', True))
     except Exception:

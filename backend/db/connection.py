@@ -91,6 +91,9 @@ def init_db() -> None:
     _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
     _ensure_llm_generation_settings(db)
+    # Must run after the two above: it drops the graded reasoning_effort columns
+    # they used to own, reading their values first.
+    _ensure_llama_server_settings(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -440,47 +443,100 @@ def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
         # the briefing as standing context so the secretary knows what they're
         # working towards.
         db.execute('ALTER TABLE settings ADD COLUMN briefing_goals TEXT')
-    if 'briefing_reasoning_effort' not in cols:
-        # How hard the briefing model "thinks" before answering: one of
-        # none/low/medium/high/max (Ollama's reasoning_effort levels). 'none' by
-        # default — reasoning models otherwise spend their whole output budget on
-        # chain-of-thought, leaving the JSON empty/truncated.
-        db.execute(
-            "ALTER TABLE settings ADD COLUMN briefing_reasoning_effort TEXT DEFAULT 'none'"
-        )
+    # briefing_reasoning_effort is gone — thinking is now the boolean
+    # briefing_thinking, owned by _ensure_llama_server_settings.
     if 'briefing_max_tokens' not in cols:
         # Output-token ceiling for the briefing completion. The briefing runs
         # overnight, so this is deliberately generous.
         db.execute('ALTER TABLE settings ADD COLUMN briefing_max_tokens INTEGER DEFAULT 16384')
     if 'briefing_num_ctx' not in cols:
-        # Retired: the context window is now a single shared setting
-        # (llm_num_ctx), because changing num_ctx between requests makes Ollama
-        # reload the weights — a separate briefing window bought a reload at 4am
-        # and another on the user's next message. Nothing reads this column; it
-        # stays only so the migration remains an append-only ALTER.
+        # Retired, twice over: the context window was first collapsed into one
+        # shared setting, and is now fixed at llama-server load time and not
+        # settable per request at all. Nothing reads this column; it stays only so
+        # the migration remains an append-only ALTER.
         db.execute('ALTER TABLE settings ADD COLUMN briefing_num_ctx INTEGER DEFAULT 8192')
     db.commit()
 
 
 def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
-    """Reasoning level + output ceiling applied to the default (conversational)
-    model — the one the user chats with. Kept deliberately simple: one standard
-    pair that applies the same way to every model, thinking or not."""
+    """Output ceiling for the default (conversational) model — the one the user
+    chats with. Thinking lives in the boolean llm_thinking, owned by
+    _ensure_llama_server_settings."""
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
-    if 'llm_reasoning_effort' not in cols:
-        db.execute(
-            "ALTER TABLE settings ADD COLUMN llm_reasoning_effort TEXT DEFAULT 'none'"
-        )
     if 'llm_max_tokens' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN llm_max_tokens INTEGER DEFAULT 4096')
     if 'llm_num_ctx' not in cols:
-        # Context window (num_ctx) for *every* LLM call — chat, briefing and the
-        # structured helpers alike, since a mismatch reloads the model. Ollama's
-        # own default is 4096; 8192 gives a thinking model room for prompt +
-        # reasoning + answer together. Raise it for a long-context model, but
-        # cost scales with the model's KV shape, not its size — see
-        # docs/learnings/local-model-context-budget.md.
+        # Retired: the context window is fixed when llama-server loads the model
+        # (ctx-size in llama/presets.ini) and cannot be set per request, so
+        # nothing reads this column. It stays only so the migration remains an
+        # append-only ALTER — see docs/learnings/local-model-context-budget.md.
         db.execute('ALTER TABLE settings ADD COLUMN llm_num_ctx INTEGER DEFAULT 8192')
+    db.commit()
+
+
+def _ensure_llama_server_settings(db: sqlite3.Connection) -> None:
+    """Move the local-inference settings from Ollama to llama.cpp's llama-server.
+
+    Two shape changes, not just a rename:
+
+    - `ollama_url`/`ollama_model` become `llama_url`/`llama_model`. The port moves
+      from 11434 to 8080 and the model name becomes a llama-server *router alias*
+      (a section name in llama/presets.ini) rather than an Ollama tag, so the old
+      value is deliberately NOT copied forward — 'qwen3.6:35b' is not a valid
+      alias and silently keeping it would 404 every call. A NULL model means
+      "whatever the router loads by default".
+    - `llm_reasoning_effort`/`briefing_reasoning_effort` (Ollama's graded
+      none/low/medium/high/max) collapse to booleans, because Gemma 4 has a single
+      thinking channel toggled by a chat-template kwarg, with no levels.
+
+      These two migrate *differently*, deliberately. The graded levels are not
+      equivalent to Gemma 4's channel: a level bounded how much the old model
+      thought, whereas Gemma 4's channel is unbounded, and measured here it costs
+      **25s to first token instead of 1.3s** on a trivial prompt. So the
+      interactive chat setting resets to off no matter what it was — a user who
+      had 'high' did not ask for a 20x latency regression, and Settings makes it
+      one click to opt back in. The briefing keeps its old intent, since it runs
+      overnight where the tokens are free.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+
+    if 'llama_url' not in cols:
+        db.execute(
+            "ALTER TABLE settings ADD COLUMN llama_url TEXT DEFAULT 'http://localhost:8080'"
+        )
+    if 'llama_model' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN llama_model TEXT')
+    for dead in ('ollama_url', 'ollama_model'):
+        if dead in cols:
+            db.execute(f'ALTER TABLE settings DROP COLUMN {dead}')
+
+    # briefing_model holds the same kind of value as the retired ollama_model — an
+    # Ollama tag like 'qwen3.6:35b' — and survives in its own column, so it has to
+    # be cleared on the same grounds: it is not a router alias, and leaving it
+    # would 404 every overnight briefing while the interactive chat kept working,
+    # which is a miserable thing to debug. NULL means "same as the chat model".
+    # Keyed off the presence of the old columns so a user who later picks a real
+    # alias keeps it.
+    if 'ollama_model' in cols and 'briefing_model' in cols:
+        db.execute("UPDATE settings SET briefing_model = NULL"
+                   " WHERE briefing_model IS NOT NULL")
+
+    # Graded effort -> boolean. `carry_over` says whether the old intent survives:
+    # the briefing's does, the latency-sensitive chat path's does not (see above).
+    for old, new, carry_over in (
+        ('llm_reasoning_effort', 'llm_thinking', False),
+        ('briefing_reasoning_effort', 'briefing_thinking', True),
+    ):
+        if new in cols:
+            continue
+        db.execute(f'ALTER TABLE settings ADD COLUMN {new} INTEGER DEFAULT 0')
+        if old in cols:
+            if carry_over:
+                db.execute(
+                    f"UPDATE settings SET {new} = CASE"
+                    f" WHEN {old} IS NULL OR {old} = 'none' THEN 0 ELSE 1 END"
+                )
+            db.execute(f'ALTER TABLE settings DROP COLUMN {old}')
     db.commit()
 
 
