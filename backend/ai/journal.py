@@ -161,15 +161,31 @@ def classify_entry_for_tag(content: str, tag_name: str) -> bool:
     return False
 
 
+class PolishUnavailable(Exception):
+    """The polish could not be produced — no AI configured, or the call to it
+    failed. Distinct from "the model returned the text unchanged", which is a
+    successful polish that happened to need no edits."""
+
+
 def polish_journal_entry(raw_text: str) -> str:
+    """Return the cleaned-up text, or raise PolishUnavailable.
+
+    It deliberately does NOT fall back to returning `raw_text`: callers used to
+    be unable to tell a real polish from a swallowed connection error, so a
+    failed call would overwrite an already-polished entry with its raw
+    transcript and report success. Callers decide what a failure means for them
+    — the background path leaves the entry alone, the route reports 503.
+    """
     if not raw_text.strip():
         return raw_text
+    if not is_ai_configured():
+        raise PolishUnavailable('AI is not configured')
     try:
-        if not is_ai_configured():
-            return raw_text
         result = chat_text(raw_text, system=_SYSTEM)
-        return _clean_polish_output(result) or raw_text
     except Exception as e:
-        logger.error('Journal polish failed, using raw text: %s', e)
-
-    return raw_text
+        logger.error('Journal polish failed: %s', e)
+        raise PolishUnavailable(str(e)) from e
+    cleaned = _clean_polish_output(result)
+    if not cleaned:
+        raise PolishUnavailable('model returned an empty polish')
+    return cleaned

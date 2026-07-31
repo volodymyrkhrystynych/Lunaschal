@@ -94,6 +94,9 @@ def init_db() -> None:
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
     _ensure_llama_server_settings(db)
+    # After it: llama_vision_model is a llama-server-era column, so there is no
+    # point adding it to a settings table that migration is still reshaping.
+    _ensure_llama_vision_model(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -113,6 +116,7 @@ def init_db() -> None:
     _ensure_meeting_whisper_columns(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
+    _reset_stale_attachment_transcripts(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -327,6 +331,19 @@ def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _reset_stale_attachment_transcripts(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_fic_downloads: transcription/captioning
+    runs on a background worker whose state dies with the process, so a row
+    still 'running' at startup has no thread left behind it. Reset to 'idle'
+    rather than 'error' — nothing was lost, the button is simply clickable
+    again."""
+    db.execute(
+        "UPDATE journal_attachments SET transcript_status='idle'"
+        " WHERE transcript_status='running'"
+    )
+    db.commit()
+
+
 def _ensure_hf_token(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'hf_token' not in cols:
@@ -472,6 +489,18 @@ def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
         # append-only ALTER — see docs/learnings/local-model-context-budget.md.
         db.execute('ALTER TABLE settings ADD COLUMN llm_num_ctx INTEGER DEFAULT 8192')
     db.commit()
+
+
+def _ensure_llama_vision_model(db: sqlite3.Connection) -> None:
+    """Router alias for image captioning (journal photo attachments). Left NULL,
+    which means captioning is off: the chat presets set `mmproj-auto = false`
+    and there is no VRAM headroom for the projector alongside the 26B, so
+    defaulting this to anything would just produce a button that always errors.
+    See backend/ai/images.py."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'llama_vision_model' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN llama_vision_model TEXT')
+        db.commit()
 
 
 def _ensure_llama_server_settings(db: sqlite3.Connection) -> None:

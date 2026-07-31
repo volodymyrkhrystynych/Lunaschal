@@ -1,5 +1,7 @@
 // Typed API client — replaces tRPC hooks
 
+import { uploadFilenameFor } from '../lib/journalAttachments';
+
 export interface JournalEntry {
   id: string;
   content: string;
@@ -8,8 +10,26 @@ export interface JournalEntry {
   tags: string | null;
   curatedTags: string[];
   ficRefs?: FicRef[];
+  attachments?: JournalAttachment[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface JournalAttachment {
+  id: string;
+  entryId: string;
+  kind: 'audio' | 'video' | 'image';
+  /** The user's label — what this recording, video or photo is about. */
+  name: string;
+  url: string;
+  mime: string | null;
+  size: number | null;
+  position: number;
+  /** Transcript for audio, caption for an image. Null until asked for. */
+  transcript: string | null;
+  transcriptStatus: 'idle' | 'running' | 'done' | 'error';
+  transcriptError: string | null;
+  createdAt: string;
 }
 
 export interface FicRef {
@@ -420,6 +440,9 @@ export interface AppSettings {
   /** A llama-server router alias — a section name in llama/presets.ini, not a
    * file name. */
   llamaModel: string | null;
+  /** Separate alias for image captioning: the chat presets skip Gemma 4's vision
+   * tower to fit in VRAM, so an empty string means photo captioning is off. */
+  llamaVisionModel: string;
   /** Gemma 4's thinking channel is on or off; there are no graded levels. */
   llmThinking: boolean;
   llmMaxTokens: number;
@@ -910,6 +933,34 @@ export const api = {
     delete: (id: string) => del<{ success: boolean }>(`/api/journal/${id}`),
     polish: (id: string) =>
       post<{ success: boolean; content: string }>(`/api/journal/${id}/polish`),
+
+    attachments: {
+      list: (entryId: string) =>
+        get<JournalAttachment[]>(`/api/journal/${entryId}/attachments`),
+      upload: (entryId: string, file: File, name?: string) => {
+        const form = new FormData();
+        // Explicit filename: an iOS voice memo is a File with an empty `name`,
+        // and the two-argument form would send `filename=""`.
+        form.append('file', file, uploadFilenameFor(file));
+        if (name?.trim()) form.append('name', name.trim());
+        return upload<JournalAttachment>(
+          `/api/journal/${entryId}/attachments`,
+          form
+        );
+      },
+      rename: (attachmentId: string, name: string) =>
+        patch<JournalAttachment>(`/api/journal/attachments/${attachmentId}`, {
+          name,
+        }),
+      delete: (attachmentId: string) =>
+        del<{ success: boolean }>(`/api/journal/attachments/${attachmentId}`),
+      // Opt-in per attachment: transcribes audio, captions an image. Returns
+      // as soon as the work is queued; the result arrives over /api/journal/events.
+      transcribe: (attachmentId: string) =>
+        post<JournalAttachment>(
+          `/api/journal/attachments/${attachmentId}/transcribe`
+        ),
+    },
   },
 
   transcriptions: {

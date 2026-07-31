@@ -1,0 +1,397 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { JournalAttachments } from './JournalAttachments';
+import { api, type JournalAttachment } from '../hooks/api';
+
+vi.mock('../hooks/api', () => ({
+  api: {
+    journal: {
+      attachments: {
+        list: vi.fn(),
+        upload: vi.fn(),
+        rename: vi.fn(),
+        delete: vi.fn(),
+        transcribe: vi.fn(),
+      },
+    },
+  },
+}));
+
+function attachment(over: Partial<JournalAttachment> = {}): JournalAttachment {
+  const id = over.id ?? 'a1';
+  return {
+    id,
+    entryId: 'e1',
+    kind: 'audio',
+    name: 'Walk home',
+    // Derived, not hardcoded: the server builds this from the id, and a fixture
+    // that pinned it to a1 made every row claim the same file.
+    url: `/api/journal/attachments/${id}/file`,
+    mime: 'audio/mp4',
+    size: 2048,
+    position: 0,
+    transcript: null,
+    transcriptStatus: 'idle',
+    transcriptError: null,
+    createdAt: '2026-07-30T12:00:00Z',
+    ...over,
+  };
+}
+
+function renderIt(
+  attachments: JournalAttachment[] | undefined,
+  editable = true
+) {
+  const qc = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={qc}>
+      <JournalAttachments
+        entryId="e1"
+        attachments={attachments}
+        editable={editable}
+      />
+    </QueryClientProvider>
+  );
+}
+
+beforeEach(() => vi.clearAllMocks());
+
+describe('JournalAttachments', () => {
+  it('summarizes the collapsed section', () => {
+    renderIt([attachment(), attachment({ id: 'a2', kind: 'image' })]);
+    expect(screen.getByText(/1 recording, 1 photo/)).toBeTruthy();
+  });
+
+  it('stays out of the way when there is nothing to show and nothing to add', () => {
+    const { container } = renderIt([], false);
+    expect(container.innerHTML).toBe('');
+  });
+
+  it('offers add buttons only while editing', () => {
+    const { unmount } = renderIt([attachment()], true);
+    expect(screen.getByText('Add audio or video')).toBeTruthy();
+    expect(screen.getByText('Add photo')).toBeTruthy();
+    expect(screen.getByText('Paste')).toBeTruthy();
+    unmount();
+
+    renderIt([attachment()], false);
+    expect(screen.queryByText('Add audio or video')).toBeNull();
+    expect(screen.queryByText('Add photo')).toBeNull();
+    expect(screen.queryByText('Paste')).toBeNull();
+  });
+
+  it('uploads a picked file, naming it after the filename', async () => {
+    vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
+    const { container } = renderIt([]);
+
+    const input = container.querySelector<HTMLInputElement>(
+      '[data-testid="journal-audio-input"]'
+    )!;
+    const file = new File(['x'], 'voice-memo-004.m4a', { type: 'audio/mp4' });
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() =>
+      expect(api.journal.attachments.upload).toHaveBeenCalledWith(
+        'e1',
+        file,
+        'voice-memo-004'
+      )
+    );
+  });
+
+  it('renders a player matched to each kind', () => {
+    const { container } = renderIt([
+      attachment(),
+      attachment({ id: 'a2', kind: 'image', name: 'The sink' }),
+      attachment({ id: 'a3', kind: 'video', name: 'Talking it through' }),
+    ]);
+    expect(container.querySelector('audio')?.getAttribute('src')).toBe(
+      '/api/journal/attachments/a1/file'
+    );
+    expect(container.querySelector('img')?.getAttribute('alt')).toBe(
+      'The sink'
+    );
+    // A video in an <audio> element would silently lose the picture.
+    expect(container.querySelector('video')?.getAttribute('src')).toBe(
+      '/api/journal/attachments/a3/file'
+    );
+  });
+
+  // The point of the whole paste path: a voice memo copied on a phone should not
+  // have to be exported to Files and picked back out.
+  describe('paste and drop', () => {
+    const pasteEvent = (files: File[]) => ({
+      clipboardData: { files: files as unknown as FileList },
+    });
+
+    it('uploads a pasted media file', async () => {
+      vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
+      const { container } = renderIt([]);
+      const zone = container.querySelector(
+        '[data-testid="journal-attachment-dropzone"]'
+      )!;
+
+      const memo = new File(['x'], 'New Recording 4.m4a', {
+        type: 'audio/mp4',
+      });
+      fireEvent.paste(zone, pasteEvent([memo]));
+
+      await waitFor(() =>
+        expect(api.journal.attachments.upload).toHaveBeenCalledWith(
+          'e1',
+          memo,
+          'New Recording 4'
+        )
+      );
+    });
+
+    it('uploads several pasted files in order', async () => {
+      vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
+      const { container } = renderIt([]);
+      const zone = container.querySelector(
+        '[data-testid="journal-attachment-dropzone"]'
+      )!;
+
+      const first = new File(['x'], 'a.m4a', { type: 'audio/mp4' });
+      const second = new File(['x'], 'b.mov', { type: 'video/quicktime' });
+      fireEvent.paste(zone, pasteEvent([first, second]));
+
+      await waitFor(() =>
+        expect(api.journal.attachments.upload).toHaveBeenCalledTimes(2)
+      );
+      expect(
+        vi.mocked(api.journal.attachments.upload).mock.calls.map(c => c[1])
+      ).toEqual([first, second]);
+    });
+
+    it('says why a paste it cannot take was ignored', async () => {
+      const { container } = renderIt([]);
+      const zone = container.querySelector(
+        '[data-testid="journal-attachment-dropzone"]'
+      )!;
+
+      fireEvent.paste(
+        zone,
+        pasteEvent([new File(['x'], 'notes.pdf', { type: 'application/pdf' })])
+      );
+
+      // Silence here is what made the earlier version feel broken.
+      expect(await screen.findByText(/Can't attach notes\.pdf/)).toBeTruthy();
+      expect(api.journal.attachments.upload).not.toHaveBeenCalled();
+    });
+
+    it('uploads a file iOS handed over with no name', async () => {
+      vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
+      const { container } = renderIt([]);
+      const zone = container.querySelector(
+        '[data-testid="journal-attachment-dropzone"]'
+      )!;
+
+      const nameless = new File(['x'], '', { type: 'audio/mp4' });
+      fireEvent.drop(zone, {
+        dataTransfer: { files: [nameless] as unknown as FileList },
+      });
+
+      await waitFor(() =>
+        expect(api.journal.attachments.upload).toHaveBeenCalledWith(
+          'e1',
+          nameless,
+          ''
+        )
+      );
+    });
+
+    it('leaves an ordinary text paste alone', () => {
+      const { container } = renderIt([]);
+      const zone = container.querySelector(
+        '[data-testid="journal-attachment-dropzone"]'
+      )!;
+
+      fireEvent.paste(zone, pasteEvent([]));
+      expect(api.journal.attachments.upload).not.toHaveBeenCalled();
+    });
+
+    it('ignores a paste outside edit mode', () => {
+      const { container } = renderIt([attachment()], false);
+      const zone = container.querySelector(
+        '[data-testid="journal-attachment-dropzone"]'
+      )!;
+
+      fireEvent.paste(
+        zone,
+        pasteEvent([new File(['x'], 'a.m4a', { type: 'audio/mp4' })])
+      );
+      expect(api.journal.attachments.upload).not.toHaveBeenCalled();
+    });
+
+    // Safari offers no paste affordance unless the tap lands in an editable
+    // field, so there is an explicit button as well as the event handler.
+    describe('the Paste button', () => {
+      const stubClipboard = (read: () => Promise<unknown[]>) =>
+        vi.stubGlobal('navigator', { ...navigator, clipboard: { read } });
+
+      afterEach(() => vi.unstubAllGlobals());
+
+      it('uploads audio it finds on the clipboard', async () => {
+        vi.mocked(api.journal.attachments.upload).mockResolvedValue(
+          attachment()
+        );
+        stubClipboard(async () => [
+          {
+            types: ['audio/mp4'],
+            getType: async () => new Blob(['x'], { type: 'audio/mp4' }),
+          },
+        ]);
+        renderIt([]);
+
+        fireEvent.click(screen.getByText('Paste'));
+
+        await waitFor(() =>
+          expect(api.journal.attachments.upload).toHaveBeenCalled()
+        );
+        expect(
+          vi.mocked(api.journal.attachments.upload).mock.calls[0][1].type
+        ).toBe('audio/mp4');
+      });
+
+      it('says so when the clipboard holds nothing attachable', async () => {
+        stubClipboard(async () => [
+          { types: ['text/plain'], getType: async () => new Blob(['hi']) },
+        ]);
+        renderIt([]);
+
+        fireEvent.click(screen.getByText('Paste'));
+
+        expect(
+          await screen.findByText(/clipboard has no audio, video or image/)
+        ).toBeTruthy();
+        expect(api.journal.attachments.upload).not.toHaveBeenCalled();
+      });
+
+      it('reports a clipboard the browser refuses to read', async () => {
+        stubClipboard(async () => {
+          throw new Error('Read permission denied');
+        });
+        renderIt([]);
+
+        fireEvent.click(screen.getByText('Paste'));
+
+        expect(await screen.findByText(/Read permission denied/)).toBeTruthy();
+      });
+    });
+
+    it('uploads a dropped file', async () => {
+      vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
+      const { container } = renderIt([]);
+      const zone = container.querySelector(
+        '[data-testid="journal-attachment-dropzone"]'
+      )!;
+
+      const clip = new File(['x'], 'IMG_0043.MOV', { type: 'video/quicktime' });
+      fireEvent.drop(zone, {
+        dataTransfer: { files: [clip] as unknown as FileList },
+      });
+
+      await waitFor(() =>
+        expect(api.journal.attachments.upload).toHaveBeenCalledWith(
+          'e1',
+          clip,
+          'IMG_0043'
+        )
+      );
+    });
+  });
+
+  it('queues a transcription on demand and never on its own', async () => {
+    vi.mocked(api.journal.attachments.transcribe).mockResolvedValue(
+      attachment({ transcriptStatus: 'running' })
+    );
+    renderIt([attachment()]);
+
+    // Rendering an attachment must not cost a transcription — it is opt-in.
+    expect(api.journal.attachments.transcribe).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Transcribe'));
+    await waitFor(() =>
+      expect(api.journal.attachments.transcribe).toHaveBeenCalledWith('a1')
+    );
+  });
+
+  it('disables the button while a transcription is running', () => {
+    renderIt([attachment({ transcriptStatus: 'running' })]);
+    const button = screen.getByText('Transcribing…') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it('shows the transcript once it lands', () => {
+    renderIt([
+      attachment({
+        transcript: 'So today was rough.',
+        transcriptStatus: 'done',
+      }),
+    ]);
+    expect(screen.getByText('So today was rough.')).toBeTruthy();
+  });
+
+  it('shows why a transcription failed', () => {
+    renderIt([
+      attachment({
+        transcriptStatus: 'error',
+        transcriptError: 'No vision model configured',
+      }),
+    ]);
+    expect(screen.getByText('No vision model configured')).toBeTruthy();
+  });
+
+  it('renames on blur, and only when the name actually changed', async () => {
+    vi.mocked(api.journal.attachments.rename).mockResolvedValue(attachment());
+    renderIt([attachment()]);
+
+    const field = screen.getByLabelText('What this attachment is about');
+    fireEvent.blur(field);
+    expect(api.journal.attachments.rename).not.toHaveBeenCalled();
+
+    fireEvent.change(field, {
+      target: { value: 'Walk home, parser thoughts' },
+    });
+    fireEvent.blur(field);
+    await waitFor(() =>
+      expect(api.journal.attachments.rename).toHaveBeenCalledWith(
+        'a1',
+        'Walk home, parser thoughts'
+      )
+    );
+  });
+
+  it('reverts an emptied name rather than saving it', () => {
+    renderIt([attachment()]);
+    const field = screen.getByLabelText(
+      'What this attachment is about'
+    ) as HTMLInputElement;
+    fireEvent.change(field, { target: { value: '   ' } });
+    fireEvent.blur(field);
+
+    expect(api.journal.attachments.rename).not.toHaveBeenCalled();
+    expect(field.value).toBe('Walk home');
+  });
+
+  it('surfaces an upload failure instead of failing silently', async () => {
+    vi.mocked(api.journal.attachments.upload).mockRejectedValue(
+      new Error('file is too large')
+    );
+    const { container } = renderIt([]);
+
+    const input = container.querySelector<HTMLInputElement>(
+      '[data-testid="journal-image-input"]'
+    )!;
+    fireEvent.change(input, {
+      target: { files: [new File(['x'], 'big.png', { type: 'image/png' })] },
+    });
+
+    expect(await screen.findByText('file is too large')).toBeTruthy();
+  });
+});

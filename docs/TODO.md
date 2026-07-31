@@ -35,3 +35,7 @@ The first three items to build, picked from [ROADMAP.md](./ROADMAP.md) as the be
 ---
 
 **Next up after these** (in rough order): journal "on this day last year" + view modes, global search across content types, weekly AI review.
+
+## Parked
+
+- **Getting an iOS voice memo into a journal entry.** Attachments work everywhere else; paste and drag-and-drop both fail on iOS and the Files round-trip is the friction the feature was meant to remove. Dead ends and the next thing to try (iOS Shortcuts posting to the API) are written up in [learnings/ios-voice-memo-capture.md](./learnings/ios-voice-memo-capture.md) — read it before spending time on this again.

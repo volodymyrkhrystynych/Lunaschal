@@ -66,6 +66,8 @@ def get_settings():
     return jsonify({
         'llamaUrl': s.get('llama_url'),
         'llamaModel': s.get('llama_model'),
+        # Empty means journal photo captioning stays off — see backend/ai/images.py.
+        'llamaVisionModel': s.get('llama_vision_model') or '',
         'llmThinking': bool(s.get('llm_thinking', 0)),
         'llmMaxTokens': s.get('llm_max_tokens') or 4096,
         # No llmNumCtx: the context window is fixed when llama-server loads the
@@ -99,6 +101,7 @@ def update_ai():
     body = request.json or {}
     field_map = {
         'llamaUrl': 'llama_url', 'llamaModel': 'llama_model',
+        'llamaVisionModel': 'llama_vision_model',
         'llmThinking': 'llm_thinking',
         'llmMaxTokens': 'llm_max_tokens',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
