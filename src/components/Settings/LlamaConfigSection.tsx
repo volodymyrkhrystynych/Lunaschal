@@ -8,6 +8,7 @@ const DEFAULT_MODEL = 'gemma4';
 export function LlamaConfigSection() {
   const [llamaUrl, setLlamaUrl] = useState(DEFAULT_URL);
   const [llamaModel, setLlamaModel] = useState(DEFAULT_MODEL);
+  const [llamaVisionModel, setLlamaVisionModel] = useState('');
   const [message, setMessage] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -29,6 +30,7 @@ export function LlamaConfigSection() {
     if (settings) {
       setLlamaUrl(settings.llamaUrl || DEFAULT_URL);
       setLlamaModel(settings.llamaModel || DEFAULT_MODEL);
+      setLlamaVisionModel(settings.llamaVisionModel || '');
     }
   }, [settings]);
 
@@ -131,8 +133,33 @@ export function LlamaConfigSection() {
                   , then restart llama-server.
                 </p>
               )}
+              <div>
+                <label className="text-sm text-[var(--color-text-muted)]">
+                  Vision model (optional)
+                </label>
+                <input
+                  type="text"
+                  value={llamaVisionModel}
+                  onChange={e => setLlamaVisionModel(e.target.value)}
+                  placeholder="off"
+                  className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
+                />
+                <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                  Enables AI captions for journal photo attachments. Needs its
+                  own preset with an{' '}
+                  <code className="text-[var(--color-text)]">mmproj</code>{' '}
+                  projector — both chat presets set{' '}
+                  <code className="text-[var(--color-text)]">
+                    mmproj-auto = false
+                  </code>{' '}
+                  because the ~1.1 GB vision tower doesn't fit alongside the
+                  26B. Leave empty to keep captioning off.
+                </p>
+              </div>
               <button
-                onClick={() => updateAI.mutate({ llamaUrl, llamaModel })}
+                onClick={() =>
+                  updateAI.mutate({ llamaUrl, llamaModel, llamaVisionModel })
+                }
                 disabled={updateAI.isPending}
                 className="px-4 py-2 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
               >

@@ -8,6 +8,34 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     updated_at INTEGER NOT NULL
 );
 
+-- Audio and photo attachments on a journal entry. The files themselves live
+-- under ./data/journal/<attachment_id>/ (backend/journal/storage.py), never as
+-- blobs, matching the fanfic/meetings/lifestyle media roots.
+CREATE TABLE IF NOT EXISTS journal_attachments (
+    id TEXT PRIMARY KEY,
+    entry_id TEXT NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,          -- 'audio' | 'image'
+    -- What the attachment is about, named by the user. Defaults to the uploaded
+    -- filename so a list of attachments is never a list of blank rows.
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    mime TEXT,
+    size INTEGER,
+    position INTEGER NOT NULL DEFAULT 0,
+    -- AI-derived text, and never generated on upload: transcription/captioning
+    -- is opt-in per attachment. Holds the transcript for audio and the caption
+    -- for an image — one column, so the status/polling path is shared.
+    transcript TEXT,
+    -- 'idle' | 'running' | 'done' | 'error'. Reset to 'idle' at startup for any
+    -- row left 'running' by a crash (backend/db/connection.py).
+    transcript_status TEXT NOT NULL DEFAULT 'idle',
+    transcript_error TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_attachments_entry
+    ON journal_attachments(entry_id, position);
+
 CREATE TABLE IF NOT EXISTS calendar_events (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,

@@ -2,6 +2,8 @@
 calls the shared chat_json/chat_text helpers (backend.ai.llm) with the right
 system prompt and processes the result correctly. The native transport itself
 is covered by test_llm.py; these tests fake chat_json/chat_text directly."""
+import pytest
+
 from backend.ai import journal
 
 
@@ -54,9 +56,12 @@ def test_classify_reads_yes_no_from_chat_text(monkeypatch):
     assert 'some content' in captured['prompt']
 
 
-def test_polish_skipped_when_ai_unconfigured(monkeypatch):
+def test_polish_raises_when_ai_unconfigured(monkeypatch):
+    """It used to return the raw text here, which the caller could not tell
+    apart from a successful polish — see test_journal_polish.py."""
     monkeypatch.setattr(journal, 'is_ai_configured', lambda: False)
-    assert journal.polish_journal_entry('raw text') == 'raw text'
+    with pytest.raises(journal.PolishUnavailable):
+        journal.polish_journal_entry('raw text')
 
 
 def test_metadata_empty_when_ai_unconfigured(monkeypatch):

@@ -29,6 +29,10 @@ def get_provider_config() -> dict:
     return {
         'llama_url': (s.get('llama_url') if s else None) or 'http://localhost:8080',
         'llama_model': s.get('llama_model') if s else None,
+        # Separate alias because the chat presets deliberately skip Gemma 4's
+        # vision tower for VRAM reasons — see backend/ai/images.py. NULL/empty
+        # means image captioning is off, which is the default.
+        'llama_vision_model': s.get('llama_vision_model') if s else None,
         'openai_api_key': (s.get('openai_api_key') if s else None) or os.environ.get('OPENAI_API_KEY'),
         'google_api_key': (s.get('google_api_key') if s else None) or os.environ.get('GOOGLE_API_KEY'),
     }

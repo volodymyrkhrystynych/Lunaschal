@@ -13,7 +13,13 @@ import {
 } from '../offline/mutationDefaults';
 import { buildFeed } from '../lib/journalFeed';
 import { isBreak, parseProposedTodos } from '../lib/chatSegments';
+import {
+  defaultNameFor,
+  filesFromTransfer,
+  rejectedFilesMessage,
+} from '../lib/journalAttachments';
 import { BriefingTodos } from './BriefingTodos';
+import { JournalAttachments } from './JournalAttachments';
 import { MessageMarkdown } from './MessageMarkdown';
 import type {
   DatedConversation,
@@ -46,6 +52,12 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   const [editTitle, setEditTitle] = useState('');
   const [newEntry, setNewEntry] = useState('');
   const [showNewEntry, setShowNewEntry] = useState(false);
+  // Files pasted/dropped into the compose box, held until the entry they belong
+  // to exists server-side.
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [stagedUploadError, setStagedUploadError] = useState<string | null>(
+    null
+  );
   const [showDelete, setShowDelete] = useState(false);
   const [generatingFor, setGeneratingFor] = useState<string | null>(null);
   const [generationResult, setGenerationResult] = useState<{
@@ -53,6 +65,10 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     count: number;
   } | null>(null);
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
+  const [polishError, setPolishError] = useState<{
+    id: string;
+    message: string;
+  } | null>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
@@ -176,11 +192,63 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   const createEntry = useJournalCreate();
   const updateEntry = useJournalUpdate();
 
+  const stageFiles = (
+    transfer: DataTransfer | null,
+    e: React.SyntheticEvent
+  ) => {
+    const { accepted, rejected } = filesFromTransfer(transfer);
+    if (accepted.length === 0) {
+      // A paste carrying files we can't take says so; one carrying no files at
+      // all is ordinary text and still belongs to the textarea.
+      setStagedUploadError(rejectedFilesMessage(rejected));
+      return;
+    }
+    e.preventDefault();
+    setStagedUploadError(null);
+    setPendingFiles(current => [...current, ...accepted]);
+  };
+
   const submitNewEntry = () => {
     if (!newEntry.trim()) return;
-    createEntry.mutate({ id: ulid(), content: newEntry });
+    const id = ulid();
+    const staged = pendingFiles;
+    createEntry.mutate(
+      { id, content: newEntry },
+      {
+        // Per-call, so the shared offline defaults' own callbacks still run.
+        // Uploads wait for the create to land: offline the mutation is paused
+        // and the entry has no server-side row for an attachment to hang off.
+        onSuccess: () => {
+          if (staged.length) uploadStagedFiles(id, staged);
+        },
+      }
+    );
     setNewEntry('');
+    setPendingFiles([]);
     setShowNewEntry(false);
+  };
+
+  // Deliberately fire-and-forget with its own error surface: the entry is
+  // already saved by this point, so a failed upload must not look like a failed
+  // save. Sequential so the server's `position` matches the paste order.
+  const uploadStagedFiles = async (entryId: string, files: File[]) => {
+    try {
+      for (const file of files) {
+        await api.journal.attachments.upload(
+          entryId,
+          file,
+          defaultNameFor(file.name)
+        );
+      }
+    } catch (e) {
+      setStagedUploadError(
+        `The entry was saved, but its attachment failed to upload: ${
+          (e as Error).message || 'upload failed'
+        }`
+      );
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ['journal'] });
+    }
   };
 
   const submitEdit = (id: string) => {
@@ -220,9 +288,20 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
 
   const polishEntry = useMutation({
     mutationFn: (id: string) => api.journal.polish(id),
-    onMutate: id => setPolishingFor(id),
+    onMutate: id => {
+      setPolishingFor(id);
+      setPolishError(null);
+    },
     onSettled: () => setPolishingFor(null),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['journal'] }),
+    // A polish runs on the local llama-server, which is often simply not up.
+    // Without this the button just stopped saying "Polishing..." and nothing
+    // else happened, which read as a broken button rather than an offline model.
+    onError: (err, id) =>
+      setPolishError({
+        id,
+        message: (err as Error).message || 'Polish failed',
+      }),
   });
 
   const generateFlashcards = useMutation({
@@ -341,8 +420,31 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
         </div>
       </div>
 
+      {stagedUploadError && (
+        <div className="mb-4 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400 flex items-center gap-2">
+          {/* The message carries its own context — this banner covers both a
+              rejected paste (before saving) and a failed upload (after). */}
+          <span>{stagedUploadError}</span>
+          <button
+            onClick={() => setStagedUploadError(null)}
+            className="ml-auto text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {showNewEntry && (
-        <div className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
+        <div
+          className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10"
+          // The entry does not exist server-side yet, so a file pasted here is
+          // held until the create succeeds and uploaded then (submitNewEntry).
+          onPaste={e => stageFiles(e.clipboardData, e)}
+          onDrop={e => stageFiles(e.dataTransfer, e)}
+          onDragOver={e => {
+            if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+          }}
+        >
           <textarea
             value={newEntry}
             onChange={e => setNewEntry(e.target.value)}
@@ -362,9 +464,38 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
             rows={4}
             className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none"
           />
+          {pendingFiles.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {pendingFiles.map((f, i) => (
+                <span
+                  key={`${f.name}:${i}`}
+                  className="flex items-center gap-1 px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] bg-white/5"
+                >
+                  {f.name}
+                  <button
+                    onClick={() =>
+                      setPendingFiles(files =>
+                        files.filter((_, index) => index !== i)
+                      )
+                    }
+                    aria-label={`Remove ${f.name}`}
+                    className="text-red-400 hover:text-red-300"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <span className="text-xs text-[var(--color-text-muted)] self-center">
+                attached on save
+              </span>
+            </div>
+          )}
           <div className="flex justify-end gap-2 mt-2">
             <button
-              onClick={() => setShowNewEntry(false)}
+              onClick={() => {
+                setShowNewEntry(false);
+                setPendingFiles([]);
+              }}
               className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
             >
               Cancel
@@ -526,27 +657,41 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                 </div>
               )}
 
+              {polishError?.id === entry.id && (
+                <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
+                  {polishError.message} — the entry was left unchanged.
+                </div>
+              )}
+
               {editingId === entry.id ? (
                 <div>
-                  <input
-                    value={editTitle}
-                    onChange={e => setEditTitle(e.target.value)}
-                    placeholder="Entry title..."
-                    onKeyDown={e => {
-                      if (e.key === 'Escape') setEditingId(null);
-                    }}
-                    className="w-full bg-transparent text-[var(--color-text)] font-medium focus:outline-none border border-white/10 rounded p-2 mb-2"
-                  />
-                  <textarea
-                    value={editContent}
-                    onChange={e => setEditContent(e.target.value)}
-                    rows={4}
-                    autoFocus
-                    onKeyDown={e => {
-                      if (e.key === 'Escape') setEditingId(null);
-                    }}
-                    className="w-full bg-transparent text-[var(--color-text)] resize-none focus:outline-none border border-white/10 rounded p-2"
-                  />
+                  {/* Wrapping the fields makes the whole editor a paste/drop
+                      target — see JournalAttachments. */}
+                  <JournalAttachments
+                    entryId={entry.id}
+                    attachments={entry.attachments}
+                    editable
+                  >
+                    <input
+                      value={editTitle}
+                      onChange={e => setEditTitle(e.target.value)}
+                      placeholder="Entry title..."
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') setEditingId(null);
+                      }}
+                      className="w-full bg-transparent text-[var(--color-text)] font-medium focus:outline-none border border-white/10 rounded p-2 mb-2"
+                    />
+                    <textarea
+                      value={editContent}
+                      onChange={e => setEditContent(e.target.value)}
+                      rows={4}
+                      autoFocus
+                      onKeyDown={e => {
+                        if (e.key === 'Escape') setEditingId(null);
+                      }}
+                      className="w-full bg-transparent text-[var(--color-text)] resize-none focus:outline-none border border-white/10 rounded p-2"
+                    />
+                  </JournalAttachments>
                   <div className="flex justify-end gap-2 mt-2">
                     <button
                       onClick={() => setEditingId(null)}
@@ -582,6 +727,13 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                       </div>
                     </details>
                   )}
+                  {/* Readable outside edit mode too — playing a recording back
+                      shouldn't require putting the entry into an editable state. */}
+                  <JournalAttachments
+                    entryId={entry.id}
+                    attachments={entry.attachments}
+                    editable={false}
+                  />
                 </>
               )}
 

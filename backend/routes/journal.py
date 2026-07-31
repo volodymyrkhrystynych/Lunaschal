@@ -2,11 +2,16 @@ import json
 import queue
 import threading
 import time
-from flask import Blueprint, Response, jsonify, request, stream_with_context
+from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
-from backend.ai.journal import polish_journal_entry, generate_journal_metadata
+from backend.ai.journal import (
+    PolishUnavailable,
+    polish_journal_entry,
+    generate_journal_metadata,
+)
 from backend.ai.background import run_bg
+from backend.journal import storage
 from backend.tags import tags_json
 
 bp = Blueprint('journal', __name__, url_prefix='/api/journal')
@@ -113,7 +118,9 @@ def list_entries():
             (limit, offset),
         ).fetchall()
     dicts = [row_to_dict(r) for r in rows]
-    return jsonify(_enrich_with_fic_refs(db, _enrich_with_curated_tags(db, dicts)))
+    return jsonify(_enrich_with_attachments(
+        db, _enrich_with_fic_refs(db, _enrich_with_curated_tags(db, dicts))
+    ))
 
 
 @bp.get('/search')
@@ -133,15 +140,18 @@ def search():
         list(id_rank),
     ).fetchall()
     dicts = sorted([row_to_dict(r) for r in rows], key=lambda d: id_rank.get(d['id'], 0))
-    return jsonify(_enrich_with_fic_refs(db, _enrich_with_curated_tags(db, dicts)))
+    return jsonify(_enrich_with_attachments(
+        db, _enrich_with_fic_refs(db, _enrich_with_curated_tags(db, dicts))
+    ))
 
 
 @bp.get('/<id>')
 def get_entry(id):
-    row = get_db().execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
+    db = get_db()
+    row = db.execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(row_to_dict(row))
+    return jsonify(_enrich_with_attachments(db, [row_to_dict(row)])[0])
 
 
 @bp.post('')
@@ -189,7 +199,12 @@ def polish_entry(id):
     source = row['raw_content'] or ''
     if not source.strip():
         return jsonify({'error': 'No original transcription to polish'}), 400
-    polished = polish_journal_entry(source)
+    try:
+        polished = polish_journal_entry(source)
+    except PolishUnavailable as e:
+        # Leave `content` exactly as it is. Writing the raw transcript back here
+        # is what used to make an offline llama-server look like a broken button.
+        return jsonify({'error': f'Polish unavailable: {e}'}), 503
     db = get_db()
     db.execute(
         'UPDATE journal_entries SET content=?, updated_at=? WHERE id=?',
@@ -232,6 +247,12 @@ def _polish_bg(journal_id: str, raw_content: str) -> None:
             polished = polish_journal_entry(raw_content)
             if polished == raw_content:
                 return
+        except PolishUnavailable as e:
+            # The entry is already saved with its raw text as `content`; nothing
+            # to undo, and nobody is waiting on a response.
+            print(f'Background polish unavailable for {journal_id}: {e}')
+            return
+        try:
             db = get_db()
             db.execute(
                 'UPDATE journal_entries SET content=?, updated_at=? WHERE id=?',
@@ -241,6 +262,293 @@ def _polish_bg(journal_id: str, raw_content: str) -> None:
             _notify_subscribers(journal_id)
         except Exception as e:
             print(f'Background polish failed for {journal_id}: {e}')
+    run_bg(_run)
+
+
+# --- Attachments -------------------------------------------------------------
+#
+# Audio clips and photos hung off an entry. Two things shape the design:
+#
+# - Transcription and captioning are opt-in per attachment, never automatic on
+#   upload. A voice memo attached to an entry is often kept *as audio* — the
+#   point is to have the recording, not a wall of text — and on this hardware a
+#   transcription is a real cost (Whisper/Parakeet on CPU) that shouldn't be
+#   spent on every upload.
+# - They run on the shared single-worker background executor and report through
+#   `transcript_status`, so the request returns immediately and the existing
+#   /events SSE stream tells the client when the text has landed.
+
+# A phone voice memo of a long walk is tens of MB; a photo off the same phone is
+# a few; a minute of 4K video is a few hundred. All three are generous ceilings
+# whose job is to stop a mis-picked file from filling the disk, not to be a
+# meaningful limit on real attachments. Uploads stream to disk rather than being
+# read into memory, so a large video costs disk, not RAM.
+MAX_AUDIO_BYTES = 100 * 1024 * 1024
+MAX_IMAGE_BYTES = 25 * 1024 * 1024
+MAX_VIDEO_BYTES = 1024 * 1024 * 1024
+
+_MAX_BYTES_BY_KIND = {
+    'audio': MAX_AUDIO_BYTES,
+    'image': MAX_IMAGE_BYTES,
+    'video': MAX_VIDEO_BYTES,
+}
+
+_UNSUPPORTED_TYPE = 'Unsupported file type — audio, video or images only'
+
+_DEFAULT_NAMES = {'audio': 'Audio', 'video': 'Video', 'image': 'Photo'}
+
+_ATTACHMENT_COLS = (
+    'id, entry_id, kind, name, path, mime, size, position,'
+    ' transcript, transcript_status, transcript_error, created_at'
+)
+
+
+def _attachment_dict(row) -> dict:
+    d = row_to_dict(row)
+    # `path` is a server-side filesystem location; the client gets a URL instead.
+    d.pop('path', None)
+    d['url'] = f'/api/journal/attachments/{row["id"]}/file'
+    return d
+
+
+def _enrich_with_attachments(db, dicts: list[dict]) -> list[dict]:
+    if not dicts:
+        return dicts
+    ids = [d['id'] for d in dicts]
+    placeholders = ','.join('?' * len(ids))
+    rows = db.execute(
+        f'SELECT {_ATTACHMENT_COLS} FROM journal_attachments'
+        f' WHERE entry_id IN ({placeholders})'
+        f' ORDER BY position, created_at',
+        ids,
+    ).fetchall()
+    by_entry: dict[str, list[dict]] = {}
+    for r in rows:
+        by_entry.setdefault(r['entry_id'], []).append(_attachment_dict(r))
+    for d in dicts:
+        d['attachments'] = by_entry.get(d['id'], [])
+    return dicts
+
+
+def _load_attachment(attachment_id: str):
+    return get_db().execute(
+        f'SELECT {_ATTACHMENT_COLS} FROM journal_attachments WHERE id=?',
+        (attachment_id,),
+    ).fetchone()
+
+
+@bp.get('/<id>/attachments')
+def list_attachments(id):
+    db = get_db()
+    rows = db.execute(
+        f'SELECT {_ATTACHMENT_COLS} FROM journal_attachments WHERE entry_id=?'
+        f' ORDER BY position, created_at',
+        (id,),
+    ).fetchall()
+    return jsonify([_attachment_dict(r) for r in rows])
+
+
+@bp.post('/<id>/attachments')
+def upload_attachment(id):
+    entry = get_db().execute(
+        'SELECT id FROM journal_entries WHERE id=?', (id,)
+    ).fetchone()
+    if not entry:
+        return jsonify({'error': 'Not found'}), 404
+
+    file = request.files.get('file')
+    if file is None:
+        return jsonify({'error': 'file is required'}), 400
+
+    # NOT `or not file.filename`: a voice memo dragged out of the iOS Voice Memos
+    # app arrives as a File with an empty name, and rejecting it here turned a
+    # working drag-and-drop into "file is required". A nameless upload is fine —
+    # the mime type carries the extension and _DEFAULT_NAMES carries the label.
+    resolved = storage.resolve_upload(file.mimetype, file.filename)
+    if resolved is None:
+        return jsonify({'error': _UNSUPPORTED_TYPE}), 400
+    ext, kind = resolved
+
+    # The user's label for the attachment. Falling back to the filename keeps a
+    # list of attachments readable even when someone skips naming them.
+    name = (request.form.get('name') or '').strip()
+    if not name:
+        name = (file.filename or '').rsplit('/', 1)[-1] or _DEFAULT_NAMES[kind]
+
+    attachment_id = str(ULID())
+    path = storage.attachment_path(attachment_id, ext)
+    if path is None:
+        return jsonify({'error': _UNSUPPORTED_TYPE}), 400
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Streamed to disk rather than read() into memory: a phone video is happily
+    # several hundred MB, and this app also runs on a handheld with 8 GB of RAM.
+    file.save(path)
+
+    size = path.stat().st_size
+    if size == 0:
+        storage.delete_attachment_dir(attachment_id)
+        return jsonify({'error': 'file is empty'}), 400
+    if size > _MAX_BYTES_BY_KIND[kind]:
+        storage.delete_attachment_dir(attachment_id)
+        return jsonify({'error': 'file is too large'}), 413
+
+    db = get_db()
+    position = db.execute(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM journal_attachments'
+        ' WHERE entry_id=?',
+        (id,),
+    ).fetchone()['next']
+    try:
+        db.execute(
+            'INSERT INTO journal_attachments'
+            '(id, entry_id, kind, name, path, mime, size, position, transcript_status, created_at)'
+            " VALUES (?,?,?,?,?,?,?,?,'idle',?)",
+            (attachment_id, id, kind, name, str(path), file.mimetype or None,
+             size, position, int(time.time())),
+        )
+        db.commit()
+    except Exception:
+        # Don't leave a file on disk that no row points at.
+        storage.delete_attachment_dir(attachment_id)
+        raise
+
+    _notify_subscribers(id)
+    return jsonify(_attachment_dict(_load_attachment(attachment_id))), 201
+
+
+@bp.patch('/attachments/<attachment_id>')
+def update_attachment(attachment_id):
+    body = request.json or {}
+    if 'name' not in body:
+        return jsonify({'error': 'name required'}), 400
+    name = (body.get('name') or '').strip()
+    if not name:
+        return jsonify({'error': 'name cannot be empty'}), 400
+    db = get_db()
+    cur = build_update(db, 'journal_attachments', {'name': name}, 'id=?', (attachment_id,))
+    db.commit()
+    if not cur.rowcount:
+        return jsonify({'error': 'Not found'}), 404
+    row = _load_attachment(attachment_id)
+    _notify_subscribers(row['entry_id'])
+    return jsonify(_attachment_dict(row))
+
+
+@bp.delete('/attachments/<attachment_id>')
+def delete_attachment(attachment_id):
+    db = get_db()
+    row = _load_attachment(attachment_id)
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    entry_id = row['entry_id']
+    db.execute('DELETE FROM journal_attachments WHERE id=?', (attachment_id,))
+    db.commit()
+    storage.delete_attachment_dir(attachment_id)
+    _notify_subscribers(entry_id)
+    return jsonify({'success': True})
+
+
+@bp.get('/attachments/<attachment_id>/file')
+def get_attachment_file(attachment_id):
+    row = get_db().execute(
+        'SELECT path, mime, name FROM journal_attachments WHERE id=?',
+        (attachment_id,),
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    path = storage.resolve_stored_path(row['path'])
+    if path is None or not path.is_file():
+        return jsonify({'error': 'Not found'}), 404
+    # conditional=True so <audio> range requests work — seeking in a long voice
+    # memo otherwise re-downloads the whole file on every scrub.
+    return send_file(path, mimetype=row['mime'] or None, conditional=True)
+
+
+@bp.post('/attachments/<attachment_id>/transcribe')
+def transcribe_attachment(attachment_id):
+    """Queue transcription (audio/video) or captioning (image) for one attachment.
+
+    Returns 202 immediately; the result arrives on the row and is pushed to the
+    client through the /events stream.
+    """
+    db = get_db()
+    row = _load_attachment(attachment_id)
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['transcript_status'] == 'running':
+        return jsonify({'error': 'Already running'}), 409
+
+    db.execute(
+        "UPDATE journal_attachments SET transcript_status='running', transcript_error=NULL"
+        ' WHERE id=?',
+        (attachment_id,),
+    )
+    db.commit()
+    _notify_subscribers(row['entry_id'])
+    _transcribe_attachment_bg(attachment_id, row['entry_id'], row['kind'],
+                              row['path'], row['name'])
+    return jsonify(_attachment_dict(_load_attachment(attachment_id))), 202
+
+
+def _do_attachment_audio(path: str) -> str:
+    """Transcribe an audio *or video* attachment through whichever STT backend
+    is configured, loading it on demand exactly as POST /api/transcribe does.
+
+    Video needs no special handling: every backend goes through ffmpeg (directly
+    for Parakeet, internally for Whisper) and ffmpeg reads the audio track out of
+    a container without caring that there are also video frames in it.
+    """
+    # Imported here rather than at module scope: the STT module pulls in numpy
+    # and (for the local backend) torch, and the journal blueprint is imported
+    # by tests that have no business paying for that.
+    from backend.routes import stt as stt_routes
+
+    p = storage.resolve_stored_path(path)
+    if p is None or not p.is_file():
+        raise RuntimeError('The recording is missing')
+    stt_routes._load_stt()
+    result = stt_routes._do_transcribe(p.read_bytes(), p.name, None)
+    text = (result.get('text') or '').strip()
+    if not text:
+        raise RuntimeError('No speech found in the recording')
+    return text
+
+
+def _do_attachment_caption(path: str, name: str) -> str:
+    from backend.ai.images import caption_image
+
+    p = storage.resolve_stored_path(path)
+    if p is None or not p.is_file():
+        raise RuntimeError('The image file is missing')
+    return caption_image(p, hint=name)
+
+
+def _transcribe_attachment_bg(
+    attachment_id: str, entry_id: str, kind: str, path: str, name: str
+) -> None:
+    def _run():
+        try:
+            # Video takes the speech path, not the vision one: what is worth
+            # keeping from a clip filmed to talk into is what was said.
+            if kind in ('audio', 'video'):
+                text = _do_attachment_audio(path)
+            else:
+                text = _do_attachment_caption(path, name)
+            status, error = 'done', None
+        except Exception as e:
+            text, status, error = None, 'error', str(e) or 'Failed'
+            print(f'Attachment transcription failed for {attachment_id}: {e}')
+
+        try:
+            db = get_db()
+            updates = {'transcript_status': status, 'transcript_error': error}
+            if text is not None:
+                updates['transcript'] = text
+            build_update(db, 'journal_attachments', updates, 'id=?', (attachment_id,))
+            db.commit()
+            _notify_subscribers(entry_id)
+        except Exception as e:
+            print(f'Failed to record transcription result for {attachment_id}: {e}')
     run_bg(_run)
 
 
