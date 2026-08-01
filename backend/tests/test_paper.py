@@ -234,3 +234,142 @@ def test_missing_page_and_paper_404(client):
     assert client.get('/api/paper/pages/nope').status_code == 404
     assert client.get('/api/paper/pages/nope/image').status_code == 404
     assert client.post('/api/paper/nope/pages').status_code == 404
+
+
+# --- pasted images ---
+
+def _first_page(client, paper_id):
+    return client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
+
+
+def _add_image(client, page_id, name='pic.png', data=b'\x89PNG-fake', **over):
+    form = {'x': '100', 'y': '200', 'width': '400', 'height': '300'}
+    form.update({k: str(v) for k, v in over.items()})
+    form['image'] = (io.BytesIO(data), name)
+    return client.post(
+        f'/api/paper/pages/{page_id}/images',
+        data=form,
+        content_type='multipart/form-data',
+    )
+
+
+def test_add_image_stores_the_file_and_returns_placement(client, paper_root):
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+
+    resp = _add_image(client, page_id)
+    assert resp.status_code == 201, resp.get_json()
+    img = resp.get_json()
+    assert (img['x'], img['y'], img['width'], img['height']) == (100, 200, 400, 300)
+    assert img['rotation'] == 0 and img['flipped'] == 0 and img['locked'] == 0
+    # The stored path is server-side detail; the client gets a URL.
+    assert 'filePath' not in img
+    assert img['url'].startswith(f"/api/paper/images/{img['id']}/file")
+
+    stored = list((paper_root / paper_id).glob('img-*.png'))
+    assert len(stored) == 1
+    assert stored[0].read_bytes() == b'\x89PNG-fake'
+
+
+def test_page_read_includes_its_images_in_draw_order(client):
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+    first = _add_image(client, page_id).get_json()
+    second = _add_image(client, page_id).get_json()
+
+    page = client.get(f'/api/paper/pages/{page_id}').get_json()
+    assert [i['id'] for i in page['images']] == [first['id'], second['id']]
+    assert [i['position'] for i in page['images']] == [0, 1]
+
+
+def test_add_image_rejects_an_unsupported_type(client):
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+    # An .svg served from our own origin is a script vector, which is why the
+    # extension list is closed rather than "anything that isn't obviously bad".
+    resp = _add_image(client, page_id, name='payload.svg')
+    assert resp.status_code == 400
+    assert 'unsupported' in resp.get_json()['error']
+
+
+def test_add_image_rejects_a_zero_size_box(client):
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+    assert _add_image(client, page_id, width=0).status_code == 400
+
+
+def test_transform_updates_geometry(client):
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+    img = _add_image(client, page_id).get_json()
+
+    resp = client.patch(
+        f"/api/paper/images/{img['id']}",
+        data=json.dumps({'rotation': 45, 'flipped': True, 'x': 10, 'width': 50}),
+        content_type='application/json',
+    )
+    assert resp.status_code == 200, resp.get_json()
+    out = resp.get_json()
+    assert out['rotation'] == 45 and out['flipped'] == 1
+    assert out['x'] == 10 and out['width'] == 50
+    # Untouched fields survive.
+    assert out['y'] == 200 and out['height'] == 300
+
+
+def test_a_locked_image_refuses_geometry_changes(client):
+    """The lock has to hold server-side: an in-flight drag can land after it."""
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+    img = _add_image(client, page_id).get_json()
+    client.patch(f"/api/paper/images/{img['id']}", data=json.dumps({'locked': True}),
+                 content_type='application/json')
+
+    resp = client.patch(f"/api/paper/images/{img['id']}", data=json.dumps({'x': 999}),
+                        content_type='application/json')
+    assert resp.status_code == 409
+    page = client.get(f'/api/paper/pages/{page_id}').get_json()
+    assert page['images'][0]['x'] == 100
+
+
+def test_a_locked_image_can_still_be_unlocked(client):
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+    img = _add_image(client, page_id).get_json()
+    client.patch(f"/api/paper/images/{img['id']}", data=json.dumps({'locked': True}),
+                 content_type='application/json')
+
+    resp = client.patch(f"/api/paper/images/{img['id']}", data=json.dumps({'locked': False}),
+                        content_type='application/json')
+    assert resp.status_code == 200
+    assert resp.get_json()['locked'] == 0
+
+
+def test_delete_image_removes_the_row_and_the_file(client, paper_root):
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+    img = _add_image(client, page_id).get_json()
+    assert list((paper_root / paper_id).glob('img-*.png'))
+
+    assert client.delete(f"/api/paper/images/{img['id']}").status_code == 200
+    assert client.get(f'/api/paper/pages/{page_id}').get_json()['images'] == []
+    assert not list((paper_root / paper_id).glob('img-*.png'))
+
+
+def test_serve_image_file(client):
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+    img = _add_image(client, page_id, data=b'\x89PNG-body').get_json()
+
+    resp = client.get(f"/api/paper/images/{img['id']}/file")
+    assert resp.status_code == 200
+    assert resp.data == b'\x89PNG-body'
+    assert resp.mimetype == 'image/png'
+
+
+def test_deleting_a_page_takes_its_image_rows_with_it(client):
+    paper_id = _create(client)
+    page_id = client.post(f'/api/paper/{paper_id}/pages').get_json()['id']
+    img = _add_image(client, page_id).get_json()
+
+    assert client.delete(f'/api/paper/pages/{page_id}').status_code == 200
+    assert client.get(f"/api/paper/images/{img['id']}/file").status_code == 404

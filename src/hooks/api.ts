@@ -649,10 +649,27 @@ export interface JournalPaper {
   pages: { id: string; imageUrl: string | null }[];
 }
 
+export interface PaperPageImage {
+  id: string;
+  pageId: string;
+  url: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Degrees clockwise. */
+  rotation: number;
+  /** SQLite booleans, 0/1, like every other flag in this API. */
+  flipped: number;
+  locked: number;
+  position: number;
+}
+
 export interface PaperPageContent {
   strokes: string;
   width: number | null;
   height: number | null;
+  images: PaperPageImage[];
 }
 
 export interface FoodMedia {
@@ -1720,6 +1737,40 @@ export const api = {
       post<{ id: string; position: number }>(`/api/paper/${id}/pages`),
     getPage: (pageId: string) =>
       get<PaperPageContent>(`/api/paper/pages/${pageId}`),
+    addImage: async (
+      pageId: string,
+      file: Blob,
+      box: { x: number; y: number; width: number; height: number },
+      filename = 'pasted.png'
+    ) => {
+      const form = new FormData();
+      form.set('image', file, filename);
+      form.set('x', String(box.x));
+      form.set('y', String(box.y));
+      form.set('width', String(box.width));
+      form.set('height', String(box.height));
+      const r = await fetch(`/api/paper/pages/${pageId}/images`, {
+        method: 'POST',
+        credentials: 'include',
+        body: form,
+      });
+      if (!r.ok) throw new Error((await r.json()).error ?? 'Upload failed');
+      return (await r.json()) as PaperPageImage;
+    },
+    updateImage: (
+      imageId: string,
+      data: Partial<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        rotation: number;
+        flipped: boolean;
+        locked: boolean;
+      }>
+    ) => patch<PaperPageImage>(`/api/paper/images/${imageId}`, data),
+    deleteImage: (imageId: string) =>
+      del<{ success: boolean }>(`/api/paper/images/${imageId}`),
     savePage: async (
       pageId: string,
       data: { strokes: string; width: number; height: number; snapshot: Blob }

@@ -546,6 +546,37 @@ CREATE TABLE IF NOT EXISTS paper_pages (
 
 CREATE INDEX IF NOT EXISTS idx_paper_pages_paper ON paper_pages(paper_id, position);
 
+-- A picture pasted onto a page. The file lives on disk beside the page's
+-- snapshot (never as a blob); this row is only its placement. Geometry is in
+-- the page's A4 coordinate space, the same one strokes use — see src/lib/paper.ts.
+CREATE TABLE IF NOT EXISTS paper_page_images (
+    id TEXT PRIMARY KEY,
+    page_id TEXT NOT NULL REFERENCES paper_pages(id) ON DELETE CASCADE,
+    file_path TEXT NOT NULL,
+    -- Top-left corner and size of the unrotated box; the image rotates and
+    -- flips about its own centre.
+    x REAL NOT NULL,
+    y REAL NOT NULL,
+    width REAL NOT NULL,
+    height REAL NOT NULL,
+    -- Degrees clockwise. The client snaps to quarter turns, but the column is free-form
+    -- so an existing angle survives a future finer-grained editor.
+    rotation REAL NOT NULL DEFAULT 0,
+    -- Mirrored left-to-right about its own centre. Combined with rotation this
+    -- reaches every orientation, so there is deliberately no vertical flip.
+    flipped INTEGER NOT NULL DEFAULT 0,
+    -- A locked image is still drawn, but can't be selected, moved, resized or
+    -- rotated — so writing over a photo can't nudge it out from under the pen.
+    locked INTEGER NOT NULL DEFAULT 0,
+    -- Draw order within the page, low to high.
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_page_images_page
+    ON paper_page_images(page_id, position);
+
 -- --- Lifestyle tab: workouts, body weight, selfies, calories -----------------
 -- See docs/lifestyle-tab.md. Chores are deliberately absent: they already exist
 -- as todos with list='chores' (backend/todo_recurrence.py) and the Lifestyle tab

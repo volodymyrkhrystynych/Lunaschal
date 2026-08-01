@@ -198,12 +198,18 @@ def add_page(paper_id):
 
 @bp.get('/pages/<page_id>')
 def get_page(page_id):
-    row = get_db().execute(
+    db = get_db()
+    row = db.execute(
         'SELECT strokes, width, height FROM paper_pages WHERE id=?', (page_id,)
     ).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify({'strokes': row['strokes'], 'width': row['width'], 'height': row['height']})
+    return jsonify({
+        'strokes': row['strokes'],
+        'width': row['width'],
+        'height': row['height'],
+        'images': page_images(db, page_id),
+    })
 
 
 @bp.put('/pages/<page_id>')
@@ -276,3 +282,177 @@ def serve_page_image(page_id):
     if path is None or not path.is_file():
         return jsonify({'error': 'Not found'}), 404
     return send_file(path, mimetype='image/png', conditional=True)
+
+
+# --- pasted images ---
+
+# Extensions we will store, mapped to the mimetype we serve them back as.
+# Deliberately closed: the file is written straight to disk from an upload, and
+# an open-ended list is how an .html or .svg ends up being served from our own
+# origin.
+_IMAGE_EXTS = {
+    'png': 'image/png',
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'webp': 'image/webp',
+    'gif': 'image/gif',
+}
+
+_IMAGE_COLUMNS = (
+    'id, page_id, file_path, x, y, width, height, rotation, flipped, locked, '
+    'position, created_at, updated_at'
+)
+
+
+def _image_row(row) -> dict:
+    d = row_to_dict(row)
+    # Cache-busted on updated_at like the page snapshot: the bytes never change
+    # for a given id, but a re-upload under the same id would otherwise stick.
+    d['url'] = f"/api/paper/images/{d['id']}/file?v={row['updated_at']}"
+    # The stored path is server-side detail; the client only ever needs the URL.
+    d.pop('filePath', None)
+    return d
+
+
+def page_images(db, page_id: str) -> list[dict]:
+    rows = db.execute(
+        f'SELECT {_IMAGE_COLUMNS} FROM paper_page_images WHERE page_id=? ORDER BY position, created_at',
+        (page_id,),
+    ).fetchall()
+    return [_image_row(r) for r in rows]
+
+
+@bp.post('/pages/<page_id>/images')
+def add_page_image(page_id):
+    db = get_db()
+    page = db.execute('SELECT paper_id FROM paper_pages WHERE id=?', (page_id,)).fetchone()
+    if not page:
+        return jsonify({'error': 'Not found'}), 404
+
+    upload = request.files.get('image')
+    if upload is None or not upload.filename:
+        return jsonify({'error': 'image file required'}), 400
+    ext = upload.filename.rsplit('.', 1)[-1].lower() if '.' in upload.filename else ''
+    if ext == 'jpe':
+        ext = 'jpg'
+    if ext not in _IMAGE_EXTS:
+        return jsonify({'error': f'unsupported image type: {ext or "unknown"}'}), 400
+
+    for field in ('x', 'y', 'width', 'height'):
+        if request.form.get(field, type=float) is None:
+            return jsonify({'error': f'{field} required'}), 400
+    width = request.form.get('width', type=float)
+    height = request.form.get('height', type=float)
+    if width <= 0 or height <= 0:
+        return jsonify({'error': 'width and height must be positive'}), 400
+
+    image_id = str(ULID())
+    path = storage.pasted_image_path(page['paper_id'], image_id, ext)
+    if path is None:
+        return jsonify({'error': 'Invalid id'}), 500
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Streamed to disk, not read() into memory: a phone photo is happily
+    # several MB and this is the same rule journal attachments follow.
+    upload.save(path)
+
+    now = int(time.time())
+    next_pos = db.execute(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS p FROM paper_page_images WHERE page_id=?',
+        (page_id,),
+    ).fetchone()['p']
+    db.execute(
+        '''INSERT INTO paper_page_images(
+               id, page_id, file_path, x, y, width, height, position, created_at, updated_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)''',
+        (image_id, page_id, str(path), request.form.get('x', type=float),
+         request.form.get('y', type=float), width, height, next_pos, now, now),
+    )
+    db.execute('UPDATE paper_pages SET updated_at=? WHERE id=?', (now, page_id))
+    db.commit()
+    row = db.execute(
+        f'SELECT {_IMAGE_COLUMNS} FROM paper_page_images WHERE id=?', (image_id,)
+    ).fetchone()
+    return jsonify(_image_row(row)), 201
+
+
+_IMAGE_FIELDS = {
+    'x': 'x', 'y': 'y', 'width': 'width', 'height': 'height', 'rotation': 'rotation',
+}
+
+
+@bp.patch('/images/<image_id>')
+def update_page_image(image_id):
+    db = get_db()
+    row = db.execute(
+        'SELECT id, page_id, locked FROM paper_page_images WHERE id=?', (image_id,)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    body = request.json or {}
+
+    updates: dict = {}
+    for camel, col in _IMAGE_FIELDS.items():
+        if camel in body:
+            try:
+                updates[col] = float(body[camel])
+            except (TypeError, ValueError):
+                return jsonify({'error': f'{camel} must be a number'}), 400
+    if 'width' in updates and updates['width'] <= 0:
+        return jsonify({'error': 'width must be positive'}), 400
+    if 'height' in updates and updates['height'] <= 0:
+        return jsonify({'error': 'height must be positive'}), 400
+    if 'flipped' in body:
+        updates['flipped'] = 1 if body['flipped'] else 0
+    if 'locked' in body:
+        updates['locked'] = 1 if body['locked'] else 0
+
+    # A locked image only accepts being unlocked. The lock exists to stop a
+    # stray drag moving a photo, so honouring a geometry write in the same
+    # breath would defeat it — and the client can't be the only thing enforcing
+    # that, since an in-flight drag can land after the lock.
+    if row['locked'] and updates.keys() - {'locked'}:
+        return jsonify({'error': 'image is locked'}), 409
+    if not updates:
+        return jsonify({'error': 'no fields to update'}), 400
+
+    now = int(time.time())
+    updates['updated_at'] = now
+    build_update(db, 'paper_page_images', updates, 'id=?', (image_id,))
+    db.execute('UPDATE paper_pages SET updated_at=? WHERE id=?', (now, row['page_id']))
+    db.commit()
+    fresh = db.execute(
+        f'SELECT {_IMAGE_COLUMNS} FROM paper_page_images WHERE id=?', (image_id,)
+    ).fetchone()
+    return jsonify(_image_row(fresh))
+
+
+@bp.delete('/images/<image_id>')
+def delete_page_image(image_id):
+    db = get_db()
+    row = db.execute(
+        'SELECT file_path, page_id FROM paper_page_images WHERE id=?', (image_id,)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    db.execute('DELETE FROM paper_page_images WHERE id=?', (image_id,))
+    db.execute('UPDATE paper_pages SET updated_at=? WHERE id=?', (int(time.time()), row['page_id']))
+    db.commit()
+    path = storage.resolve_stored_path(row['file_path'])
+    if path is not None and path.is_file():
+        path.unlink(missing_ok=True)
+    return jsonify({'success': True})
+
+
+@bp.get('/images/<image_id>/file')
+def serve_page_image_file(image_id):
+    row = get_db().execute(
+        'SELECT file_path FROM paper_page_images WHERE id=?', (image_id,)
+    ).fetchone()
+    if row is None:
+        return jsonify({'error': 'Not found'}), 404
+    path = storage.resolve_stored_path(row['file_path'])
+    if path is None or not path.is_file():
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(path, mimetype=_IMAGE_EXTS.get(path.suffix.lstrip('.').lower(),
+                                                    'application/octet-stream'),
+                     conditional=True)
