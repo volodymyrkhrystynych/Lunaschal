@@ -1,0 +1,9 @@
+# systemd --user oneshot unit, triggered by lunaschal-backup.timer. See
+# docs/deployment.md for install steps and ops/backup.sh for the logic.
+
+[Unit]
+Description=Lunaschal daily backup (DB + media -> HDD + tablet)
+
+[Service]
+Type=oneshot
+ExecStart=%h/workspace/Lunaschal/ops/backup.sh

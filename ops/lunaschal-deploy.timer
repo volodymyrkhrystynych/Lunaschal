@@ -1,0 +1,15 @@
+# Polls origin/main every 5 minutes via lunaschal-deploy.service. Install:
+#   ln -sf "$PWD/ops/lunaschal-deploy.timer" ~/.config/systemd/user/
+#   ln -sf "$PWD/ops/lunaschal-deploy.service" ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now lunaschal-deploy.timer
+
+[Unit]
+Description=Lunaschal auto-deploy poll timer
+
+[Timer]
+OnUnitActiveSec=5min
+OnBootSec=2min
+
+[Install]
+WantedBy=timers.target
