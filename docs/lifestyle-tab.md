@@ -34,9 +34,22 @@ calorie tracking.
   the lightweight counter beside it.
 - **The PWA caveat is already handled** — Lunaschal ships an installed PWA (`public/manifest.json`),
   which is why the localStorage draft save is written as the actual fix rather than a stopgap.
-- **The selfie widget has a fallback.** `getUserMedia` gives a live preview where it works, and a
-  `capture="user"` file input is always offered beside it, so the open Pocket 2 camera question
-  can't block logging a selfie.
+- **Selfie capture hands off to the device camera.** The first build paired a `getUserMedia` live
+  preview with a `capture="user"` file input; on an iPad the in-page `<video>` was plainly the
+  worse camera, so both buttons now take the native path (front camera vs. photo library) and the
+  preview machinery is gone. Nothing in the thumbnail strip deletes any more either — a tap used
+  to delete the day's selfie and cost real photos. Replacing a day means retaking it that day;
+  deleting is a deliberate database operation.
+- **Intensity is 1–5 stars with written meanings, not a 1–10 RPE.** Ten points were too subjective
+  to rate the same way twice. Each star says what it means ("Not intense whatsoever" … "I am going
+  ham"), surfaced as the picker's label and every readout's tooltip/screen-reader text, because
+  the words are the whole point. Stored 1–10 values were folded once by
+  `_migrate_workout_intensity_to_stars` (ceil(v/2), guarded by a marker column — the fold is only
+  correct on un-migrated data).
+- **Bodyweight sets carry a null weight, never 0.** "squats 10 10 10 10" is four sets of ten with
+  nothing loaded; the parse schema requires an explicit `"weight": null`, the log renders it as
+  "10 × 4 bodyweight", and an exercise that was never loaded charts total reps instead of an empty
+  weight line.
 
 ## Why a new tab
 
@@ -76,12 +89,14 @@ activity also happened that day (it doesn't need to say which one — hovering/c
 shows the full list of sessions).
 
 **Shading intensity**: open question, deferred. Log **both** duration (minutes) and a self-rated
-intensity (e.g. 1–10 RPE) on every session from day one, so there's real data to decide with later
-whether duration, RPE, or a toggle between the two drives the shade. Don't block building the
+intensity (originally a 1–10 RPE; now 1–5 stars — see above) on every session from day one, so
+there's real data to decide with later whether duration, intensity, or a toggle between the two
+drives the shade. Don't block building the
 heatmap on this decision — default to duration since it's the more objective/frictionless of the
 two to log, and revisit once a few weeks of data exist.
 
-Clicking/hovering a day shows the session(s) logged that day (location, duration, RPE, exercises).
+Clicking/hovering a day shows the session(s) logged that day (location, duration, intensity,
+exercises).
 
 ## 2. Workout log
 
@@ -152,9 +167,8 @@ are capped at 4 and chores shouldn't share that limit or that list.
 
 ## 5. Daily selfie
 
-**Capture**: in-app camera widget (browser `getUserMedia`) right in the Lifestyle tab — snap and
-it uploads directly. Needs a check on the Pocket 2 for whether it has a usable camera and how
-`getUserMedia` behaves there; desktop should just work.
+**Capture**: settled as a hand-off to the device camera app (`<input type="file" accept="image/*"
+capture="user">`) rather than an in-app `getUserMedia` widget — see "What the build settled".
 
 **Storage**: one photo per day, stored next to the DB the same way fanfic/meeting media is
 (`./data/lifestyle/selfies/<date>.jpg` or similar), not in SQLite as a blob.
@@ -182,8 +196,10 @@ Single scrollable column in the main content area (sidebar unchanged), top to bo
    Legend underneath (4 activity colors + secondary-activity mark); hovering/clicking a day shows
    that day's session(s).
 2. **Workout log | Chores** — two cards side by side (stacked on narrow/Pocket 2 widths). Workout
-   log: freeform textarea, location chip picker, duration/RPE fields, recent-entries list below.
-   Chores: plain checklist, "+ Add chore" affordance.
+   log: freeform textarea, location chip picker, duration field + intensity star picker,
+   recent-entries list below. Chores: the Tasks view's own `TodoRow`/`TodoForm` — same rows, same
+   chrome, and (the reason it's shared rather than copied) the same `isFarOffPeriodic` rule, so a
+   monthly chore stays hidden until it's nearly due.
 3. **Progression** — one card, two mini charts side by side: body weight sparkline (with an inline
    "log today's weight" field) and a per-exercise sparkline behind an exercise picker dropdown.
 4. **Daily selfie | Calories** — two cards side by side. Selfie: capture widget + a short strip of
@@ -202,9 +218,9 @@ created (see above), and `workout_sessions` gained a `parse_status` column so th
 parse in flight and offer a retry on failure.
 
 - `workout_sessions` — id, date, location_type (enum: outside/building/goodlife_alone/goodlife_brother),
-  duration_minutes, intensity_rating, raw_text, notes, parse_status
+  duration_minutes, intensity_rating (1–5 stars), raw_text, notes, parse_status
 - `workout_exercises` — id, session_id, name_raw, name_canonical, position
-- `workout_sets` — id, exercise_id, weight, reps, set_order
+- `workout_sets` — id, exercise_id, weight (NULL = bodyweight), reps, set_order
 - `body_weight_logs` — id, date (unique — re-logging a day corrects it), weight
 - ~~`chores`~~ / ~~`chore_completions`~~ — dropped; chores are `todos` rows with `list='chores'`
 - `lifestyle_selfies` — id, date (unique), path, mime
@@ -214,7 +230,7 @@ parse in flight and offer a retry on failure.
 
 Still open (both are now toggles in the UI, waiting on real data rather than on a decision):
 
-- Duration vs. RPE for heatmap shading — currently a toggle defaulting to duration.
+- Duration vs. intensity for heatmap shading — currently a toggle defaulting to duration.
 - Weight vs. volume for the per-exercise progression chart — currently a toggle.
 
 Settled during the build (see "What the build settled" above): charting library (none —

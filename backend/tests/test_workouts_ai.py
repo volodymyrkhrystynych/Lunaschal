@@ -41,6 +41,45 @@ def test_bodyweight_sets_keep_a_null_weight(monkeypatch):
     assert result == [{'name': 'pull ups', 'sets': [{'weight': None, 'reps': 12}]}]
 
 
+def test_bare_rep_counts_are_four_bodyweight_sets(monkeypatch):
+    """"squats 10 10 10 10" is how bodyweight work actually gets written: four
+    sets of ten, no weight anywhere on the line."""
+    _stub(monkeypatch, {'exercises': [
+        {'name': 'squats', 'sets': [{'weight': None, 'reps': 10}] * 4},
+    ]})
+    assert workouts.parse_workout('squats 10 10 10 10') == [
+        {'name': 'squats', 'sets': [
+            {'weight': None, 'reps': 10}, {'weight': None, 'reps': 10},
+            {'weight': None, 'reps': 10}, {'weight': None, 'reps': 10},
+        ]},
+    ]
+
+
+def test_a_missing_weight_key_is_also_a_bodyweight_set(monkeypatch):
+    """The schema requires the key, but a schema-less fallback parse can still
+    hand back a set with no `weight` at all — it must not become 0 kg."""
+    _stub(monkeypatch, {'exercises': [{'name': 'dips', 'sets': [{'reps': 8}]}]})
+    assert workouts.parse_workout('dips 8') == [
+        {'name': 'dips', 'sets': [{'weight': None, 'reps': 8}]},
+    ]
+
+
+def test_schema_demands_an_explicit_weight_that_may_be_null():
+    """The grammar has to allow (and ask for) a null weight, or the model is
+    pushed into inventing a number for bodyweight work."""
+    set_schema = (
+        workouts._WORKOUT_SCHEMA['properties']['exercises']['items']
+        ['properties']['sets']['items']
+    )
+    assert set_schema['properties']['weight']['type'] == ['number', 'null']
+    assert set_schema['required'] == ['weight', 'reps']
+
+
+def test_prompt_shows_a_bodyweight_example():
+    assert 'squats 10 10 10 10' in workouts._WORKOUT_SYSTEM
+    assert 'bodyweight' in workouts._WORKOUT_SYSTEM
+
+
 def test_drops_sets_carrying_neither_weight_nor_reps(monkeypatch):
     _stub(monkeypatch, {'exercises': [
         {'name': 'squats', 'sets': [

@@ -213,11 +213,14 @@ export interface CalendarEvent {
   date: string;
   time: string | null;
   endTime: string | null;
+  // Explicitly all-day, as opposed to merely untimed. Arrives from SQLite as
+  // 0/1, like every other boolean column in this API.
+  allDay: boolean;
   tags: string | null;
   journalId: string | null;
   createdAt: string;
   // Recurrence rule. repeatFreq null = a one-off event.
-  repeatFreq: 'daily' | 'weekly' | 'monthly' | null;
+  repeatFreq: 'daily' | 'weekly' | 'monthly' | 'yearly' | null;
   repeatInterval: number | null;
   repeatByweekday: string | null; // CSV of 0-6, Sunday=0
   repeatUntil: string | null;
@@ -230,7 +233,7 @@ export interface CalendarEvent {
 }
 
 export interface CalendarRepeat {
-  repeatFreq?: 'daily' | 'weekly' | 'monthly' | null;
+  repeatFreq?: 'daily' | 'weekly' | 'monthly' | 'yearly' | null;
   repeatInterval?: number | null;
   repeatByweekday?: number[] | null;
   repeatUntil?: string | null;
@@ -701,6 +704,7 @@ export type ActivityTypeId =
 
 export interface WorkoutSet {
   id: string;
+  /** null = bodyweight ("squats 10 10 10 10"). Never 0 — see formatSets. */
   weight: number | null;
   reps: number | null;
   setOrder: number;
@@ -723,6 +727,9 @@ export interface WorkoutSession {
   date: string;
   locationType: ActivityTypeId;
   durationMinutes: number | null;
+  /** 1-5 stars, each with a written meaning (src/lib/lifestyle.ts
+   *  INTENSITY_LABELS). Was a 1-10 RPE; stored rows were folded once by
+   *  _migrate_workout_intensity_to_stars. */
   intensityRating: number | null;
   rawText: string | null;
   notes: string | null;
@@ -738,6 +745,7 @@ export interface HeatmapDayResponse {
   activityType: ActivityTypeId;
   secondary: boolean;
   durationMinutes: number | null;
+  /** The day's hardest session, 1-5 stars. */
   intensityRating: number | null;
   sessions: WorkoutSession[];
 }
@@ -751,6 +759,8 @@ export interface ExerciseSummary {
 
 export interface ProgressionPoint {
   date: string;
+  /** null for a bodyweight day — nothing was loaded, so there is no top set.
+   *  `exerciseSeries` falls back to totalReps rather than plotting a zero. */
   maxWeight: number | null;
   totalVolume: number | null;
   totalReps: number | null;
@@ -1208,6 +1218,7 @@ export const api = {
         description?: string;
         time?: string;
         endTime?: string;
+        allDay?: boolean;
         tags?: string[];
         journalId?: string;
       } & CalendarRepeat
@@ -1755,6 +1766,7 @@ export const api = {
         date?: string;
         locationType: ActivityTypeId;
         durationMinutes?: number | null;
+        /** 1-5 stars; the backend rejects anything outside that. */
         intensityRating?: number | null;
         rawText?: string;
         notes?: string;
@@ -1765,6 +1777,7 @@ export const api = {
           date?: string;
           locationType?: ActivityTypeId;
           durationMinutes?: number | null;
+          /** 1-5 stars; the backend rejects anything outside that. */
           intensityRating?: number | null;
           rawText?: string;
           notes?: string;

@@ -114,6 +114,7 @@ def init_db() -> None:
     _ensure_meeting_source(db)
     _ensure_meeting_pause_columns(db)
     _ensure_meeting_whisper_columns(db)
+    _migrate_workout_intensity_to_stars(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
@@ -214,7 +215,7 @@ def _ensure_todo_list_columns(db: sqlite3.Connection) -> None:
 
 
 def _ensure_calendar_recurrence(db: sqlite3.Connection) -> None:
-    """Recurrence rule columns on calendar_events.
+    """Recurrence rule and all-day columns on calendar_events.
 
     The exceptions table itself is a plain CREATE TABLE IF NOT EXISTS in
     schema.sql; only the added columns need the ALTER dance.
@@ -226,6 +227,9 @@ def _ensure_calendar_recurrence(db: sqlite3.Connection) -> None:
         ('repeat_interval', 'INTEGER'),
         ('repeat_byweekday', 'TEXT'),
         ('repeat_until', 'TEXT'),
+        # Backfills to 0, so events that predate the flag stay merely untimed
+        # rather than being retroactively relabelled as all-day.
+        ('all_day', 'INTEGER NOT NULL DEFAULT 0'),
         # No REFERENCES here: SQLite can't add an FK constraint to an existing
         # table via ALTER, and the column is a breadcrumb, not an invariant.
         ('split_from', 'TEXT'),
@@ -312,6 +316,38 @@ def _ensure_food_location(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE food_entries ADD COLUMN latitude REAL')
     if 'longitude' not in cols:
         db.execute('ALTER TABLE food_entries ADD COLUMN longitude REAL')
+    db.commit()
+
+
+def _migrate_workout_intensity_to_stars(db: sqlite3.Connection) -> None:
+    """Fold `workout_sessions.intensity_rating` from the old 1-10 RPE onto the
+    1-5 star scale, exactly once.
+
+    The mapping is ceil(v/2) — expressed here as SQLite integer division
+    `(v + 1) / 2` — so 1-2 -> 1 … 9-10 -> 5.
+
+    **This must never run twice**, and it can't be made self-detecting: "convert
+    the rows above 5" would leave a genuine old 4 (light, ~2 stars) sitting at 4
+    stars, and re-running the fold would crush a real 4 down to 2. So a marker
+    column on `settings` records that it has happened, the same one-shot pattern
+    `_repair_escaped_image_fallbacks` uses; its *existence* is the marker, so a
+    settings table with no row still latches.
+    """
+    if not db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='workout_sessions'"
+    ).fetchone():
+        return
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'workout_intensity_five_star' in cols:
+        return
+    db.execute(
+        'ALTER TABLE settings ADD COLUMN workout_intensity_five_star INTEGER NOT NULL DEFAULT 0'
+    )
+    db.execute(
+        'UPDATE workout_sessions SET intensity_rating = (intensity_rating + 1) / 2'
+        ' WHERE intensity_rating IS NOT NULL AND intensity_rating > 0'
+    )
+    db.execute('UPDATE settings SET workout_intensity_five_star=1')
     db.commit()
 
 

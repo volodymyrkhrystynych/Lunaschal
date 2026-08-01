@@ -4,9 +4,9 @@ import { api, type CalendarEvent } from '../hooks/api';
 import { useIsMobile } from '@/hooks/useMediaQuery';
 import {
   buildMonthGrid,
+  eventTimeLabel,
   parseEventTags,
   repeatLabel,
-  timeSpan,
   toLocalISO,
   WEEKDAY_INITIALS,
   WEEKDAY_LABELS,
@@ -41,6 +41,7 @@ function EventDetails({
     description: '',
     time: '',
     endTime: '',
+    allDay: false,
   });
 
   const { data: event, isLoading } = useQuery({
@@ -122,8 +123,9 @@ function EventDetails({
       const payload = {
         title: draft.title,
         description: draft.description || null,
-        time: draft.time || null,
-        endTime: draft.endTime || null,
+        time: draft.allDay ? null : draft.time || null,
+        endTime: draft.allDay ? null : draft.endTime || null,
+        allDay: draft.allDay,
       };
       // The two endpoints return different shapes; the caller only cares that
       // the write landed.
@@ -166,6 +168,7 @@ function EventDetails({
       description: event.description ?? '',
       time: event.time ?? '',
       endTime: event.endTime ?? '',
+      allDay: !!event.allDay,
     });
     setMode('edit');
   };
@@ -194,10 +197,8 @@ function EventDetails({
                 month: 'long',
                 day: 'numeric',
               })}
-              {event.time && (
-                <span className="ml-2">
-                  {timeSpan(event.time, event.endTime)}
-                </span>
+              {eventTimeLabel(event) && (
+                <span className="ml-2">{eventTimeLabel(event)}</span>
               )}
             </div>
             {repeat && (
@@ -224,22 +225,35 @@ function EventDetails({
               onChange={e => setDraft({ ...draft, title: e.target.value })}
               className="w-full bg-transparent text-[var(--color-text)] border-b border-white/10 pb-2 focus:outline-none"
             />
-            <div className="flex gap-2">
+            <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
               <input
-                type="time"
-                aria-label="Start time"
-                value={draft.time}
-                onChange={e => setDraft({ ...draft, time: e.target.value })}
-                className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 pb-2 focus:outline-none"
+                type="checkbox"
+                checked={draft.allDay}
+                onChange={e => setDraft({ ...draft, allDay: e.target.checked })}
+                className="w-4 h-4 accent-[var(--color-primary)]"
               />
-              <input
-                type="time"
-                aria-label="End time"
-                value={draft.endTime}
-                onChange={e => setDraft({ ...draft, endTime: e.target.value })}
-                className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 pb-2 focus:outline-none"
-              />
-            </div>
+              All day
+            </label>
+            {!draft.allDay && (
+              <div className="flex gap-2">
+                <input
+                  type="time"
+                  aria-label="Start time"
+                  value={draft.time}
+                  onChange={e => setDraft({ ...draft, time: e.target.value })}
+                  className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 pb-2 focus:outline-none"
+                />
+                <input
+                  type="time"
+                  aria-label="End time"
+                  value={draft.endTime}
+                  onChange={e =>
+                    setDraft({ ...draft, endTime: e.target.value })
+                  }
+                  className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 pb-2 focus:outline-none"
+                />
+              </div>
+            )}
             <textarea
               aria-label="Description"
               value={draft.description}
@@ -474,6 +488,7 @@ const EMPTY_NEW_EVENT = {
   description: '',
   time: '',
   endTime: '',
+  allDay: false,
   repeatFreq: '' as '' | RepeatFreq,
   repeatInterval: 1,
   repeatByweekday: [] as number[],
@@ -563,8 +578,9 @@ export function Calendar() {
       title: newEvent.title,
       date: selectedDate,
       description: newEvent.description || undefined,
-      time: newEvent.time || undefined,
-      endTime: newEvent.endTime || undefined,
+      time: newEvent.allDay ? undefined : newEvent.time || undefined,
+      endTime: newEvent.allDay ? undefined : newEvent.endTime || undefined,
+      allDay: newEvent.allDay,
       repeatFreq: newEvent.repeatFreq || null,
       repeatInterval: newEvent.repeatFreq ? newEvent.repeatInterval : null,
       repeatByweekday:
@@ -735,9 +751,9 @@ export function Calendar() {
                             )}
                             {e.title}
                           </div>
-                          {e.time && (
+                          {eventTimeLabel(e) && (
                             <div className="text-[var(--color-text-muted)]">
-                              {timeSpan(e.time, e.endTime)}
+                              {eventTimeLabel(e)}
                             </div>
                           )}
                         </button>
@@ -835,24 +851,39 @@ export function Calendar() {
                     placeholder="Event title"
                     className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border-b border-white/10 pb-2 mb-2 focus:outline-none"
                   />
-                  <div className="flex gap-2 mb-2">
+                  <label className="flex items-center gap-2 mb-2 text-xs text-[var(--color-text-muted)]">
                     <input
-                      type="time"
-                      value={newEvent.time}
+                      type="checkbox"
+                      checked={newEvent.allDay}
                       onChange={e =>
-                        setNewEvent({ ...newEvent, time: e.target.value })
+                        setNewEvent({ ...newEvent, allDay: e.target.checked })
                       }
-                      className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 pb-2 focus:outline-none"
+                      className="w-4 h-4 accent-[var(--color-primary)]"
                     />
-                    <input
-                      type="time"
-                      value={newEvent.endTime}
-                      onChange={e =>
-                        setNewEvent({ ...newEvent, endTime: e.target.value })
-                      }
-                      className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 pb-2 focus:outline-none"
-                    />
-                  </div>
+                    All day
+                  </label>
+                  {!newEvent.allDay && (
+                    <div className="flex gap-2 mb-2">
+                      <input
+                        type="time"
+                        aria-label="Start time"
+                        value={newEvent.time}
+                        onChange={e =>
+                          setNewEvent({ ...newEvent, time: e.target.value })
+                        }
+                        className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 pb-2 focus:outline-none"
+                      />
+                      <input
+                        type="time"
+                        aria-label="End time"
+                        value={newEvent.endTime}
+                        onChange={e =>
+                          setNewEvent({ ...newEvent, endTime: e.target.value })
+                        }
+                        className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 pb-2 focus:outline-none"
+                      />
+                    </div>
+                  )}
 
                   <div className="mb-2">
                     <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
@@ -882,6 +913,7 @@ export function Calendar() {
                         <option value="daily">Daily</option>
                         <option value="weekly">Weekly</option>
                         <option value="monthly">Monthly</option>
+                        <option value="yearly">Yearly</option>
                       </select>
                     </label>
 
@@ -990,9 +1022,9 @@ export function Calendar() {
                     <div className="font-medium text-[var(--color-text)]">
                       {event.title}
                     </div>
-                    {event.time && (
+                    {eventTimeLabel(event) && (
                       <div className="text-sm text-[var(--color-text-muted)]">
-                        {timeSpan(event.time, event.endTime)}
+                        {eventTimeLabel(event)}
                       </div>
                     )}
                     {event.isRecurring && (

@@ -1,16 +1,37 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import {
   commitStroke,
+  DEFAULT_PANEL_PLACEMENT,
+  DEFAULT_STROKE_SIZE,
   emptyStrokeState,
   eraseStroke,
+  fitPageBox,
   isHorizontalSwipe,
+  isPageSpace,
   isTap,
+  loadPanelPlacement,
+  PAGE_ASPECT,
+  PAGE_HEIGHT,
+  PAGE_WIDTH,
+  PANEL_PLACEMENT_KEY,
+  panelOrientation,
+  panelPosition,
+  parseBuffer,
+  parsePanelPlacement,
   parseStrokes,
   redo,
+  resolveSnapEdge,
   resolveSwipe,
+  savePanelPlacement,
+  saveStatusLabel,
+  serializeBuffer,
   serializeStrokes,
   simplifyStroke,
+  sizeDotPx,
+  snapPlacement,
   strokeWidth,
+  toPageSpace,
+  toPageSpaceStrokes,
   undo,
   type Stroke,
   type StrokePoint,
@@ -84,7 +105,11 @@ describe('stroke serialization', () => {
       '[{"points":[{"x":1,"y":2},{"x":"bad","y":0}]}]'
     );
     expect(parsed).toEqual([
-      { tool: 'pen', size: 4, points: [{ x: 1, y: 2, pressure: 0.5 }] },
+      {
+        tool: 'pen',
+        size: DEFAULT_STROKE_SIZE,
+        points: [{ x: 1, y: 2, pressure: 0.5 }],
+      },
     ]);
   });
 
@@ -93,7 +118,7 @@ describe('stroke serialization', () => {
       '[{"tool":"crayon","size":-3,"points":[{"x":0,"y":0,"pressure":0.5}]}]'
     );
     expect(parsed[0].tool).toBe('pen');
-    expect(parsed[0].size).toBe(4);
+    expect(parsed[0].size).toBe(DEFAULT_STROKE_SIZE);
   });
 });
 
@@ -287,5 +312,348 @@ describe('gesture + width helpers', () => {
     expect(strokeWidth(10, 1)).toBeCloseTo(10);
     expect(strokeWidth(10, 2)).toBeCloseTo(10); // clamped
     expect(strokeWidth(10, NaN)).toBeCloseTo(6.75); // defaults to 0.5
+  });
+
+  it('previews stroke widths as dots that fit the button', () => {
+    expect(sizeDotPx(4)).toBe(2);
+    expect(sizeDotPx(14)).toBe(7);
+    expect(sizeDotPx(100)).toBe(18); // capped
+  });
+});
+
+describe('fitPageBox', () => {
+  it('is always A4 portrait, whatever the viewport', () => {
+    for (const viewport of [
+      { width: 1600, height: 900 },
+      { width: 820, height: 1180 },
+      { width: 300, height: 300 },
+    ]) {
+      const box = fitPageBox(viewport);
+      expect(box.width / box.height).toBeCloseTo(PAGE_ASPECT, 6);
+    }
+  });
+
+  it('fits a wide viewport by height, with bars left and right', () => {
+    const box = fitPageBox({ width: 1600, height: 900 });
+    expect(box.height).toBe(900);
+    expect(box.width).toBeCloseTo(900 * PAGE_ASPECT);
+    expect(box.top).toBe(0);
+    expect(box.left).toBeCloseTo((1600 - box.width) / 2);
+    expect(box.left).toBeGreaterThan(0);
+  });
+
+  it('fits a tall viewport by width, with bars top and bottom', () => {
+    const box = fitPageBox({ width: 800, height: 2000 });
+    expect(box.width).toBe(800);
+    expect(box.height).toBeCloseTo(800 / PAGE_ASPECT);
+    expect(box.left).toBe(0);
+    expect(box.top).toBeCloseTo((2000 - box.height) / 2);
+  });
+
+  it('never crops: the page always fits inside the viewport', () => {
+    for (const viewport of [
+      { width: 1024, height: 200 },
+      { width: 200, height: 1024 },
+      { width: 500, height: 707 },
+    ]) {
+      const box = fitPageBox(viewport);
+      expect(box.width).toBeLessThanOrEqual(viewport.width + 1e-9);
+      expect(box.height).toBeLessThanOrEqual(viewport.height + 1e-9);
+    }
+  });
+
+  it('degrades to an empty box for a viewport that has not been measured', () => {
+    expect(fitPageBox({ width: 0, height: 0 })).toEqual({
+      width: 0,
+      height: 0,
+      left: 0,
+      top: 0,
+      scale: 0,
+    });
+    expect(fitPageBox({ width: NaN, height: 500 }).width).toBe(0);
+  });
+});
+
+describe('toPageSpace', () => {
+  it('maps the corners of the on-screen page onto the page corners', () => {
+    const box = fitPageBox({ width: 1600, height: 900 });
+    expect(toPageSpace(0, 0, box)).toEqual({ x: 0, y: 0 });
+    const br = toPageSpace(box.width, box.height, box);
+    expect(br.x).toBeCloseTo(PAGE_WIDTH);
+    expect(br.y).toBeCloseTo(PAGE_HEIGHT);
+  });
+
+  it('is resolution-independent: the same touch lands on the same page point', () => {
+    // The bug this replaces: a stroke drawn on a desktop-shaped page came back
+    // squashed on an iPad, because the stored space was the screen box.
+    const desktop = fitPageBox({ width: 1600, height: 900 });
+    const ipad = fitPageBox({ width: 820, height: 1180 });
+    // Same relative spot on the sheet, two very different fitted sizes.
+    const a = toPageSpace(desktop.width * 0.25, desktop.height * 0.6, desktop);
+    const b = toPageSpace(ipad.width * 0.25, ipad.height * 0.6, ipad);
+    expect(a.x).toBeCloseTo(b.x, 6);
+    expect(a.y).toBeCloseTo(b.y, 6);
+  });
+
+  it('survives an unmeasured box without producing NaN', () => {
+    expect(toPageSpace(10, 10, { width: 0, height: 0 })).toEqual({
+      x: 0,
+      y: 0,
+    });
+  });
+});
+
+describe('legacy stroke conversion', () => {
+  const legacy: Stroke[] = [
+    {
+      tool: 'pen',
+      size: 4,
+      points: [
+        { x: 0, y: 0, pressure: 0.5 },
+        { x: 1000, y: 700, pressure: 0.5 },
+      ],
+    },
+  ];
+
+  it('recognizes page-space rows (and an unsaved page) as needing nothing', () => {
+    expect(isPageSpace({ width: PAGE_WIDTH, height: PAGE_HEIGHT })).toBe(true);
+    expect(isPageSpace(null)).toBe(true);
+    expect(isPageSpace({ width: 1000, height: 700 })).toBe(false);
+  });
+
+  it('returns page-space strokes untouched', () => {
+    expect(
+      toPageSpaceStrokes(legacy, { width: PAGE_WIDTH, height: PAGE_HEIGHT })
+    ).toBe(legacy);
+    expect(toPageSpaceStrokes(legacy, null)).toBe(legacy);
+  });
+
+  it('scales an old screen-space drawing onto the page without distorting it', () => {
+    const [s] = toPageSpaceStrokes(legacy, { width: 1000, height: 700 });
+    // Uniform contain fit: 1000x700 into 2100x2970 scales by 2.1 on both axes.
+    const drawnAspect =
+      (s.points[1].x - s.points[0].x) / (s.points[1].y - s.points[0].y);
+    expect(drawnAspect).toBeCloseTo(1000 / 700, 6);
+    expect(s.size).toBeCloseTo(4 * 2.1);
+  });
+
+  it('centres the converted drawing on the page', () => {
+    const [s] = toPageSpaceStrokes(legacy, { width: 1000, height: 700 });
+    const topLeft = s.points[0];
+    const bottomRight = s.points[1];
+    // The 1000x700 sheet is width-limited, so it is centred vertically.
+    expect(topLeft.x).toBeCloseTo(0);
+    expect(bottomRight.x).toBeCloseTo(PAGE_WIDTH);
+    expect(topLeft.y).toBeCloseTo(PAGE_HEIGHT / 2 - (700 * 2.1) / 2);
+    expect(bottomRight.y + topLeft.y).toBeCloseTo(PAGE_HEIGHT);
+  });
+
+  it('keeps every converted point on the page', () => {
+    for (const source of [
+      { width: 1600, height: 400 },
+      { width: 400, height: 1600 },
+      { width: 1024, height: 768 },
+    ]) {
+      const corners: Stroke[] = [
+        {
+          tool: 'pen',
+          size: 4,
+          points: [
+            { x: 0, y: 0, pressure: 0.5 },
+            { x: source.width, y: source.height, pressure: 0.5 },
+          ],
+        },
+      ];
+      for (const p of toPageSpaceStrokes(corners, source)[0].points) {
+        expect(p.x).toBeGreaterThanOrEqual(-1e-9);
+        expect(p.x).toBeLessThanOrEqual(PAGE_WIDTH + 1e-9);
+        expect(p.y).toBeGreaterThanOrEqual(-1e-9);
+        expect(p.y).toBeLessThanOrEqual(PAGE_HEIGHT + 1e-9);
+      }
+    }
+  });
+});
+
+describe('local buffer', () => {
+  const strokes: Stroke[] = [
+    { tool: 'pen', size: 8, points: [{ x: 10, y: 20, pressure: 0.5 }] },
+  ];
+
+  it('round-trips page-space strokes', () => {
+    expect(parseBuffer(serializeBuffer(strokes), null)).toEqual(strokes);
+  });
+
+  it('converts a buffer written before the page space instead of dropping it', () => {
+    // The old format was a bare stroke array in the page's screen-sized space.
+    const old = serializeStrokes([
+      { tool: 'pen', size: 4, points: [{ x: 500, y: 350, pressure: 0.5 }] },
+    ]);
+    const parsed = parseBuffer(old, { width: 1000, height: 700 });
+    expect(parsed).toEqual([
+      {
+        tool: 'pen',
+        size: 4 * 2.1,
+        points: [{ x: PAGE_WIDTH / 2, y: PAGE_HEIGHT / 2, pressure: 0.5 }],
+      },
+    ]);
+  });
+
+  it('returns null when there is nothing usable held locally', () => {
+    expect(parseBuffer(undefined, null)).toBeNull();
+    expect(parseBuffer('', null)).toBeNull();
+    expect(parseBuffer('not json', null)).toBeNull();
+    expect(parseBuffer('{"space":"other"}', null)).toBeNull();
+  });
+
+  it('tells an empty buffered page apart from no buffer at all', () => {
+    expect(parseBuffer(serializeBuffer([]), null)).toEqual([]);
+    expect(parseBuffer(null, null)).toBeNull();
+  });
+});
+
+describe('tool panel placement', () => {
+  it('snaps to whichever edge the panel was dropped nearest', () => {
+    const bounds = { width: 1000, height: 800 };
+    expect(resolveSnapEdge({ x: 500, y: 20 }, bounds)).toBe('top');
+    expect(resolveSnapEdge({ x: 500, y: 780 }, bounds)).toBe('bottom');
+    expect(resolveSnapEdge({ x: 30, y: 400 }, bounds)).toBe('left');
+    expect(resolveSnapEdge({ x: 970, y: 400 }, bounds)).toBe('right');
+    // Dead centre of a landscape area: the top and bottom are nearest.
+    expect(resolveSnapEdge({ x: 500, y: 400 }, bounds)).toBe('top');
+  });
+
+  it('remembers how far along the edge it was dropped, as a fraction', () => {
+    const bounds = { width: 1000, height: 800 };
+    expect(snapPlacement({ x: 250, y: 10 }, bounds)).toEqual({
+      edge: 'top',
+      offset: 0.25,
+    });
+    expect(snapPlacement({ x: 10, y: 600 }, bounds)).toEqual({
+      edge: 'left',
+      offset: 0.75,
+    });
+  });
+
+  it('clamps a drop outside the area and survives an unmeasured one', () => {
+    // Dragged off past the top-left corner — still lands on a real edge.
+    expect(
+      snapPlacement({ x: -50, y: -80 }, { width: 100, height: 400 })
+    ).toEqual({ edge: 'top', offset: 0 });
+    expect(
+      snapPlacement({ x: 900, y: 200 }, { width: 100, height: 400 })
+    ).toEqual({ edge: 'right', offset: 0.5 });
+    expect(snapPlacement({ x: 5, y: 5 }, { width: 0, height: 0 }).offset).toBe(
+      0.5
+    );
+  });
+
+  it('lies along the edge it is docked to', () => {
+    expect(panelOrientation('top')).toBe('horizontal');
+    expect(panelOrientation('bottom')).toBe('horizontal');
+    expect(panelOrientation('left')).toBe('vertical');
+    expect(panelOrientation('right')).toBe('vertical');
+  });
+
+  it('positions the panel against its edge, centred on the stored offset', () => {
+    const bounds = { width: 1000, height: 800 };
+    const horizontal = { width: 400, height: 56 };
+    const vertical = { width: 56, height: 400 };
+    expect(
+      panelPosition({ edge: 'top', offset: 0.5 }, bounds, horizontal)
+    ).toEqual({ left: 300, top: 12 });
+    expect(
+      panelPosition({ edge: 'bottom', offset: 0.5 }, bounds, horizontal)
+    ).toEqual({ left: 300, top: 800 - 56 - 12 });
+    expect(
+      panelPosition({ edge: 'left', offset: 0.5 }, bounds, vertical)
+    ).toEqual({ left: 12, top: 200 });
+    expect(
+      panelPosition({ edge: 'right', offset: 0.5 }, bounds, vertical)
+    ).toEqual({ left: 1000 - 56 - 12, top: 200 });
+  });
+
+  it('keeps the panel fully on screen at the extremes', () => {
+    const bounds = { width: 1000, height: 800 };
+    const panel = { width: 400, height: 56 };
+    const atStart = panelPosition({ edge: 'top', offset: 0 }, bounds, panel);
+    expect(atStart.left).toBe(12);
+    const atEnd = panelPosition({ edge: 'top', offset: 1 }, bounds, panel);
+    expect(atEnd.left).toBe(1000 - 400 - 12);
+  });
+
+  it('does not go negative when the panel is wider than the area', () => {
+    const pos = panelPosition(
+      { edge: 'top', offset: 0.5 },
+      { width: 200, height: 800 },
+      { width: 400, height: 56 }
+    );
+    expect(pos.left).toBe(12);
+  });
+
+  it('parses a stored placement and rejects a broken one', () => {
+    expect(parsePanelPlacement('{"edge":"right","offset":0.2}')).toEqual({
+      edge: 'right',
+      offset: 0.2,
+    });
+    expect(parsePanelPlacement('{"edge":"right"}')).toEqual({
+      edge: 'right',
+      offset: 0.5,
+    });
+    expect(parsePanelPlacement('{"edge":"middle","offset":0.2}')).toBeNull();
+    expect(parsePanelPlacement('nonsense')).toBeNull();
+    expect(parsePanelPlacement(null)).toBeNull();
+  });
+});
+
+describe('panel placement persistence', () => {
+  // A minimal localStorage stand-in: these tests run in the node environment.
+  beforeEach(() => {
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    };
+  });
+
+  it('round-trips through storage', () => {
+    savePanelPlacement({ edge: 'bottom', offset: 0.3 });
+    expect(localStorage.getItem(PANEL_PLACEMENT_KEY)).toBeTruthy();
+    expect(loadPanelPlacement()).toEqual({ edge: 'bottom', offset: 0.3 });
+  });
+
+  it('falls back to the default when nothing (or nonsense) is stored', () => {
+    expect(loadPanelPlacement()).toEqual(DEFAULT_PANEL_PLACEMENT);
+    localStorage.setItem(PANEL_PLACEMENT_KEY, 'broken');
+    expect(loadPanelPlacement()).toEqual(DEFAULT_PANEL_PLACEMENT);
+  });
+
+  it('shrugs off storage that throws (private mode)', () => {
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: () => {
+        throw new Error('denied');
+      },
+      setItem: () => {
+        throw new Error('denied');
+      },
+    };
+    expect(loadPanelPlacement()).toEqual(DEFAULT_PANEL_PLACEMENT);
+    expect(() => savePanelPlacement({ edge: 'top', offset: 0 })).not.toThrow();
+  });
+});
+
+describe('saveStatusLabel', () => {
+  it('reports the three states in a slot that never changes size', () => {
+    expect(saveStatusLabel(true, true)).toBe('Saving…');
+    expect(saveStatusLabel(false, true)).toBe('Unsaved');
+    expect(saveStatusLabel(false, false)).toBe('Saved');
+    // Always some text: an empty label is what let the old bar reflow.
+    for (const label of [
+      saveStatusLabel(true, false),
+      saveStatusLabel(false, true),
+      saveStatusLabel(false, false),
+    ]) {
+      expect(label.length).toBeGreaterThan(0);
+    }
   });
 });

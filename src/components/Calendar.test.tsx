@@ -31,6 +31,7 @@ const event = (over: Partial<CalendarEvent> = {}): CalendarEvent => ({
   date: '2026-02-04',
   time: '09:00',
   endTime: '17:00',
+  allDay: false,
   tags: null,
   journalId: null,
   createdAt: '',
@@ -349,6 +350,43 @@ describe('creating a recurring event', () => {
         repeatFreq: 'weekly',
         repeatInterval: 1,
         repeatByweekday: [1, 2, 3, 4, 5],
+      })
+    );
+  });
+
+  it('sends an all-day yearly birthday with no times', async () => {
+    const { container } = renderCalendar();
+    const cells = await waitFor(() => {
+      const found = container.querySelectorAll('[data-testid="month-cell"]');
+      expect(found).toHaveLength(42);
+      return found;
+    });
+    fireEvent.click(cells[3]); // 2026-02-04
+    fireEvent.click(screen.getByText('+ Add'));
+    fireEvent.change(screen.getByPlaceholderText('Event title'), {
+      target: { value: 'Birthday' },
+    });
+
+    fireEvent.click(screen.getByLabelText('All day'));
+    // Ticking all-day retires the clock inputs rather than leaving them to
+    // contradict the flag.
+    expect(container.querySelectorAll('input[type="time"]')).toHaveLength(0);
+
+    fireEvent.change(screen.getByRole('combobox'), {
+      target: { value: 'yearly' },
+    });
+    fireEvent.click(screen.getByText('Save'));
+
+    await waitFor(() => expect(api.calendar.create).toHaveBeenCalled());
+    expect(vi.mocked(api.calendar.create).mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        title: 'Birthday',
+        date: '2026-02-04',
+        allDay: true,
+        time: undefined,
+        endTime: undefined,
+        repeatFreq: 'yearly',
+        repeatInterval: 1,
       })
     );
   });

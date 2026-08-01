@@ -85,7 +85,7 @@ export function Paper() {
             <button
               onClick={() => create.mutate()}
               disabled={create.isPending}
-              className="aspect-[3/4] rounded-lg border-2 border-dashed border-white/15 flex flex-col items-center justify-center gap-2 transition-colors hover:bg-white/5 disabled:opacity-50"
+              className="aspect-[210/297] rounded-lg border-2 border-dashed border-white/15 flex flex-col items-center justify-center gap-2 transition-colors hover:bg-white/5 disabled:opacity-50"
             >
               <span className="text-4xl leading-none">＋</span>
               <span className="text-sm opacity-70">New paper</span>
@@ -98,7 +98,9 @@ export function Paper() {
                 onClick={() =>
                   deleteMode ? remove.mutate(p.id) : setOpenId(p.id)
                 }
-                className={`w-full aspect-[3/4] rounded-lg overflow-hidden border bg-white shadow-sm transition-shadow ${
+                /* A4, like the page itself — the snapshot is an A4 sheet, and a
+                   3:4 tile cropped the bottom off every thumbnail. */
+                className={`w-full aspect-[210/297] rounded-lg overflow-hidden border bg-white shadow-sm transition-shadow ${
                   deleteMode
                     ? 'border-red-500 hover:shadow-md'
                     : 'border-white/10 hover:shadow-md'

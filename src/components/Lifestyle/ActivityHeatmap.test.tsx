@@ -20,7 +20,7 @@ const dayResponse = (
   activityType: 'goodlife_brother',
   secondary: false,
   durationMinutes: 60,
-  intensityRating: 7,
+  intensityRating: 4,
   sessions: [],
   ...over,
 });
@@ -55,12 +55,16 @@ describe('legend', () => {
 describe('day cells', () => {
   it('describes a logged day in its accessible label', async () => {
     heatmap.mockResolvedValue([
-      dayResponse({ durationMinutes: 90, intensityRating: 8 }),
+      dayResponse({ durationMinutes: 90, intensityRating: 4 }),
     ]);
     renderHeatmap();
 
+    // Intensity is spelled out, not left as star glyphs — this label is the
+    // box's only accessible name.
     const cell = await screen.findByLabelText(
-      new RegExp(`${TODAY}: Goodlife with brother, 90 min, RPE 8`)
+      new RegExp(
+        `${TODAY}: Goodlife with brother, 90 min, intensity 4/5 — I'm really trying hard`
+      )
     );
     expect(cell).toBeTruthy();
   });
@@ -91,7 +95,7 @@ describe('day cells', () => {
             date: TODAY,
             locationType: 'goodlife_brother',
             durationMinutes: 60,
-            intensityRating: 7,
+            intensityRating: 3,
             rawText: 'squats 60,8',
             notes: null,
             parseStatus: 'done',
@@ -118,7 +122,9 @@ describe('day cells', () => {
     await waitFor(() =>
       expect(screen.getByText(/Squat \(1 sets\)/)).toBeTruthy()
     );
-    expect(screen.getByText(/60 min · RPE 7/)).toBeTruthy();
+    expect(screen.getByText(/60 min/)).toBeTruthy();
+    // Stars are decoration; the words carry the rating.
+    expect(screen.getByText("Intensity 3/5 — I'm sweating")).toBeTruthy();
 
     fireEvent.click(cell);
     await waitFor(() =>

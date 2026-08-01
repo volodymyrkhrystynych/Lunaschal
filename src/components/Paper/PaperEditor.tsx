@@ -1,24 +1,24 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../hooks/api';
+import { api, type PaperPageContent } from '../../hooks/api';
 import {
+  fitPageBox,
   parseStrokes,
   resolveSwipe,
+  saveStatusLabel,
   TOOL_SIZES,
   type StrokeTool,
   type SwipeDirection,
 } from '../../lib/paper';
 import { PaperCanvas, type PaperCanvasHandle } from './PaperCanvas';
-
-const TOOL_META: { id: StrokeTool; label: string; icon: string }[] = [
-  { id: 'pen', label: 'Pen', icon: '🖊' },
-  { id: 'highlighter', label: 'Highlighter', icon: '🖍' },
-  { id: 'eraser', label: 'Eraser', icon: '⌫' },
-];
-const SIZE_LABELS = ['S', 'M', 'L'];
+import { PaperToolPanel } from './PaperToolPanel';
 
 /** How long the pen must be still before the page is uploaded on its own. */
 const AUTOSAVE_DELAY_MS = 1500;
+
+/** Breathing room between the fitted page and the edge of the drawing area, so
+ * the panel has somewhere to sit when it is docked. */
+const PAGE_INSET = 10;
 
 interface PaperEditorProps {
   paperId: string;
@@ -46,6 +46,29 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+
+  // The page is fitted into whatever the drawing area currently is, so its size
+  // has to be measured rather than assumed (the sidebar reflows it without any
+  // window resize).
+  const stageRef = useRef<HTMLDivElement>(null);
+  const [stage, setStage] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const el = stageRef.current;
+    if (!el) return;
+    const measure = () =>
+      setStage({ width: el.clientWidth, height: el.clientHeight });
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Contain-fit: the page keeps its A4 ratio and the leftover shows as bars.
+  const box = fitPageBox({
+    width: stage.width - PAGE_INSET * 2,
+    height: stage.height - PAGE_INSET * 2,
+  });
 
   // The tool to return to when the eraser is toggled back off.
   const prevToolRef = useRef<StrokeTool>('pen');
@@ -100,6 +123,18 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
       // Guarded by the revision: strokes drawn during the upload stay dirty.
       canvasRef.current?.markSaved(data.revision);
       setSaveError(null);
+      // Write what we just uploaded straight into the page's cache entry.
+      // Without this the entry keeps whatever the page held when it was opened
+      // — empty, for a page written on for the first time — and coming back to
+      // it later re-seeds the canvas from that stale copy, so the page reads as
+      // blank. Drawing on the blank one would then overwrite the real strokes,
+      // since a save replaces the column outright. setQueryData (not an
+      // invalidate) because the client already knows the answer: no refetch,
+      // and nothing races the page currently under the pen.
+      queryClient.setQueryData<PaperPageContent>(
+        ['paper', 'page', currentPage.id],
+        { strokes: data.strokes, width: data.width, height: data.height }
+      );
       // Only the grid needs refreshing. Invalidating the whole 'paper' prefix
       // would also refetch the page content being drawn on right now.
       queryClient.invalidateQueries({ queryKey: ['paper'], exact: true });
@@ -204,11 +239,21 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [toggleEraser]);
 
-  const initialStrokes = content ? parseStrokes(content.strokes) : [];
-  const initialSize =
-    content && content.width && content.height
-      ? { width: content.width, height: content.height }
-      : null;
+  // Memoised on the query result, whose identity React Query keeps stable
+  // unless the data actually changed. The canvas adopts these on identity
+  // change, so re-deriving them every render would re-seed it constantly and
+  // throw away undo history.
+  const initialStrokes = useMemo(
+    () => (content ? parseStrokes(content.strokes) : []),
+    [content]
+  );
+  const initialSize = useMemo(
+    () =>
+      content && content.width && content.height
+        ? { width: content.width, height: content.height }
+        : null,
+    [content]
+  );
 
   const btn =
     'px-3 py-1.5 rounded-md text-sm font-medium transition-colors disabled:opacity-40 bg-[var(--color-surface)] hover:bg-white/10';
@@ -235,69 +280,14 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
         >
           📓 {archiveRequested ? 'To journal ✓' : 'To journal'}
         </button>
-        <div className="w-px h-6 mx-1 bg-white/10" />
-        {TOOL_META.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTool(t.id)}
-            className={toolBtn(tool === t.id)}
-            title={t.label}
-          >
-            {t.icon} {t.label}
-          </button>
-        ))}
-
-        {/* Size selector for the active tool */}
-        <div className="flex items-center gap-1 ml-1">
-          {TOOL_SIZES[tool].map((px, i) => (
-            <button
-              key={i}
-              onClick={() => setSizeIndex(prev => ({ ...prev, [tool]: i }))}
-              className={`w-8 h-8 rounded-md flex items-center justify-center transition-colors ${
-                sizeIndex[tool] === i
-                  ? 'bg-[var(--color-primary)]'
-                  : 'bg-[var(--color-surface)] hover:bg-white/10'
-              }`}
-              title={`${SIZE_LABELS[i]} (${px}px)`}
-            >
-              <span
-                className="rounded-full bg-current"
-                style={{
-                  width: `${Math.min(px, 18)}px`,
-                  height: `${Math.min(px, 18)}px`,
-                  color:
-                    sizeIndex[tool] === i
-                      ? 'var(--color-bg)'
-                      : 'var(--color-text)',
-                }}
-              />
-            </button>
-          ))}
-        </div>
-
-        <div className="w-px h-6 mx-1 bg-white/10" />
-        <button
-          onClick={() => canvasRef.current?.undo()}
-          disabled={!canvasState.canUndo}
-          className={btn}
-          title="Undo"
-        >
-          ↶
-        </button>
-        <button
-          onClick={() => canvasRef.current?.redo()}
-          disabled={!canvasState.canRedo}
-          className={btn}
-          title="Redo"
-        >
-          ↷
-        </button>
-
         <div className="ml-auto flex items-center gap-2">
-          {saving && <span className="text-xs opacity-60">Saving…</span>}
-          {!saving && canvasState.dirty && (
-            <span className="text-xs opacity-60">Unsaved</span>
-          )}
+          {/* Fixed-width slot. The tools used to sit in this bar and this text
+           * popped in and out on every autosave, reflowing the row out from
+           * under the stylus — the reserved width is what keeps the bar (and
+           * now the floating panel, which carries no status at all) still. */}
+          <span className="text-xs opacity-60 w-16 text-right shrink-0">
+            {saveStatusLabel(saving, canvasState.dirty)}
+          </span>
           <button
             onClick={() => navigate('prev')}
             disabled={currentIndex === 0}
@@ -343,10 +333,24 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
         </div>
       )}
 
-      {/* Drawing surface */}
-      <div className="flex-1 relative overflow-hidden bg-neutral-200 flex items-stretch justify-center p-2">
-        {currentPage && content ? (
-          <div className="h-full w-full max-w-[1024px] bg-white shadow-md rounded-sm overflow-hidden">
+      {/* Drawing surface. The page is an A4 sheet fitted into this area and
+       * centred; the bars left over on two sides are deliberate — a page that
+       * stretched to the viewport changed shape with the device, and the ink
+       * saved on it came back distorted. */}
+      <div
+        ref={stageRef}
+        className="flex-1 relative overflow-hidden bg-neutral-200"
+      >
+        {currentPage && content && box.width > 0 ? (
+          <div
+            className="absolute bg-white shadow-md rounded-sm overflow-hidden"
+            style={{
+              left: box.left + PAGE_INSET,
+              top: box.top + PAGE_INSET,
+              width: box.width,
+              height: box.height,
+            }}
+          >
             <PaperCanvas
               key={currentPage.id}
               ref={canvasRef}
@@ -361,10 +365,24 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
             />
           </div>
         ) : (
-          <div className="flex items-center justify-center w-full text-neutral-500">
+          <div className="flex items-center justify-center w-full h-full text-neutral-500">
             Loading…
           </div>
         )}
+
+        <PaperToolPanel
+          tool={tool}
+          onToolChange={setTool}
+          sizeIndex={sizeIndex[tool]}
+          onSizeIndexChange={i =>
+            setSizeIndex(prev => ({ ...prev, [tool]: i }))
+          }
+          canUndo={canvasState.canUndo}
+          canRedo={canvasState.canRedo}
+          onUndo={() => canvasRef.current?.undo()}
+          onRedo={() => canvasRef.current?.redo()}
+          bounds={stage}
+        />
       </div>
     </div>
   );
