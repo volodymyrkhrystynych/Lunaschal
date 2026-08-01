@@ -5,23 +5,20 @@ from backend.ai.llm import chat_json
 CLASSIFIER_PROMPT = """You are an intent classifier. Analyze the user's message and determine its intent.
 
 Intent Types:
-- journal: Personal reflections, diary entries, things learned, thoughts. "Today I...", "I learned...", "I felt..."
 - calendar: Activities or events. "I went to...", "Had a meeting...", mentions of times/dates.
 - question: Asking for information. Question marks, "How do I...", "What is..."
 - flashcard_request: Wants flashcards or quiz. "quiz me", "create flashcards"
 - conversation: General chat, greetings, commands.
 
 Rules:
-1. For journal entries, clean up content while preserving voice.
-2. For calendar events, determine date. Today: {TODAY}
-3. Confidence: 0.8+ for clear intents, 0.5-0.8 for ambiguous.
-4. Generate relevant tags.
+1. For calendar events, determine date. Today: {TODAY}
+2. Confidence: 0.8+ for clear intents, 0.5-0.8 for ambiguous.
+3. Generate relevant tags.
 
 Respond with valid JSON matching this schema:
 {
-  "intent": "journal|calendar|question|conversation|flashcard_request",
+  "intent": "calendar|question|conversation|flashcard_request",
   "confidence": 0.0-1.0,
-  "journalEntry": {"title": "...", "content": "...", "tags": ["..."]} (only if journal),
   "calendarEvent": {"title": "...", "description": "...", "date": "YYYY-MM-DD", "time": "HH:MM", "tags": ["..."]} (only if calendar),
   "flashcardRequest": {"topic": "..."} (only if flashcard_request)
 }"""
@@ -37,17 +34,10 @@ CLASSIFIER_SCHEMA = {
     'properties': {
         'intent': {
             'type': 'string',
-            'enum': ['journal', 'calendar', 'question', 'conversation',
+            'enum': ['calendar', 'question', 'conversation',
                      'flashcard_request'],
         },
         'confidence': {'type': 'number', 'minimum': 0, 'maximum': 1},
-        'journalEntry': {'anyOf': [{
-            'type': 'object',
-            'properties': {'title': {'type': 'string'},
-                           'content': {'type': 'string'},
-                           'tags': _TAGS},
-            'required': ['title', 'content'],
-        }, {'type': 'null'}]},
         'calendarEvent': {'anyOf': [{
             'type': 'object',
             'properties': {'title': {'type': 'string'},
