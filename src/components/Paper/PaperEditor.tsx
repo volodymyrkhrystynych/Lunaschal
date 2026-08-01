@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval';
 import { api, type PaperPageContent } from '../../hooks/api';
 import {
   fitPageBox,
@@ -24,12 +25,27 @@ import { PaperToolPanel } from './PaperToolPanel';
 import { PaperImageLayer } from './PaperImageLayer';
 import { PaperImageActions } from './PaperImageActions';
 
-/** How long the pen must be still before the page is uploaded on its own. */
-const AUTOSAVE_DELAY_MS = 1500;
-
 /** Breathing room between the fitted page and the edge of the drawing area, so
  * the panel has somewhere to sit when it is docked. */
 const PAGE_INSET = 10;
+
+type PendingImageEdit = Partial<
+  ImageBox & Pick<PageImage, 'rotation' | 'flipped' | 'locked'>
+>;
+
+const imageEditsBufferKey = (pageId: string) => `paper-page-images-${pageId}`;
+
+/** Parse a buffered set of staged picture edits, defensively — a corrupt or
+ * missing entry just means nothing is pending, never a crash. */
+function parseImageEditsBuffer(raw: unknown): Record<string, PendingImageEdit> {
+  if (typeof raw !== 'string' || !raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 interface PaperEditorProps {
   paperId: string;
@@ -60,11 +76,17 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   // no right-click and no spare button to hold.
   const [selectMode, setSelectMode] = useState(false);
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
-  // Geometry of the drag in flight, before it is persisted.
+  // Geometry of the drag in flight, before it is committed to pendingImageEdits.
   const [imagePreview, setImagePreview] = useState<{
     id: string;
     box: ImageBox;
   } | null>(null);
+  // Picture transforms (move/resize/rotate/flip/lock), committed locally and
+  // held here — like strokes, they only reach the server on Save — keyed by
+  // image id so the same picture can be nudged several times before saving.
+  const [pendingImageEdits, setPendingImageEdits] = useState<
+    Record<string, PendingImageEdit>
+  >({});
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -131,40 +153,56 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     },
   });
 
-  /** Upload the current page. Never throws: a save failure must not stop the
-   * caller, because unsaved strokes stay in the canvas's IndexedDB buffer and
-   * trapping the user on a page that won't save only risks losing more work. */
+  /** Upload the current page: strokes plus any staged picture transforms.
+   * Never throws: a save failure must not stop the caller, because unsaved
+   * strokes stay in the canvas's IndexedDB buffer, staged picture edits stay in
+   * `pendingImageEdits`, and trapping the user on a page that won't save only
+   * risks losing more work. This is the only path that reaches the server —
+   * drawing and moving pictures around no longer sync on their own, so this
+   * runs on an explicit Save and on leaving the page (navigate/back/add page/
+   * tab hidden), never on a timer. */
   const saveCurrent = async (): Promise<boolean> => {
     if (!currentPage || savingRef.current) return true;
     const data = await canvasRef.current?.getSaveData();
-    if (!data) return true; // nothing dirty
+    const imageEdits = Object.entries(pendingImageEdits);
+    if (!data && imageEdits.length === 0) return true; // nothing dirty
     savingRef.current = true;
     setSaving(true);
     try {
-      await api.paper.savePage(currentPage.id, data);
-      // Guarded by the revision: strokes drawn during the upload stay dirty.
-      canvasRef.current?.markSaved(data.revision);
+      if (data) {
+        await api.paper.savePage(currentPage.id, data);
+        // Guarded by the revision: strokes drawn during the upload stay dirty.
+        canvasRef.current?.markSaved(data.revision);
+        // Write what we just uploaded straight into the page's cache entry.
+        // Without this the entry keeps whatever the page held when it was
+        // opened — empty, for a page written on for the first time — and
+        // coming back to it later re-seeds the canvas from that stale copy, so
+        // the page reads as blank. Drawing on the blank one would then
+        // overwrite the real strokes, since a save replaces the column
+        // outright. setQueryData (not an invalidate) because the client
+        // already knows the answer: no refetch, and nothing races the page
+        // currently under the pen.
+        queryClient.setQueryData<PaperPageContent>(
+          ['paper', 'page', currentPage.id],
+          prev => ({
+            strokes: data.strokes,
+            width: data.width,
+            height: data.height,
+            // A save uploads strokes only — pictures are owned by their own
+            // endpoints — so carry across whatever the cache already holds
+            // rather than blanking the list.
+            images: prev?.images ?? [],
+          })
+        );
+      }
+      if (imageEdits.length > 0) {
+        await Promise.all(
+          imageEdits.map(([id, edit]) => api.paper.updateImage(id, edit))
+        );
+        setPendingImageEdits({});
+        refreshPage();
+      }
       setSaveError(null);
-      // Write what we just uploaded straight into the page's cache entry.
-      // Without this the entry keeps whatever the page held when it was opened
-      // — empty, for a page written on for the first time — and coming back to
-      // it later re-seeds the canvas from that stale copy, so the page reads as
-      // blank. Drawing on the blank one would then overwrite the real strokes,
-      // since a save replaces the column outright. setQueryData (not an
-      // invalidate) because the client already knows the answer: no refetch,
-      // and nothing races the page currently under the pen.
-      queryClient.setQueryData<PaperPageContent>(
-        ['paper', 'page', currentPage.id],
-        prev => ({
-          strokes: data.strokes,
-          width: data.width,
-          height: data.height,
-          // A save uploads strokes only — pictures are owned by their own
-          // endpoints — so carry across whatever the cache already holds
-          // rather than blanking the list.
-          images: prev?.images ?? [],
-        })
-      );
       // Only the grid needs refreshing. Invalidating the whole 'paper' prefix
       // would also refetch the page content being drawn on right now.
       queryClient.invalidateQueries({ queryKey: ['paper'], exact: true });
@@ -217,15 +255,10 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     setCurrentIndex(target);
   };
 
-  // Debounced autosave. Every stroke bumps `revision`, which reschedules the
-  // timer, so the upload happens once the pen has been still for a moment.
-  useEffect(() => {
-    if (!canvasState.dirty) return;
-    const timer = setTimeout(() => void saveRef.current(), AUTOSAVE_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [canvasState.dirty, canvasState.revision]);
-
   // Best-effort save when the tab is hidden (iPad app-switch, screen lock).
+  // This is the one automatic trigger left: it's a single flush on the way
+  // out, not a recurring sync, so it doesn't fight with the manual-save intent
+  // below — it just stops a background/close from losing an unsaved page.
   useEffect(() => {
     const onHidden = () => {
       if (document.visibilityState === 'hidden') void saveRef.current();
@@ -253,6 +286,9 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
           e.preventDefault();
           if (e.shiftKey) canvasRef.current?.redo();
           else canvasRef.current?.undo();
+        } else if (e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          void saveRef.current();
         }
         return;
       }
@@ -287,21 +323,26 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     [content]
   );
 
-  // What the canvas and the overlay actually draw: the server's list with the
-  // in-flight drag applied, so a move tracks the finger without a round trip.
+  // What the canvas and the overlay actually draw: the server's list with any
+  // staged-but-unsaved transform applied, then the in-flight drag on top of
+  // that, so a move tracks the finger without a round trip and neither needs
+  // the network to show up.
   const shownImages = useMemo(
     () =>
-      imagePreview
-        ? images.map(i =>
-            i.id === imagePreview.id ? { ...i, ...imagePreview.box } : i
-          )
-        : images,
-    [images, imagePreview]
+      images.map(i => {
+        const pending = pendingImageEdits[i.id];
+        const withPending = pending ? { ...i, ...pending } : i;
+        return imagePreview && imagePreview.id === i.id
+          ? { ...withPending, ...imagePreview.box }
+          : withPending;
+      }),
+    [images, pendingImageEdits, imagePreview]
   );
   const selectedImage = shownImages.find(i => i.id === selectedImageId) ?? null;
   // A locked picture is deliberately invisible to the hit test, so tapping the
   // page can never reach one again. This is the way back to it.
   const lockedImages = shownImages.filter(i => i.locked);
+  const imagesDirty = Object.keys(pendingImageEdits).length > 0;
 
   const refreshPage = () => {
     if (currentPage) {
@@ -311,31 +352,26 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     }
   };
 
-  const transformImage = useMutation({
-    mutationFn: ({
-      id,
-      data,
-    }: {
-      id: string;
-      data: Parameters<typeof api.paper.updateImage>[1];
-    }) => api.paper.updateImage(id, data),
-    onSuccess: () => {
-      setImagePreview(null);
-      refreshPage();
-    },
-    onError: (e: Error) => {
-      // Drop the optimistic geometry so the picture snaps back to the truth
-      // rather than sitting somewhere the server never agreed to.
-      setImagePreview(null);
-      refreshPage();
-      setSaveError(e.message || 'Could not update the picture');
-    },
-  });
+  /** Stage a picture transform locally instead of syncing it straight away —
+   * like strokes, it only reaches the server on Save (or on leaving the
+   * page). Merged over whatever is already pending for this image so several
+   * transforms can stack before a save flushes them. */
+  const commitImageEdit = (id: string, data: PendingImageEdit) => {
+    setPendingImageEdits(prev => ({ ...prev, [id]: { ...prev[id], ...data } }));
+    setImagePreview(null);
+  };
 
   const removeImage = useMutation({
     mutationFn: (id: string) => api.paper.deleteImage(id),
-    onSuccess: () => {
+    onSuccess: (_data, id) => {
       setSelectedImageId(null);
+      // A pending transform for a picture that no longer exists would 404 the
+      // next save.
+      setPendingImageEdits(prev => {
+        if (!(id in prev)) return prev;
+        const { [id]: _removed, ...rest } = prev;
+        return rest;
+      });
       refreshPage();
     },
     onError: (e: Error) => setSaveError(e.message || 'Could not delete it'),
@@ -402,11 +438,44 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   }, []);
 
   // A selection belongs to one page; carrying it across would point the action
-  // bar at a picture that is no longer on screen.
+  // bar at a picture that is no longer on screen. Staged picture edits are
+  // page-scoped too, but unlike strokes they have no server copy to fall back
+  // on until saved, so they're reloaded from the same kind of local buffer
+  // strokes use (imageEditsBufferKey) rather than simply discarded — a save
+  // that failed on the way out must not quietly lose a moved picture.
   useEffect(() => {
     setSelectedImageId(null);
     setImagePreview(null);
+    if (!currentPage) {
+      setPendingImageEdits({});
+      return;
+    }
+    let cancelled = false;
+    idbGet(imageEditsBufferKey(currentPage.id))
+      .then(raw => {
+        if (cancelled) return;
+        setPendingImageEdits(parseImageEditsBuffer(raw));
+      })
+      .catch(() => {
+        if (!cancelled) setPendingImageEdits({});
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [currentPage?.id]);
+
+  // Mirror staged picture edits into IndexedDB, the same safety net the
+  // stroke buffer gives drawing: a save that never reaches the server (closed
+  // tab, dead network) must not silently drop a moved/rotated picture.
+  useEffect(() => {
+    if (!currentPage) return;
+    const key = imageEditsBufferKey(currentPage.id);
+    if (Object.keys(pendingImageEdits).length === 0) {
+      idbDel(key).catch(() => {});
+    } else {
+      idbSet(key, JSON.stringify(pendingImageEdits)).catch(() => {});
+    }
+  }, [currentPage, pendingImageEdits]);
 
   // Memoised on the query result, whose identity React Query keeps stable
   // unless the data actually changed. The canvas adopts these on identity
@@ -501,8 +570,16 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
            * under the stylus — the reserved width is what keeps the bar (and
            * now the floating panel, which carries no status at all) still. */}
           <span className="text-xs opacity-60 w-16 text-right shrink-0">
-            {saveStatusLabel(saving, canvasState.dirty)}
+            {saveStatusLabel(saving, canvasState.dirty || imagesDirty)}
           </span>
+          <button
+            onClick={() => void saveCurrent()}
+            disabled={saving || !(canvasState.dirty || imagesDirty)}
+            className={btn}
+            title="Save this page (Ctrl+S) — nothing is sent to the server until you do"
+          >
+            💾 Save
+          </button>
           <button
             onClick={() => navigate('prev')}
             disabled={currentIndex === 0}
@@ -587,9 +664,7 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
                 selectedId={selectedImageId}
                 onSelect={setSelectedImageId}
                 onPreview={(id, next) => setImagePreview({ id, box: next })}
-                onCommit={(id, next) =>
-                  transformImage.mutate({ id, data: next })
-                }
+                onCommit={(id, next) => commitImageEdit(id, next)}
               />
             )}
           </div>
@@ -603,25 +678,18 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
           <PaperImageActions
             image={selectedImage}
             onRotate={delta =>
-              transformImage.mutate({
-                id: selectedImage.id,
-                data: {
-                  rotation: snapRotation(
-                    rotateBy(selectedImage.rotation, delta)
-                  ),
-                },
+              commitImageEdit(selectedImage.id, {
+                rotation: snapRotation(rotateBy(selectedImage.rotation, delta)),
               })
             }
             onFlip={() =>
-              transformImage.mutate({
-                id: selectedImage.id,
-                data: { flipped: !selectedImage.flipped },
+              commitImageEdit(selectedImage.id, {
+                flipped: !selectedImage.flipped,
               })
             }
             onToggleLock={() =>
-              transformImage.mutate({
-                id: selectedImage.id,
-                data: { locked: !selectedImage.locked },
+              commitImageEdit(selectedImage.id, {
+                locked: !selectedImage.locked,
               })
             }
             onDelete={() => removeImage.mutate(selectedImage.id)}
