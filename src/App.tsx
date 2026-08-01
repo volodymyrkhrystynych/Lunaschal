@@ -21,6 +21,7 @@ import { Newspapers } from './components/Newspapers';
 import { Paper } from './components/Paper/Paper';
 import { Meetings } from './components/Meetings';
 import { api } from './hooks/api';
+import { useTodayNewspapersStatus } from './hooks/useTodayNewspapersStatus';
 import { resolveAuthGate } from './lib/authGate';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 import { MOBILE_QUERY } from './lib/breakpoints';
@@ -59,6 +60,11 @@ export default function App() {
     isError: authError,
     data: authStatus,
   });
+
+  // Mounted regardless of currentView so the sidebar can flag a gap without
+  // the user opening the Newspapers tab; gated on 'app' so it doesn't fire
+  // against a still-unauthenticated network-mode session.
+  const newspapersNeedAttention = useTodayNewspapersStatus(authGate === 'app');
 
   const handleTranscribed = (text: string) => {
     if (currentView === 'files') {
@@ -199,6 +205,7 @@ export default function App() {
             onViewChange={setCurrentView}
             isOpen={sidebarOpen}
             onToggle={() => setSidebarOpen(!sidebarOpen)}
+            newspapersNeedAttention={newspapersNeedAttention}
           />
           <main className="flex-1 flex flex-col overflow-hidden">
             {renderView()}
