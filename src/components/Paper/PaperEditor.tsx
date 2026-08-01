@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type PaperPageContent } from '../../hooks/api';
 import {
   fitPageBox,
+  PAGE_WIDTH,
   parseStrokes,
   resolveSwipe,
   saveStatusLabel,
@@ -10,8 +11,18 @@ import {
   type StrokeTool,
   type SwipeDirection,
 } from '../../lib/paper';
+import {
+  fitPastedImage,
+  pastedFilename,
+  rotateBy,
+  snapRotation,
+  type ImageBox,
+  type PageImage,
+} from '../../lib/paperImages';
 import { PaperCanvas, type PaperCanvasHandle } from './PaperCanvas';
 import { PaperToolPanel } from './PaperToolPanel';
+import { PaperImageLayer } from './PaperImageLayer';
+import { PaperImageActions } from './PaperImageActions';
 
 /** How long the pen must be still before the page is uploaded on its own. */
 const AUTOSAVE_DELAY_MS = 1500;
@@ -28,6 +39,7 @@ interface PaperEditorProps {
 export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   const queryClient = useQueryClient();
   const canvasRef = useRef<PaperCanvasHandle>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [tool, setTool] = useState<StrokeTool>('pen');
   // Each tool remembers its own width (index into TOOL_SIZES[tool]).
@@ -43,6 +55,16 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     dirty: false,
     revision: 0,
   });
+  // Select mode swaps the pen for picture handling. It is a mode rather than a
+  // modifier because there is no mouse here: with a stylus there is no hover,
+  // no right-click and no spare button to hold.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+  // Geometry of the drag in flight, before it is persisted.
+  const [imagePreview, setImagePreview] = useState<{
+    id: string;
+    box: ImageBox;
+  } | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
@@ -133,7 +155,15 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
       // and nothing races the page currently under the pen.
       queryClient.setQueryData<PaperPageContent>(
         ['paper', 'page', currentPage.id],
-        { strokes: data.strokes, width: data.width, height: data.height }
+        prev => ({
+          strokes: data.strokes,
+          width: data.width,
+          height: data.height,
+          // A save uploads strokes only — pictures are owned by their own
+          // endpoints — so carry across whatever the cache already holds
+          // rather than blanking the list.
+          images: prev?.images ?? [],
+        })
       );
       // Only the grid needs refreshing. Invalidating the whole 'paper' prefix
       // would also refetch the page content being drawn on right now.
@@ -239,6 +269,145 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [toggleEraser]);
 
+  // SQLite hands booleans back as 0/1; the geometry module wants real booleans.
+  const images = useMemo<PageImage[]>(
+    () =>
+      (content?.images ?? []).map(i => ({
+        id: i.id,
+        url: i.url,
+        x: i.x,
+        y: i.y,
+        width: i.width,
+        height: i.height,
+        rotation: i.rotation,
+        flipped: !!i.flipped,
+        locked: !!i.locked,
+        position: i.position,
+      })),
+    [content]
+  );
+
+  // What the canvas and the overlay actually draw: the server's list with the
+  // in-flight drag applied, so a move tracks the finger without a round trip.
+  const shownImages = useMemo(
+    () =>
+      imagePreview
+        ? images.map(i =>
+            i.id === imagePreview.id ? { ...i, ...imagePreview.box } : i
+          )
+        : images,
+    [images, imagePreview]
+  );
+  const selectedImage = shownImages.find(i => i.id === selectedImageId) ?? null;
+  // A locked picture is deliberately invisible to the hit test, so tapping the
+  // page can never reach one again. This is the way back to it.
+  const lockedImages = shownImages.filter(i => i.locked);
+
+  const refreshPage = () => {
+    if (currentPage) {
+      queryClient.invalidateQueries({
+        queryKey: ['paper', 'page', currentPage.id],
+      });
+    }
+  };
+
+  const transformImage = useMutation({
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: Parameters<typeof api.paper.updateImage>[1];
+    }) => api.paper.updateImage(id, data),
+    onSuccess: () => {
+      setImagePreview(null);
+      refreshPage();
+    },
+    onError: (e: Error) => {
+      // Drop the optimistic geometry so the picture snaps back to the truth
+      // rather than sitting somewhere the server never agreed to.
+      setImagePreview(null);
+      refreshPage();
+      setSaveError(e.message || 'Could not update the picture');
+    },
+  });
+
+  const removeImage = useMutation({
+    mutationFn: (id: string) => api.paper.deleteImage(id),
+    onSuccess: () => {
+      setSelectedImageId(null);
+      refreshPage();
+    },
+    onError: (e: Error) => setSaveError(e.message || 'Could not delete it'),
+  });
+
+  /** Read a blob's pixel size, so a pasted picture can be placed at a sane
+   * scale before it is uploaded. */
+  const naturalSize = (file: Blob) =>
+    new Promise<{ width: number; height: number }>(resolve => {
+      const url = URL.createObjectURL(file);
+      const el = new Image();
+      el.onload = () => {
+        URL.revokeObjectURL(url);
+        resolve({ width: el.naturalWidth, height: el.naturalHeight });
+      };
+      el.onerror = () => {
+        URL.revokeObjectURL(url);
+        // Fall back to a square: better a placed picture than a failed paste.
+        resolve({ width: 1, height: 1 });
+      };
+      el.src = url;
+    });
+
+  const addImage = async (file: Blob, filename?: string) => {
+    if (!currentPage) return;
+    const name = filename ?? pastedFilename(file.type);
+    if (!name) {
+      setSaveError(`Can't put a ${file.type || 'file of that type'} on a page`);
+      return;
+    }
+    try {
+      const size = await naturalSize(file);
+      const box = fitPastedImage(size.width, size.height);
+      const created = await api.paper.addImage(currentPage.id, file, box, name);
+      refreshPage();
+      // Land in select mode with it chosen — pasting is always followed by
+      // placing it.
+      setSelectMode(true);
+      setSelectedImageId(created.id);
+    } catch (e) {
+      setSaveError(
+        e instanceof Error ? e.message : 'Could not add the picture'
+      );
+    }
+  };
+
+  const addImageRef = useRef(addImage);
+  addImageRef.current = addImage;
+
+  // Paste a picture straight onto the page. Registered on the window because
+  // the canvas isn't focusable — there is nowhere for a paste to land otherwise.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.items ?? []).find(
+        i => i.kind === 'file' && i.type.startsWith('image/')
+      );
+      const file = item?.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      void addImageRef.current(file);
+    };
+    window.addEventListener('paste', onPaste);
+    return () => window.removeEventListener('paste', onPaste);
+  }, []);
+
+  // A selection belongs to one page; carrying it across would point the action
+  // bar at a picture that is no longer on screen.
+  useEffect(() => {
+    setSelectedImageId(null);
+    setImagePreview(null);
+  }, [currentPage?.id]);
+
   // Memoised on the query result, whose identity React Query keeps stable
   // unless the data actually changed. The canvas adopts these on identity
   // change, so re-deriving them every render would re-seed it constantly and
@@ -280,6 +449,52 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
         >
           📓 {archiveRequested ? 'To journal ✓' : 'To journal'}
         </button>
+        <button
+          onClick={() => {
+            setSelectMode(v => !v);
+            setSelectedImageId(null);
+          }}
+          className={toolBtn(selectMode)}
+          title={
+            selectMode
+              ? 'Back to drawing'
+              : 'Select and move pictures instead of drawing'
+          }
+        >
+          {selectMode ? '✋ Pictures' : '✋ Pictures'}
+        </button>
+        {selectMode && lockedImages.length > 0 && (
+          <button
+            onClick={() => {
+              const at = lockedImages.findIndex(i => i.id === selectedImageId);
+              setSelectedImageId(
+                lockedImages[(at + 1) % lockedImages.length].id
+              );
+            }}
+            className={btn}
+            title="Step through locked pictures to unlock one"
+          >
+            🔒 {lockedImages.length}
+          </button>
+        )}
+        <button
+          onClick={() => imageInputRef.current?.click()}
+          className={btn}
+          title="Add a picture (or just paste one)"
+        >
+          🖼 Add
+        </button>
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          className="hidden"
+          onChange={e => {
+            const file = e.target.files?.[0];
+            if (file) void addImage(file, file.name);
+            e.target.value = '';
+          }}
+        />
         <div className="ml-auto flex items-center gap-2">
           {/* Fixed-width slot. The tools used to sit in this bar and this text
            * popped in and out on every autosave, reflowing the row out from
@@ -355,6 +570,7 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
               key={currentPage.id}
               ref={canvasRef}
               pageId={currentPage.id}
+              images={shownImages}
               initialStrokes={initialStrokes}
               initialSize={initialSize}
               tool={tool}
@@ -363,11 +579,53 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
               onToggleEraser={toggleEraser}
               onStateChange={setCanvasState}
             />
+            {/* Only mounted in select mode, so it can never swallow a stroke. */}
+            {selectMode && (
+              <PaperImageLayer
+                images={shownImages}
+                scale={box.width / PAGE_WIDTH}
+                selectedId={selectedImageId}
+                onSelect={setSelectedImageId}
+                onPreview={(id, next) => setImagePreview({ id, box: next })}
+                onCommit={(id, next) =>
+                  transformImage.mutate({ id, data: next })
+                }
+              />
+            )}
           </div>
         ) : (
           <div className="flex items-center justify-center w-full h-full text-neutral-500">
             Loading…
           </div>
+        )}
+
+        {selectMode && selectedImage && (
+          <PaperImageActions
+            image={selectedImage}
+            onRotate={delta =>
+              transformImage.mutate({
+                id: selectedImage.id,
+                data: {
+                  rotation: snapRotation(
+                    rotateBy(selectedImage.rotation, delta)
+                  ),
+                },
+              })
+            }
+            onFlip={() =>
+              transformImage.mutate({
+                id: selectedImage.id,
+                data: { flipped: !selectedImage.flipped },
+              })
+            }
+            onToggleLock={() =>
+              transformImage.mutate({
+                id: selectedImage.id,
+                data: { locked: !selectedImage.locked },
+              })
+            }
+            onDelete={() => removeImage.mutate(selectedImage.id)}
+          />
         )}
 
         <PaperToolPanel

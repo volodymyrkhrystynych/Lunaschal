@@ -23,6 +23,7 @@ import {
   type StrokeTool,
   type SwipeDirection,
 } from '@/lib/paper';
+import type { PageImage } from '@/lib/paperImages';
 
 const PAGE_BG = '#ffffff';
 const INK = '#111111';
@@ -65,6 +66,9 @@ export interface PaperCanvasHandle {
 
 interface PaperCanvasProps {
   pageId: string;
+  /** Pictures pasted onto the page, drawn beneath the ink. Interaction lives in
+   * the DOM overlay above this canvas, not here — see PaperImageLayer. */
+  images?: PageImage[];
   initialStrokes: Stroke[];
   /** Coordinate space the stored strokes are in. Page-space rows report the
    * fixed page size; a row saved before the A4 page space reports the CSS-pixel
@@ -88,6 +92,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
   function PaperCanvas(
     {
       pageId,
+      images,
       initialStrokes,
       initialSize,
       tool,
@@ -108,6 +113,9 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     toolRef.current = tool;
     const sizeRef = useRef(size);
     sizeRef.current = size;
+    // Read through a ref so the paint helpers never close over a stale list.
+    const imagesRef = useRef<PageImage[]>(images ?? []);
+    imagesRef.current = images ?? [];
 
     // Live drawing scratch state.
     const drawingRef = useRef<{ pointerId: number; stroke: Stroke } | null>(
@@ -220,12 +228,59 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       }
     };
 
+    // Decoded <img> elements, keyed by URL. A miss kicks off the load and
+    // repaints when it lands, so a page with pictures fills in rather than
+    // waiting on the network before showing any ink.
+    const imageElsRef = useRef(new Map<string, HTMLImageElement>());
+    const imageElement = (url: string): HTMLImageElement | null => {
+      const cache = imageElsRef.current;
+      let el = cache.get(url);
+      if (!el) {
+        el = new Image();
+        el.onload = () => redrawAll();
+        el.src = url;
+        cache.set(url, el);
+      }
+      return el.complete && el.naturalWidth > 0 ? el : null;
+    };
+
+    const drawImage = (ctx: CanvasRenderingContext2D, img: PageImage) => {
+      const el = imageElement(img.url);
+      if (!el) return;
+      const s = scale();
+      ctx.save();
+      // Rotate and mirror about the image's own centre, matching the geometry
+      // in src/lib/paperImages.ts exactly — the overlay's CSS transform and the
+      // hit test both assume it.
+      ctx.translate((img.x + img.width / 2) * s, (img.y + img.height / 2) * s);
+      ctx.rotate((img.rotation * Math.PI) / 180);
+      if (img.flipped) ctx.scale(-1, 1);
+      ctx.drawImage(
+        el,
+        (-img.width / 2) * s,
+        (-img.height / 2) * s,
+        img.width * s,
+        img.height * s
+      );
+      ctx.restore();
+    };
+
+    /** Page white plus the pictures. Everything that repaints from scratch goes
+     * through this, so ink always lands on top of the images. */
+    const paintBackdrop = (
+      ctx: CanvasRenderingContext2D,
+      c: HTMLCanvasElement
+    ) => {
+      ctx.fillStyle = PAGE_BG;
+      ctx.fillRect(0, 0, c.clientWidth, c.clientHeight);
+      for (const img of imagesRef.current) drawImage(ctx, img);
+    };
+
     const redrawAll = () => {
       const c = canvasRef.current;
       const ctx = ctxOf();
       if (!c || !ctx) return;
-      ctx.fillStyle = PAGE_BG;
-      ctx.fillRect(0, 0, c.clientWidth, c.clientHeight);
+      paintBackdrop(ctx, c);
       for (const s of stateRef.current.strokes) drawStroke(ctx, s);
     };
 
@@ -379,6 +434,14 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [initialStrokes]);
 
+    // Repaint when a picture is added, moved or removed. Cheap: the strokes are
+    // already in memory, and this is the only thing that reflects a transform
+    // committed through the overlay.
+    useEffect(() => {
+      redrawAll();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [images]);
+
     // --- pointer handlers ---
     const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
       const native = e.nativeEvent;
@@ -446,8 +509,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         const cc = canvasRef.current;
         const ctx = ctxOf();
         if (cc && ctx) {
-          ctx.fillStyle = PAGE_BG;
-          ctx.fillRect(0, 0, cc.clientWidth, cc.clientHeight);
+          paintBackdrop(ctx, cc);
           for (const s of erased.strokes) drawStroke(ctx, s);
           // Small circle where the eraser tip is so the active area is visible.
           const last = eraser.points[eraser.points.length - 1];

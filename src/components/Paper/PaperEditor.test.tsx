@@ -71,6 +71,7 @@ beforeEach(() => {
     strokes: '[]',
     width: null,
     height: null,
+    images: [],
   });
   vi.mocked(api.paper.savePage).mockResolvedValue({ success: true } as never);
 });
@@ -145,6 +146,8 @@ describe('page content cache after a save', () => {
         strokes: uploaded.strokes,
         width: PAGE_WIDTH,
         height: PAGE_HEIGHT,
+        // A stroke save must not blank the page's pictures.
+        images: [],
       })
     );
     // And the refresh is free: writing the known answer in must not cost a
