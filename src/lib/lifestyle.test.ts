@@ -7,6 +7,13 @@ import {
   metricValue,
   monthLabels,
   nearestPoint,
+  exerciseSeries,
+  formatSets,
+  groupSets,
+  INTENSITY_MAX,
+  intensityLabel,
+  intensityStars,
+  intensityText,
   parseCalorieEntry,
   plotSeries,
   shadeLevel,
@@ -70,23 +77,31 @@ describe('shading', () => {
     expect(shadeOpacity(shadeLevel(500, 60))).toBe(1);
   });
 
-  it('scales duration against the busiest day but intensity against 10', () => {
+  it('scales duration against the busiest day but intensity against 5 stars', () => {
     const days = [
-      day({ date: '2026-07-01', durationMinutes: 45, intensityRating: 5 }),
-      day({ date: '2026-07-02', durationMinutes: 90, intensityRating: 8 }),
+      day({ date: '2026-07-01', durationMinutes: 45, intensityRating: 3 }),
+      day({ date: '2026-07-02', durationMinutes: 90, intensityRating: 4 }),
     ];
     expect(metricCeiling(days, 'duration')).toBe(90);
-    expect(metricCeiling(days, 'intensity')).toBe(10);
+    expect(metricCeiling(days, 'intensity')).toBe(5);
   });
 
   it('reads the metric the toggle selected', () => {
     const d = day({
       date: '2026-07-01',
       durationMinutes: 45,
-      intensityRating: 8,
+      intensityRating: 4,
     });
     expect(metricValue(d, 'duration')).toBe(45);
-    expect(metricValue(d, 'intensity')).toBe(8);
+    expect(metricValue(d, 'intensity')).toBe(4);
+  });
+
+  it('shades a 5-star day solid and a 1-star day faintly', () => {
+    // The old 1-10 scale meant a hard session (8) only reached level 4 at 10;
+    // on the star scale the top of the scale is actually reachable.
+    expect(shadeLevel(5, 5)).toBe(4);
+    expect(shadeLevel(1, 5)).toBe(1);
+    expect(shadeLevel(3, 5)).toBe(3);
   });
 });
 
@@ -262,5 +277,161 @@ describe('isActivityType', () => {
     expect(isActivityType('outside')).toBe(true);
     expect(isActivityType('gym')).toBe(false);
     expect(isActivityType(null)).toBe(false);
+  });
+});
+
+describe('intensity', () => {
+  it('is a five-point scale where every star has a written meaning', () => {
+    expect(INTENSITY_MAX).toBe(5);
+    expect(intensityLabel(1)).toBe('Not intense whatsoever');
+    expect(intensityLabel(2)).toBe('Just a smidge');
+    expect(intensityLabel(3)).toBe("I'm sweating");
+    expect(intensityLabel(4)).toBe("I'm really trying hard");
+    expect(intensityLabel(5)).toBe('I am going ham');
+  });
+
+  it('has no label outside 1-5', () => {
+    expect(intensityLabel(null)).toBeNull();
+    expect(intensityLabel(undefined)).toBeNull();
+    expect(intensityLabel(0)).toBeNull();
+    expect(intensityLabel(7)).toBeNull();
+  });
+
+  it('draws stars only as decoration, filled to the rating', () => {
+    expect(intensityStars(3)).toBe('★★★☆☆');
+    expect(intensityStars(5)).toBe('★★★★★');
+    expect(intensityStars(0)).toBe('☆☆☆☆☆');
+    // A stale out-of-range value from before the migration must not blow up
+    // the string length.
+    expect(intensityStars(9)).toBe('★★★★★');
+  });
+
+  it('spells the rating out for tooltips and screen readers', () => {
+    expect(intensityText(3)).toBe("3/5 — I'm sweating");
+    expect(intensityText(null)).toBeNull();
+    // Out of range: still readable, just unlabelled.
+    expect(intensityText(8)).toBe('8/5');
+  });
+});
+
+describe('set formatting', () => {
+  it('collapses a run of identical sets', () => {
+    expect(
+      groupSets([
+        { weight: null, reps: 10 },
+        { weight: null, reps: 10 },
+        { weight: null, reps: 10 },
+        { weight: null, reps: 10 },
+      ])
+    ).toEqual([{ weight: null, reps: 10, count: 4 }]);
+  });
+
+  it('keeps a progression through the session in order', () => {
+    expect(
+      groupSets([
+        { weight: 60, reps: 8 },
+        { weight: 60, reps: 8 },
+        { weight: 65, reps: 6 },
+      ])
+    ).toEqual([
+      { weight: 60, reps: 8, count: 2 },
+      { weight: 65, reps: 6, count: 1 },
+    ]);
+  });
+
+  it('renders bodyweight sets as bodyweight, never as 0', () => {
+    // "squats 10 10 10 10"
+    const sets = Array.from({ length: 4 }, () => ({ weight: null, reps: 10 }));
+    expect(formatSets(sets)).toBe('10 × 4 bodyweight');
+    expect(formatSets(sets)).not.toContain('0×');
+  });
+
+  it('renders a single bodyweight set without a set count', () => {
+    expect(formatSets([{ weight: null, reps: 8 }])).toBe('8 bodyweight');
+  });
+
+  it('renders weighted sets with their weight', () => {
+    expect(
+      formatSets([
+        { weight: 60, reps: 8 },
+        { weight: 60, reps: 8 },
+        { weight: 65, reps: 6 },
+      ])
+    ).toBe('60×8 ×2  65×6');
+  });
+
+  it('survives a set with no reps recorded', () => {
+    expect(formatSets([{ weight: 60, reps: null }])).toBe('60×?');
+    expect(formatSets([{ weight: null, reps: null }])).toBe('? bodyweight');
+  });
+
+  it('is empty for an exercise with no sets', () => {
+    expect(formatSets([])).toBe('');
+  });
+});
+
+describe('exerciseSeries', () => {
+  const point = (
+    date: string,
+    maxWeight: number | null,
+    totalVolume: number | null,
+    totalReps: number | null
+  ) => ({ date, maxWeight, totalVolume, totalReps });
+
+  it('plots top-set weight for a weighted exercise', () => {
+    const { series, bodyweight, metric } = exerciseSeries(
+      [point('2026-07-01', 65, 828, 22), point('2026-07-08', 70, 350, 5)],
+      'weight'
+    );
+    expect(bodyweight).toBe(false);
+    expect(metric).toBe('weight');
+    expect(series.map(p => p.value)).toEqual([65, 70]);
+  });
+
+  it('falls back to reps when nothing was ever loaded', () => {
+    // A bodyweight-only exercise has no weight on any set; a weight chart would
+    // otherwise be empty or a flat line at zero.
+    const { series, bodyweight, metric } = exerciseSeries(
+      [
+        point('2026-07-01', null, null, 30),
+        point('2026-07-08', null, null, 48),
+      ],
+      'weight'
+    );
+    expect(bodyweight).toBe(true);
+    expect(metric).toBe('reps');
+    expect(series.map(p => p.value)).toEqual([30, 48]);
+  });
+
+  it('still charts weight once a bodyweight exercise gets loaded', () => {
+    const { bodyweight, metric } = exerciseSeries(
+      [point('2026-07-01', null, null, 30), point('2026-07-08', 20, 200, 10)],
+      'weight'
+    );
+    expect(bodyweight).toBe(false);
+    expect(metric).toBe('weight');
+  });
+
+  it('drops days with no number rather than plotting them at zero', () => {
+    const { series } = exerciseSeries(
+      [point('2026-07-01', 60, 480, 8), point('2026-07-08', null, null, 12)],
+      'weight'
+    );
+    expect(series.map(p => p.value)).toEqual([60]);
+  });
+
+  it("formats labels through the caller's formatter", () => {
+    const { series } = exerciseSeries(
+      [point('2026-07-01', 60, 480, 8)],
+      'weight',
+      iso => iso.slice(5)
+    );
+    expect(series[0].label).toBe('07-01');
+  });
+
+  it('is empty, and not bodyweight, with no points at all', () => {
+    const { series, bodyweight } = exerciseSeries([], 'weight');
+    expect(series).toEqual([]);
+    expect(bodyweight).toBe(false);
   });
 });

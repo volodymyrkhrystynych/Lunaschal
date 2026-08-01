@@ -10,7 +10,7 @@ export const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 // the left-to-right order of the grid.
 export const WEEKDAY_INITIALS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 
-export type RepeatFreq = 'daily' | 'weekly' | 'monthly';
+export type RepeatFreq = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 export interface MonthCell {
   date: Date;
@@ -67,7 +67,14 @@ export function repeatLabel(event: {
   const freq = event.repeatFreq;
   if (!freq) return '';
   const interval = event.repeatInterval || 1;
-  const unit = freq === 'daily' ? 'day' : freq === 'weekly' ? 'week' : 'month';
+  const unit =
+    freq === 'daily'
+      ? 'day'
+      : freq === 'weekly'
+        ? 'week'
+        : freq === 'yearly'
+          ? 'year'
+          : 'month';
   const every = interval === 1 ? `every ${unit}` : `every ${interval} ${unit}s`;
   if (freq !== 'weekly') return every;
 
@@ -97,11 +104,23 @@ export function parseEventTags(tags: string | null | undefined): string[] {
   }
 }
 
-// 'HH:MM' start (+ optional end) as one compact span, or '' for an all-day event.
+// 'HH:MM' start (+ optional end) as one compact span, or '' when untimed.
 export function timeSpan(
   time?: string | null,
   endTime?: string | null
 ): string {
   if (!time) return '';
   return endTime ? `${time}–${endTime}` : time;
+}
+
+// What the clock line reads for an event. The explicit all-day flag wins over
+// any leftover time; an event that is merely untimed still shows nothing, which
+// is what rows predating the flag have always done.
+export function eventTimeLabel(event: {
+  time?: string | null;
+  endTime?: string | null;
+  allDay?: boolean | number | null;
+}): string {
+  if (event.allDay) return 'All day';
+  return timeSpan(event.time, event.endTime);
 }

@@ -157,7 +157,7 @@ def test_clearing_the_rule_clears_its_parameters(client):
 
 def test_patch_rejects_bad_values(client):
     id = create_ok(client)
-    for body in ({'date': 'nope'}, {'time': 'noon'}, {'repeatFreq': 'yearly'}):
+    for body in ({'date': 'nope'}, {'time': 'noon'}, {'repeatFreq': 'hourly'}):
         resp = client.patch(f'/api/calendar/{id}', data=json.dumps(body),
                             content_type='application/json')
         assert resp.status_code == 400, body
@@ -390,3 +390,64 @@ def test_deleting_the_series_cascades_exceptions(client):
     left = connection.get_db().execute(
         'SELECT COUNT(*) FROM calendar_event_exceptions').fetchone()[0]
     assert left == 0
+
+
+# --- all-day ---
+
+def test_create_all_day_event(client):
+    id = create_ok(client, allDay=True)
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert event['allDay'] == 1
+    assert event['time'] is None and event['endTime'] is None
+
+
+def test_create_rejects_all_day_with_a_time(client):
+    resp = create(client, allDay=True, time='09:00')
+    assert resp.status_code == 400
+    assert 'all-day' in resp.get_json()['error']
+
+
+def test_events_default_to_not_all_day(client):
+    """Rows that predate the flag stay merely untimed, not retroactively
+    relabelled — so an event created without a time is allDay=0."""
+    id = create_ok(client)
+    assert client.get(f'/api/calendar/{id}').get_json()['allDay'] == 0
+
+
+def test_switching_to_all_day_clears_the_stored_times(client):
+    id = create_ok(client, time='09:00', endTime='17:00')
+    resp = client.patch(f'/api/calendar/{id}', data=json.dumps({'allDay': True}),
+                        content_type='application/json')
+    assert resp.status_code == 200, resp.get_json()
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert event['allDay'] == 1
+    assert event['time'] is None and event['endTime'] is None
+
+
+def test_switching_off_all_day_leaves_it_untimed(client):
+    id = create_ok(client, allDay=True)
+    client.patch(f'/api/calendar/{id}', data=json.dumps({'allDay': False}),
+                 content_type='application/json')
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert event['allDay'] == 0
+    assert event['time'] is None
+
+
+def test_all_day_yearly_birthday_expands(client):
+    """The combination the feature exists for: an all-day yearly event."""
+    id = create_ok(client, title='Birthday', date='1990-08-09',
+                   allDay=True, repeatFreq='yearly')
+    events = listing(client, '2026-01-01', '2028-12-31')
+    mine = [e for e in events if e['id'] == id]
+    assert [e['date'] for e in mine] == ['2026-08-09', '2027-08-09', '2028-08-09']
+    assert all(e['allDay'] == 1 and e['isRecurring'] for e in mine)
+
+
+def test_all_day_survives_a_this_and_future_split(client):
+    id = create_ok(client, date='2026-01-01', allDay=True, repeatFreq='yearly')
+    resp = client.patch(f'/api/calendar/{id}/from/2028-01-01',
+                        data=json.dumps({'title': 'Renamed'}),
+                        content_type='application/json')
+    assert resp.status_code == 200, resp.get_json()
+    new_id = resp.get_json()['id']
+    assert client.get(f'/api/calendar/{new_id}').get_json()['allDay'] == 1

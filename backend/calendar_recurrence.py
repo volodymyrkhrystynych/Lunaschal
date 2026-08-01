@@ -12,7 +12,7 @@ Sunday-first grid the UI renders, *not* Python's Monday=0.
 import calendar
 from datetime import date, timedelta
 
-VALID_FREQS = ('daily', 'weekly', 'monthly')
+VALID_FREQS = ('daily', 'weekly', 'monthly', 'yearly')
 
 # Ceiling on occurrences produced for a single series in one call. A range query
 # never legitimately needs this many (a daily event over a year is 366), so it
@@ -61,6 +61,18 @@ def _add_months(d: date, months: int) -> date:
     return date(year, month, min(d.day, calendar.monthrange(year, month)[1]))
 
 
+def _add_years(d: date, years: int) -> date:
+    """Same month/day `years` later, clamped to the target month's length
+    (Feb 29 + 1 year -> Feb 28), matching _add_months.
+
+    Clamping rather than skipping is the deliberate choice: a Feb 29 birthday
+    should show up every year, and the rest of this module already resolves the
+    same "that day doesn't exist here" problem the same way.
+    """
+    year = d.year + years
+    return date(year, d.month, min(d.day, calendar.monthrange(year, d.month)[1]))
+
+
 def occurrence_dates(event: dict, start: str, end: str) -> list[str]:
     """ISO dates on which `event` occurs within [start, end] inclusive.
 
@@ -95,6 +107,8 @@ def occurrence_dates(event: dict, start: str, end: str) -> list[str]:
         dates = _daily(anchor, win_start, win_end, interval)
     elif freq == 'weekly':
         dates = _weekly(event, anchor, win_start, win_end, interval)
+    elif freq == 'yearly':
+        dates = _yearly(anchor, win_start, win_end, interval)
     else:
         dates = _monthly(anchor, win_start, win_end, interval)
     return [d.isoformat() for d in dates[:MAX_OCCURRENCES]]
@@ -139,6 +153,20 @@ def _monthly(anchor: date, win_start: date, win_end: date, interval: int) -> lis
     out = []
     while len(out) < MAX_OCCURRENCES:
         current = _add_months(anchor, steps * interval)
+        if current > win_end:
+            break
+        if current >= win_start and current >= anchor:
+            out.append(current)
+        steps += 1
+    return out
+
+
+def _yearly(anchor: date, win_start: date, win_end: date, interval: int) -> list[date]:
+    years_behind = max(0, win_start.year - anchor.year)
+    steps = -(-years_behind // interval)  # ceil
+    out = []
+    while len(out) < MAX_OCCURRENCES:
+        current = _add_years(anchor, steps * interval)
         if current > win_end:
             break
         if current >= win_start and current >= anchor:

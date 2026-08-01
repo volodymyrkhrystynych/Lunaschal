@@ -91,9 +91,9 @@ export interface HeatmapCell {
  *  there's real data to compare (docs/lifestyle-tab.md §1). */
 export type ShadeMetric = 'duration' | 'intensity';
 
-/** Intensity is a fixed 1–10 RPE, so its shade is absolute; duration has no
- *  ceiling, so it's scaled against the busiest day on screen. */
-export const INTENSITY_MAX = 10;
+/** Intensity is a fixed 1–5 star rating, so its shade is absolute; duration has
+ *  no ceiling, so it's scaled against the busiest day on screen. */
+export const INTENSITY_MAX = 5;
 
 export function metricValue(
   day: HeatmapDay,
@@ -186,6 +186,98 @@ export function monthLabels(
   return labels;
 }
 
+// --- Intensity ---------------------------------------------------------------
+
+/**
+ * Workout intensity is a 1–5 star rating, and **the words are the feature**.
+ * A bare 1–10 RPE was too subjective to rate the same way twice, so every star
+ * carries a written meaning; the picker and every readout surface it (tooltip,
+ * label, screen-reader text) rather than relying on the glyph count alone.
+ *
+ * Indexed from 1 — `INTENSITY_LABELS[0]` is deliberately absent.
+ */
+export const INTENSITY_LABELS: Record<number, string> = {
+  1: 'Not intense whatsoever',
+  2: 'Just a smidge',
+  3: "I'm sweating",
+  4: "I'm really trying hard",
+  5: 'I am going ham',
+};
+
+/** The written meaning of a star count, or null when it isn't 1–5. */
+export function intensityLabel(
+  value: number | null | undefined
+): string | null {
+  if (value == null) return null;
+  return INTENSITY_LABELS[value] ?? null;
+}
+
+/** "★★★☆☆" — decoration only; never the sole carrier of the rating. */
+export function intensityStars(value: number): string {
+  const filled = Math.max(0, Math.min(Math.round(value), INTENSITY_MAX));
+  return '★'.repeat(filled) + '☆'.repeat(INTENSITY_MAX - filled);
+}
+
+/** "3/5 — I'm sweating": the text form used for tooltips and aria-labels, so a
+ *  screen reader never has to interpret a run of star glyphs. */
+export function intensityText(value: number | null | undefined): string | null {
+  if (value == null) return null;
+  const label = intensityLabel(value);
+  const scale = `${value}/${INTENSITY_MAX}`;
+  return label ? `${scale} — ${label}` : scale;
+}
+
+// --- Workout sets ------------------------------------------------------------
+
+export interface WorkoutSetLike {
+  weight: number | null;
+  reps: number | null;
+}
+
+export interface SetGroup extends WorkoutSetLike {
+  /** How many identical sets in a row this group stands for. */
+  count: number;
+}
+
+/** Collapse a run of identical sets — "10 10 10 10" is one thing done four
+ *  times, not four things. Only *consecutive* equals fold, so a real 60/60/65
+ *  progression through the session still reads in order. */
+export function groupSets(sets: WorkoutSetLike[]): SetGroup[] {
+  const groups: SetGroup[] = [];
+  for (const s of sets) {
+    const last = groups[groups.length - 1];
+    if (last && last.weight === s.weight && last.reps === s.reps)
+      last.count += 1;
+    else groups.push({ weight: s.weight, reps: s.reps, count: 1 });
+  }
+  return groups;
+}
+
+/**
+ * One group as text. A null weight means bodyweight — it is never rendered as
+ * 0, which would read as "lifted nothing" and plot as a real data point.
+ *
+ *   60×8            one set, 60 kg for 8
+ *   60×8 ×3         three identical weighted sets
+ *   10 bodyweight   one set of 10 at bodyweight
+ *   10 × 4 bodyweight   four sets of 10 at bodyweight
+ */
+export function formatSetGroup(group: SetGroup): string {
+  const reps = group.reps ?? '?';
+  if (group.weight == null) {
+    return group.count > 1
+      ? `${reps} × ${group.count} bodyweight`
+      : `${reps} bodyweight`;
+  }
+  const one = `${group.weight}×${reps}`;
+  return group.count > 1 ? `${one} ×${group.count}` : one;
+}
+
+/** The whole set list of an exercise as one readable line. */
+export function formatSets(sets: WorkoutSetLike[]): string {
+  return groupSets(sets).map(formatSetGroup).join('  ');
+}
+
 // --- Chart geometry ----------------------------------------------------------
 
 export interface SeriesPoint {
@@ -257,6 +349,49 @@ export function nearestPoint(
   return points.reduce((best, p) =>
     Math.abs(p.x - x) < Math.abs(best.x - x) ? p : best
   );
+}
+
+// --- Exercise progression ----------------------------------------------------
+
+export type ProgressionMetric = 'weight' | 'volume' | 'reps';
+
+export interface ProgressionPointLike {
+  date: string;
+  maxWeight: number | null;
+  totalVolume: number | null;
+  totalReps: number | null;
+}
+
+/**
+ * Turn `/progression` points into a plottable series.
+ *
+ * A bodyweight exercise ("squats 10 10 10 10") has no weight on any set, so
+ * both weight-based metrics are null for every point. Plotting those as 0 would
+ * draw a flat line along the floor and plotting nothing would claim there was
+ * no training — so the series falls back to **total reps**, and `bodyweight`
+ * tells the caller to say so instead of offering a Top-set/Volume toggle that
+ * can only ever be empty.
+ */
+export function exerciseSeries(
+  points: ProgressionPointLike[],
+  metric: ProgressionMetric,
+  labelDate: (iso: string) => string = iso => iso
+): { series: SeriesPoint[]; bodyweight: boolean; metric: ProgressionMetric } {
+  const bodyweight =
+    points.length > 0 && points.every(p => p.maxWeight == null);
+  const effective: ProgressionMetric = bodyweight ? 'reps' : metric;
+  const pick = (p: ProgressionPointLike) =>
+    effective === 'weight'
+      ? p.maxWeight
+      : effective === 'volume'
+        ? p.totalVolume
+        : p.totalReps;
+
+  const series = points
+    // A missing number is an absent point, not a zero.
+    .filter(p => pick(p) != null && (pick(p) as number) > 0)
+    .map(p => ({ label: labelDate(p.date), value: pick(p) as number }));
+  return { series, bodyweight, metric: effective };
 }
 
 // --- Calories ----------------------------------------------------------------

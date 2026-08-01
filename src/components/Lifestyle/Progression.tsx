@@ -1,11 +1,17 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
-import { ACTIVITY_COLORS, todayISO, type SeriesPoint } from '@/lib/lifestyle';
+import {
+  ACTIVITY_COLORS,
+  exerciseSeries,
+  todayISO,
+  type SeriesPoint,
+} from '@/lib/lifestyle';
 import { Sparkline } from './Sparkline';
 
 /** Weight vs volume is still an open question in the doc, so both are plotted
- *  behind a toggle rather than one being picked blind. */
+ *  behind a toggle rather than one being picked blind. A bodyweight-only
+ *  exercise has neither, and falls back to reps (see `exerciseSeries`). */
 type Metric = 'weight' | 'volume';
 
 const shortDate = (iso: string) => iso.slice(5).replace('-', '/');
@@ -109,12 +115,12 @@ function ExerciseChart() {
     enabled: name !== null,
   });
 
-  const series: SeriesPoint[] = (progression?.points ?? [])
-    .map(p => ({
-      label: shortDate(p.date),
-      value: (metric === 'weight' ? p.maxWeight : p.totalVolume) ?? 0,
-    }))
-    .filter(p => p.value > 0);
+  const { series, bodyweight } = exerciseSeries(
+    progression?.points ?? [],
+    metric,
+    shortDate
+  );
+  const plotted: SeriesPoint[] = series;
 
   return (
     <div className="min-w-0">
@@ -122,22 +128,31 @@ function ExerciseChart() {
         <h3 className="text-sm font-medium text-[var(--color-text)]">
           Per-exercise
         </h3>
-        <div className="flex items-center gap-1 p-0.5 rounded bg-[var(--color-bg)] border border-white/10">
-          {(['weight', 'volume'] as Metric[]).map(m => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMetric(m)}
-              className={`px-2 py-0.5 rounded text-xs transition-colors ${
-                metric === m
-                  ? 'bg-[var(--color-primary)] text-white'
-                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-              }`}
-            >
-              {m === 'weight' ? 'Top set' : 'Volume'}
-            </button>
-          ))}
-        </div>
+        {bodyweight ? (
+          // Nothing was ever loaded on this exercise, so Top set / Volume can
+          // only ever draw an empty chart — say what is being plotted instead
+          // of offering a toggle with no answers behind it.
+          <span className="px-2 py-0.5 rounded text-xs bg-[var(--color-bg)] border border-white/10 text-[var(--color-text-muted)]">
+            Total reps (bodyweight)
+          </span>
+        ) : (
+          <div className="flex items-center gap-1 p-0.5 rounded bg-[var(--color-bg)] border border-white/10">
+            {(['weight', 'volume'] as Metric[]).map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMetric(m)}
+                className={`px-2 py-0.5 rounded text-xs transition-colors ${
+                  metric === m
+                    ? 'bg-[var(--color-primary)] text-white'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                }`}
+              >
+                {m === 'weight' ? 'Top set' : 'Volume'}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       <select
@@ -155,10 +170,16 @@ function ExerciseChart() {
       </select>
 
       <Sparkline
-        series={series}
+        series={plotted}
         color={ACTIVITY_COLORS.goodlife_alone}
         title={progression?.displayName ?? 'Exercise'}
-        formatValue={v => (metric === 'weight' ? `${v}` : `${Math.round(v)}`)}
+        formatValue={v =>
+          bodyweight
+            ? `${Math.round(v)} reps`
+            : metric === 'weight'
+              ? `${v}`
+              : `${Math.round(v)}`
+        }
         empty="Log a workout to start this chart"
       />
     </div>

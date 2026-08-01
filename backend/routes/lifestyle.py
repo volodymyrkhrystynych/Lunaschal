@@ -26,6 +26,13 @@ _DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 # photo of a person and shouldn't be written to disk.
 MAX_SELFIE_BYTES = 20 * 1024 * 1024
 
+# Intensity is a 5-star scale, not the old 1-10 RPE: the ten-point version was
+# too subjective to rate consistently, so each star now has a written meaning
+# (see src/lib/lifestyle.ts INTENSITY_LABELS, which the UI shows as tooltips).
+# Rows written under the old scale were folded to 1-5 once, at startup, by
+# `_migrate_workout_intensity_to_stars` in backend/db/connection.py.
+INTENSITY_MAX = 5
+
 
 def _today() -> str:
     return date_cls.today().isoformat()
@@ -221,7 +228,7 @@ def create_workout():
     duration, err = _parse_int(body.get('durationMinutes'), 'durationMinutes', 0, 24 * 60)
     if err:
         return jsonify({'error': err}), 400
-    intensity, err = _parse_int(body.get('intensityRating'), 'intensityRating', 1, 10)
+    intensity, err = _parse_int(body.get('intensityRating'), 'intensityRating', 1, INTENSITY_MAX)
     if err:
         return jsonify({'error': err}), 400
 
@@ -277,7 +284,7 @@ def update_workout(session_id):
             return jsonify({'error': err}), 400
         updates['duration_minutes'] = duration
     if 'intensityRating' in body:
-        intensity, err = _parse_int(body['intensityRating'], 'intensityRating', 1, 10)
+        intensity, err = _parse_int(body['intensityRating'], 'intensityRating', 1, INTENSITY_MAX)
         if err:
             return jsonify({'error': err}), 400
         updates['intensity_rating'] = intensity

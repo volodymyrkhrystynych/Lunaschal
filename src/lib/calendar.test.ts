@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildMonthGrid,
   parseEventTags,
+  eventTimeLabel,
   repeatLabel,
   timeSpan,
   toLocalISO,
@@ -150,5 +151,41 @@ describe('timeSpan', () => {
     expect(timeSpan('09:00', '17:00')).toBe('09:00–17:00');
     expect(timeSpan('09:00', null)).toBe('09:00');
     expect(timeSpan(null, '17:00')).toBe('');
+  });
+});
+
+describe('repeatLabel yearly', () => {
+  it('names the year unit', () => {
+    expect(repeatLabel({ repeatFreq: 'yearly', repeatInterval: 1 })).toBe(
+      'every year'
+    );
+    expect(repeatLabel({ repeatFreq: 'yearly', repeatInterval: 2 })).toBe(
+      'every 2 years'
+    );
+  });
+});
+
+describe('eventTimeLabel', () => {
+  it('reads all-day events as all day', () => {
+    expect(eventTimeLabel({ allDay: true, time: null })).toBe('All day');
+  });
+
+  it('lets the flag win over a leftover time', () => {
+    expect(eventTimeLabel({ allDay: true, time: '09:00' })).toBe('All day');
+  });
+
+  it('accepts the 0/1 SQLite sends for the flag', () => {
+    expect(eventTimeLabel({ allDay: 1, time: null })).toBe('All day');
+    expect(eventTimeLabel({ allDay: 0, time: '09:00' })).toBe('09:00');
+  });
+
+  it('leaves a merely untimed event blank, as it always rendered', () => {
+    expect(eventTimeLabel({ allDay: false, time: null })).toBe('');
+  });
+
+  it('still spans start and end for a timed event', () => {
+    expect(eventTimeLabel({ time: '09:00', endTime: '17:00' })).toBe(
+      '09:00\u201317:00'
+    );
   });
 });

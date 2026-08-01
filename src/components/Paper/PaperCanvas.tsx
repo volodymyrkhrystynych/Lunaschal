@@ -6,11 +6,16 @@ import {
   eraseStroke,
   isHorizontalSwipe,
   isTap,
-  parseStrokes,
+  PAGE_HEIGHT,
+  PAGE_WIDTH,
+  parseBuffer,
   redo as redoState,
+  serializeBuffer,
   serializeStrokes,
   simplifyStroke,
   strokeWidth,
+  toPageSpace,
+  toPageSpaceStrokes,
   undo as undoState,
   type Stroke,
   type StrokePoint,
@@ -61,7 +66,9 @@ export interface PaperCanvasHandle {
 interface PaperCanvasProps {
   pageId: string;
   initialStrokes: Stroke[];
-  /** Logical coordinate space the stored strokes live in (size at capture). */
+  /** Coordinate space the stored strokes are in. Page-space rows report the
+   * fixed page size; a row saved before the A4 page space reports the CSS-pixel
+   * box it was drawn in, and is converted on read (see toPageSpaceStrokes). */
   initialSize: { width: number; height: number } | null;
   tool: StrokeTool;
   /** Base width for the active tool, in logical pixels. */
@@ -101,11 +108,6 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     toolRef.current = tool;
     const sizeRef = useRef(size);
     sizeRef.current = size;
-
-    // The fixed logical coordinate space for this page. Points are stored in it
-    // regardless of the on-screen canvas size, so a reload or rotation just
-    // rescales on render. Set on mount from the stored size (or current size).
-    const logicalRef = useRef<{ w: number; h: number }>({ w: 1, h: 1 });
 
     // Live drawing scratch state.
     const drawingRef = useRef<{ pointerId: number; stroke: Stroke } | null>(
@@ -150,14 +152,13 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
 
     const ctxOf = () => canvasRef.current?.getContext('2d') ?? null;
 
-    // scale factor logical -> on-screen CSS pixels
+    // Page units -> on-screen CSS pixels. A single factor for both axes: the
+    // canvas box is fitted to the page's A4 aspect by PaperEditor, so there is
+    // no separate sx/sy to drift apart and squash the ink.
     const scale = () => {
       const c = canvasRef.current;
-      if (!c) return { sx: 1, sy: 1 };
-      return {
-        sx: c.clientWidth / logicalRef.current.w,
-        sy: c.clientHeight / logicalRef.current.h,
-      };
+      if (!c || !c.clientWidth) return 1;
+      return c.clientWidth / PAGE_WIDTH;
     };
 
     const paintOf = (tool: StrokeTool) =>
@@ -168,8 +169,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     // translucent flat pass (a single path so overlapping segments don't stack
     // alpha into dark blobs).
     const drawStroke = (ctx: CanvasRenderingContext2D, stroke: Stroke) => {
-      const { sx, sy } = scale();
-      const avg = (sx + sy) / 2;
+      const s = scale();
       const pts = stroke.points;
       const paint = paintOf(stroke.tool);
       ctx.lineCap = 'round';
@@ -180,14 +180,14 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       if (stroke.tool === 'highlighter') {
         ctx.save();
         ctx.globalAlpha = HIGHLIGHT_ALPHA;
-        ctx.lineWidth = stroke.size * avg;
+        ctx.lineWidth = stroke.size * s;
         ctx.beginPath();
-        ctx.moveTo(pts[0].x * sx, pts[0].y * sy);
+        ctx.moveTo(pts[0].x * s, pts[0].y * s);
         if (pts.length === 1) {
-          ctx.lineTo(pts[0].x * sx + 0.01, pts[0].y * sy);
+          ctx.lineTo(pts[0].x * s + 0.01, pts[0].y * s);
         } else {
           for (let i = 1; i < pts.length; i++) {
-            ctx.lineTo(pts[i].x * sx, pts[i].y * sy);
+            ctx.lineTo(pts[i].x * s, pts[i].y * s);
           }
         }
         ctx.stroke();
@@ -202,7 +202,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
           ? strokeWidth(stroke.size, p.pressure)
           : stroke.size;
         ctx.beginPath();
-        ctx.arc(p.x * sx, p.y * sy, (w * avg) / 2, 0, Math.PI * 2);
+        ctx.arc(p.x * s, p.y * s, (w * s) / 2, 0, Math.PI * 2);
         ctx.fill();
         return;
       }
@@ -212,10 +212,10 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         const w = usePressure
           ? strokeWidth(stroke.size, b.pressure)
           : stroke.size;
-        ctx.lineWidth = w * avg;
+        ctx.lineWidth = w * s;
         ctx.beginPath();
-        ctx.moveTo(a.x * sx, a.y * sy);
-        ctx.lineTo(b.x * sx, b.y * sy);
+        ctx.moveTo(a.x * s, a.y * s);
+        ctx.lineTo(b.x * s, b.y * s);
         ctx.stroke();
       }
     };
@@ -242,20 +242,28 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     };
 
-    // Convert a pointer event to a logical-space point.
+    // Convert a pointer event to a page-space point. Goes through the live
+    // bounding rect, so the ink lands under the stylus whatever the fit scale
+    // is (and keeps working while the page box animates or the sidebar opens).
     const toLogical = (e: PointerEvent): StrokePoint => {
       const c = canvasRef.current!;
       const rect = c.getBoundingClientRect();
-      const lx = ((e.clientX - rect.left) / rect.width) * logicalRef.current.w;
-      const ly = ((e.clientY - rect.top) / rect.height) * logicalRef.current.h;
+      const { x, y } = toPageSpace(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        {
+          width: rect.width,
+          height: rect.height,
+        }
+      );
       const pressure = e.pressure > 0 ? e.pressure : 0.5;
-      return { x: lx, y: ly, pressure };
+      return { x, y, pressure };
     };
 
     const persistBuffer = () => {
       idbSet(
         bufferKey(pageId),
-        serializeStrokes(stateRef.current.strokes)
+        serializeBuffer(stateRef.current.strokes)
       ).catch(() => {});
     };
 
@@ -264,8 +272,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       const c = canvasRef.current;
       if (!el || !c) return;
       const rect = c.getBoundingClientRect();
-      const { sx, sy } = scale();
-      const d = sizeRef.current * ((sx + sy) / 2);
+      const d = sizeRef.current * scale();
       el.style.width = `${d}px`;
       el.style.height = `${d}px`;
       el.style.transform = `translate(${e.clientX - rect.left - d / 2}px, ${
@@ -283,30 +290,27 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     useEffect(() => {
       const c = canvasRef.current;
       if (!c) return;
-      logicalRef.current = initialSize
-        ? {
-            w: initialSize.width || c.clientWidth,
-            h: initialSize.height || c.clientHeight,
-          }
-        : { w: c.clientWidth || 1, h: c.clientHeight || 1 };
       setupCanvas();
+      // Ink saved before the page space existed is converted on read; a row
+      // already in page space passes through untouched.
+      const stored = toPageSpaceStrokes(initialStrokes, initialSize);
 
       // Prefer an unsaved local buffer over the server copy if one exists.
       let cancelled = false;
       idbGet(bufferKey(pageId))
         .then(buf => {
           if (cancelled) return;
-          if (typeof buf === 'string') {
-            const parsed = parseStrokes(buf);
+          const buffered = parseBuffer(buf, initialSize);
+          if (buffered) {
             stateRef.current = {
-              strokes: parsed,
+              strokes: buffered,
               history: [],
               redo: [],
             };
             dirtyRef.current = true;
           } else {
             stateRef.current = {
-              strokes: initialStrokes,
+              strokes: stored,
               history: [],
               redo: [],
             };
@@ -317,7 +321,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
         })
         .catch(() => {
           stateRef.current = {
-            strokes: initialStrokes,
+            strokes: stored,
             history: [],
             redo: [],
           };
@@ -352,6 +356,28 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [pageId]);
+
+    // Adopt content that arrives *after* mount. The effect above reads
+    // initialStrokes once, so a refetch landing while this canvas is already up
+    // used to be dropped on the floor — which is what kept a page blank after
+    // its stale (pre-save) cache entry had seeded it. Identity is stable
+    // between renders (the parent memoises it), so this only fires on real
+    // changes. Never while dirty: unsaved strokes outrank anything the server
+    // has to say.
+    const seededRef = useRef(initialStrokes);
+    useEffect(() => {
+      if (initialStrokes === seededRef.current) return;
+      seededRef.current = initialStrokes;
+      if (dirtyRef.current) return;
+      stateRef.current = {
+        strokes: toPageSpaceStrokes(initialStrokes, initialSize),
+        history: [],
+        redo: [],
+      };
+      redrawAll();
+      notify();
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [initialStrokes]);
 
     // --- pointer handlers ---
     const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -425,13 +451,12 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
           for (const s of erased.strokes) drawStroke(ctx, s);
           // Small circle where the eraser tip is so the active area is visible.
           const last = eraser.points[eraser.points.length - 1];
-          const { sx, sy } = scale();
-          const avg = (sx + sy) / 2;
-          const r = (eraser.size * avg) / 2;
+          const s = scale();
+          const r = (eraser.size * s) / 2;
           ctx.strokeStyle = '#888';
           ctx.lineWidth = 1;
           ctx.beginPath();
-          ctx.arc(last.x * sx, last.y * sy, r, 0, Math.PI * 2);
+          ctx.arc(last.x * s, last.y * s, r, 0, Math.PI * 2);
           ctx.stroke();
         }
         return;
@@ -567,8 +592,10 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
             }
             resolve({
               strokes: serializeStrokes(stateRef.current.strokes),
-              width: Math.round(logicalRef.current.w),
-              height: Math.round(logicalRef.current.h),
+              // Always the fixed page space — the size column is what tells a
+              // later load whether the row needs converting.
+              width: PAGE_WIDTH,
+              height: PAGE_HEIGHT,
               snapshot: blob,
               revision: revisionRef.current,
             });

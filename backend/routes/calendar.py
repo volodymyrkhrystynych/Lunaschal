@@ -27,6 +27,22 @@ def _valid_time(value) -> bool:
         return False
 
 
+def _all_day_field(body: dict) -> tuple[dict, str | None]:
+    """Validate and normalise the all-day half of a create/update body.
+
+    Turning the flag on clears any stored clock times: an all-day event that
+    also starts at 14:00 is a contradiction, and leaving a stale time behind
+    would resurface the moment the flag was turned back off.
+    """
+    if 'allDay' not in body:
+        return {}, None
+    if not body['allDay']:
+        return {'all_day': 0}, None
+    if body.get('time') or body.get('endTime'):
+        return {}, 'an all-day event cannot have a time'
+    return {'all_day': 1, 'time': None, 'end_time': None}, None
+
+
 def _repeat_fields(body: dict) -> tuple[dict, str | None]:
     """Validate and normalise the recurrence half of a create/update body.
 
@@ -168,17 +184,24 @@ def create_event():
         return jsonify({'error': err}), 400
     if repeat.get('repeat_until') and repeat['repeat_until'] < body['date']:
         return jsonify({'error': 'repeatUntil must not precede date'}), 400
+    all_day, err = _all_day_field(body)
+    if err:
+        return jsonify({'error': err}), 400
 
     now = int(time.time())
     id = str(ULID())
     tags = body.get('tags')
+    is_all_day = all_day.get('all_day', 0)
     get_db().execute(
         '''INSERT INTO calendar_events(
-               id, title, description, date, time, end_time, tags, journal_id, created_at,
+               id, title, description, date, time, end_time, all_day, tags,
+               journal_id, created_at,
                repeat_freq, repeat_interval, repeat_byweekday, repeat_until)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-        (id, body['title'], body.get('description'), body['date'], body.get('time'),
-         body.get('endTime'), json.dumps(tags) if tags is not None else None,
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        (id, body['title'], body.get('description'), body['date'],
+         None if is_all_day else body.get('time'),
+         None if is_all_day else body.get('endTime'),
+         is_all_day, json.dumps(tags) if tags is not None else None,
          body.get('journalId'), now,
          repeat.get('repeat_freq'), repeat.get('repeat_interval'),
          repeat.get('repeat_byweekday'), repeat.get('repeat_until')),
@@ -212,6 +235,12 @@ def _event_updates(body: dict) -> tuple[dict, str | None]:
     if err:
         return {}, err
     updates.update(repeat)
+    # Last, so clearing the times on an all-day switch wins over any time
+    # carried in the same payload by _FIELD_MAP.
+    all_day, err = _all_day_field(body)
+    if err:
+        return {}, err
+    updates.update(all_day)
     return updates, None
 
 
@@ -296,7 +325,7 @@ def end_series(id, date):
 # calendar_journal_links rows deliberately stay behind: they point at entries
 # written about specific past days.
 _SPLIT_COLUMNS = (
-    'title', 'description', 'time', 'end_time', 'tags',
+    'title', 'description', 'time', 'end_time', 'all_day', 'tags',
     'repeat_freq', 'repeat_interval', 'repeat_byweekday', 'repeat_until',
 )
 

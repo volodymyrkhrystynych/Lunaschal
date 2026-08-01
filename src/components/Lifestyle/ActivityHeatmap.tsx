@@ -12,11 +12,13 @@ import {
   metricValue,
   monthLabels,
   shadeLevel,
+  intensityText,
   shadeOpacity,
   todayISO,
   type HeatmapDay,
   type ShadeMetric,
 } from '@/lib/lifestyle';
+import { IntensityStars } from './IntensityStars';
 
 const WEEKS = 53;
 const CELL = 12;
@@ -26,7 +28,6 @@ const WEEKDAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', ''];
 function sessionSummary(session: WorkoutSession): string {
   const parts = [ACTIVITY_LABELS[session.locationType]];
   if (session.durationMinutes) parts.push(`${session.durationMinutes} min`);
-  if (session.intensityRating) parts.push(`RPE ${session.intensityRating}`);
   return parts.join(' · ');
 }
 
@@ -52,6 +53,9 @@ function DayDetail({
               <span className="text-[var(--color-text)]">
                 {sessionSummary(session)}
               </span>
+              {session.intensityRating != null && (
+                <IntensityStars value={session.intensityRating} />
+              )}
             </div>
             {session.exercises.length > 0 && (
               <div className="ml-4.5 mt-1 text-xs text-[var(--color-text-muted)]">
@@ -192,9 +196,13 @@ export function ActivityHeatmap() {
                           day.durationMinutes
                             ? `, ${day.durationMinutes} min`
                             : ''
-                        }${day.intensityRating ? `, RPE ${day.intensityRating}` : ''}${
-                          day.secondary ? ', plus another activity' : ''
-                        }`
+                        }${
+                          // Spelled out, never as star glyphs — this string is
+                          // the box's only accessible name.
+                          day.intensityRating
+                            ? `, intensity ${intensityText(day.intensityRating)}`
+                            : ''
+                        }${day.secondary ? ', plus another activity' : ''}`
                       : `${cell.date}: nothing logged`;
                     return (
                       <button

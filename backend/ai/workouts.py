@@ -25,7 +25,12 @@ _WORKOUT_SYSTEM = (
     '- "name" is the exercise exactly as the user wrote it, minus the numbers. '
     "Do not rename, expand, or correct it — the caller handles naming.\n"
     "- Expand shorthand: \"3x12\" becomes three separate set objects.\n"
-    "- Use null for a weight that was not given (bodyweight work), never 0.\n"
+    "- Use null for a weight that was not given (bodyweight work), never 0. "
+    "Never guess or invent a weight, and never copy one in from another line.\n"
+    "- A run of bare numbers with no weight paired to them is one rep count per "
+    'set, at bodyweight. "squats 10 10 10 10" is four sets: '
+    '[{"weight": null, "reps": 10}, {"weight": null, "reps": 10}, '
+    '{"weight": null, "reps": 10}, {"weight": null, "reps": 10}].\n'
     "- Leave out anything that is not an exercise (how you felt, the weather, "
     "where you trained). Never invent sets that were not written."
 )
@@ -45,10 +50,16 @@ _WORKOUT_SCHEMA = {
                         'maxItems': 30,
                         'items': {
                             'type': 'object',
+                            # Both keys are required *and* nullable: the grammar
+                            # then forces an explicit `"weight": null` for a
+                            # bodyweight set ("squats 10 10 10 10") instead of
+                            # letting the model drop the key and leave "no
+                            # weight" and "forgot to say" indistinguishable.
                             'properties': {
                                 'weight': {'type': ['number', 'null']},
                                 'reps': {'type': ['integer', 'null']},
                             },
+                            'required': ['weight', 'reps'],
                         },
                     },
                 },

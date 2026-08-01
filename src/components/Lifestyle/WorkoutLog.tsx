@@ -6,8 +6,10 @@ import {
   ACTIVITY_COLORS,
   ACTIVITY_LABELS,
   ACTIVITY_TYPES,
+  formatSets,
   isActivityType,
 } from '@/lib/lifestyle';
+import { IntensityPicker, IntensityStars } from './IntensityStars';
 import {
   clearWorkoutDraft,
   DRAFT_SAVE_DELAY_MS,
@@ -44,7 +46,6 @@ function SessionCard({ session }: { session: WorkoutSession }) {
 
   const meta = [
     session.durationMinutes ? `${session.durationMinutes} min` : null,
-    session.intensityRating ? `RPE ${session.intensityRating}` : null,
   ].filter(Boolean);
 
   return (
@@ -63,6 +64,9 @@ function SessionCard({ session }: { session: WorkoutSession }) {
             <span className="text-xs text-[var(--color-text-muted)]">
               {meta.join(' · ')}
             </span>
+          )}
+          {session.intensityRating != null && (
+            <IntensityStars value={session.intensityRating} />
           )}
         </div>
         <div className="flex items-center gap-2 text-xs">
@@ -111,13 +115,7 @@ function SessionCard({ session }: { session: WorkoutSession }) {
             <li key={ex.id} className="text-sm">
               <span className="text-[var(--color-text)]">{ex.displayName}</span>{' '}
               <span className="text-xs text-[var(--color-text-muted)]">
-                {ex.sets
-                  .map(s =>
-                    s.weight != null
-                      ? `${s.weight}×${s.reps ?? '?'}`
-                      : `${s.reps ?? '?'} reps`
-                  )
-                  .join('  ')}
+                {formatSets(ex.sets)}
               </span>
             </li>
           ))}
@@ -255,18 +253,10 @@ export function WorkoutLog() {
             className="mt-1 w-full px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
           />
         </label>
-        <label className="text-xs text-[var(--color-text-muted)]">
-          Intensity (RPE 1–10)
-          <input
-            type="number"
-            inputMode="numeric"
-            min={1}
-            max={10}
-            value={draft.intensityRating}
-            onChange={e => set('intensityRating', e.target.value)}
-            className="mt-1 w-full px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-          />
-        </label>
+        <IntensityPicker
+          value={draft.intensityRating}
+          onChange={v => set('intensityRating', v)}
+        />
       </div>
 
       <input

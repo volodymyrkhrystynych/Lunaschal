@@ -141,6 +141,61 @@ def test_monthly_interval():
     assert dates == ['2026-01-10', '2026-04-10', '2026-07-10', '2026-10-10']
 
 
+# --- yearly ---
+
+def test_yearly_same_day_each_year():
+    dates = occurrence_dates(
+        event(date='1990-03-14', repeat_freq='yearly'), '2026-01-01', '2029-12-31')
+    assert dates == ['2026-03-14', '2027-03-14', '2028-03-14', '2029-03-14']
+
+
+def test_yearly_never_precedes_the_anchor():
+    dates = occurrence_dates(
+        event(date='2028-03-14', repeat_freq='yearly'), '2026-01-01', '2029-12-31')
+    assert dates == ['2028-03-14', '2029-03-14']
+
+
+def test_yearly_interval():
+    dates = occurrence_dates(
+        event(date='2026-06-01', repeat_freq='yearly', repeat_interval=2),
+        '2026-01-01', '2032-12-31')
+    assert dates == ['2026-06-01', '2028-06-01', '2030-06-01', '2032-06-01']
+
+
+def test_yearly_leap_day_clamps_to_feb_28_off_cycle():
+    """A Feb 29 anchor still fires every year, clamped like _monthly does for
+    the 31st — the birthday shows up rather than vanishing for three years."""
+    dates = occurrence_dates(
+        event(date='2024-02-29', repeat_freq='yearly'), '2025-01-01', '2028-12-31')
+    assert dates == ['2025-02-28', '2026-02-28', '2027-02-28', '2028-02-29']
+
+
+def test_yearly_found_from_a_narrow_window():
+    """A one-day window years after the anchor still finds its occurrence."""
+    dates = occurrence_dates(
+        event(date='1990-12-25', repeat_freq='yearly'), '2026-12-25', '2026-12-25')
+    assert dates == ['2026-12-25']
+
+
+def test_yearly_respects_repeat_until():
+    dates = occurrence_dates(
+        event(date='2020-05-05', repeat_freq='yearly', repeat_until='2027-01-01'),
+        '2025-01-01', '2030-12-31')
+    assert dates == ['2025-05-05', '2026-05-05']
+
+
+def test_yearly_occurrence_can_be_skipped_and_moved():
+    ev = event(id='bday', date='1990-08-09', repeat_freq='yearly')
+    excs = [
+        {'event_id': 'bday', 'date': '2026-08-09', 'action': 'skip'},
+        {'event_id': 'bday', 'date': '2027-08-09', 'action': 'move',
+         'new_date': '2027-08-10', 'new_time': None, 'new_end_time': None},
+    ]
+    out = expand_events([ev], excs, '2026-01-01', '2028-12-31')
+    assert [i['date'] for i in out] == ['2027-08-10', '2028-08-09']
+    assert all(i['isRecurring'] for i in out)
+
+
 # --- until ---
 
 def test_repeat_until_is_inclusive():

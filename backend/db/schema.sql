@@ -43,11 +43,15 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     date TEXT NOT NULL,
     time TEXT,
     end_time TEXT,
+    -- Explicitly all-day, as opposed to merely untimed. Both render without a
+    -- clock, but only this one says the user meant the whole day — legacy rows
+    -- with a NULL time predate the flag and are left as untimed.
+    all_day INTEGER NOT NULL DEFAULT 0,
     tags TEXT,
     journal_id TEXT REFERENCES journal_entries(id),
     created_at INTEGER NOT NULL,
     -- Recurrence rule. NULL repeat_freq = a one-off event; `date` is the anchor.
-    repeat_freq TEXT,          -- 'daily' | 'weekly' | 'monthly'
+    repeat_freq TEXT,          -- 'daily' | 'weekly' | 'monthly' | 'yearly'
     repeat_interval INTEGER,   -- every N units (default 1)
     repeat_byweekday TEXT,     -- CSV of 0-6, Sunday=0 (matches JS getDay and the UI grid)
     repeat_until TEXT,         -- 'YYYY-MM-DD' inclusive; NULL = forever
@@ -557,7 +561,11 @@ CREATE TABLE IF NOT EXISTS workout_sessions (
     date TEXT NOT NULL,
     location_type TEXT NOT NULL,          -- see backend/lifestyle/activity.py
     duration_minutes INTEGER,
-    intensity_rating INTEGER,             -- self-rated 1-10 RPE
+    intensity_rating INTEGER,             -- self-rated 1-5 stars, each with a
+                                          -- written meaning (1 "not intense
+                                          -- whatsoever" … 5 "I am going ham").
+                                          -- Was a 1-10 RPE; old rows were folded
+                                          -- once by _migrate_workout_intensity_to_stars.
     raw_text TEXT,
     notes TEXT,
     parse_status TEXT NOT NULL DEFAULT 'pending',  -- pending|done|error|skipped

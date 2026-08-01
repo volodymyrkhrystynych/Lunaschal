@@ -22,18 +22,22 @@ def sync_bg(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def stub_parser(monkeypatch):
-    """Stand in for the LLM. Understands the doc's `name w,r w,r` shorthand so
-    route tests exercise real parsed rows without touching a model."""
+    """Stand in for the LLM. Understands the doc's `name w,r w,r` shorthand — and
+    the bodyweight form `name r r r` (bare rep counts, no weight) — so route
+    tests exercise real parsed rows without touching a model."""
     def fake(text):
         exercises = []
         for line in text.splitlines():
             parts = line.split()
-            name_words = [p for p in parts if ',' not in p]
-            sets = []
+            name_words, sets = [], []
             for p in parts:
                 if ',' in p:
                     weight, reps = p.split(',', 1)
                     sets.append({'weight': float(weight), 'reps': int(reps)})
+                elif p.isdigit():
+                    sets.append({'weight': None, 'reps': int(p)})
+                else:
+                    name_words.append(p)
             if name_words:
                 exercises.append({'name': ' '.join(name_words), 'sets': sets})
         return exercises
@@ -61,14 +65,14 @@ def test_create_workout_parses_freeform_text_into_sets(client):
         date='2026-07-20',
         locationType='goodlife_brother',
         durationMinutes=65,
-        intensityRating=8,
+        intensityRating=4,
         rawText='bicep curls 20,10 20,10\nsquats 60,8 60,8 65,6',
     )
     assert res.status_code == 201
     body = res.get_json()
     assert body['locationType'] == 'goodlife_brother'
     assert body['durationMinutes'] == 65
-    assert body['intensityRating'] == 8
+    assert body['intensityRating'] == 4
 
     detail = client.get(f'/api/lifestyle/workouts/{body["id"]}').get_json()
     assert detail['parseStatus'] == 'done'
@@ -137,7 +141,7 @@ def test_clearing_raw_text_drops_the_parsed_sets(client):
     ({'locationType': 'gym'}, 'locationType'),
     ({'locationType': 'outside', 'date': '20-07-2026'}, 'date'),
     ({'locationType': 'outside', 'date': '2026-02-30'}, 'date'),
-    ({'locationType': 'outside', 'intensityRating': 11}, 'intensityRating'),
+    ({'locationType': 'outside', 'intensityRating': 6}, 'intensityRating'),
     ({'locationType': 'outside', 'intensityRating': 0}, 'intensityRating'),
     ({'locationType': 'outside', 'durationMinutes': -5}, 'durationMinutes'),
 ])
@@ -145,6 +149,45 @@ def test_create_workout_rejects_bad_input(client, body, field):
     res = client.post('/api/lifestyle/workouts', json=body)
     assert res.status_code == 400
     assert field in res.get_json()['error']
+
+
+def test_intensity_accepts_the_whole_five_star_range(client):
+    for stars in (1, 2, 3, 4, 5):
+        res = _create_workout(client, intensityRating=stars)
+        assert res.status_code == 201
+        assert res.get_json()['intensityRating'] == stars
+
+
+def test_patching_intensity_past_five_stars_is_rejected(client):
+    session_id = _create_workout(client, intensityRating=3).get_json()['id']
+    res = client.patch(
+        f'/api/lifestyle/workouts/{session_id}', json={'intensityRating': 7}
+    )
+    assert res.status_code == 400
+    assert 'intensityRating' in res.get_json()['error']
+    detail = client.get(f'/api/lifestyle/workouts/{session_id}').get_json()
+    assert detail['intensityRating'] == 3
+
+
+def test_bodyweight_reps_are_stored_with_a_null_weight(client):
+    """"squats 10 10 10 10" — four sets of ten at bodyweight. A weight of 0
+    would be a lie the progression chart would then plot."""
+    session_id = _create_workout(
+        client, date='2026-07-20', rawText='squats 10 10 10 10'
+    ).get_json()['id']
+    detail = client.get(f'/api/lifestyle/workouts/{session_id}').get_json()
+    sets = detail['exercises'][0]['sets']
+    assert [(s['weight'], s['reps']) for s in sets] == [(None, 10)] * 4
+
+
+def test_progression_for_a_bodyweight_exercise_reports_reps_not_zero_weight(client):
+    _create_workout(client, date='2026-07-01', rawText='squats 10 10 10')
+    _create_workout(client, date='2026-07-08', rawText='squats 12 12 12 12')
+    res = client.get('/api/lifestyle/exercises/squat/progression').get_json()
+    assert [p['maxWeight'] for p in res['points']] == [None, None]
+    assert [p['totalVolume'] for p in res['points']] == [None, None]
+    assert [p['totalReps'] for p in res['points']] == [30, 48]
+    assert [p['setCount'] for p in res['points']] == [3, 4]
 
 
 def test_delete_workout_cascades_to_exercises_and_sets(client):
@@ -165,15 +208,15 @@ def test_workouts_list_is_newest_day_first(client):
 
 def test_heatmap_takes_the_highest_priority_activity_and_flags_a_secondary(client):
     _create_workout(client, date='2026-07-20', locationType='outside', durationMinutes=30,
-                    intensityRating=4)
+                    intensityRating=2)
     _create_workout(client, date='2026-07-20', locationType='goodlife_brother',
-                    durationMinutes=60, intensityRating=9)
+                    durationMinutes=60, intensityRating=5)
     day = client.get('/api/lifestyle/heatmap').get_json()[0]
     assert day['date'] == '2026-07-20'
     assert day['activityType'] == 'goodlife_brother'
     assert day['secondary'] is True
     assert day['durationMinutes'] == 90        # summed across the day
-    assert day['intensityRating'] == 9         # the day's hardest session
+    assert day['intensityRating'] == 5         # the day's hardest session
     assert len(day['sessions']) == 2
 
 
