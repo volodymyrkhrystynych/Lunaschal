@@ -335,6 +335,12 @@ export interface ApproveResult {
   score?: number;
 }
 
+export interface DraftCard {
+  id: string;
+  question: string;
+  answer: string;
+}
+
 export interface VerificationCitation {
   title: string;
   source: string;
@@ -1378,12 +1384,19 @@ export const api = {
         '/api/learning/generate-for-topic',
         { topic, folderId }
       ),
+    generateFromNote: (content: string) =>
+      post<{
+        count: number;
+        ids: string[];
+        cards: DraftCard[];
+        folderId: string;
+      }>('/api/learning/generate-from-note', { content }),
 
     listQueue: () => get<LearningCard[]>('/api/learning/queue'),
     approve: (id: string, force?: boolean) =>
       post<ApproveResult>(`/api/learning/queue/${id}/approve`, { force }),
     regenerate: (id: string, direction: string) =>
-      post<{ count: number; ids: string[] }>(
+      post<{ count: number; ids: string[]; cards: DraftCard[] }>(
         `/api/learning/queue/${id}/regenerate`,
         { direction }
       ),

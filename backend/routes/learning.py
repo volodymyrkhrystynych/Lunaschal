@@ -402,6 +402,50 @@ def generate_from_journal():
     return jsonify({'count': len(ids), 'ids': ids})
 
 
+def _get_or_create_lessons_folder(db) -> str:
+    row = db.execute(
+        "SELECT id FROM learning_folders WHERE lower(name)='lessons'"
+    ).fetchone()
+    if row:
+        return row['id']
+    id = str(ULID())
+    now = int(time.time())
+    db.execute(
+        'INSERT INTO learning_folders(id, name, position, created_at, updated_at)'
+        ' VALUES (?,?,COALESCE((SELECT MAX(position)+1 FROM learning_folders), 0),?,?)',
+        (id, 'lessons', now, now),
+    )
+    db.commit()
+    return id
+
+
+@bp.post('/generate-from-note')
+def generate_from_note():
+    """"Note to self" from chat: draft a lesson card straight from what the
+    user said (no journal-topic search) and always file it under 'lessons'."""
+    from backend.ai.learning_generation import generate_cards
+    body = request.json or {}
+    content = (body.get('content') or '').strip()
+    if not content:
+        return jsonify({'error': 'content required'}), 400
+    text = f'Lesson to remember: {content}'
+    cards = generate_cards(text)
+    if not cards:
+        return jsonify({'error': 'No cards could be generated'}), 502
+    folder_id = _get_or_create_lessons_folder(get_db())
+    ids = _insert_cards(
+        cards,
+        folder_id=folder_id,
+        tags=tags_json(['lessons']),
+        source_type='note_to_self',
+        source_id=None,
+        derived_from=None,
+        generation_context=text[:8000],
+    )
+    cards_out = [{'id': i, **c} for i, c in zip(ids, cards)]
+    return jsonify({'count': len(ids), 'ids': ids, 'cards': cards_out, 'folderId': folder_id})
+
+
 @bp.post('/generate-for-topic')
 def generate_for_topic():
     from backend.ai.learning_generation import generate_cards
@@ -511,7 +555,8 @@ def regenerate_card(id):
         derived_from=row['derived_from'],
         generation_context=row['generation_context'],
     )
-    return jsonify({'count': len(ids), 'ids': ids})
+    cards_out = [{'id': i, **c} for i, c in zip(ids, cards)]
+    return jsonify({'count': len(ids), 'ids': ids, 'cards': cards_out})
 
 
 @bp.delete('/queue/<id>')

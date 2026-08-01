@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../hooks/api';
+import { api, type DraftCard } from '../hooks/api';
 import { MessageMarkdown } from './MessageMarkdown';
 import { BriefingTodos } from './BriefingTodos';
 import {
@@ -31,7 +31,12 @@ interface PendingQuiz {
 
 interface ClassifyResult {
   intent:
-    'journal' | 'calendar' | 'flashcard_request' | 'question' | 'conversation';
+    | 'journal'
+    | 'calendar'
+    | 'flashcard_request'
+    | 'note_to_self'
+    | 'question'
+    | 'conversation';
   confidence: number;
   journalEntry?: { title: string; content: string; tags: string[] };
   calendarEvent?: {
@@ -42,6 +47,7 @@ interface ClassifyResult {
     tags: string[];
   };
   flashcardRequest?: { topic: string };
+  noteToSelf?: { content: string };
 }
 
 const BREAK_METADATA = JSON.stringify({ break: true });
@@ -53,6 +59,15 @@ export function Chat() {
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
   const [queuedCards, setQueuedCards] = useState<number | null>(null);
+  const [noteCards, setNoteCards] = useState<DraftCard[] | null>(null);
+  // Which drafted note card has its "request changes" text box open.
+  const [noteRegenId, setNoteRegenId] = useState<string | null>(null);
+  const [noteRegenDirection, setNoteRegenDirection] = useState('');
+  const [noteDupHint, setNoteDupHint] = useState<{
+    cardId: string;
+    similar: { question: string; answer: string };
+    score: number;
+  } | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -135,6 +150,8 @@ export function Chat() {
           });
         } else if (r.intent === 'flashcard_request' && r.flashcardRequest) {
           setPendingQuiz({ topic: r.flashcardRequest.topic, messageId });
+        } else if (r.intent === 'note_to_self' && r.noteToSelf?.content) {
+          generateFromNote.mutate(r.noteToSelf.content);
         }
       },
     });
@@ -168,6 +185,51 @@ export function Chat() {
     },
   });
 
+  /** "note to self" drafts a lesson card right away — the preview appears
+   * inline below so it can be approved or steered without leaving chat. */
+  const generateFromNote = useMutation({
+    mutationFn: (content: string) => api.learning.generateFromNote(content),
+    onSuccess: result => setNoteCards(result.cards),
+  });
+
+  const approveNoteCard = useMutation({
+    mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
+      api.learning.approve(id, force),
+    onSuccess: (result, { id }) => {
+      if (result.status === 'duplicateHint' && result.similar) {
+        setNoteDupHint({
+          cardId: id,
+          similar: result.similar,
+          score: result.score ?? 0,
+        });
+        return;
+      }
+      setNoteDupHint(null);
+      setNoteCards(cards => (cards ?? []).filter(c => c.id !== id));
+      queryClient.invalidateQueries({ queryKey: ['learning'] });
+    },
+  });
+
+  const regenerateNoteCard = useMutation({
+    mutationFn: ({ id, direction }: { id: string; direction: string }) =>
+      api.learning.regenerate(id, direction),
+    onSuccess: (result, { id }) => {
+      setNoteCards(cards =>
+        (cards ?? []).filter(c => c.id !== id).concat(result.cards ?? [])
+      );
+      setNoteRegenId(null);
+      setNoteRegenDirection('');
+    },
+  });
+
+  const discardNoteCard = useMutation({
+    mutationFn: (id: string) => api.learning.deny(id),
+    onSuccess: (_result, id) => {
+      setNoteCards(cards => (cards ?? []).filter(c => c.id !== id));
+      setNoteDupHint(hint => (hint?.cardId === id ? null : hint));
+    },
+  });
+
   const messages = conversation?.messages || [];
   const conversationId = conversation?.id ?? null;
   const hasBreaks = messages.some(isBreak);
@@ -189,7 +251,14 @@ export function Chat() {
       return;
     }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent, pendingSave, pendingQuiz, queuedCards]);
+  }, [
+    messages,
+    streamingContent,
+    pendingSave,
+    pendingQuiz,
+    queuedCards,
+    noteCards,
+  ]);
 
   const startNewChat = async () => {
     if (!conversationId || !hasChat || isStreaming) return;
@@ -407,8 +476,8 @@ export function Chat() {
               Start a conversation, write in your journal, or ask me anything.
             </p>
             <p className="text-sm mt-4">
-              Try: "Today I learned...", "Quiz me on React hooks", or "I went to
-              the dentist"
+              Try: "Today I learned...", "Quiz me on React hooks", "note to
+              self: ...", or "I went to the dentist"
             </p>
           </div>
         )}
@@ -508,6 +577,116 @@ export function Chat() {
             Queued {queuedCards} cards for approval — open the Learning tab to
             review and approve them.
           </div>
+        </div>
+      )}
+
+      {noteCards && noteCards.length > 0 && (
+        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50 space-y-3">
+          <div className="text-sm font-medium text-[var(--color-text)]">
+            Save {noteCards.length > 1 ? 'these lessons' : 'this lesson'} to
+            Learning?
+          </div>
+          {noteCards.map(card => (
+            <div
+              key={card.id}
+              className="border border-white/10 rounded-lg p-3 space-y-2"
+            >
+              <div className="text-sm text-[var(--color-text)]">
+                <MessageMarkdown content={card.question} />
+              </div>
+              <div className="text-sm text-[var(--color-text-muted)]">
+                <MessageMarkdown content={card.answer} />
+              </div>
+
+              {noteDupHint?.cardId === card.id && (
+                <div className="text-xs text-yellow-400 space-y-1">
+                  <div>
+                    This looks {(noteDupHint.score * 100).toFixed(0)}% similar
+                    to an existing card: "{noteDupHint.similar.question}"
+                  </div>
+                  <button
+                    onClick={() =>
+                      approveNoteCard.mutate({ id: card.id, force: true })
+                    }
+                    disabled={approveNoteCard.isPending}
+                    className="underline hover:text-yellow-300 disabled:opacity-50"
+                  >
+                    Save anyway
+                  </button>
+                </div>
+              )}
+
+              {noteRegenId === card.id ? (
+                <div className="flex gap-2">
+                  <input
+                    autoFocus
+                    value={noteRegenDirection}
+                    onChange={e => setNoteRegenDirection(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && noteRegenDirection.trim()) {
+                        regenerateNoteCard.mutate({
+                          id: card.id,
+                          direction: noteRegenDirection.trim(),
+                        });
+                      }
+                    }}
+                    placeholder="What should change?"
+                    className="flex-1 bg-[var(--color-bg)] border border-white/10 rounded px-2 py-1 text-sm text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+                  />
+                  <button
+                    onClick={() => {
+                      setNoteRegenId(null);
+                      setNoteRegenDirection('');
+                    }}
+                    disabled={regenerateNoteCard.isPending}
+                    className="px-2 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() =>
+                      regenerateNoteCard.mutate({
+                        id: card.id,
+                        direction: noteRegenDirection.trim(),
+                      })
+                    }
+                    disabled={
+                      !noteRegenDirection.trim() || regenerateNoteCard.isPending
+                    }
+                    className="px-2 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+                  >
+                    {regenerateNoteCard.isPending ? 'Updating...' : 'Update'}
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => discardNoteCard.mutate(card.id)}
+                    disabled={discardNoteCard.isPending}
+                    className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    onClick={() => {
+                      setNoteRegenId(card.id);
+                      setNoteRegenDirection('');
+                    }}
+                    className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  >
+                    Request changes
+                  </button>
+                  <button
+                    onClick={() => approveNoteCard.mutate({ id: card.id })}
+                    disabled={approveNoteCard.isPending}
+                    className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+                  >
+                    Approve
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 

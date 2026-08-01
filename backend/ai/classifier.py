@@ -9,6 +9,11 @@ Intent Types:
 - calendar: Activities or events. "I went to...", "Had a meeting...", mentions of times/dates.
 - question: Asking for information. Question marks, "How do I...", "What is..."
 - flashcard_request: Wants flashcards or quiz. "quiz me", "create flashcards"
+- note_to_self: User explicitly says "note to self" (or a clear equivalent) to
+  capture something worth remembering as a lesson. Extract the substance into
+  content. If the phrase is used but there isn't yet enough substance to form
+  a lesson (e.g. just "note to self" alone), leave content empty and keep
+  confidence below 0.7 so the assistant asks what the lesson actually is.
 - conversation: General chat, greetings, commands.
 
 Rules:
@@ -19,11 +24,12 @@ Rules:
 
 Respond with valid JSON matching this schema:
 {
-  "intent": "journal|calendar|question|conversation|flashcard_request",
+  "intent": "journal|calendar|question|conversation|flashcard_request|note_to_self",
   "confidence": 0.0-1.0,
   "journalEntry": {"title": "...", "content": "...", "tags": ["..."]} (only if journal),
   "calendarEvent": {"title": "...", "description": "...", "date": "YYYY-MM-DD", "time": "HH:MM", "tags": ["..."]} (only if calendar),
-  "flashcardRequest": {"topic": "..."} (only if flashcard_request)
+  "flashcardRequest": {"topic": "..."} (only if flashcard_request),
+  "noteToSelf": {"content": "..."} (only if note_to_self)
 }"""
 
 
@@ -38,7 +44,7 @@ CLASSIFIER_SCHEMA = {
         'intent': {
             'type': 'string',
             'enum': ['journal', 'calendar', 'question', 'conversation',
-                     'flashcard_request'],
+                     'flashcard_request', 'note_to_self'],
         },
         'confidence': {'type': 'number', 'minimum': 0, 'maximum': 1},
         'journalEntry': {'anyOf': [{
@@ -62,6 +68,11 @@ CLASSIFIER_SCHEMA = {
             'properties': {'topic': {'type': 'string'}},
             'required': ['topic'],
         }, {'type': 'null'}]},
+        'noteToSelf': {'anyOf': [{
+            'type': 'object',
+            'properties': {'content': {'type': 'string'}},
+            'required': ['content'],
+        }, {'type': 'null'}]},
     },
     'required': ['intent', 'confidence'],
 }
@@ -69,6 +80,8 @@ CLASSIFIER_SCHEMA = {
 
 def should_classify(message: str) -> bool:
     msg = message.lower().strip()
+    if 'note to self' in msg:
+        return True
     if len(msg) < 20:
         return False
     if msg.startswith(('what ', 'how ', 'why ')):
