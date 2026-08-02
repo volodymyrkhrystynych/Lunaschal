@@ -656,3 +656,35 @@ CREATE TABLE IF NOT EXISTS calorie_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_calorie_logs_date ON calorie_logs(date);
+
+-- Ideas: the app's own feature backlog, developed with the research agent.
+-- raw_content is what was spoken/typed and is never overwritten; content is the
+-- AI-cleaned prose, following the journal_entries split.
+CREATE TABLE IF NOT EXISTS ideas (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    raw_content TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'new'
+        CHECK(status IN ('new','researching','ready','planned','building','shipped','parked')),
+    tags TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_ideas_updated ON ideas(updated_at DESC);
+
+-- A sketch is a Paper *page*, not a whole paper: one page is one diagram. The
+-- caption is not decoration — vision is off by default in this project (both
+-- presets set mmproj-auto = false, see backend/ai/images.py), so the caption is
+-- what the research agent actually reads. The image is for the human.
+CREATE TABLE IF NOT EXISTS idea_sketches (
+    id TEXT PRIMARY KEY,
+    idea_id TEXT NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    page_id TEXT NOT NULL REFERENCES paper_pages(id) ON DELETE CASCADE,
+    caption TEXT NOT NULL DEFAULT '',
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_idea_sketches_idea ON idea_sketches(idea_id, position);

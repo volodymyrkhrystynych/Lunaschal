@@ -76,7 +76,7 @@ Lunaschal is a single-user personal life-management desktop app with AI integrat
 
 ### Backend Structure (`backend/`)
 
-Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`, `lifestyle`.
+Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`, `lifestyle`, `ideas`.
 
 Feature-logic packages (kept out of the route files so they can be unit-tested):
 
@@ -145,6 +145,16 @@ Two-panel layout: left nav (project list + a `WritingNav` with Chapters/Notes/Di
 **DB tables**: `writing_projects`, `writing_chapters` (ordered by `position`), `writing_context_docs` (typed: `character | outline | worldbuilding | note`). "Notes" in the UI/API are stored in `writing_context_docs` (HTTP paths are `/api/writing/.../notes`; the table name is legacy). Discussions reuse the existing `conversations` + `messages` tables; `conversations.writing_project_id` scopes them to a project, and the general Chat tab filters them out (`writing_project_id IS NULL`). Deleting a project deletes its discussions.
 
 **Chapter/note editors**: plain `<textarea>` (not CodeMirror — prose, not code) with 1.5 s debounced auto-save; chapters add live word count and font-size shortcuts. **Discussions**: full-size chat reusing `/api/chat/stream` unchanged; the frontend assembles a `systemPrompt` from the project plus checked notes. A **Summarize** button distills the transcript into a new note via `backend/ai/writing.py`.
+
+#### Ideas (`backend/routes/ideas.py`, `src/components/Ideas/`)
+
+The app's own feature backlog, developed with an agent instead of by hand in `docs/ROADMAP.md`. Master-detail: list + capture box on the left, idea detail on the right. Things to know:
+
+- **An idea keeps `raw_content` and `content` separately**, the same contract as `journal_entries`: `raw_content` is what was dictated or typed and is never overwritten; `content` is the AI-cleaned prose. The detail pane shows `content` when it exists and falls back to `raw_content`, with the transcript still reachable under "As captured".
+- **Dictation appends to the capture box rather than saving immediately** (`useRecorder`, the `Learning/BrainDump.tsx` pattern) so a transcript can be corrected, or two thoughts recorded into one idea, before it becomes a row.
+- **A sketch is a Paper _page_, not a whole paper** (`idea_sketches` → `paper_pages`), rendered straight from the page's PNG snapshot at `/api/paper/pages/<id>/image` — no copying and no new storage, the same borrowing `JournalPaperItem` does. Deleting the page cascades the sketch.
+- **The caption on a sketch is the feature, not decoration.** Vision is off in this project (both presets set `mmproj-auto = false`; see `backend/ai/images.py`), so the agent reads the caption and the image is for the human. The UI says so out loud — a "describe this sketch" button that always errored is the journal-photo-captioning mistake.
+- `page_image_url` in `backend/routes/paper.py` is exported (not `_`-prefixed) precisely because Ideas borrows it; keep it that way.
 
 #### Fanfic library (`backend/routes/fanfic.py`, `backend/fanfic/`, `src/components/Fanfic/`)
 

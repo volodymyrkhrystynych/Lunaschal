@@ -15,6 +15,7 @@ export const VIEWS = [
   'files',
   'notebook',
   'writing',
+  'ideas',
   'tasks',
   'food',
   'lifestyle',

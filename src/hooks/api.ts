@@ -515,6 +515,53 @@ export interface NotebookReviewState {
   due: string | null;
 }
 
+export type IdeaStatus =
+  | 'new'
+  | 'researching'
+  | 'ready'
+  | 'planned'
+  | 'building'
+  | 'shipped'
+  | 'parked';
+
+/** List row: the two body columns are omitted server-side. */
+export interface IdeaSummary {
+  id: string;
+  title: string;
+  status: IdeaStatus;
+  tags: string | null;
+  sketchCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Idea extends Omit<IdeaSummary, 'sketchCount'> {
+  /** As spoken or typed. Never overwritten — only `content` is AI-owned. */
+  rawContent: string;
+  content: string;
+}
+
+export interface IdeaSketch {
+  id: string;
+  ideaId: string;
+  pageId: string;
+  paperId: string;
+  /** What the sketch shows. The agent reads this, not the drawing. */
+  caption: string;
+  position: number;
+  imageUrl: string | null;
+  createdAt: string;
+}
+
+/** A Paper page offered in the sketch picker. */
+export interface IdeaPaperPage {
+  pageId: string;
+  paperId: string;
+  paperTitle: string;
+  position: number;
+  imageUrl: string | null;
+}
+
 export interface WritingProject {
   id: string;
   title: string;
@@ -1617,6 +1664,38 @@ export const api = {
       get<{ recording: boolean; transcribing: boolean; mode: string | null }>(
         '/api/stt/listener-state'
       ),
+  },
+
+  ideas: {
+    list: () => get<IdeaSummary[]>('/api/ideas'),
+    get: (id: string) => get<Idea>(`/api/ideas/${id}`),
+    create: (data: { title?: string; rawContent?: string; tags?: string[] }) =>
+      post<{ id: string }>('/api/ideas', data),
+    createFromVoice: (rawContent: string) =>
+      post<{ id: string }>('/api/ideas/voice', { rawContent }),
+    update: (
+      id: string,
+      data: {
+        title?: string;
+        rawContent?: string;
+        content?: string;
+        status?: IdeaStatus;
+        tags?: string[];
+      }
+    ) => patch<{ success: boolean }>(`/api/ideas/${id}`, data),
+    remove: (id: string) => del<{ success: boolean }>(`/api/ideas/${id}`),
+
+    listSketches: (ideaId: string) =>
+      get<IdeaSketch[]>(`/api/ideas/${ideaId}/sketches`),
+    addSketch: (ideaId: string, data: { pageId: string; caption?: string }) =>
+      post<{ id: string }>(`/api/ideas/${ideaId}/sketches`, data),
+    updateSketch: (
+      sketchId: string,
+      data: { caption?: string; position?: number }
+    ) => patch<{ success: boolean }>(`/api/ideas/sketches/${sketchId}`, data),
+    removeSketch: (sketchId: string) =>
+      del<{ success: boolean }>(`/api/ideas/sketches/${sketchId}`),
+    paperPages: () => get<IdeaPaperPage[]>('/api/ideas/paper-pages'),
   },
 
   writing: {
