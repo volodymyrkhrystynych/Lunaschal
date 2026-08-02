@@ -710,3 +710,87 @@ CREATE TABLE IF NOT EXISTS repo_snapshots (
 );
 
 CREATE INDEX IF NOT EXISTS idx_repo_snapshots_generated ON repo_snapshots(generated_at DESC);
+
+-- The LLM wiki: agent-written, agent-updated articles about the problem spaces
+-- the ideas live in. Revisions are append-only copy-on-write, following
+-- learning_revisions — the agent must never be able to silently rewrite
+-- something the user relied on.
+CREATE TABLE IF NOT EXISTS wiki_articles (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '',
+    sources TEXT,
+    tags TEXT,
+    revision INTEGER NOT NULL DEFAULT 1,
+    -- A locked article is the user's; the agent proposes changes instead.
+    locked INTEGER NOT NULL DEFAULT 0,
+    last_researched_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wiki_articles_updated ON wiki_articles(updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS wiki_revisions (
+    id TEXT PRIMARY KEY,
+    article_id TEXT NOT NULL REFERENCES wiki_articles(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    diff TEXT,
+    author TEXT NOT NULL DEFAULT 'agent' CHECK(author IN ('agent','user')),
+    note TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_wiki_revisions_article ON wiki_revisions(article_id, revision DESC);
+
+CREATE TABLE IF NOT EXISTS idea_wiki_links (
+    idea_id TEXT NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    article_id TEXT NOT NULL REFERENCES wiki_articles(id) ON DELETE CASCADE,
+    relevance REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (idea_id, article_id)
+);
+
+-- The agent's judgement about an idea, kept append-only and tied to the repo
+-- snapshot it was made against — that pairing is what lets the UI say an
+-- assessment has gone stale rather than presenting an old verdict as current.
+CREATE TABLE IF NOT EXISTS idea_assessments (
+    id TEXT PRIMARY KEY,
+    idea_id TEXT NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    snapshot_id TEXT REFERENCES repo_snapshots(id) ON DELETE SET NULL,
+    verdict TEXT NOT NULL DEFAULT 'no' CHECK(verdict IN ('no','partial','yes')),
+    confidence REAL NOT NULL DEFAULT 0,
+    rationale TEXT NOT NULL DEFAULT '',
+    -- JSON [{kind, ref, file, line}] — chosen by index from a list we built,
+    -- so the model cannot cite a file that does not exist.
+    evidence TEXT NOT NULL DEFAULT '[]',
+    on_roadmap TEXT,
+    effort TEXT,
+    model TEXT,
+    assessed_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_idea_assessments_idea ON idea_assessments(idea_id, assessed_at DESC);
+
+-- Decisions the idea still needs from the user. Upserted by question_key so a
+-- re-run never resurrects something already answered.
+CREATE TABLE IF NOT EXISTS idea_questions (
+    id TEXT PRIMARY KEY,
+    idea_id TEXT NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    question TEXT NOT NULL,
+    question_key TEXT NOT NULL,
+    why TEXT,
+    options TEXT,
+    answer TEXT,
+    answered_at INTEGER,
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','answered','dismissed')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_idea_questions_key ON idea_questions(idea_id, question_key);

@@ -12,6 +12,7 @@ import time
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
+from backend.ai.provider import is_ai_configured
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.routes.paper import page_image_url
 from backend.tags import tags_json
@@ -198,6 +199,70 @@ def delete_sketch(sketch_id):
     db.commit()
     return jsonify({'success': True})
 
+
+
+# --- Assessment, questions, research ---
+
+@bp.post('/<idea_id>/assess')
+def assess_idea_route(idea_id):
+    """Judge the idea against the current repo snapshot. Synchronous: it is one
+    grammar-constrained call, and the user is watching."""
+    from backend.ai import priority
+    from backend.research.assess import run_assessment
+
+    if not is_ai_configured():
+        return jsonify({'error': 'AI provider not configured'}), 400
+    with priority.interactive('ideas.assess'):
+        result = run_assessment(idea_id)
+    if result is None:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(_assessment_payload(result)), 201
+
+
+@bp.get('/<idea_id>/questions')
+def list_questions(idea_id):
+    rows = get_db().execute(
+        'SELECT * FROM idea_questions WHERE idea_id=? ORDER BY status, created_at',
+        (idea_id,),
+    ).fetchall()
+    out = []
+    for r in rows:
+        d = row_to_dict(r)
+        d['options'] = json.loads(r['options']) if r['options'] else []
+        out.append(d)
+    return jsonify(out)
+
+
+@bp.patch('/questions/<question_id>')
+def update_question(question_id):
+    body = request.json or {}
+    now = int(time.time())
+    updates: dict = {'updated_at': now}
+    if 'answer' in body:
+        answer = (body['answer'] or '').strip()
+        updates['answer'] = answer or None
+        # Answering is what settles a question; clearing the answer reopens it.
+        updates['status'] = 'answered' if answer else 'open'
+        updates['answered_at'] = now if answer else None
+    if 'status' in body:
+        if body['status'] not in ('open', 'answered', 'dismissed'):
+            return jsonify({'error': 'invalid status'}), 400
+        updates['status'] = body['status']
+    db = get_db()
+    build_update(db, 'idea_questions', updates, 'id=?', (question_id,))
+    db.commit()
+    return jsonify({'success': True})
+
+
+def _assessment_payload(assessment: dict) -> dict:
+    from backend.research.assess import is_stale
+    from backend.research.repo_job import current_snapshot
+
+    payload = dict(assessment)
+    payload['evidence'] = json.loads(assessment.get('evidence') or '[]')
+    payload['onRoadmap'] = json.loads(assessment['onRoadmap']) if assessment.get('onRoadmap') else []
+    payload['stale'] = is_stale(assessment, current_snapshot())
+    return payload
 
 
 # --- Repo context ---

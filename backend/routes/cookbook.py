@@ -1,12 +1,11 @@
 import json
-import re
 import time
-from html.parser import HTMLParser
 
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
 from backend.ai.recipes import parse_recipe
+from backend.htmltext import strip_html
 from backend.db.connection import build_update, get_db, row_to_dict, search_recipes_fts
 from backend.tags import tag_counts
 
@@ -116,32 +115,8 @@ def delete_recipe(id):
     return jsonify({'success': True})
 
 
-class _TextExtractor(HTMLParser):
-    _SKIP = {'script', 'style', 'noscript', 'svg', 'head'}
-
-    def __init__(self):
-        super().__init__()
-        self._skip_depth = 0
-        self.parts: list[str] = []
-
-    def handle_starttag(self, tag, attrs):
-        if tag in self._SKIP:
-            self._skip_depth += 1
-
-    def handle_endtag(self, tag):
-        if tag in self._SKIP and self._skip_depth > 0:
-            self._skip_depth -= 1
-
-    def handle_data(self, data):
-        if self._skip_depth == 0 and data.strip():
-            self.parts.append(data.strip())
-
-
 def _strip_html(html: str) -> str:
-    parser = _TextExtractor()
-    parser.feed(html)
-    text = '\n'.join(parser.parts)
-    return re.sub(r'\n{3,}', '\n\n', text)[:_MAX_PAGE_CHARS]
+    return strip_html(html, _MAX_PAGE_CHARS)
 
 
 def _fetch_url_text(url: str) -> str:

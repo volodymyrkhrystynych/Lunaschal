@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request, Response, stream_with_context
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
 from backend.chat_day import day_key_for
+from backend.ai import priority
 from backend.ai.provider import is_ai_configured
 from backend.ai.chat import chat_stream, build_chat_system_prompt
 from backend.ai.chat_title import generate_conversation_title
@@ -341,6 +342,13 @@ def stream():
         # default prompt enriched with the last day's journal entries.
         system_prompt = build_chat_system_prompt()
 
+    # Acquired here, in the view, rather than inside generate(): the generator
+    # body does not run until Werkzeug pulls the first item, so acquiring there
+    # would leave the window between "user pressed Enter" and "first token"
+    # looking idle to background work. Released in the generator's finally,
+    # which also runs on GeneratorExit when the client disconnects mid-stream.
+    token = priority.begin('chat.stream')
+
     def generate():
         try:
             for chunk in chat_stream(messages, system_prompt):
@@ -348,6 +356,10 @@ def stream():
             yield 'data: [DONE]\n\n'
         except Exception as e:
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
+        finally:
+            # Must not yield here — that would raise "generator ignored
+            # GeneratorExit". priority.end only touches a dict under a lock.
+            priority.end(token)
 
     return Response(
         stream_with_context(generate()),

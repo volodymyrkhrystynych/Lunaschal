@@ -1,0 +1,344 @@
+"""Web search and fetch for the research agent.
+
+The SSRF tests carry most of the weight here: the model picks these URLs, the
+app binds 0.0.0.0 in network mode, and llama-server is on localhost:8080.
+"""
+import pytest
+import requests
+
+from backend.db.connection import get_db
+from backend.research import web
+
+
+# --- The SSRF guard ---
+
+@pytest.mark.parametrize('url', [
+    'http://127.0.0.1/admin',
+    'http://127.0.0.1:8080/v1/models',      # llama-server itself
+    'https://localhost/secret',
+    'http://[::1]:5000/api/settings',
+    'http://10.0.0.5/',
+    'http://192.168.1.1/',
+    'http://172.16.0.1/',
+    'http://169.254.169.254/latest/meta-data/',  # cloud metadata
+    'http://0.0.0.0/',
+    'http://nas.local/',
+    'http://wiki.internal/',
+])
+def test_private_and_loopback_addresses_are_refused(url):
+    with pytest.raises(web.UnsafeUrl):
+        web.assert_public_url(url)
+
+
+@pytest.mark.parametrize('url', [
+    'file:///etc/passwd',
+    'ftp://example.com/x',
+    'gopher://example.com/',
+    'not-a-url',
+])
+def test_non_http_schemes_are_refused(url):
+    with pytest.raises(web.UnsafeUrl):
+        web.assert_public_url(url)
+
+
+def test_a_public_hostname_is_allowed(monkeypatch):
+    monkeypatch.setattr(
+        web.socket, 'getaddrinfo',
+        lambda *a, **k: [(2, 1, 6, '', ('93.184.216.34', 443))],
+    )
+    assert web.assert_public_url('https://example.com/page') == 'https://example.com/page'
+
+
+def test_a_public_name_resolving_to_a_private_ip_is_refused(monkeypatch):
+    """DNS is the interesting attack: the hostname looks fine."""
+    monkeypatch.setattr(
+        web.socket, 'getaddrinfo',
+        lambda *a, **k: [(2, 1, 6, '', ('10.1.2.3', 443))],
+    )
+    with pytest.raises(web.UnsafeUrl, match='non-public'):
+        web.assert_public_url('https://sneaky.example.com/')
+
+
+def test_one_private_answer_among_several_is_enough_to_refuse(monkeypatch):
+    """We don't control which resolved address the socket picks."""
+    monkeypatch.setattr(
+        web.socket, 'getaddrinfo',
+        lambda *a, **k: [
+            (2, 1, 6, '', ('93.184.216.34', 443)),
+            (2, 1, 6, '', ('127.0.0.1', 443)),
+        ],
+    )
+    with pytest.raises(web.UnsafeUrl):
+        web.assert_public_url('https://mixed.example.com/')
+
+
+def test_an_unresolvable_host_is_refused(monkeypatch):
+    import socket as real_socket
+
+    def boom(*a, **k):
+        raise real_socket.gaierror('nope')
+
+    monkeypatch.setattr(web.socket, 'getaddrinfo', boom)
+    with pytest.raises(web.UnsafeUrl, match='resolve'):
+        web.assert_public_url('https://nothing.example.com/')
+
+
+# --- Fetching ---
+
+class _FakeResponse:
+    def __init__(self, *, status=200, headers=None, body=b'', redirect_to=None):
+        self.status_code = status
+        self.headers = headers or {'Content-Type': 'text/html'}
+        self._body = body
+        self.encoding = 'utf-8'
+        if redirect_to:
+            self.status_code = 302
+            self.headers['Location'] = redirect_to
+
+    @property
+    def is_redirect(self):
+        return self.status_code in (301, 302, 303, 307, 308)
+
+    is_permanent_redirect = False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(f'{self.status_code}')
+
+    def iter_content(self, size):
+        for i in range(0, len(self._body), size):
+            yield self._body[i:i + size]
+
+    def close(self):
+        pass
+
+
+@pytest.fixture
+def public_dns(monkeypatch):
+    monkeypatch.setattr(
+        web.socket, 'getaddrinfo',
+        lambda host, *a, **k: [(2, 1, 6, '', (
+            '127.0.0.1' if host in ('evil.internal.example', 'private.example') else '93.184.216.34',
+            443,
+        ))],
+    )
+
+
+def test_fetch_returns_title_and_text(monkeypatch, public_dns):
+    html = b'<html><head><title>FSRS</title><script>bad()</script></head>' \
+           b'<body><h1>Spaced repetition</h1><p>Cards are scheduled.</p></body></html>'
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: _FakeResponse(body=html))
+
+    page = web.web_fetch('https://example.com/fsrs')
+    assert page['title'] == 'FSRS'
+    assert 'Spaced repetition' in page['text']
+    assert 'bad()' not in page['text'], 'script contents are stripped'
+
+
+def test_fetch_follows_a_public_redirect(monkeypatch, public_dns):
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        if len(calls) == 1:
+            return _FakeResponse(redirect_to='https://example.com/final')
+        return _FakeResponse(body=b'<html><body>arrived</body></html>')
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    page = web.web_fetch('https://example.com/start')
+    assert page['url'] == 'https://example.com/final'
+    assert 'arrived' in page['text']
+
+
+def test_fetch_refuses_a_redirect_into_a_private_host(monkeypatch, public_dns):
+    """A public URL redirecting to the metadata service is the whole trick."""
+    monkeypatch.setattr(
+        web.requests, 'get',
+        lambda *a, **k: _FakeResponse(redirect_to='https://private.example/secret'),
+    )
+    with pytest.raises(web.UnsafeUrl, match='non-public'):
+        web.web_fetch('https://example.com/start')
+
+
+def test_fetch_gives_up_after_too_many_redirects(monkeypatch, public_dns):
+    monkeypatch.setattr(
+        web.requests, 'get',
+        lambda *a, **k: _FakeResponse(redirect_to='https://example.com/loop'),
+    )
+    with pytest.raises(web.UnsafeUrl, match='[Tt]oo many redirects'):
+        web.web_fetch('https://example.com/loop')
+
+
+def test_fetch_stops_reading_once_the_byte_cap_is_passed(monkeypatch, public_dns):
+    """The point is that we stop pulling from the socket, not just that the
+    text is short — an endless response must not be downloaded in full.
+    Granularity is one chunk, so it reads at most one chunk past the cap."""
+    monkeypatch.setattr(web, 'MAX_BYTES', 1000)
+    huge = b'<html><body>' + (b'x' * 5_000_000) + b'</body></html>'
+    served = []
+
+    class Counting(_FakeResponse):
+        def iter_content(self, size):
+            for i in range(0, len(self._body), size):
+                chunk = self._body[i:i + size]
+                served.append(len(chunk))
+                yield chunk
+
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: Counting(body=huge))
+    page = web.web_fetch('https://example.com/huge')
+
+    assert sum(served) <= 1000 + 8192, 'stopped within one chunk of the cap'
+    assert sum(served) < len(huge) / 100, 'nowhere near the full body'
+    assert len(page['text']) <= web.MAX_PAGE_CHARS
+
+
+def test_fetch_caps_the_text_it_hands_the_model(monkeypatch, public_dns):
+    """Independent of the byte cap: a page that fits still gets clipped to the
+    context budget."""
+    monkeypatch.setattr(web, 'MAX_PAGE_CHARS', 200)
+    body = b'<html><body>' + (b'word ' * 500) + b'</body></html>'
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: _FakeResponse(body=body))
+    assert len(web.web_fetch('https://example.com/p')['text']) == 200
+
+
+def test_fetch_refuses_non_text_content(monkeypatch, public_dns):
+    monkeypatch.setattr(
+        web.requests, 'get',
+        lambda *a, **k: _FakeResponse(headers={'Content-Type': 'application/pdf'}),
+    )
+    with pytest.raises(web.UnsafeUrl, match='text pages'):
+        web.web_fetch('https://example.com/doc.pdf')
+
+
+# --- Providers ---
+
+def _configure(provider, key=None, url=None):
+    db = get_db()
+    db.execute(
+        'UPDATE settings SET research_search_provider=?, research_search_key=?,'
+        ' research_searxng_url=?',
+        (provider, key, url),
+    )
+    db.commit()
+
+
+def test_no_provider_means_unavailable(client):
+    assert web.is_search_configured() is False
+    with pytest.raises(web.SearchUnavailable):
+        web.web_search('fsrs')
+
+
+def test_a_provider_without_its_key_is_not_configured(client):
+    _configure('brave', key=None)
+    assert web.is_search_configured() is False
+    with pytest.raises(web.SearchUnavailable, match='API key'):
+        web.web_search('fsrs')
+
+
+def test_brave_results_are_mapped(client, monkeypatch):
+    _configure('brave', key='k')
+    assert web.is_search_configured() is True
+
+    class R:
+        status_code = 200
+        def raise_for_status(self): pass
+        def json(self):
+            return {'web': {'results': [
+                {'title': 'FSRS', 'url': 'https://ex.com/a', 'description': 'sched'},
+                {'title': 'No URL', 'description': 'dropped'},
+            ]}}
+
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: R())
+    results = web.web_search('fsrs')
+    assert results == [{'title': 'FSRS', 'url': 'https://ex.com/a', 'snippet': 'sched'}]
+
+
+def test_tavily_results_are_mapped(client, monkeypatch):
+    _configure('tavily', key='k')
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {'results': [{'title': 'T', 'url': 'https://ex.com/t', 'content': 'body'}]}
+
+    monkeypatch.setattr(web.requests, 'post', lambda *a, **k: R())
+    assert web.web_search('fsrs')[0]['url'] == 'https://ex.com/t'
+
+
+def test_searxng_needs_only_a_url(client, monkeypatch):
+    _configure('searxng', url='http://localhost:8888')
+    assert web.is_search_configured() is True
+
+    seen = {}
+
+    class R:
+        def raise_for_status(self): pass
+        def json(self):
+            return {'results': [{'title': 'S', 'url': 'https://ex.com/s', 'content': 'c'}]}
+
+    def fake_get(url, **kwargs):
+        seen['url'] = url
+        return R()
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    assert web.web_search('fsrs')[0]['title'] == 'S'
+    assert seen['url'] == 'http://localhost:8888/search'
+
+
+def test_search_network_errors_become_search_unavailable(client, monkeypatch):
+    _configure('brave', key='k')
+
+    def boom(*a, **k):
+        raise requests.ConnectionError('down')
+
+    monkeypatch.setattr(web.requests, 'get', boom)
+    with pytest.raises(web.SearchUnavailable):
+        web.web_search('fsrs')
+
+
+def test_an_empty_query_searches_nothing(client):
+    assert web.web_search('   ') == []
+
+
+# --- run_tool: the model-facing surface ---
+
+def test_run_tool_never_raises_on_an_unconfigured_search(client):
+    """A failed tool is information the model can act on; an exception would
+    abandon a run that is otherwise fine."""
+    text, event = web.run_tool('web_search', {'query': 'fsrs'})
+    assert 'unavailable' in text.lower()
+    assert 'could not search' in text.lower()
+    assert event['ok'] is False
+
+
+def test_run_tool_formats_search_results(client, monkeypatch):
+    monkeypatch.setattr(web, 'web_search', lambda q, limit=5: [
+        {'title': 'FSRS', 'url': 'https://ex.com/a', 'snippet': 'sched'},
+    ])
+    text, event = web.run_tool('web_search', {'query': 'fsrs'})
+    assert 'https://ex.com/a' in text
+    assert event == {
+        'tool': 'web_search', 'arg': 'fsrs', 'ok': True, 'count': 1,
+        'results': [{'title': 'FSRS', 'url': 'https://ex.com/a'}],
+    }
+
+
+def test_run_tool_reports_a_refused_url_without_raising(client):
+    text, event = web.run_tool('web_fetch', {'url': 'http://127.0.0.1/admin'})
+    assert 'Refused' in text
+    assert event['ok'] is False
+
+
+def test_run_tool_reports_an_unknown_tool(client):
+    text, event = web.run_tool('rm_rf', {})
+    assert 'Unknown tool' in text
+    assert event['ok'] is False
+
+
+def test_tool_definitions_are_openai_shaped():
+    names = {t['function']['name'] for t in web.TOOLS}
+    assert names == {'web_search', 'web_fetch'}
+    for tool in web.TOOLS:
+        assert tool['type'] == 'function'
+        assert tool['function']['parameters']['type'] == 'object'
+        assert tool['function']['parameters']['required']
