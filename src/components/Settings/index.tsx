@@ -11,6 +11,7 @@ import { ResearchSection } from './ResearchSection';
 import { VRAMSection } from './VRAMSection';
 import { NetworkSection } from './NetworkSection';
 import { FanficCookiesSection } from './FanficCookiesSection';
+import { EmailSection } from './EmailSection';
 import { DisplaySection } from './DisplaySection';
 import { LlamaConfigSection } from './LlamaConfigSection';
 import { WebSearchSection } from './WebSearchSection';
@@ -82,6 +83,8 @@ export function Settings() {
           <ResearchSection />
 
           <FanficCookiesSection />
+
+          <EmailSection />
 
           {settings?.networkMode && <NetworkSection />}
 

@@ -66,7 +66,7 @@ def create_app():
     init_db()
 
     from backend.auth import NETWORK_MODE, COOKIE_NAME, is_localhost, decode_token
-    from backend.routes import journal, calendar, learning, settings, chat, files, writing, stt, tasks, curated_tags, shortcuts, transcriptions, cookbook, food, fanfic, newspapers, meetings, notebook, paper, lifestyle, ideas
+    from backend.routes import journal, calendar, learning, settings, chat, files, writing, stt, tasks, curated_tags, shortcuts, transcriptions, cookbook, food, fanfic, newspapers, meetings, notebook, paper, lifestyle, ideas, email
     from backend.routes.settings import _get_settings, _set_sleep_inhibitor, measure_base_gpu_vram
     s = _get_settings()
     if s and s.get('prevent_sleep'):
@@ -76,7 +76,7 @@ def create_app():
     # for it instead of assuming the whole card is free.
     measure_base_gpu_vram()
     from backend.routes import auth as auth_routes
-    for bp in (auth_routes.bp, journal.bp, calendar.bp, learning.bp, settings.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp, transcriptions.bp, cookbook.bp, food.bp, fanfic.bp, newspapers.bp, meetings.bp, notebook.files_bp, notebook.bp, paper.bp, lifestyle.bp, ideas.bp):
+    for bp in (auth_routes.bp, journal.bp, calendar.bp, learning.bp, settings.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp, transcriptions.bp, cookbook.bp, food.bp, fanfic.bp, newspapers.bp, meetings.bp, notebook.files_bp, notebook.bp, paper.bp, lifestyle.bp, ideas.bp, email.bp):
         app.register_blueprint(bp)
 
     @app.before_request
@@ -118,4 +118,6 @@ def create_app():
         start_repo_context_scheduler()
         from backend.research.research_scheduler import start_research_scheduler
         start_research_scheduler()
+        from backend.email_scheduler import start_email_scheduler
+        start_email_scheduler()
     return app
