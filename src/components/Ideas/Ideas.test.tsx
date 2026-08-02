@@ -19,7 +19,16 @@ vi.mock('../../hooks/api', () => ({
       updateSketch: vi.fn(),
       removeSketch: vi.fn(),
       paperPages: vi.fn(),
+      assess: vi.fn(),
+      listQuestions: vi.fn(),
+      answerQuestion: vi.fn(),
+      listConversations: vi.fn(),
+      createConversation: vi.fn(),
+      listPlans: vi.fn(),
+      getPlan: vi.fn(),
+      createPlan: vi.fn(),
     },
+    chat: { getConversation: vi.fn() },
   },
 }));
 
@@ -49,6 +58,16 @@ function summary(over: Partial<IdeaSummary> = {}): IdeaSummary {
     status: 'new',
     tags: '["ui"]',
     sketchCount: 0,
+    openQuestionCount: 0,
+    articleCount: 0,
+    hasPlan: false,
+    verdict: null,
+    confidence: null,
+    effort: null,
+    onRoadmap: false,
+    assessmentStale: false,
+    userVerdict: null,
+    researchState: 'idle',
     createdAt: '2026-08-01T00:00:00Z',
     updatedAt: '2026-08-01T00:00:00Z',
     ...over,
@@ -63,6 +82,9 @@ function detail(over: Partial<Idea> = {}): Idea {
     tags: '["ui"]',
     rawContent: 'a habit grid in the day view',
     content: '',
+    userVerdict: null,
+    userVerdictNote: null,
+    researchState: 'idle',
     createdAt: '2026-08-01T00:00:00Z',
     updatedAt: '2026-08-01T00:00:00Z',
     ...over,
@@ -89,6 +111,9 @@ beforeEach(() => {
   vi.mocked(api.ideas.paperPages).mockResolvedValue([]);
   vi.mocked(api.ideas.createFromVoice).mockResolvedValue({ id: 'i2' });
   vi.mocked(api.ideas.update).mockResolvedValue({ success: true });
+  vi.mocked(api.ideas.listQuestions).mockResolvedValue([]);
+  vi.mocked(api.ideas.listConversations).mockResolvedValue([]);
+  vi.mocked(api.ideas.listPlans).mockResolvedValue([]);
 });
 
 describe('Ideas', () => {
@@ -174,6 +199,166 @@ describe('IdeaCapture', () => {
     });
     expect(save.hasAttribute('disabled')).toBe(true);
     expect(api.ideas.createFromVoice).not.toHaveBeenCalled();
+  });
+});
+
+describe('stat chips', () => {
+  it('shows the agent verdict with its confidence', async () => {
+    vi.mocked(api.ideas.list).mockResolvedValue([
+      summary({ verdict: 'partial', confidence: 0.62 }),
+    ]);
+    renderIt();
+    expect(await screen.findByText('Partly built 62%')).toBeTruthy();
+  });
+
+  it("shows the user's verdict instead, without a confidence", async () => {
+    vi.mocked(api.ideas.list).mockResolvedValue([
+      summary({ verdict: 'no', confidence: 0.9, userVerdict: 'yes' }),
+    ]);
+    renderIt();
+    expect(await screen.findByText('Already built (you)')).toBeTruthy();
+    expect(screen.queryByText(/90%/)).toBeNull();
+  });
+
+  it('marks a verdict stale once the repo has moved on', async () => {
+    vi.mocked(api.ideas.list).mockResolvedValue([
+      summary({ verdict: 'yes', confidence: 0.8, assessmentStale: true }),
+    ]);
+    renderIt();
+    expect(await screen.findByText(/stale/)).toBeTruthy();
+  });
+
+  it('counts open decisions, plans and research notes', async () => {
+    vi.mocked(api.ideas.list).mockResolvedValue([
+      summary({ openQuestionCount: 2, hasPlan: true, articleCount: 3 }),
+    ]);
+    renderIt();
+    expect(await screen.findByTitle('2 decisions needed')).toBeTruthy();
+    expect(screen.getByTitle('Has a plan')).toBeTruthy();
+    expect(screen.getByTitle('3 research notes')).toBeTruthy();
+  });
+
+  it('shows no verdict chip before an assessment exists', async () => {
+    renderIt();
+    await screen.findByText('Habit tracking');
+    expect(
+      screen.queryByText(/Already built|Partly built|Not built/)
+    ).toBeNull();
+  });
+});
+
+describe('assessment pane', () => {
+  it('renders the cited evidence so the verdict is checkable', async () => {
+    vi.mocked(api.ideas.assess).mockResolvedValue({
+      id: 'a1',
+      ideaId: 'i1',
+      snapshotId: 's1',
+      verdict: 'partial',
+      confidence: 0.6,
+      rationale: 'Some of the machinery exists.',
+      evidence: [
+        {
+          kind: 'table',
+          ref: 'paper_pages',
+          file: 'backend/db/schema.sql',
+          line: 12,
+          detail: null,
+        },
+      ],
+      onRoadmap: [],
+      effort: 'm',
+      stale: false,
+      assessedAt: '2026-08-01T00:00:00Z',
+    });
+    renderIt();
+    fireEvent.click(await screen.findByText('Habit tracking'));
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Check the repo' })
+    );
+
+    expect(
+      await screen.findByText('Some of the machinery exists.')
+    ).toBeTruthy();
+    expect(screen.getByText('paper_pages')).toBeTruthy();
+    expect(screen.getByText('backend/db/schema.sql:12')).toBeTruthy();
+  });
+
+  it('lets the user override the verdict', async () => {
+    renderIt();
+    fireEvent.click(await screen.findByText('Habit tracking'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Built' }));
+    await waitFor(() =>
+      expect(api.ideas.update).toHaveBeenCalledWith('i1', {
+        userVerdict: 'yes',
+      })
+    );
+  });
+
+  it('surfaces open decisions and records an answer', async () => {
+    vi.mocked(api.ideas.listQuestions).mockResolvedValue([
+      {
+        id: 'q1',
+        ideaId: 'i1',
+        question: 'Where should sketches live?',
+        why: 'storage',
+        options: ['Paper', 'new table'],
+        answer: null,
+        status: 'open',
+        answeredAt: null,
+        createdAt: '2026-08-01T00:00:00Z',
+      },
+    ]);
+    vi.mocked(api.ideas.answerQuestion).mockResolvedValue({ success: true });
+    renderIt();
+    fireEvent.click(await screen.findByText('Habit tracking'));
+
+    expect(await screen.findByText('Needs a decision (1)')).toBeTruthy();
+    const field = screen.getByLabelText('Answer: Where should sketches live?');
+    fireEvent.blur(field, { target: { value: 'Paper pages' } });
+    await waitFor(() =>
+      expect(api.ideas.answerQuestion).toHaveBeenCalledWith('q1', {
+        answer: 'Paper pages',
+      })
+    );
+  });
+});
+
+describe('plan pane', () => {
+  it('offers to create a plan when there is none', async () => {
+    renderIt();
+    fireEvent.click(await screen.findByText('Habit tracking'));
+    expect(
+      await screen.findByRole('button', { name: 'Create plan' })
+    ).toBeTruthy();
+    expect(screen.getByText(/No plan yet/)).toBeTruthy();
+  });
+
+  it('renders a generated plan and offers to copy it', async () => {
+    vi.mocked(api.ideas.listPlans).mockResolvedValue([
+      {
+        id: 'p1',
+        ideaId: 'i1',
+        version: 1,
+        createdAt: '2026-08-01T00:00:00Z',
+        updatedAt: '2026-08-01T00:00:00Z',
+      },
+    ]);
+    vi.mocked(api.ideas.getPlan).mockResolvedValue({
+      id: 'p1',
+      ideaId: 'i1',
+      version: 1,
+      content: '# Habit tracking\n\n## Data model',
+      spec: '{}',
+      createdAt: '2026-08-01T00:00:00Z',
+      updatedAt: '2026-08-01T00:00:00Z',
+    });
+    renderIt();
+    fireEvent.click(await screen.findByText('Habit tracking'));
+
+    expect(
+      await screen.findByRole('button', { name: 'Copy markdown' })
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Regenerate' })).toBeTruthy();
   });
 });
 

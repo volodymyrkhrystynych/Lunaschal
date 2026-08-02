@@ -9,7 +9,7 @@ backend/db/schema.sql.
 import json
 import time
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 from ulid import ULID
 
 from backend.ai.provider import is_ai_configured
@@ -23,7 +23,10 @@ STATUSES = ('new', 'researching', 'ready', 'planned', 'building', 'shipped', 'pa
 
 # Columns the list endpoint returns: everything except the two body columns,
 # which are only needed once an idea is opened.
-_LIST_COLUMNS = 'id, title, status, tags, created_at, updated_at'
+_LIST_COLUMNS = (
+    'id, title, status, tags, user_verdict, research_state, created_at, updated_at'
+)
+
 
 # --- Ideas ---
 
@@ -33,16 +36,49 @@ def list_ideas():
     rows = db.execute(
         f'SELECT {_LIST_COLUMNS} FROM ideas ORDER BY updated_at DESC'
     ).fetchall()
-    counts = {
-        r['idea_id']: r['n']
+    # One grouped query per stat rather than a correlated subquery per idea —
+    # the list is small, but N+1 here would be four queries per row.
+    def _counts(sql):
+        return {r['idea_id']: r['n'] for r in db.execute(sql).fetchall()}
+
+    sketches = _counts('SELECT idea_id, COUNT(*) AS n FROM idea_sketches GROUP BY idea_id')
+    questions = _counts(
+        "SELECT idea_id, COUNT(*) AS n FROM idea_questions WHERE status='open'"
+        ' GROUP BY idea_id'
+    )
+    articles = _counts(
+        'SELECT idea_id, COUNT(*) AS n FROM idea_wiki_links GROUP BY idea_id'
+    )
+    plans = _counts('SELECT idea_id, COUNT(*) AS n FROM idea_plans GROUP BY idea_id')
+    assessments = {
+        r['idea_id']: r
         for r in db.execute(
-            'SELECT idea_id, COUNT(*) AS n FROM idea_sketches GROUP BY idea_id'
+            'SELECT a.* FROM idea_assessments a'
+            ' JOIN ideas i ON i.assessment_id = a.id'
         ).fetchall()
     }
+
+    from backend.research.repo_job import current_snapshot
+    snapshot = current_snapshot()
+
     result = []
     for r in rows:
         d = row_to_dict(r)
-        d['sketchCount'] = counts.get(r['id'], 0)
+        d['sketchCount'] = sketches.get(r['id'], 0)
+        d['openQuestionCount'] = questions.get(r['id'], 0)
+        d['articleCount'] = articles.get(r['id'], 0)
+        d['hasPlan'] = plans.get(r['id'], 0) > 0
+
+        assessment = assessments.get(r['id'])
+        d['verdict'] = assessment['verdict'] if assessment else None
+        d['confidence'] = assessment['confidence'] if assessment else None
+        d['effort'] = assessment['effort'] if assessment else None
+        d['onRoadmap'] = bool(assessment['on_roadmap']) if assessment else False
+        # Stale means the repo moved since the verdict was formed — the honest
+        # version of "already implemented".
+        d['assessmentStale'] = bool(
+            assessment and snapshot and assessment['snapshot_id'] != snapshot['id']
+        )
         result.append(d)
     return jsonify(result)
 
@@ -90,6 +126,15 @@ def update_idea(idea_id):
         updates['status'] = body['status']
     if 'tags' in body:
         updates['tags'] = tags_json(body['tags'])
+    if 'userVerdict' in body:
+        # The user's own call always beats the agent's, and it is stored
+        # separately so a later assessment can't quietly overwrite it.
+        verdict = body['userVerdict']
+        if verdict not in (None, '', 'no', 'partial', 'yes'):
+            return jsonify({'error': 'invalid userVerdict'}), 400
+        updates['user_verdict'] = verdict or None
+    if 'userVerdictNote' in body:
+        updates['user_verdict_note'] = (body['userVerdictNote'] or '').strip() or None
     db = get_db()
     build_update(db, 'ideas', updates, 'id=?', (idea_id,))
     db.commit()
@@ -198,7 +243,6 @@ def delete_sketch(sketch_id):
     db.execute('DELETE FROM idea_sketches WHERE id=?', (sketch_id,))
     db.commit()
     return jsonify({'success': True})
-
 
 
 # --- Assessment, questions, research ---

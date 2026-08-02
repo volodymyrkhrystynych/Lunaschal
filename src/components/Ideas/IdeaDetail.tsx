@@ -4,6 +4,9 @@ import { api, type IdeaStatus } from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { IDEA_STATUSES, statusClasses } from '../../lib/ideas';
 import { SketchStrip } from './SketchStrip';
+import { IdeaAssessment } from './IdeaAssessment';
+import { IdeaDiscussion } from './IdeaDiscussion';
+import { IdeaPlan } from './IdeaPlan';
 
 const SAVE_DEBOUNCE_MS = 1500;
 
@@ -158,6 +161,9 @@ export function IdeaDetail({ ideaId }: IdeaDetailProps) {
       )}
 
       <SketchStrip ideaId={ideaId} />
+      <IdeaAssessment ideaId={ideaId} userVerdict={idea.userVerdict} />
+      <IdeaDiscussion ideaId={ideaId} />
+      <IdeaPlan ideaId={ideaId} />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 // Pure logic for the Ideas tab, kept out of the components so it can be tested
 // in the node environment (see the testing note in CLAUDE.md).
-import type { IdeaStatus, IdeaSummary } from '../hooks/api';
+import type { IdeaStatus, IdeaSummary, IdeaVerdict } from '../hooks/api';
 
 /** Display order and labels for the idea lifecycle. */
 export const IDEA_STATUSES: { value: IdeaStatus; label: string }[] = [
@@ -106,6 +106,86 @@ export function filterIdeas(
     return true;
   });
 }
+
+export interface Implementation {
+  verdict: IdeaVerdict | null;
+  /** Who decided. The user's call always wins, and saying so is the point. */
+  source: 'user' | 'agent' | null;
+  /** Null when the user decided — a human verdict has no confidence score. */
+  confidence: number | null;
+  stale: boolean;
+}
+
+/**
+ * Which "already implemented" answer to show.
+ *
+ * The user's own verdict always beats the agent's, and the agent's is marked
+ * stale once the repo has moved past the snapshot it was formed against. An
+ * assessment presented as current when it isn't is exactly how this feature
+ * would start lying.
+ */
+export function resolveImplementation(idea: {
+  userVerdict?: IdeaVerdict | null;
+  verdict?: IdeaVerdict | null;
+  confidence?: number | null;
+  assessmentStale?: boolean;
+}): Implementation {
+  if (idea.userVerdict) {
+    return {
+      verdict: idea.userVerdict,
+      source: 'user',
+      confidence: null,
+      stale: false,
+    };
+  }
+  if (idea.verdict) {
+    return {
+      verdict: idea.verdict,
+      source: 'agent',
+      confidence: idea.confidence ?? null,
+      stale: !!idea.assessmentStale,
+    };
+  }
+  return { verdict: null, source: null, confidence: null, stale: false };
+}
+
+export function implementationLabel(impl: Implementation): string {
+  if (!impl.verdict) return 'Not assessed';
+  const base =
+    impl.verdict === 'yes'
+      ? 'Already built'
+      : impl.verdict === 'partial'
+        ? 'Partly built'
+        : 'Not built';
+  if (impl.source === 'user') return `${base} (you)`;
+  const pct =
+    impl.confidence == null ? '' : ` ${Math.round(impl.confidence * 100)}%`;
+  return `${base}${pct}${impl.stale ? ' · stale' : ''}`;
+}
+
+export function implementationClasses(impl: Implementation): string {
+  if (!impl.verdict) return 'bg-white/5 text-[var(--color-text-muted)]';
+  if (impl.stale) return 'bg-white/10 text-[var(--color-text-muted)]';
+  switch (impl.verdict) {
+    case 'yes':
+      return 'bg-emerald-500/20 text-emerald-300';
+    case 'partial':
+      return 'bg-amber-500/20 text-amber-300';
+    default:
+      return 'bg-white/10 text-[var(--color-text-muted)]';
+  }
+}
+
+/** "Needs more decisions" is simply: the agent asked something unanswered. */
+export function needsDecisions(idea: { openQuestionCount?: number }): boolean {
+  return (idea.openQuestionCount ?? 0) > 0;
+}
+
+export const EFFORT_LABELS: Record<string, string> = {
+  s: 'Small',
+  m: 'Medium',
+  l: 'Large',
+};
 
 /** {name, count} pills over the fetched list, most-used first then alphabetical. */
 export function tagCounts(

@@ -38,7 +38,7 @@ from backend.todo_recurrence import VALID_LISTS
 
 def _find_or_create_day_conversation(db, day_key: str, now: int) -> str:
     row = db.execute(
-        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL',
+        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
         (day_key,),
     ).fetchone()
     if row:

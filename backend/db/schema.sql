@@ -794,3 +794,19 @@ CREATE TABLE IF NOT EXISTS idea_questions (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_idea_questions_key ON idea_questions(idea_id, question_key);
+
+-- Versioned plan documents. Append-only: regenerating never destroys the
+-- version you may already have handed to a coding agent.
+CREATE TABLE IF NOT EXISTS idea_plans (
+    id TEXT PRIMARY KEY,
+    idea_id TEXT NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL DEFAULT 1,
+    content TEXT NOT NULL,
+    spec TEXT NOT NULL DEFAULT '{}',
+    model TEXT,
+    snapshot_id TEXT REFERENCES repo_snapshots(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_idea_plans_idea ON idea_plans(idea_id, version DESC);

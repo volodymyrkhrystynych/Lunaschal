@@ -526,6 +526,8 @@ export type IdeaStatus =
   | 'shipped'
   | 'parked';
 
+export type IdeaVerdict = 'no' | 'partial' | 'yes';
+
 /** List row: the two body columns are omitted server-side. */
 export interface IdeaSummary {
   id: string;
@@ -533,14 +535,88 @@ export interface IdeaSummary {
   status: IdeaStatus;
   tags: string | null;
   sketchCount: number;
+  openQuestionCount: number;
+  articleCount: number;
+  hasPlan: boolean;
+  /** The agent's call. `userVerdict` overrides it wherever both exist. */
+  verdict: IdeaVerdict | null;
+  confidence: number | null;
+  effort: 's' | 'm' | 'l' | null;
+  onRoadmap: boolean;
+  /** The repo moved since the verdict was formed. */
+  assessmentStale: boolean;
+  userVerdict: IdeaVerdict | null;
+  researchState: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface Idea extends Omit<IdeaSummary, 'sketchCount'> {
+export interface Idea extends Omit<
+  IdeaSummary,
+  | 'sketchCount'
+  | 'openQuestionCount'
+  | 'articleCount'
+  | 'hasPlan'
+  | 'verdict'
+  | 'confidence'
+  | 'effort'
+  | 'onRoadmap'
+  | 'assessmentStale'
+> {
   /** As spoken or typed. Never overwritten — only `content` is AI-owned. */
   rawContent: string;
   content: string;
+  userVerdictNote: string | null;
+}
+
+/** Evidence the agent cited — chosen by index from a list the server built,
+ *  so every entry points at a file that actually exists. */
+export interface IdeaEvidence {
+  kind: string;
+  ref: string;
+  file: string | null;
+  line: number | null;
+  detail: string | null;
+}
+
+export interface IdeaAssessment {
+  id: string;
+  ideaId: string;
+  snapshotId: string | null;
+  verdict: IdeaVerdict;
+  confidence: number;
+  rationale: string;
+  evidence: IdeaEvidence[];
+  onRoadmap: string[];
+  effort: 's' | 'm' | 'l' | null;
+  stale: boolean;
+  assessedAt: string;
+}
+
+export interface IdeaQuestion {
+  id: string;
+  ideaId: string;
+  question: string;
+  why: string | null;
+  options: string[];
+  answer: string | null;
+  status: 'open' | 'answered' | 'dismissed';
+  answeredAt: string | null;
+  createdAt: string;
+}
+
+export interface IdeaPlanSummary {
+  id: string;
+  ideaId: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IdeaPlan extends IdeaPlanSummary {
+  /** Rendered markdown — the thing you hand to a coding agent. */
+  content: string;
+  spec: string;
 }
 
 export interface IdeaSketch {
@@ -1702,6 +1778,8 @@ export const api = {
         content?: string;
         status?: IdeaStatus;
         tags?: string[];
+        userVerdict?: IdeaVerdict | null;
+        userVerdictNote?: string;
       }
     ) => patch<{ success: boolean }>(`/api/ideas/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/ideas/${id}`),
@@ -1717,6 +1795,27 @@ export const api = {
     removeSketch: (sketchId: string) =>
       del<{ success: boolean }>(`/api/ideas/sketches/${sketchId}`),
     paperPages: () => get<IdeaPaperPage[]>('/api/ideas/paper-pages'),
+
+    assess: (ideaId: string) =>
+      post<IdeaAssessment>(`/api/ideas/${ideaId}/assess`),
+    listQuestions: (ideaId: string) =>
+      get<IdeaQuestion[]>(`/api/ideas/${ideaId}/questions`),
+    answerQuestion: (
+      questionId: string,
+      data: { answer?: string; status?: 'open' | 'answered' | 'dismissed' }
+    ) =>
+      patch<{ success: boolean }>(`/api/ideas/questions/${questionId}`, data),
+
+    listConversations: (ideaId: string) =>
+      get<Conversation[]>(`/api/ideas/${ideaId}/conversations`),
+    createConversation: (ideaId: string, data: { title?: string } = {}) =>
+      post<{ id: string }>(`/api/ideas/${ideaId}/conversations`, data),
+
+    listPlans: (ideaId: string) =>
+      get<IdeaPlanSummary[]>(`/api/ideas/${ideaId}/plans`),
+    getPlan: (planId: string) => get<IdeaPlan>(`/api/ideas/plans/${planId}`),
+    createPlan: (ideaId: string) => post<IdeaPlan>(`/api/ideas/${ideaId}/plan`),
+
     repoContext: () => get<RepoSnapshot | null>('/api/ideas/repo-context'),
     refreshRepoContext: () =>
       post<{ id: string; routeCount: number; tableCount: number }>(

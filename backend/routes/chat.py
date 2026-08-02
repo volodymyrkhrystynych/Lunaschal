@@ -17,7 +17,7 @@ bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 @bp.get('/conversations')
 def list_conversations():
     rows = get_db().execute(
-        'SELECT * FROM conversations WHERE writing_project_id IS NULL ORDER BY updated_at DESC'
+        'SELECT * FROM conversations WHERE writing_project_id IS NULL AND idea_id IS NULL ORDER BY updated_at DESC'
     ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
@@ -27,7 +27,7 @@ def get_today():
     """The current chat day's conversation with its messages, or null if none yet."""
     db = get_db()
     row = db.execute(
-        'SELECT * FROM conversations WHERE day_key=? AND writing_project_id IS NULL',
+        'SELECT * FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
         (day_key_for(),),
     ).fetchone()
     if not row:
@@ -48,7 +48,7 @@ def journal_conversations():
                   (SELECT COUNT(*) FROM messages m
                    WHERE m.conversation_id = c.id AND m.role IN ('user', 'assistant')) AS message_count
            FROM conversations c
-           WHERE c.day_key IS NOT NULL AND c.day_key < ? AND c.writing_project_id IS NULL
+           WHERE c.day_key IS NOT NULL AND c.day_key < ? AND c.writing_project_id IS NULL AND c.idea_id IS NULL
              AND EXISTS (SELECT 1 FROM messages m2
                          WHERE m2.conversation_id = c.id AND m2.role IN ('user', 'assistant'))
            ORDER BY c.day_key DESC''',
@@ -78,7 +78,7 @@ def create_conversation():
     db = get_db()
     dk = day_key_for()
     existing = db.execute(
-        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL',
+        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
         (dk,),
     ).fetchone()
     if existing:

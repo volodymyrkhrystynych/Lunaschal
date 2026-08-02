@@ -12,7 +12,7 @@ _conn: sqlite3.Connection | None = None
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'started_at', 'ended_at', 'due',
-    'generated_at', 'last_researched_at', 'assessed_at',
+    'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -95,6 +95,7 @@ def init_db() -> None:
     _ensure_briefing_settings(db)
     _ensure_research_settings(db)
     _ensure_idea_assessment_columns(db)
+    _ensure_conversation_idea_id(db)
     _reset_stale_idea_research(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
@@ -357,181 +358,6 @@ def _migrate_workout_intensity_to_stars(db: sqlite3.Connection) -> None:
     db.commit()
 
 
-def _ensure_idea_assessment_columns(db: sqlite3.Connection) -> None:
-    cols = {r[1] for r in db.execute('PRAGMA table_info(ideas)')}
-    if 'assessment_id' not in cols:
-        # Denormalized pointer at the newest idea_assessments row, so the list
-        # endpoint does not need a correlated subquery per idea.
-        db.execute('ALTER TABLE ideas ADD COLUMN assessment_id TEXT')
-    if 'user_verdict' not in cols:
-        # The user's own call, which always beats the agent's. Recording the
-        # correction is what keeps the feature trustworthy.
-        db.execute('ALTER TABLE ideas ADD COLUMN user_verdict TEXT')
-    if 'user_verdict_note' not in cols:
-        db.execute('ALTER TABLE ideas ADD COLUMN user_verdict_note TEXT')
-    if 'research_state' not in cols:
-        db.execute("ALTER TABLE ideas ADD COLUMN research_state TEXT DEFAULT 'idle'")
-    if 'research_error' not in cols:
-        db.execute('ALTER TABLE ideas ADD COLUMN research_error TEXT')
-    db.commit()
-
-
-def _reset_stale_idea_research(db: sqlite3.Connection) -> None:
-    """Same reasoning as _reset_stale_fic_downloads: a row still 'running' at
-    startup has no worker thread left behind it. Reset to 'idle' rather than
-    'error' — nothing was lost, the button is simply clickable again."""
-    db.execute(
-        "UPDATE ideas SET research_state='idle'"
-        " WHERE research_state IN ('queued','running')"
-    )
-    db.commit()
-
-
-def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
-    """Output ceiling for the default (conversational) model — the one the user
-    chats with. Thinking lives in the boolean llm_thinking, owned by
-    _ensure_llama_server_settings."""
-    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
-    if 'llm_max_tokens' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN llm_max_tokens INTEGER DEFAULT 4096')
-    if 'llm_num_ctx' not in cols:
-        # Retired: the context window is fixed when llama-server loads the model
-        # (ctx-size in llama/presets.ini) and cannot be set per request, so
-        # nothing reads this column. It stays only so the migration remains an
-        # append-only ALTER — see docs/learnings/local-model-context-budget.md.
-        db.execute('ALTER TABLE settings ADD COLUMN llm_num_ctx INTEGER DEFAULT 8192')
-    db.commit()
-
-
-def _ensure_llama_vision_model(db: sqlite3.Connection) -> None:
-    """Router alias for image captioning (journal photo attachments). Left NULL,
-    which means captioning is off: the chat presets set `mmproj-auto = false`
-    and there is no VRAM headroom for the projector alongside the 26B, so
-    defaulting this to anything would just produce a button that always errors.
-    See backend/ai/images.py."""
-    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
-    if 'llama_vision_model' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN llama_vision_model TEXT')
-        db.commit()
-
-
-def _ensure_llama_server_settings(db: sqlite3.Connection) -> None:
-    """Move the local-inference settings from Ollama to llama.cpp's llama-server.
-
-    Two shape changes, not just a rename:
-
-    - `ollama_url`/`ollama_model` become `llama_url`/`llama_model`. The port moves
-      from 11434 to 8080 and the model name becomes a llama-server *router alias*
-      (a section name in llama/presets.ini) rather than an Ollama tag, so the old
-      value is deliberately NOT copied forward — 'qwen3.6:35b' is not a valid
-      alias and silently keeping it would 404 every call. A NULL model means
-      "whatever the router loads by default".
-    - `llm_reasoning_effort`/`briefing_reasoning_effort` (Ollama's graded
-      none/low/medium/high/max) collapse to booleans, because Gemma 4 has a single
-      thinking channel toggled by a chat-template kwarg, with no levels.
-
-      These two migrate *differently*, deliberately. The graded levels are not
-      equivalent to Gemma 4's channel: a level bounded how much the old model
-      thought, whereas Gemma 4's channel is unbounded, and measured here it costs
-      **25s to first token instead of 1.3s** on a trivial prompt. So the
-      interactive chat setting resets to off no matter what it was — a user who
-      had 'high' did not ask for a 20x latency regression, and Settings makes it
-      one click to opt back in. The briefing keeps its old intent, since it runs
-      overnight where the tokens are free.
-    """
-    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
-
-    if 'llama_url' not in cols:
-        db.execute(
-            "ALTER TABLE settings ADD COLUMN llama_url TEXT DEFAULT 'http://localhost:8080'"
-        )
-    if 'llama_model' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN llama_model TEXT')
-    for dead in ('ollama_url', 'ollama_model'):
-        if dead in cols:
-            db.execute(f'ALTER TABLE settings DROP COLUMN {dead}')
-
-    # briefing_model holds the same kind of value as the retired ollama_model — an
-    # Ollama tag like 'qwen3.6:35b' — and survives in its own column, so it has to
-    # be cleared on the same grounds: it is not a router alias, and leaving it
-    # would 404 every overnight briefing while the interactive chat kept working,
-    # which is a miserable thing to debug. NULL means "same as the chat model".
-    # Keyed off the presence of the old columns so a user who later picks a real
-    # alias keeps it.
-    if 'ollama_model' in cols and 'briefing_model' in cols:
-        db.execute("UPDATE settings SET briefing_model = NULL"
-                   " WHERE briefing_model IS NOT NULL")
-
-    # Graded effort -> boolean. `carry_over` says whether the old intent survives:
-    # the briefing's does, the latency-sensitive chat path's does not (see above).
-    for old, new, carry_over in (
-        ('llm_reasoning_effort', 'llm_thinking', False),
-        ('briefing_reasoning_effort', 'briefing_thinking', True),
-    ):
-        if new in cols:
-            continue
-        db.execute(f'ALTER TABLE settings ADD COLUMN {new} INTEGER DEFAULT 0')
-        if old in cols:
-            if carry_over:
-                db.execute(
-                    f"UPDATE settings SET {new} = CASE"
-                    f" WHEN {old} IS NULL OR {old} = 'none' THEN 0 ELSE 1 END"
-                )
-            db.execute(f'ALTER TABLE settings DROP COLUMN {old}')
-    db.commit()
-
-
-def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:
-    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
-    if 'raw_content' not in cols:
-        db.execute('ALTER TABLE journal_entries ADD COLUMN raw_content TEXT')
-        db.commit()
-
-
-def _migrate_flashcards_to_learning(db: sqlite3.Connection) -> None:
-    # One-time move of legacy SM-2 flashcards into learning_cards; scheduling
-    # resets (all due now, fresh FSRS). Dropping the table makes reruns no-ops.
-    exists = db.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='flashcards'"
-    ).fetchone()
-    if not exists:
-        return
-    cols = {r[1] for r in db.execute('PRAGMA table_info(flashcards)')}
-    tags_expr = 'tags' if 'tags' in cols else 'NULL'
-    now = int(time.time())
-    db.execute(
-        f"""
-        INSERT INTO learning_cards
-            (id, question, answer, tags, source_type, source_id,
-             state, fsrs_state, due, created_at, updated_at)
-        SELECT id, front, back, {tags_expr},
-               CASE WHEN source_id IS NOT NULL THEN 'journal' ELSE 'manual' END,
-               source_id, 'active', NULL, ?, created_at, ?
-        FROM flashcards
-        """,
-        (now, now),
-    )
-    db.execute('DROP TABLE flashcards')
-    db.execute('DROP INDEX IF EXISTS idx_flashcard_next_review')
-    db.commit()
-
-
-def _ensure_writing_project_id(db: sqlite3.Connection) -> None:
-    cols = {r[1] for r in db.execute('PRAGMA table_info(conversations)')}
-    if 'writing_project_id' not in cols:
-        db.execute('ALTER TABLE conversations ADD COLUMN writing_project_id TEXT REFERENCES writing_projects(id)')
-        db.commit()
-
-
-def _ensure_conversation_day_key(db: sqlite3.Connection) -> None:
-    # day_key groups a conversation to a 4am-anchored local day (YYYY-MM-DD).
-    # Left NULL on pre-existing conversations so they stay out of the journal feed.
-    cols = {r[1] for r in db.execute('PRAGMA table_info(conversations)')}
-    if 'day_key' not in cols:
-        db.execute('ALTER TABLE conversations ADD COLUMN day_key TEXT')
-        db.commit()
-
-
 def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
     """A fic's in-memory download progress (backend/fanfic/download.py's
     `_dl_progress`) never survives a process restart, but the persisted
@@ -659,26 +485,6 @@ def _ensure_nudge_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
-def _ensure_research_settings(db: sqlite3.Connection) -> None:
-    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
-    if 'repo_context_enabled' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN repo_context_enabled INTEGER DEFAULT 1')
-    if 'repo_context_hour' not in cols:
-        # 03:00 deliberately: the chat-title sweep owns 02:00-03:00 and the
-        # briefing owns 05:00-07:00, so a 03:00-05:00 window contends with
-        # neither for the two llama slots.
-        db.execute('ALTER TABLE settings ADD COLUMN repo_context_hour INTEGER DEFAULT 3')
-    if 'research_search_provider' not in cols:
-        # '' | 'brave' | 'tavily' | 'searxng'. Empty means the research agent
-        # has no web access and says so, rather than guessing.
-        db.execute("ALTER TABLE settings ADD COLUMN research_search_provider TEXT DEFAULT ''")
-    if 'research_search_key' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN research_search_key TEXT')
-    if 'research_searxng_url' not in cols:
-        db.execute('ALTER TABLE settings ADD COLUMN research_searxng_url TEXT')
-    db.commit()
-
-
 def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'briefing_enabled' not in cols:
@@ -709,6 +515,71 @@ def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
         # settable per request at all. Nothing reads this column; it stays only so
         # the migration remains an append-only ALTER.
         db.execute('ALTER TABLE settings ADD COLUMN briefing_num_ctx INTEGER DEFAULT 8192')
+    db.commit()
+
+
+def _ensure_research_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'repo_context_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN repo_context_enabled INTEGER DEFAULT 1')
+    if 'repo_context_hour' not in cols:
+        # 03:00 deliberately: the chat-title sweep owns 02:00-03:00 and the
+        # briefing owns 05:00-07:00, so a 03:00-05:00 window contends with
+        # neither for the two llama slots.
+        db.execute('ALTER TABLE settings ADD COLUMN repo_context_hour INTEGER DEFAULT 3')
+    if 'research_search_provider' not in cols:
+        # '' | 'brave' | 'tavily' | 'searxng'. Empty means the research agent
+        # has no web access and says so, rather than guessing.
+        db.execute("ALTER TABLE settings ADD COLUMN research_search_provider TEXT DEFAULT ''")
+    if 'research_search_key' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN research_search_key TEXT')
+    if 'research_searxng_url' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN research_searxng_url TEXT')
+    db.commit()
+
+
+def _ensure_idea_assessment_columns(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(ideas)')}
+    if 'assessment_id' not in cols:
+        # Denormalized pointer at the newest idea_assessments row, so the list
+        # endpoint does not need a correlated subquery per idea.
+        db.execute('ALTER TABLE ideas ADD COLUMN assessment_id TEXT')
+    if 'user_verdict' not in cols:
+        # The user's own call, which always beats the agent's. Recording the
+        # correction is what keeps the feature trustworthy.
+        db.execute('ALTER TABLE ideas ADD COLUMN user_verdict TEXT')
+    if 'user_verdict_note' not in cols:
+        db.execute('ALTER TABLE ideas ADD COLUMN user_verdict_note TEXT')
+    if 'research_state' not in cols:
+        db.execute("ALTER TABLE ideas ADD COLUMN research_state TEXT DEFAULT 'idle'")
+    if 'research_error' not in cols:
+        db.execute('ALTER TABLE ideas ADD COLUMN research_error TEXT')
+    db.commit()
+
+
+def _ensure_conversation_idea_id(db: sqlite3.Connection) -> None:
+    """Second discriminator on conversations, after writing_project_id.
+
+    Every query that means "a general chat conversation" now has to exclude
+    both, or idea discussions surface in the Chat tab — see the six call sites
+    that filter `writing_project_id IS NULL AND idea_id IS NULL`.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(conversations)')}
+    if 'idea_id' not in cols:
+        db.execute(
+            'ALTER TABLE conversations ADD COLUMN idea_id TEXT REFERENCES ideas(id)'
+        )
+        db.commit()
+
+
+def _reset_stale_idea_research(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_fic_downloads: a row still 'running' at
+    startup has no worker thread left behind it. Reset to 'idle' rather than
+    'error' — nothing was lost, the button is simply clickable again."""
+    db.execute(
+        "UPDATE ideas SET research_state='idle'"
+        " WHERE research_state IN ('queued','running')"
+    )
     db.commit()
 
 
@@ -892,6 +763,41 @@ def _init_fts(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _init_recipes_fts(db: sqlite3.Connection) -> None:
+    db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS recipes_fts USING fts5(
+            id UNINDEXED,
+            title,
+            content,
+            tags,
+            content='recipes',
+            content_rowid='rowid'
+        )
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS recipes_ai AFTER INSERT ON recipes BEGIN
+            INSERT INTO recipes_fts(rowid, id, title, content, tags)
+            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content, NEW.tags);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS recipes_ad AFTER DELETE ON recipes BEGIN
+            INSERT INTO recipes_fts(recipes_fts, rowid, id, title, content, tags)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.content, OLD.tags);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS recipes_au AFTER UPDATE ON recipes BEGIN
+            INSERT INTO recipes_fts(recipes_fts, rowid, id, title, content, tags)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.content, OLD.tags);
+            INSERT INTO recipes_fts(rowid, id, title, content, tags)
+            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content, NEW.tags);
+        END
+    """)
+    db.execute("INSERT INTO recipes_fts(recipes_fts) VALUES('rebuild')")
+    db.commit()
+
+
 def _init_wiki_fts(db: sqlite3.Connection) -> None:
     db.execute("""
         CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(
@@ -944,41 +850,6 @@ def search_wiki_fts(query: str, limit: int = 20) -> list[dict]:
         (escaped, limit),
     ).fetchall()
     return [{'id': r['id'], 'rank': r['rank']} for r in rows]
-
-
-def _init_recipes_fts(db: sqlite3.Connection) -> None:
-    db.execute("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS recipes_fts USING fts5(
-            id UNINDEXED,
-            title,
-            content,
-            tags,
-            content='recipes',
-            content_rowid='rowid'
-        )
-    """)
-    db.execute("""
-        CREATE TRIGGER IF NOT EXISTS recipes_ai AFTER INSERT ON recipes BEGIN
-            INSERT INTO recipes_fts(rowid, id, title, content, tags)
-            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content, NEW.tags);
-        END
-    """)
-    db.execute("""
-        CREATE TRIGGER IF NOT EXISTS recipes_ad AFTER DELETE ON recipes BEGIN
-            INSERT INTO recipes_fts(recipes_fts, rowid, id, title, content, tags)
-            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.content, OLD.tags);
-        END
-    """)
-    db.execute("""
-        CREATE TRIGGER IF NOT EXISTS recipes_au AFTER UPDATE ON recipes BEGIN
-            INSERT INTO recipes_fts(recipes_fts, rowid, id, title, content, tags)
-            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.content, OLD.tags);
-            INSERT INTO recipes_fts(rowid, id, title, content, tags)
-            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content, NEW.tags);
-        END
-    """)
-    db.execute("INSERT INTO recipes_fts(recipes_fts) VALUES('rebuild')")
-    db.commit()
 
 
 def _init_fanfic_fts(db: sqlite3.Connection) -> None:

@@ -2,7 +2,10 @@ import { describe, it, expect } from 'vitest';
 import {
   displayTitle,
   filterIdeas,
+  implementationLabel,
+  needsDecisions,
   parseTags,
+  resolveImplementation,
   statusLabel,
   tagCounts,
 } from './ideas';
@@ -15,11 +18,77 @@ function idea(over: Partial<IdeaSummary> = {}): IdeaSummary {
     status: 'new',
     tags: null,
     sketchCount: 0,
+    openQuestionCount: 0,
+    articleCount: 0,
+    hasPlan: false,
+    verdict: null,
+    confidence: null,
+    effort: null,
+    onRoadmap: false,
+    assessmentStale: false,
+    userVerdict: null,
+    researchState: 'idle',
     createdAt: '2026-08-01T00:00:00+00:00',
     updatedAt: '2026-08-01T00:00:00+00:00',
     ...over,
   };
 }
+
+describe('resolveImplementation', () => {
+  it('reports nothing before an assessment exists', () => {
+    const impl = resolveImplementation(idea());
+    expect(impl).toEqual({
+      verdict: null,
+      source: null,
+      confidence: null,
+      stale: false,
+    });
+    expect(implementationLabel(impl)).toBe('Not assessed');
+  });
+
+  it('uses the agent verdict with its confidence', () => {
+    const impl = resolveImplementation(
+      idea({ verdict: 'partial', confidence: 0.62 })
+    );
+    expect(impl.source).toBe('agent');
+    expect(implementationLabel(impl)).toBe('Partly built 62%');
+  });
+
+  it("lets the user's verdict beat the agent's, and drops the confidence", () => {
+    const impl = resolveImplementation(
+      idea({ verdict: 'no', confidence: 0.9, userVerdict: 'yes' })
+    );
+    expect(impl).toEqual({
+      verdict: 'yes',
+      source: 'user',
+      confidence: null,
+      stale: false,
+    });
+    expect(implementationLabel(impl)).toBe('Already built (you)');
+  });
+
+  it('marks an agent verdict stale once the repo has moved on', () => {
+    const impl = resolveImplementation(
+      idea({ verdict: 'yes', confidence: 0.8, assessmentStale: true })
+    );
+    expect(impl.stale).toBe(true);
+    expect(implementationLabel(impl)).toContain('stale');
+  });
+
+  it('never calls a user verdict stale — a human decision does not expire', () => {
+    const impl = resolveImplementation(
+      idea({ verdict: 'yes', userVerdict: 'no', assessmentStale: true })
+    );
+    expect(impl.stale).toBe(false);
+  });
+});
+
+describe('needsDecisions', () => {
+  it('is true only when a question is unanswered', () => {
+    expect(needsDecisions(idea())).toBe(false);
+    expect(needsDecisions(idea({ openQuestionCount: 2 }))).toBe(true);
+  });
+});
 
 describe('parseTags', () => {
   it('reads a JSON array column', () => {

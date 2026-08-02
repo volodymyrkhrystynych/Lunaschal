@@ -4,7 +4,10 @@ import type { IdeaSummary } from '../../hooks/api';
 import {
   displayTitle,
   filterIdeas,
+  implementationClasses,
+  implementationLabel,
   parseTags,
+  resolveImplementation,
   statusClasses,
   statusLabel,
   tagCounts,
@@ -74,6 +77,7 @@ export function IdeaList({
           <ul>
             {visible.map(idea => {
               const selected = idea.id === selectedId;
+              const impl = resolveImplementation(idea);
               return (
                 <li key={idea.id}>
                   <button
@@ -95,6 +99,37 @@ export function IdeaList({
                       >
                         {statusLabel(idea.status)}
                       </span>
+                      {impl.verdict && (
+                        <span
+                          className={`px-1.5 py-0.5 rounded ${implementationClasses(impl)}`}
+                        >
+                          {implementationLabel(impl)}
+                        </span>
+                      )}
+                      {idea.openQuestionCount > 0 && (
+                        <span
+                          className="text-amber-300"
+                          title={`${idea.openQuestionCount} decision${idea.openQuestionCount === 1 ? '' : 's'} needed`}
+                        >
+                          ? {idea.openQuestionCount}
+                        </span>
+                      )}
+                      {idea.hasPlan && (
+                        <span
+                          className="text-[var(--color-text-muted)]"
+                          title="Has a plan"
+                        >
+                          📄
+                        </span>
+                      )}
+                      {idea.articleCount > 0 && (
+                        <span
+                          className="text-[var(--color-text-muted)]"
+                          title={`${idea.articleCount} research note${idea.articleCount === 1 ? '' : 's'}`}
+                        >
+                          📚 {idea.articleCount}
+                        </span>
+                      )}
                       {idea.sketchCount > 0 && (
                         <span
                           className="text-[var(--color-text-muted)]"
