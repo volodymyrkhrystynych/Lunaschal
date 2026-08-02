@@ -148,7 +148,7 @@ Two-panel layout: left nav (project list + a `WritingNav` with Chapters/Notes/Di
 
 #### Ideas (`backend/routes/ideas.py`, `src/components/Ideas/`)
 
-The app's own feature backlog, developed with an agent instead of by hand in `docs/ROADMAP.md`. Master-detail: list + capture box on the left, idea detail on the right. Things to know:
+The app's own feature backlog, developed with an agent instead of by hand in `docs/ROADMAP.md`. Master-detail: list + capture box on the left, idea detail on the right. Design record and the decisions the build settled — including what is deliberately _not_ built: [docs/ideas-tab.md](docs/ideas-tab.md). Things to know:
 
 - **An idea keeps `raw_content` and `content` separately**, the same contract as `journal_entries`: `raw_content` is what was dictated or typed and is never overwritten; `content` is the AI-cleaned prose. The detail pane shows `content` when it exists and falls back to `raw_content`, with the transcript still reachable under "As captured".
 - **Dictation appends to the capture box rather than saving immediately** (`useRecorder`, the `Learning/BrainDump.tsx` pattern) so a transcript can be corrected, or two thoughts recorded into one idea, before it becomes a row.

@@ -19,6 +19,7 @@ flowchart LR
             V_JOURNAL["Journal"]
             V_MEET["Meetings"]
             V_WRITE["Writing/"]
+            V_IDEAS["Ideas/"]
             V_CAL["Calendar"]
             V_LEARN["Learning/"]
             V_COOK["Cookbook"]
@@ -40,6 +41,7 @@ flowchart LR
             R_JOURNAL["journal · calendar · curated_tags · transcriptions"]
             R_LEARN["learning"]
             R_WRITE["writing"]
+            R_IDEAS["ideas"]
             R_TASKS["tasks"]
             R_COOK["cookbook"]
             R_FIC["fanfic"]
@@ -54,12 +56,15 @@ flowchart LR
             AI_LEARN["learning_generation<br/>learning_grading<br/>learning_verification"]
             AI_MISC["journal · writing<br/>meetings · recipes"]
             MCP["mcp_client.py"]
+            AI_IDEAS["repo_context · idea_assessment<br/>idea_research"]
+            PRIORITY["priority.py<br/>interactive-first gate"]
         end
         subgraph PKGS["Feature packages"]
             P_LEARN["learning/<br/>FSRS scheduler + dedup<br/>deferred attempt grading"]
             P_FIC["fanfic/<br/>xenforo parser · download<br/>epub/docx · sanitize"]
             P_MEET["meetings/<br/>recorder · pipeline · merge"]
             P_NEWS["newspapers/<br/>scraper · sync"]
+            P_RESEARCH["research/<br/>repo_facts · web (SSRF-guarded)<br/>wiki · agent · worker · assess"]
         end
         DBLAYER["db/ — schema.sql + connection.py<br/>WAL SQLite · FTS5 ×3<br/>_ensure_* migrations"]
     end
@@ -81,6 +86,7 @@ flowchart LR
         FORUMS["XenForo forums<br/>(SB / SV / QQ)"]
         FRONTPAGES["frontpages.com"]
         MCPSRV["MCP evidence servers"]
+        WEB["Web — search provider<br/>(Brave · Tavily · SearXNG)<br/>+ arbitrary pages"]
         AUDIO["ffmpeg + PipeWire"]
     end
 
@@ -98,6 +104,7 @@ flowchart LR
     R_JOURNAL --> AI_MISC
     R_LEARN --> AI_LEARN & P_LEARN
     R_WRITE --> AI_MISC
+    R_IDEAS --> AI_IDEAS & P_RESEARCH
     R_TASKS --> AI_CHAT
     R_COOK --> AI_MISC
     R_FIC --> P_FIC
@@ -107,7 +114,10 @@ flowchart LR
     AI_LEARN --> MCP --> MCPSRV
     P_LEARN --> AI_EMBED
 
-    AI_CHAT & AI_EMBED & AI_LEARN & AI_MISC --> PROVIDER --> LLMS
+    P_RESEARCH --> AI_IDEAS
+    P_RESEARCH -->|"web_search · web_fetch"| WEB
+    AI_CHAT & AI_EMBED & AI_LEARN & AI_MISC & AI_IDEAS --> PROVIDER --> LLMS
+    PRIORITY -.->|"background work parks<br/>while the user waits"| PROVIDER
 
     ROUTES --> DBLAYER --> DB
     P_FIC --> FORUMS
