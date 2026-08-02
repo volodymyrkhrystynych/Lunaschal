@@ -471,6 +471,10 @@ export interface AppSettings {
   briefingMaxTokens: number;
   repoContextEnabled: boolean;
   repoContextHour: number;
+  researchEnabled: boolean;
+  researchSearchProvider: string;
+  hasResearchSearchKey: boolean;
+  researchSearxngUrl: string;
 }
 
 export interface WhisperModel {
@@ -657,6 +661,20 @@ export interface RepoSnapshot {
   /** Drift between the frontend's three hand-synced view lists. */
   warnings: string[];
   generatedAt: string;
+}
+
+/** What the background research worker is doing right now. */
+export interface ResearchStatus {
+  running: boolean;
+  current: { kind: string; target: string | null; startedAt: number } | null;
+  last: {
+    kind: string;
+    target: string | null;
+    error: string | null;
+    cancelled: boolean;
+    seconds: number;
+    finishedAt: number;
+  } | null;
 }
 
 export interface WritingProject {
@@ -1817,6 +1835,11 @@ export const api = {
     createPlan: (ideaId: string) => post<IdeaPlan>(`/api/ideas/${ideaId}/plan`),
 
     repoContext: () => get<RepoSnapshot | null>('/api/ideas/repo-context'),
+    researchStatus: () => get<ResearchStatus>('/api/ideas/research/status'),
+    cancelResearch: () =>
+      post<{ cancelled: boolean }>('/api/ideas/research/cancel'),
+    research: (ideaId: string) =>
+      post<{ queued: boolean }>(`/api/ideas/${ideaId}/research`),
     refreshRepoContext: () =>
       post<{ id: string; routeCount: number; tableCount: number }>(
         '/api/ideas/repo-context/refresh'

@@ -89,6 +89,24 @@ def active() -> bool:
         return bool(_marks)
 
 
+def idle_seconds() -> float:
+    """Seconds since the last interactive call finished; 0.0 while one is in
+    flight, and `inf` when none has ever run.
+
+    Lets a caller require a longer quiet period than `wait_for_idle`'s grace —
+    starting a multi-minute research pass the instant a chat finishes is more
+    intrusive than starting one model call.
+    """
+    with _cond:
+        now = time.monotonic()
+        _prune_locked(now)
+        if _marks:
+            return 0.0
+        if _released_at == 0.0:
+            return float('inf')
+        return now - _released_at
+
+
 def snapshot() -> list[dict]:
     """[{label, age}] for the in-flight marks — for debugging a stuck gate."""
     now = time.monotonic()

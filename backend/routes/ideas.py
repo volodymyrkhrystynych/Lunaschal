@@ -309,6 +309,44 @@ def _assessment_payload(assessment: dict) -> dict:
     return payload
 
 
+@bp.get('/research/status')
+def research_status():
+    from backend.research import worker
+    return jsonify(worker.status())
+
+
+@bp.post('/research/cancel')
+def cancel_research():
+    from backend.research import worker
+    return jsonify({'cancelled': worker.cancel()})
+
+
+@bp.post('/<idea_id>/research')
+def research_idea(idea_id):
+    """Queue a research pass for one idea, jumping the scheduler's turn.
+
+    Queued rather than run inline: a pass is minutes of tool turns, and the
+    worker is where cancellation and the yield-to-the-user checkpoint live.
+    """
+    from backend.research import worker
+    from backend.research.research_job import run_task
+
+    if not is_ai_configured():
+        return jsonify({'error': 'AI provider not configured'}), 400
+    db = get_db()
+    if not db.execute('SELECT 1 FROM ideas WHERE id=?', (idea_id,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+
+    queued = worker.submit(
+        'research', lambda cancel: run_task('research', idea_id, cancel), target=idea_id
+    )
+    if not queued:
+        return jsonify({'error': 'A research job is already running'}), 409
+    db.execute("UPDATE ideas SET research_state='queued' WHERE id=?", (idea_id,))
+    db.commit()
+    return jsonify({'queued': True}), 202
+
+
 # --- Repo context ---
 
 @bp.get('/repo-context')

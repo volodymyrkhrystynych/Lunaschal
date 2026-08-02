@@ -97,6 +97,11 @@ def get_settings():
         'repoContextHour': (
             s.get('repo_context_hour') if s.get('repo_context_hour') is not None else 3
         ),
+        'researchEnabled': bool(s.get('research_enabled', 0)),
+        'researchSearchProvider': s.get('research_search_provider') or '',
+        # Never the key itself, following hasHfToken.
+        'hasResearchSearchKey': bool(s.get('research_search_key')),
+        'researchSearxngUrl': s.get('research_searxng_url') or '',
     })
 
 
@@ -125,6 +130,10 @@ def update_ai():
         'briefingMaxTokens': 'briefing_max_tokens',
         'repoContextEnabled': 'repo_context_enabled',
         'repoContextHour': 'repo_context_hour',
+        'researchEnabled': 'research_enabled',
+        'researchSearchProvider': 'research_search_provider',
+        'researchSearchKey': 'research_search_key',
+        'researchSearxngUrl': 'research_searxng_url',
         # No context-window field at all: llama-server allocates the KV cache when
         # it loads the model, so the window is a serving-config concern
         # (llama/presets.ini), not a per-request one.
@@ -133,7 +142,8 @@ def update_ai():
     for camel, snake in field_map.items():
         if camel in body:
             value = body[camel]
-            if camel in ('briefingThinking', 'llmThinking', 'repoContextEnabled'):
+            if camel in ('briefingThinking', 'llmThinking', 'repoContextEnabled',
+                         'researchEnabled'):
                 # Stored as 0/1 — Gemma 4's thinking channel is on or off, with no
                 # graded levels to validate against.
                 value = 1 if value else 0

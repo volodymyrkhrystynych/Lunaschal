@@ -13,6 +13,7 @@ TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'started_at', 'ended_at', 'due',
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
+    'researched_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -535,6 +536,10 @@ def _ensure_research_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN research_search_key TEXT')
     if 'research_searxng_url' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN research_searxng_url TEXT')
+    if 'research_enabled' not in cols:
+        # Off by default: the research loop makes outbound web requests, which
+        # is not something to start doing without being asked.
+        db.execute('ALTER TABLE settings ADD COLUMN research_enabled INTEGER DEFAULT 0')
     db.commit()
 
 
@@ -554,6 +559,10 @@ def _ensure_idea_assessment_columns(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE ideas ADD COLUMN research_state TEXT DEFAULT 'idle'")
     if 'research_error' not in cols:
         db.execute('ALTER TABLE ideas ADD COLUMN research_error TEXT')
+    if 'researched_at' not in cols:
+        # When the background loop last researched this idea. Drives the
+        # cooldown, so a quiet backlog doesn't get re-researched every tick.
+        db.execute('ALTER TABLE ideas ADD COLUMN researched_at INTEGER')
     db.commit()
 
 
