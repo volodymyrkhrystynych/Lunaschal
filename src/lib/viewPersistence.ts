@@ -21,6 +21,7 @@ export const VIEWS = [
   'fanfic',
   'newspapers',
   'paper',
+  'email',
 ] as const;
 
 export type View = (typeof VIEWS)[number];

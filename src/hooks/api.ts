@@ -469,6 +469,10 @@ export interface AppSettings {
   briefingGoals: string;
   briefingThinking: boolean;
   briefingMaxTokens: number;
+  hasGoogleOauthClient: boolean;
+  emailSyncEnabled: boolean;
+  emailSyncIntervalMinutes: number;
+  emailBackfillDays: number;
 }
 
 export interface WhisperModel {
@@ -613,6 +617,51 @@ export interface FrontPage {
 export interface SyncResult {
   paper: string;
   status: 'downloaded' | 'already-saved' | 'error';
+  error?: string;
+}
+
+export interface EmailOauthStatus {
+  connected: boolean;
+  emailAddress?: string | null;
+  lastSyncedAt?: string | null;
+  lastSyncError?: string | null;
+  syncEnabled?: boolean;
+}
+
+export type EmailCategory =
+  'job_application' | 'newsletter' | 'notification' | 'personal' | 'other';
+
+export type JobApplicationStatus =
+  'sent' | 'rejection' | 'interview_next_step' | 'other_update';
+
+export interface EmailMessage {
+  id: string;
+  accountId: string;
+  gmailId: string;
+  threadId: string | null;
+  subject: string | null;
+  sender: string | null;
+  senderEmail: string | null;
+  snippet: string | null;
+  bodyText: string;
+  receivedAt: string;
+  category: EmailCategory | null;
+  jobStatus: JobApplicationStatus | null;
+  classifiedAt: string | null;
+  classificationError: string | null;
+}
+
+export interface EmailStats {
+  sentCount: number;
+  rejectionCount: number;
+  interviewNextStepCount: number;
+  otherUpdateCount: number;
+  nextSteps: EmailMessage[];
+}
+
+export interface EmailSyncResult {
+  status: 'ok' | 'error';
+  newCount?: number;
   error?: string;
 }
 
@@ -911,8 +960,15 @@ export const api = {
 
   settings: {
     get: () => get<AppSettings | null>('/api/settings'),
-    updateAI: (data: Partial<AppSettings & { hfToken?: string }>) =>
-      patch<{ success: boolean }>('/api/settings/ai', data),
+    updateAI: (
+      data: Partial<
+        AppSettings & {
+          hfToken?: string;
+          googleOauthClientId?: string;
+          googleOauthClientSecret?: string;
+        }
+      >
+    ) => patch<{ success: boolean }>('/api/settings/ai', data),
     updateShortcuts: (data: {
       sttPasteKey?: string;
       sttVoiceKey?: string;
@@ -1716,6 +1772,31 @@ export const api = {
     getByDate: (date: string) =>
       get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
     sync: () => post<SyncResult[]>('/api/newspapers/sync'),
+  },
+  email: {
+    oauthStatus: () => get<EmailOauthStatus>('/api/email/oauth/status'),
+    disconnect: () => post<{ success: boolean }>('/api/email/oauth/disconnect'),
+    syncNow: () => post<EmailSyncResult>('/api/email/sync'),
+    list: (
+      params: {
+        category?: EmailCategory;
+        jobStatus?: JobApplicationStatus;
+        query?: string;
+        limit?: number;
+        offset?: number;
+      } = {}
+    ) => {
+      const q = new URLSearchParams();
+      if (params.category) q.set('category', params.category);
+      if (params.jobStatus) q.set('jobStatus', params.jobStatus);
+      if (params.query) q.set('query', params.query);
+      if (params.limit != null) q.set('limit', String(params.limit));
+      if (params.offset != null) q.set('offset', String(params.offset));
+      const qs = q.toString();
+      return get<EmailMessage[]>(`/api/email${qs ? `?${qs}` : ''}`);
+    },
+    get: (id: string) => get<EmailMessage>(`/api/email/${id}`),
+    stats: () => get<EmailStats>('/api/email/stats'),
   },
   paper: {
     list: (params: { limit?: number; offset?: number } = {}) => {

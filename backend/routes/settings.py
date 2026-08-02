@@ -93,6 +93,10 @@ def get_settings():
         'briefingGoals': s.get('briefing_goals') or '',
         'briefingThinking': bool(s.get('briefing_thinking', 0)),
         'briefingMaxTokens': s.get('briefing_max_tokens') or 16384,
+        'hasGoogleOauthClient': bool(s.get('google_oauth_client_id')) and bool(s.get('google_oauth_client_secret')),
+        'emailSyncEnabled': bool(s.get('email_sync_enabled', 1)),
+        'emailSyncIntervalMinutes': s.get('email_sync_interval_minutes') or 15,
+        'emailBackfillDays': s.get('email_backfill_days') or 30,
     })
 
 
@@ -122,6 +126,11 @@ def update_ai():
         # No context-window field at all: llama-server allocates the KV cache when
         # it loads the model, so the window is a serving-config concern
         # (llama/presets.ini), not a per-request one.
+        'googleOauthClientId': 'google_oauth_client_id',
+        'googleOauthClientSecret': 'google_oauth_client_secret',
+        'emailSyncEnabled': 'email_sync_enabled',
+        'emailSyncIntervalMinutes': 'email_sync_interval_minutes',
+        'emailBackfillDays': 'email_backfill_days',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
