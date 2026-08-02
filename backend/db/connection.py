@@ -11,6 +11,7 @@ _conn: sqlite3.Connection | None = None
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'started_at', 'ended_at', 'due',
+    'generated_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -90,6 +91,7 @@ def init_db() -> None:
     _ensure_prevent_sleep(db)
     _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
+    _ensure_research_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -475,6 +477,18 @@ def _ensure_nudge_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN nudge_enabled INTEGER DEFAULT 1')
     if 'nudge_interval_minutes' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN nudge_interval_minutes INTEGER DEFAULT 45')
+    db.commit()
+
+
+def _ensure_research_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'repo_context_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN repo_context_enabled INTEGER DEFAULT 1')
+    if 'repo_context_hour' not in cols:
+        # 03:00 deliberately: the chat-title sweep owns 02:00-03:00 and the
+        # briefing owns 05:00-07:00, so a 03:00-05:00 window contends with
+        # neither for the two llama slots.
+        db.execute('ALTER TABLE settings ADD COLUMN repo_context_hour INTEGER DEFAULT 3')
     db.commit()
 
 

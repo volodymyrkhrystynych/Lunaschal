@@ -688,3 +688,25 @@ CREATE TABLE IF NOT EXISTS idea_sketches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_idea_sketches_idea ON idea_sketches(idea_id, position);
+
+-- A nightly, machine-generated picture of what the app currently is. `facts`
+-- is deterministic extraction (backend/research/repo_facts.py); only
+-- `change_summary` comes from the model, and it is nullable on purpose — a
+-- failed summary must never cost us the facts, which are the actual product.
+CREATE TABLE IF NOT EXISTS repo_snapshots (
+    id TEXT PRIMARY KEY,
+    git_sha TEXT,
+    git_branch TEXT,
+    facts TEXT NOT NULL DEFAULT '{}',
+    digest TEXT NOT NULL DEFAULT '',
+    change_summary TEXT,
+    route_count INTEGER NOT NULL DEFAULT 0,
+    table_count INTEGER NOT NULL DEFAULT 0,
+    component_count INTEGER NOT NULL DEFAULT 0,
+    warnings TEXT,
+    prev_snapshot_id TEXT REFERENCES repo_snapshots(id) ON DELETE SET NULL,
+    generated_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_repo_snapshots_generated ON repo_snapshots(generated_at DESC);

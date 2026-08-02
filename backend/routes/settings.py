@@ -93,6 +93,10 @@ def get_settings():
         'briefingGoals': s.get('briefing_goals') or '',
         'briefingThinking': bool(s.get('briefing_thinking', 0)),
         'briefingMaxTokens': s.get('briefing_max_tokens') or 16384,
+        'repoContextEnabled': bool(s.get('repo_context_enabled', 1)),
+        'repoContextHour': (
+            s.get('repo_context_hour') if s.get('repo_context_hour') is not None else 3
+        ),
     })
 
 
@@ -119,6 +123,8 @@ def update_ai():
         'briefingGoals': 'briefing_goals',
         'briefingThinking': 'briefing_thinking',
         'briefingMaxTokens': 'briefing_max_tokens',
+        'repoContextEnabled': 'repo_context_enabled',
+        'repoContextHour': 'repo_context_hour',
         # No context-window field at all: llama-server allocates the KV cache when
         # it loads the model, so the window is a serving-config concern
         # (llama/presets.ini), not a per-request one.
@@ -127,7 +133,7 @@ def update_ai():
     for camel, snake in field_map.items():
         if camel in body:
             value = body[camel]
-            if camel in ('briefingThinking', 'llmThinking'):
+            if camel in ('briefingThinking', 'llmThinking', 'repoContextEnabled'):
                 # Stored as 0/1 — Gemma 4's thinking channel is on or off, with no
                 # graded levels to validate against.
                 value = 1 if value else 0

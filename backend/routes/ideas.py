@@ -6,6 +6,7 @@ and the research wiki. Sketches are Paper *pages* borrowed into an idea; the
 caption, not the image, is what the agent reads — see idea_sketches in
 backend/db/schema.sql.
 """
+import json
 import time
 
 from flask import Blueprint, jsonify, request
@@ -197,6 +198,223 @@ def delete_sketch(sketch_id):
     db.commit()
     return jsonify({'success': True})
 
+
+
+# --- Repo context ---
+
+@bp.get('/repo-context')
+def get_repo_context():
+    """The latest repo snapshot: what the app currently is, for the agent and
+    for the user to sanity-check."""
+    from backend.research.repo_job import current_snapshot
+    snapshot = current_snapshot()
+    if not snapshot:
+        return jsonify(None)
+    # `facts` is the raw extraction — tens of KB, and the client only renders
+    # the digest. Keep it server-side.
+    snapshot.pop('facts', None)
+    snapshot['warnings'] = json.loads(snapshot['warnings']) if snapshot.get('warnings') else []
+    return jsonify(snapshot)
+
+
+@bp.post('/repo-context/refresh')
+def refresh_repo_context():
+    from backend.research.repo_job import run_repo_snapshot
+    result = run_repo_snapshot(force=True)
+    if result is None:
+        return jsonify({'error': 'Not a Lunaschal checkout'}), 400
+    return jsonify(result), 201
+
+
+# --- Discussion (tool-using, streamed) ---
+
+@bp.get('/<idea_id>/conversations')
+def list_idea_conversations(idea_id):
+    rows = get_db().execute(
+        'SELECT * FROM conversations WHERE idea_id=? ORDER BY updated_at DESC',
+        (idea_id,),
+    ).fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
+
+
+@bp.post('/<idea_id>/conversations')
+def create_idea_conversation(idea_id):
+    db = get_db()
+    if not db.execute('SELECT 1 FROM ideas WHERE id=?', (idea_id,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+    now = int(time.time())
+    conversation_id = str(ULID())
+    db.execute(
+        'INSERT INTO conversations(id, title, idea_id, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?)',
+        (conversation_id, (request.json or {}).get('title'), idea_id, now, now),
+    )
+    db.commit()
+    return jsonify({'id': conversation_id}), 201
+
+
+@bp.post('/<idea_id>/discuss')
+def discuss(idea_id):
+    """Tool-using discussion, streamed as SSE.
+
+    Gathering and answering are separate turns: the tool loop is blocking
+    (llama-server reconstructs tool_calls from a grammar, and reassembling
+    partial tool-call deltas is how an argument goes missing), and only the
+    final answer streams. Tool events go out as they happen so the 30-90s of
+    gathering is legible instead of a spinner.
+    """
+    from backend.ai import priority
+    from backend.ai.llm import chat_stream_deltas
+    from backend.research import agent, discuss as ctx
+
+    if not is_ai_configured():
+        return jsonify({'error': 'AI provider not configured'}), 400
+
+    body = request.json or {}
+    conversation_id = (body.get('conversationId') or '').strip()
+    question = (body.get('message') or '').strip()
+    if not conversation_id or not question:
+        return jsonify({'error': 'conversationId and message required'}), 400
+
+    db = get_db()
+    if not db.execute('SELECT 1 FROM ideas WHERE id=?', (idea_id,)).fetchone():
+        return jsonify({'error': 'Not found'}), 404
+
+    # Persist the user's turn before streaming: a disconnect mid-answer should
+    # not lose the question.
+    now = int(time.time())
+    db.execute(
+        'INSERT INTO messages(id, conversation_id, role, content, created_at)'
+        ' VALUES (?,?,?,?,?)',
+        (str(ULID()), conversation_id, 'user', question, now),
+    )
+    db.execute('UPDATE conversations SET updated_at=? WHERE id=?', (now, conversation_id))
+    db.commit()
+
+    context = ctx.build_context(idea_id)
+    history = ctx.history_messages(conversation_id)[:-1]  # drop the turn just saved
+    gather_request = ctx.build_gather_request(context, history, question)
+
+    # Acquired in the view, released in the generator's finally — see the same
+    # shape in backend/routes/chat.py.
+    token = priority.begin('ideas.discuss')
+
+    def generate():
+        answer = ''
+        steps: list[dict] = []
+        sources: list[dict] = []
+        try:
+            result = {}
+            # The generator form, so a tool event reaches the browser the
+            # moment that call finishes rather than after all gathering ends.
+            for kind, payload in agent.gather_events(ctx.SYSTEM_PROMPT, gather_request):
+                if kind == 'step':
+                    yield f'data: {json.dumps(payload)}\n\n'
+                else:
+                    result = payload
+            steps = result.get('steps', [])
+            sources = result.get('sources', [])
+
+            messages = result.get('messages', []) + [
+                {'role': 'user', 'content': ctx.ANSWER_INSTRUCTION}
+            ]
+            for chunk in chat_stream_deltas(messages):
+                answer += chunk
+                yield f'data: {json.dumps({"content": chunk})}\n\n'
+
+            message_id = str(ULID())
+            finished = int(time.time())
+            get_db().execute(
+                'INSERT INTO messages(id, conversation_id, role, content, metadata, created_at)'
+                ' VALUES (?,?,?,?,?,?)',
+                (message_id, conversation_id, 'assistant', answer,
+                 json.dumps({'agent': 'ideas', 'steps': steps, 'sources': sources}),
+                 finished),
+            )
+            get_db().execute(
+                'UPDATE conversations SET updated_at=? WHERE id=?',
+                (finished, conversation_id),
+            )
+            get_db().commit()
+            yield f'data: {json.dumps({"done": True, "messageId": message_id, "sources": sources})}\n\n'
+            yield 'data: [DONE]\n\n'
+        except Exception as e:
+            yield f'data: {json.dumps({"error": str(e)})}\n\n'
+        finally:
+            priority.end(token)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'},
+    )
+
+
+# --- Plan ---
+
+@bp.get('/<idea_id>/plans')
+def list_idea_plans(idea_id):
+    from backend.research.plan import list_plans
+    return jsonify(list_plans(idea_id))
+
+
+@bp.get('/plans/<plan_id>')
+def get_plan(plan_id):
+    row = get_db().execute('SELECT * FROM idea_plans WHERE id=?', (plan_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(row_to_dict(row))
+
+
+@bp.post('/<idea_id>/plan')
+def create_plan(idea_id):
+    """Generate a spec for a coding agent. Blocking — it is one long call and
+    the user pressed the button."""
+    from backend.ai import priority
+    from backend.research import assess, discuss as ctx, plan as plan_mod
+    from backend.research.repo_job import current_snapshot
+
+    if not is_ai_configured():
+        return jsonify({'error': 'AI provider not configured'}), 400
+
+    db = get_db()
+    row = db.execute('SELECT * FROM ideas WHERE id=?', (idea_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    idea = row_to_dict(row)
+
+    assessment = assess.latest_assessment(idea_id)
+    evidence = json.loads(assessment['evidence']) if assessment else []
+    answered = assess.answered_questions(idea_id)
+    open_rows = db.execute(
+        "SELECT question FROM idea_questions WHERE idea_id=? AND status='open'",
+        (idea_id,),
+    ).fetchall()
+    open_questions = [{'question': r['question']} for r in open_rows]
+
+    prompt = ctx.build_context(idea_id) + (
+        '\n\n# Your task\n\nWrite the implementation spec for this idea.'
+    )
+    with priority.interactive('ideas.plan'):
+        spec = plan_mod.generate_spec(prompt)
+    if spec is None:
+        return jsonify({'error': 'The model returned no usable plan'}), 502
+
+    snapshot = current_snapshot()
+    content = plan_mod.render_plan_markdown(
+        idea.get('title') or 'Untitled idea',
+        spec,
+        evidence=evidence,
+        answered=answered,
+        open_questions=open_questions,
+    )
+    saved = plan_mod.save_plan(idea_id, content, spec, (snapshot or {}).get('id'))
+    db.execute(
+        "UPDATE ideas SET status=?, updated_at=? WHERE id=? AND status IN ('new','researching','ready')",
+        ('planned', int(time.time()), idea_id),
+    )
+    db.commit()
+    return jsonify(saved), 201
 
 
 @bp.get('/paper-pages')

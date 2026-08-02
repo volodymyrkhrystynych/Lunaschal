@@ -114,4 +114,6 @@ def create_app():
         start_title_scheduler()
         from backend.briefing_scheduler import start_briefing_scheduler
         start_briefing_scheduler()
+        from backend.research.repo_scheduler import start_repo_context_scheduler
+        start_repo_context_scheduler()
     return app

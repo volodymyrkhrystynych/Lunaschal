@@ -469,6 +469,8 @@ export interface AppSettings {
   briefingGoals: string;
   briefingThinking: boolean;
   briefingMaxTokens: number;
+  repoContextEnabled: boolean;
+  repoContextHour: number;
 }
 
 export interface WhisperModel {
@@ -560,6 +562,25 @@ export interface IdeaPaperPage {
   paperTitle: string;
   position: number;
   imageUrl: string | null;
+}
+
+/**
+ * A nightly, machine-generated picture of what the app currently is. `digest`
+ * is deterministic extraction; only `changeSummary` comes from the model, and
+ * it is null when the model was unavailable.
+ */
+export interface RepoSnapshot {
+  id: string;
+  gitSha: string | null;
+  gitBranch: string | null;
+  digest: string;
+  changeSummary: string | null;
+  routeCount: number;
+  tableCount: number;
+  componentCount: number;
+  /** Drift between the frontend's three hand-synced view lists. */
+  warnings: string[];
+  generatedAt: string;
 }
 
 export interface WritingProject {
@@ -1696,6 +1717,11 @@ export const api = {
     removeSketch: (sketchId: string) =>
       del<{ success: boolean }>(`/api/ideas/sketches/${sketchId}`),
     paperPages: () => get<IdeaPaperPage[]>('/api/ideas/paper-pages'),
+    repoContext: () => get<RepoSnapshot | null>('/api/ideas/repo-context'),
+    refreshRepoContext: () =>
+      post<{ id: string; routeCount: number; tableCount: number }>(
+        '/api/ideas/repo-context/refresh'
+      ),
   },
 
   writing: {
