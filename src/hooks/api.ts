@@ -114,10 +114,21 @@ export interface FicChapter extends FicChapterSummary {
   createdAt: string;
 }
 
+export interface WatchedScanProgress {
+  page: number;
+  lastPage: number | null;
+  found: number;
+  imported: number;
+  alreadyInLibrary: number;
+  done: boolean;
+  error: string | null;
+}
+
 export interface SiteCookieInfo {
   domain: string;
   hasCookie: boolean;
   updatedAt: string | null;
+  watchedScan?: WatchedScanProgress;
 }
 
 export interface Transcription {
@@ -1216,6 +1227,8 @@ export const api = {
       put: (domain: string, cookie: string) =>
         put<{ success: boolean }>('/api/fanfic/cookies', { domain, cookie }),
     },
+    scanWatched: (domain: string) =>
+      post<{ started: boolean }>(`/api/fanfic/scan-watched/${domain}`),
   },
 
   calendar: {

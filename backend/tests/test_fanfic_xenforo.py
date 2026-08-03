@@ -278,3 +278,28 @@ def test_parse_alerts():
 def test_parse_alerts_empty_page():
     assert xenforo.parse_alerts('<html><body>no alerts</body></html>',
                                 'forums.spacebattles.com') == []
+
+
+# --- parse_watched_threads ---
+
+def test_parse_watched_threads_p1():
+    page = xenforo.parse_watched_threads(
+        fixture('watched_threads_p1.html'), 'forums.spacebattles.com')
+    assert [r.thread_id for r in page.refs] == ['12345', '67890', '11111']
+    assert page.refs[0] == ThreadRef('forums.spacebattles.com', '12345', 'a-test-fic')
+    assert page.last_page == 2
+
+
+def test_parse_watched_threads_p2_skips_unresolvable_rows():
+    page = xenforo.parse_watched_threads(
+        fixture('watched_threads_p2.html'), 'forums.spacebattles.com')
+    # the second row has no thread link (a deleted/moved thread) and is skipped
+    assert [r.thread_id for r in page.refs] == ['22222']
+    assert page.last_page == 2
+
+
+def test_parse_watched_threads_empty_page():
+    page = xenforo.parse_watched_threads(
+        '<html><body>no watched threads</body></html>', 'forums.spacebattles.com')
+    assert page.refs == []
+    assert page.last_page == 1
