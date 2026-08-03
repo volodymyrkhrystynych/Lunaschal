@@ -23,3 +23,12 @@ export function shiftDateISO(date: string, days: number): string {
 export function isFutureDate(date: string, now: Date = new Date()): boolean {
   return date > todayISO(now);
 }
+
+// Used to flag the sidebar when a day's front pages haven't all synced yet.
+// Any missing paper counts — a partial sync (one paper failed to scrape) is
+// still worth surfacing, not just a fully-missed day.
+export function hasMissingEditions(
+  pages: { imageUrl: string | null }[]
+): boolean {
+  return pages.some(page => page.imageUrl == null);
+}
