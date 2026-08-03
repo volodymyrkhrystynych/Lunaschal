@@ -3,6 +3,7 @@ gmail_client HTTP call is monkeypatched, matching test_newspapers.py's style."""
 import pytest
 
 from backend.db.connection import get_db
+from backend.routes.email import _get_account
 
 
 def _set_oauth_client(client):
@@ -10,6 +11,29 @@ def _set_oauth_client(client):
         'googleOauthClientId': 'client-123',
         'googleOauthClientSecret': 'secret-456',
     })
+
+
+def test_get_account_prefers_most_recently_updated_over_created(client):
+    """Regression: reconnecting an account is an UPDATE (the ON CONFLICT
+    upsert in oauth_callback) that bumps updated_at but never touches
+    created_at. _get_account() must resolve by updated_at, not created_at —
+    otherwise reconnecting an older account after having connected and
+    disconnected a newer-but-now-stale one would keep resolving to the
+    stale account in oauth_status/oauth_disconnect/sync_now."""
+    db = get_db()
+    db.execute(
+        "INSERT INTO email_accounts (id, provider, email_address, refresh_token, sync_enabled, created_at, updated_at)"
+        " VALUES ('acct-a', 'gmail', 'a@example.com', 'rt-a', 1, 100, 500)"
+    )
+    db.execute(
+        "INSERT INTO email_accounts (id, provider, email_address, refresh_token, sync_enabled, created_at, updated_at)"
+        " VALUES ('acct-b', 'gmail', 'b@example.com', NULL, 0, 200, 300)"
+    )
+    db.commit()
+
+    account = _get_account()
+
+    assert account['id'] == 'acct-a'
 
 
 def test_authorize_without_client_configured_is_400(client):

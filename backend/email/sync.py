@@ -14,9 +14,13 @@ from backend.ai.background import run_bg
 from backend.db.connection import get_db
 from backend.email import gmail_client
 
-# Re-anchor window used only when a history cursor has expired — short and
-# safe because UNIQUE(account_id, gmail_id) makes re-fetching idempotent.
-HISTORY_RECOVERY_DAYS = 3
+# Re-anchor window used only when a history cursor has expired. Matches
+# Gmail's documented history retention (on the order of a week, see the
+# module docstring) rather than a shorter value: recovering fewer days than
+# what's actually still retained means any mail in that gap is gone for
+# good once the cursor resets, whereas over-recovering just costs a few
+# extra, idempotent (UNIQUE(account_id, gmail_id)) re-fetches.
+HISTORY_RECOVERY_DAYS = 7
 
 
 def _get_oauth_settings(db) -> dict | None:
@@ -56,6 +60,16 @@ def _insert_message(db, account_id: str, gmail_id: str, access_token: str) -> st
 
 def _backfill(db, account_row, access_token: str, backfill_days: int) -> list[str]:
     after_date = (date.today() - timedelta(days=backfill_days)).strftime('%Y/%m/%d')
+    # Snapshot the history-id baseline before paging through messages, not
+    # after: messages.list is newest-first, so a message that arrives while
+    # a multi-page backfill is in flight can land before pagination reaches
+    # it and be skipped by this run. If the baseline is captured afterwards
+    # (via get_profile), it's guaranteed >= that message's own history
+    # event, so the next incremental sync's list_history(start_history_id=
+    # baseline) excludes it too — permanently. Capturing the baseline first
+    # means the worst case is a redundant, idempotent re-fetch next cycle
+    # instead of silent data loss.
+    profile = gmail_client.get_profile(access_token)
     new_ids: list[str] = []
     page_token = None
     while True:
@@ -67,7 +81,6 @@ def _backfill(db, account_row, access_token: str, backfill_days: int) -> list[st
         page_token = page.get('nextPageToken')
         if not page_token:
             break
-    profile = gmail_client.get_profile(access_token)
     db.execute(
         'UPDATE email_accounts SET history_id=? WHERE id=?',
         (profile.get('historyId'), account_row['id']),
