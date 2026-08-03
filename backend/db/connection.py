@@ -11,6 +11,7 @@ _conn: sqlite3.Connection | None = None
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'started_at', 'ended_at', 'due',
+    'received_at', 'classified_at', 'last_synced_at', 'token_expires_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -79,6 +80,7 @@ def init_db() -> None:
     _init_fts(db)
     _init_recipes_fts(db)
     _init_fanfic_fts(db)
+    _init_emails_fts(db)
     _drop_vector_tables(db)
     _ensure_network_code(db)
     _ensure_writing_project_id(db)
@@ -90,6 +92,7 @@ def init_db() -> None:
     _ensure_prevent_sleep(db)
     _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
+    _ensure_email_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -511,6 +514,19 @@ def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_email_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'email_sync_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN email_sync_enabled INTEGER DEFAULT 1')
+    if 'email_sync_interval_minutes' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN email_sync_interval_minutes INTEGER DEFAULT 15')
+    if 'google_oauth_client_id' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_id TEXT')
+    if 'google_oauth_client_secret' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_secret TEXT')
+    db.commit()
+
+
 def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
     """Output ceiling for the default (conversational) model — the one the user
     chats with. Thinking lives in the boolean llm_thinking, owned by
@@ -760,6 +776,41 @@ def _init_fanfic_fts(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _init_emails_fts(db: sqlite3.Connection) -> None:
+    db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS emails_fts USING fts5(
+            id UNINDEXED,
+            subject,
+            body_text,
+            sender,
+            content='emails',
+            content_rowid='rowid'
+        )
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS emails_ai AFTER INSERT ON emails BEGIN
+            INSERT INTO emails_fts(rowid, id, subject, body_text, sender)
+            VALUES (NEW.rowid, NEW.id, NEW.subject, NEW.body_text, NEW.sender);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS emails_ad AFTER DELETE ON emails BEGIN
+            INSERT INTO emails_fts(emails_fts, rowid, id, subject, body_text, sender)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.subject, OLD.body_text, OLD.sender);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS emails_au AFTER UPDATE ON emails BEGIN
+            INSERT INTO emails_fts(emails_fts, rowid, id, subject, body_text, sender)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.subject, OLD.body_text, OLD.sender);
+            INSERT INTO emails_fts(rowid, id, subject, body_text, sender)
+            VALUES (NEW.rowid, NEW.id, NEW.subject, NEW.body_text, NEW.sender);
+        END
+    """)
+    db.execute("INSERT INTO emails_fts(emails_fts) VALUES('rebuild')")
+    db.commit()
+
+
 def _drop_vector_tables(db: sqlite3.Connection) -> None:
     """Tear down the retired RAG vector store.
 
@@ -823,6 +874,19 @@ def search_recipes_fts(query: str, limit: int = 50) -> list[dict]:
     escaped = ' OR '.join(f'"{w}"*' for w in words)
     rows = db.execute(
         'SELECT id, rank FROM recipes_fts WHERE recipes_fts MATCH ? ORDER BY rank LIMIT ?',
+        (escaped, limit),
+    ).fetchall()
+    return [{'id': r['id'], 'rank': r['rank']} for r in rows]
+
+
+def search_emails_fts(query: str, limit: int = 50) -> list[dict]:
+    db = get_db()
+    words = [w for w in query.split() if w]
+    if not words:
+        return []
+    escaped = ' OR '.join(f'"{w}"*' for w in words)
+    rows = db.execute(
+        'SELECT id, rank FROM emails_fts WHERE emails_fts MATCH ? ORDER BY rank LIMIT ?',
         (escaped, limit),
     ).fetchall()
     return [{'id': r['id'], 'rank': r['rank']} for r in rows]

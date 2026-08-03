@@ -10,6 +10,7 @@ import { BriefingSection } from './BriefingSection';
 import { VRAMSection } from './VRAMSection';
 import { NetworkSection } from './NetworkSection';
 import { FanficCookiesSection } from './FanficCookiesSection';
+import { EmailSection } from './EmailSection';
 import { DisplaySection } from './DisplaySection';
 import { LlamaConfigSection } from './LlamaConfigSection';
 
@@ -79,6 +80,8 @@ export function Settings() {
           <BriefingSection />
 
           <FanficCookiesSection />
+
+          <EmailSection />
 
           {settings?.networkMode && <NetworkSection />}
 
