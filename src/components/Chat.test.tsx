@@ -16,7 +16,13 @@ vi.mock('../hooks/api', () => ({
       saveCalendar: vi.fn(),
     },
     settings: { get: vi.fn() },
-    learning: { generateForTopic: vi.fn() },
+    learning: {
+      generateForTopic: vi.fn(),
+      generateFromNote: vi.fn(),
+      approve: vi.fn(),
+      regenerate: vi.fn(),
+      deny: vi.fn(),
+    },
   },
 }));
 
@@ -134,5 +140,192 @@ describe('Chat send ordering', () => {
     stream.close();
 
     expect(await screen.findByText(/Morning run/)).toBeTruthy();
+  });
+});
+
+describe('note to self', () => {
+  const sendAndClassify = async (
+    message: string,
+    stream: ReturnType<typeof openStream>,
+    reply: string
+  ) => {
+    const input = await screen.findByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: message } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+    stream.push(reply);
+    stream.close();
+  };
+
+  it('drafts and previews a lesson card when the classifier returns note_to_self', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    vi.mocked(api.chat.classify).mockResolvedValue({
+      intent: 'note_to_self',
+      confidence: 0.9,
+      noteToSelf: { content: 'warm up before deadlifts' },
+    } as never);
+    vi.mocked(api.learning.generateFromNote).mockResolvedValue({
+      count: 1,
+      ids: ['card-1'],
+      cards: [
+        { id: 'card-1', question: 'Warm up before what?', answer: 'Deadlifts' },
+      ],
+      folderId: 'folder-1',
+    } as never);
+
+    renderChat();
+    await sendAndClassify(
+      'note to self: warm up before deadlifts',
+      stream,
+      'Noted.'
+    );
+
+    await waitFor(() =>
+      expect(api.learning.generateFromNote).toHaveBeenCalledWith(
+        'warm up before deadlifts'
+      )
+    );
+    expect(await screen.findByText('Warm up before what?')).toBeTruthy();
+    expect(screen.getByText('Deadlifts')).toBeTruthy();
+    expect(screen.getByText('Save this lesson to Learning?')).toBeTruthy();
+  });
+
+  it('removes the preview once the drafted card is approved', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    vi.mocked(api.chat.classify).mockResolvedValue({
+      intent: 'note_to_self',
+      confidence: 0.9,
+      noteToSelf: { content: 'warm up before deadlifts' },
+    } as never);
+    vi.mocked(api.learning.generateFromNote).mockResolvedValue({
+      count: 1,
+      ids: ['card-1'],
+      cards: [
+        { id: 'card-1', question: 'Warm up before what?', answer: 'Deadlifts' },
+      ],
+      folderId: 'folder-1',
+    } as never);
+    vi.mocked(api.learning.approve).mockResolvedValue({
+      status: 'approved',
+    } as never);
+
+    renderChat();
+    await sendAndClassify(
+      'note to self: warm up before deadlifts',
+      stream,
+      'Noted.'
+    );
+    await screen.findByText('Warm up before what?');
+
+    fireEvent.click(screen.getByText('Approve'));
+
+    await waitFor(() =>
+      expect(api.learning.approve).toHaveBeenCalledWith('card-1', undefined)
+    );
+    await waitFor(() =>
+      expect(screen.queryByText('Warm up before what?')).toBeNull()
+    );
+  });
+
+  it('removes the preview once the drafted card is discarded', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    vi.mocked(api.chat.classify).mockResolvedValue({
+      intent: 'note_to_self',
+      confidence: 0.9,
+      noteToSelf: { content: 'warm up before deadlifts' },
+    } as never);
+    vi.mocked(api.learning.generateFromNote).mockResolvedValue({
+      count: 1,
+      ids: ['card-1'],
+      cards: [
+        { id: 'card-1', question: 'Warm up before what?', answer: 'Deadlifts' },
+      ],
+      folderId: 'folder-1',
+    } as never);
+    vi.mocked(api.learning.deny).mockResolvedValue({ success: true } as never);
+
+    renderChat();
+    await sendAndClassify(
+      'note to self: warm up before deadlifts',
+      stream,
+      'Noted.'
+    );
+    await screen.findByText('Warm up before what?');
+
+    fireEvent.click(screen.getByText('Discard'));
+
+    await waitFor(() =>
+      expect(api.learning.deny).toHaveBeenCalledWith('card-1')
+    );
+    await waitFor(() =>
+      expect(screen.queryByText('Warm up before what?')).toBeNull()
+    );
+  });
+
+  it('keeps an earlier unactioned draft when a second note-to-self arrives', async () => {
+    const streamA = openStream();
+    const streamB = openStream();
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(streamA.response)
+        .mockResolvedValueOnce(streamB.response)
+    );
+    vi.mocked(api.chat.classify)
+      .mockResolvedValueOnce({
+        intent: 'note_to_self',
+        confidence: 0.9,
+        noteToSelf: { content: 'warm up before deadlifts' },
+      } as never)
+      .mockResolvedValueOnce({
+        intent: 'note_to_self',
+        confidence: 0.9,
+        noteToSelf: { content: 'stretch after too' },
+      } as never);
+    vi.mocked(api.learning.generateFromNote)
+      .mockResolvedValueOnce({
+        count: 1,
+        ids: ['card-a'],
+        cards: [
+          {
+            id: 'card-a',
+            question: 'Warm up before what?',
+            answer: 'Deadlifts',
+          },
+        ],
+        folderId: 'folder-1',
+      } as never)
+      .mockResolvedValueOnce({
+        count: 1,
+        ids: ['card-b'],
+        cards: [
+          { id: 'card-b', question: 'Stretch when?', answer: 'After lifting' },
+        ],
+        folderId: 'folder-1',
+      } as never);
+
+    renderChat();
+    await sendAndClassify(
+      'note to self: warm up before deadlifts',
+      streamA,
+      'Noted.'
+    );
+    await screen.findByText('Warm up before what?');
+
+    await sendAndClassify(
+      'note to self: stretch after too',
+      streamB,
+      'Got it.'
+    );
+    await screen.findByText('Stretch when?');
+
+    // The first draft is still there — a second note-to-self must not wipe
+    // out an earlier one the user hasn't approved or discarded yet.
+    expect(screen.getByText('Warm up before what?')).toBeTruthy();
+    expect(screen.getByText('Save these lessons to Learning?')).toBeTruthy();
   });
 });

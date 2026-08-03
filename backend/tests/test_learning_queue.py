@@ -79,6 +79,10 @@ def test_regenerate_replaces_card_and_preserves_lineage(client, fake_generate):
     assert len(new_ids) == 2
     assert fake_generate['regenerate']['direction'] == 'too broad, split it'
     assert fake_generate['regenerate']['context'] == 'dump'
+    # The drafted question/answer text comes back too, so a caller (chat's
+    # inline note-to-self preview) can update its view without a refetch.
+    assert [c['question'] for c in r.json['cards']] == ['Split A?', 'Split B?']
+    assert r.json['cards'][0]['id'] == new_ids[0]
 
     # Original gone, replacements pending with lineage/tags carried over.
     assert client.get(f'/api/learning/cards/{ids[0]}').status_code == 404
@@ -124,6 +128,30 @@ def test_generate_for_topic(client, fake_generate):
     card = client.get(f"/api/learning/cards/{r.json['ids'][0]}").json
     assert card['sourceType'] == 'chat'
     assert 'closures' in fake_generate['generate']['text']
+
+
+def test_generate_from_note_requires_content(client, fake_generate):
+    assert client.post('/api/learning/generate-from-note', json={}).status_code == 400
+
+
+def test_generate_from_note_creates_lessons_folder(client, fake_generate):
+    r = client.post('/api/learning/generate-from-note', json={'content': 'always warm up first'})
+    assert r.status_code == 200
+    assert 'always warm up first' in fake_generate['generate']['text']
+
+    card = client.get(f"/api/learning/cards/{r.json['ids'][0]}").json
+    assert card['sourceType'] == 'note_to_self'
+    assert card['tags'] == ['lessons']
+
+    folders = client.get('/api/learning/folders').json
+    lessons = [f for f in folders if f['name'] == 'lessons']
+    assert len(lessons) == 1
+    assert card['folderId'] == lessons[0]['id'] == r.json['folderId']
+
+    # A second note reuses the same folder instead of creating another.
+    r2 = client.post('/api/learning/generate-from-note', json={'content': 'stretch after too'})
+    assert r2.json['folderId'] == lessons[0]['id']
+    assert len(client.get('/api/learning/folders').json) == len(folders)
 
 
 def test_generation_prompt_parses_and_enforces_shape(monkeypatch):
