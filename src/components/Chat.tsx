@@ -189,7 +189,8 @@ export function Chat() {
    * inline below so it can be approved or steered without leaving chat. */
   const generateFromNote = useMutation({
     mutationFn: (content: string) => api.learning.generateFromNote(content),
-    onSuccess: result => setNoteCards(result.cards),
+    onSuccess: result =>
+      setNoteCards(cards => (cards ?? []).concat(result.cards)),
   });
 
   const approveNoteCard = useMutation({
