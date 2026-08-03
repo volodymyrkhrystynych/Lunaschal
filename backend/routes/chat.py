@@ -294,23 +294,6 @@ def classify():
     return jsonify(classify_intent(message))
 
 
-@bp.post('/save-journal')
-def save_journal():
-    body = request.json or {}
-    now = int(time.time())
-    id = str(ULID())
-    tags = body.get('tags', [])
-    db = get_db()
-    db.execute(
-        'INSERT INTO journal_entries(id, content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?)',
-        (id, body.get('content', ''), body.get('title'), json.dumps(tags), now, now),
-    )
-    if body.get('messageId'):
-        _update_message_metadata(db, body['messageId'], 'savedAsJournal', id)
-    db.commit()
-    return jsonify({'id': id}), 201
-
-
 @bp.post('/save-calendar')
 def save_calendar():
     body = request.json or {}

@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, waitFor, act } from '@testing-library/react';
+import {
+  render,
+  waitFor,
+  act,
+  fireEvent,
+  screen,
+} from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { PaperEditor } from './PaperEditor';
@@ -14,6 +20,9 @@ vi.mock('../../hooks/api', () => ({
       savePage: vi.fn(),
       addPage: vi.fn(),
       setArchiveRequested: vi.fn(),
+      updateImage: vi.fn(),
+      addImage: vi.fn(),
+      deleteImage: vi.fn(),
     },
   },
 }));
@@ -74,6 +83,7 @@ beforeEach(() => {
     images: [],
   });
   vi.mocked(api.paper.savePage).mockResolvedValue({ success: true } as never);
+  vi.mocked(api.paper.updateImage).mockResolvedValue({} as never);
 });
 
 function renderEditor() {
@@ -108,7 +118,7 @@ describe('page content cache after a save', () => {
       strokes: '[]',
     });
 
-    // Draw, then let the debounced autosave fire.
+    // Draw, then explicitly save — nothing uploads on its own any more.
     await act(async () => {
       canvas.dispatchEvent(
         new MouseEvent('pointerdown', {
@@ -133,9 +143,10 @@ describe('page content cache after a save', () => {
       );
     });
 
-    await waitFor(() => expect(api.paper.savePage).toHaveBeenCalled(), {
-      timeout: 4000,
-    });
+    expect(api.paper.savePage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(api.paper.savePage).toHaveBeenCalled());
 
     const uploaded = vi.mocked(api.paper.savePage).mock.calls[0][1];
     // Guard the guard: an upload of "[]" would make the assertion below vacuous.
@@ -153,5 +164,55 @@ describe('page content cache after a save', () => {
     // And the refresh is free: writing the known answer in must not cost a
     // refetch of the page currently under the pen.
     expect(api.paper.getPage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('manual save', () => {
+  it('stages a moved picture locally and only PATCHes it on save', async () => {
+    // A full-page image so any click inside the drawing area lands on it,
+    // sidestepping the need to replicate PaperEditor's fitPageBox math here.
+    vi.mocked(api.paper.getPage).mockResolvedValue({
+      strokes: '[]',
+      width: null,
+      height: null,
+      images: [
+        {
+          id: 'img-1',
+          url: '/api/paper/images/img-1/file',
+          x: 0,
+          y: 0,
+          width: PAGE_WIDTH,
+          height: PAGE_HEIGHT,
+          rotation: 0,
+          flipped: 0,
+          locked: 0,
+          position: 0,
+        },
+      ],
+    } as never);
+
+    const { container } = renderEditor();
+    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+
+    fireEvent.click(
+      screen.getByTitle('Select and move pictures instead of drawing')
+    );
+    const layer = await waitFor(() => screen.getByTestId('paper-image-layer'));
+
+    fireEvent.pointerDown(layer, { clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.pointerMove(layer, { clientX: 150, clientY: 160, pointerId: 1 });
+    fireEvent.pointerUp(layer, { clientX: 150, clientY: 160, pointerId: 1 });
+
+    // The drag committed locally, not to the server — moving a picture must
+    // not sync on its own any more than drawing does.
+    expect(api.paper.updateImage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(api.paper.updateImage).toHaveBeenCalledTimes(1));
+    expect(api.paper.updateImage).toHaveBeenCalledWith(
+      'img-1',
+      expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) })
+    );
   });
 });

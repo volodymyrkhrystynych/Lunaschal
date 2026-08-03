@@ -1,15 +1,40 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../hooks/api';
+import { api, type WatchedScanProgress } from '../../hooks/api';
+
+function WatchedScanStatus({ scan }: { scan: WatchedScanProgress }) {
+  if (scan.error) {
+    return (
+      <p className="text-xs text-red-400 mt-2">Scan stopped: {scan.error}</p>
+    );
+  }
+  if (!scan.done) {
+    return (
+      <p className="text-xs text-[var(--color-text-muted)] mt-2">
+        Scanning page {scan.page}
+        {scan.lastPage ? ` / ${scan.lastPage}` : ''} · {scan.imported} imported,{' '}
+        {scan.alreadyInLibrary} already in library
+      </p>
+    );
+  }
+  return (
+    <p className="text-xs text-[var(--color-text-muted)] mt-2">
+      Last scan: {scan.imported} imported, {scan.alreadyInLibrary} already in
+      library ({scan.found} watched threads seen)
+    </p>
+  );
+}
 
 function FanficCookieRow({
   domain,
   hasCookie,
   updatedAt,
+  watchedScan,
 }: {
   domain: string;
   hasCookie: boolean;
   updatedAt: string | null;
+  watchedScan?: WatchedScanProgress;
 }) {
   const [value, setValue] = useState('');
   const queryClient = useQueryClient();
@@ -21,6 +46,14 @@ function FanficCookieRow({
       queryClient.invalidateQueries({ queryKey: ['fanfic', 'cookies'] });
     },
   });
+
+  const scanWatched = useMutation({
+    mutationFn: () => api.fanfic.scanWatched(domain),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['fanfic', 'cookies'] }),
+  });
+
+  const scanning = watchedScan && !watchedScan.done;
 
   return (
     <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
@@ -69,15 +102,37 @@ function FanficCookieRow({
           </button>
         )}
       </div>
+      <div className="mt-3 flex items-center justify-between">
+        <button
+          onClick={() => scanWatched.mutate()}
+          disabled={!hasCookie || !!scanning || scanWatched.isPending}
+          title={
+            hasCookie
+              ? 'Walk this site’s watched-threads list and import anything missing from the library'
+              : 'Save a cookie above first — scanning needs a logged-in session'
+          }
+          className="px-3 py-1.5 text-sm rounded border border-white/10 text-[var(--color-text)] hover:bg-white/5 disabled:opacity-50"
+        >
+          {scanning ? 'Scanning…' : 'Scan watched threads'}
+        </button>
+      </div>
+      {watchedScan && <WatchedScanStatus scan={watchedScan} />}
     </div>
   );
 }
 
 export function FanficCookiesSection() {
-  const { data: cookies } = useQuery({
+  const { data: cookies, refetch } = useQuery({
     queryKey: ['fanfic', 'cookies'],
     queryFn: api.fanfic.cookies.list,
   });
+
+  useEffect(() => {
+    const scanning = cookies?.some(c => c.watchedScan && !c.watchedScan.done);
+    if (!scanning) return;
+    const id = setInterval(() => refetch(), 2000);
+    return () => clearInterval(id);
+  }, [cookies, refetch]);
 
   return (
     <section className="mb-8">
@@ -100,6 +155,7 @@ export function FanficCookiesSection() {
             domain={c.domain}
             hasCookie={c.hasCookie}
             updatedAt={c.updatedAt}
+            watchedScan={c.watchedScan}
           />
         ))}
       </div>

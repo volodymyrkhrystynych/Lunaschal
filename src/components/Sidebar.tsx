@@ -24,6 +24,7 @@ interface SidebarProps {
   isOpen: boolean;
   onToggle: () => void;
   lifestyleNeedsAttention?: boolean;
+  newspapersNeedAttention?: boolean;
 }
 
 export const navItems: { view: View; label: string; icon: string }[] = [
@@ -50,6 +51,7 @@ export function Sidebar({
   isOpen,
   onToggle,
   lifestyleNeedsAttention,
+  newspapersNeedAttention,
 }: SidebarProps) {
   const { level } = useShortcuts();
   const isMobile = useIsMobile();
@@ -94,6 +96,15 @@ export function Sidebar({
               style={{ color: '#f0b429' }}
               title="No selfie logged today"
               aria-label="No selfie logged today"
+            >
+              ❗
+            </span>
+          )}
+          {item.view === 'newspapers' && newspapersNeedAttention && (
+            <span
+              style={{ color: '#f0b429' }}
+              title="Today's front pages haven't all synced yet"
+              aria-label="Today's front pages haven't all synced yet"
             >
               ❗
             </span>
