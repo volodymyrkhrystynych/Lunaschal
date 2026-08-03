@@ -61,6 +61,7 @@ export interface Fic {
   downloadStatus: 'downloading' | 'complete' | 'error';
   downloadError: string | null;
   updatePending?: boolean;
+  deepPending?: boolean;
   lastReadChapterId: string | null;
   lastCheckedAt: string | null;
   rating: number | null;
@@ -90,7 +91,6 @@ export interface FicTagCount {
 export interface RefreshAlertsResult {
   flagged: number;
   newImports: number;
-  skippedFresh: number;
   skippedActive: number;
   alertsSeen: number;
   errors: Record<string, string>;
@@ -1189,9 +1189,12 @@ export const api = {
       }),
     status: (ficId: string) =>
       get<FicDownloadProgress | { done: true }>(`/api/fanfic/${ficId}/status`),
-    checkUpdates: (ficId: string) =>
-      post<{ id: string; queued: boolean }>(
-        `/api/fanfic/${ficId}/check-updates`
+    // `deep` asks for the slow pass that re-reads every saved chapter and
+    // rewrites the ones the author edited since we downloaded them.
+    checkUpdates: (ficId: string, deep = false) =>
+      post<{ id: string; queued: boolean; deep: boolean }>(
+        `/api/fanfic/${ficId}/check-updates`,
+        deep ? { deep: true } : undefined
       ),
     refreshAlerts: () =>
       post<RefreshAlertsResult>('/api/fanfic/refresh-alerts'),

@@ -87,7 +87,8 @@ export function Library({ onOpen }: LibraryProps) {
   });
 
   const checkUpdates = useMutation({
-    mutationFn: (ficId: string) => api.fanfic.checkUpdates(ficId),
+    mutationFn: ({ ficId, deep }: { ficId: string; deep?: boolean }) =>
+      api.fanfic.checkUpdates(ficId, deep),
     onSuccess: invalidate,
     onError: (e: Error) => setImportError(e.message),
   });
@@ -105,7 +106,6 @@ export function Library({ onOpen }: LibraryProps) {
       if (r.flagged) parts.push(`${r.flagged} queued for update`);
       if (r.newImports)
         parts.push(`${r.newImports} new import${r.newImports > 1 ? 's' : ''}`);
-      if (r.skippedFresh) parts.push(`${r.skippedFresh} already current`);
       if (r.skippedActive) parts.push(`${r.skippedActive} already queued`);
       if (parts.length === 0)
         parts.push(`no library threads among ${r.alertsSeen} alerts`);
@@ -313,7 +313,9 @@ export function Library({ onOpen }: LibraryProps) {
             selected={isSelected(idx)}
             showDelete={showDelete}
             onOpen={() => onOpen(fic.id)}
-            onCheckUpdates={() => checkUpdates.mutate(fic.id)}
+            onCheckUpdates={deep =>
+              checkUpdates.mutate({ ficId: fic.id, deep })
+            }
             onTagClick={name => {
               setSearchQuery('');
               setTag(name);
@@ -350,7 +352,7 @@ function FicCard({
   selected: boolean;
   showDelete: boolean;
   onOpen: () => void;
-  onCheckUpdates: () => void;
+  onCheckUpdates: (deep?: boolean) => void;
   onTagClick: (name: string) => void;
   onDelete: () => void;
 }) {
@@ -401,21 +403,40 @@ function FicCard({
                 Review
               </button>
               {fic.sourceType === 'xenforo' && !downloading && (
-                <button
-                  onClick={onCheckUpdates}
-                  className={`text-sm ${
-                    fic.updatePending
-                      ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
-                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-                  }`}
-                  title={
-                    fic.updatePending
-                      ? 'Waiting for the update worker — click to un-queue'
-                      : 'Queue an update check'
-                  }
-                >
-                  {fic.updatePending ? '⏳ Queued' : '↻ Update'}
-                </button>
+                <>
+                  <button
+                    onClick={() => onCheckUpdates(false)}
+                    className={`text-sm ${
+                      fic.updatePending
+                        ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
+                        : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                    }`}
+                    title={
+                      fic.updatePending
+                        ? 'Waiting for the update worker — click to un-queue'
+                        : 'Queue an update check for new chapters'
+                    }
+                  >
+                    {fic.updatePending && !fic.deepPending
+                      ? '⏳ Queued'
+                      : '↻ Update'}
+                  </button>
+                  <button
+                    onClick={() => onCheckUpdates(true)}
+                    className={`text-sm ${
+                      fic.deepPending
+                        ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
+                        : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                    }`}
+                    title={
+                      fic.deepPending
+                        ? 'Deep check queued — click to un-queue'
+                        : 'Re-read every saved chapter and pull in any the author has edited. Slower: it refetches the whole fic.'
+                    }
+                  >
+                    {fic.deepPending ? '⏳ Deep' : '↻↻ Deep'}
+                  </button>
+                </>
               )}
               {showDelete && (
                 <button
