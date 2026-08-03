@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../hooks/api';
-import { MessageMarkdown } from './MessageMarkdown';
-import { BriefingTodos } from './BriefingTodos';
+import { api, type ChatMode } from '../../hooks/api';
+import { MessageMarkdown } from '../MessageMarkdown';
+import { BriefingTodos } from '../BriefingTodos';
 import {
   contextMessages,
   isBreak,
@@ -10,6 +10,11 @@ import {
 } from '@/lib/chatSegments';
 import { readSSE } from '@/lib/sse';
 import { formatMessageTime } from '@/lib/chatTime';
+import {
+  parseWebSearchMeta,
+  stepLabel,
+  type WebSearchStep,
+} from '@/lib/websearchSteps';
 
 interface PendingSave {
   type: 'journal' | 'calendar';
@@ -46,10 +51,15 @@ interface ClassifyResult {
 
 const BREAK_METADATA = JSON.stringify({ break: true });
 
-export function Chat() {
+interface ChatPanelProps {
+  mode: ChatMode;
+}
+
+export function ChatPanel({ mode }: ChatPanelProps) {
   const [input, setInput] = useState('');
   const [streamingContent, setStreamingContent] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [liveSteps, setLiveSteps] = useState<WebSearchStep[]>([]);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
   const [queuedCards, setQueuedCards] = useState<number | null>(null);
@@ -64,11 +74,12 @@ export function Chat() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const queryClient = useQueryClient();
+  const isWebSearch = mode === 'websearch';
 
-  // The single conversation for the current chat day (4am -> 4am).
+  // The single conversation for the current chat day (4am -> 4am), one per mode.
   const { data: conversation } = useQuery({
-    queryKey: ['chat', 'today'],
-    queryFn: api.chat.today,
+    queryKey: ['chat', 'today', mode],
+    queryFn: () => api.chat.today(mode),
   });
 
   const { data: settings } = useQuery({
@@ -77,10 +88,10 @@ export function Chat() {
   });
 
   const invalidateToday = () =>
-    queryClient.invalidateQueries({ queryKey: ['chat', 'today'] });
+    queryClient.invalidateQueries({ queryKey: ['chat', 'today', mode] });
 
   const createConversation = useMutation({
-    mutationFn: api.chat.createConversation,
+    mutationFn: () => api.chat.createConversation({ mode }),
     onSuccess: invalidateToday,
   });
 
@@ -105,7 +116,9 @@ export function Chat() {
 
   /** Ask the model whether the message was really a journal entry, a calendar
    * event or a flashcard request, and offer to save it if so. Fire-and-forget:
-   * a failed classification just means no offer. */
+   * a failed classification just means no offer. Only for the regular chat —
+   * a web-search lookup ("what's the weather in Tokyo") isn't journal/calendar
+   * material and the offer would just be noise. */
   const classifyUserMessage = (message: string, messageId: string) => {
     classifyMessage.mutate(message, {
       onSuccess: result => {
@@ -189,7 +202,14 @@ export function Chat() {
       return;
     }
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages, streamingContent, pendingSave, pendingQuiz, queuedCards]);
+  }, [
+    messages,
+    streamingContent,
+    liveSteps,
+    pendingSave,
+    pendingQuiz,
+    queuedCards,
+  ]);
 
   const startNewChat = async () => {
     if (!conversationId || !hasChat || isStreaming) return;
@@ -211,7 +231,7 @@ export function Chat() {
     let convId = conversationId;
 
     if (!convId) {
-      const result = await createConversation.mutateAsync(undefined);
+      const result = await createConversation.mutateAsync();
       convId = result.id;
     }
 
@@ -240,14 +260,18 @@ export function Chat() {
 
     setIsStreaming(true);
     setStreamingContent('');
+    setLiveSteps([]);
 
     try {
-      const response = await fetch('/api/chat/stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ messages: chatMessages }),
-      });
+      const response = await fetch(
+        isWebSearch ? '/api/chat/websearch/stream' : '/api/chat/stream',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ messages: chatMessages }),
+        }
+      );
 
       if (!response.ok) {
         const error = await response.json();
@@ -258,18 +282,35 @@ export function Chat() {
       if (!reader) throw new Error('No response body');
 
       let fullContent = '';
+      let steps: WebSearchStep[] = [];
+      let sources: { url: string; title?: string }[] = [];
       for await (const parsed of readSSE(reader)) {
+        // Tool events arrive as each call finishes, so the gathering pass
+        // reads as progress rather than a spinner.
+        if (parsed.tool) {
+          steps = [...steps, parsed as WebSearchStep];
+          setLiveSteps(steps);
+        }
         if (parsed.content) {
           fullContent += parsed.content;
           setStreamingContent(fullContent);
         }
+        if (parsed.done && Array.isArray(parsed.sources)) {
+          sources = parsed.sources as { url: string; title?: string }[];
+        }
         if (parsed.error) throw new Error(parsed.error);
       }
+
+      const metadata =
+        isWebSearch && (steps.length > 0 || sources.length > 0)
+          ? JSON.stringify({ steps, sources })
+          : undefined;
 
       await addMessage.mutateAsync({
         convId: convId!,
         role: 'assistant',
         content: fullContent,
+        metadata,
       });
     } catch (error) {
       setStreamingContent(
@@ -278,12 +319,13 @@ export function Chat() {
     } finally {
       setIsStreaming(false);
       setStreamingContent('');
+      setLiveSteps([]);
       // Deliberately *after* the reply, not alongside it. llama-server serves one
       // request at a time per model, so a classify fired in parallel simply
       // wins the queue and the user waits out a whole second generation before
       // their first token. The save/quiz prompts it produces are offered after
       // the reply anyway.
-      classifyUserMessage(userMessage, userMsgResult.id);
+      if (!isWebSearch) classifyUserMessage(userMessage, userMsgResult.id);
     }
   };
 
@@ -380,7 +422,7 @@ export function Chat() {
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
         <h1 className="text-sm font-medium text-[var(--color-text-muted)]">
-          Today's chat
+          {isWebSearch ? "Today's web search chat" : "Today's chat"}
         </h1>
         <button
           onClick={startNewChat}
@@ -402,14 +444,20 @@ export function Chat() {
         )}
         {!hasChat && isConfigured && (
           <div className="text-center text-[var(--color-text-muted)] py-12">
-            <h2 className="text-xl mb-2">Welcome to Lunaschal</h2>
+            <h2 className="text-xl mb-2">
+              {isWebSearch ? 'Search the web' : 'Welcome to Lunaschal'}
+            </h2>
             <p>
-              Start a conversation, write in your journal, or ask me anything.
+              {isWebSearch
+                ? "Ask a question that depends on what's actually out there — it'll search and read pages before answering."
+                : 'Start a conversation, write in your journal, or ask me anything.'}
             </p>
-            <p className="text-sm mt-4">
-              Try: "Today I learned...", "Quiz me on React hooks", or "I went to
-              the dentist"
-            </p>
+            {!isWebSearch && (
+              <p className="text-sm mt-4">
+                Try: "Today I learned...", "Quiz me on React hooks", or "I went
+                to the dentist"
+              </p>
+            )}
           </div>
         )}
         {messages.map(message => {
@@ -438,6 +486,7 @@ export function Chat() {
           // The overnight briefing's plan for the day — crossed off in place;
           // only an explicit "add to to-dos" ever reaches the list.
           const proposedTodos = parseProposedTodos(message.metadata);
+          const { steps, sources } = parseWebSearchMeta(message.metadata);
           const sentAt = formatMessageTime(message.createdAt);
           return (
             <div
@@ -454,6 +503,35 @@ export function Chat() {
                     <MessageMarkdown content={message.content} />
                   )}
                 </div>
+                {steps.length > 0 && (
+                  <details className="mt-1 text-xs text-[var(--color-text-muted)]">
+                    <summary className="cursor-pointer">
+                      {steps.length} research step
+                      {steps.length === 1 ? '' : 's'}
+                    </summary>
+                    <ul className="mt-1 space-y-0.5">
+                      {steps.map((step, i) => (
+                        <li key={i}>· {stepLabel(step)}</li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+                {sources.length > 0 && (
+                  <ul className="mt-1 text-xs space-y-0.5">
+                    {sources.map(source => (
+                      <li key={source.url}>
+                        <a
+                          href={source.url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="text-[var(--color-primary)] hover:underline"
+                        >
+                          {source.title || source.url}
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 {proposedTodos.length > 0 && (
                   <BriefingTodos
                     messageId={message.id}
@@ -480,6 +558,13 @@ export function Chat() {
             </div>
           );
         })}
+        {isStreaming && liveSteps.length > 0 && (
+          <div className="text-xs text-[var(--color-text-muted)] space-y-0.5">
+            {liveSteps.map((step, i) => (
+              <div key={i}>· {stepLabel(step)}</div>
+            ))}
+          </div>
+        )}
         {isStreaming && streamingContent && (
           <div className="flex justify-start">
             <div className="max-w-[80%]">
@@ -599,7 +684,9 @@ export function Chat() {
             onKeyDown={handleKeyDown}
             placeholder={
               isConfigured
-                ? 'Type a message...'
+                ? isWebSearch
+                  ? 'Ask something to look up...'
+                  : 'Type a message...'
                 : 'Configure AI provider first...'
             }
             disabled={!isConfigured || isStreaming}

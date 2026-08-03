@@ -2,10 +2,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { api } from '../hooks/api';
-import { Chat } from './Chat';
+import { api } from '../../hooks/api';
+import { ChatPanel } from './ChatPanel';
 
-vi.mock('../hooks/api', () => ({
+vi.mock('../../hooks/api', () => ({
   api: {
     chat: {
       today: vi.fn(),
@@ -47,7 +47,7 @@ const renderChat = () => {
   });
   return render(
     <QueryClientProvider client={client}>
-      <Chat />
+      <ChatPanel mode="chat" />
     </QueryClientProvider>
   );
 };

@@ -83,6 +83,8 @@ def init_db() -> None:
     _ensure_network_code(db)
     _ensure_writing_project_id(db)
     _ensure_conversation_day_key(db)
+    _ensure_conversation_mode(db)
+    _ensure_websearch_settings(db)
     _ensure_stt_shortcuts(db)
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
@@ -654,6 +656,31 @@ def _ensure_conversation_day_key(db: sqlite3.Connection) -> None:
     if 'day_key' not in cols:
         db.execute('ALTER TABLE conversations ADD COLUMN day_key TEXT')
         db.commit()
+
+
+def _ensure_conversation_mode(db: sqlite3.Connection) -> None:
+    # 'chat' | 'websearch' — distinguishes the two Chat-tab sub-tabs sharing
+    # the same day_key/writing_project_id-scoped conversations. Defaulting to
+    # 'chat' backfills every pre-existing row correctly: they were all the
+    # regular chat before this column existed.
+    cols = {r[1] for r in db.execute('PRAGMA table_info(conversations)')}
+    if 'mode' not in cols:
+        db.execute("ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat'")
+        db.commit()
+
+
+def _ensure_websearch_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'websearch_search_provider' not in cols:
+        # '' | 'brave' | 'tavily' | 'searxng'. Empty means the web-search chat
+        # tab degrades to an explanatory failure per tool call instead of
+        # searching (see backend/websearch/tools.py:is_search_configured).
+        db.execute("ALTER TABLE settings ADD COLUMN websearch_search_provider TEXT DEFAULT ''")
+    if 'websearch_search_key' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN websearch_search_key TEXT')
+    if 'websearch_searxng_url' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN websearch_searxng_url TEXT')
+    db.commit()
 
 
 def _init_fts(db: sqlite3.Connection) -> None:

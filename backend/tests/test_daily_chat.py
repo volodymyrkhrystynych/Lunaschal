@@ -27,11 +27,11 @@ def test_2am_belongs_to_prior_morning():
 
 # --- fixtures ---
 
-def _insert_conv(id, day_key, writing=None, title=None):
+def _insert_conv(id, day_key, writing=None, title=None, mode='chat'):
     connection.get_db().execute(
-        'INSERT INTO conversations(id, title, day_key, writing_project_id, created_at, updated_at) '
-        'VALUES (?,?,?,?,?,?)',
-        (id, title, day_key, writing, NOW, NOW),
+        'INSERT INTO conversations(id, title, day_key, writing_project_id, mode, created_at, updated_at) '
+        'VALUES (?,?,?,?,?,?,?)',
+        (id, title, day_key, writing, mode, NOW, NOW),
     )
 
 
@@ -57,6 +57,25 @@ def test_create_conversation_is_find_or_create(client):
     ).fetchone()
     assert row['title'] is None
     assert row['day_key'] == day_key_for()
+
+
+def test_create_conversation_defaults_to_chat_mode(client):
+    id1 = client.post('/api/chat/conversations', json={}).get_json()['id']
+    row = connection.get_db().execute(
+        'SELECT mode FROM conversations WHERE id=?', (id1,)
+    ).fetchone()
+    assert row['mode'] == 'chat'
+
+
+def test_chat_and_websearch_are_separate_conversations_for_the_same_day(client):
+    chat_id = client.post('/api/chat/conversations', json={'mode': 'chat'}).get_json()['id']
+    ws_id = client.post('/api/chat/conversations', json={'mode': 'websearch'}).get_json()['id']
+    assert chat_id != ws_id
+    # Each mode's find-or-create is idempotent on its own.
+    assert client.post('/api/chat/conversations', json={'mode': 'websearch'}).get_json()['id'] == ws_id
+
+    assert client.get('/api/chat/today').get_json()['id'] == chat_id
+    assert client.get('/api/chat/today?mode=websearch').get_json()['id'] == ws_id
 
 
 def test_new_day_creates_a_new_conversation(client, monkeypatch):
@@ -92,6 +111,10 @@ def test_journal_conversations_filters_and_shape(client):
     _insert_msg('m2', 'c_old', 'assistant', 'yo')
     _insert_conv('c_newer', '2026-02-01')
     _insert_msg('m3', 'c_newer')
+    # A past websearch-mode day — included alongside regular chat, same as the
+    # user asked ("moves to the Journal like the regular chat").
+    _insert_conv('c_ws', '2026-01-15', mode='websearch')
+    _insert_msg('m_ws', 'c_ws')
     # Writing-project chat — excluded.
     _insert_conv('c_writing', '2026-01-01', writing='wp1')
     _insert_msg('m4', 'c_writing')
@@ -105,10 +128,13 @@ def test_journal_conversations_filters_and_shape(client):
     rows = client.get('/api/chat/journal-conversations').get_json()
     ids = [r['id'] for r in rows]
     # excludes today + writing + empty + break-only, day_key DESC
-    assert ids == ['c_newer', 'c_old']
+    assert ids == ['c_newer', 'c_ws', 'c_old']
     old = next(r for r in rows if r['id'] == 'c_old')
     assert old['messageCount'] == 2
     assert old['dayKey'] == '2026-01-01'
+    assert old['mode'] == 'chat'
+    ws = next(r for r in rows if r['id'] == 'c_ws')
+    assert ws['mode'] == 'websearch'
 
 
 # --- title generation ---

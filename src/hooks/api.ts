@@ -379,6 +379,7 @@ export interface Conversation {
   id: string;
   title: string | null;
   writingProjectId?: string | null;
+  mode?: ChatMode;
   createdAt: string;
   updatedAt: string;
 }
@@ -427,11 +428,16 @@ export interface BriefingTodoDecision {
   list?: TodoList;
 }
 
+// The Chat tab's two sub-tabs: the regular daily chat, and one that answers by
+// actually searching the web. Each is its own conversation per chat day.
+export type ChatMode = 'chat' | 'websearch';
+
 // A past chat day shown in the Journal feed (collapsed, expand to load messages).
 export interface DatedConversation {
   id: string;
   title: string | null;
   dayKey: string;
+  mode: ChatMode;
   messageCount: number;
   createdAt: string;
   updatedAt: string;
@@ -469,6 +475,11 @@ export interface AppSettings {
   briefingGoals: string;
   briefingThinking: boolean;
   briefingMaxTokens: number;
+  /** '' | 'brave' | 'tavily' | 'searxng' — empty means the web-search chat tab
+   * degrades to an explanatory failure instead of searching. */
+  websearchSearchProvider: string;
+  hasWebsearchSearchKey: boolean;
+  websearchSearxngUrl: string;
 }
 
 export interface WhisperModel {
@@ -911,8 +922,11 @@ export const api = {
 
   settings: {
     get: () => get<AppSettings | null>('/api/settings'),
-    updateAI: (data: Partial<AppSettings & { hfToken?: string }>) =>
-      patch<{ success: boolean }>('/api/settings/ai', data),
+    updateAI: (
+      data: Partial<
+        AppSettings & { hfToken?: string; websearchSearchKey?: string }
+      >
+    ) => patch<{ success: boolean }>('/api/settings/ai', data),
     updateShortcuts: (data: {
       sttPasteKey?: string;
       sttVoiceKey?: string;
@@ -1467,7 +1481,8 @@ export const api = {
   },
 
   chat: {
-    today: () => get<ConversationWithMessages | null>('/api/chat/today'),
+    today: (mode: ChatMode = 'chat') =>
+      get<ConversationWithMessages | null>(`/api/chat/today?mode=${mode}`),
     journalConversations: () =>
       get<DatedConversation[]>('/api/chat/journal-conversations'),
     generateTitle: (id: string) =>
@@ -1478,7 +1493,7 @@ export const api = {
     listConversations: () => get<Conversation[]>('/api/chat/conversations'),
     getConversation: (id: string) =>
       get<ConversationWithMessages | null>(`/api/chat/conversations/${id}`),
-    createConversation: (data?: { title?: string }) =>
+    createConversation: (data?: { title?: string; mode?: ChatMode }) =>
       post<{ id: string }>('/api/chat/conversations', data ?? {}),
     updateTitle: (id: string, title: string) =>
       patch<{ success: boolean }>(`/api/chat/conversations/${id}/title`, {

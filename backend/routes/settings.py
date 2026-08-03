@@ -93,6 +93,10 @@ def get_settings():
         'briefingGoals': s.get('briefing_goals') or '',
         'briefingThinking': bool(s.get('briefing_thinking', 0)),
         'briefingMaxTokens': s.get('briefing_max_tokens') or 16384,
+        'websearchSearchProvider': s.get('websearch_search_provider') or '',
+        # Never echo the key itself back to the client.
+        'hasWebsearchSearchKey': bool(s.get('websearch_search_key')),
+        'websearchSearxngUrl': s.get('websearch_searxng_url') or '',
     })
 
 
@@ -122,6 +126,9 @@ def update_ai():
         # No context-window field at all: llama-server allocates the KV cache when
         # it loads the model, so the window is a serving-config concern
         # (llama/presets.ini), not a per-request one.
+        'websearchSearchProvider': 'websearch_search_provider',
+        'websearchSearchKey': 'websearch_search_key',
+        'websearchSearxngUrl': 'websearch_searxng_url',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():

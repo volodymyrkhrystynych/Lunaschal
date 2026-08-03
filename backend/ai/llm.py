@@ -197,17 +197,21 @@ def chat_stream_deltas(messages: list[dict]):
             yield text
 
 
-def chat_with_tools(messages: list[dict], tools: list[dict]):
+def chat_with_tools(messages: list[dict], tools: list[dict], max_tokens: int | None = None):
     """One tool-calling turn; returns the assistant message.
 
     llama-server parses Gemma 4's native `<|tool_call>call:NAME{...}` notation into
     OpenAI-shaped `tool_calls` via its peg-gemma4 grammar, which requires the
     server to run with `--jinja` (see llama/start-llama.sh).
+
+    `max_tokens` caps a single tool-selection turn (e.g. the web-search chat's
+    gather loop) so a run through several turns stays bounded; omitted for
+    callers whose tool turn is also the final answer.
     """
     c = get_provider_config()
     client = get_llama_client(c)
     resp = client.chat.completions.create(
         model=get_model(c), messages=messages, tools=tools, timeout=_TIMEOUT,
-        **_request_kwargs(thinking=False, max_tokens=None),
+        **_request_kwargs(thinking=False, max_tokens=max_tokens),
     )
     return resp.choices[0].message
