@@ -60,6 +60,12 @@ its decision (`deploy`, `skip-branch`, `skip-dirty`, or `up-to-date`) — a
 `skip-*` result while you're mid-feature-branch is expected and correct, not
 an error.
 
+`deploy-check.sh` also refuses to pull (and exits non-zero) if `origin` isn't
+the exact repo URL it was built for — it auto-executes whatever it pulls
+(`npm ci` / `pip install` / `npm run build`), so it never trusts a remote
+that's been repointed, accidentally or otherwise. If you ever fork or rename
+the repo, update `EXPECTED_REMOTE` in `ops/deploy-check.sh` to match.
+
 ## 3. Set up the backup destinations
 
 ### External HDD

@@ -25,8 +25,12 @@ trap 'rm -rf "$STAGING"' EXIT
 
 log() { echo "$(date -Iseconds) backup: $*"; }
 
+DB_SNAPSHOT_OK=1
 log "snapshotting DB"
-.venv/bin/python -m backend.ops.backup snapshot data/lunaschal.db "$STAGING/lunaschal.db"
+if ! .venv/bin/python -m backend.ops.backup snapshot data/lunaschal.db "$STAGING/lunaschal.db"; then
+  log "DB snapshot failed — continuing with media-only backup (lunaschal.db will be missing from today's snapshot)"
+  DB_SNAPSHOT_OK=0
+fi
 
 backup_to_hdd() {
   local base="$1"
@@ -43,7 +47,11 @@ backup_to_hdd() {
 
   mkdir -p "$dest/data"
   rsync -a --delete "${link_args[@]}" --exclude='lunaschal.db*' data/ "$dest/data/"
-  rsync -a "$STAGING/lunaschal.db" "$dest/data/lunaschal.db"
+  if [ "$DB_SNAPSHOT_OK" = 1 ]; then
+    rsync -a "$STAGING/lunaschal.db" "$dest/data/lunaschal.db"
+  else
+    log "skipping lunaschal.db in $dest — DB snapshot failed earlier"
+  fi
   log "HDD snapshot written to $dest"
 
   local existing
@@ -80,7 +88,11 @@ backup_to_tablet() {
 
   ssh "$target" "mkdir -p '$dest/data'"
   rsync -a --delete -e ssh "${link_args[@]}" --exclude='lunaschal.db*' data/ "$target:$dest/data/"
-  rsync -a -e ssh "$STAGING/lunaschal.db" "$target:$dest/data/lunaschal.db"
+  if [ "$DB_SNAPSHOT_OK" = 1 ]; then
+    rsync -a -e ssh "$STAGING/lunaschal.db" "$target:$dest/data/lunaschal.db"
+  else
+    log "skipping lunaschal.db in $host:$dest — DB snapshot failed earlier"
+  fi
   log "tablet snapshot written to $host:$dest"
 
   local existing
@@ -94,5 +106,10 @@ backup_to_tablet() {
 
 [ -n "$BACKUP_HDD_PATH" ] && backup_to_hdd "$BACKUP_HDD_PATH"
 [ -n "$BACKUP_TABLET_HOST" ] && backup_to_tablet "$BACKUP_TABLET_USER" "$BACKUP_TABLET_HOST" "$BACKUP_TABLET_PATH"
+
+if [ "$DB_SNAPSHOT_OK" != 1 ]; then
+  log "done, but with errors — DB snapshot failed (see above); media backup still ran"
+  exit 1
+fi
 
 log "done"

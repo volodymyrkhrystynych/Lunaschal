@@ -10,6 +10,17 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+# This watcher executes whatever it pulls (npm ci / pip install / npm run build
+# all run unattended), so it only ever trusts the one remote this repo was set
+# up with — not whatever `origin` happens to point at if it were ever
+# reconfigured, accidentally or otherwise.
+EXPECTED_REMOTE='git@github.com:volodymyrkhrystynych/Lunaschal.git'
+ACTUAL_REMOTE=$(git remote get-url origin)
+if [ "$ACTUAL_REMOTE" != "$EXPECTED_REMOTE" ]; then
+  echo "$(date -Iseconds) deploy-check: origin is '$ACTUAL_REMOTE', expected '$EXPECTED_REMOTE' — refusing to auto-pull" >&2
+  exit 1
+fi
+
 git fetch origin main --quiet
 
 LOCAL_SHA=$(git rev-parse HEAD)
@@ -38,7 +49,7 @@ if echo "$CHANGED" | grep -qE '^(package\.json|package-lock\.json)$'; then
   npm ci
 fi
 
-if echo "$CHANGED" | grep -qE '^requirements.*\.txt$'; then
+if echo "$CHANGED" | grep -qE '^requirements\.txt$'; then
   echo "Python requirements changed — reinstalling"
   .venv/bin/pip install -r requirements.txt
 fi
