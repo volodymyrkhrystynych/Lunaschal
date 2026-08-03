@@ -426,6 +426,13 @@ def discuss(idea_id):
     db = get_db()
     if not db.execute('SELECT 1 FROM ideas WHERE id=?', (idea_id,)).fetchone():
         return jsonify({'error': 'Not found'}), 404
+    # The conversation must actually belong to this idea — otherwise a stale or
+    # mismatched conversationId would append idea-discussion turns to someone
+    # else's conversation (another idea's, or a general chat/Writing one).
+    if not db.execute(
+        'SELECT 1 FROM conversations WHERE id=? AND idea_id=?', (conversation_id, idea_id)
+    ).fetchone():
+        return jsonify({'error': 'Not found'}), 404
 
     # Persist the user's turn before streaming: a disconnect mid-answer should
     # not lose the question.

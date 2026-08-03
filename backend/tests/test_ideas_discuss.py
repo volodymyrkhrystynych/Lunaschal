@@ -211,6 +211,24 @@ def test_discuss_validates_its_input(client):
                        json={'conversationId': 'c', 'message': 'q'}).status_code == 404
 
 
+def test_discuss_rejects_a_conversation_belonging_to_another_idea(client):
+    """A conversationId must actually belong to this idea — otherwise a stale
+    or mismatched id would append idea-discussion turns to someone else's
+    conversation (another idea's, or a general chat/Writing one)."""
+    idea_a = _idea(client, title='A')
+    idea_b = _idea(client, title='B')
+    conversation_id = client.post(
+        f'/api/ideas/{idea_a}/conversations', json={}
+    ).get_json()['id']
+
+    r = client.post(f'/api/ideas/{idea_b}/discuss',
+                     json={'conversationId': conversation_id, 'message': 'q'})
+    assert r.status_code == 404
+    assert get_db().execute(
+        'SELECT COUNT(*) AS n FROM messages WHERE conversation_id=?', (conversation_id,)
+    ).fetchone()['n'] == 0
+
+
 def test_discuss_needs_ai(client, monkeypatch):
     import backend.routes.ideas as routes
     monkeypatch.setattr(routes, 'is_ai_configured', lambda: False)
