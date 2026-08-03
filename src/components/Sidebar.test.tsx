@@ -12,7 +12,10 @@ vi.mock('../hooks/api', () => ({
   },
 }));
 
-function renderSidebar(newspapersNeedAttention?: boolean) {
+function renderSidebar(
+  lifestyleNeedsAttention?: boolean,
+  newspapersNeedAttention?: boolean
+) {
   const queryClient = new QueryClient();
   return render(
     <QueryClientProvider client={queryClient}>
@@ -26,6 +29,7 @@ function renderSidebar(newspapersNeedAttention?: boolean) {
           onViewChange={() => {}}
           isOpen
           onToggle={() => {}}
+          lifestyleNeedsAttention={lifestyleNeedsAttention}
           newspapersNeedAttention={newspapersNeedAttention}
         />
       </ShortcutProvider>
@@ -33,14 +37,26 @@ function renderSidebar(newspapersNeedAttention?: boolean) {
   );
 }
 
-describe('Sidebar newspapers badge', () => {
+describe('Sidebar selfie badge', () => {
   it('shows no badge by default', () => {
     renderSidebar(false);
+    expect(screen.queryByTitle(/No selfie logged today/)).toBeNull();
+  });
+
+  it('shows the exclamation badge when today has no selfie', () => {
+    renderSidebar(true);
+    expect(screen.queryByTitle(/No selfie logged today/)).toBeTruthy();
+  });
+});
+
+describe('Sidebar newspapers badge', () => {
+  it('shows no badge by default', () => {
+    renderSidebar(false, false);
     expect(screen.queryByTitle(/haven't all synced/)).toBeNull();
   });
 
   it('shows the exclamation badge when today has a missing edition', () => {
-    renderSidebar(true);
+    renderSidebar(false, true);
     expect(screen.queryByTitle(/haven't all synced/)).toBeTruthy();
   });
 });
