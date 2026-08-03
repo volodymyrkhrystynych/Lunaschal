@@ -46,8 +46,14 @@ def _get_oauth_client() -> tuple[str | None, str | None]:
 
 
 def _get_account():
+    # updated_at, not created_at: reconnecting a previously-used account (e.g.
+    # after picking the wrong Google account on the consent screen and fixing
+    # it) is an UPDATE via the ON CONFLICT upsert below, which bumps
+    # updated_at but leaves created_at at its original value — ordering by
+    # created_at would keep returning a since-reconnected-away-from account
+    # instead of the one actually active now.
     return get_db().execute(
-        "SELECT * FROM email_accounts WHERE provider='gmail' ORDER BY created_at DESC LIMIT 1"
+        "SELECT * FROM email_accounts WHERE provider='gmail' ORDER BY updated_at DESC LIMIT 1"
     ).fetchone()
 
 
