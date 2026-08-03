@@ -1539,13 +1539,6 @@ export const api = {
         '/api/chat/classify',
         { message }
       ),
-    saveJournal: (data: {
-      conversationId: string;
-      messageId?: string;
-      title: string;
-      content: string;
-      tags: string[];
-    }) => post<{ id: string }>('/api/chat/save-journal', data),
     saveCalendar: (data: {
       conversationId: string;
       messageId?: string;

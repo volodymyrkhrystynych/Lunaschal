@@ -12,11 +12,9 @@ import { readSSE } from '@/lib/sse';
 import { formatMessageTime } from '@/lib/chatTime';
 
 interface PendingSave {
-  type: 'journal' | 'calendar';
   messageId: string;
   data: {
     title: string;
-    content?: string;
     description?: string;
     date?: string;
     time?: string;
@@ -31,14 +29,12 @@ interface PendingQuiz {
 
 interface ClassifyResult {
   intent:
-    | 'journal'
     | 'calendar'
     | 'flashcard_request'
     | 'note_to_self'
     | 'question'
     | 'conversation';
   confidence: number;
-  journalEntry?: { title: string; content: string; tags: string[] };
   calendarEvent?: {
     title: string;
     description?: string;
@@ -118,27 +114,16 @@ export function Chat() {
     mutationFn: (message: string) => api.chat.classify(message),
   });
 
-  /** Ask the model whether the message was really a journal entry, a calendar
-   * event or a flashcard request, and offer to save it if so. Fire-and-forget:
-   * a failed classification just means no offer. */
+  /** Ask the model whether the message was really a calendar event or a
+   * flashcard request, and offer to save it if so. Fire-and-forget: a failed
+   * classification just means no offer. */
   const classifyUserMessage = (message: string, messageId: string) => {
     classifyMessage.mutate(message, {
       onSuccess: result => {
         const r = result as ClassifyResult;
         if (r.confidence < 0.7) return;
-        if (r.intent === 'journal' && r.journalEntry) {
+        if (r.intent === 'calendar' && r.calendarEvent) {
           setPendingSave({
-            type: 'journal',
-            messageId,
-            data: {
-              title: r.journalEntry.title,
-              content: r.journalEntry.content,
-              tags: r.journalEntry.tags,
-            },
-          });
-        } else if (r.intent === 'calendar' && r.calendarEvent) {
-          setPendingSave({
-            type: 'calendar',
             messageId,
             data: {
               title: r.calendarEvent.title,
@@ -156,15 +141,6 @@ export function Chat() {
       },
     });
   };
-
-  const saveJournal = useMutation({
-    mutationFn: api.chat.saveJournal,
-    onSuccess: () => {
-      invalidateToday();
-      queryClient.invalidateQueries({ queryKey: ['journal'] });
-      setPendingSave(null);
-    },
-  });
 
   const saveCalendar = useMutation({
     mutationFn: api.chat.saveCalendar,
@@ -359,25 +335,15 @@ export function Chat() {
 
   const handleSave = () => {
     if (!pendingSave || !conversationId) return;
-    if (pendingSave.type === 'journal') {
-      saveJournal.mutate({
-        conversationId,
-        messageId: pendingSave.messageId,
-        title: pendingSave.data.title,
-        content: pendingSave.data.content || '',
-        tags: pendingSave.data.tags,
-      });
-    } else {
-      saveCalendar.mutate({
-        conversationId,
-        messageId: pendingSave.messageId,
-        title: pendingSave.data.title,
-        description: pendingSave.data.description || '',
-        date: pendingSave.data.date || new Date().toISOString().split('T')[0],
-        time: pendingSave.data.time,
-        tags: pendingSave.data.tags,
-      });
-    }
+    saveCalendar.mutate({
+      conversationId,
+      messageId: pendingSave.messageId,
+      title: pendingSave.data.title,
+      description: pendingSave.data.description || '',
+      date: pendingSave.data.date || new Date().toISOString().split('T')[0],
+      time: pendingSave.data.time,
+      tags: pendingSave.data.tags,
+    });
   };
 
   const toggleRecording = async () => {
@@ -444,7 +410,7 @@ export function Chat() {
   };
 
   const isConfigured = !!settings?.llamaUrl;
-  const isSaving = saveJournal.isPending || saveCalendar.isPending;
+  const isSaving = saveCalendar.isPending;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -473,12 +439,10 @@ export function Chat() {
         {!hasChat && isConfigured && (
           <div className="text-center text-[var(--color-text-muted)] py-12">
             <h2 className="text-xl mb-2">Welcome to Lunaschal</h2>
-            <p>
-              Start a conversation, write in your journal, or ask me anything.
-            </p>
+            <p>Start a conversation or ask me anything.</p>
             <p className="text-sm mt-4">
-              Try: "Today I learned...", "Quiz me on React hooks", "note to
-              self: ...", or "I went to the dentist"
+              Try: "Quiz me on React hooks", "note to self: ...", or "I went to
+              the dentist"
             </p>
           </div>
         )}
@@ -728,13 +692,11 @@ export function Chat() {
           <div className="flex items-start gap-3">
             <div className="flex-1">
               <div className="text-sm font-medium text-[var(--color-text)]">
-                {pendingSave.type === 'journal'
-                  ? 'Save as journal entry?'
-                  : 'Save as calendar event?'}
+                Save as calendar event?
               </div>
               <div className="text-sm text-[var(--color-text-muted)] mt-1">
                 <span className="font-medium">{pendingSave.data.title}</span>
-                {pendingSave.type === 'calendar' && pendingSave.data.date && (
+                {pendingSave.data.date && (
                   <span className="ml-2">({pendingSave.data.date})</span>
                 )}
               </div>

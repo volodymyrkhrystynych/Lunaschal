@@ -12,7 +12,6 @@ vi.mock('../hooks/api', () => ({
       createConversation: vi.fn(),
       addMessage: vi.fn(),
       classify: vi.fn(),
-      saveJournal: vi.fn(),
       saveCalendar: vi.fn(),
     },
     settings: { get: vi.fn() },
@@ -115,23 +114,24 @@ describe('Chat send ordering', () => {
     );
   });
 
-  it('still offers to save when the classifier comes back journal', async () => {
+  it('still offers to save when the classifier comes back calendar', async () => {
     const stream = openStream();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
     vi.mocked(api.chat.classify).mockResolvedValue({
-      intent: 'journal',
+      intent: 'calendar',
       confidence: 0.9,
-      journalEntry: {
-        title: 'Morning run',
-        content: 'Ran 10k.',
-        tags: ['run'],
+      calendarEvent: {
+        title: 'Dentist appointment',
+        description: 'Checkup',
+        date: '2026-08-05',
+        tags: [],
       },
     } as never);
 
     renderChat();
     const input = await screen.findByPlaceholderText('Type a message...');
     fireEvent.change(input, {
-      target: { value: 'went for a long run this morning and felt great' },
+      target: { value: 'going to the dentist next week' },
     });
     fireEvent.keyDown(input, { key: 'Enter' });
 
@@ -139,7 +139,26 @@ describe('Chat send ordering', () => {
     stream.push('Nice!');
     stream.close();
 
-    expect(await screen.findByText(/Morning run/)).toBeTruthy();
+    expect(await screen.findByText(/Dentist appointment/)).toBeTruthy();
+  });
+
+  it('still shows "Saved to journal" on historical messages saved before the feature was removed', async () => {
+    vi.mocked(api.chat.today).mockResolvedValue({
+      id: 'c1',
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          content: 'went for a long run this morning',
+          metadata: JSON.stringify({ savedAsJournal: 'entry1' }),
+          createdAt: '2026-01-01T08:00:00.000Z',
+        },
+      ],
+    } as never);
+
+    renderChat();
+
+    expect(await screen.findByText('Saved to journal')).toBeTruthy();
   });
 });
 
