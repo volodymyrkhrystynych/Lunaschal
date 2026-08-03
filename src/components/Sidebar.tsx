@@ -23,6 +23,7 @@ interface SidebarProps {
   onViewChange: (view: View) => void;
   isOpen: boolean;
   onToggle: () => void;
+  lifestyleNeedsAttention?: boolean;
 }
 
 export const navItems: { view: View; label: string; icon: string }[] = [
@@ -48,6 +49,7 @@ export function Sidebar({
   onViewChange,
   isOpen,
   onToggle,
+  lifestyleNeedsAttention,
 }: SidebarProps) {
   const { level } = useShortcuts();
   const isMobile = useIsMobile();
@@ -87,6 +89,15 @@ export function Sidebar({
         >
           <span>{item.icon}</span>
           <span>{item.label}</span>
+          {item.view === 'lifestyle' && lifestyleNeedsAttention && (
+            <span
+              style={{ color: '#f0b429' }}
+              title="No selfie logged today"
+              aria-label="No selfie logged today"
+            >
+              ❗
+            </span>
+          )}
         </button>
       ))}
     </nav>
