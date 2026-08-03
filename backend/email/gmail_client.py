@@ -34,8 +34,12 @@ class HistoryExpiredError(Exception):
     """Raised when Gmail's history cursor is too old (404 from history.list).
 
     Gmail only retains history records for a bounded window (on the order of
-    a week) — callers should catch this and fall back to a short date-range
-    re-listing, then re-baseline history_id from a fresh get_profile() call.
+    a week) — callers should catch this and fall back to a full re-list of
+    the mailbox, then re-baseline history_id from a fresh get_profile() call.
+    Re-listing everything is safe and cheap: already-synced messages are
+    skipped before the expensive per-message fetch (see
+    backend/email/sync.py::_insert_message), so this can't create duplicates
+    and only pays for messages that are actually new.
     """
 
 
@@ -130,9 +134,12 @@ def list_history(access_token: str, start_history_id: str, page_token: str | Non
     return resp.json()
 
 
-def list_message_ids_since(access_token: str, after_date: str, page_token: str | None = None) -> dict:
-    """`after_date` is Gmail search syntax (YYYY/MM/DD)."""
-    params = {'q': f'after:{after_date}', 'maxResults': 100}
+def list_all_message_ids(access_token: str, page_token: str | None = None) -> dict:
+    """Lists every message in the mailbox, paginated 100 at a time. No `q` or
+    `labelIds` filter: the goal is a complete local mirror for backup, so
+    this deliberately doesn't bound by date. Gmail excludes SPAM/TRASH from
+    an unfiltered listing by default (`includeSpamTrash` defaults to false)."""
+    params = {'maxResults': 100}
     if page_token:
         params['pageToken'] = page_token
     resp = requests.get(

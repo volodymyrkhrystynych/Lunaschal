@@ -517,7 +517,6 @@ export interface AppSettings {
   hasGoogleOauthClient: boolean;
   emailSyncEnabled: boolean;
   emailSyncIntervalMinutes: number;
-  emailBackfillDays: number;
 }
 
 export interface WhisperModel {

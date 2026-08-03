@@ -1,12 +1,15 @@
 """Per-account Gmail sync: History API for steady-state incremental polling,
-a date-range listing for first connect and as the recovery path when a
+a full-mailbox listing for first connect and as the recovery path when a
 history cursor has expired (Gmail only retains history for a bounded
-window). Shaped like backend/newspapers/sync.py::sync_today — try/except,
-returns a status dict, never raises, so one bad cycle can't kill the
-scheduler thread that calls this in a loop."""
+window). The goal is a complete local mirror for backup, so there's no
+day-bounded window anywhere — re-listing the whole mailbox is cheap even on
+recovery, since already-synced messages are skipped before the expensive
+per-message fetch (see _insert_message). Shaped like
+backend/newspapers/sync.py::sync_today — try/except, returns a status dict,
+never raises, so one bad cycle can't kill the scheduler thread that calls
+this in a loop."""
 import json
 import time
-from datetime import date, timedelta
 
 from ulid import ULID
 
@@ -14,18 +17,10 @@ from backend.ai.background import run_bg
 from backend.db.connection import get_db
 from backend.email import gmail_client
 
-# Re-anchor window used only when a history cursor has expired. Matches
-# Gmail's documented history retention (on the order of a week, see the
-# module docstring) rather than a shorter value: recovering fewer days than
-# what's actually still retained means any mail in that gap is gone for
-# good once the cursor resets, whereas over-recovering just costs a few
-# extra, idempotent (UNIQUE(account_id, gmail_id)) re-fetches.
-HISTORY_RECOVERY_DAYS = 7
-
 
 def _get_oauth_settings(db) -> dict | None:
     row = db.execute(
-        'SELECT google_oauth_client_id, google_oauth_client_secret, email_backfill_days FROM settings LIMIT 1'
+        'SELECT google_oauth_client_id, google_oauth_client_secret FROM settings LIMIT 1'
     ).fetchone()
     return dict(row) if row else None
 
@@ -58,8 +53,7 @@ def _insert_message(db, account_id: str, gmail_id: str, access_token: str) -> st
     return row_id
 
 
-def _backfill(db, account_row, access_token: str, backfill_days: int) -> list[str]:
-    after_date = (date.today() - timedelta(days=backfill_days)).strftime('%Y/%m/%d')
+def _backfill(db, account_row, access_token: str) -> list[str]:
     # Snapshot the history-id baseline before paging through messages, not
     # after: messages.list is newest-first, so a message that arrives while
     # a multi-page backfill is in flight can land before pagination reaches
@@ -73,7 +67,7 @@ def _backfill(db, account_row, access_token: str, backfill_days: int) -> list[st
     new_ids: list[str] = []
     page_token = None
     while True:
-        page = gmail_client.list_message_ids_since(access_token, after_date, page_token)
+        page = gmail_client.list_all_message_ids(access_token, page_token)
         for msg in page.get('messages') or []:
             row_id = _insert_message(db, account_row['id'], msg['id'], access_token)
             if row_id:
@@ -130,15 +124,14 @@ def sync_account(account_row) -> dict:
         access_token = gmail_client.get_valid_access_token(
             db, dict(account_row), client_id, client_secret
         )
-        backfill_days = (settings.get('email_backfill_days') if settings else None) or 30
 
         if account_row['history_id'] is None:
-            new_ids = _backfill(db, account_row, access_token, backfill_days)
+            new_ids = _backfill(db, account_row, access_token)
         else:
             try:
                 new_ids = _incremental(db, account_row, access_token)
             except gmail_client.HistoryExpiredError:
-                new_ids = _backfill(db, account_row, access_token, HISTORY_RECOVERY_DAYS)
+                new_ids = _backfill(db, account_row, access_token)
 
         now = int(time.time())
         db.execute(
