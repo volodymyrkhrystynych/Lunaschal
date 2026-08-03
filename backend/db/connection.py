@@ -520,11 +520,6 @@ def _ensure_email_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN email_sync_enabled INTEGER DEFAULT 1')
     if 'email_sync_interval_minutes' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN email_sync_interval_minutes INTEGER DEFAULT 15')
-    if 'email_backfill_days' not in cols:
-        # Only consulted while an account's history_id IS NULL (first connect,
-        # or just recovered from an expired history cursor) — changing this
-        # afterwards has no effect on an already-synced account.
-        db.execute('ALTER TABLE settings ADD COLUMN email_backfill_days INTEGER DEFAULT 30')
     if 'google_oauth_client_id' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_id TEXT')
     if 'google_oauth_client_secret' not in cols:

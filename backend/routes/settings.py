@@ -96,7 +96,6 @@ def get_settings():
         'hasGoogleOauthClient': bool(s.get('google_oauth_client_id')) and bool(s.get('google_oauth_client_secret')),
         'emailSyncEnabled': bool(s.get('email_sync_enabled', 1)),
         'emailSyncIntervalMinutes': s.get('email_sync_interval_minutes') or 15,
-        'emailBackfillDays': s.get('email_backfill_days') or 30,
     })
 
 
@@ -130,7 +129,6 @@ def update_ai():
         'googleOauthClientSecret': 'google_oauth_client_secret',
         'emailSyncEnabled': 'email_sync_enabled',
         'emailSyncIntervalMinutes': 'email_sync_interval_minutes',
-        'emailBackfillDays': 'email_backfill_days',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():

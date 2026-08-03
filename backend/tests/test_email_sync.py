@@ -71,8 +71,8 @@ def test_missing_oauth_client_is_an_error(client, account_row):
 def test_first_connect_backfills_and_sets_history_id(client, monkeypatch, account_row, run_bg_sync):
     monkeypatch.setattr(gmail_client, 'get_valid_access_token', lambda db, row, cid, cs: 'token123')
     monkeypatch.setattr(
-        gmail_client, 'list_message_ids_since',
-        lambda token, after_date, page_token=None: {'messages': [{'id': 'm1'}, {'id': 'm2'}]},
+        gmail_client, 'list_all_message_ids',
+        lambda token, page_token=None: {'messages': [{'id': 'm1'}, {'id': 'm2'}]},
     )
     monkeypatch.setattr(gmail_client, 'get_message', lambda token, gid: _gmail_message(gid))
     monkeypatch.setattr(gmail_client, 'get_profile', lambda token: {'emailAddress': 'me@example.com', 'historyId': 'h100'})
@@ -91,11 +91,35 @@ def test_first_connect_backfills_and_sets_history_id(client, monkeypatch, accoun
     ).fetchall())
 
 
+def test_first_connect_pages_through_the_whole_mailbox(client, monkeypatch, account_row):
+    """First connect must not stop at one page or apply any date bound — the
+    goal is a complete local mirror, so it keeps paging until nextPageToken
+    runs out, however far back that goes."""
+    monkeypatch.setattr(gmail_client, 'get_valid_access_token', lambda db, row, cid, cs: 'token123')
+    pages = {
+        None: {'messages': [{'id': 'm1'}], 'nextPageToken': 'p2'},
+        'p2': {'messages': [{'id': 'm2'}], 'nextPageToken': 'p3'},
+        'p3': {'messages': [{'id': 'm3'}]},
+    }
+    monkeypatch.setattr(
+        gmail_client, 'list_all_message_ids',
+        lambda token, page_token=None: pages[page_token],
+    )
+    monkeypatch.setattr(gmail_client, 'get_message', lambda token, gid: _gmail_message(gid))
+    monkeypatch.setattr(gmail_client, 'get_profile', lambda token: {'emailAddress': 'me@example.com', 'historyId': 'h100'})
+
+    result = sync.sync_account(account_row)
+
+    assert result == {'status': 'ok', 'newCount': 3}
+    rows = get_db().execute('SELECT gmail_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchall()
+    assert {r['gmail_id'] for r in rows} == {'m1', 'm2', 'm3'}
+
+
 def test_rerunning_backfill_is_idempotent(client, monkeypatch, account_row):
     monkeypatch.setattr(gmail_client, 'get_valid_access_token', lambda db, row, cid, cs: 'token123')
     monkeypatch.setattr(
-        gmail_client, 'list_message_ids_since',
-        lambda token, after_date, page_token=None: {'messages': [{'id': 'm1'}]},
+        gmail_client, 'list_all_message_ids',
+        lambda token, page_token=None: {'messages': [{'id': 'm1'}]},
     )
     monkeypatch.setattr(gmail_client, 'get_message', lambda token, gid: _gmail_message(gid))
     monkeypatch.setattr(gmail_client, 'get_profile', lambda token: {'emailAddress': 'me@example.com', 'historyId': 'h100'})
@@ -139,7 +163,11 @@ def test_incremental_sync_inserts_new_messages(client, monkeypatch, account_row)
     assert updated['history_id'] == 'h2'
 
 
-def test_expired_history_cursor_falls_back_to_backfill(client, monkeypatch, account_row):
+def test_expired_history_cursor_falls_back_to_full_relist(client, monkeypatch, account_row):
+    """Recovery from an expired history cursor must re-list the entire
+    mailbox (no date bound), so mail older than any short recovery window
+    is still recovered — proven here with a message that would fall outside
+    a short recency window but still gets picked up."""
     db = get_db()
     db.execute('UPDATE email_accounts SET history_id=? WHERE id=?', ('stale', account_row['id']))
     db.commit()
@@ -152,8 +180,8 @@ def test_expired_history_cursor_falls_back_to_backfill(client, monkeypatch, acco
 
     monkeypatch.setattr(gmail_client, 'list_history', raise_expired)
     monkeypatch.setattr(
-        gmail_client, 'list_message_ids_since',
-        lambda token, after_date, page_token=None: {'messages': [{'id': 'recovered1'}]},
+        gmail_client, 'list_all_message_ids',
+        lambda token, page_token=None: {'messages': [{'id': 'ancient-message'}]},
     )
     monkeypatch.setattr(gmail_client, 'get_message', lambda token, gid: _gmail_message(gid))
     monkeypatch.setattr(gmail_client, 'get_profile', lambda token: {'emailAddress': 'me@example.com', 'historyId': 'h-fresh'})
@@ -164,12 +192,12 @@ def test_expired_history_cursor_falls_back_to_backfill(client, monkeypatch, acco
     updated = get_db().execute('SELECT * FROM email_accounts WHERE id=?', (account_row['id'],)).fetchone()
     assert updated['history_id'] == 'h-fresh'
     row = get_db().execute('SELECT gmail_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchone()
-    assert row['gmail_id'] == 'recovered1'
+    assert row['gmail_id'] == 'ancient-message'
 
 
 def test_backfill_snapshots_history_id_before_paging_messages(client, monkeypatch, account_row):
     """Regression: get_profile (the history_id baseline) must be called
-    before list_message_ids_since starts paginating, not after. A message
+    before list_all_message_ids starts paginating, not after. A message
     arriving mid-backfill would already be missed by pagination (newest
     first) but, if the baseline were snapshotted afterwards, would also fall
     at-or-before that baseline and so be silently skipped by every future
@@ -181,49 +209,17 @@ def test_backfill_snapshots_history_id_before_paging_messages(client, monkeypatc
         call_order.append('get_profile')
         return {'emailAddress': 'me@example.com', 'historyId': 'h100'}
 
-    def fake_list_message_ids_since(token, after_date, page_token=None):
-        call_order.append('list_message_ids_since')
+    def fake_list_all_message_ids(token, page_token=None):
+        call_order.append('list_all_message_ids')
         return {'messages': [{'id': 'm1'}]}
 
     monkeypatch.setattr(gmail_client, 'get_profile', fake_get_profile)
-    monkeypatch.setattr(gmail_client, 'list_message_ids_since', fake_list_message_ids_since)
+    monkeypatch.setattr(gmail_client, 'list_all_message_ids', fake_list_all_message_ids)
     monkeypatch.setattr(gmail_client, 'get_message', lambda token, gid: _gmail_message(gid))
 
     sync.sync_account(account_row)
 
     assert call_order[0] == 'get_profile'
-
-
-def test_history_recovery_window_matches_documented_retention(client, monkeypatch, account_row):
-    """Regression: the history-expiry recovery window must not be shorter
-    than Gmail's actual history retention (documented in sync.py as 'on the
-    order of a week') — recovering fewer days than what's still retained
-    means mail in that gap is unrecoverable once the cursor re-anchors."""
-    db = get_db()
-    db.execute('UPDATE email_accounts SET history_id=? WHERE id=?', ('stale', account_row['id']))
-    db.commit()
-    account_row = dict(db.execute('SELECT * FROM email_accounts WHERE id=?', (account_row['id'],)).fetchone())
-
-    def raise_expired(token, start_history_id, page_token=None):
-        raise gmail_client.HistoryExpiredError('expired')
-
-    captured = {}
-
-    def fake_list(token, after_date, page_token=None):
-        captured['after_date'] = after_date
-        return {'messages': []}
-
-    monkeypatch.setattr(gmail_client, 'get_valid_access_token', lambda db, row, cid, cs: 'token123')
-    monkeypatch.setattr(gmail_client, 'list_history', raise_expired)
-    monkeypatch.setattr(gmail_client, 'list_message_ids_since', fake_list)
-    monkeypatch.setattr(gmail_client, 'get_profile', lambda token: {'emailAddress': 'me@example.com', 'historyId': 'h-fresh'})
-
-    sync.sync_account(account_row)
-
-    from datetime import date, timedelta
-    assert sync.HISTORY_RECOVERY_DAYS >= 7
-    expected_after_date = (date.today() - timedelta(days=sync.HISTORY_RECOVERY_DAYS)).strftime('%Y/%m/%d')
-    assert captured['after_date'] == expected_after_date
 
 
 def test_exception_is_recorded_and_never_raises(client, monkeypatch, account_row):
