@@ -135,4 +135,23 @@ describe('Chat send ordering', () => {
 
     expect(await screen.findByText(/Dentist appointment/)).toBeTruthy();
   });
+
+  it('still shows "Saved to journal" on historical messages saved before the feature was removed', async () => {
+    vi.mocked(api.chat.today).mockResolvedValue({
+      id: 'c1',
+      messages: [
+        {
+          id: 'm1',
+          role: 'user',
+          content: 'went for a long run this morning',
+          metadata: JSON.stringify({ savedAsJournal: 'entry1' }),
+          createdAt: '2026-01-01T08:00:00.000Z',
+        },
+      ],
+    } as never);
+
+    renderChat();
+
+    expect(await screen.findByText('Saved to journal')).toBeTruthy();
+  });
 });
