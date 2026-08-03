@@ -427,6 +427,16 @@ CREATE TABLE IF NOT EXISTS site_cookies (
     updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS fanfic_watched_scans (
+    domain TEXT PRIMARY KEY,
+    next_page INTEGER NOT NULL DEFAULT 1,
+    found INTEGER NOT NULL DEFAULT 0,
+    imported INTEGER NOT NULL DEFAULT 0,
+    already_in_library INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS fic_folders (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,

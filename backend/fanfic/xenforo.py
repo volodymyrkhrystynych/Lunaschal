@@ -226,6 +226,33 @@ def parse_alerts(html: str, domain: str) -> list[AlertItem]:
     return items
 
 
+@dataclass
+class WatchedThreadsPage:
+    refs: list[ThreadRef]
+    last_page: int
+
+
+def parse_watched_threads(html: str, domain: str) -> WatchedThreadsPage:
+    """Thread references from a /watched/threads listing page. XenForo
+    renders watched threads with the same structItem template as an ordinary
+    forum thread list (structItem--thread), unlike the alert-feed template
+    parse_alerts handles — so this walks .structItem-title links instead of
+    alert rows. Rows that don't resolve to a thread (deleted/moved threads
+    XenForo still lists) are skipped rather than raising."""
+    soup = BeautifulSoup(html, 'html.parser')
+    base = f'https://{domain}/'
+    rows = soup.select('.structItem--thread') or soup.select('.structItem')
+    refs: list[ThreadRef] = []
+    for row in rows:
+        a = row.select_one('.structItem-title a[href]')
+        if not a:
+            continue
+        ref = parse_thread_ref(urljoin(base, a['href']))
+        if ref:
+            refs.append(ref)
+    return WatchedThreadsPage(refs=refs, last_page=_last_page(soup))
+
+
 def parse_thread_tags(html: str) -> list[str]:
     """Tags from a thread page's tag list. XenForo 2 renders them as
     <a class="tagItem"> anchors, either wrapped in a span.js-tagList or

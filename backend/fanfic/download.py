@@ -10,6 +10,8 @@ import time
 from typing import NamedTuple
 from urllib.parse import urlparse
 
+from ulid import ULID
+
 from backend.db.connection import get_db
 from backend.fanfic import storage, xenforo
 from backend.fanfic.sanitize import count_words, html_to_text, sanitize_chapter_html
@@ -168,6 +170,144 @@ def fetch_alerts(domain: str) -> list[xenforo.AlertItem]:
             f'{domain}: not logged in — paste a fresh Cookie header in'
             ' Settings → Fanfic site cookies.')
     return items
+
+
+# --- watched-threads archive scan ---
+#
+# Rare, user-triggered background job that walks a site's /watched/threads
+# listing (every thread the account follows, not just recent alert activity)
+# and queues anything missing from the library, so old/dead watched threads
+# that never generate a fresh alert still get archived. Reuses the same
+# placeholder-fic + serial drain-worker pipeline as refresh_alerts. Progress
+# is an in-memory registry like _dl_progress, but the page position and
+# running counts are also checkpointed to fanfic_watched_scans so a Flask
+# restart mid-scan resumes instead of starting over from page 1.
+
+_watch_scan_progress: dict[str, dict] = {}
+_watch_scan_lock = threading.Lock()
+
+
+def get_watched_scan_progress(domain: str) -> dict | None:
+    with _watch_scan_lock:
+        p = _watch_scan_progress.get(domain)
+        return dict(p) if p else None
+
+
+def is_watched_scan_active(domain: str) -> bool:
+    with _watch_scan_lock:
+        p = _watch_scan_progress.get(domain)
+        return bool(p and not p.get('done'))
+
+
+def _update_watch_progress(domain: str, **kw) -> None:
+    with _watch_scan_lock:
+        if domain in _watch_scan_progress:
+            _watch_scan_progress[domain].update(kw)
+
+
+def watched_threads_url(domain: str, page: int = 1) -> str:
+    base = f'https://{domain}/watched/threads'
+    if page > 1:
+        base += f'/page-{page}'
+    return f'{base}?unread=0'
+
+
+def fetch_watched_threads_page(domain: str, page: int) -> xenforo.WatchedThreadsPage:
+    """Fetch and parse one page of a site's /watched/threads listing.
+    Requires a stored session cookie, same as fetch_alerts."""
+    resp = _fetch(watched_threads_url(domain, page))
+    watched = xenforo.parse_watched_threads(resp.text, domain)
+    logged_out = '/login' in urlparse(str(resp.url)).path or \
+        (page == 1 and not watched.refs and '/login/login' in resp.text)
+    if logged_out:
+        raise FetchBlockedError(
+            f'{domain}: not logged in — paste a fresh Cookie header in'
+            ' Settings → Fanfic site cookies.')
+    return watched
+
+
+def run_watched_scan(domain: str) -> None:
+    """Walk the domain's watched-threads listing from its checkpointed page,
+    queueing any (site, thread_id) not already in the library. Runs to the
+    last page and then wraps back to page 1 so a later click does a full
+    fresh pass (cheap: already-archived fics are an instant unique-index
+    skip) and picks up anything newly watched since the last run."""
+    db = get_db()
+    now = int(time.time())
+    row = db.execute(
+        'SELECT next_page, found, imported, already_in_library'
+        ' FROM fanfic_watched_scans WHERE domain=?', (domain,)).fetchone()
+    if row is None:
+        db.execute(
+            'INSERT INTO fanfic_watched_scans(domain, next_page, updated_at)'
+            ' VALUES (?, 1, ?)', (domain, now))
+        db.commit()
+        page, found, imported, already = 1, 0, 0, 0
+    elif row['next_page'] <= 1:
+        page, found, imported, already = 1, 0, 0, 0
+    else:
+        page = row['next_page']
+        found, imported, already = row['found'], row['imported'], row['already_in_library']
+
+    with _watch_scan_lock:
+        _watch_scan_progress[domain] = {
+            'page': page, 'lastPage': None, 'found': found, 'imported': imported,
+            'alreadyInLibrary': already, 'done': False, 'error': None,
+        }
+
+    try:
+        while True:
+            with _watch_scan_lock:
+                if domain not in _watch_scan_progress:
+                    return
+            watched = fetch_watched_threads_page(domain, page)
+            for ref in watched.refs:
+                found += 1
+                existing = db.execute(
+                    'SELECT id FROM fics WHERE site=? AND thread_id=?',
+                    (ref.domain, ref.thread_id)).fetchone()
+                if existing:
+                    already += 1
+                    continue
+                fic_now = int(time.time())
+                placeholder = ref.slug.replace('-', ' ').strip() or 'Importing…'
+                db.execute(
+                    'INSERT INTO fics(id, title, source_type, source_url, site, thread_id,'
+                    ' update_pending, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?)',
+                    (str(ULID()), placeholder, 'xenforo', ref.thread_url, ref.domain,
+                     ref.thread_id, fic_now, fic_now))
+                imported += 1
+            next_page = page + 1 if page < watched.last_page else 1
+            db.execute(
+                'UPDATE fanfic_watched_scans SET next_page=?, found=?, imported=?,'
+                ' already_in_library=?, last_error=NULL, updated_at=? WHERE domain=?',
+                (next_page, found, imported, already, int(time.time()), domain))
+            db.commit()
+            # Once the last page is done, show 'page' as the wrapped resume
+            # point (1) rather than the just-finished page, so a status read
+            # right after completion already matches what the DB checkpoint
+            # (and a subsequent run) would show.
+            shown_page = next_page if page >= watched.last_page else page
+            _update_watch_progress(domain, page=shown_page, lastPage=watched.last_page,
+                                    found=found, imported=imported, alreadyInLibrary=already)
+            # Drain inline (this thread is already dedicated to slow, serial
+            # forum requests) rather than spawning the usual background drain
+            # worker — that avoids a second long-lived thread racing this
+            # scan's own checkpointing, and keeps behavior identical whether
+            # the caller runs this in a daemon thread or synchronously.
+            run_drain_pending()
+            if page >= watched.last_page:
+                break
+            page += 1
+    except Exception as e:
+        error = str(e)
+        db.execute(
+            'UPDATE fanfic_watched_scans SET last_error=?, updated_at=? WHERE domain=?',
+            (error, int(time.time()), domain))
+        db.commit()
+        _update_watch_progress(domain, error=error)
+    finally:
+        _update_watch_progress(domain, done=True)
 
 
 # --- images ---

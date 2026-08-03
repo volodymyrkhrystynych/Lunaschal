@@ -144,16 +144,39 @@ def search():
 
 @bp.get('/cookies')
 def list_cookies():
-    rows = get_db().execute('SELECT domain, updated_at FROM site_cookies').fetchall()
+    db = get_db()
+    rows = db.execute('SELECT domain, updated_at FROM site_cookies').fetchall()
     stored = {r['domain']: r for r in rows}
-    return jsonify([
-        {
+    scan_rows = {
+        r['domain']: r for r in db.execute(
+            'SELECT domain, next_page, found, imported, already_in_library, last_error'
+            ' FROM fanfic_watched_scans').fetchall()
+    }
+    result = []
+    for domain in sorted(KNOWN_SITES):
+        entry = {
             'domain': domain,
             'hasCookie': domain in stored,
             'updatedAt': row_to_dict(stored[domain])['updatedAt'] if domain in stored else None,
         }
-        for domain in sorted(KNOWN_SITES)
-    ])
+        progress = download.get_watched_scan_progress(domain)
+        if progress:
+            entry['watchedScan'] = {
+                'page': progress['page'], 'lastPage': progress['lastPage'],
+                'found': progress['found'], 'imported': progress['imported'],
+                'alreadyInLibrary': progress['alreadyInLibrary'],
+                'done': progress['done'], 'error': progress['error'],
+            }
+        elif domain in scan_rows:
+            r = scan_rows[domain]
+            entry['watchedScan'] = {
+                'page': r['next_page'], 'lastPage': None,
+                'found': r['found'], 'imported': r['imported'],
+                'alreadyInLibrary': r['already_in_library'],
+                'done': True, 'error': r['last_error'],
+            }
+        result.append(entry)
+    return jsonify(result)
 
 
 def _normalize_cookie_input(text: str) -> str:
@@ -377,6 +400,10 @@ def _start_drain_bg() -> None:
     download.start_drain()
 
 
+def _start_watch_scan_bg(domain: str) -> None:
+    threading.Thread(target=download.run_watched_scan, args=(domain,), daemon=True).start()
+
+
 @bp.post('/import')
 def import_from_url():
     body = request.json or {}
@@ -536,6 +563,29 @@ def refresh_alerts():
         'skippedActive': skipped_active,
         'alertsSeen': alerts_seen, 'errors': errors,
     })
+
+
+@bp.post('/scan-watched/<domain>')
+def scan_watched(domain):
+    """Rare, manual archival scan: walk a site's /watched/threads listing
+    page by page and queue anything missing from the library, so old watched
+    threads that will never generate a fresh alert still get imported. Runs
+    in the background (backend/fanfic/download.py:run_watched_scan) and is
+    resumable across restarts via the fanfic_watched_scans checkpoint."""
+    domain = domain.lower()
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    if domain not in KNOWN_SITES:
+        return jsonify({'error': f'unknown domain: {domain}'}), 400
+    has_cookie = get_db().execute(
+        'SELECT 1 FROM site_cookies WHERE domain=?', (domain,)).fetchone()
+    if not has_cookie:
+        return jsonify({'error': 'No site cookie configured — paste your forum'
+                        ' session cookie in Settings → Fanfic site cookies first'}), 400
+    if download.is_watched_scan_active(domain):
+        return jsonify({'error': 'A watched-threads scan is already running for this site'}), 409
+    _start_watch_scan_bg(domain)
+    return jsonify({'started': True}), 202
 
 
 def _insert_book(book, fic_id: str) -> str:
