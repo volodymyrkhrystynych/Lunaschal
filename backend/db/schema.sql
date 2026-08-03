@@ -378,6 +378,7 @@ CREATE TABLE IF NOT EXISTS fics (
         CHECK(download_status IN ('downloading','complete','error')),
     download_error TEXT,
     update_pending INTEGER NOT NULL DEFAULT 0,
+    deep_pending INTEGER NOT NULL DEFAULT 0,
     last_read_chapter_id TEXT,
     last_checked_at INTEGER,
     rating INTEGER CHECK(rating BETWEEN 1 AND 5),
@@ -402,6 +403,7 @@ CREATE TABLE IF NOT EXISTS fic_chapters (
     source_post_id TEXT,
     word_count INTEGER NOT NULL DEFAULT 0,
     posted_at INTEGER,
+    edited_at INTEGER,
     created_at INTEGER NOT NULL,
     UNIQUE(fic_id, source_post_id)
 );

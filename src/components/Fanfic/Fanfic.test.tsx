@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Fanfic } from './Fanfic';
 import { ShortcutProvider } from '../../shortcuts/ShortcutProvider';
@@ -36,8 +36,8 @@ const { CHAPTERS, FIC } = vi.hoisted(() => {
     lastReadChapterId: null,
     lastCheckedAt: null,
     rating: null,
-    createdAt: '',
-    updatedAt: '',
+    createdAt: '2024-01-02T03:04:05Z',
+    updatedAt: '2024-01-02T03:04:05Z',
   };
   return { CHAPTERS, FIC };
 });
@@ -58,6 +58,9 @@ vi.mock('../../hooks/api', () => ({
       }),
       saveProgress: vi.fn().mockResolvedValue({ success: true }),
       setRead: vi.fn().mockResolvedValue({ success: true, readCount: 0 }),
+      checkUpdates: vi
+        .fn()
+        .mockResolvedValue({ id: 'fic1', queued: true, deep: false }),
     },
     shortcuts: {
       get: vi.fn().mockResolvedValue({ bindings: {} }),
@@ -104,5 +107,28 @@ describe('Fanfic reload resume', () => {
 
     await screen.findByText('Test Fic');
     expect(localStorage.getItem('lunaschal:openFic')).toBeNull();
+  });
+});
+
+describe('Library update buttons', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.scrollTo = vi.fn();
+  });
+
+  it('queues a shallow check from Update and a deep one from Deep', async () => {
+    const { api } = await import('../../hooks/api');
+    renderFanfic();
+
+    fireEvent.click(await screen.findByTitle(/Queue an update check/));
+    await waitFor(() =>
+      expect(api.fanfic.checkUpdates).toHaveBeenLastCalledWith('fic1', false)
+    );
+
+    fireEvent.click(screen.getByTitle(/Re-read every saved chapter/));
+    await waitFor(() =>
+      expect(api.fanfic.checkUpdates).toHaveBeenLastCalledWith('fic1', true)
+    );
   });
 });

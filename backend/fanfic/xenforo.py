@@ -72,6 +72,11 @@ class ReaderPost:
     author: str | None
     posted_at: int | None
     content_html: str
+    # Unix seconds from the post's "Last edited" notice, None when it has
+    # never been edited. This is the only signal XenForo gives that an
+    # already-published chapter changed — editing a post raises no alert and
+    # leaves the threadmarks index untouched.
+    edited_at: int | None = None
 
 
 @dataclass
@@ -134,6 +139,15 @@ def resolve_thread_ref(url: str, fetch) -> ThreadRef:
 
 def _tag_text(tag) -> str:
     return re.sub(r'\s+', ' ', tag.get_text(' ', strip=True)) if tag else ''
+
+
+def _time_value(tag) -> int | None:
+    """Unix seconds from a XenForo <time data-time>. The ISO `datetime`
+    attribute alongside it is ignored — data-time is already epoch seconds."""
+    if tag is None:
+        return None
+    raw = str(tag.get('data-time', ''))
+    return int(raw) if raw.isdigit() else None
 
 
 def parse_threadmarks_index(html: str) -> ThreadIndex:
@@ -208,11 +222,7 @@ def parse_alerts(html: str, domain: str) -> list[AlertItem]:
                 break
         if not ref:
             continue
-        time_tag = row.select_one('time[data-time]')
-        alert_at = None
-        if time_tag and str(time_tag.get('data-time', '')).isdigit():
-            alert_at = int(time_tag['data-time'])
-        items.append(AlertItem(ref=ref, alert_at=alert_at))
+        items.append(AlertItem(ref=ref, alert_at=_time_value(row.select_one('time[data-time]'))))
     return items
 
 
@@ -259,10 +269,7 @@ def parse_threadmark_list(html: str) -> ThreadmarkListPage:
         m = _POST_ID_IN_HREF.search(a.get('href', ''))
         if not m:
             continue
-        time_tag = row.select_one('time[data-time]')
-        posted_at = None
-        if time_tag and str(time_tag.get('data-time', '')).isdigit():
-            posted_at = int(time_tag['data-time'])
+        posted_at = _time_value(row.select_one('time[data-time]'))
         items.append(ThreadmarkItem(post_id=m.group(1), title=_tag_text(a), posted_at=posted_at))
     return ThreadmarkListPage(items=items, last_page=_last_page(soup))
 
@@ -282,10 +289,21 @@ def parse_reader_page(html: str) -> ReaderPage:
         if body is None:
             continue
 
-        time_tag = article.select_one('time.u-dt[data-time]') or article.select_one('time[data-time]')
-        posted_at = None
-        if time_tag and str(time_tag.get('data-time', '')).isdigit():
-            posted_at = int(time_tag['data-time'])
+        # "Last edited: <time>" — a sibling of the post body, so it lives in
+        # the same <article> and costs no extra request.
+        edited_at = _time_value(article.select_one('.message-lastEdit time[data-time]'))
+
+        # Prefer the attribution block's timestamp: the lastEdit <time> also
+        # carries u-dt, so an unscoped "first time tag" lookup would read an
+        # edit date as the post date on any theme that reorders them.
+        posted_at = _time_value(article.select_one('.message-attribution time[data-time]'))
+        if posted_at is None:
+            for tag in article.select('time[data-time]'):
+                if tag.find_parent(class_='message-lastEdit') is not None:
+                    continue
+                posted_at = _time_value(tag)
+                if posted_at is not None:
+                    break
 
         posts.append(ReaderPost(
             post_id=post_id,
@@ -293,6 +311,7 @@ def parse_reader_page(html: str) -> ReaderPage:
             author=article.get('data-author') or None,
             posted_at=posted_at,
             content_html=body.decode_contents(),
+            edited_at=edited_at,
         ))
 
     return ReaderPage(posts=posts, last_page=_last_page(soup))
