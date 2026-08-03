@@ -378,6 +378,7 @@ CREATE TABLE IF NOT EXISTS fics (
         CHECK(download_status IN ('downloading','complete','error')),
     download_error TEXT,
     update_pending INTEGER NOT NULL DEFAULT 0,
+    deep_pending INTEGER NOT NULL DEFAULT 0,
     last_read_chapter_id TEXT,
     last_checked_at INTEGER,
     rating INTEGER CHECK(rating BETWEEN 1 AND 5),
@@ -402,6 +403,7 @@ CREATE TABLE IF NOT EXISTS fic_chapters (
     source_post_id TEXT,
     word_count INTEGER NOT NULL DEFAULT 0,
     posted_at INTEGER,
+    edited_at INTEGER,
     created_at INTEGER NOT NULL,
     UNIQUE(fic_id, source_post_id)
 );
@@ -422,6 +424,16 @@ CREATE INDEX IF NOT EXISTS idx_jefr_fic ON journal_entry_fic_refs(fic_id);
 CREATE TABLE IF NOT EXISTS site_cookies (
     domain TEXT PRIMARY KEY,
     cookie TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fanfic_watched_scans (
+    domain TEXT PRIMARY KEY,
+    next_page INTEGER NOT NULL DEFAULT 1,
+    found INTEGER NOT NULL DEFAULT 0,
+    imported INTEGER NOT NULL DEFAULT 0,
+    already_in_library INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
     updated_at INTEGER NOT NULL
 );
 

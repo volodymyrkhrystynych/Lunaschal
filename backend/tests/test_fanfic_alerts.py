@@ -101,7 +101,6 @@ def test_refresh_updates_stale_and_imports_unknown(client, fake_net):
     body = resp.get_json()
     assert body['flagged'] == 1
     assert body['newImports'] == 1
-    assert body['skippedFresh'] == 0
     assert body['errors'] == {}
     assert body['alertsSeen'] == 4  # the /posts/-only quote alert is dropped
 
@@ -116,7 +115,12 @@ def test_refresh_updates_stale_and_imports_unknown(client, fake_net):
     assert stale['lastCheckedAt'] is not None
 
 
-def test_refresh_skips_fresh_fic(client, fake_net):
+def test_refresh_checks_fic_fetched_after_its_alert(client, fake_net):
+    """A fic checked more recently than its newest alert is still checked.
+
+    Being newer than the alert used to mean "skip", which assumed an alert is
+    the only way a thread changes. XenForo raises none when an author edits an
+    existing post, so that shortcut hid revisions indefinitely."""
     fic_id = _import_fic(client)
     _set_last_checked(fic_id, 1700000000)  # newer than every alert
     fake_net['pages'].update(_thread_pages(OTHER))
@@ -124,25 +128,12 @@ def test_refresh_skips_fresh_fic(client, fake_net):
 
     before = len(fake_net['log'])
     body = client.post('/api/fanfic/refresh-alerts').get_json()
-    assert body['skippedFresh'] == 1
-    assert body['flagged'] == 0
-    assert body['newImports'] == 1
-    # nothing was fetched for the fresh fic — only the alerts page + import
-    fetched = fake_net['log'][before:]
-    assert not any('a-test-fic.12345' in url for url in fetched)
-
-
-def test_refresh_dedupes_newest_alert_wins(client, fake_net):
-    """Thread 12345 is alerted twice; freshness compares against the newest
-    (1600500000), so a fetch between the two timestamps is still stale."""
-    fic_id = _import_fic(client)
-    _set_last_checked(fic_id, 1600450000)
-    fake_net['pages'].update(_thread_pages(OTHER))
-    _put_cookie(client)
-
-    body = client.post('/api/fanfic/refresh-alerts').get_json()
     assert body['flagged'] == 1
-    assert body['skippedFresh'] == 0
+    assert body['newImports'] == 1
+    assert 'skippedFresh' not in body
+    # and it really was walked, not just flagged
+    fetched = fake_net['log'][before:]
+    assert any('a-test-fic.12345' in url for url in fetched)
 
 
 def test_refresh_skips_already_queued_fic(client, fake_net, monkeypatch):
@@ -223,7 +214,7 @@ def test_check_updates_toggles_queue_flag(client, fake_net, monkeypatch):
 
     resp = client.post(f'/api/fanfic/{fic_id}/check-updates')
     assert resp.status_code == 202
-    assert resp.get_json() == {'id': fic_id, 'queued': True}
+    assert resp.get_json() == {'id': fic_id, 'queued': True, 'deep': False}
     assert client.get(f'/api/fanfic/{fic_id}').get_json()['updatePending'] is True
 
     # clicking again un-queues instead of double-flagging

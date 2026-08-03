@@ -14,7 +14,7 @@ bp = Blueprint('fanfic', __name__, url_prefix='/api/fanfic')
 
 _LIST_COLS = (
     'id, title, author, source_type, source_url, site, cover_path, word_count,'
-    ' chapter_count, download_status, download_error, update_pending,'
+    ' chapter_count, download_status, download_error, update_pending, deep_pending,'
     ' last_read_chapter_id, last_checked_at, rating, created_at, updated_at'
 )
 
@@ -47,6 +47,8 @@ def _attach_progress(dicts: list[dict]) -> list[dict]:
             d['downloadProgress'] = progress
         if 'updatePending' in d:
             d['updatePending'] = bool(d['updatePending'])
+        if 'deepPending' in d:
+            d['deepPending'] = bool(d['deepPending'])
     return dicts
 
 
@@ -142,16 +144,39 @@ def search():
 
 @bp.get('/cookies')
 def list_cookies():
-    rows = get_db().execute('SELECT domain, updated_at FROM site_cookies').fetchall()
+    db = get_db()
+    rows = db.execute('SELECT domain, updated_at FROM site_cookies').fetchall()
     stored = {r['domain']: r for r in rows}
-    return jsonify([
-        {
+    scan_rows = {
+        r['domain']: r for r in db.execute(
+            'SELECT domain, next_page, found, imported, already_in_library, last_error'
+            ' FROM fanfic_watched_scans').fetchall()
+    }
+    result = []
+    for domain in sorted(KNOWN_SITES):
+        entry = {
             'domain': domain,
             'hasCookie': domain in stored,
             'updatedAt': row_to_dict(stored[domain])['updatedAt'] if domain in stored else None,
         }
-        for domain in sorted(KNOWN_SITES)
-    ])
+        progress = download.get_watched_scan_progress(domain)
+        if progress:
+            entry['watchedScan'] = {
+                'page': progress['page'], 'lastPage': progress['lastPage'],
+                'found': progress['found'], 'imported': progress['imported'],
+                'alreadyInLibrary': progress['alreadyInLibrary'],
+                'done': progress['done'], 'error': progress['error'],
+            }
+        elif domain in scan_rows:
+            r = scan_rows[domain]
+            entry['watchedScan'] = {
+                'page': r['next_page'], 'lastPage': None,
+                'found': r['found'], 'imported': r['imported'],
+                'alreadyInLibrary': r['already_in_library'],
+                'done': True, 'error': r['last_error'],
+            }
+        result.append(entry)
+    return jsonify(result)
 
 
 def _normalize_cookie_input(text: str) -> str:
@@ -375,6 +400,10 @@ def _start_drain_bg() -> None:
     download.start_drain()
 
 
+def _start_watch_scan_bg(domain: str) -> None:
+    threading.Thread(target=download.run_watched_scan, args=(domain,), daemon=True).start()
+
+
 @bp.post('/import')
 def import_from_url():
     body = request.json or {}
@@ -436,33 +465,45 @@ def check_updates(fic_id):
     """Toggle the fic's spot in the serial update queue. Updates are never
     run directly — the drain worker fetches one fic at a time to stay polite
     to the forums — so queueing is cheap and a mis-click can be undone by
-    clicking again before the worker gets there."""
+    clicking again before the worker gets there.
+
+    `{"deep": true}` asks for the slow pass that re-reads every saved chapter
+    and rewrites the ones the author edited. Queuing a deep check over a
+    pending shallow one upgrades it rather than cancelling."""
+    # silent: the button posts with no body at all for a shallow check.
+    deep = bool((request.get_json(silent=True) or {}).get('deep'))
     db = get_db()
     row = db.execute(
-        'SELECT source_type, update_pending, download_status FROM fics WHERE id=?',
-        (fic_id,)).fetchone()
+        'SELECT source_type, update_pending, deep_pending, download_status'
+        ' FROM fics WHERE id=?', (fic_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
     if row['source_type'] != 'xenforo':
         return jsonify({'error': 'Only forum fics can be updated'}), 400
     if download.is_active(fic_id) or row['download_status'] == 'downloading':
         return jsonify({'error': 'A download is already running for this fic'}), 409
-    if row['update_pending']:
-        db.execute('UPDATE fics SET update_pending=0 WHERE id=?', (fic_id,))
+    if row['update_pending'] and not (deep and not row['deep_pending']):
+        db.execute('UPDATE fics SET update_pending=0, deep_pending=0 WHERE id=?', (fic_id,))
         db.commit()
         return jsonify({'id': fic_id, 'queued': False})
-    db.execute('UPDATE fics SET update_pending=1 WHERE id=?', (fic_id,))
+    db.execute('UPDATE fics SET update_pending=1, deep_pending=? WHERE id=?',
+               (1 if deep else 0, fic_id))
     db.commit()
     _start_drain_bg()
-    return jsonify({'id': fic_id, 'queued': True}), 202
+    return jsonify({'id': fic_id, 'queued': True, 'deep': deep}), 202
 
 
 @bp.post('/refresh-alerts')
 def refresh_alerts():
     """Scan page 1 of each cookie'd site's alerts page and queue updates for
-    the unique threads mentioned: library fics get flagged unless their last
-    fetch is newer than the alert, unknown threads get a placeholder fic that
-    the drain worker imports."""
+    the unique threads mentioned: library fics get flagged, unknown threads
+    get a placeholder fic that the drain worker imports.
+
+    A fic is no longer skipped for having been fetched more recently than its
+    alert. That comparison assumed an alert is the only way a thread changes,
+    but XenForo raises none when an author edits an existing post — so
+    "checked since the alert" regularly meant "reported up to date while a
+    revised chapter sat unread". A check on an unchanged fic is cheap."""
     db = get_db()
     domains = [
         r['domain'] for r in
@@ -490,19 +531,16 @@ def refresh_alerts():
             if prev is None or (item.alert_at or 0) > (prev[1] or 0):
                 newest[key] = (item.ref, item.alert_at)
 
-    flagged = new_imports = skipped_fresh = skipped_active = 0
+    flagged = new_imports = skipped_active = 0
     now = int(time.time())
-    for (site, thread_id), (ref, alert_at) in newest.items():
+    for (site, thread_id), (ref, _alert_at) in newest.items():
         row = db.execute(
-            'SELECT id, update_pending, download_status, last_checked_at'
+            'SELECT id, update_pending, download_status'
             ' FROM fics WHERE site=? AND thread_id=?', (site, thread_id)).fetchone()
         if row:
             if (row['update_pending'] or row['download_status'] == 'downloading'
                     or download.is_active(row['id'])):
                 skipped_active += 1
-            elif (row['last_checked_at'] is not None and alert_at is not None
-                    and row['last_checked_at'] >= alert_at):
-                skipped_fresh += 1
             else:
                 db.execute('UPDATE fics SET update_pending=1 WHERE id=?', (row['id'],))
                 flagged += 1
@@ -522,9 +560,32 @@ def refresh_alerts():
     _start_drain_bg()
     return jsonify({
         'flagged': flagged, 'newImports': new_imports,
-        'skippedFresh': skipped_fresh, 'skippedActive': skipped_active,
+        'skippedActive': skipped_active,
         'alertsSeen': alerts_seen, 'errors': errors,
     })
+
+
+@bp.post('/scan-watched/<domain>')
+def scan_watched(domain):
+    """Rare, manual archival scan: walk a site's /watched/threads listing
+    page by page and queue anything missing from the library, so old watched
+    threads that will never generate a fresh alert still get imported. Runs
+    in the background (backend/fanfic/download.py:run_watched_scan) and is
+    resumable across restarts via the fanfic_watched_scans checkpoint."""
+    domain = domain.lower()
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    if domain not in KNOWN_SITES:
+        return jsonify({'error': f'unknown domain: {domain}'}), 400
+    has_cookie = get_db().execute(
+        'SELECT 1 FROM site_cookies WHERE domain=?', (domain,)).fetchone()
+    if not has_cookie:
+        return jsonify({'error': 'No site cookie configured — paste your forum'
+                        ' session cookie in Settings → Fanfic site cookies first'}), 400
+    if download.is_watched_scan_active(domain):
+        return jsonify({'error': 'A watched-threads scan is already running for this site'}), 409
+    _start_watch_scan_bg(domain)
+    return jsonify({'started': True}), 202
 
 
 def _insert_book(book, fic_id: str) -> str:

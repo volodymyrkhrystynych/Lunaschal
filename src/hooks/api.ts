@@ -61,6 +61,7 @@ export interface Fic {
   downloadStatus: 'downloading' | 'complete' | 'error';
   downloadError: string | null;
   updatePending?: boolean;
+  deepPending?: boolean;
   lastReadChapterId: string | null;
   lastCheckedAt: string | null;
   rating: number | null;
@@ -90,7 +91,6 @@ export interface FicTagCount {
 export interface RefreshAlertsResult {
   flagged: number;
   newImports: number;
-  skippedFresh: number;
   skippedActive: number;
   alertsSeen: number;
   errors: Record<string, string>;
@@ -114,10 +114,21 @@ export interface FicChapter extends FicChapterSummary {
   createdAt: string;
 }
 
+export interface WatchedScanProgress {
+  page: number;
+  lastPage: number | null;
+  found: number;
+  imported: number;
+  alreadyInLibrary: number;
+  done: boolean;
+  error: string | null;
+}
+
 export interface SiteCookieInfo {
   domain: string;
   hasCookie: boolean;
   updatedAt: string | null;
+  watchedScan?: WatchedScanProgress;
 }
 
 export interface Transcription {
@@ -333,6 +344,12 @@ export interface ApproveResult {
   due?: string;
   similar?: { id: string; question: string; answer: string };
   score?: number;
+}
+
+export interface DraftCard {
+  id: string;
+  question: string;
+  answer: string;
 }
 
 export interface VerificationCitation {
@@ -1183,9 +1200,12 @@ export const api = {
       }),
     status: (ficId: string) =>
       get<FicDownloadProgress | { done: true }>(`/api/fanfic/${ficId}/status`),
-    checkUpdates: (ficId: string) =>
-      post<{ id: string; queued: boolean }>(
-        `/api/fanfic/${ficId}/check-updates`
+    // `deep` asks for the slow pass that re-reads every saved chapter and
+    // rewrites the ones the author edited since we downloaded them.
+    checkUpdates: (ficId: string, deep = false) =>
+      post<{ id: string; queued: boolean; deep: boolean }>(
+        `/api/fanfic/${ficId}/check-updates`,
+        deep ? { deep: true } : undefined
       ),
     refreshAlerts: () =>
       post<RefreshAlertsResult>('/api/fanfic/refresh-alerts'),
@@ -1216,6 +1236,8 @@ export const api = {
       put: (domain: string, cookie: string) =>
         put<{ success: boolean }>('/api/fanfic/cookies', { domain, cookie }),
     },
+    scanWatched: (domain: string) =>
+      post<{ started: boolean }>(`/api/fanfic/scan-watched/${domain}`),
   },
 
   calendar: {
@@ -1378,12 +1400,19 @@ export const api = {
         '/api/learning/generate-for-topic',
         { topic, folderId }
       ),
+    generateFromNote: (content: string) =>
+      post<{
+        count: number;
+        ids: string[];
+        cards: DraftCard[];
+        folderId: string;
+      }>('/api/learning/generate-from-note', { content }),
 
     listQueue: () => get<LearningCard[]>('/api/learning/queue'),
     approve: (id: string, force?: boolean) =>
       post<ApproveResult>(`/api/learning/queue/${id}/approve`, { force }),
     regenerate: (id: string, direction: string) =>
-      post<{ count: number; ids: string[] }>(
+      post<{ count: number; ids: string[]; cards: DraftCard[] }>(
         `/api/learning/queue/${id}/regenerate`,
         { direction }
       ),

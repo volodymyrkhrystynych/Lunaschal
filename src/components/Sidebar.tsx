@@ -23,6 +23,7 @@ interface SidebarProps {
   onViewChange: (view: View) => void;
   isOpen: boolean;
   onToggle: () => void;
+  newspapersNeedAttention?: boolean;
 }
 
 export const navItems: { view: View; label: string; icon: string }[] = [
@@ -48,6 +49,7 @@ export function Sidebar({
   onViewChange,
   isOpen,
   onToggle,
+  newspapersNeedAttention,
 }: SidebarProps) {
   const { level } = useShortcuts();
   const isMobile = useIsMobile();
@@ -87,6 +89,15 @@ export function Sidebar({
         >
           <span>{item.icon}</span>
           <span>{item.label}</span>
+          {item.view === 'newspapers' && newspapersNeedAttention && (
+            <span
+              style={{ color: '#f0b429' }}
+              title="Today's front pages haven't all synced yet"
+              aria-label="Today's front pages haven't all synced yet"
+            >
+              ❗
+            </span>
+          )}
         </button>
       ))}
     </nav>
