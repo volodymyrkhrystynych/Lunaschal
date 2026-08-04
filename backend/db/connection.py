@@ -11,7 +11,7 @@ _conn: sqlite3.Connection | None = None
 
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
-    'posted_at', 'last_checked_at', 'started_at', 'ended_at', 'due',
+    'posted_at', 'last_checked_at', 'edited_at', 'started_at', 'ended_at', 'due',
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
     'researched_at',
 })
@@ -113,6 +113,7 @@ def init_db() -> None:
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
+    _ensure_fic_deep_scan_columns(db)
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
     _ensure_food_location(db)
@@ -274,6 +275,22 @@ def _ensure_fic_update_pending(db: sqlite3.Connection) -> None:
     if 'update_pending' not in cols:
         db.execute('ALTER TABLE fics ADD COLUMN update_pending INTEGER NOT NULL DEFAULT 0')
         db.commit()
+
+
+def _ensure_fic_deep_scan_columns(db: sqlite3.Connection) -> None:
+    """Columns for the deep update scan: whether the queued check should be a
+    deep one, and the per-chapter edit timestamp that scan compares against.
+
+    `edited_at` is left NULL on existing rows on purpose — a post carrying no
+    "Last edited" notice parses to None too, so unchanged chapters compare
+    equal and the first deep scan doesn't rewrite the whole library."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
+    if 'deep_pending' not in cols:
+        db.execute('ALTER TABLE fics ADD COLUMN deep_pending INTEGER NOT NULL DEFAULT 0')
+    chapter_cols = {r[1] for r in db.execute('PRAGMA table_info(fic_chapters)')}
+    if 'edited_at' not in chapter_cols:
+        db.execute('ALTER TABLE fic_chapters ADD COLUMN edited_at INTEGER')
+    db.commit()
 
 
 def _repair_escaped_image_fallbacks(db: sqlite3.Connection) -> None:

@@ -14,6 +14,7 @@ import {
   intensityLabel,
   intensityStars,
   intensityText,
+  isTodaySelfieMissing,
   parseCalorieEntry,
   plotSeries,
   shadeLevel,
@@ -53,6 +54,27 @@ describe('dates', () => {
   it('indexes weekdays with Sunday first', () => {
     expect(weekdayIndex('2026-07-26')).toBe(0); // Sunday
     expect(weekdayIndex('2026-07-30')).toBe(4); // Thursday
+  });
+});
+
+describe('isTodaySelfieMissing', () => {
+  it('is false when today is in the list', () => {
+    expect(
+      isTodaySelfieMissing(
+        [{ date: '2026-08-02' }, { date: '2026-08-03' }],
+        '2026-08-03'
+      )
+    ).toBe(false);
+  });
+
+  it('is true when today is absent', () => {
+    expect(isTodaySelfieMissing([{ date: '2026-08-02' }], '2026-08-03')).toBe(
+      true
+    );
+  });
+
+  it('is true for an empty list', () => {
+    expect(isTodaySelfieMissing([], '2026-08-03')).toBe(true);
   });
 });
 

@@ -424,6 +424,12 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       if (initialStrokes === seededRef.current) return;
       seededRef.current = initialStrokes;
       if (dirtyRef.current) return;
+      // A stroke in progress is painted straight onto the canvas before it is
+      // committed (see onPointerMove) and isn't part of stateRef yet, so a
+      // reseed here would repaint over it and erase everything drawn so far —
+      // it would reappear only once the stroke commits and something else
+      // triggers a redraw. Bail and let the commit's own paint stand.
+      if (drawingRef.current) return;
       stateRef.current = {
         strokes: toPageSpaceStrokes(initialStrokes, initialSize),
         history: [],
