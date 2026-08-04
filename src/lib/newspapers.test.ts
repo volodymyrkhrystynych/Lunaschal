@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { shiftDateISO, isFutureDate, todayISO } from './newspapers';
+import {
+  shiftDateISO,
+  isFutureDate,
+  todayISO,
+  hasMissingEditions,
+} from './newspapers';
 
 describe('todayISO', () => {
   it('uses the local calendar date, not the UTC one', () => {
@@ -41,5 +46,29 @@ describe('isFutureDate', () => {
 
   it('is true for tomorrow', () => {
     expect(isFutureDate('2026-07-11', now)).toBe(true);
+  });
+});
+
+describe('hasMissingEditions', () => {
+  it('is false when every paper has an image', () => {
+    expect(
+      hasMissingEditions([{ imageUrl: 'a.jpg' }, { imageUrl: 'b.jpg' }])
+    ).toBe(false);
+  });
+
+  it('is true when any single paper is missing', () => {
+    expect(
+      hasMissingEditions([{ imageUrl: 'a.jpg' }, { imageUrl: null }])
+    ).toBe(true);
+  });
+
+  it('is true when every paper is missing', () => {
+    expect(hasMissingEditions([{ imageUrl: null }, { imageUrl: null }])).toBe(
+      true
+    );
+  });
+
+  it('is false for an empty list', () => {
+    expect(hasMissingEditions([])).toBe(false);
   });
 });

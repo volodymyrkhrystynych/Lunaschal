@@ -187,10 +187,7 @@ export function Meetings() {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold text-[var(--color-text)]">
-          Meetings
-        </h1>
+      <div className="flex items-center justify-end mb-4">
         <MeetingRecordButton />
       </div>
 

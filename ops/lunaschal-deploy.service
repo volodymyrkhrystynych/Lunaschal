@@ -1,0 +1,9 @@
+# systemd --user oneshot unit, triggered by lunaschal-deploy.timer. See
+# docs/deployment.md for install steps and ops/deploy-check.sh for the logic.
+
+[Unit]
+Description=Lunaschal auto-deploy check
+
+[Service]
+Type=oneshot
+ExecStart=%h/workspace/Lunaschal/ops/deploy-check.sh

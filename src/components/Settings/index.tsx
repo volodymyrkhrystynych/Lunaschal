@@ -7,6 +7,7 @@ import { STTStatusSection } from './STTStatusSection';
 import { ShortcutsSection } from './ShortcutsSection';
 import { NudgeSection } from './NudgeSection';
 import { BriefingSection } from './BriefingSection';
+import { ResearchSection } from './ResearchSection';
 import { VRAMSection } from './VRAMSection';
 import { NetworkSection } from './NetworkSection';
 import { FanficCookiesSection } from './FanficCookiesSection';
@@ -35,10 +36,7 @@ export function Settings() {
   return (
     <div className="flex-1 overflow-y-auto p-4">
       <div className="flex items-center gap-4 mb-6">
-        <h1 className="text-2xl font-semibold text-[var(--color-text)]">
-          Settings
-        </h1>
-        <div className="flex gap-1 ml-2">
+        <div className="flex gap-1">
           {(['general', 'tags', 'shortcuts'] as const).map(tab => (
             <button
               key={tab}
@@ -80,6 +78,8 @@ export function Settings() {
           <BriefingSection />
 
           <WebSearchSection />
+
+          <ResearchSection />
 
           <FanficCookiesSection />
 

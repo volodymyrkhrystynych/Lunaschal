@@ -278,6 +278,245 @@ def test_check_updates_appends_new_chapter(client, fake_net):
     assert client.get(f'/api/fanfic/{fic_id}').get_json()['chapterCount'] == 5
 
 
+# --- edited chapters ---
+#
+# XenForo raises no alert when an author edits an existing post and leaves the
+# threadmarks index untouched, so nothing about the fic looks different from
+# outside. Only re-reading the post reveals the change, which is what the deep
+# check does and the cheap one deliberately does not.
+
+def _rewrite_chapter_two(fake_net, *, edited_at: int | None, body: str) -> None:
+    """Replace reader page 1 so post-102 carries new prose, optionally with a
+    "Last edited" notice. Post 101 is left byte-identical."""
+    edit_block = (
+        f'<div class="message-lastEdit">Last edited:'
+        f' <time class="u-dt" data-time="{edited_at}"></time></div>'
+        if edited_at is not None else ''
+    )
+    fake_net['pages'][f'{THREAD}/reader?threadmark_category=1'] = f"""
+    <article class="message" data-author="TestAuthor" data-content="post-101">
+      <span class="threadmarkLabel">Chapter One</span>
+      <div class="message-attribution">
+        <time class="u-dt" data-time="1600000000"></time></div>
+      <div class="bbWrapper">It began on a <b>Tuesday</b>.</div></article>
+    <article class="message" data-author="TestAuthor" data-content="post-102">
+      <span class="threadmarkLabel">Chapter Two</span>
+      <div class="message-attribution">
+        <time class="u-dt" data-time="1600100000"></time></div>
+      <div class="bbWrapper">{body}</div>
+      {edit_block}</article>
+    <nav class="pageNavWrapper"><ul class="pageNav-main">
+      <li class="pageNav-page"><a href="#">1</a></li>
+      <li class="pageNav-page"><a href="#">2</a></li>
+    </ul></nav>
+    """
+
+
+def _chapter_named(client, fic_id: str, title: str) -> dict:
+    chapters = client.get(f'/api/fanfic/{fic_id}/chapters').get_json()
+    summary = next(c for c in chapters if c['title'] == title)
+    return client.get(f"/api/fanfic/chapters/{summary['id']}").get_json()
+
+
+def test_deep_check_rewrites_an_edited_chapter(client, fake_net):
+    fic_id = _import_fic(client)
+    before = _chapter_named(client, fic_id, 'Chapter Two')
+    assert 'rewrote this scene' not in before['contentHtml']
+
+    _rewrite_chapter_two(
+        fake_net, edited_at=1700000000,
+        body='The author rewrote this scene entirely, and it is now'
+             ' considerably longer than the version we downloaded.')
+    resp = client.post(f'/api/fanfic/{fic_id}/check-updates', json={'deep': True})
+    assert resp.status_code == 202
+    assert resp.get_json()['deep'] is True
+
+    after = _chapter_named(client, fic_id, 'Chapter Two')
+    assert 'rewrote this scene' in after['contentHtml']
+    assert 'rewrote this scene' in after['contentText']
+    assert after['editedAt'] is not None
+    assert after['wordCount'] > before['wordCount']
+    # the chapter is revised in place: same row, same reading position, and no
+    # phantom chapter appended
+    assert after['id'] == before['id']
+    assert after['position'] == before['position']
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['chapterCount'] == 4
+
+
+def test_routine_check_never_escalates_itself_to_a_deep_one(client, fake_net):
+    """The tier boundary, stated out loud. Finding an edit costs a full re-walk
+    and authors revising published chapters is rare, so nothing escalates on a
+    timer — a deep pass happens only when it's asked for."""
+    fic_id = _import_fic(client)
+    _rewrite_chapter_two(
+        fake_net, edited_at=1700000000, body='The author rewrote this scene.')
+
+    client.post(f'/api/fanfic/{fic_id}/check-updates')
+    assert 'rewrote this scene' not in _chapter_named(
+        client, fic_id, 'Chapter Two')['contentHtml']
+
+    # ...and repeating it doesn't eventually trip into one either
+    client.post(f'/api/fanfic/{fic_id}/check-updates')
+    assert 'rewrote this scene' not in _chapter_named(
+        client, fic_id, 'Chapter Two')['contentHtml']
+
+
+def test_deep_check_leaves_unedited_chapters_untouched(client, fake_net):
+    """A deep scan re-reads everything but must rewrite nothing when nothing
+    changed — otherwise every scan churns content_text and the FTS index."""
+    from backend.db.connection import get_db
+    fic_id = _import_fic(client)
+    db = get_db()
+    db.execute("UPDATE fic_chapters SET content_html='SENTINEL' WHERE fic_id=?", (fic_id,))
+    db.commit()
+
+    client.post(f'/api/fanfic/{fic_id}/check-updates', json={'deep': True})
+
+    remaining = db.execute(
+        "SELECT COUNT(*) AS n FROM fic_chapters WHERE fic_id=? AND content_html='SENTINEL'",
+        (fic_id,)).fetchone()['n']
+    assert remaining == 4
+
+
+def _long_fic_pages(post_ids: list[str]) -> dict[str, str]:
+    """A single-category thread of `post_ids` chapters, paginated 10 per reader
+    page exactly as XenForo does, plus the matching threadmarks index."""
+    pages: dict[str, str] = {}
+    page_count = -(-len(post_ids) // 10)
+
+    def nav() -> str:
+        links = ''.join(
+            f'<li class="pageNav-page"><a href="#">{i}</a></li>'
+            for i in range(1, page_count + 1))
+        return f'<nav class="pageNavWrapper"><ul class="pageNav-main">{links}</ul></nav>'
+
+    for page in range(1, page_count + 1):
+        chunk = post_ids[(page - 1) * 10:page * 10]
+        articles = ''.join(f"""
+        <article class="message" data-author="TestAuthor" data-content="post-{pid}">
+          <span class="threadmarkLabel">Chapter {pid}</span>
+          <div class="message-attribution">
+            <time class="u-dt" data-time="{1600000000 + int(pid)}"></time></div>
+          <div class="bbWrapper">Body of chapter {pid}.</div></article>
+        """ for pid in chunk)
+        suffix = '' if page == 1 else f'/page-{page}'
+        pages[f'{THREAD}/reader{suffix}?threadmark_category=1'] = articles + nav()
+
+    rows = ''.join(f"""
+    <div class="structItem structItem--threadmark">
+      <div class="structItem-title"><a href="/threads/a-test-fic.12345/post-{pid}">
+        Chapter {pid}</a></div>
+      <time data-time="{1600000000 + int(pid)}"></time>
+    </div>
+    """ for pid in post_ids)
+    pages[f'{THREAD}/threadmarks?threadmark_category=1'] = f'<html><body>{rows}</body></html>'
+
+    pages[f'{THREAD}/'] = (FIXTURES / 'thread_page.html').read_text()
+    pages[f'{THREAD}/threadmarks'] = f"""
+    <html><body>
+      <h1 class="p-title-value">Threadmarks for: A Test Fic</h1>
+      <div class="block-tabHeader--threadmarkCategoryTabs">
+        <a class="tabs-tab" href="/threads/a-test-fic.12345/threadmarks">Threadmarks</a>
+      </div>
+      <li aria-labelledby="threadmark-category-1">
+        Statistics ({len(post_ids)} threadmarks, 1.2k words)
+      </li>
+    </body></html>
+    """
+    return pages
+
+
+def test_check_updates_survives_the_site_losing_a_threadmark(client, fake_net):
+    """A fic could latch into "permanently up to date".
+
+    The category was skipped when the site's threadmark count was `<=` our row
+    count, so once the site's count fell *below* ours — an author un-threadmarks
+    or deletes a post, or a category is renamed under our rows — the comparison
+    stayed true forever and every subsequent chapter was ignored. The count is
+    now only trusted when it matches exactly; anything else falls through to
+    the post-id diff."""
+    from backend.db.connection import get_db
+
+    ids = [str(100 + i) for i in range(1, 13)]  # 101..112
+    fake_net['pages'].clear()
+    fake_net['pages'].update(_long_fic_pages(ids))
+    fic_id = _import_fic(client)
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['chapterCount'] == 12
+
+    # the author un-threadmarks two chapters, then posts a new one
+    remaining = [i for i in ids if i not in ('110', '111')] + ['113']
+    assert len(remaining) == 11  # the site now reports fewer than we hold
+    fake_net['pages'].update(_long_fic_pages(remaining))
+
+    client.post(f'/api/fanfic/{fic_id}/check-updates')
+
+    titles = {c['title'] for c in
+              client.get(f'/api/fanfic/{fic_id}/chapters').get_json()}
+    assert 'Chapter 113' in titles
+    # the un-threadmarked chapters are kept: we downloaded them, and the site
+    # dropping a threadmark is not a reason to destroy the reader's copy
+    assert {'Chapter 110', 'Chapter 111'} <= titles
+    assert get_db().execute(
+        'SELECT COUNT(*) AS n FROM fic_chapters WHERE fic_id=?',
+        (fic_id,)).fetchone()['n'] == 13
+
+
+def test_check_updates_sees_swapped_threadmarks_at_an_unchanged_count(client, fake_net):
+    """Equal counts do not mean equal contents.
+
+    A category that loses two threadmarks and gains two reports the same
+    "Statistics (N threadmarks)" it did before. Any count-based shortcut agrees
+    the fic is current and skips it; only diffing post ids notices."""
+    ids = [str(100 + i) for i in range(1, 13)]  # 101..112
+    fake_net['pages'].clear()
+    fake_net['pages'].update(_long_fic_pages(ids))
+    fic_id = _import_fic(client)
+
+    remaining = [i for i in ids if i not in ('110', '111')] + ['113', '114']
+    assert len(remaining) == len(ids)  # the site's count is unchanged
+    fake_net['pages'].update(_long_fic_pages(remaining))
+
+    client.post(f'/api/fanfic/{fic_id}/check-updates')
+
+    titles = {c['title'] for c in
+              client.get(f'/api/fanfic/{fic_id}/chapters').get_json()}
+    assert {'Chapter 113', 'Chapter 114'} <= titles
+
+
+def test_check_updates_recovers_a_chapter_missing_from_the_middle(client, fake_net):
+    """A gap in what we stored used to be permanent.
+
+    The reader page to resume from was derived from our row *count*, so a
+    chapter missing from the middle (a failed import, a post that 403'd) shifted
+    every later chapter's arithmetic and pushed the walk straight past the page
+    holding the gap. Post ids are now diffed against the threadmarks index,
+    which points at the page the missing chapter is actually on."""
+    from backend.db.connection import get_db
+
+    ids = [str(100 + i) for i in range(1, 13)]  # 101..112, two reader pages
+    fake_net['pages'].clear()
+    fake_net['pages'].update(_long_fic_pages(ids))
+    fic_id = _import_fic(client)
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['chapterCount'] == 12
+
+    db = get_db()
+    db.execute('DELETE FROM fic_chapters WHERE fic_id=? AND source_post_id=?',
+               (fic_id, '103'))
+    db.commit()
+
+    # The site gains chapter 113, so the category isn't skipped as unchanged.
+    # 11 rows stored puts the old count-derived resume at reader page 2 —
+    # past page 1, where the missing chapter 103 lives.
+    fake_net['pages'].update(_long_fic_pages([*ids, '113']))
+
+    client.post(f'/api/fanfic/{fic_id}/check-updates')
+
+    chapters = client.get(f'/api/fanfic/{fic_id}/chapters').get_json()
+    titles = {c['title'] for c in chapters}
+    assert 'Chapter 103' in titles  # the gap was refilled
+    assert 'Chapter 113' in titles  # and the genuinely new chapter arrived
+
+
 PROXY_ART = ('https://forums.spacebattles.com/proxy.php'
              '?image=https%3A%2F%2Fexample.com%2Fart.png&hash=abc123')
 

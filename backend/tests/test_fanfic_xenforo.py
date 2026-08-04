@@ -160,6 +160,49 @@ def test_parse_reader_page_posts():
     assert 'threadmarkLabel' not in first.content_html  # only bbWrapper content
 
 
+def test_parse_reader_page_edited_at():
+    """The "Last edited" notice is the only signal XenForo gives that an
+    already-published chapter changed — it raises no alert and leaves the
+    threadmarks index alone."""
+    html = """
+    <article class="message" data-author="TestAuthor" data-content="post-101">
+      <div class="message-attribution">
+        <time class="u-dt" data-time="1600000000">Sep 13, 2020</time>
+      </div>
+      <div class="bbWrapper">Revised prose.</div>
+      <div class="message-lastEdit">Last edited:
+        <time class="u-dt" data-time="1700000000">Nov 14, 2023</time>
+      </div>
+    </article>
+    """
+    post = parse_reader_page(html).posts[0]
+    assert post.posted_at == 1600000000
+    assert post.edited_at == 1700000000
+    assert 'Last edited' not in post.content_html
+
+
+def test_parse_reader_page_edited_at_absent_when_never_edited():
+    post = parse_reader_page(fixture('reader_p1.html')).posts[0]
+    assert post.edited_at is None
+
+
+def test_parse_reader_page_lastedit_not_mistaken_for_post_date():
+    """The lastEdit <time> also carries u-dt, so a post whose attribution
+    block is missing or reordered must not read its edit date as a post date —
+    that would make every edited chapter look re-posted."""
+    html = """
+    <article class="message" data-author="TestAuthor" data-content="post-101">
+      <div class="bbWrapper">Prose.</div>
+      <div class="message-lastEdit">Last edited:
+        <time class="u-dt" data-time="1700000000">Nov 14, 2023</time>
+      </div>
+    </article>
+    """
+    post = parse_reader_page(html).posts[0]
+    assert post.posted_at is None
+    assert post.edited_at == 1700000000
+
+
 def test_parse_reader_page_last_page_default():
     page = parse_reader_page(fixture('reader_side_p1.html'))
     assert page.last_page == 1
@@ -278,3 +321,28 @@ def test_parse_alerts():
 def test_parse_alerts_empty_page():
     assert xenforo.parse_alerts('<html><body>no alerts</body></html>',
                                 'forums.spacebattles.com') == []
+
+
+# --- parse_watched_threads ---
+
+def test_parse_watched_threads_p1():
+    page = xenforo.parse_watched_threads(
+        fixture('watched_threads_p1.html'), 'forums.spacebattles.com')
+    assert [r.thread_id for r in page.refs] == ['12345', '67890', '11111']
+    assert page.refs[0] == ThreadRef('forums.spacebattles.com', '12345', 'a-test-fic')
+    assert page.last_page == 2
+
+
+def test_parse_watched_threads_p2_skips_unresolvable_rows():
+    page = xenforo.parse_watched_threads(
+        fixture('watched_threads_p2.html'), 'forums.spacebattles.com')
+    # the second row has no thread link (a deleted/moved thread) and is skipped
+    assert [r.thread_id for r in page.refs] == ['22222']
+    assert page.last_page == 2
+
+
+def test_parse_watched_threads_empty_page():
+    page = xenforo.parse_watched_threads(
+        '<html><body>no watched threads</body></html>', 'forums.spacebattles.com')
+    assert page.refs == []
+    assert page.last_page == 1

@@ -63,6 +63,16 @@ export function addDays(iso: string, days: number): string {
   return toISODate(date);
 }
 
+// Used to flag the sidebar when today has no selfie yet. Takes the fetched
+// rows rather than re-deriving "today" itself, so the caller controls the
+// clock read the same way the newspapers badge does.
+export function isTodaySelfieMissing(
+  selfies: { date: string }[],
+  today: string
+): boolean {
+  return !selfies.some(s => s.date === today);
+}
+
 /** 0 = Sunday … 6 = Saturday, matching the heatmap's row order. */
 export function weekdayIndex(iso: string): number {
   return parseISODate(iso).getUTCDay();

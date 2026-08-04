@@ -12,6 +12,7 @@ import { SttPanel } from './components/Editor/SttPanel';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { Login } from './components/Login';
 import { Writing } from './components/Writing';
+import { Ideas } from './components/Ideas';
 import { Tasks } from './components/Tasks';
 import { Food } from './components/Food/Food';
 import { Lifestyle } from './components/Lifestyle/Lifestyle';
@@ -21,6 +22,8 @@ import { Newspapers } from './components/Newspapers';
 import { Paper } from './components/Paper/Paper';
 import { Meetings } from './components/Meetings';
 import { api } from './hooks/api';
+import { useTodaySelfieStatus } from './hooks/useTodaySelfieStatus';
+import { useTodayNewspapersStatus } from './hooks/useTodayNewspapersStatus';
 import { resolveAuthGate } from './lib/authGate';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 import { MOBILE_QUERY } from './lib/breakpoints';
@@ -59,6 +62,12 @@ export default function App() {
     isError: authError,
     data: authStatus,
   });
+
+  // Mounted regardless of currentView so the sidebar can flag a gap without
+  // the user opening the Lifestyle/Newspapers tab; gated on 'app' so it
+  // doesn't fire against a still-unauthenticated network-mode session.
+  const lifestyleNeedsAttention = useTodaySelfieStatus(authGate === 'app');
+  const newspapersNeedAttention = useTodayNewspapersStatus(authGate === 'app');
 
   const handleTranscribed = (text: string) => {
     if (currentView === 'files') {
@@ -149,6 +158,8 @@ export default function App() {
         return <Notebook />;
       case 'writing':
         return <Writing />;
+      case 'ideas':
+        return <Ideas />;
       case 'tasks':
         return <Tasks />;
       case 'food':
@@ -199,6 +210,8 @@ export default function App() {
             onViewChange={setCurrentView}
             isOpen={sidebarOpen}
             onToggle={() => setSidebarOpen(!sidebarOpen)}
+            lifestyleNeedsAttention={lifestyleNeedsAttention}
+            newspapersNeedAttention={newspapersNeedAttention}
           />
           <main className="flex-1 flex flex-col overflow-hidden">
             {renderView()}

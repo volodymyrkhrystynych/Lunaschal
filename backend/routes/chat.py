@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request, Response, stream_with_context
 from ulid import ULID
 from backend.db.connection import get_db, row_to_dict
 from backend.chat_day import day_key_for
+from backend.ai import priority
 from backend.ai.provider import is_ai_configured
 from backend.ai.chat import chat_stream, build_chat_system_prompt
 from backend.ai import websearch_chat
@@ -17,7 +18,7 @@ bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 @bp.get('/conversations')
 def list_conversations():
     rows = get_db().execute(
-        'SELECT * FROM conversations WHERE writing_project_id IS NULL ORDER BY updated_at DESC'
+        'SELECT * FROM conversations WHERE writing_project_id IS NULL AND idea_id IS NULL ORDER BY updated_at DESC'
     ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
 
@@ -32,7 +33,7 @@ def get_today():
     mode = request.args.get('mode', 'chat')
     db = get_db()
     row = db.execute(
-        'SELECT * FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND mode=?',
+        'SELECT * FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL AND mode=?',
         (day_key_for(), mode),
     ).fetchone()
     if not row:
@@ -57,7 +58,7 @@ def journal_conversations():
                   (SELECT COUNT(*) FROM messages m
                    WHERE m.conversation_id = c.id AND m.role IN ('user', 'assistant')) AS message_count
            FROM conversations c
-           WHERE c.day_key IS NOT NULL AND c.day_key < ? AND c.writing_project_id IS NULL
+           WHERE c.day_key IS NOT NULL AND c.day_key < ? AND c.writing_project_id IS NULL AND c.idea_id IS NULL
              AND EXISTS (SELECT 1 FROM messages m2
                          WHERE m2.conversation_id = c.id AND m2.role IN ('user', 'assistant'))
            ORDER BY c.day_key DESC''',
@@ -85,12 +86,12 @@ def create_conversation():
     """Find-or-create the current chat day's conversation for the given `mode`
     ('chat', default, or 'websearch'). Titles stay NULL until the nightly
     title job fills them in."""
-    body = request.json or {}
+    body = request.get_json(silent=True) or {}
     mode = body.get('mode', 'chat')
     db = get_db()
     dk = day_key_for()
     existing = db.execute(
-        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND mode=?',
+        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL AND mode=?',
         (dk, mode),
     ).fetchone()
     if existing:
@@ -307,23 +308,6 @@ def classify():
     return jsonify(classify_intent(message))
 
 
-@bp.post('/save-journal')
-def save_journal():
-    body = request.json or {}
-    now = int(time.time())
-    id = str(ULID())
-    tags = body.get('tags', [])
-    db = get_db()
-    db.execute(
-        'INSERT INTO journal_entries(id, content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?)',
-        (id, body.get('content', ''), body.get('title'), json.dumps(tags), now, now),
-    )
-    if body.get('messageId'):
-        _update_message_metadata(db, body['messageId'], 'savedAsJournal', id)
-    db.commit()
-    return jsonify({'id': id}), 201
-
-
 @bp.post('/save-calendar')
 def save_calendar():
     body = request.json or {}
@@ -354,6 +338,13 @@ def stream():
         # default prompt enriched with the last day's journal entries.
         system_prompt = build_chat_system_prompt()
 
+    # Acquired here, in the view, rather than inside generate(): the generator
+    # body does not run until Werkzeug pulls the first item, so acquiring there
+    # would leave the window between "user pressed Enter" and "first token"
+    # looking idle to background work. Released in the generator's finally,
+    # which also runs on GeneratorExit when the client disconnects mid-stream.
+    token = priority.begin('chat.stream')
+
     def generate():
         try:
             for chunk in chat_stream(messages, system_prompt):
@@ -361,6 +352,10 @@ def stream():
             yield 'data: [DONE]\n\n'
         except Exception as e:
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
+        finally:
+            # Must not yield here — that would raise "generator ignored
+            # GeneratorExit". priority.end only touches a dict under a lock.
+            priority.end(token)
 
     return Response(
         stream_with_context(generate()),

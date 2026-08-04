@@ -10,7 +10,7 @@ from backend.paper import storage
 bp = Blueprint('paper', __name__, url_prefix='/api/paper')
 
 
-def _page_image_url(page) -> str | None:
+def page_image_url(page) -> str | None:
     """URL for a page's PNG snapshot, cache-busted by updated_at, or None if the
     page hasn't been saved with a snapshot yet."""
     if not page['image_path']:
@@ -74,7 +74,7 @@ def list_papers():
         ).fetchone()['n']
         d = row_to_dict(p)
         d['pageCount'] = count
-        d['firstPageImageUrl'] = _page_image_url(first) if first else None
+        d['firstPageImageUrl'] = page_image_url(first) if first else None
         d['pendingArchive'] = p['archive_requested_at'] is not None
         result.append(d)
     return jsonify(result)
@@ -104,7 +104,7 @@ def journal_papers():
             'journalDate': _journal_day(p['archive_requested_at']),
             'archivedAt': _iso(p['archive_requested_at']),
             'pages': [
-                {'id': pg['id'], 'imageUrl': _page_image_url(pg)} for pg in pages
+                {'id': pg['id'], 'imageUrl': page_image_url(pg)} for pg in pages
             ],
         })
     return jsonify(result)
@@ -141,7 +141,7 @@ def get_paper(paper_id):
     ).fetchall()
     d = row_to_dict(paper)
     d['pages'] = [
-        {'id': pg['id'], 'position': pg['position'], 'imageUrl': _page_image_url(pg)}
+        {'id': pg['id'], 'position': pg['position'], 'imageUrl': page_image_url(pg)}
         for pg in pages
     ]
     d['archiveRequested'] = paper['archive_requested_at'] is not None

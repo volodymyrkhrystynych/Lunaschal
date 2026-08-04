@@ -74,6 +74,7 @@ export type AppView =
   | 'files'
   | 'notebook'
   | 'writing'
+  | 'ideas'
   | 'tasks'
   | 'food'
   | 'lifestyle'
@@ -92,6 +93,7 @@ export const VIEW_ORDER: AppView[] = [
   'notebook',
   'meetings',
   'writing',
+  'ideas',
   'calendar',
   'food',
   'lifestyle',

@@ -27,10 +27,7 @@ export function Food() {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold text-[var(--color-text)]">
-          Food
-        </h1>
+      <div className="flex items-center justify-end mb-4">
         <div className="flex gap-1 p-1 bg-[var(--color-surface)] rounded-lg border border-white/10">
           {tab('log', 'Log')}
           {tab('recipes', 'Recipes')}

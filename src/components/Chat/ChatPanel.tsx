@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, type ChatMode } from '../../hooks/api';
+import { api, type ChatMode, type DraftCard } from '../../hooks/api';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { BriefingTodos } from '../BriefingTodos';
 import {
@@ -17,11 +17,9 @@ import {
 } from '@/lib/websearchSteps';
 
 interface PendingSave {
-  type: 'journal' | 'calendar';
   messageId: string;
   data: {
     title: string;
-    content?: string;
     description?: string;
     date?: string;
     time?: string;
@@ -36,9 +34,12 @@ interface PendingQuiz {
 
 interface ClassifyResult {
   intent:
-    'journal' | 'calendar' | 'flashcard_request' | 'question' | 'conversation';
+    | 'calendar'
+    | 'flashcard_request'
+    | 'note_to_self'
+    | 'question'
+    | 'conversation';
   confidence: number;
-  journalEntry?: { title: string; content: string; tags: string[] };
   calendarEvent?: {
     title: string;
     description?: string;
@@ -47,6 +48,7 @@ interface ClassifyResult {
     tags: string[];
   };
   flashcardRequest?: { topic: string };
+  noteToSelf?: { content: string };
 }
 
 const BREAK_METADATA = JSON.stringify({ break: true });
@@ -63,6 +65,15 @@ export function ChatPanel({ mode }: ChatPanelProps) {
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
   const [queuedCards, setQueuedCards] = useState<number | null>(null);
+  const [noteCards, setNoteCards] = useState<DraftCard[] | null>(null);
+  // Which drafted note card has its "request changes" text box open.
+  const [noteRegenId, setNoteRegenId] = useState<string | null>(null);
+  const [noteRegenDirection, setNoteRegenDirection] = useState('');
+  const [noteDupHint, setNoteDupHint] = useState<{
+    cardId: string;
+    similar: { question: string; answer: string };
+    score: number;
+  } | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -114,29 +125,18 @@ export function ChatPanel({ mode }: ChatPanelProps) {
     mutationFn: (message: string) => api.chat.classify(message),
   });
 
-  /** Ask the model whether the message was really a journal entry, a calendar
-   * event or a flashcard request, and offer to save it if so. Fire-and-forget:
-   * a failed classification just means no offer. Only for the regular chat —
-   * a web-search lookup ("what's the weather in Tokyo") isn't journal/calendar
-   * material and the offer would just be noise. */
+  /** Ask the model whether the message was really a calendar event, a
+   * flashcard request or a note to self, and offer to save it if so.
+   * Fire-and-forget: a failed classification just means no offer. Only for
+   * the regular chat — a web-search lookup ("what's the weather in Tokyo")
+   * isn't calendar/note material and the offer would just be noise. */
   const classifyUserMessage = (message: string, messageId: string) => {
     classifyMessage.mutate(message, {
       onSuccess: result => {
         const r = result as ClassifyResult;
         if (r.confidence < 0.7) return;
-        if (r.intent === 'journal' && r.journalEntry) {
+        if (r.intent === 'calendar' && r.calendarEvent) {
           setPendingSave({
-            type: 'journal',
-            messageId,
-            data: {
-              title: r.journalEntry.title,
-              content: r.journalEntry.content,
-              tags: r.journalEntry.tags,
-            },
-          });
-        } else if (r.intent === 'calendar' && r.calendarEvent) {
-          setPendingSave({
-            type: 'calendar',
             messageId,
             data: {
               title: r.calendarEvent.title,
@@ -148,19 +148,12 @@ export function ChatPanel({ mode }: ChatPanelProps) {
           });
         } else if (r.intent === 'flashcard_request' && r.flashcardRequest) {
           setPendingQuiz({ topic: r.flashcardRequest.topic, messageId });
+        } else if (r.intent === 'note_to_self' && r.noteToSelf?.content) {
+          generateFromNote.mutate(r.noteToSelf.content);
         }
       },
     });
   };
-
-  const saveJournal = useMutation({
-    mutationFn: api.chat.saveJournal,
-    onSuccess: () => {
-      invalidateToday();
-      queryClient.invalidateQueries({ queryKey: ['journal'] });
-      setPendingSave(null);
-    },
-  });
 
   const saveCalendar = useMutation({
     mutationFn: api.chat.saveCalendar,
@@ -178,6 +171,52 @@ export function ChatPanel({ mode }: ChatPanelProps) {
       setPendingQuiz(null);
       queryClient.invalidateQueries({ queryKey: ['learning'] });
       setTimeout(() => setQueuedCards(null), 8000);
+    },
+  });
+
+  /** "note to self" drafts a lesson card right away — the preview appears
+   * inline below so it can be approved or steered without leaving chat. */
+  const generateFromNote = useMutation({
+    mutationFn: (content: string) => api.learning.generateFromNote(content),
+    onSuccess: result =>
+      setNoteCards(cards => (cards ?? []).concat(result.cards)),
+  });
+
+  const approveNoteCard = useMutation({
+    mutationFn: ({ id, force }: { id: string; force?: boolean }) =>
+      api.learning.approve(id, force),
+    onSuccess: (result, { id }) => {
+      if (result.status === 'duplicateHint' && result.similar) {
+        setNoteDupHint({
+          cardId: id,
+          similar: result.similar,
+          score: result.score ?? 0,
+        });
+        return;
+      }
+      setNoteDupHint(null);
+      setNoteCards(cards => (cards ?? []).filter(c => c.id !== id));
+      queryClient.invalidateQueries({ queryKey: ['learning'] });
+    },
+  });
+
+  const regenerateNoteCard = useMutation({
+    mutationFn: ({ id, direction }: { id: string; direction: string }) =>
+      api.learning.regenerate(id, direction),
+    onSuccess: (result, { id }) => {
+      setNoteCards(cards =>
+        (cards ?? []).filter(c => c.id !== id).concat(result.cards ?? [])
+      );
+      setNoteRegenId(null);
+      setNoteRegenDirection('');
+    },
+  });
+
+  const discardNoteCard = useMutation({
+    mutationFn: (id: string) => api.learning.deny(id),
+    onSuccess: (_result, id) => {
+      setNoteCards(cards => (cards ?? []).filter(c => c.id !== id));
+      setNoteDupHint(hint => (hint?.cardId === id ? null : hint));
     },
   });
 
@@ -209,6 +248,7 @@ export function ChatPanel({ mode }: ChatPanelProps) {
     pendingSave,
     pendingQuiz,
     queuedCards,
+    noteCards,
   ]);
 
   const startNewChat = async () => {
@@ -262,6 +302,7 @@ export function ChatPanel({ mode }: ChatPanelProps) {
     setStreamingContent('');
     setLiveSteps([]);
 
+    let fullContent = '';
     try {
       const response = await fetch(
         isWebSearch ? '/api/chat/websearch/stream' : '/api/chat/stream',
@@ -281,7 +322,6 @@ export function ChatPanel({ mode }: ChatPanelProps) {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
-      let fullContent = '';
       let steps: WebSearchStep[] = [];
       let sources: { url: string; title?: string }[] = [];
       for await (const parsed of readSSE(reader)) {
@@ -312,13 +352,20 @@ export function ChatPanel({ mode }: ChatPanelProps) {
         content: fullContent,
         metadata,
       });
+      // Only clear on success: `messages` already carries the saved reply by
+      // this point (addMessage's onSuccess invalidates+refetches before
+      // mutateAsync resolves), so this can't leave a visible gap. Clearing
+      // unconditionally in a `finally` used to wipe the error message below
+      // in the same tick it was set — a failed save (or a failed stream)
+      // silently vanished the whole reply with nothing shown to the user.
+      setStreamingContent('');
     } catch (error) {
       setStreamingContent(
-        `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`
+        `Error: ${error instanceof Error ? error.message : 'Failed to get response'}` +
+          (fullContent ? `\n\n(reply was not saved)\n\n${fullContent}` : '')
       );
     } finally {
       setIsStreaming(false);
-      setStreamingContent('');
       setLiveSteps([]);
       // Deliberately *after* the reply, not alongside it. llama-server serves one
       // request at a time per model, so a classify fired in parallel simply
@@ -331,25 +378,15 @@ export function ChatPanel({ mode }: ChatPanelProps) {
 
   const handleSave = () => {
     if (!pendingSave || !conversationId) return;
-    if (pendingSave.type === 'journal') {
-      saveJournal.mutate({
-        conversationId,
-        messageId: pendingSave.messageId,
-        title: pendingSave.data.title,
-        content: pendingSave.data.content || '',
-        tags: pendingSave.data.tags,
-      });
-    } else {
-      saveCalendar.mutate({
-        conversationId,
-        messageId: pendingSave.messageId,
-        title: pendingSave.data.title,
-        description: pendingSave.data.description || '',
-        date: pendingSave.data.date || new Date().toISOString().split('T')[0],
-        time: pendingSave.data.time,
-        tags: pendingSave.data.tags,
-      });
-    }
+    saveCalendar.mutate({
+      conversationId,
+      messageId: pendingSave.messageId,
+      title: pendingSave.data.title,
+      description: pendingSave.data.description || '',
+      date: pendingSave.data.date || new Date().toISOString().split('T')[0],
+      time: pendingSave.data.time,
+      tags: pendingSave.data.tags,
+    });
   };
 
   const toggleRecording = async () => {
@@ -416,14 +453,11 @@ export function ChatPanel({ mode }: ChatPanelProps) {
   };
 
   const isConfigured = !!settings?.llamaUrl;
-  const isSaving = saveJournal.isPending || saveCalendar.isPending;
+  const isSaving = saveCalendar.isPending;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
-        <h1 className="text-sm font-medium text-[var(--color-text-muted)]">
-          {isWebSearch ? "Today's web search chat" : "Today's chat"}
-        </h1>
+      <div className="flex items-center justify-end border-b border-white/10 px-4 py-2">
         <button
           onClick={startNewChat}
           disabled={!hasChat || isStreaming}
@@ -450,11 +484,11 @@ export function ChatPanel({ mode }: ChatPanelProps) {
             <p>
               {isWebSearch
                 ? "Ask a question that depends on what's actually out there — it'll search and read pages before answering."
-                : 'Start a conversation, write in your journal, or ask me anything.'}
+                : 'Start a conversation or ask me anything.'}
             </p>
             {!isWebSearch && (
               <p className="text-sm mt-4">
-                Try: "Today I learned...", "Quiz me on React hooks", or "I went
+                Try: "Quiz me on React hooks", "note to self: ...", or "I went
                 to the dentist"
               </p>
             )}
@@ -565,7 +599,7 @@ export function ChatPanel({ mode }: ChatPanelProps) {
             ))}
           </div>
         )}
-        {isStreaming && streamingContent && (
+        {streamingContent && (
           <div className="flex justify-start">
             <div className="max-w-[80%]">
               <div className="content-text rounded-lg px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text)]">
@@ -593,6 +627,116 @@ export function ChatPanel({ mode }: ChatPanelProps) {
             Queued {queuedCards} cards for approval — open the Learning tab to
             review and approve them.
           </div>
+        </div>
+      )}
+
+      {noteCards && noteCards.length > 0 && (
+        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50 space-y-3">
+          <div className="text-sm font-medium text-[var(--color-text)]">
+            Save {noteCards.length > 1 ? 'these lessons' : 'this lesson'} to
+            Learning?
+          </div>
+          {noteCards.map(card => (
+            <div
+              key={card.id}
+              className="border border-white/10 rounded-lg p-3 space-y-2"
+            >
+              <div className="text-sm text-[var(--color-text)]">
+                <MessageMarkdown content={card.question} />
+              </div>
+              <div className="text-sm text-[var(--color-text-muted)]">
+                <MessageMarkdown content={card.answer} />
+              </div>
+
+              {noteDupHint?.cardId === card.id && (
+                <div className="text-xs text-yellow-400 space-y-1">
+                  <div>
+                    This looks {(noteDupHint.score * 100).toFixed(0)}% similar
+                    to an existing card: "{noteDupHint.similar.question}"
+                  </div>
+                  <button
+                    onClick={() =>
+                      approveNoteCard.mutate({ id: card.id, force: true })
+                    }
+                    disabled={approveNoteCard.isPending}
+                    className="underline hover:text-yellow-300 disabled:opacity-50"
+                  >
+                    Save anyway
+                  </button>
+                </div>
+              )}
+
+              {noteRegenId === card.id ? (
+                <div className="flex gap-2">
+                  <input
+                    autoFocus
+                    value={noteRegenDirection}
+                    onChange={e => setNoteRegenDirection(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && noteRegenDirection.trim()) {
+                        regenerateNoteCard.mutate({
+                          id: card.id,
+                          direction: noteRegenDirection.trim(),
+                        });
+                      }
+                    }}
+                    placeholder="What should change?"
+                    className="flex-1 bg-[var(--color-bg)] border border-white/10 rounded px-2 py-1 text-sm text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+                  />
+                  <button
+                    onClick={() => {
+                      setNoteRegenId(null);
+                      setNoteRegenDirection('');
+                    }}
+                    disabled={regenerateNoteCard.isPending}
+                    className="px-2 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() =>
+                      regenerateNoteCard.mutate({
+                        id: card.id,
+                        direction: noteRegenDirection.trim(),
+                      })
+                    }
+                    disabled={
+                      !noteRegenDirection.trim() || regenerateNoteCard.isPending
+                    }
+                    className="px-2 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+                  >
+                    {regenerateNoteCard.isPending ? 'Updating...' : 'Update'}
+                  </button>
+                </div>
+              ) : (
+                <div className="flex gap-2 justify-end">
+                  <button
+                    onClick={() => discardNoteCard.mutate(card.id)}
+                    disabled={discardNoteCard.isPending}
+                    className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+                  >
+                    Discard
+                  </button>
+                  <button
+                    onClick={() => {
+                      setNoteRegenId(card.id);
+                      setNoteRegenDirection('');
+                    }}
+                    className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  >
+                    Request changes
+                  </button>
+                  <button
+                    onClick={() => approveNoteCard.mutate({ id: card.id })}
+                    disabled={approveNoteCard.isPending}
+                    className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+                  >
+                    Approve
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
 
@@ -633,13 +777,11 @@ export function ChatPanel({ mode }: ChatPanelProps) {
           <div className="flex items-start gap-3">
             <div className="flex-1">
               <div className="text-sm font-medium text-[var(--color-text)]">
-                {pendingSave.type === 'journal'
-                  ? 'Save as journal entry?'
-                  : 'Save as calendar event?'}
+                Save as calendar event?
               </div>
               <div className="text-sm text-[var(--color-text-muted)] mt-1">
                 <span className="font-medium">{pendingSave.data.title}</span>
-                {pendingSave.type === 'calendar' && pendingSave.data.date && (
+                {pendingSave.data.date && (
                   <span className="ml-2">({pendingSave.data.date})</span>
                 )}
               </div>

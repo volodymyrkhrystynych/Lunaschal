@@ -1,5 +1,7 @@
 # Lunaschal
 
+Okay, so the entire idea about this project was that AI is great with context and all the context I want to give AI, I don't want to give a separate company. So I will never completely trust any kind of company even a privacy first one with this kind of data, so why not build it myself? And nicely enough, just like when you fart it doesn't smell so bad, vibe coding your own app it doesn't look that bad.
+
 A self-hosted personal knowledge management desktop app with local AI. Journal, calendar, flashcards, file editor, creative writing workspace, and an AI chat that understands your notes — all running on your own machine as a native desktop window.
 
 ## Features
@@ -50,7 +52,9 @@ npm install
 npm run dev
 ```
 
-The Flask backend runs on `http://localhost:5000`. Vite runs on `http://localhost:5173` and proxies `/api` requests to Flask. Open `http://localhost:5173` in your browser.
+The dev Flask backend runs on `http://localhost:5001`. Vite runs on `http://localhost:5173` and proxies `/api` requests to it. Open `http://localhost:5173` in your browser.
+
+`:5000` is reserved for the production server (`lunaschal.service`, see [docs/deployment.md](docs/deployment.md)), which runs headless full-time — dev and production coexist without either stopping the other.
 
 To open as a native desktop window instead:
 
@@ -70,7 +74,7 @@ npm run build
 python main.py
 ```
 
-Flask serves the built `dist/` from `http://127.0.0.1:5000` and PyWebView opens it as a native window.
+Flask serves the built `dist/` from `http://127.0.0.1:5000`. Under systemd this runs headless (`main.py --headless`); `./ops/open-window.sh` opens a PyWebView window against it as a separate client.
 
 ## AI Providers
 

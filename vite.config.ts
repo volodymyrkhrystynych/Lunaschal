@@ -43,9 +43,14 @@ export default defineConfig({
         // locally while proxying API calls to the backend on another machine.
         // Flask itself speaks HTTPS-only once a cert is wired in (start-server.sh),
         // so the default target must follow suit or every proxied call gets ECONNRESET.
+        //
+        // :5001 is the *dev* backend. :5000 is the production server
+        // (lunaschal.service), which now runs full-time — pointing the dev proxy
+        // there would silently serve the running production build while you
+        // edited backend code and saw nothing change.
         target:
           process.env.VITE_API_PROXY_TARGET ||
-          (https ? 'https://localhost:5000' : 'http://localhost:5000'),
+          (https ? 'https://localhost:5001' : 'http://localhost:5001'),
         changeOrigin: true,
         // The cert's CN is the Tailscale hostname, not "localhost" — this hop
         // never leaves the machine, so skipping hostname verification is fine.

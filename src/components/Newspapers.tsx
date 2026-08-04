@@ -71,16 +71,13 @@ export function Newspapers() {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold text-[var(--color-text)]">
-          Newspapers
-        </h1>
-        {sync.isPending && (
+      {sync.isPending && (
+        <div className="flex items-center justify-end mb-4">
           <span className="text-sm text-[var(--color-text-muted)]">
             Checking for today's front pages…
           </span>
-        )}
-      </div>
+        </div>
+      )}
 
       <div className="flex items-center justify-center gap-3 mb-4">
         <button

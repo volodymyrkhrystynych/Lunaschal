@@ -61,6 +61,7 @@ export interface Fic {
   downloadStatus: 'downloading' | 'complete' | 'error';
   downloadError: string | null;
   updatePending?: boolean;
+  deepPending?: boolean;
   lastReadChapterId: string | null;
   lastCheckedAt: string | null;
   rating: number | null;
@@ -90,7 +91,6 @@ export interface FicTagCount {
 export interface RefreshAlertsResult {
   flagged: number;
   newImports: number;
-  skippedFresh: number;
   skippedActive: number;
   alertsSeen: number;
   errors: Record<string, string>;
@@ -114,10 +114,21 @@ export interface FicChapter extends FicChapterSummary {
   createdAt: string;
 }
 
+export interface WatchedScanProgress {
+  page: number;
+  lastPage: number | null;
+  found: number;
+  imported: number;
+  alreadyInLibrary: number;
+  done: boolean;
+  error: string | null;
+}
+
 export interface SiteCookieInfo {
   domain: string;
   hasCookie: boolean;
   updatedAt: string | null;
+  watchedScan?: WatchedScanProgress;
 }
 
 export interface Transcription {
@@ -335,6 +346,12 @@ export interface ApproveResult {
   score?: number;
 }
 
+export interface DraftCard {
+  id: string;
+  question: string;
+  answer: string;
+}
+
 export interface VerificationCitation {
   title: string;
   source: string;
@@ -480,6 +497,12 @@ export interface AppSettings {
   websearchSearchProvider: string;
   hasWebsearchSearchKey: boolean;
   websearchSearxngUrl: string;
+  repoContextEnabled: boolean;
+  repoContextHour: number;
+  researchEnabled: boolean;
+  researchSearchProvider: string;
+  hasResearchSearchKey: boolean;
+  researchSearxngUrl: string;
 }
 
 export interface WhisperModel {
@@ -524,6 +547,162 @@ export interface NotebookReviewState {
   enabled: boolean;
   fsrsState: string | null;
   due: string | null;
+}
+
+export type IdeaStatus =
+  | 'new'
+  | 'researching'
+  | 'ready'
+  | 'planned'
+  | 'building'
+  | 'shipped'
+  | 'parked';
+
+export type IdeaVerdict = 'no' | 'partial' | 'yes';
+
+/** List row: the two body columns are omitted server-side. */
+export interface IdeaSummary {
+  id: string;
+  title: string;
+  status: IdeaStatus;
+  tags: string | null;
+  sketchCount: number;
+  openQuestionCount: number;
+  articleCount: number;
+  hasPlan: boolean;
+  /** The agent's call. `userVerdict` overrides it wherever both exist. */
+  verdict: IdeaVerdict | null;
+  confidence: number | null;
+  effort: 's' | 'm' | 'l' | null;
+  onRoadmap: boolean;
+  /** The repo moved since the verdict was formed. */
+  assessmentStale: boolean;
+  userVerdict: IdeaVerdict | null;
+  researchState: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Idea extends Omit<
+  IdeaSummary,
+  | 'sketchCount'
+  | 'openQuestionCount'
+  | 'articleCount'
+  | 'hasPlan'
+  | 'verdict'
+  | 'confidence'
+  | 'effort'
+  | 'onRoadmap'
+  | 'assessmentStale'
+> {
+  /** As spoken or typed. Never overwritten — only `content` is AI-owned. */
+  rawContent: string;
+  content: string;
+  userVerdictNote: string | null;
+}
+
+/** Evidence the agent cited — chosen by index from a list the server built,
+ *  so every entry points at a file that actually exists. */
+export interface IdeaEvidence {
+  kind: string;
+  ref: string;
+  file: string | null;
+  line: number | null;
+  detail: string | null;
+}
+
+export interface IdeaAssessment {
+  id: string;
+  ideaId: string;
+  snapshotId: string | null;
+  verdict: IdeaVerdict;
+  confidence: number;
+  rationale: string;
+  evidence: IdeaEvidence[];
+  onRoadmap: string[];
+  effort: 's' | 'm' | 'l' | null;
+  stale: boolean;
+  assessedAt: string;
+}
+
+export interface IdeaQuestion {
+  id: string;
+  ideaId: string;
+  question: string;
+  why: string | null;
+  options: string[];
+  answer: string | null;
+  status: 'open' | 'answered' | 'dismissed';
+  answeredAt: string | null;
+  createdAt: string;
+}
+
+export interface IdeaPlanSummary {
+  id: string;
+  ideaId: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface IdeaPlan extends IdeaPlanSummary {
+  /** Rendered markdown — the thing you hand to a coding agent. */
+  content: string;
+  spec: string;
+}
+
+export interface IdeaSketch {
+  id: string;
+  ideaId: string;
+  pageId: string;
+  paperId: string;
+  /** What the sketch shows. The agent reads this, not the drawing. */
+  caption: string;
+  position: number;
+  imageUrl: string | null;
+  createdAt: string;
+}
+
+/** A Paper page offered in the sketch picker. */
+export interface IdeaPaperPage {
+  pageId: string;
+  paperId: string;
+  paperTitle: string;
+  position: number;
+  imageUrl: string | null;
+}
+
+/**
+ * A nightly, machine-generated picture of what the app currently is. `digest`
+ * is deterministic extraction; only `changeSummary` comes from the model, and
+ * it is null when the model was unavailable.
+ */
+export interface RepoSnapshot {
+  id: string;
+  gitSha: string | null;
+  gitBranch: string | null;
+  digest: string;
+  changeSummary: string | null;
+  routeCount: number;
+  tableCount: number;
+  componentCount: number;
+  /** Drift between the frontend's three hand-synced view lists. */
+  warnings: string[];
+  generatedAt: string;
+}
+
+/** What the background research worker is doing right now. */
+export interface ResearchStatus {
+  running: boolean;
+  current: { kind: string; target: string | null; startedAt: number } | null;
+  last: {
+    kind: string;
+    target: string | null;
+    error: string | null;
+    cancelled: boolean;
+    seconds: number;
+    finishedAt: number;
+  } | null;
 }
 
 export interface WritingProject {
@@ -1197,9 +1376,12 @@ export const api = {
       }),
     status: (ficId: string) =>
       get<FicDownloadProgress | { done: true }>(`/api/fanfic/${ficId}/status`),
-    checkUpdates: (ficId: string) =>
-      post<{ id: string; queued: boolean }>(
-        `/api/fanfic/${ficId}/check-updates`
+    // `deep` asks for the slow pass that re-reads every saved chapter and
+    // rewrites the ones the author edited since we downloaded them.
+    checkUpdates: (ficId: string, deep = false) =>
+      post<{ id: string; queued: boolean; deep: boolean }>(
+        `/api/fanfic/${ficId}/check-updates`,
+        deep ? { deep: true } : undefined
       ),
     refreshAlerts: () =>
       post<RefreshAlertsResult>('/api/fanfic/refresh-alerts'),
@@ -1230,6 +1412,8 @@ export const api = {
       put: (domain: string, cookie: string) =>
         put<{ success: boolean }>('/api/fanfic/cookies', { domain, cookie }),
     },
+    scanWatched: (domain: string) =>
+      post<{ started: boolean }>(`/api/fanfic/scan-watched/${domain}`),
   },
 
   calendar: {
@@ -1392,12 +1576,19 @@ export const api = {
         '/api/learning/generate-for-topic',
         { topic, folderId }
       ),
+    generateFromNote: (content: string) =>
+      post<{
+        count: number;
+        ids: string[];
+        cards: DraftCard[];
+        folderId: string;
+      }>('/api/learning/generate-from-note', { content }),
 
     listQueue: () => get<LearningCard[]>('/api/learning/queue'),
     approve: (id: string, force?: boolean) =>
       post<ApproveResult>(`/api/learning/queue/${id}/approve`, { force }),
     regenerate: (id: string, direction: string) =>
-      post<{ count: number; ids: string[] }>(
+      post<{ count: number; ids: string[]; cards: DraftCard[] }>(
         `/api/learning/queue/${id}/regenerate`,
         { direction }
       ),
@@ -1525,13 +1716,6 @@ export const api = {
         '/api/chat/classify',
         { message }
       ),
-    saveJournal: (data: {
-      conversationId: string;
-      messageId?: string;
-      title: string;
-      content: string;
-      tags: string[];
-    }) => post<{ id: string }>('/api/chat/save-journal', data),
     saveCalendar: (data: {
       conversationId: string;
       messageId?: string;
@@ -1631,6 +1815,71 @@ export const api = {
     listenerState: () =>
       get<{ recording: boolean; transcribing: boolean; mode: string | null }>(
         '/api/stt/listener-state'
+      ),
+  },
+
+  ideas: {
+    list: () => get<IdeaSummary[]>('/api/ideas'),
+    get: (id: string) => get<Idea>(`/api/ideas/${id}`),
+    create: (data: { title?: string; rawContent?: string; tags?: string[] }) =>
+      post<{ id: string }>('/api/ideas', data),
+    createFromVoice: (rawContent: string) =>
+      post<{ id: string }>('/api/ideas/voice', { rawContent }),
+    update: (
+      id: string,
+      data: {
+        title?: string;
+        rawContent?: string;
+        content?: string;
+        status?: IdeaStatus;
+        tags?: string[];
+        userVerdict?: IdeaVerdict | null;
+        userVerdictNote?: string;
+      }
+    ) => patch<{ success: boolean }>(`/api/ideas/${id}`, data),
+    remove: (id: string) => del<{ success: boolean }>(`/api/ideas/${id}`),
+
+    listSketches: (ideaId: string) =>
+      get<IdeaSketch[]>(`/api/ideas/${ideaId}/sketches`),
+    addSketch: (ideaId: string, data: { pageId: string; caption?: string }) =>
+      post<{ id: string }>(`/api/ideas/${ideaId}/sketches`, data),
+    updateSketch: (
+      sketchId: string,
+      data: { caption?: string; position?: number }
+    ) => patch<{ success: boolean }>(`/api/ideas/sketches/${sketchId}`, data),
+    removeSketch: (sketchId: string) =>
+      del<{ success: boolean }>(`/api/ideas/sketches/${sketchId}`),
+    paperPages: () => get<IdeaPaperPage[]>('/api/ideas/paper-pages'),
+
+    assess: (ideaId: string) =>
+      post<IdeaAssessment>(`/api/ideas/${ideaId}/assess`),
+    listQuestions: (ideaId: string) =>
+      get<IdeaQuestion[]>(`/api/ideas/${ideaId}/questions`),
+    answerQuestion: (
+      questionId: string,
+      data: { answer?: string; status?: 'open' | 'answered' | 'dismissed' }
+    ) =>
+      patch<{ success: boolean }>(`/api/ideas/questions/${questionId}`, data),
+
+    listConversations: (ideaId: string) =>
+      get<Conversation[]>(`/api/ideas/${ideaId}/conversations`),
+    createConversation: (ideaId: string, data: { title?: string } = {}) =>
+      post<{ id: string }>(`/api/ideas/${ideaId}/conversations`, data),
+
+    listPlans: (ideaId: string) =>
+      get<IdeaPlanSummary[]>(`/api/ideas/${ideaId}/plans`),
+    getPlan: (planId: string) => get<IdeaPlan>(`/api/ideas/plans/${planId}`),
+    createPlan: (ideaId: string) => post<IdeaPlan>(`/api/ideas/${ideaId}/plan`),
+
+    repoContext: () => get<RepoSnapshot | null>('/api/ideas/repo-context'),
+    researchStatus: () => get<ResearchStatus>('/api/ideas/research/status'),
+    cancelResearch: () =>
+      post<{ cancelled: boolean }>('/api/ideas/research/cancel'),
+    research: (ideaId: string) =>
+      post<{ queued: boolean }>(`/api/ideas/${ideaId}/research`),
+    refreshRepoContext: () =>
+      post<{ id: string; routeCount: number; tableCount: number }>(
+        '/api/ideas/repo-context/refresh'
       ),
   },
 

@@ -26,13 +26,15 @@ Development happens on two machines: a desktop (comfortable, full mouse/keyboard
 ## Commands
 
 ```bash
-# Development (Flask backend on :5000 + Vite client on :5173)
+# Development (Flask backend on :5001 + Vite client on :5173)
+# Production keeps :5000 — see the Ports note under Key Behaviors.
 npm run dev
 
-npm run dev:flask        # backend only (flask --app backend.app run --port 5000 --debug)
+npm run dev:flask        # backend only (flask --app backend.app run --port 5001 --debug)
 npm run dev:client       # frontend only (vite)
 npm run dev:desktop      # desktop window via PyWebView pointed at the Vite dev server
-python main.py           # production: build first with npm run build, then desktop window
+python main.py           # build first with npm run build, then serve dist/ + open a window
+python main.py --headless # server only, no window (what ops/run-prod.sh runs)
 
 # Local inference (llama.cpp). Prefer the systemd unit — the model takes tens of
 # seconds to load, and Flask's --debug reloader restarts constantly.
@@ -40,7 +42,10 @@ python main.py           # production: build first with npm run build, then desk
 systemctl --user status lunaschal-llama   # see llama/lunaschal-llama.service to install
 
 # Convenience launchers
-./start.sh               # kills stale :5000/:5173, starts llama-server if needed, npm run dev
+./start.sh               # kills stale :5001/:5173, warns if llama-server is down, npm run dev
+                         # (assumes llama-server is already running; never touches :5000)
+./ops/run-prod.sh        # production server, headless (what lunaschal.service runs)
+./ops/open-window.sh     # desktop window against the running production server
 ./start-server.sh        # network mode (NETWORK_MODE=1, requires LUNASCHAL_PASSWORD)
 ./start-node.sh          # frontend-only on a weak machine; proxies /api to a remote
                          # backend via VITE_API_PROXY_TARGET/LUNASCHAL_URL (Tailscale)
@@ -57,7 +62,7 @@ npm run test:watch       # vitest in watch mode
 
 ## Architecture
 
-Lunaschal is a single-user personal life-management desktop app with AI integration. Views (in sidebar order): AI chat, daily tasks + todos, journal, meeting recorder/transcriber, creative-writing workspace, calendar, spaced-repetition learning, cookbook, lifestyle (workouts/heatmap/chores/selfie/calories), fanfic library/reader, newspaper front pages, file editor, settings. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
+Lunaschal is a single-user personal life-management desktop app with AI integration. Views (in sidebar order): spaced-repetition learning, AI chat, daily tasks + todos, journal, notebook, meeting recorder/transcriber, creative-writing workspace, ideas + research agent, calendar, food log (+ recipes), lifestyle (workouts/heatmap/chores/selfie/calories), fanfic library/reader, newspaper front pages, handwritten paper, file editor, settings. Recipes are no longer a top-level view — they live inside Food (`src/components/Food/RecipeList.tsx`) over the `cookbook` blueprint. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
 
 ### Stack
 
@@ -71,12 +76,12 @@ Lunaschal is a single-user personal life-management desktop app with AI integrat
 
 ### Entry Points
 
-- **`main.py`** — PyWebView desktop launcher. Starts Flask in a daemon thread, waits for `/api/health`, then opens the window. Pass `--dev` to point the window at the Vite dev server instead of the built `dist/`.
+- **`main.py`** — PyWebView desktop launcher. Starts Flask in a daemon thread, waits for `/api/health`, then opens the window. Pass `--dev` to point the window at the Vite dev server instead of the built `dist/` (health-checked on `:5001`, the dev port). **`--headless` skips the window entirely** and runs Flask in the foreground — that's the production server, and `webview`/Qt are imported inside `_start_window()` so this path needs no display. `--server-url` opens a window against an already-running server without starting one.
 - **`backend/app.py`** — Flask app factory (`create_app`). Runs DB init, registers all blueprints, mounts auth middleware, serves the built `dist/` in production, restores the sleep inhibitor, snapshots baseline GPU VRAM for the Settings VRAM budget, and (with `STT_LISTENER=1`) spawns the voice listener as a subprocess.
 
 ### Backend Structure (`backend/`)
 
-Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`, `lifestyle`.
+Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `food`, `fanfic`, `newspapers`, `meetings`, `notebook`, `paper`, `lifestyle`, `ideas`.
 
 Feature-logic packages (kept out of the route files so they can be unit-tested):
 
@@ -86,18 +91,23 @@ Feature-logic packages (kept out of the route files so they can be unit-tested):
 - `backend/newspapers/` — frontpages.com scraper, sync, file storage
 - `backend/lifestyle/` — the four activity types and per-day heatmap collapse (`activity.py`), exercise-name canonicalization (`exercises.py`), selfie file storage
 - `backend/journal/` — file storage for journal audio/photo attachments (`storage.py`)
+- `backend/food/` — food-photo storage and EXIF capture-date/GPS extraction (`exif.py`)
+- `backend/paper/` — file storage for handwritten page snapshots (`storage.py`)
+- `backend/research/` — the Ideas agent: deterministic repo extraction (`repo_facts.py`), SSRF-guarded web tools (`web.py`), the copy-on-write wiki, the sync tool loop, the research worker and the evidence-backed assessment. Design record: [docs/ideas-tab.md](docs/ideas-tab.md)
 - `backend/tags.py` — shared normalization for JSON-array tag columns (use it, don't grow per-feature rules)
 
 The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` using Flask's `Response(stream_with_context(...))`.
 
-Long-running work (fic downloads, curated-tag scans, meeting transcription) runs in daemon threads with an in-memory progress registry; anything that must survive a restart is checkpointed to the DB, and `connection.py` resets orphaned in-flight states (`downloading` fics, `recording`/`transcribing` meetings) to `'error'` at startup.
+Long-running work (fic downloads, curated-tag scans, meeting transcription, Ideas research) runs in daemon threads with an in-memory progress registry; anything that must survive a restart is checkpointed to the DB, and `connection.py` resets orphaned in-flight states (`downloading` fics, `recording`/`transcribing` meetings, `running` idea research) at startup.
+
+There is no cron and no general scheduler: four hand-rolled daemon loops start from `create_app()` (all skipped when `LUNASCHAL_NO_SCHEDULERS` is set, which the test suite does). `chat_title_scheduler` owns 02:00–03:00, `research/repo_scheduler` 03:00–05:00, `briefing_scheduler` 05:00–07:00 — staggered so they never contend for the two llama slots — and `research/research_scheduler` runs in **no window at all**, deferring moment to moment through `backend/ai/priority.py` instead.
 
 ### Database Layer (`backend/db/`)
 
 - `schema.sql` — raw SQL `CREATE TABLE IF NOT EXISTS` statements; all IDs are ULIDs; timestamps are unix ints (converted to ISO strings by `row_to_dict`, which also camelCases column names — see `TIMESTAMP_COLS`)
 - `connection.py` — opens a single WAL-mode SQLite connection (`get_db()`), runs `schema.sql` on startup, then a long list of `_ensure_*` helpers: **migrations are idempotent ALTER TABLEs guarded by `PRAGMA table_info` checks** — follow that pattern for new columns
-- Three FTS5 virtual tables maintained by SQL triggers: `journal_fts`, `recipes_fts`, `fic_chapters_fts`
-- Binary/media files live next to the DB under `./data/`: `fanfic/<fic_id>/` (images, PDFs), `meetings/<id>/` (WAV tracks), `newspapers/`, `journal/<attachment_id>/` (entry audio + photos), plus `shortcuts.json` (in-app key bindings). Roots overridable via `FANFIC_ROOT` / `MEETINGS_ROOT` / `NEWSPAPERS_ROOT` / `JOURNAL_ROOT` / `SHORTCUTS_PATH`.
+- Four FTS5 virtual tables maintained by SQL triggers: `journal_fts`, `recipes_fts`, `fic_chapters_fts`, `wiki_fts`
+- Binary/media files live next to the DB under `./data/`: `fanfic/<fic_id>/` (images, PDFs), `meetings/<id>/` (WAV tracks), `newspapers/`, `journal/<attachment_id>/` (entry audio + photos), `lifestyle/<id>/` (daily selfies), `food/<id>/` (meal photos), `paper/<page_id>/` (page snapshots + pasted pictures), plus `shortcuts.json` (in-app key bindings). Roots overridable via `FANFIC_ROOT` / `MEETINGS_ROOT` / `NEWSPAPERS_ROOT` / `JOURNAL_ROOT` / `LIFESTYLE_ROOT` / `FOOD_ROOT` / `PAPER_ROOT` / `SHORTCUTS_PATH`.
 
 ### AI Layer (`backend/ai/`)
 
@@ -146,9 +156,58 @@ Two-panel layout: left nav (project list + a `WritingNav` with Chapters/Notes/Di
 
 **Chapter/note editors**: plain `<textarea>` (not CodeMirror — prose, not code) with 1.5 s debounced auto-save; chapters add live word count and font-size shortcuts. **Discussions**: full-size chat reusing `/api/chat/stream` unchanged; the frontend assembles a `systemPrompt` from the project plus checked notes. A **Summarize** button distills the transcript into a new note via `backend/ai/writing.py`.
 
+#### Ideas (`backend/routes/ideas.py`, `src/components/Ideas/`)
+
+The app's own feature backlog, developed with an agent instead of by hand in `docs/ROADMAP.md`. Master-detail: list + capture box on the left, idea detail on the right. Design record and the decisions the build settled — including what is deliberately _not_ built: [docs/ideas-tab.md](docs/ideas-tab.md). Things to know:
+
+- **An idea keeps `raw_content` and `content` separately**, the same contract as `journal_entries`: `raw_content` is what was dictated or typed and is never overwritten; `content` is the AI-cleaned prose. The detail pane shows `content` when it exists and falls back to `raw_content`, with the transcript still reachable under "As captured".
+- **Dictation appends to the capture box rather than saving immediately** (`useRecorder`, the `Learning/BrainDump.tsx` pattern) so a transcript can be corrected, or two thoughts recorded into one idea, before it becomes a row.
+- **A sketch is a Paper _page_, not a whole paper** (`idea_sketches` → `paper_pages`), rendered straight from the page's PNG snapshot at `/api/paper/pages/<id>/image` — no copying and no new storage, the same borrowing `JournalPaperItem` does. Deleting the page cascades the sketch.
+- **The caption on a sketch is the feature, not decoration.** Vision is off in this project (both presets set `mmproj-auto = false`; see `backend/ai/images.py`), so the agent reads the caption and the image is for the human. The UI says so out loud — a "describe this sketch" button that always errored is the journal-photo-captioning mistake.
+- `page_image_url` in `backend/routes/paper.py` is exported (not `_`-prefixed) precisely because Ideas borrows it; keep it that way.
+
+**The repo-context agent** (`backend/research/repo_facts.py`, `repo_job.py`, `repo_scheduler.py`) maintains a nightly `repo_snapshots` row describing what the app currently is, so "you already built this" is evidence rather than a guess.
+
+- **It is mostly not an LLM.** Routes come from an `ast` walk of the `@bp.<method>` decorators (which resolves each back to its Blueprint for the `url_prefix`), tables from `PRAGMA table_info` on the **live** DB (so `_ensure_*` migrations are included, which a parse of `schema.sql` would miss), views from the three hand-synced frontend literals. Pushing the repo through a 25 tok/s model nightly would cost tens of thousands of tokens to produce a lossy paraphrase of things we can read exactly. The model's only job is summarizing the `git log` delta — and it is nullable, because a failed summary must never cost the facts.
+- **`view_facts` cross-checks `VIEWS` / `navItems` / `VIEW_ORDER`** and emits a warning when they drift. Those three are maintained by hand in three files, and a view missing from `VIEW_ORDER` simply can't be reached by the keyboard.
+- **`CLAUDE.md`, `docs/architecture.md`, `docs/ROADMAP.md` and `docs/TODO.md` are read, never regenerated.** ROADMAP/TODO bullets are kept verbatim — they are the "planned but not built" ledger.
+- Snapshot queries order by **`generated_at DESC, id DESC`**: `generated_at` is second-resolution, so the ULID is what actually orders two scans in the same second.
+- Window defaults to 03:00–05:00, between the chat-title sweep (02:00–03:00) and the briefing (05:00–07:00), so the three never contend for the two llama slots.
+
+**The research agent** (`backend/research/web.py`, `wiki.py`, `agent.py`, `backend/ai/priority.py`):
+
+- **`backend/ai/priority.py` is a throughput gate, not a mutex.** llama-server has two slots, so a background loop and a chat message genuinely run at once — but they share memory-bound expert tensors, so the loop parks _between_ steps while a human waits. Nothing preempts a generation already in flight, which is why `chat_with_tools` now takes `max_tokens` and the research loop passes a small ceiling: **turn length is the granularity at which background work can yield.** The mark is acquired in the _view_ and released in the SSE generator's `finally` — acquiring inside the generator would leave time-to-first-token looking idle, and releasing outside it would leak on client disconnect. `MARK_TTL` and a `wait_for_idle` timeout mean a leak costs deferral, never starvation.
+- **`run_bg` marks its work interactive** in one place, because journal polish and friends were triggered by a user action seconds earlier. Long agent runs deliberately do _not_ go on that executor — they would head-of-line block seven user-visible flows.
+- **`web.py` is the only arbitrary outbound fetch in the app, and the model picks the URLs.** `assert_public_url` rejects non-http(s), `.local`/`.internal`, and any host resolving to a private/loopback/link-local/reserved address — re-run on every redirect hop, with manual redirect following. Search is pluggable (Brave/Tavily key, or keyless self-hosted SearXNG); with none configured the tools return an explanatory _result_ rather than raising, so the loop degrades instead of dying.
+- **The wiki is copy-on-write** (`wiki_revisions`, the `learning_revisions` pattern) — a background process editing prose the user relies on has to be auditable and undoable. A `locked` article rejects agent writes. Retrieval hands the model the whole index (`wiki_list`) rather than only a retriever: at a few dozen articles that costs ~1,200 tokens and beats any ranking function. **No embeddings** — the `embed` alias has `ctx-size 2048` so articles would need chunking, and its vectors are frozen because `learning_cards` depends on them.
+- **Tool turns are never streamed.** llama-server reconstructs OpenAI `tool_calls` from Gemma 4's native notation via its peg-gemma4 grammar; reassembling partial tool-call deltas across chunks is how an argument goes missing in production. Gathering and answering are separate turns so the answer can stream while gathering stays blocking. `agent.gather_events` is a generator yielding `('step', …)` then one `('result', …)`, and `agent.gather` is the blocking wrapper — the SSE route needs the generator, because with the blocking form every tool event only arrives _after_ gathering ends, which is the silent spinner the events exist to replace.
+
+- **The research loop is the one daemon with no hour window** (`backend/research/research_scheduler.py`). The repo scan, briefing and title sweep are scheduled at night so they don't compete with the user; this one defers moment to moment through `priority` instead, which is what "runs whenever it likes but yields to anything you ask for" actually needs — and research is worth doing while the user is awake and about to read the answer. Each tick asks four questions (enabled? worker free? user quiet for `QUIET_SECONDS`? anything due?) and submits at most one task. `research_job.plan_next` holds the whole policy: assessment always before research (cheap, no web, and its output is what tells the research pass what to look for), nothing without a repo snapshot, nothing without a search provider, and a 24 h per-idea cooldown so a settled backlog doesn't re-research its newest idea every tick. **`research_enabled` defaults off** — the loop makes outbound requests.
+
+**Assessment — "already built?" is evidence, not a vibe** (`backend/research/evidence.py`, `assess.py`, `backend/ai/idea_assessment.py`):
+
+- **The model never writes a file path.** `gather_candidates` builds a numbered list of things in the repo the idea might already be satisfied by, each with a real `{kind, ref, file, line}`, and the JSON schema bounds `evidenceIndexes` to that list — so llama-server's grammar makes citing a nonexistent file impossible during decoding.
+- **A deterministic clamp runs after the call**: no citations ⇒ verdict forced to `no` (confidence ≤ 0.4); `yes` with fewer than two citations ⇒ downgraded to `partial`. A confident uncited "yes" is the one output that could make the user drop an idea they should have built.
+- **Being on the roadmap is tracked separately from being built** — they're opposites, and conflating them is how a backlog item gets marked done because someone wrote it down.
+- Each assessment records the `snapshot_id` it judged against, so the UI marks it **stale** once the repo moves rather than presenting an old verdict as current. `ideas.user_verdict` always overrides the agent's.
+- Open questions are upserted by a normalized `question_key`, so a re-run never resurrects one the user already answered.
+
+**Discussion and plans**: `conversations.idea_id` is a second discriminator after `writing_project_id` — **six queries** filter "a general chat conversation" and all of them need `AND idea_id IS NULL` (`backend/routes/chat.py:20,30,51,81`, `briefing_job.py`, `chat_title_scheduler.py`). `backend/research/plan.py::render_plan_markdown` is pure, and the sections that must be exact — what already exists, which decisions are settled, which are still open — are stitched in from real rows rather than paraphrased by the model.
+
 #### Fanfic library (`backend/routes/fanfic.py`, `backend/fanfic/`, `src/components/Fanfic/`)
 
-Personal fanfiction library + reader ("Library" in the UI). Imports from XenForo forums (SpaceBattles / Sufficient Velocity / Questionable Questing) by scraping threadmark reader pages — `xenforo.py` is a **pure parser** (no network/DB; tests feed fixture HTML), `download.py` streams chapters into the DB one reader page at a time (resumable; in-memory progress registry; 2 s request delay; browser UA + per-domain cookies from `site_cookies` for Cloudflare). Also imports epub/docx uploads and stores PDFs. Chapters keep sanitized HTML + plain text (FTS). Per-fic: folders (ordered), site tags, per-chapter read tracking, last-read position, rating/review, update checking (`check-updates` / `refresh-alerts` set `update_pending`). Journal entries can reference fics/chapters (`journal_entry_fic_refs`) — reading commentary shows up in the Journal feed and deep-links back into the reader.
+Personal fanfiction library + reader ("Library" in the UI). Imports from XenForo forums (SpaceBattles / Sufficient Velocity / Questionable Questing) by scraping threadmark reader pages — `xenforo.py` is a **pure parser** (no network/DB; tests feed fixture HTML), `download.py` streams chapters into the DB one reader page at a time (resumable; in-memory progress registry; 2 s request delay; browser UA + per-domain cookies from `site_cookies` for Cloudflare). Also imports epub/docx uploads and stores PDFs. Chapters keep sanitized HTML + plain text (FTS). Per-fic: folders (ordered), site tags, per-chapter read tracking, last-read position, rating/review, update checking (`check-updates` / `refresh-alerts` set `update_pending`; a single drain worker walks the flags one fic at a time). Journal entries can reference fics/chapters (`journal_entry_fic_refs`) — reading commentary shows up in the Journal feed and deep-links back into the reader.
+
+**Update checks come in two tiers, because an edit is invisible from outside the post.** XenForo raises no alert when an author revises an existing chapter and leaves the threadmarks index untouched, so nothing about the fic looks different until you re-read the post itself.
+
+- A **cheap** check looks only for chapters we don't have. It diffs the threadmarks index's post ids against the stored ones and resumes at the reader page holding the first missing chapter — one index fetch per ~50 threadmarks per category, and no reader fetch at all when nothing is missing. Three things about it are load-bearing, and all three were bugs:
+  - **`Statistics (N threadmarks)` is never used to skip a category.** It counts a different population than our rows do — threadmarks get recategorised, renamed and deleted on long threads — so the two drift apart, and every count-based shortcut fails in one of two ways. `count <= rows` latched a fic shut permanently the moment the site's count fell below ours (`test_check_updates_survives_the_site_losing_a_threadmark`): this is the root cause of recently-updated fics never downloading, and a category losing a couple of _non-chapter_ threadmarks is enough to trigger it. `count == rows` then still agreed a category was current when it had swapped two threadmarks for two others (`test_check_updates_sees_swapped_threadmarks_at_an_unchanged_count`). Post ids are the only comparison that can't be fooled.
+  - **The resume page comes from the index position, never from our row count.** Count arithmetic overshoots whenever there's a gap, so a chapter missing from the middle pushed the walk past the very page holding it and stayed missing forever.
+  - Chapters the site un-threadmarks are **kept**, not deleted — we downloaded them, and the site dropping a threadmark isn't a reason to destroy the reader's copy.
+- A **deep** check walks every reader page and compares each post against the saved chapter. `fic_chapters.edited_at` holds XenForo's "Last edited" timestamp — parsed from `.message-lastEdit`, which sits in the same `<article>` the body does, so it costs no extra request. A changed chapter is rewritten **in place**: `position` is never touched, or a typo fix would reshuffle reading order and the last-read pointer.
+- **Deep only ever runs when asked** (`{"deep": true}`, the Deep button; `fics.deep_pending` carries the request to the drain worker). There is deliberately no cadence and no auto-escalation: authors revising already-published chapters is rare, so re-walking every fic on a timer would spend far more requests than it recovers.
+- **`edited_at` is left NULL by the migration on purpose.** A post with no edit notice also parses to `None`, so unchanged chapters compare equal and a first deep scan doesn't rewrite the whole library.
+- **`refresh-alerts` no longer skips a fic for being fetched more recently than its alert.** That comparison assumed an alert is the only way a thread changes; with edits raising none, "checked since the alert" regularly meant reporting a fic current while a revised chapter sat unread.
 
 #### Meetings (`backend/routes/meetings.py`, `backend/meetings/`, `src/components/Meetings.tsx`)
 
@@ -200,7 +259,8 @@ Append-only log of everything the STT pipeline transcribed (source/app/detail). 
 - **Settings** owns more than AI keys: STT/TTS backends and Whisper model/device, voice + in-app shortcuts, curated tags, fanfic site cookies, HF token (diarization), meeting echo-cancel, task nudges, prevent-sleep (a `systemd-inhibit` subprocess), and a GPU **VRAM budget** view (non-LLM baseline measured at startup; the LLM's share and the card total are read **live** from `nvidia-smi`, because with expert tensors split across GPU and RAM a model's footprint can't be derived from its file size — thresholds in `src/lib/vram.ts`)
 - **DB path** defaults to `./data/lunaschal.db`; override with `DATABASE_URL` env var
 - **JWT secret** defaults to a hardcoded dev string; set `JWT_SECRET` env var in production
-- **Flask port** is always 5000; Vite dev server is 5173 and proxies `/api` to Flask (`VITE_API_PROXY_TARGET` overrides the target for split-machine dev). The Vite watcher must keep ignoring `data/**` — WAL files churn on every request and previously OOM'd the dev server.
+- **Ports: production Flask is 5000, dev Flask is 5001**, Vite dev is 5173 and proxies `/api` to :5001 (`VITE_API_PROXY_TARGET` overrides the target for split-machine dev). They are split because `lunaschal.service` now runs production full-time on :5000, so a dev run must neither bind that port nor kill what is on it — `start.sh`/`start-server.sh` deliberately exclude :5000 from their stale-process sweep, and `main.py --dev` health-checks :5001 (probing :5000 would find production and report ready before the dev backend existed). Override with `LUNASCHAL_PORT` / `LUNASCHAL_DEV_PORT`. The Vite watcher must keep ignoring `data/**` — WAL files churn on every request and previously OOM'd the dev server.
+- **Production runs headless** (`main.py --headless` via `ops/run-prod.sh`): Flask in the foreground, no PyWebView. The windowed path exits 0 when its window closes, which under `Restart=on-failure` read as a clean shutdown and silently took the LAN server down. The unit is now `Restart=always`. Use `ops/open-window.sh` (or any browser) to open the UI as a _client_ — closing it stops nothing.
 - **Network mode**: set `NETWORK_MODE=1` and `LUNASCHAL_PASSWORD=...` to bind `0.0.0.0` and enforce auth for LAN access
 
 A Mermaid diagram of the module structure lives in `docs/architecture.md`.

@@ -11,6 +11,7 @@ type View =
   | 'files'
   | 'notebook'
   | 'writing'
+  | 'ideas'
   | 'tasks'
   | 'food'
   | 'lifestyle'
@@ -23,6 +24,8 @@ interface SidebarProps {
   onViewChange: (view: View) => void;
   isOpen: boolean;
   onToggle: () => void;
+  lifestyleNeedsAttention?: boolean;
+  newspapersNeedAttention?: boolean;
 }
 
 export const navItems: { view: View; label: string; icon: string }[] = [
@@ -33,6 +36,7 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'notebook', label: 'Notebook', icon: '🗒️' },
   { view: 'meetings', label: 'Meetings', icon: '🎙️' },
   { view: 'writing', label: 'Writing', icon: '✍️' },
+  { view: 'ideas', label: 'Ideas', icon: '💡' },
   { view: 'calendar', label: 'Calendar', icon: '📅' },
   { view: 'food', label: 'Food', icon: '🍽️' },
   { view: 'lifestyle', label: 'Lifestyle', icon: '🏋️' },
@@ -48,6 +52,8 @@ export function Sidebar({
   onViewChange,
   isOpen,
   onToggle,
+  lifestyleNeedsAttention,
+  newspapersNeedAttention,
 }: SidebarProps) {
   const { level } = useShortcuts();
   const isMobile = useIsMobile();
@@ -87,6 +93,24 @@ export function Sidebar({
         >
           <span>{item.icon}</span>
           <span>{item.label}</span>
+          {item.view === 'lifestyle' && lifestyleNeedsAttention && (
+            <span
+              style={{ color: '#f0b429' }}
+              title="No selfie logged today"
+              aria-label="No selfie logged today"
+            >
+              ❗
+            </span>
+          )}
+          {item.view === 'newspapers' && newspapersNeedAttention && (
+            <span
+              style={{ color: '#f0b429' }}
+              title="Today's front pages haven't all synced yet"
+              aria-label="Today's front pages haven't all synced yet"
+            >
+              ❗
+            </span>
+          )}
         </button>
       ))}
     </nav>
