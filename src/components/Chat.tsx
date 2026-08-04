@@ -414,10 +414,7 @@ export function Chat() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex items-center justify-between border-b border-white/10 px-4 py-2">
-        <h1 className="text-sm font-medium text-[var(--color-text-muted)]">
-          Today's chat
-        </h1>
+      <div className="flex items-center justify-end border-b border-white/10 px-4 py-2">
         <button
           onClick={startNewChat}
           disabled={!hasChat || isStreaming}

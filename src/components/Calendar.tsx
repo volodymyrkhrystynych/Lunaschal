@@ -601,10 +601,7 @@ export function Calendar() {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-semibold text-[var(--color-text)]">
-          Calendar
-        </h1>
+      <div className="flex items-center justify-end mb-4">
         <div className="hidden md:flex gap-2">
           {(['month', 'week'] as ViewMode[]).map(v => (
             <button

@@ -15,9 +15,6 @@ import { WorkoutLog } from './WorkoutLog';
 export function Lifestyle() {
   return (
     <div className="flex-1 overflow-y-auto p-4">
-      <h1 className="text-2xl font-semibold text-[var(--color-text)] mb-4">
-        Lifestyle
-      </h1>
       <div className="flex flex-col gap-4 max-w-6xl">
         <ActivityHeatmap />
         <div className="grid gap-4 lg:grid-cols-2">
