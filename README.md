@@ -50,7 +50,9 @@ npm install
 npm run dev
 ```
 
-The Flask backend runs on `http://localhost:5000`. Vite runs on `http://localhost:5173` and proxies `/api` requests to Flask. Open `http://localhost:5173` in your browser.
+The dev Flask backend runs on `http://localhost:5001`. Vite runs on `http://localhost:5173` and proxies `/api` requests to it. Open `http://localhost:5173` in your browser.
+
+`:5000` is reserved for the production server (`lunaschal.service`, see [docs/deployment.md](docs/deployment.md)), which runs headless full-time — dev and production coexist without either stopping the other.
 
 To open as a native desktop window instead:
 
@@ -70,7 +72,7 @@ npm run build
 python main.py
 ```
 
-Flask serves the built `dist/` from `http://127.0.0.1:5000` and PyWebView opens it as a native window.
+Flask serves the built `dist/` from `http://127.0.0.1:5000`. Under systemd this runs headless (`main.py --headless`); `./ops/open-window.sh` opens a PyWebView window against it as a separate client.
 
 ## AI Providers
 

@@ -8,19 +8,27 @@
 #   systemctl --user enable --now lunaschal
 #
 # Note: ops/deploy-check.sh restarts this unit after every auto-pulled deploy.
-# For manual dev work with start.sh/start-server.sh (both also bind :5000),
-# `systemctl --user stop lunaschal` first and `start` again when done.
+# The dev servers now use :5001/:5173, so this can stay running during dev work
+# — no need to stop it first.
 
 [Unit]
-Description=Lunaschal (production)
+Description=Lunaschal (production, headless)
 After=network.target lunaschal-llama.service
 Wants=lunaschal-llama.service
 
 [Service]
 Type=exec
 ExecStart=%h/workspace/Lunaschal/ops/run-prod.sh
-Restart=on-failure
+# Restart=always, not on-failure: run-prod.sh is headless precisely so nothing
+# can end it "successfully", but a clean exit for any other reason (an
+# unhandled shutdown path, a killed child) should still bring the server back.
+# on-failure is what let a closed window take production down for 4 minutes.
+Restart=always
 RestartSec=5
 
 [Install]
-WantedBy=graphical-session.target
+# default.target, not graphical-session.target: the headless server has no
+# window and no reason to wait for a desktop session. Pair with
+# `loginctl enable-linger volodya` if it should also survive logout / start at
+# boot without anyone signing in.
+WantedBy=default.target
