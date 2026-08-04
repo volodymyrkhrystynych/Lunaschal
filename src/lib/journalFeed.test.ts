@@ -38,6 +38,7 @@ function conversation(id: string, updatedAt: string): DatedConversation {
     id,
     title: `chat ${id}`,
     dayKey: updatedAt.slice(0, 10),
+    mode: 'chat',
     messageCount: 4,
     createdAt: updatedAt,
     updatedAt,

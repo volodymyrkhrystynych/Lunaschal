@@ -13,6 +13,7 @@ import { NetworkSection } from './NetworkSection';
 import { FanficCookiesSection } from './FanficCookiesSection';
 import { DisplaySection } from './DisplaySection';
 import { LlamaConfigSection } from './LlamaConfigSection';
+import { WebSearchSection } from './WebSearchSection';
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<'general' | 'tags' | 'shortcuts'>(
@@ -75,6 +76,8 @@ export function Settings() {
           <NudgeSection />
 
           <BriefingSection />
+
+          <WebSearchSection />
 
           <ResearchSection />
 

@@ -8,6 +8,7 @@ from backend.chat_day import day_key_for
 from backend.ai import priority
 from backend.ai.provider import is_ai_configured
 from backend.ai.chat import chat_stream, build_chat_system_prompt
+from backend.ai import websearch_chat
 from backend.ai.chat_title import generate_conversation_title
 from backend.ai.classifier import classify_intent, should_classify
 
@@ -24,11 +25,16 @@ def list_conversations():
 
 @bp.get('/today')
 def get_today():
-    """The current chat day's conversation with its messages, or null if none yet."""
+    """The current chat day's conversation with its messages, or null if none yet.
+
+    `mode` selects which Chat-tab sub-tab: 'chat' (default) or 'websearch' —
+    each has its own conversation for the same day.
+    """
+    mode = request.args.get('mode', 'chat')
     db = get_db()
     row = db.execute(
-        'SELECT * FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
-        (day_key_for(),),
+        'SELECT * FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL AND mode=?',
+        (day_key_for(), mode),
     ).fetchone()
     if not row:
         return jsonify(None)
@@ -42,9 +48,13 @@ def get_today():
 
 @bp.get('/journal-conversations')
 def journal_conversations():
-    """Past chat days for the Journal feed (excludes the current live day)."""
+    """Past chat days for the Journal feed (excludes the current live day).
+
+    Both 'chat' and 'websearch' conversations qualify — the web-search tab
+    moves into the Journal at day's end exactly like the regular chat does.
+    """
     rows = get_db().execute(
-        '''SELECT c.id, c.title, c.day_key, c.created_at, c.updated_at,
+        '''SELECT c.id, c.title, c.day_key, c.mode, c.created_at, c.updated_at,
                   (SELECT COUNT(*) FROM messages m
                    WHERE m.conversation_id = c.id AND m.role IN ('user', 'assistant')) AS message_count
            FROM conversations c
@@ -73,21 +83,24 @@ def get_conversation(id):
 
 @bp.post('/conversations')
 def create_conversation():
-    """Find-or-create the current chat day's conversation. Titles stay NULL until
-    the nightly title job fills them in."""
+    """Find-or-create the current chat day's conversation for the given `mode`
+    ('chat', default, or 'websearch'). Titles stay NULL until the nightly
+    title job fills them in."""
+    body = request.get_json(silent=True) or {}
+    mode = body.get('mode', 'chat')
     db = get_db()
     dk = day_key_for()
     existing = db.execute(
-        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
-        (dk,),
+        'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL AND mode=?',
+        (dk, mode),
     ).fetchone()
     if existing:
         return jsonify({'id': existing['id']}), 200
     now = int(time.time())
     id = str(ULID())
     db.execute(
-        'INSERT INTO conversations(id, title, day_key, created_at, updated_at) VALUES (?,?,?,?,?)',
-        (id, None, dk, now, now),
+        'INSERT INTO conversations(id, title, day_key, mode, created_at, updated_at) VALUES (?,?,?,?,?,?)',
+        (id, None, dk, mode, now, now),
     )
     db.commit()
     return jsonify({'id': id}), 201
@@ -343,6 +356,37 @@ def stream():
             # Must not yield here — that would raise "generator ignored
             # GeneratorExit". priority.end only touches a dict under a lock.
             priority.end(token)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'},
+    )
+
+
+@bp.post('/websearch/stream')
+def websearch_stream():
+    """Same request shape as /stream, but gathers with web_search/web_fetch
+    tools before answering. Tool-call events stream out as each one finishes
+    (so the gathering pass is legible instead of a spinner), then the answer
+    streams as content deltas — mirroring /stream's SSE framing."""
+    if not is_ai_configured():
+        return jsonify({'error': 'AI provider not configured'}), 400
+    body = request.json or {}
+    messages = body.get('messages', [])
+
+    def generate():
+        try:
+            for kind, payload in websearch_chat.stream_reply(messages):
+                if kind == 'step':
+                    yield f'data: {json.dumps(payload)}\n\n'
+                elif kind == 'content':
+                    yield f'data: {json.dumps({"content": payload})}\n\n'
+                elif kind == 'done':
+                    yield f'data: {json.dumps({"done": True, **payload})}\n\n'
+            yield 'data: [DONE]\n\n'
+        except Exception as e:
+            yield f'data: {json.dumps({"error": str(e)})}\n\n'
 
     return Response(
         stream_with_context(generate()),

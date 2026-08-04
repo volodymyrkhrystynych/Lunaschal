@@ -812,7 +812,10 @@ function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
     month: 'short',
     day: 'numeric',
   }).format(new Date(conversation.dayKey + 'T00:00:00'));
-  const title = conversation.title || `Chat — ${dayLabel}`;
+  const isWebSearch = conversation.mode === 'websearch';
+  const title =
+    conversation.title ||
+    `${isWebSearch ? 'Web search' : 'Chat'} — ${dayLabel}`;
   const messages = data?.messages ?? [];
 
   return (
@@ -821,7 +824,9 @@ function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
       onToggle={e => setOpen((e.target as HTMLDetailsElement).open)}
     >
       <summary className="cursor-pointer select-none list-none flex items-baseline justify-between gap-2">
-        <span className="text-[var(--color-text)] truncate">💬 {title}</span>
+        <span className="text-[var(--color-text)] truncate">
+          {isWebSearch ? '🔎' : '💬'} {title}
+        </span>
         <span className="text-xs text-[var(--color-text-muted)] shrink-0">
           {dayLabel} · {conversation.messageCount} msg
           {conversation.messageCount === 1 ? '' : 's'}
