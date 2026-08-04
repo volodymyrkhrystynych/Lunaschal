@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
-# Daily full backup of the DB + all of data/ to the external HDD and the LAN
-# tablet, run by lunaschal-backup.timer. Each destination gets an
-# independently-restorable dated snapshot dir (rsync --link-dest against
-# yesterday's, so unchanged media is hardlinked rather than duplicated across
-# every day's snapshot). A missing destination (drive unplugged, tablet
-# asleep) is skipped with a logged warning, never a hard failure — see
+# Daily backup of the DB + all of data/, run by lunaschal-backup.timer.
+#
+# Two tiers, because the two halves of data/ want opposite things:
+#
+#   <dest>/db/YYYY-MM-DD/lunaschal.db   dated snapshots, pruned past
+#                                       BACKUP_RETENTION_DAYS
+#   <dest>/media/                       ONE flat mirror, additive forever
+#
+# The DB is small and worth having history for — you may need last Tuesday's
+# copy. The media (fanfic, meetings, journal attachments) is ~6G and each file
+# is immutable once written, so dated copies of it would be pure duplication.
+# The media mirror therefore has no --delete and is never pruned: a fic removed
+# from the library keeps its only surviving copy here. That is the point, not an
+# oversight — this is an archive as much as a backup.
+#
+# A missing destination (drive unplugged, tablet asleep) is skipped with a
+# logged warning, never a hard failure — see
 # `journalctl --user -u lunaschal-backup` for history.
 #
 # Config: copy ops/backup.env.example to ops/backup.env and fill in.
@@ -32,35 +43,69 @@ if ! .venv/bin/python -m backend.ops.backup snapshot data/lunaschal.db "$STAGING
   DB_SNAPSHOT_OK=0
 fi
 
+# Flags chosen for the exFAT destination. Both were measured against the actual
+# drive, and neither is as load-bearing as it looks:
+#   -rt rather than -a — exFAT stores no POSIX ownership or permission bits.
+#     This mount has uid/gid/fmask/dmask set, so the driver silently accepts the
+#     chown/chmod and -a exits 0 too; -rt just avoids issuing metadata calls
+#     that can never round-trip.
+#   --modify-window=1 — insurance against FAT-family timestamp granularity.
+#     Measured as NOT required here: exFAT keeps 10ms resolution (FAT32's 2s is
+#     where that worry comes from), and a second run already transfers nothing
+#     without it.
+# The real exFAT constraint is hardlinks, which is why there is no --link-dest
+# anywhere in this script — see the header.
+RSYNC_FLAGS=(-rt --modify-window=1)
+
+# Delete the dated DB directories that have aged out. The caller passes the name
+# of a function that removes one snapshot, so the local and remote destinations
+# share this loop without the removal command having to survive a round-trip
+# through eval. backend/ops/backup.py does the date arithmetic either way, and
+# only ever emits names that parsed as real YYYY-MM-DD dates.
+prune_db_dirs() {
+  local label="$1" existing="$2" remover="$3"
+  [ -z "$existing" ] && return
+  local old
+  # shellcheck disable=SC2086
+  while read -r old; do
+    [ -n "$old" ] || continue
+    log "pruning $label DB snapshot $old"
+    "$remover" "$old"
+  done < <(.venv/bin/python -m backend.ops.backup prune --keep-days "$RETENTION_DAYS" $existing)
+}
+
+_remove_hdd_snapshot() { rm -rf "${HDD_BASE:?}/db/$1"; }
+_remove_tablet_snapshot() { ssh "$TABLET_TARGET" "rm -rf '${TABLET_BASE:?}/db/$1'"; }
+
 backup_to_hdd() {
   local base="$1"
-  if [ ! -d "$base" ]; then
-    log "HDD path '$base' not present — skipping (drive unplugged?)"
+  HDD_BASE="$base"
+
+  # $base is a directory *on* the drive, so it does not exist until the first
+  # successful run — testing it directly would report "unplugged" and skip
+  # forever. The mount point above it is what actually indicates the drive.
+  local parent
+  parent=$(dirname "$base")
+  if [ ! -d "$parent" ]; then
+    log "HDD mount point '$parent' not present — skipping (drive unplugged?)"
     return
   fi
 
-  local prev
-  prev=$(ls "$base" 2>/dev/null | grep -E "$DATE_RE" | sort | tail -1)
-  local dest="$base/$TODAY"
-  local link_args=()
-  [ -n "$prev" ] && [ "$prev" != "$TODAY" ] && link_args=(--link-dest="$base/$prev/data")
+  mkdir -p "$base/media"
+  log "mirroring media to $base/media"
+  rsync "${RSYNC_FLAGS[@]}" --exclude='lunaschal.db*' data/ "$base/media/"
 
-  mkdir -p "$dest/data"
-  rsync -a --delete "${link_args[@]}" --exclude='lunaschal.db*' data/ "$dest/data/"
   if [ "$DB_SNAPSHOT_OK" = 1 ]; then
-    rsync -a "$STAGING/lunaschal.db" "$dest/data/lunaschal.db"
+    mkdir -p "$base/db/$TODAY"
+    rsync "${RSYNC_FLAGS[@]}" "$STAGING/lunaschal.db" "$base/db/$TODAY/lunaschal.db"
+    log "HDD DB snapshot written to $base/db/$TODAY"
   else
-    log "skipping lunaschal.db in $dest — DB snapshot failed earlier"
+    log "skipping DB snapshot in $base — snapshot failed earlier"
   fi
-  log "HDD snapshot written to $dest"
 
   local existing
-  existing=$(ls "$base" 2>/dev/null | grep -E "$DATE_RE")
-  # shellcheck disable=SC2086
-  .venv/bin/python -m backend.ops.backup prune --keep-days "$RETENTION_DAYS" $existing | while read -r old; do
-    log "pruning HDD snapshot $old"
-    rm -rf "${base:?}/$old"
-  done
+  existing=$(ls "$base/db" 2>/dev/null | grep -E "$DATE_RE" || true)
+  prune_db_dirs "HDD" "$existing" _remove_hdd_snapshot
 }
 
 backup_to_tablet() {
@@ -74,34 +119,29 @@ backup_to_tablet() {
   # user is invalid, so fall back to plain "host" in that case.
   local target="$host"
   [ -n "$user" ] && target="$user@$host"
+  TABLET_TARGET="$target"
+  TABLET_BASE="$base"
 
   if ! ssh -o ConnectTimeout=5 -o BatchMode=yes "$target" true 2>/dev/null; then
     log "tablet '$host' unreachable — skipping (asleep/offline?)"
     return
   fi
 
-  local prev
-  prev=$(ssh "$target" "mkdir -p '$base' && ls '$base'" 2>/dev/null | grep -E "$DATE_RE" | sort | tail -1)
-  local dest="$base/$TODAY"
-  local link_args=()
-  [ -n "$prev" ] && [ "$prev" != "$TODAY" ] && link_args=(--link-dest="$base/$prev/data")
+  ssh "$target" "mkdir -p '$base/media'"
+  log "mirroring media to $host:$base/media"
+  rsync "${RSYNC_FLAGS[@]}" -e ssh --exclude='lunaschal.db*' data/ "$target:$base/media/"
 
-  ssh "$target" "mkdir -p '$dest/data'"
-  rsync -a --delete -e ssh "${link_args[@]}" --exclude='lunaschal.db*' data/ "$target:$dest/data/"
   if [ "$DB_SNAPSHOT_OK" = 1 ]; then
-    rsync -a -e ssh "$STAGING/lunaschal.db" "$target:$dest/data/lunaschal.db"
+    ssh "$target" "mkdir -p '$base/db/$TODAY'"
+    rsync "${RSYNC_FLAGS[@]}" -e ssh "$STAGING/lunaschal.db" "$target:$base/db/$TODAY/lunaschal.db"
+    log "tablet DB snapshot written to $host:$base/db/$TODAY"
   else
-    log "skipping lunaschal.db in $host:$dest — DB snapshot failed earlier"
+    log "skipping DB snapshot in $host:$base — snapshot failed earlier"
   fi
-  log "tablet snapshot written to $host:$dest"
 
   local existing
-  existing=$(ssh "$target" "ls '$base'" 2>/dev/null | grep -E "$DATE_RE")
-  # shellcheck disable=SC2086
-  .venv/bin/python -m backend.ops.backup prune --keep-days "$RETENTION_DAYS" $existing | while read -r old; do
-    log "pruning tablet snapshot $old"
-    ssh "$target" "rm -rf '${base:?}/$old'"
-  done
+  existing=$(ssh "$target" "ls '$base/db'" 2>/dev/null | grep -E "$DATE_RE" || true)
+  prune_db_dirs "tablet" "$existing" _remove_tablet_snapshot
 }
 
 [ -n "$BACKUP_HDD_PATH" ] && backup_to_hdd "$BACKUP_HDD_PATH"

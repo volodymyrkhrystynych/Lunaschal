@@ -9,8 +9,8 @@ Lunaschal server:
   ahead and the local checkout is a clean `main` (never a feature branch, never
   a dirty tree — this machine is also used for day-to-day development), pulls,
   reinstalls changed dependencies, rebuilds, and restarts `lunaschal.service`.
-- **`lunaschal-backup.timer`** — daily at 3am, snapshots the DB + all of
-  `data/` to the external HDD and the tablet.
+- **`lunaschal-backup.timer`** — daily at 3am. Dated DB snapshots plus a
+  single additive mirror of the media, to the external HDD and the tablet.
 
 All the scripts and unit files live in `ops/`; the pure decision logic (should
 we deploy, which snapshots to prune) lives in `backend/ops/` and is covered by
@@ -76,18 +76,32 @@ the repo, update `EXPECTED_REMOTE` in `ops/deploy-check.sh` to match.
 
 ### External HDD
 
-Mount the 4TB drive at a **stable** path — a `/etc/fstab` entry keyed by
-`UUID=` (`lsblk -f` to find it), or a udev rule, rather than relying on
-whatever device/label the kernel assigns on reconnect:
+The drive in use is the 7.3 TB exFAT `Expansion`, auto-mounted by udisks at
+`/run/media/volodya/Expansion`. That path is keyed to the filesystem label, so
+it's stable across reconnects, and `BACKUP_HDD_PATH` points one level inside it.
+
+`backup.sh` decides the drive is present by testing the **mount point** —
+the parent of `BACKUP_HDD_PATH` — not the configured directory itself, which
+doesn't exist until the first successful run.
+
+If you ever want backups to run without a desktop session having mounted the
+drive (udisks mounts on login/plug, so a headless 3am run could find nothing),
+give it an `/etc/fstab` entry keyed by `UUID=` (`lsblk -f` to find it) and
+repoint `BACKUP_HDD_PATH`:
 
 ```
-UUID=xxxx-xxxx  /mnt/backup-hdd  ext4  defaults,nofail  0  2
+UUID=xxxx-xxxx  /mnt/backup-hdd  exfat  defaults,nofail,uid=1000,gid=1000  0  2
 ```
 
 `nofail` matters — the backup script already tolerates the drive being
 unplugged, but the boot itself shouldn't stall waiting for it.
 
-### Tablet (Surface Pro, Arch Linux)
+### Tablet (optional, currently unconfigured)
+
+There is no second destination set up: the tailnet has no Linux machine running
+`sshd` (`kozak-1` refuses port 22, and the iPad/iPhone can't host this). Leave
+`BACKUP_TABLET_HOST` blank and `backup.sh` skips the tablet entirely. To add one
+later:
 
 ```bash
 # On the tablet:
@@ -118,9 +132,11 @@ matching how `TAILSCALE_HOSTNAME` is already used for network-mode HTTPS.
 cp ops/backup.env.example ops/backup.env
 ```
 
-Fill in `BACKUP_HDD_PATH` (the fstab mount point above), `BACKUP_TABLET_HOST`
-/ `BACKUP_TABLET_USER` / `BACKUP_TABLET_PATH`, and `BACKUP_RETENTION_DAYS`
-(default 14). This file is gitignored — same convention as `.env`.
+Fill in `BACKUP_HDD_PATH` (a directory inside the mount point above) and
+`BACKUP_RETENTION_DAYS` (default 14, governs the `db/` tier only). Leave
+`BACKUP_TABLET_HOST` / `BACKUP_TABLET_USER` / `BACKUP_TABLET_PATH` blank unless
+you've set up a second machine. This file is gitignored — same convention
+as `.env`.
 
 ### Install the backup timer
 
@@ -138,11 +154,43 @@ systemctl --user enable --now lunaschal-backup.timer
 journalctl --user -u lunaschal-backup
 ```
 
-Confirm a `YYYY-MM-DD/data/` directory shows up under both `BACKUP_HDD_PATH`
-and on the tablet, containing `lunaschal.db` plus the rest of `data/`
-(fanfic, meetings, journal attachments, etc.). Each day's directory is a full,
-independently restorable snapshot — restoring means copying that directory's
-`data/` back over the live `./data/` (with the app stopped first).
+Confirm this layout appears under `BACKUP_HDD_PATH`:
+
+```
+db/YYYY-MM-DD/lunaschal.db   dated snapshots, pruned past BACKUP_RETENTION_DAYS
+media/                       one flat mirror of the rest of data/
+```
+
+To restore, stop the app, copy `media/` back over `./data/`, then drop the
+chosen `db/<date>/lunaschal.db` in as `./data/lunaschal.db`.
+
+### Why the two tiers differ
+
+The DB is ~600 MB and changes constantly, so history is worth paying for — you
+may want last Tuesday's copy. The media (fanfic, meetings, journal attachments)
+is ~6 GB of files that are immutable once written, so dated copies of it would
+be pure duplication.
+
+So **`media/` has no `--delete` and is never pruned.** A fic deleted from the
+library keeps its only surviving copy there — the mirror is an archive as much
+as a backup, and nothing in the retention setting can remove from it.
+
+The original design instead kept a full dated snapshot of everything, deduped
+with `rsync --link-dest`. That was dropped because **the backup drive is exFAT,
+which does not support hardlinks** (`ln` returns `Operation not permitted`), so
+`--link-dest` silently degrades to full copies — 14 complete copies of the
+media. That is the one measured, load-bearing constraint.
+
+The two rsync flags are weaker than they look, and both were checked against
+the real drive rather than assumed:
+
+- **`-rt`, not `-a`** — exFAT stores no POSIX ownership or permission bits.
+  This mount sets `uid`/`gid`/`fmask`/`dmask`, so the driver silently accepts
+  the chown/chmod and **`-a` exits 0 too**; `-rt` merely avoids issuing metadata
+  calls that can never round-trip.
+- **`--modify-window=1`** — insurance against FAT-family timestamp granularity,
+  and **not actually required here**: a second run transfers zero files without
+  it. exFAT keeps 10 ms resolution; the 2-second worry comes from FAT32.
 
 ## How the pieces fit together
 
