@@ -287,6 +287,7 @@ export function Chat() {
     setIsStreaming(true);
     setStreamingContent('');
 
+    let fullContent = '';
     try {
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
@@ -303,7 +304,6 @@ export function Chat() {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
-      let fullContent = '';
       for await (const parsed of readSSE(reader)) {
         if (parsed.content) {
           fullContent += parsed.content;
@@ -317,13 +317,20 @@ export function Chat() {
         role: 'assistant',
         content: fullContent,
       });
+      // Only clear on success: `messages` already carries the saved reply by
+      // this point (addMessage's onSuccess invalidates+refetches before
+      // mutateAsync resolves), so this can't leave a visible gap. Clearing
+      // unconditionally in a `finally` used to wipe the error message below
+      // in the same tick it was set — a failed save (or a failed stream)
+      // silently vanished the whole reply with nothing shown to the user.
+      setStreamingContent('');
     } catch (error) {
       setStreamingContent(
-        `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`
+        `Error: ${error instanceof Error ? error.message : 'Failed to get response'}` +
+          (fullContent ? `\n\n(reply was not saved)\n\n${fullContent}` : '')
       );
     } finally {
       setIsStreaming(false);
-      setStreamingContent('');
       // Deliberately *after* the reply, not alongside it. llama-server serves one
       // request at a time per model, so a classify fired in parallel simply
       // wins the queue and the user waits out a whole second generation before
@@ -511,7 +518,7 @@ export function Chat() {
             </div>
           );
         })}
-        {isStreaming && streamingContent && (
+        {streamingContent && (
           <div className="flex justify-start">
             <div className="max-w-[80%]">
               <div className="content-text rounded-lg px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text)]">

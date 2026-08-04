@@ -162,6 +162,35 @@ describe('Chat send ordering', () => {
   });
 });
 
+describe('reply persistence', () => {
+  it('keeps the reply on screen with an error, instead of silently vanishing, when saving it fails', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    vi.mocked(api.chat.addMessage)
+      .mockResolvedValueOnce({ id: 'm-user' }) // saving the user's message
+      .mockRejectedValueOnce(new Error('network blip')); // saving the reply
+
+    renderChat();
+    const input = await screen.findByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: 'hello there' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(api.chat.addMessage).toHaveBeenCalledWith('c1', {
+        role: 'user',
+        content: 'hello there',
+      })
+    );
+    stream.push('General Kenobi');
+    stream.close();
+
+    // The generated reply must stay visible along with the failure — not
+    // wiped out in the same tick it was reported.
+    expect(await screen.findByText(/network blip/)).toBeTruthy();
+    expect(screen.getByText(/General Kenobi/)).toBeTruthy();
+  });
+});
+
 describe('note to self', () => {
   const sendAndClassify = async (
     message: string,
