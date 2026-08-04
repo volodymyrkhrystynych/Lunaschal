@@ -526,6 +526,7 @@ def create_plan(idea_id):
     the user pressed the button."""
     from backend.ai import priority
     from backend.research import assess, discuss as ctx, plan as plan_mod
+    from backend.research.idea_text import display_title
     from backend.research.repo_job import current_snapshot
 
     if not is_ai_configured():
@@ -556,7 +557,7 @@ def create_plan(idea_id):
 
     snapshot = current_snapshot()
     content = plan_mod.render_plan_markdown(
-        idea.get('title') or 'Untitled idea',
+        display_title(idea),
         spec,
         evidence=evidence,
         answered=answered,

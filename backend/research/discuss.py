@@ -10,6 +10,7 @@ import json
 
 from backend.db.connection import get_db, row_to_dict
 from backend.research import assess, wiki
+from backend.research.idea_text import display_title
 from backend.research.repo_job import current_snapshot
 
 MAX_DIGEST_CHARS = 8000
@@ -49,7 +50,7 @@ def build_context(idea_id: str) -> str:
 
     parts = [
         '# The idea\n\n'
-        + (idea.get('title') or '(untitled)')
+        + display_title(idea)
         + '\n\n'
         + (idea.get('content') or idea.get('rawContent') or '')[:MAX_IDEA_CHARS]
     ]

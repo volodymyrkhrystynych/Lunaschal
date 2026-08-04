@@ -26,6 +26,26 @@ VERDICTS = ('no', 'partial', 'yes')
 # name proves nothing. Two independent citations is the bar for "yes".
 MIN_EVIDENCE_FOR_YES = 2
 
+# The model is told to cite evidence by its number in the candidate list, and it
+# obligingly carries those numbers into the rationale prose too — "the data is
+# stored (8, 10, 11)". The candidate list is prompt-internal and never rendered,
+# so the reader gets bare numbers pointing at nothing. The prompt asks it not to;
+# this is the deterministic half, because one stray "[3, 25]" is all it takes.
+_INDEX_CITATION = re.compile(r'\s*[\[(]\s*\d+(?:\s*(?:,|and|&|-|–)\s*\d+)*\s*[\])]')
+# ...but only when they read as citations. A parenthetical that says something
+# ("(2 tables)", "(30 days)") keeps its number.
+_SPACE_BEFORE_PUNCT = re.compile(r'\s+([.,;:!?])')
+
+
+def strip_index_citations(text: str) -> str:
+    """Remove candidate-list index citations from rationale prose.
+
+    Only bare numeric brackets go: `[1, 13, 15]` and `(9)` are citations, while
+    `(2 tables)` carries meaning and stays.
+    """
+    cleaned = _INDEX_CITATION.sub('', text or '')
+    return _SPACE_BEFORE_PUNCT.sub(r'\1', cleaned).strip()
+
 
 def question_key(question: str) -> str:
     """Normalized identity for a question, so a re-run does not resurrect one
@@ -42,7 +62,7 @@ def clamp(result: dict, evidence: list[dict], has_snapshot: bool) -> dict:
         confidence = float(result.get('confidence') or 0.0)
     except (TypeError, ValueError):
         confidence = 0.0
-    rationale = (result.get('rationale') or '').strip()
+    rationale = strip_index_citations(result.get('rationale') or '')
 
     if not has_snapshot:
         # Nothing to judge against. Saying so beats guessing from the model's

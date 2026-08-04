@@ -193,6 +193,47 @@ def test_confidence_is_bounded_and_rounded():
                         _evidence(2), True)['confidence'] == 0.68
 
 
+# --- Rationale prose ---
+#
+# The strings below are verbatim from the first live run against Gemma 4: told
+# to cite by candidate number, it put the numbers in the rationale too, and the
+# candidate list is prompt-internal, so the UI rendered bare pointers to nothing.
+
+def test_bracketed_index_citations_are_stripped_from_the_rationale():
+    out = assess.clamp(
+        {'verdict': 'partial', 'confidence': 0.9,
+         'rationale': 'The backend supports the necessary data structures '
+                      '[1, 13, 15]. The routes for reading files [3, 25] are generic.'},
+        evidence=_evidence(3), has_snapshot=True,
+    )
+    assert out['rationale'] == (
+        'The backend supports the necessary data structures. '
+        'The routes for reading files are generic.'
+    )
+
+
+def test_parenthesised_index_citations_are_stripped_too():
+    out = assess.clamp(
+        {'verdict': 'partial', 'confidence': 0.9,
+         'rationale': 'It structures the text into sets (9), stores them (8, 10, 11), '
+                      'and exposes progression (14).'},
+        evidence=_evidence(4), has_snapshot=True,
+    )
+    assert out['rationale'] == (
+        'It structures the text into sets, stores them, and exposes progression.'
+    )
+
+
+def test_a_parenthetical_that_says_something_keeps_its_number():
+    """Only bare numbers read as citations; "(2 tables)" is prose."""
+    out = assess.clamp(
+        {'verdict': 'partial', 'confidence': 0.5,
+         'rationale': 'Two tables (2 tables in total) cover it, kept for 30 days.'},
+        evidence=_evidence(2), has_snapshot=True,
+    )
+    assert out['rationale'] == 'Two tables (2 tables in total) cover it, kept for 30 days.'
+
+
 # --- End to end ---
 
 @pytest.fixture

@@ -29,6 +29,9 @@ already satisfy it, and an inventory of the app.
 Rules:
 - Cite evidence only by its number in the candidate list. Never write a file \
 path or invent a route; if nothing in the list is relevant, cite nothing.
+- The rationale is read by someone who never sees the candidate list, so it \
+must not contain those numbers. Write it as prose that stands on its own; the \
+numbers belong in evidenceIndexes and nowhere else.
 - "implemented" means a user could do this today. Adjacent machinery that would \
 have to be extended is "partial", not "yes".
 - Being on the roadmap means it was *planned*, which is the opposite of built. \

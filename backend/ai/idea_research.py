@@ -10,6 +10,7 @@ import logging
 
 from backend.ai.llm import chat_json
 from backend.ai.provider import is_ai_configured
+from backend.research.idea_text import display_title
 
 logger = logging.getLogger(__name__)
 
@@ -24,8 +25,13 @@ the standard approaches, the trade-offs people report after living with them, \
 and anything that would be expensive to learn the hard way.
 
 Check your own wiki first — you may already have notes on this. Then search \
-the web for what is missing. Read the pages that look substantive rather than \
-collecting links.
+the web for what is missing.
+
+A search result is a title and a snippet; it is not a source, and it is not \
+enough to write from. Once a search turns up something substantive, open it \
+with web_fetch and read it. Prefer two or three pages read properly over ten \
+searches skimmed — the notes you write are only as good as the pages behind \
+them, and only pages you actually opened are recorded as sources.
 
 Do not research Lunaschal itself; you are given its inventory and it is \
 authoritative."""
@@ -77,7 +83,7 @@ _WRITE_SCHEMA = {
 def build_gather_request(idea: dict, context: str) -> str:
     body = (idea.get('content') or idea.get('rawContent') or '')[:4000]
     return (
-        f"# The idea to research\n\n{idea.get('title') or '(untitled)'}\n\n{body}\n\n"
+        f"# The idea to research\n\n{display_title(idea)}\n\n{body}\n\n"
         f'{context}\n\n'
         'Research how this kind of thing is usually done. Gather what you need, '
         'then stop — you will be asked to write it up separately.'
@@ -110,7 +116,7 @@ def decide_articles(idea: dict, transcript: str, existing: list[dict]) -> list[d
         or '(the wiki is empty)'
     )
     prompt = (
-        f"# The idea being researched\n\n{idea.get('title') or '(untitled)'}\n\n"
+        f"# The idea being researched\n\n{display_title(idea)}\n\n"
         f"{(idea.get('content') or idea.get('rawContent') or '')[:2000]}\n\n"
         f'# Existing wiki articles\n\n{index}\n\n'
         f'# What your research turned up\n\n{transcript}'
@@ -124,10 +130,20 @@ def decide_articles(idea: dict, transcript: str, existing: list[dict]) -> list[d
         return []
 
     articles = []
+    seen: set[str] = set()
     for item in result.get('articles') or []:
         if not isinstance(item, dict):
             continue
         if not (item.get('slug') and item.get('title') and item.get('content')):
             continue
+        # The model sometimes returns the same slug two or three times in one
+        # response — three sections of one article, emitted as three articles.
+        # Upserting each in turn would leave the last one standing and pile up
+        # revisions of a single note, so only the first survives the pass.
+        slug = item['slug']
+        if slug in seen:
+            logger.info('Dropped a repeated wiki slug from one write-up: %s', slug)
+            continue
+        seen.add(slug)
         articles.append(item)
     return articles

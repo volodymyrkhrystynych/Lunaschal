@@ -1,10 +1,11 @@
 # Ideas tab — design doc
 
-**Status: built.** Capture, the nightly repo-context agent, the research agent and its wiki, the
-tool-using discussion and plan generation all ship, across five commits on
-`feat/ideas-research-agent`. What is _not_ done is listed under
-[Open questions carried forward](#open-questions-carried-forward) — most importantly, none of it
-has been run against a live llama-server and a real search provider.
+**Status: built, and run for real.** Capture, the nightly repo-context agent, the research agent
+and its wiki, the tool-using discussion and plan generation all ship, across five commits on
+`feat/ideas-research-agent`, and every part of it has now been exercised against a live
+llama-server and a real search provider — see [The first live run](#the-first-live-run) for what
+that changed. What is still _not_ done is listed under
+[Open questions carried forward](#open-questions-carried-forward).
 
 This is the design record. Where the build settled a question, or a decision would be expensive to
 re-derive, it is written down here rather than left in the diff.
@@ -275,18 +276,105 @@ call. `get_db()` hands out one process-global connection with `check_same_thread
 commit, then call the model. Existing background writers get away with ignoring this because their
 writes are single short statements; a multi-minute agent turn would not.
 
+## The first live run
+
+Run against llama-server (Gemma 4 26B) and Tavily, on a copy of the real DB. Timings on the 8 GB
+machine: repo snapshot 18 s, assessment 13-15 s, a research pass 82-88 s, a plan 57-89 s — the
+~80 s the plan button blocks for was the estimate, and it holds.
+
+What it settled:
+
+- **Article slugs are topic-shaped, which was the thing worth watching.** A budget-tracker idea
+  produced `document-data-extraction-methodologies` and `personal-finance-app-architecture`, not
+  one article named after the idea. The "write about the problem space" rule in `WRITE_SYSTEM`
+  does the work it was written for.
+- **The clamp fires in practice, not just in tests.** The same idea came back with a fluent
+  rationale citing journal-attachment machinery and _zero_ structured citations; it was forced to
+  `no` at 0.4, exactly as designed.
+- **The Chat tab does not leak idea discussions.** Verified against the real conversations table —
+  the `idea_id IS NULL` fix on `backend/routes/chat.py` holds with live rows.
+- **The SSRF guard holds against live traffic.** `localhost:8080` (llama-server itself),
+  `127.0.0.1:5000`, `[::1]`, `169.254.169.254`, `192.168.1.1`, `*.local` and `file://` are all
+  refused, and — the one that needed a real network — a public redirector pointed at
+  `169.254.169.254` was followed and then rejected at the hop.
+- **The model would not open a page — and the reason was not the model.** Worth reading in full
+  below, because three separate things had to be fixed and only one of them was a prompt.
+
+### Why it never read a page
+
+The first two passes ran eight searches and opened zero pages, then wrote the articles from
+snippets — so `sources` was empty on every article, because provenance is recorded from what was
+fetched rather than what the model says it read. Sharpening `GATHER_SYSTEM` ("a snippet is not a
+source") changed nothing. Instrumenting the loop to log `finish_reason` and token counts per turn
+found three causes, none of them "the model is bad at tool use":
+
+- **The turn budget ran out before the web was reached.** `MAX_TOOL_TURNS` was 6, and Gemma 4 calls
+  one tool per turn far more often than it batches. A `wiki_list` and two `wiki_read`s — which
+  `GATHER_SYSTEM` explicitly asks for first — spend three of the six before a single search.
+  Now 12; a run that ends in a fetch takes 8.
+- **A truncated turn was read as a finished one.** Tool-selection turns cost 9-42 completion
+  tokens, so `TURN_MAX_TOKENS = 768` is enormous for them — but when the model stops calling tools
+  and starts writing a summary, it hits the ceiling and comes back with `finish_reason='length'`
+  and no `tool_calls`. The loop's "no tool calls means it's done" check could not tell that from a
+  real finish and reported `truncated: False` on a run cut off mid-sentence. `chat_with_tools`
+  discarded the finish_reason entirely, so `chat_tool_turn` now returns it and the loop trusts it.
+- **The instruction was in the wrong place.** This is the interesting one. Given a URL, the model
+  fetches it. Given search results _in the user message_ and told to read one, it fetches. Given
+  the same results as a `role: tool` message, with the instruction thousands of tokens back in the
+  system prompt, it searches again instead. So the reminder now rides on the search results
+  themselves (`web.READ_ONE_REMINDER`) — the position where it demonstrably works.
+
+Together: 4 of 5 passes now open a page and record it as a source, up from 0 of 2. The one that
+did not had a search return a dictionary entry and a Spotify page, and declining to read those is
+the right call. Pass time is unchanged at 67-96 s, because a fetch replaces a redundant search
+rather than adding to it.
+
+Two costs to know about. The loop's last turn spends ~30 s writing a summary that
+`flatten_transcript` discards, since it keeps only tool messages — capping it lower would trade
+that against the truncation signal above, so it stands. And the discussion endpoint shares this
+loop, so a discussion that searches will now also fetch: better grounded, slower to answer.
+
+Three bugs only a live run could produce, all fixed:
+
+- The model was told to cite evidence by candidate number, and carried those numbers into the
+  rationale prose too — "stores these in a database (8, 10, 11)" — where the UI renders them as
+  pointers to a list the user never sees. `WRITE_SYSTEM`'s sibling rule now forbids it and
+  `assess.strip_index_citations` removes them anyway, because one stray `[3, 25]` is all it takes.
+- Every plan for a dictated idea was headed **"Untitled idea"**. Voice capture leaves `title`
+  empty and, despite the route's comment, nothing ever fills it in; the list papered over it with
+  `displayTitle` in `src/lib/ideas.ts` and the server had no counterpart. Now it does —
+  `backend/research/idea_text.py`, same clipping rules, so the two agree.
+- Phases came out **"1. 1. Database: ..."**: the model numbers them about half the time and the
+  renderer numbers them too.
+- **One article was written three times in a single pass.** The write-up returned one note's three
+  sections as three articles sharing a slug; upserting each in turn left only the last section
+  standing, with three revisions behind it. `decide_articles` now keeps the first of a repeated
+  slug.
+- **A worker thread outlived its test and segfaulted the interpreter.** Not a product bug, but it
+  will bite again: the research worker writes through the module-global SQLite connection, and the
+  autouse fixture that drains it is torn down _after_ the `client` fixture that closes the
+  connection. `client` now stops the worker before taking its database away.
+
 ## Open questions carried forward
 
-- **None of it has run against a live model and a real search provider.** Everything is tested
-  against stubs. The first real pass is worth watching, particularly whether Gemma 4 picks sensible
-  article slugs rather than one article per idea.
+- **One page per pass is still thin.** Reading is now reliable but shallow: the model opens a
+  single page and writes the note from it plus snippets. Whether the right next move is asking for
+  two or three reads, or leaving it alone because a wiki note is a starting point and not a
+  literature review, wants a few weeks of real notes to judge. `MAX_FETCHES` is 12, so nothing in
+  the way but the model's own sense of "enough".
+- **The nudge is a prompt, not a guarantee.** `READ_ONE_REMINDER` rides on every non-empty result
+  set and works 4 times in 5. If it ever stops working — a model change, a different search
+  provider — the structural version is to fetch the top results in code once gathering ends. That
+  spends requests on a guess, which is why it was not done first.
 - **The wiki has no UI.** Articles are reachable by the agent and in the DB, but there is no way to
   read, edit, lock or revert one from the app. `wiki_revisions` exists precisely so that UI can be
   built; until it is, `locked` can only be set by hand.
 - **Discussion and plan generation run inline on the request thread**, not on the worker. Correct
   for a button press, but a plan blocks its request for the ~80 s it takes locally.
-- **`researchTopics` from the assessment is not used to target research.** The assessment asks for
-  it and the schema carries it; `plan_next` currently just researches the whole idea.
+- **Research is not targeted by the assessment.** The assessment works out what an idea still needs
+  decided, which is exactly what would tell a research pass where to look — but nothing carries it
+  across. There is no `researchTopics` field in the assessment schema or on `idea_assessments`
+  (an earlier draft of this doc claimed there was), and `plan_next` just researches the whole idea.
 - **The 24 h cooldown is a guess.** It exists to stop a tight re-research loop; whether a
   researched idea deserves revisiting daily, weekly, or only when edited is unknown until this has
   run on a real backlog.

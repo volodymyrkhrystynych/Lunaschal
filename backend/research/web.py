@@ -292,6 +292,18 @@ TOOLS = [
 ]
 
 
+# Gemma 4 will not follow a search with a fetch when the only instruction to do
+# so is back in the system prompt — across live runs it searched, searched again
+# and then wrote the article from snippets. It fetches readily when the results
+# and the instruction sit together in the freshest message, so the reminder
+# rides on the results themselves. Measured, not guessed: see
+# docs/ideas-tab.md#the-first-live-run.
+READ_ONE_REMINDER = (
+    '\n\nThese are snippets, not sources. Open the most substantive of these '
+    'with web_fetch and read it before you write anything up.'
+)
+
+
 def run_tool(name: str, args: dict) -> tuple[str, dict]:
     """Execute a tool call. Returns (text for the model, event for the UI).
 
@@ -318,7 +330,7 @@ def run_tool(name: str, args: dict) -> tuple[str, dict]:
             for i, r in enumerate(results)
         ]
         return (
-            '\n'.join(lines),
+            '\n'.join(lines) + READ_ONE_REMINDER,
             {
                 'tool': 'web_search',
                 'arg': query,

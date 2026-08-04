@@ -323,6 +323,29 @@ def test_run_tool_formats_search_results(client, monkeypatch):
     }
 
 
+def test_search_results_carry_the_reminder_to_open_one(client, monkeypatch):
+    """The nudge rides on the results, not the system prompt.
+
+    Gemma 4 searched, searched again and wrote from snippets when the only
+    instruction to read a page was back in GATHER_SYSTEM; it fetches when the
+    results and the instruction arrive together. Measured — see
+    docs/ideas-tab.md#the-first-live-run.
+    """
+    monkeypatch.setattr(web, 'web_search', lambda q, limit=5: [
+        {'title': 'FSRS', 'url': 'https://ex.com/a', 'snippet': 'sched'},
+    ])
+    text, _ = web.run_tool('web_search', {'query': 'fsrs'})
+    assert 'web_fetch' in text
+    assert text.startswith('1. FSRS'), 'the results still come first'
+
+
+def test_an_empty_result_set_does_not_tell_the_model_to_open_one(client, monkeypatch):
+    monkeypatch.setattr(web, 'web_search', lambda q, limit=5: [])
+    text, event = web.run_tool('web_search', {'query': 'fsrs'})
+    assert 'web_fetch' not in text
+    assert event['count'] == 0
+
+
 def test_run_tool_reports_a_refused_url_without_raising(client):
     text, event = web.run_tool('web_fetch', {'url': 'http://127.0.0.1/admin'})
     assert 'Refused' in text

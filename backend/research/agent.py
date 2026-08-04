@@ -23,13 +23,17 @@ makes both testable in one place.
 import json
 import logging
 
-from backend.ai.llm import chat_with_tools
+from backend.ai.llm import chat_tool_turn
 from backend.ai.mcp_client import serialize_tool_calls
 from backend.research import web, wiki
 
 logger = logging.getLogger(__name__)
 
-MAX_TOOL_TURNS = 6
+# Gemma 4 calls one tool per turn far more often than it batches, and the first
+# few go on orienting — a wiki_list and two wiki_reads before the web is touched
+# at all. At 6 the budget ran out mid-search, which is why the loop never got as
+# far as reading a page: a live run that ends in a fetch needs 8.
+MAX_TOOL_TURNS = 12
 # Tool-selection turns are short by construction — a few tokens of reasoning
 # and a call. Capping them keeps the worst-case overlap with an interactive
 # chat message to a few seconds rather than the 1800s client timeout.
@@ -136,7 +140,7 @@ def _loop(
         checkpoint()
         turns += 1
         try:
-            msg = chat_with_tools(messages, tools, max_tokens=TURN_MAX_TOKENS)
+            msg, finish_reason = chat_tool_turn(messages, tools, max_tokens=TURN_MAX_TOKENS)
         except Exception as e:
             logger.warning('Research tool turn failed: %s', e)
             steps.append({'tool': None, 'ok': False, 'error': str(e)})
@@ -145,7 +149,12 @@ def _loop(
         tool_calls = getattr(msg, 'tool_calls', None)
         if not tool_calls:
             messages.append({'role': 'assistant', 'content': msg.content or ''})
-            truncated = False
+            # A turn stopped at TURN_MAX_TOKENS also arrives with no tool calls.
+            # Reading that as "the model is finished" is how a run cut off
+            # mid-sentence used to report itself as a complete one.
+            truncated = finish_reason == 'length'
+            if truncated:
+                logger.info('Gathering turn hit the token ceiling; treating as truncated')
             break
 
         messages.append({

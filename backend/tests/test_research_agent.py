@@ -24,15 +24,23 @@ def _msg(content=None, tool_calls=None):
     return SimpleNamespace(content=content, tool_calls=tool_calls)
 
 
-def _script(monkeypatch, responses):
-    """Feed the loop a fixed sequence of assistant messages."""
+def _script(monkeypatch, responses, finish_reasons=None):
+    """Feed the loop a fixed sequence of assistant messages.
+
+    `finish_reasons` runs alongside, defaulting to a clean stop — pass 'length'
+    to simulate a turn cut off at the token ceiling.
+    """
     calls = []
 
     def fake(messages, tools, max_tokens=None):
         calls.append({'messages': list(messages), 'max_tokens': max_tokens})
-        return responses[min(len(calls) - 1, len(responses) - 1)]
+        i = min(len(calls) - 1, len(responses) - 1)
+        reason = (finish_reasons or [])[i] if finish_reasons and i < len(finish_reasons) else None
+        if reason is None:
+            reason = 'tool_calls' if responses[i].tool_calls else 'stop'
+        return responses[i], reason
 
-    monkeypatch.setattr(agent, 'chat_with_tools', fake)
+    monkeypatch.setattr(agent, 'chat_tool_turn', fake)
     return calls
 
 
@@ -51,6 +59,25 @@ def test_a_plain_answer_ends_the_loop_immediately(monkeypatch):
     assert result['turns'] == 1
     assert result['truncated'] is False
     assert result['messages'][-1] == {'role': 'assistant', 'content': 'I already know this.'}
+
+
+def test_a_turn_cut_off_at_the_token_ceiling_is_not_a_finished_run(monkeypatch):
+    """A truncated turn arrives with no tool calls, exactly like a finished one.
+
+    Live, this is what a 768-token ceiling does when the model starts writing a
+    summary instead of calling a tool — and the run reported itself complete.
+    """
+    _script(monkeypatch,
+            [_msg(content='The research is complete. Below is a summ')],
+            finish_reasons=['length'])
+    result = agent.gather('sys', 'q')
+
+    assert result['truncated'] is True, 'a cut-off turn must not read as "done gathering"'
+
+
+def test_a_clean_stop_is_a_finished_run(monkeypatch):
+    _script(monkeypatch, [_msg(content='Done.')], finish_reasons=['stop'])
+    assert agent.gather('sys', 'q')['truncated'] is False
 
 
 def test_a_tool_call_is_executed_and_fed_back(client, monkeypatch):
@@ -132,7 +159,7 @@ def test_a_model_error_ends_the_loop_without_raising(monkeypatch):
     def boom(messages, tools, max_tokens=None):
         raise RuntimeError('llama-server is down')
 
-    monkeypatch.setattr(agent, 'chat_with_tools', boom)
+    monkeypatch.setattr(agent, 'chat_tool_turn', boom)
     result = agent.gather('sys', 'q')
     assert result['steps'][0]['ok'] is False
     assert 'llama-server is down' in result['steps'][0]['error']

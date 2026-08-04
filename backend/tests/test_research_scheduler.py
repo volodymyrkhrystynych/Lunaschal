@@ -218,6 +218,45 @@ def test_scheduler_does_not_start_under_the_reloader_parent(monkeypatch):
     assert started == []
 
 
+# --- The write-up ---
+
+def _write_up(monkeypatch, articles):
+    import backend.ai.idea_research as ir
+    from backend.ai import provider
+    monkeypatch.setattr(provider, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(ir, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(ir, 'chat_json', lambda *a, **kw: {'articles': articles})
+    return ir.decide_articles({'title': 'i'}, 'transcript', [])
+
+
+def test_a_repeated_slug_in_one_write_up_is_written_once(monkeypatch):
+    """Live, Gemma 4 returned one article's three sections as three articles
+    sharing a slug — which upserted the same note three times, leaving only the
+    last section and three revisions behind it."""
+    out = _write_up(monkeypatch, [
+        {'slug': 'fitness-data-models', 'title': 'A', 'content': 'Section one.'},
+        {'slug': 'fitness-data-models', 'title': 'A', 'content': 'Section two.'},
+        {'slug': 'fitness-data-models', 'title': 'A', 'content': 'Section three.'},
+    ])
+    assert [a['content'] for a in out] == ['Section one.']
+
+
+def test_distinct_slugs_all_survive(monkeypatch):
+    out = _write_up(monkeypatch, [
+        {'slug': 'a', 'title': 'A', 'content': 'x'},
+        {'slug': 'b', 'title': 'B', 'content': 'y'},
+    ])
+    assert [a['slug'] for a in out] == ['a', 'b']
+
+
+def test_an_article_missing_its_content_is_dropped(monkeypatch):
+    out = _write_up(monkeypatch, [
+        {'slug': 'a', 'title': 'A'},
+        {'slug': 'b', 'title': 'B', 'content': 'y'},
+    ])
+    assert [a['slug'] for a in out] == ['b']
+
+
 # --- The research task ---
 
 def _stub_research(monkeypatch, articles, sources=None):

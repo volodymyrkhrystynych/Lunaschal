@@ -197,6 +197,24 @@ def chat_stream_deltas(messages: list[dict]):
             yield text
 
 
+def chat_tool_turn(messages: list[dict], tools: list[dict], max_tokens: int | None = None):
+    """One tool-calling turn as `(message, finish_reason)`.
+
+    Callers that cap `max_tokens` need the finish_reason: a turn cut off at the
+    ceiling comes back with no `tool_calls`, which is indistinguishable from the
+    model deciding it is finished unless you look. `'length'` means truncated,
+    `'stop'` means done.
+    """
+    c = get_provider_config()
+    client = get_llama_client(c)
+    resp = client.chat.completions.create(
+        model=get_model(c), messages=messages, tools=tools, timeout=_TIMEOUT,
+        **_request_kwargs(thinking=False, max_tokens=max_tokens),
+    )
+    choice = resp.choices[0]
+    return choice.message, choice.finish_reason
+
+
 def chat_with_tools(messages: list[dict], tools: list[dict], max_tokens: int | None = None):
     """One tool-calling turn; returns the assistant message.
 
@@ -208,11 +226,7 @@ def chat_with_tools(messages: list[dict], tools: list[dict], max_tokens: int | N
     whole case. Background loops should pass a small ceiling: nothing preempts a
     generation once it starts, so the turn length *is* the granularity at which
     background work can yield to an interactive chat message (backend/ai/priority.py).
+    Anything that caps it should call `chat_tool_turn` instead and check why the
+    turn ended.
     """
-    c = get_provider_config()
-    client = get_llama_client(c)
-    resp = client.chat.completions.create(
-        model=get_model(c), messages=messages, tools=tools, timeout=_TIMEOUT,
-        **_request_kwargs(thinking=False, max_tokens=max_tokens),
-    )
-    return resp.choices[0].message
+    return chat_tool_turn(messages, tools, max_tokens)[0]

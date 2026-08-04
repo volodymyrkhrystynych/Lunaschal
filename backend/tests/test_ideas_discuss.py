@@ -283,6 +283,27 @@ def test_render_plan_handles_an_empty_spec():
     assert plan_mod.render_plan_markdown('', None).startswith('# Untitled idea')
 
 
+def test_phases_the_model_already_numbered_are_not_numbered_twice():
+    """Live runs come back with "1. Database: ..." about half the time, and the
+    renderer numbers them too — the first real plan read "1. 1. Database:"."""
+    md = plan_mod.render_plan_markdown('Numbered', {
+        'phases': ['1. Database: add the tables',
+                   '2) Backend: the blueprint',
+                   'Phase 3 — Frontend: the views',
+                   'Ship it'],
+    })
+    assert '1. Database: add the tables' in md
+    assert '2. Backend: the blueprint' in md
+    assert '3. Frontend: the views' in md
+    assert '4. Ship it' in md
+    assert '1. 1.' not in md
+
+
+def test_a_phase_that_merely_starts_with_a_number_keeps_it():
+    md = plan_mod.render_plan_markdown('Numbered', {'phases': ['2FA rollout']})
+    assert '1. 2FA rollout' in md
+
+
 # --- Plan generation ---
 
 def test_create_plan_stores_a_version_and_advances_status(client, monkeypatch):

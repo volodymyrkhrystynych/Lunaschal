@@ -8,6 +8,7 @@ reason the repo inventory is extracted rather than summarized.
 """
 import json
 import logging
+import re
 import time
 
 from ulid import ULID
@@ -111,6 +112,19 @@ def _bullets(items, prefix='- '):
     return [f'{prefix}{item}' for item in items if item]
 
 
+# The model returns phases already numbered about half the time ("1. Database:
+# add the tables"), and the renderer numbers them too, so the plan came out as
+# "1. 1. Database:". The separator is required, so "2FA rollout" keeps its number.
+_LEADING_ENUMERATOR = re.compile(
+    r'^\s*(?:phase|step)?\s*\d+\s*[.)\]:—–-]\s+', re.IGNORECASE
+)
+
+
+def _unnumbered(phase: str) -> str:
+    """A phase with any enumerator the model supplied stripped off."""
+    return _LEADING_ENUMERATOR.sub('', phase or '').strip()
+
+
 def render_plan_markdown(
     title: str,
     spec: dict,
@@ -176,7 +190,8 @@ def render_plan_markdown(
 
     if spec.get('phases'):
         out += ['## Suggested phases', '']
-        out += [f'{i}. {p}' for i, p in enumerate(spec['phases'], start=1)]
+        numbered = [(i, _unnumbered(p)) for i, p in enumerate(spec['phases'], start=1)]
+        out += [f'{i}. {p}' for i, p in numbered if p]
         out.append('')
 
     if spec.get('risks'):
