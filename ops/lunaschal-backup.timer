@@ -1,0 +1,17 @@
+# Runs lunaschal-backup.service daily at 3am. Install:
+#   ln -sf "$PWD/ops/lunaschal-backup.timer" ~/.config/systemd/user/
+#   ln -sf "$PWD/ops/lunaschal-backup.service" ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now lunaschal-backup.timer
+
+[Unit]
+Description=Lunaschal daily backup timer
+
+[Timer]
+OnCalendar=03:00
+# Catches up on a missed run if the desktop was asleep at 3am — this is a
+# desktop, not an always-on server.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

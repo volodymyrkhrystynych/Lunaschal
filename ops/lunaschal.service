@@ -1,0 +1,26 @@
+# systemd --user unit for Lunaschal's production app (built dist/ + PyWebView
+# window), driven by ops/run-prod.sh. See docs/deployment.md for full setup.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   ln -sf "$PWD/ops/lunaschal.service" ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now lunaschal
+#
+# Note: ops/deploy-check.sh restarts this unit after every auto-pulled deploy.
+# For manual dev work with start.sh/start-server.sh (both also bind :5000),
+# `systemctl --user stop lunaschal` first and `start` again when done.
+
+[Unit]
+Description=Lunaschal (production)
+After=network.target lunaschal-llama.service
+Wants=lunaschal-llama.service
+
+[Service]
+Type=exec
+ExecStart=%h/workspace/Lunaschal/ops/run-prod.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=graphical-session.target

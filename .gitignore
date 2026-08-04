@@ -3,6 +3,7 @@ dist/
 data/
 data_backup/
 .env
+ops/backup.env
 .venv/
 __pycache__/
 *.pyc
