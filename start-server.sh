@@ -28,35 +28,30 @@ export TAILSCALE_HOSTNAME=$(basename "$CERT_FILE" .crt)
 export VITE_HTTPS_CERT="$CERT_FILE"
 export VITE_HTTPS_KEY="$KEY_FILE"
 
-# Kill any leftover processes from a previous session
-for port in 5000 5173; do
+# Kill any leftover processes from a previous session. :5000 is excluded on
+# purpose — that is the always-on production server (lunaschal.service), not
+# ours to kill. Dev owns :5001 and :5173.
+for port in 5001 5173; do
   pids=$(lsof -ti tcp:$port 2>/dev/null) && kill $pids 2>/dev/null && echo "Killed stale process on :$port" || true
 done
 
-# Start llama-server if nothing is serving on :8080 yet. Prefer the systemd unit
-# (llama/lunaschal-llama.service) so the model outlives this script.
+# llama-server is assumed to be running already — see llama/lunaschal-llama.service.
 if ! curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
-  echo "Starting llama-server..."
-  ./llama/start-llama.sh &>/tmp/llama-server.log &
-  echo "Waiting for llama-server (loads ~17GB, give it a minute)..."
-  for _ in $(seq 1 180); do
-    curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1 && break
-    sleep 1
-  done
-  curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1 \
-    || echo "WARNING: llama-server not up — see /tmp/llama-server.log."
+  echo "WARNING: llama-server is not responding on :8080 — AI features will fail."
+  echo "  Start it with:  systemctl --user start lunaschal-llama"
+  echo "  Or, without the unit installed:  ./llama/start-llama.sh"
 fi
 
 # Start Flask (bound to all interfaces, TLS) + Vite dev servers
 ./node_modules/.bin/concurrently \
-  ".venv/bin/flask --app backend.app run --host 0.0.0.0 --port 5000 --debug --cert=$CERT_FILE --key=$KEY_FILE" \
+  ".venv/bin/flask --app backend.app run --host 0.0.0.0 --port 5001 --debug --cert=$CERT_FILE --key=$KEY_FILE" \
   "./node_modules/.bin/vite --host" &
 DEV_PID=$!
 
 # Wait for Flask to be ready (-k: verifying 127.0.0.1 against a cert issued
 # for the Tailscale hostname would otherwise fail this local readiness check)
 echo "Waiting for Flask..."
-until curl -skf https://127.0.0.1:5000/api/health > /dev/null; do sleep 0.5; done
+until curl -skf https://127.0.0.1:5001/api/health > /dev/null; do sleep 0.5; done
 
 echo "Server ready. Nodes can connect at https://$TAILSCALE_HOSTNAME:5173"
 

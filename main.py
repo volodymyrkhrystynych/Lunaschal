@@ -5,18 +5,18 @@ import time
 import urllib.request
 import urllib.error
 
-import webview
+# webview and Qt are imported inside _start_window() rather than here: --headless
+# is the production server (ops/run-prod.sh) and must not need a display, a
+# QtWebEngine install, or the ~1.5G that loading it costs. The import *order*
+# inside that function still matters — see the comment there.
 
-# QtWebEngine must be imported before *any* QCoreApplication exists — Qt needs to
-# set AA_ShareOpenGLContexts while there is still no app instance. main() creates a
-# QApplication (for the WM identity) before PyWebView loads its qt backend, so
-# without this eager import PyWebView's `from qtpy.QtWebEngineWidgets import ...`
-# raises ImportError, it falls back to PyQt5/WebKit, and startup dies with
-# "You must have either QT or GTK with Python extensions installed".
-import qtpy.QtWebEngineWidgets  # noqa: F401  (import order matters, see above)
-from qtpy.QtWidgets import QApplication
+FLASK_PORT = int(os.environ.get('LUNASCHAL_PORT', '5000'))
 
-FLASK_PORT = 5000
+# The dev backend deliberately does not share :5000 with production. The
+# production server now runs full-time under lunaschal.service, so a dev run on
+# the same port would either fail to bind or, worse, have start.sh kill the
+# running server to free it.
+DEV_FLASK_PORT = int(os.environ.get('LUNASCHAL_DEV_PORT', '5001'))
 ICON_PATH = os.path.join(os.path.dirname(__file__), 'public', 'icons', 'icon.png')
 
 
@@ -48,10 +48,12 @@ if _NETWORK_MODE and _TAILSCALE_HOSTNAME:
     DEV_URL = f'https://{_TAILSCALE_HOSTNAME}:5173'
     PROD_URL = f'https://{_TAILSCALE_HOSTNAME}:{FLASK_PORT}'
     _HEALTH_URL = f'https://{_TAILSCALE_HOSTNAME}:{FLASK_PORT}/api/health'
+    _DEV_HEALTH_URL = f'https://{_TAILSCALE_HOSTNAME}:{DEV_FLASK_PORT}/api/health'
 else:
     DEV_URL = 'http://localhost:5173'
     PROD_URL = f'http://127.0.0.1:{FLASK_PORT}'
     _HEALTH_URL = f'http://127.0.0.1:{FLASK_PORT}/api/health'
+    _DEV_HEALTH_URL = f'http://127.0.0.1:{DEV_FLASK_PORT}/api/health'
 
 
 def _run_flask():
@@ -63,11 +65,11 @@ def _run_flask():
     app.run(host=host, port=FLASK_PORT, use_reloader=False, ssl_context=ssl_context)
 
 
-def _wait_for_flask(timeout: float = 10.0) -> bool:
+def _wait_for_flask(url: str = _HEALTH_URL, timeout: float = 10.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         try:
-            urllib.request.urlopen(_HEALTH_URL, timeout=1)
+            urllib.request.urlopen(url, timeout=1)
             return True
         except (urllib.error.URLError, OSError):
             time.sleep(0.1)
@@ -87,13 +89,14 @@ def _wait_for_vite(timeout: float = 15.0) -> bool:
 
 def _parse_args():
     dev = '--dev' in sys.argv
+    headless = '--headless' in sys.argv
     server_url = None
     for i, arg in enumerate(sys.argv[1:], 1):
         if arg == '--server-url' and i + 1 < len(sys.argv):
             server_url = sys.argv[i + 1]
         elif arg.startswith('--server-url='):
             server_url = arg.split('=', 1)[1]
-    return dev, server_url
+    return dev, server_url, headless
 
 
 def _resolve_target(dev: bool, server_url: str | None) -> tuple[str, str]:
@@ -115,7 +118,19 @@ def _resolve_target(dev: bool, server_url: str | None) -> tuple[str, str]:
 
 
 def main():
-    dev, server_url = _parse_args()
+    dev, server_url, headless = _parse_args()
+
+    if headless:
+        # The production server (ops/run-prod.sh). Runs Flask in the foreground
+        # and never returns, so systemd's Restart= governs the process lifetime.
+        #
+        # This exists because the windowed path exits 0 when the window is
+        # closed: with Restart=on-failure that looked like a clean shutdown, so
+        # closing the window silently took the LAN server down for the phone and
+        # the Pocket 2 and systemd correctly declined to bring it back.
+        _run_flask()
+        return
+
     url, wait_for = _resolve_target(dev, server_url)
 
     if wait_for == 'flask-spawn':
@@ -123,7 +138,11 @@ def main():
         thread.start()
 
     if wait_for in ('flask-spawn', 'flask-external'):
-        if not _wait_for_flask():
+        # --dev talks to the dev backend on DEV_FLASK_PORT. Probing FLASK_PORT
+        # here would find the *production* server, report ready, and open a
+        # window onto a Vite proxy whose own backend hadn't started yet.
+        health = _HEALTH_URL if wait_for == 'flask-spawn' else _DEV_HEALTH_URL
+        if not _wait_for_flask(health):
             print('error: Flask did not start in time', file=sys.stderr)
             sys.exit(1)
     elif wait_for == 'vite':
@@ -131,7 +150,21 @@ def main():
             print('error: Vite dev server did not start in time', file=sys.stderr)
             sys.exit(1)
 
-    import os
+    _start_window(url)
+
+
+def _start_window(url: str):
+    # QtWebEngine must be imported before *any* QCoreApplication exists — Qt needs
+    # to set AA_ShareOpenGLContexts while there is still no app instance. We create
+    # a QApplication (for the WM identity) before PyWebView loads its qt backend,
+    # so without this eager import PyWebView's
+    # `from qtpy.QtWebEngineWidgets import ...` raises ImportError, it falls back
+    # to PyQt5/WebKit, and startup dies with "You must have either QT or GTK with
+    # Python extensions installed".
+    import webview
+    import qtpy.QtWebEngineWidgets  # noqa: F401  (import order matters, see above)
+    from qtpy.QtWidgets import QApplication
+
     os.environ.setdefault('QSG_RHI_BACKEND', 'opengl')
     os.environ.setdefault('QTWEBENGINE_CHROMIUM_FLAGS',
         '--disable-gpu --disable-gpu-compositing --disable-vulkan '

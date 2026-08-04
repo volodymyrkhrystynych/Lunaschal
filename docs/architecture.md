@@ -35,7 +35,7 @@ flowchart LR
         LIB["src/lib/<br/>pure logic (node-env tests)"]
     end
 
-    subgraph BE["Backend — backend/ (Flask, :5000)"]
+    subgraph BE["Backend — backend/ (Flask, :5000 prod / :5001 dev)"]
         APPFACTORY["app.py — create_app()<br/>+ auth middleware"]
         AUTH["auth.py<br/>JWT cookie (network mode)"]
         subgraph ROUTES["Blueprints — backend/routes/"]

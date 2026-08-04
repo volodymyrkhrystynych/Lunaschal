@@ -26,13 +26,15 @@ Development happens on two machines: a desktop (comfortable, full mouse/keyboard
 ## Commands
 
 ```bash
-# Development (Flask backend on :5000 + Vite client on :5173)
+# Development (Flask backend on :5001 + Vite client on :5173)
+# Production keeps :5000 — see the Ports note under Key Behaviors.
 npm run dev
 
-npm run dev:flask        # backend only (flask --app backend.app run --port 5000 --debug)
+npm run dev:flask        # backend only (flask --app backend.app run --port 5001 --debug)
 npm run dev:client       # frontend only (vite)
 npm run dev:desktop      # desktop window via PyWebView pointed at the Vite dev server
-python main.py           # production: build first with npm run build, then desktop window
+python main.py           # build first with npm run build, then serve dist/ + open a window
+python main.py --headless # server only, no window (what ops/run-prod.sh runs)
 
 # Local inference (llama.cpp). Prefer the systemd unit — the model takes tens of
 # seconds to load, and Flask's --debug reloader restarts constantly.
@@ -40,7 +42,10 @@ python main.py           # production: build first with npm run build, then desk
 systemctl --user status lunaschal-llama   # see llama/lunaschal-llama.service to install
 
 # Convenience launchers
-./start.sh               # kills stale :5000/:5173, starts llama-server if needed, npm run dev
+./start.sh               # kills stale :5001/:5173, warns if llama-server is down, npm run dev
+                         # (assumes llama-server is already running; never touches :5000)
+./ops/run-prod.sh        # production server, headless (what lunaschal.service runs)
+./ops/open-window.sh     # desktop window against the running production server
 ./start-server.sh        # network mode (NETWORK_MODE=1, requires LUNASCHAL_PASSWORD)
 ./start-node.sh          # frontend-only on a weak machine; proxies /api to a remote
                          # backend via VITE_API_PROXY_TARGET/LUNASCHAL_URL (Tailscale)
@@ -71,7 +76,7 @@ Lunaschal is a single-user personal life-management desktop app with AI integrat
 
 ### Entry Points
 
-- **`main.py`** — PyWebView desktop launcher. Starts Flask in a daemon thread, waits for `/api/health`, then opens the window. Pass `--dev` to point the window at the Vite dev server instead of the built `dist/`.
+- **`main.py`** — PyWebView desktop launcher. Starts Flask in a daemon thread, waits for `/api/health`, then opens the window. Pass `--dev` to point the window at the Vite dev server instead of the built `dist/` (health-checked on `:5001`, the dev port). **`--headless` skips the window entirely** and runs Flask in the foreground — that's the production server, and `webview`/Qt are imported inside `_start_window()` so this path needs no display. `--server-url` opens a window against an already-running server without starting one.
 - **`backend/app.py`** — Flask app factory (`create_app`). Runs DB init, registers all blueprints, mounts auth middleware, serves the built `dist/` in production, restores the sleep inhibitor, snapshots baseline GPU VRAM for the Settings VRAM budget, and (with `STT_LISTENER=1`) spawns the voice listener as a subprocess.
 
 ### Backend Structure (`backend/`)
@@ -254,7 +259,8 @@ Append-only log of everything the STT pipeline transcribed (source/app/detail). 
 - **Settings** owns more than AI keys: STT/TTS backends and Whisper model/device, voice + in-app shortcuts, curated tags, fanfic site cookies, HF token (diarization), meeting echo-cancel, task nudges, prevent-sleep (a `systemd-inhibit` subprocess), and a GPU **VRAM budget** view (non-LLM baseline measured at startup; the LLM's share and the card total are read **live** from `nvidia-smi`, because with expert tensors split across GPU and RAM a model's footprint can't be derived from its file size — thresholds in `src/lib/vram.ts`)
 - **DB path** defaults to `./data/lunaschal.db`; override with `DATABASE_URL` env var
 - **JWT secret** defaults to a hardcoded dev string; set `JWT_SECRET` env var in production
-- **Flask port** is always 5000; Vite dev server is 5173 and proxies `/api` to Flask (`VITE_API_PROXY_TARGET` overrides the target for split-machine dev). The Vite watcher must keep ignoring `data/**` — WAL files churn on every request and previously OOM'd the dev server.
+- **Ports: production Flask is 5000, dev Flask is 5001**, Vite dev is 5173 and proxies `/api` to :5001 (`VITE_API_PROXY_TARGET` overrides the target for split-machine dev). They are split because `lunaschal.service` now runs production full-time on :5000, so a dev run must neither bind that port nor kill what is on it — `start.sh`/`start-server.sh` deliberately exclude :5000 from their stale-process sweep, and `main.py --dev` health-checks :5001 (probing :5000 would find production and report ready before the dev backend existed). Override with `LUNASCHAL_PORT` / `LUNASCHAL_DEV_PORT`. The Vite watcher must keep ignoring `data/**` — WAL files churn on every request and previously OOM'd the dev server.
+- **Production runs headless** (`main.py --headless` via `ops/run-prod.sh`): Flask in the foreground, no PyWebView. The windowed path exits 0 when its window closes, which under `Restart=on-failure` read as a clean shutdown and silently took the LAN server down. The unit is now `Restart=always`. Use `ops/open-window.sh` (or any browser) to open the UI as a _client_ — closing it stops nothing.
 - **Network mode**: set `NETWORK_MODE=1` and `LUNASCHAL_PASSWORD=...` to bind `0.0.0.0` and enforce auth for LAN access
 
 A Mermaid diagram of the module structure lives in `docs/architecture.md`.

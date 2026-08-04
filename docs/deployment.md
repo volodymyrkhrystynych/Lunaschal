@@ -36,15 +36,30 @@ systemctl --user daemon-reload
 systemctl --user enable --now lunaschal
 ```
 
-This opens the Lunaschal window automatically at the next graphical login
-(`WantedBy=graphical-session.target`) and keeps Flask serving `dist/` with
-`NETWORK_MODE=1`, so the Pocket 2 / phone / tablet can all reach it.
+This keeps Flask serving `dist/` on `:5000` with `NETWORK_MODE=1`, so the
+Pocket 2 / phone / tablet can all reach it, and starts at login
+(`WantedBy=default.target`). Add `loginctl enable-linger volodya` if it should
+also come up at boot without anyone signing in.
 
-**Port conflict note:** `start.sh`/`start-server.sh` (interactive dev mode)
-and `lunaschal.service` (production) both bind `:5000`. Before a manual dev
-session, run `systemctl --user stop lunaschal`; `systemctl --user start
-lunaschal` again when done. This is a manual step by design — keeping the
-service simple was preferred over auto-detecting a conflict.
+**It runs headless** — `main.py --headless`, no PyWebView window. This is
+deliberate: the windowed path returns from `webview.start()` when the window is
+closed and exits 0, which `Restart=on-failure` treated as a clean shutdown, so
+closing the window took the LAN server down and systemd declined to restart it.
+The unit is now `Restart=always`, and a server's lifetime no longer depends on
+a window nobody meant to be load-bearing.
+
+To open the UI:
+
+```bash
+./ops/open-window.sh     # desktop window against the running server
+```
+
+It's a plain client (`main.py --server-url`) — closing it stops nothing. Any
+browser pointed at `https://<tailscale-host>:5000` works identically.
+
+**No port conflict with dev.** Dev Flask moved to `:5001` (Vite still `:5173`),
+so `start.sh` / `start-server.sh` can run while production stays up, and their
+stale-process sweep deliberately skips `:5000`.
 
 ## 2. Install the auto-deploy watcher
 

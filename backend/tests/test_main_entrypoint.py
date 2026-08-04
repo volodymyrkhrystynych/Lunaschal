@@ -44,14 +44,60 @@ def test_webview_launches_non_private_with_a_persistent_profile(tmp_path, monkey
     QtWebEngine profile must persist — private_mode=True would wipe the login
     cookie, the remembered display code, and the offline cache on every restart.
     """
+    # webview is imported inside _start_window (so --headless needs no display),
+    # so patch the module itself rather than a main.webview attribute.
+    import webview
+
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
     monkeypatch.setattr(main.sys, 'argv', ['main.py', '--server-url', 'https://x.ts.net:5000'])
-    monkeypatch.setattr(main.webview, 'create_window', lambda *a, **k: None)
+    monkeypatch.setattr(webview, 'create_window', lambda *a, **k: None)
     captured = {}
-    monkeypatch.setattr(main.webview, 'start', lambda **kwargs: captured.update(kwargs))
+    monkeypatch.setattr(webview, 'start', lambda **kwargs: captured.update(kwargs))
 
     main.main()
 
     assert captured['private_mode'] is False
     assert captured['storage_path']
     assert os.path.isdir(captured['storage_path'])
+
+
+def test_headless_serves_flask_and_never_opens_a_window(monkeypatch):
+    """--headless is what lunaschal.service runs.
+
+    The windowed path returns from webview.start() when the window is closed and
+    exits 0, which Restart=on-failure read as a clean shutdown — so closing the
+    window took the LAN server down and systemd declined to bring it back. The
+    production path must therefore never construct a window at all.
+    """
+    monkeypatch.setattr(main.sys, 'argv', ['main.py', '--headless'])
+    calls = []
+    monkeypatch.setattr(main, '_run_flask', lambda: calls.append('flask'))
+    monkeypatch.setattr(main, '_start_window', lambda url: calls.append('window'))
+
+    main.main()
+
+    assert calls == ['flask']
+
+
+def test_headless_is_parsed_independently_of_the_other_flags():
+    monkeypatch_argv = ['main.py', '--headless']
+    import sys as _sys
+
+    original = _sys.argv
+    try:
+        _sys.argv = monkeypatch_argv
+        dev, server_url, headless = main._parse_args()
+    finally:
+        _sys.argv = original
+    assert headless is True
+    assert dev is False
+    assert server_url is None
+
+
+def test_dev_health_check_targets_the_dev_port_not_production():
+    """--dev waits on the dev backend. Probing the production port would find
+    lunaschal.service already healthy and open a window before the dev backend
+    had bound anything."""
+    assert main.DEV_FLASK_PORT != main.FLASK_PORT
+    assert f':{main.DEV_FLASK_PORT}/' in main._DEV_HEALTH_URL
+    assert main._DEV_HEALTH_URL != main._HEALTH_URL
