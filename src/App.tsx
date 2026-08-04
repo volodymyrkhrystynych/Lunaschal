@@ -12,6 +12,7 @@ import { SttPanel } from './components/Editor/SttPanel';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { Login } from './components/Login';
 import { Writing } from './components/Writing';
+import { Ideas } from './components/Ideas';
 import { Tasks } from './components/Tasks';
 import { Food } from './components/Food/Food';
 import { Lifestyle } from './components/Lifestyle/Lifestyle';
@@ -157,6 +158,8 @@ export default function App() {
         return <Notebook />;
       case 'writing':
         return <Writing />;
+      case 'ideas':
+        return <Ideas />;
       case 'tasks':
         return <Tasks />;
       case 'food':

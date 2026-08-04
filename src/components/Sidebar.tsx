@@ -11,6 +11,7 @@ type View =
   | 'files'
   | 'notebook'
   | 'writing'
+  | 'ideas'
   | 'tasks'
   | 'food'
   | 'lifestyle'
@@ -35,6 +36,7 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'notebook', label: 'Notebook', icon: '🗒️' },
   { view: 'meetings', label: 'Meetings', icon: '🎙️' },
   { view: 'writing', label: 'Writing', icon: '✍️' },
+  { view: 'ideas', label: 'Ideas', icon: '💡' },
   { view: 'calendar', label: 'Calendar', icon: '📅' },
   { view: 'food', label: 'Food', icon: '🍽️' },
   { view: 'lifestyle', label: 'Lifestyle', icon: '🏋️' },

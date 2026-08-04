@@ -7,6 +7,7 @@ import { STTStatusSection } from './STTStatusSection';
 import { ShortcutsSection } from './ShortcutsSection';
 import { NudgeSection } from './NudgeSection';
 import { BriefingSection } from './BriefingSection';
+import { ResearchSection } from './ResearchSection';
 import { VRAMSection } from './VRAMSection';
 import { NetworkSection } from './NetworkSection';
 import { FanficCookiesSection } from './FanficCookiesSection';
@@ -77,6 +78,8 @@ export function Settings() {
           <NudgeSection />
 
           <BriefingSection />
+
+          <ResearchSection />
 
           <FanficCookiesSection />
 

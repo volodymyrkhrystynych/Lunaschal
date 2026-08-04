@@ -57,7 +57,7 @@ npm run test:watch       # vitest in watch mode
 
 ## Architecture
 
-Lunaschal is a single-user personal life-management desktop app with AI integration. Views (in sidebar order): AI chat, daily tasks + todos, journal, meeting recorder/transcriber, creative-writing workspace, calendar, spaced-repetition learning, cookbook, lifestyle (workouts/heatmap/chores/selfie/calories), fanfic library/reader, newspaper front pages, file editor, settings. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
+Lunaschal is a single-user personal life-management desktop app with AI integration. Views (in sidebar order): spaced-repetition learning, AI chat, daily tasks + todos, journal, notebook, meeting recorder/transcriber, creative-writing workspace, ideas + research agent, calendar, food log (+ recipes), lifestyle (workouts/heatmap/chores/selfie/calories), fanfic library/reader, newspaper front pages, handwritten paper, file editor, settings. Recipes are no longer a top-level view — they live inside Food (`src/components/Food/RecipeList.tsx`) over the `cookbook` blueprint. Runs as a native desktop window via PyWebView, or as a web app on the LAN in network mode.
 
 ### Stack
 
@@ -76,7 +76,7 @@ Lunaschal is a single-user personal life-management desktop app with AI integrat
 
 ### Backend Structure (`backend/`)
 
-Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `fanfic`, `newspapers`, `meetings`, `lifestyle`.
+Flask blueprints in `backend/routes/`: `auth`, `journal`, `calendar`, `learning`, `settings`, `chat`, `files`, `writing`, `stt`, `tasks`, `curated_tags`, `shortcuts`, `transcriptions`, `cookbook`, `food`, `fanfic`, `newspapers`, `meetings`, `notebook`, `paper`, `lifestyle`, `ideas`.
 
 Feature-logic packages (kept out of the route files so they can be unit-tested):
 
@@ -86,18 +86,23 @@ Feature-logic packages (kept out of the route files so they can be unit-tested):
 - `backend/newspapers/` — frontpages.com scraper, sync, file storage
 - `backend/lifestyle/` — the four activity types and per-day heatmap collapse (`activity.py`), exercise-name canonicalization (`exercises.py`), selfie file storage
 - `backend/journal/` — file storage for journal audio/photo attachments (`storage.py`)
+- `backend/food/` — food-photo storage and EXIF capture-date/GPS extraction (`exif.py`)
+- `backend/paper/` — file storage for handwritten page snapshots (`storage.py`)
+- `backend/research/` — the Ideas agent: deterministic repo extraction (`repo_facts.py`), SSRF-guarded web tools (`web.py`), the copy-on-write wiki, the sync tool loop, the research worker and the evidence-backed assessment. Design record: [docs/ideas-tab.md](docs/ideas-tab.md)
 - `backend/tags.py` — shared normalization for JSON-array tag columns (use it, don't grow per-feature rules)
 
 The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` using Flask's `Response(stream_with_context(...))`.
 
-Long-running work (fic downloads, curated-tag scans, meeting transcription) runs in daemon threads with an in-memory progress registry; anything that must survive a restart is checkpointed to the DB, and `connection.py` resets orphaned in-flight states (`downloading` fics, `recording`/`transcribing` meetings) to `'error'` at startup.
+Long-running work (fic downloads, curated-tag scans, meeting transcription, Ideas research) runs in daemon threads with an in-memory progress registry; anything that must survive a restart is checkpointed to the DB, and `connection.py` resets orphaned in-flight states (`downloading` fics, `recording`/`transcribing` meetings, `running` idea research) at startup.
+
+There is no cron and no general scheduler: four hand-rolled daemon loops start from `create_app()` (all skipped when `LUNASCHAL_NO_SCHEDULERS` is set, which the test suite does). `chat_title_scheduler` owns 02:00–03:00, `research/repo_scheduler` 03:00–05:00, `briefing_scheduler` 05:00–07:00 — staggered so they never contend for the two llama slots — and `research/research_scheduler` runs in **no window at all**, deferring moment to moment through `backend/ai/priority.py` instead.
 
 ### Database Layer (`backend/db/`)
 
 - `schema.sql` — raw SQL `CREATE TABLE IF NOT EXISTS` statements; all IDs are ULIDs; timestamps are unix ints (converted to ISO strings by `row_to_dict`, which also camelCases column names — see `TIMESTAMP_COLS`)
 - `connection.py` — opens a single WAL-mode SQLite connection (`get_db()`), runs `schema.sql` on startup, then a long list of `_ensure_*` helpers: **migrations are idempotent ALTER TABLEs guarded by `PRAGMA table_info` checks** — follow that pattern for new columns
-- Three FTS5 virtual tables maintained by SQL triggers: `journal_fts`, `recipes_fts`, `fic_chapters_fts`
-- Binary/media files live next to the DB under `./data/`: `fanfic/<fic_id>/` (images, PDFs), `meetings/<id>/` (WAV tracks), `newspapers/`, `journal/<attachment_id>/` (entry audio + photos), plus `shortcuts.json` (in-app key bindings). Roots overridable via `FANFIC_ROOT` / `MEETINGS_ROOT` / `NEWSPAPERS_ROOT` / `JOURNAL_ROOT` / `SHORTCUTS_PATH`.
+- Four FTS5 virtual tables maintained by SQL triggers: `journal_fts`, `recipes_fts`, `fic_chapters_fts`, `wiki_fts`
+- Binary/media files live next to the DB under `./data/`: `fanfic/<fic_id>/` (images, PDFs), `meetings/<id>/` (WAV tracks), `newspapers/`, `journal/<attachment_id>/` (entry audio + photos), `lifestyle/<id>/` (daily selfies), `food/<id>/` (meal photos), `paper/<page_id>/` (page snapshots + pasted pictures), plus `shortcuts.json` (in-app key bindings). Roots overridable via `FANFIC_ROOT` / `MEETINGS_ROOT` / `NEWSPAPERS_ROOT` / `JOURNAL_ROOT` / `LIFESTYLE_ROOT` / `FOOD_ROOT` / `PAPER_ROOT` / `SHORTCUTS_PATH`.
 
 ### AI Layer (`backend/ai/`)
 
@@ -145,6 +150,44 @@ Two-panel layout: left nav (project list + a `WritingNav` with Chapters/Notes/Di
 **DB tables**: `writing_projects`, `writing_chapters` (ordered by `position`), `writing_context_docs` (typed: `character | outline | worldbuilding | note`). "Notes" in the UI/API are stored in `writing_context_docs` (HTTP paths are `/api/writing/.../notes`; the table name is legacy). Discussions reuse the existing `conversations` + `messages` tables; `conversations.writing_project_id` scopes them to a project, and the general Chat tab filters them out (`writing_project_id IS NULL`). Deleting a project deletes its discussions.
 
 **Chapter/note editors**: plain `<textarea>` (not CodeMirror — prose, not code) with 1.5 s debounced auto-save; chapters add live word count and font-size shortcuts. **Discussions**: full-size chat reusing `/api/chat/stream` unchanged; the frontend assembles a `systemPrompt` from the project plus checked notes. A **Summarize** button distills the transcript into a new note via `backend/ai/writing.py`.
+
+#### Ideas (`backend/routes/ideas.py`, `src/components/Ideas/`)
+
+The app's own feature backlog, developed with an agent instead of by hand in `docs/ROADMAP.md`. Master-detail: list + capture box on the left, idea detail on the right. Design record and the decisions the build settled — including what is deliberately _not_ built: [docs/ideas-tab.md](docs/ideas-tab.md). Things to know:
+
+- **An idea keeps `raw_content` and `content` separately**, the same contract as `journal_entries`: `raw_content` is what was dictated or typed and is never overwritten; `content` is the AI-cleaned prose. The detail pane shows `content` when it exists and falls back to `raw_content`, with the transcript still reachable under "As captured".
+- **Dictation appends to the capture box rather than saving immediately** (`useRecorder`, the `Learning/BrainDump.tsx` pattern) so a transcript can be corrected, or two thoughts recorded into one idea, before it becomes a row.
+- **A sketch is a Paper _page_, not a whole paper** (`idea_sketches` → `paper_pages`), rendered straight from the page's PNG snapshot at `/api/paper/pages/<id>/image` — no copying and no new storage, the same borrowing `JournalPaperItem` does. Deleting the page cascades the sketch.
+- **The caption on a sketch is the feature, not decoration.** Vision is off in this project (both presets set `mmproj-auto = false`; see `backend/ai/images.py`), so the agent reads the caption and the image is for the human. The UI says so out loud — a "describe this sketch" button that always errored is the journal-photo-captioning mistake.
+- `page_image_url` in `backend/routes/paper.py` is exported (not `_`-prefixed) precisely because Ideas borrows it; keep it that way.
+
+**The repo-context agent** (`backend/research/repo_facts.py`, `repo_job.py`, `repo_scheduler.py`) maintains a nightly `repo_snapshots` row describing what the app currently is, so "you already built this" is evidence rather than a guess.
+
+- **It is mostly not an LLM.** Routes come from an `ast` walk of the `@bp.<method>` decorators (which resolves each back to its Blueprint for the `url_prefix`), tables from `PRAGMA table_info` on the **live** DB (so `_ensure_*` migrations are included, which a parse of `schema.sql` would miss), views from the three hand-synced frontend literals. Pushing the repo through a 25 tok/s model nightly would cost tens of thousands of tokens to produce a lossy paraphrase of things we can read exactly. The model's only job is summarizing the `git log` delta — and it is nullable, because a failed summary must never cost the facts.
+- **`view_facts` cross-checks `VIEWS` / `navItems` / `VIEW_ORDER`** and emits a warning when they drift. Those three are maintained by hand in three files, and a view missing from `VIEW_ORDER` simply can't be reached by the keyboard.
+- **`CLAUDE.md`, `docs/architecture.md`, `docs/ROADMAP.md` and `docs/TODO.md` are read, never regenerated.** ROADMAP/TODO bullets are kept verbatim — they are the "planned but not built" ledger.
+- Snapshot queries order by **`generated_at DESC, id DESC`**: `generated_at` is second-resolution, so the ULID is what actually orders two scans in the same second.
+- Window defaults to 03:00–05:00, between the chat-title sweep (02:00–03:00) and the briefing (05:00–07:00), so the three never contend for the two llama slots.
+
+**The research agent** (`backend/research/web.py`, `wiki.py`, `agent.py`, `backend/ai/priority.py`):
+
+- **`backend/ai/priority.py` is a throughput gate, not a mutex.** llama-server has two slots, so a background loop and a chat message genuinely run at once — but they share memory-bound expert tensors, so the loop parks _between_ steps while a human waits. Nothing preempts a generation already in flight, which is why `chat_with_tools` now takes `max_tokens` and the research loop passes a small ceiling: **turn length is the granularity at which background work can yield.** The mark is acquired in the _view_ and released in the SSE generator's `finally` — acquiring inside the generator would leave time-to-first-token looking idle, and releasing outside it would leak on client disconnect. `MARK_TTL` and a `wait_for_idle` timeout mean a leak costs deferral, never starvation.
+- **`run_bg` marks its work interactive** in one place, because journal polish and friends were triggered by a user action seconds earlier. Long agent runs deliberately do _not_ go on that executor — they would head-of-line block seven user-visible flows.
+- **`web.py` is the only arbitrary outbound fetch in the app, and the model picks the URLs.** `assert_public_url` rejects non-http(s), `.local`/`.internal`, and any host resolving to a private/loopback/link-local/reserved address — re-run on every redirect hop, with manual redirect following. Search is pluggable (Brave/Tavily key, or keyless self-hosted SearXNG); with none configured the tools return an explanatory _result_ rather than raising, so the loop degrades instead of dying.
+- **The wiki is copy-on-write** (`wiki_revisions`, the `learning_revisions` pattern) — a background process editing prose the user relies on has to be auditable and undoable. A `locked` article rejects agent writes. Retrieval hands the model the whole index (`wiki_list`) rather than only a retriever: at a few dozen articles that costs ~1,200 tokens and beats any ranking function. **No embeddings** — the `embed` alias has `ctx-size 2048` so articles would need chunking, and its vectors are frozen because `learning_cards` depends on them.
+- **Tool turns are never streamed.** llama-server reconstructs OpenAI `tool_calls` from Gemma 4's native notation via its peg-gemma4 grammar; reassembling partial tool-call deltas across chunks is how an argument goes missing in production. Gathering and answering are separate turns so the answer can stream while gathering stays blocking. `agent.gather_events` is a generator yielding `('step', …)` then one `('result', …)`, and `agent.gather` is the blocking wrapper — the SSE route needs the generator, because with the blocking form every tool event only arrives _after_ gathering ends, which is the silent spinner the events exist to replace.
+
+- **The research loop is the one daemon with no hour window** (`backend/research/research_scheduler.py`). The repo scan, briefing and title sweep are scheduled at night so they don't compete with the user; this one defers moment to moment through `priority` instead, which is what "runs whenever it likes but yields to anything you ask for" actually needs — and research is worth doing while the user is awake and about to read the answer. Each tick asks four questions (enabled? worker free? user quiet for `QUIET_SECONDS`? anything due?) and submits at most one task. `research_job.plan_next` holds the whole policy: assessment always before research (cheap, no web, and its output is what tells the research pass what to look for), nothing without a repo snapshot, nothing without a search provider, and a 24 h per-idea cooldown so a settled backlog doesn't re-research its newest idea every tick. **`research_enabled` defaults off** — the loop makes outbound requests.
+
+**Assessment — "already built?" is evidence, not a vibe** (`backend/research/evidence.py`, `assess.py`, `backend/ai/idea_assessment.py`):
+
+- **The model never writes a file path.** `gather_candidates` builds a numbered list of things in the repo the idea might already be satisfied by, each with a real `{kind, ref, file, line}`, and the JSON schema bounds `evidenceIndexes` to that list — so llama-server's grammar makes citing a nonexistent file impossible during decoding.
+- **A deterministic clamp runs after the call**: no citations ⇒ verdict forced to `no` (confidence ≤ 0.4); `yes` with fewer than two citations ⇒ downgraded to `partial`. A confident uncited "yes" is the one output that could make the user drop an idea they should have built.
+- **Being on the roadmap is tracked separately from being built** — they're opposites, and conflating them is how a backlog item gets marked done because someone wrote it down.
+- Each assessment records the `snapshot_id` it judged against, so the UI marks it **stale** once the repo moves rather than presenting an old verdict as current. `ideas.user_verdict` always overrides the agent's.
+- Open questions are upserted by a normalized `question_key`, so a re-run never resurrects one the user already answered.
+
+**Discussion and plans**: `conversations.idea_id` is a second discriminator after `writing_project_id` — **six queries** filter "a general chat conversation" and all of them need `AND idea_id IS NULL` (`backend/routes/chat.py:20,30,51,81`, `briefing_job.py`, `chat_title_scheduler.py`). `backend/research/plan.py::render_plan_markdown` is pure, and the sections that must be exact — what already exists, which decisions are settled, which are still open — are stitched in from real rows rather than paraphrased by the model.
 
 #### Fanfic library (`backend/routes/fanfic.py`, `backend/fanfic/`, `src/components/Fanfic/`)
 

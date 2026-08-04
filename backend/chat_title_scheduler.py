@@ -25,7 +25,7 @@ def run_title_sweep() -> int:
     db = get_db()
     rows = db.execute(
         '''SELECT c.id FROM conversations c
-           WHERE c.day_key IS NOT NULL AND c.title IS NULL AND c.writing_project_id IS NULL
+           WHERE c.day_key IS NOT NULL AND c.title IS NULL AND c.writing_project_id IS NULL AND c.idea_id IS NULL
              AND EXISTS (SELECT 1 FROM messages m
                          WHERE m.conversation_id = c.id AND m.role IN ('user', 'assistant'))'''
     ).fetchall()

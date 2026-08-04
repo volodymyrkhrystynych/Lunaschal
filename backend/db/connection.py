@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -11,6 +12,8 @@ _conn: sqlite3.Connection | None = None
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'edited_at', 'started_at', 'ended_at', 'due',
+    'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
+    'researched_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -78,6 +81,7 @@ def init_db() -> None:
         db.commit()
     _init_fts(db)
     _init_recipes_fts(db)
+    _init_wiki_fts(db)
     _init_fanfic_fts(db)
     _drop_vector_tables(db)
     _ensure_network_code(db)
@@ -90,6 +94,10 @@ def init_db() -> None:
     _ensure_prevent_sleep(db)
     _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
+    _ensure_research_settings(db)
+    _ensure_idea_assessment_columns(db)
+    _ensure_conversation_idea_id(db)
+    _reset_stale_idea_research(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -528,6 +536,79 @@ def _ensure_briefing_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_research_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'repo_context_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN repo_context_enabled INTEGER DEFAULT 1')
+    if 'repo_context_hour' not in cols:
+        # 03:00 deliberately: the chat-title sweep owns 02:00-03:00 and the
+        # briefing owns 05:00-07:00, so a 03:00-05:00 window contends with
+        # neither for the two llama slots.
+        db.execute('ALTER TABLE settings ADD COLUMN repo_context_hour INTEGER DEFAULT 3')
+    if 'research_search_provider' not in cols:
+        # '' | 'brave' | 'tavily' | 'searxng'. Empty means the research agent
+        # has no web access and says so, rather than guessing.
+        db.execute("ALTER TABLE settings ADD COLUMN research_search_provider TEXT DEFAULT ''")
+    if 'research_search_key' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN research_search_key TEXT')
+    if 'research_searxng_url' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN research_searxng_url TEXT')
+    if 'research_enabled' not in cols:
+        # Off by default: the research loop makes outbound web requests, which
+        # is not something to start doing without being asked.
+        db.execute('ALTER TABLE settings ADD COLUMN research_enabled INTEGER DEFAULT 0')
+    db.commit()
+
+
+def _ensure_idea_assessment_columns(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(ideas)')}
+    if 'assessment_id' not in cols:
+        # Denormalized pointer at the newest idea_assessments row, so the list
+        # endpoint does not need a correlated subquery per idea.
+        db.execute('ALTER TABLE ideas ADD COLUMN assessment_id TEXT')
+    if 'user_verdict' not in cols:
+        # The user's own call, which always beats the agent's. Recording the
+        # correction is what keeps the feature trustworthy.
+        db.execute('ALTER TABLE ideas ADD COLUMN user_verdict TEXT')
+    if 'user_verdict_note' not in cols:
+        db.execute('ALTER TABLE ideas ADD COLUMN user_verdict_note TEXT')
+    if 'research_state' not in cols:
+        db.execute("ALTER TABLE ideas ADD COLUMN research_state TEXT DEFAULT 'idle'")
+    if 'research_error' not in cols:
+        db.execute('ALTER TABLE ideas ADD COLUMN research_error TEXT')
+    if 'researched_at' not in cols:
+        # When the background loop last researched this idea. Drives the
+        # cooldown, so a quiet backlog doesn't get re-researched every tick.
+        db.execute('ALTER TABLE ideas ADD COLUMN researched_at INTEGER')
+    db.commit()
+
+
+def _ensure_conversation_idea_id(db: sqlite3.Connection) -> None:
+    """Second discriminator on conversations, after writing_project_id.
+
+    Every query that means "a general chat conversation" now has to exclude
+    both, or idea discussions surface in the Chat tab — see the six call sites
+    that filter `writing_project_id IS NULL AND idea_id IS NULL`.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(conversations)')}
+    if 'idea_id' not in cols:
+        db.execute(
+            'ALTER TABLE conversations ADD COLUMN idea_id TEXT REFERENCES ideas(id)'
+        )
+        db.commit()
+
+
+def _reset_stale_idea_research(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_fic_downloads: a row still 'running' at
+    startup has no worker thread left behind it. Reset to 'idle' rather than
+    'error' — nothing was lost, the button is simply clickable again."""
+    db.execute(
+        "UPDATE ideas SET research_state='idle'"
+        " WHERE research_state IN ('queued','running')"
+    )
+    db.commit()
+
+
 def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
     """Output ceiling for the default (conversational) model — the one the user
     chats with. Thinking lives in the boolean llm_thinking, owned by
@@ -741,6 +822,60 @@ def _init_recipes_fts(db: sqlite3.Connection) -> None:
     """)
     db.execute("INSERT INTO recipes_fts(recipes_fts) VALUES('rebuild')")
     db.commit()
+
+
+def _init_wiki_fts(db: sqlite3.Connection) -> None:
+    db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS wiki_fts USING fts5(
+            id UNINDEXED,
+            title,
+            summary,
+            content,
+            tags,
+            content='wiki_articles',
+            content_rowid='rowid'
+        )
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS wiki_articles_ai AFTER INSERT ON wiki_articles BEGIN
+            INSERT INTO wiki_fts(rowid, id, title, summary, content, tags)
+            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.summary, NEW.content, NEW.tags);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS wiki_articles_ad AFTER DELETE ON wiki_articles BEGIN
+            INSERT INTO wiki_fts(wiki_fts, rowid, id, title, summary, content, tags)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.summary, OLD.content, OLD.tags);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS wiki_articles_au AFTER UPDATE ON wiki_articles BEGIN
+            INSERT INTO wiki_fts(wiki_fts, rowid, id, title, summary, content, tags)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.title, OLD.summary, OLD.content, OLD.tags);
+            INSERT INTO wiki_fts(rowid, id, title, summary, content, tags)
+            VALUES (NEW.rowid, NEW.id, NEW.title, NEW.summary, NEW.content, NEW.tags);
+        END
+    """)
+    db.execute("INSERT INTO wiki_fts(wiki_fts) VALUES('rebuild')")
+    db.commit()
+
+
+def search_wiki_fts(query: str, limit: int = 20) -> list[dict]:
+    """Prefix-OR search over the wiki, title-weighted.
+
+    bm25 column weights: id, title, summary, content, tags — a title match
+    should outrank a passing mention in a body paragraph.
+    """
+    words = [w for w in re.findall(r'\w+', query) if w]
+    if not words:
+        return []
+    escaped = ' OR '.join(f'"{w}"*' for w in words)
+    rows = get_db().execute(
+        'SELECT id, bm25(wiki_fts, 0.0, 8.0, 4.0, 1.0, 2.0) AS rank'
+        ' FROM wiki_fts WHERE wiki_fts MATCH ? ORDER BY rank LIMIT ?',
+        (escaped, limit),
+    ).fetchall()
+    return [{'id': r['id'], 'rank': r['rank']} for r in rows]
 
 
 def _init_fanfic_fts(db: sqlite3.Connection) -> None:
