@@ -1,5 +1,7 @@
 # Lunaschal
 
+Okay, so the entire idea about this project was that AI is great with context and all the context I want to give AI, I don't want to give a separate company. So I will never completely trust any kind of company even a privacy first one with this kind of data, so why not build it myself? And nicely enough, just like when you fart it doesn't smell so bad, vibe coding your own app it doesn't look that bad.
+
 A self-hosted personal knowledge management desktop app with local AI. Journal, calendar, flashcards, file editor, creative writing workspace, and an AI chat that understands your notes — all running on your own machine as a native desktop window.
 
 ## Features
