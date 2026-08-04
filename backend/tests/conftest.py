@@ -38,14 +38,17 @@ def client(tmp_path):
         with app.test_client() as c:
             yield c
     finally:
-        # The research worker runs jobs on a background thread against this same
-        # module-global connection, and a test that submits one can outlive its
-        # own teardown — an autouse fixture draining the worker is torn down
-        # *after* this one, so closing the connection here first segfaulted the
-        # interpreter mid-write. Stop the work before taking its database away.
+        # Two executors run jobs on background threads against this same
+        # module-global connection — the research worker and run_bg's queue
+        # (journal polish, metadata, transcription, workout parsing…). A test
+        # that triggers either can outlive its own teardown, and closing the
+        # connection underneath a thread mid-query segfaults the interpreter
+        # rather than raising. Stop the work before taking its database away.
+        from backend.ai import background
         from backend.research import worker
         worker.cancel()
         worker.wait_idle(timeout=15.0)
+        background.wait_idle(timeout=15.0)
         if connection._conn is not None:
             connection._conn.close()
         connection._DB_PATH, connection._conn = prev_path, prev_conn
