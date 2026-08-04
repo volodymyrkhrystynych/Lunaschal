@@ -29,3 +29,22 @@ def test_up_to_date_clean_main():
 def test_up_to_date_wins_over_dirty_check():
     # Nothing to pull, so dirty-tree state is irrelevant either way.
     assert needs_deploy('main', True, 'aaa', 'aaa') == 'up-to-date'
+
+
+def test_local_commit_ahead_of_origin_is_not_a_deploy():
+    # An unpushed merge on main: the shas differ, but origin has nothing new.
+    # Reporting 'deploy' here makes deploy-check.sh pull nothing and then
+    # rebuild + restart the production window on every 5-minute tick.
+    assert needs_deploy('main', False, 'bbb', 'aaa', local_ahead=True) == 'ahead'
+
+
+def test_ahead_reported_even_when_tree_is_dirty():
+    assert needs_deploy('main', True, 'bbb', 'aaa', local_ahead=True) == 'ahead'
+
+
+def test_behind_origin_still_deploys_when_not_ahead():
+    assert needs_deploy('main', False, 'aaa', 'bbb', local_ahead=False) == 'deploy'
+
+
+def test_ahead_on_a_feature_branch_still_reports_branch_first():
+    assert needs_deploy('feat/whatever', False, 'bbb', 'aaa', local_ahead=True) == 'skip-branch'

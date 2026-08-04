@@ -56,9 +56,15 @@ systemctl --user enable --now lunaschal-deploy.timer
 ```
 
 Check it's working: `journalctl --user -u lunaschal-deploy -f`. Each tick logs
-its decision (`deploy`, `skip-branch`, `skip-dirty`, or `up-to-date`) — a
-`skip-*` result while you're mid-feature-branch is expected and correct, not
-an error.
+its decision (`deploy`, `skip-branch`, `skip-dirty`, `up-to-date`, or `ahead`)
+— a `skip-*` result while you're mid-feature-branch is expected and correct,
+not an error.
+
+`ahead` means `origin/main` is already an ancestor of `HEAD`: a local commit on
+`main` you haven't pushed. It's reported separately from `up-to-date` because
+the two shas _do_ differ, and treating that as a deploy would pull nothing and
+then still run the unconditional rebuild and restart at the end of this
+script — tearing down the production window every 5 minutes until you push.
 
 `deploy-check.sh` also refuses to pull (and exits non-zero) if `origin` isn't
 the exact repo URL it was built for — it auto-executes whatever it pulls

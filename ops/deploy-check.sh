@@ -32,7 +32,15 @@ if [ -n "$(git status --porcelain)" ]; then
   DIRTY_FLAG=(--dirty)
 fi
 
-DECISION=$(.venv/bin/python -m backend.ops.deploy --branch "$BRANCH" --local "$LOCAL_SHA" --remote "$REMOTE_SHA" "${DIRTY_FLAG[@]}") || true
+# origin/main already contained in HEAD => a local commit that hasn't been
+# pushed, not new upstream work. Without this the shas merely "differ" and every
+# tick pulls nothing but still rebuilds and restarts the app — see deploy.py.
+AHEAD_FLAG=()
+if git merge-base --is-ancestor origin/main HEAD; then
+  AHEAD_FLAG=(--local-ahead)
+fi
+
+DECISION=$(.venv/bin/python -m backend.ops.deploy --branch "$BRANCH" --local "$LOCAL_SHA" --remote "$REMOTE_SHA" "${DIRTY_FLAG[@]}" "${AHEAD_FLAG[@]}") || true
 echo "$(date -Iseconds) deploy-check: $DECISION (branch=$BRANCH local=${LOCAL_SHA:0:8} remote=${REMOTE_SHA:0:8})"
 
 if [ "$DECISION" != "deploy" ]; then
