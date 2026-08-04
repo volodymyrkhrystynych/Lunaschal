@@ -143,10 +143,7 @@ export function Library({ onOpen }: LibraryProps) {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
-      <div className="flex items-center justify-between gap-2 mb-4">
-        <h1 className="text-xl md:text-2xl font-semibold text-[var(--color-text)]">
-          Library
-        </h1>
+      <div className="flex items-center justify-end gap-2 mb-4">
         <div className="flex flex-wrap justify-end gap-2">
           <button
             onClick={() => refreshAlerts.mutate()}

@@ -64,8 +64,7 @@ export function Paper() {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-xl font-semibold">Paper</h1>
+      <div className="flex items-center justify-end mb-4">
         <button
           onClick={() => setDeleteMode(m => !m)}
           className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${

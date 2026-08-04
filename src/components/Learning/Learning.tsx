@@ -73,9 +73,6 @@ export function Learning() {
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-baseline gap-3">
-          <h1 className="text-2xl font-semibold text-[var(--color-text)]">
-            Learning
-          </h1>
           {stats && (
             <div className="flex gap-2.5 text-xs text-[var(--color-text-muted)]">
               <span>{stats.total} cards</span>
