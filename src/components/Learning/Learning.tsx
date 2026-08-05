@@ -123,10 +123,10 @@ export function Learning() {
       </div>
 
       {folders && folders.length > 0 && mode !== 'folders' && (
-        <div className="mb-3 flex flex-wrap gap-2">
+        <div className="mb-3 flex flex-nowrap gap-2 overflow-x-auto">
           <button
             onClick={() => setFolderId(null)}
-            className={pillClass(!folderId)}
+            className={`${pillClass(!folderId)} shrink-0 whitespace-nowrap`}
           >
             All folders
           </button>
@@ -134,7 +134,7 @@ export function Learning() {
             <button
               key={f.id}
               onClick={() => setFolderId(folderId === f.id ? null : f.id)}
-              className={pillClass(folderId === f.id)}
+              className={`${pillClass(folderId === f.id)} shrink-0 whitespace-nowrap`}
             >
               {f.name}
               {f.dueCount > 0 && (
@@ -146,15 +146,18 @@ export function Learning() {
       )}
 
       {tags && tags.length > 0 && mode !== 'folders' && (
-        <div className="mb-4 flex flex-wrap gap-2">
-          <button onClick={() => setTag(null)} className={pillClass(!tag)}>
+        <div className="mb-4 flex flex-nowrap gap-2 overflow-x-auto">
+          <button
+            onClick={() => setTag(null)}
+            className={`${pillClass(!tag)} shrink-0 whitespace-nowrap`}
+          >
             All
           </button>
           {tags.map(t => (
             <button
               key={t.name}
               onClick={() => setTag(tag === t.name ? null : t.name)}
-              className={pillClass(tag === t.name)}
+              className={`${pillClass(tag === t.name)} shrink-0 whitespace-nowrap`}
             >
               #{t.name} <span className="opacity-60">{t.count}</span>
             </button>

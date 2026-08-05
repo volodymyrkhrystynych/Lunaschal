@@ -24,7 +24,9 @@ interface SidebarProps {
   onViewChange: (view: View) => void;
   isOpen: boolean;
   onToggle: () => void;
-  lifestyleNeedsAttention?: boolean;
+  /** Each entry is a reason the Lifestyle tab needs a look today (missing
+   *  selfie, low calories, …); the badge shows whenever this is non-empty. */
+  lifestyleReasons?: string[];
   newspapersNeedAttention?: boolean;
 }
 
@@ -52,7 +54,7 @@ export function Sidebar({
   onViewChange,
   isOpen,
   onToggle,
-  lifestyleNeedsAttention,
+  lifestyleReasons,
   newspapersNeedAttention,
 }: SidebarProps) {
   const { level } = useShortcuts();
@@ -93,15 +95,17 @@ export function Sidebar({
         >
           <span>{item.icon}</span>
           <span>{item.label}</span>
-          {item.view === 'lifestyle' && lifestyleNeedsAttention && (
-            <span
-              style={{ color: '#f0b429' }}
-              title="No selfie logged today"
-              aria-label="No selfie logged today"
-            >
-              ❗
-            </span>
-          )}
+          {item.view === 'lifestyle' &&
+            lifestyleReasons &&
+            lifestyleReasons.length > 0 && (
+              <span
+                style={{ color: '#f0b429' }}
+                title={lifestyleReasons.join(' · ')}
+                aria-label={lifestyleReasons.join(' · ')}
+              >
+                ❗
+              </span>
+            )}
           {item.view === 'newspapers' && newspapersNeedAttention && (
             <span
               style={{ color: '#f0b429' }}

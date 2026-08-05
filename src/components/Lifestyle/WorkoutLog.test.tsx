@@ -251,3 +251,43 @@ describe('session history', () => {
     expect(screen.getByText('Intensity 2/5 — Just a smidge')).toBeTruthy();
   });
 });
+
+describe('delete protection', () => {
+  const session = {
+    id: 's1',
+    date: '2026-07-20',
+    locationType: 'outside' as const,
+    durationMinutes: 30,
+    intensityRating: 2,
+    rawText: 'squats 10 10 10 10',
+    notes: null,
+    parseStatus: 'done' as const,
+    exercises: [],
+    createdAt: '',
+    updatedAt: '',
+  };
+
+  it('hides the delete button until "Show delete buttons" is toggled', async () => {
+    vi.mocked(api.lifestyle.workouts.list).mockResolvedValue([session]);
+    renderLog();
+
+    await screen.findByText(/2026-07-20/);
+    expect(screen.queryByRole('button', { name: /^delete$/i })).toBeNull();
+
+    fireEvent.click(screen.getByTitle('Show delete buttons'));
+    expect(screen.getByRole('button', { name: /^delete$/i })).toBeTruthy();
+  });
+
+  it('only deletes once shown, and never on its own', async () => {
+    vi.mocked(api.lifestyle.workouts.list).mockResolvedValue([session]);
+    renderLog();
+
+    await screen.findByText(/2026-07-20/);
+    fireEvent.click(screen.getByTitle('Show delete buttons'));
+    fireEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    await waitFor(() =>
+      expect(api.lifestyle.workouts.delete).toHaveBeenCalledWith('s1')
+    );
+  });
+});

@@ -29,7 +29,13 @@ function numberOrNull(value: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function SessionCard({ session }: { session: WorkoutSession }) {
+function SessionCard({
+  session,
+  showDelete,
+}: {
+  session: WorkoutSession;
+  showDelete: boolean;
+}) {
   const queryClient = useQueryClient();
   const [showRaw, setShowRaw] = useState(false);
   const invalidate = () =>
@@ -79,13 +85,15 @@ function SessionCard({ session }: { session: WorkoutSession }) {
               {showRaw ? 'Hide raw' : 'Raw'}
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => remove.mutate()}
-            className="text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-          >
-            Delete
-          </button>
+          {showDelete && (
+            <button
+              type="button"
+              onClick={() => remove.mutate()}
+              className="text-[var(--color-accent)] hover:opacity-80"
+            >
+              Delete
+            </button>
+          )}
         </div>
       </div>
 
@@ -153,6 +161,10 @@ export function WorkoutLog() {
   );
   const [restored] = useState(() => loadWorkoutDraft() !== null);
   const [error, setError] = useState<string | null>(null);
+  // Delete buttons are hidden behind a toggle, same convention as Journal
+  // and Library — a "Delete" sitting right next to "Raw" was too easy to hit
+  // by accident while thumbing through history.
+  const [showDelete, setShowDelete] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(
@@ -200,11 +212,27 @@ export function WorkoutLog() {
         <h2 className="text-lg font-semibold text-[var(--color-text)]">
           Workout log
         </h2>
-        {restored && !isDraftEmpty(draft) && (
-          <span className="text-xs text-[var(--color-text-muted)]">
-            Draft restored
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {restored && !isDraftEmpty(draft) && (
+            <span className="text-xs text-[var(--color-text-muted)]">
+              Draft restored
+            </span>
+          )}
+          {sessions.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowDelete(!showDelete)}
+              title={showDelete ? 'Hide delete buttons' : 'Show delete buttons'}
+              className={`px-2.5 py-1 text-sm border rounded-lg transition-colors ${
+                showDelete
+                  ? 'border-red-400/50 text-red-400 bg-red-500/10'
+                  : 'border-white/20 text-[var(--color-text-muted)] hover:bg-white/10'
+              }`}
+            >
+              🗑
+            </button>
+          )}
+        </div>
       </div>
 
       <textarea
@@ -282,7 +310,11 @@ export function WorkoutLog() {
       {sessions.length > 0 && (
         <ul className="mt-4 space-y-2">
           {sessions.map(session => (
-            <SessionCard key={session.id} session={session} />
+            <SessionCard
+              key={session.id}
+              session={session}
+              showDelete={showDelete}
+            />
           ))}
         </ul>
       )}

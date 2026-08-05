@@ -14,6 +14,7 @@ import {
   intensityLabel,
   intensityStars,
   intensityText,
+  isTodayCaloriesLow,
   isTodaySelfieMissing,
   parseCalorieEntry,
   plotSeries,
@@ -75,6 +76,18 @@ describe('isTodaySelfieMissing', () => {
 
   it('is true for an empty list', () => {
     expect(isTodaySelfieMissing([], '2026-08-03')).toBe(true);
+  });
+});
+
+describe('isTodayCaloriesLow', () => {
+  it('flags totals under the 1,500 floor', () => {
+    expect(isTodayCaloriesLow(0)).toBe(true);
+    expect(isTodayCaloriesLow(1499)).toBe(true);
+  });
+
+  it('does not flag totals at or above the floor', () => {
+    expect(isTodayCaloriesLow(1500)).toBe(false);
+    expect(isTodayCaloriesLow(2200)).toBe(false);
   });
 });
 

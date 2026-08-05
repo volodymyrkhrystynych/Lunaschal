@@ -23,6 +23,7 @@ import { Paper } from './components/Paper/Paper';
 import { Meetings } from './components/Meetings';
 import { api } from './hooks/api';
 import { useTodaySelfieStatus } from './hooks/useTodaySelfieStatus';
+import { useTodayCaloriesStatus } from './hooks/useTodayCaloriesStatus';
 import { useTodayNewspapersStatus } from './hooks/useTodayNewspapersStatus';
 import { resolveAuthGate } from './lib/authGate';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
@@ -66,7 +67,12 @@ export default function App() {
   // Mounted regardless of currentView so the sidebar can flag a gap without
   // the user opening the Lifestyle/Newspapers tab; gated on 'app' so it
   // doesn't fire against a still-unauthenticated network-mode session.
-  const lifestyleNeedsAttention = useTodaySelfieStatus(authGate === 'app');
+  const missingSelfie = useTodaySelfieStatus(authGate === 'app');
+  const lowCalories = useTodayCaloriesStatus(authGate === 'app');
+  const lifestyleReasons = [
+    missingSelfie && 'No selfie logged today',
+    lowCalories && 'Under 1,500 calories logged today',
+  ].filter((reason): reason is string => Boolean(reason));
   const newspapersNeedAttention = useTodayNewspapersStatus(authGate === 'app');
 
   const handleTranscribed = (text: string) => {
@@ -210,7 +216,7 @@ export default function App() {
             onViewChange={setCurrentView}
             isOpen={sidebarOpen}
             onToggle={() => setSidebarOpen(!sidebarOpen)}
-            lifestyleNeedsAttention={lifestyleNeedsAttention}
+            lifestyleReasons={lifestyleReasons}
             newspapersNeedAttention={newspapersNeedAttention}
           />
           <main className="flex-1 flex flex-col overflow-hidden">

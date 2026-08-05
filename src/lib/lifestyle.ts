@@ -73,6 +73,15 @@ export function isTodaySelfieMissing(
   return !selfies.some(s => s.date === today);
 }
 
+// Flags the sidebar when today's logged calories are under a "you probably
+// haven't eaten enough" floor. 1,500 is a general baseline amount of food,
+// not a diet target — this is a reminder to log/eat, not a calorie limit.
+export const LOW_CALORIE_THRESHOLD = 1500;
+
+export function isTodayCaloriesLow(totalCalories: number): boolean {
+  return totalCalories < LOW_CALORIE_THRESHOLD;
+}
+
 /** 0 = Sunday … 6 = Saturday, matching the heatmap's row order. */
 export function weekdayIndex(iso: string): number {
   return parseISODate(iso).getUTCDay();

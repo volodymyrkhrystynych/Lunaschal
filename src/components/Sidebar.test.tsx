@@ -13,7 +13,7 @@ vi.mock('../hooks/api', () => ({
 }));
 
 function renderSidebar(
-  lifestyleNeedsAttention?: boolean,
+  lifestyleReasons?: string[],
   newspapersNeedAttention?: boolean
 ) {
   const queryClient = new QueryClient();
@@ -29,7 +29,7 @@ function renderSidebar(
           onViewChange={() => {}}
           isOpen
           onToggle={() => {}}
-          lifestyleNeedsAttention={lifestyleNeedsAttention}
+          lifestyleReasons={lifestyleReasons}
           newspapersNeedAttention={newspapersNeedAttention}
         />
       </ShortcutProvider>
@@ -37,26 +37,43 @@ function renderSidebar(
   );
 }
 
-describe('Sidebar selfie badge', () => {
+describe('Sidebar lifestyle badge', () => {
   it('shows no badge by default', () => {
-    renderSidebar(false);
+    renderSidebar([]);
     expect(screen.queryByTitle(/No selfie logged today/)).toBeNull();
+    expect(screen.queryByTitle(/Under 1,500 calories/)).toBeNull();
   });
 
   it('shows the exclamation badge when today has no selfie', () => {
-    renderSidebar(true);
+    renderSidebar(['No selfie logged today']);
     expect(screen.queryByTitle(/No selfie logged today/)).toBeTruthy();
+  });
+
+  it('shows the exclamation badge when today is under the calorie floor', () => {
+    renderSidebar(['Under 1,500 calories logged today']);
+    expect(screen.queryByTitle(/Under 1,500 calories/)).toBeTruthy();
+  });
+
+  it('combines both reasons into one tooltip when both apply', () => {
+    renderSidebar([
+      'No selfie logged today',
+      'Under 1,500 calories logged today',
+    ]);
+    const badge = screen.getByTitle(
+      /No selfie logged today · Under 1,500 calories logged today/
+    );
+    expect(badge).toBeTruthy();
   });
 });
 
 describe('Sidebar newspapers badge', () => {
   it('shows no badge by default', () => {
-    renderSidebar(false, false);
+    renderSidebar([], false);
     expect(screen.queryByTitle(/haven't all synced/)).toBeNull();
   });
 
   it('shows the exclamation badge when today has a missing edition', () => {
-    renderSidebar(false, true);
+    renderSidebar([], true);
     expect(screen.queryByTitle(/haven't all synced/)).toBeTruthy();
   });
 });
