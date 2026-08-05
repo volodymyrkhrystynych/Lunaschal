@@ -36,6 +36,14 @@ _SYSTEM = (
     "capitalisation are exactly what you are being asked to change; adding a blank "
     "line between two thoughts never counts as altering what the speaker said.\n"
     "\n"
+    "The transcript may be followed by a line of dashes (---) and a 'Context:' "
+    "section — descriptions of audio attached to this entry, heard by a "
+    "different listener. Use it only to fix a word in the transcript that is "
+    "clearly a mishearing, such as a mangled name; never use it to add, remove, "
+    "or infer anything the transcript doesn't already say. Do not repeat the "
+    "context section or the dashes in your reply — reply with the corrected "
+    "transcript only.\n"
+    "\n"
     "Example input:\n"
     "so today was rough i barely slept and then the standup ran long anyway i "
     "finally got the parser working after lunch which felt great\n"
@@ -167,7 +175,7 @@ class PolishUnavailable(Exception):
     successful polish that happened to need no edits."""
 
 
-def polish_journal_entry(raw_text: str) -> str:
+def polish_journal_entry(raw_text: str, context: str | None = None) -> str:
     """Return the cleaned-up text, or raise PolishUnavailable.
 
     It deliberately does NOT fall back to returning `raw_text`: callers used to
@@ -175,13 +183,22 @@ def polish_journal_entry(raw_text: str) -> str:
     failed call would overwrite an already-polished entry with its raw
     transcript and report success. Callers decide what a failure means for them
     — the background path leaves the entry alone, the route reports 503.
+
+    `context` — descriptions of the entry's attached audio/video (see
+    backend/routes/journal.py's `_attachment_polish_context`) — is optional and
+    off by default; when given, it's appended after the transcript exactly as
+    the system prompt tells the model to expect, so a name the speech-to-text
+    mangled can be corrected using what a different listener heard.
     """
     if not raw_text.strip():
         return raw_text
     if not is_ai_configured():
         raise PolishUnavailable('AI is not configured')
+    prompt = raw_text
+    if context:
+        prompt = f'{raw_text}\n\n---\nContext:\n{context}'
     try:
-        result = chat_text(raw_text, system=_SYSTEM)
+        result = chat_text(prompt, system=_SYSTEM)
     except Exception as e:
         logger.error('Journal polish failed: %s', e)
         raise PolishUnavailable(str(e)) from e

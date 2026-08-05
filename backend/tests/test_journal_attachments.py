@@ -1,17 +1,35 @@
 """Audio/photo attachments on journal entries.
 
-The two behaviours worth pinning down: an upload never triggers AI work (the
-transcript is opt-in, because on this hardware it costs a real CPU
-transcription), and a failed transcription lands on the row as an error the UI
-can show rather than disappearing into a background thread.
+The behaviours worth pinning down: an upload never triggers the *transcript*
+(opt-in, because on this hardware it costs a real CPU transcription), a failed
+transcription lands on the row as an error the UI can show rather than
+disappearing into a background thread, an upload *does* auto-fire the
+non-speech audio description when an audio model is configured (but stays
+idle, not erroring, when it isn't), and an image upload picks up its capture
+location from EXIF GPS the same way the food log does.
 """
 import io
 
 import pytest
+from PIL import Image
 
+from backend.ai import audio_description as audio_ai
 from backend.ai import images as images_ai
 from backend.journal import storage
 from backend.routes import journal as journal_routes
+
+
+def _exif_jpeg(gps=('N', (43.0, 39.0, 11.0), 'W', (79.0, 22.0, 59.0))):
+    """A tiny JPEG carrying a GPS fix (or none, if gps=None)."""
+    img = Image.new('RGB', (8, 8), (120, 120, 120))
+    exif = img.getexif()
+    if gps:
+        lat_ref, lat, lon_ref, lon = gps
+        g = exif.get_ifd(0x8825)
+        g[1], g[2], g[3], g[4] = lat_ref, lat, lon_ref, lon
+    buf = io.BytesIO()
+    img.save(buf, 'JPEG', exif=exif)
+    return buf.getvalue()
 
 
 @pytest.fixture(autouse=True)
@@ -144,6 +162,66 @@ def test_uploads_keep_their_order(client, entry_id):
     _upload(client, entry_id, name='second')
     names = [a['name'] for a in client.get(f'/api/journal/{entry_id}/attachments').get_json()]
     assert names == ['first', 'second']
+
+
+# --- location (EXIF GPS) and auto-fired audio description --------------------
+
+def test_upload_extracts_gps_from_image_exif(client, entry_id):
+    a = _upload(client, entry_id, filename='view.jpg', mime='image/jpeg',
+                data=_exif_jpeg()).get_json()
+    assert a['latitude'] == pytest.approx(43.653056)
+    assert a['longitude'] == pytest.approx(-79.383056)
+
+
+def test_upload_leaves_location_null_without_gps(client, entry_id):
+    a = _upload(client, entry_id, filename='view.jpg', mime='image/jpeg',
+                data=_exif_jpeg(gps=None)).get_json()
+    assert a['latitude'] is None
+    assert a['longitude'] is None
+
+
+def test_audio_upload_has_no_location(client, entry_id):
+    a = _upload(client, entry_id).get_json()
+    assert a['latitude'] is None
+    assert a['longitude'] is None
+
+
+def test_upload_does_not_auto_describe_when_unconfigured(client, entry_id):
+    """No llama_audio_model is set on a fresh DB, the shipped default — an
+    upload must not land on a dead 'no model configured' error."""
+    a = _upload(client, entry_id).get_json()
+    assert a['descriptionStatus'] == 'idle'
+    assert a['description'] is None
+
+
+def test_upload_auto_fires_audio_description_when_configured(client, entry_id, monkeypatch):
+    monkeypatch.setattr(
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+    )
+    jobs = _run_pending_bg(monkeypatch)
+    monkeypatch.setattr(
+        journal_routes, '_do_attachment_audio_description',
+        lambda _p, _n: 'A dog barks twice in the background.',
+    )
+
+    a = _upload(client, entry_id).get_json()
+    assert a['descriptionStatus'] == 'running'
+    assert len(jobs) == 1
+
+    jobs[0]()
+    got = client.get(f'/api/journal/{entry_id}/attachments').get_json()[0]
+    assert got['description'] == 'A dog barks twice in the background.'
+    assert got['descriptionStatus'] == 'done'
+
+
+def test_image_upload_never_auto_describes(client, entry_id, monkeypatch):
+    monkeypatch.setattr(
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+    )
+    jobs = _run_pending_bg(monkeypatch)
+    a = _upload(client, entry_id, filename='sink.jpg', mime='image/jpeg').get_json()
+    assert a['descriptionStatus'] == 'idle'
+    assert jobs == []
 
 
 # --- listing -----------------------------------------------------------------

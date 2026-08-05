@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
     description TEXT,
     description_status TEXT NOT NULL DEFAULT 'idle',
     description_error TEXT,
+    -- EXIF-derived capture location for image attachments (backend/food/exif.py's
+    -- extract_photo_meta, same helper the food log uses). NULL when the photo
+    -- carries no GPS EXIF, or for non-image attachments.
+    latitude REAL,
+    longitude REAL,
     created_at INTEGER NOT NULL
 );
 

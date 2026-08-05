@@ -57,7 +57,6 @@ vi.mock('../hooks/api', () => ({
     },
     curatedTags: { list: vi.fn().mockResolvedValue([]) },
     transcriptions: { list: vi.fn().mockResolvedValue([]), delete: vi.fn() },
-    learning: { generateFromJournal: vi.fn() },
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
     settings: { get: vi.fn().mockResolvedValue({}) },
   },
@@ -327,6 +326,24 @@ describe('Journal new-entry attachments', () => {
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() => expect(createMock).toHaveBeenCalled());
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('offers Add audio/photo buttons in the compose box, staging a picked file', async () => {
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+
+    expect(screen.getByText('Add audio or video')).toBeTruthy();
+    expect(screen.getByText('Add photo')).toBeTruthy();
+
+    const photo = new File(['x'], 'fence.png', { type: 'image/png' });
+    const input = screen.getByTestId(
+      'journal-new-entry-image-input'
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [photo] } });
+
+    // Staged the same way a paste would be — nothing uploads until save.
+    expect(screen.getByText('fence.png')).toBeTruthy();
     expect(uploadMock).not.toHaveBeenCalled();
   });
 

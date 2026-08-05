@@ -31,6 +31,8 @@ function attachment(over: Partial<JournalAttachment> = {}): JournalAttachment {
     description: null,
     descriptionStatus: 'idle',
     descriptionError: null,
+    latitude: null,
+    longitude: null,
     createdAt: '2026-07-30T12:00:00Z',
     ...over,
   };

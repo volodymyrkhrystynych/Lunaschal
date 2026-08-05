@@ -33,6 +33,9 @@ export interface JournalAttachment {
   description: string | null;
   descriptionStatus: 'idle' | 'running' | 'done' | 'error';
   descriptionError: string | null;
+  /** EXIF-derived capture location, images only. Null when the photo carries no GPS EXIF. */
+  latitude: number | null;
+  longitude: number | null;
   createdAt: string;
 }
 

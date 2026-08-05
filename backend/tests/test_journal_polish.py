@@ -6,16 +6,32 @@ down, clicking Polish overwrote an already-polished entry with its raw
 transcript and returned 200. The button looked broken; the entry silently lost
 its polish.
 """
+import io
+
 import pytest
 
 from backend.ai import journal as journal_ai
 from backend.ai.journal import PolishUnavailable, polish_journal_entry
+from backend.db.connection import get_db
 from backend.routes import journal as journal_routes
 
 
 @pytest.fixture(autouse=True)
 def _no_metadata_thread(monkeypatch):
     monkeypatch.setattr(journal_routes, '_generate_metadata_bg', lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_media_root(tmp_path, monkeypatch):
+    monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path / 'journal-media'))
+
+
+def _upload(client, entry_id, *, filename, mime, data=b'\x00' * 64):
+    return client.post(
+        f'/api/journal/{entry_id}/attachments',
+        data={'file': (io.BytesIO(data), filename, mime)},
+        content_type='multipart/form-data',
+    )
 
 
 def _entry_with_raw(client, monkeypatch, raw='so today was rough i barely slept'):
@@ -74,7 +90,7 @@ def test_route_reports_503_and_keeps_content_when_ai_is_down(client, monkeypatch
     # Simulate a previous successful polish, so there is something to lose.
     client.patch(f'/api/journal/{entry_id}', json={'content': 'Polished prose.'})
 
-    def _unavailable(_text):
+    def _unavailable(_text, **_k):
         raise PolishUnavailable('Connection error.')
     monkeypatch.setattr(journal_routes, 'polish_journal_entry', _unavailable)
 
@@ -89,7 +105,7 @@ def test_route_reports_503_and_keeps_content_when_ai_is_down(client, monkeypatch
 def test_route_writes_the_polish_on_success(client, monkeypatch):
     entry_id = _entry_with_raw(client, monkeypatch, raw='raw dictation here')
     monkeypatch.setattr(
-        journal_routes, 'polish_journal_entry', lambda _t: 'Raw dictation here.'
+        journal_routes, 'polish_journal_entry', lambda _t, **_k: 'Raw dictation here.'
     )
 
     r = client.post(f'/api/journal/{entry_id}/polish')
@@ -102,3 +118,43 @@ def test_route_400s_without_a_transcript_to_polish(client, monkeypatch):
     created = client.post('/api/journal', json={'content': 'Typed by hand.'}).get_json()
     r = client.post(f"/api/journal/{created['id']}/polish")
     assert r.status_code == 400
+
+
+# --- attachment context passed to the polish -----------------------------------
+
+def test_polish_route_passes_attachment_descriptions_as_context(client, monkeypatch):
+    entry_id = _entry_with_raw(client, monkeypatch, raw='raw dictation here')
+    a = _upload(
+        client, entry_id, filename='memo.m4a', mime='audio/mp4'
+    ).get_json()
+    # Simulate a completed auto-description, since no audio model is
+    # configured in this test environment.
+    get_db().execute(
+        "UPDATE journal_attachments SET description_status='done',"
+        " description='A dog barks twice in the background.' WHERE id=?",
+        (a['id'],),
+    )
+    get_db().commit()
+
+    captured = {}
+
+    def _fake_polish(_text, context=None):
+        captured['context'] = context
+        return 'Raw dictation here.'
+    monkeypatch.setattr(journal_routes, 'polish_journal_entry', _fake_polish)
+
+    r = client.post(f'/api/journal/{entry_id}/polish')
+    assert r.status_code == 200
+    assert captured['context'] == 'memo.m4a: A dog barks twice in the background.'
+
+
+def test_attachment_polish_context_ignores_undescribed_and_image_attachments(client, monkeypatch):
+    entry_id = _entry_with_raw(client, monkeypatch)
+    # An audio attachment with no description yet (status stays 'idle' since
+    # no audio model is configured in tests).
+    _upload(client, entry_id, filename='memo.m4a', mime='audio/mp4')
+    # An image attachment can never carry a description at all.
+    _upload(client, entry_id, filename='sink.jpg', mime='image/jpeg',
+             data=b'\x89PNG' + b'\x00' * 60)
+
+    assert journal_routes._attachment_polish_context(entry_id) is None
