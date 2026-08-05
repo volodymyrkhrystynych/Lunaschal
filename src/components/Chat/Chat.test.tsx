@@ -126,7 +126,40 @@ describe('Chat tab switching', () => {
 
     fireEvent.click(screen.getByText('Web Search'));
     await screen.findByPlaceholderText('Ask something to look up...');
-    expect(screen.queryByText('hello from regular chat')).toBeNull();
+    // The Chat tab's panel stays mounted (so an in-progress stream survives a
+    // tab switch) but its wrapper is display:none while Web Search is active.
+    const chatWrapper = document.querySelector('[data-tab-panel="chat"]');
+    expect(chatWrapper).toHaveProperty('style.display', 'none');
+    expect(screen.getByText('hello from regular chat')).toBeTruthy();
+  });
+});
+
+describe('Chat tab switching mid-stream', () => {
+  it('keeps an in-progress Web Search reply alive when switching tabs and back', async () => {
+    const stream = openWebSearchStream();
+    const fetchMock = vi.fn().mockResolvedValue(stream.response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderChat();
+    await screen.findByPlaceholderText('Type a message...');
+    fireEvent.click(screen.getByText('Web Search'));
+    const input = await screen.findByPlaceholderText(
+      'Ask something to look up...'
+    );
+
+    fireEvent.change(input, { target: { value: 'who won the game' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    stream.pushContent('Team A won.');
+    await screen.findByText(/Team A won\./);
+
+    // Navigate away mid-stream and back — the old implementation remounted
+    // ChatPanel via `key={activeTab}`, wiping the in-progress reply.
+    fireEvent.click(screen.getByText('Chat'));
+    fireEvent.click(screen.getByText('Web Search'));
+
+    expect(screen.getByText(/Team A won\./)).toBeTruthy();
   });
 });
 

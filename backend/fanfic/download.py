@@ -206,10 +206,10 @@ def _update_watch_progress(domain: str, **kw) -> None:
 
 
 def watched_threads_url(domain: str, page: int = 1) -> str:
-    base = f'https://{domain}/watched/threads'
+    base = f'https://{domain}/watched/threads?unread=0'
     if page > 1:
-        base += f'/page-{page}'
-    return f'{base}?unread=0'
+        base += f'&page={page}'
+    return base
 
 
 def fetch_watched_threads_page(domain: str, page: int) -> xenforo.WatchedThreadsPage:
