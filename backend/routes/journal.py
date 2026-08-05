@@ -299,7 +299,8 @@ _DEFAULT_NAMES = {'audio': 'Audio', 'video': 'Video', 'image': 'Photo'}
 
 _ATTACHMENT_COLS = (
     'id, entry_id, kind, name, path, mime, size, position,'
-    ' transcript, transcript_status, transcript_error, created_at'
+    ' transcript, transcript_status, transcript_error,'
+    ' description, description_status, description_error, created_at'
 )
 
 
@@ -488,6 +489,66 @@ def transcribe_attachment(attachment_id):
     _transcribe_attachment_bg(attachment_id, row['entry_id'], row['kind'],
                               row['path'], row['name'])
     return jsonify(_attachment_dict(_load_attachment(attachment_id))), 202
+
+
+@bp.post('/attachments/<attachment_id>/describe-audio')
+def describe_audio_attachment(attachment_id):
+    """Queue non-speech audio description for an audio/video attachment.
+
+    Separate from /transcribe: this asks a different, audio-capable model what
+    is happening in the recording beyond the words said — see
+    backend/ai/audio_description.py. Returns 202 immediately; the result
+    arrives on the row and is pushed to the client through the /events stream.
+    """
+    db = get_db()
+    row = _load_attachment(attachment_id)
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['kind'] not in ('audio', 'video'):
+        return jsonify({'error': 'Only audio and video attachments can be described'}), 400
+    if row['description_status'] == 'running':
+        return jsonify({'error': 'Already running'}), 409
+
+    db.execute(
+        "UPDATE journal_attachments SET description_status='running', description_error=NULL"
+        ' WHERE id=?',
+        (attachment_id,),
+    )
+    db.commit()
+    _notify_subscribers(row['entry_id'])
+    _describe_attachment_bg(attachment_id, row['entry_id'], row['path'], row['name'])
+    return jsonify(_attachment_dict(_load_attachment(attachment_id))), 202
+
+
+def _do_attachment_audio_description(path: str, name: str) -> str:
+    from backend.ai.audio_description import describe_audio
+
+    p = storage.resolve_stored_path(path)
+    if p is None or not p.is_file():
+        raise RuntimeError('The recording is missing')
+    return describe_audio(p, hint=name)
+
+
+def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str, name: str) -> None:
+    def _run():
+        try:
+            text = _do_attachment_audio_description(path, name)
+            status, error = 'done', None
+        except Exception as e:
+            text, status, error = None, 'error', str(e) or 'Failed'
+            print(f'Attachment audio description failed for {attachment_id}: {e}')
+
+        try:
+            db = get_db()
+            updates = {'description_status': status, 'description_error': error}
+            if text is not None:
+                updates['description'] = text
+            build_update(db, 'journal_attachments', updates, 'id=?', (attachment_id,))
+            db.commit()
+            _notify_subscribers(entry_id)
+        except Exception as e:
+            print(f'Failed to record audio description result for {attachment_id}: {e}')
+    run_bg(_run)
 
 
 def _do_attachment_audio(path: str) -> str:

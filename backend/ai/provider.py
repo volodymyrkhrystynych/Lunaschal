@@ -33,6 +33,10 @@ def get_provider_config() -> dict:
         # vision tower for VRAM reasons — see backend/ai/images.py. NULL/empty
         # means image captioning is off, which is the default.
         'llama_vision_model': s.get('llama_vision_model') if s else None,
+        # Separate again from llama_vision_model: audio input is an
+        # E2B/E4B/12B capability, not this router's 26B chat model — see
+        # backend/ai/audio_description.py. NULL/empty means it's off.
+        'llama_audio_model': s.get('llama_audio_model') if s else None,
         'openai_api_key': (s.get('openai_api_key') if s else None) or os.environ.get('OPENAI_API_KEY'),
         'google_api_key': (s.get('google_api_key') if s else None) or os.environ.get('GOOGLE_API_KEY'),
     }

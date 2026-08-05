@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
     -- row left 'running' by a crash (backend/db/connection.py).
     transcript_status TEXT NOT NULL DEFAULT 'idle',
     transcript_error TEXT,
+    -- Non-speech audio/video description ("a dog barking, a door slamming"),
+    -- via a separate audio-capable model (backend/ai/audio_description.py) —
+    -- kept apart from `transcript` because a spoken recording wants both the
+    -- words said AND the ambient sound, not one or the other.
+    description TEXT,
+    description_status TEXT NOT NULL DEFAULT 'idle',
+    description_error TEXT,
     created_at INTEGER NOT NULL
 );
 

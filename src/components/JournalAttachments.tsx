@@ -5,7 +5,9 @@ import { useAttachmentUpload } from '../hooks/useAttachmentUpload';
 import {
   ACCEPT_AUDIO,
   ACCEPT_IMAGE,
+  canDescribeAudio,
   canTranscribe,
+  describeAudioLabel,
   filesFromTransfer,
   formatBytes,
   hasRunningTranscription,
@@ -72,6 +74,15 @@ export function JournalAttachments({
 
   const transcribeAttachment = useMutation({
     mutationFn: (id: string) => api.journal.attachments.transcribe(id),
+    onSuccess: () => {
+      setError(null);
+      invalidate();
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const describeAudioAttachment = useMutation({
+    mutationFn: (id: string) => api.journal.attachments.describeAudio(id),
     onSuccess: () => {
       setError(null);
       invalidate();
@@ -191,6 +202,7 @@ export function JournalAttachments({
               onRename={name => renameAttachment.mutate({ id: a.id, name })}
               onDelete={() => deleteAttachment.mutate(a.id)}
               onTranscribe={() => transcribeAttachment.mutate(a.id)}
+              onDescribeAudio={() => describeAudioAttachment.mutate(a.id)}
             />
           ))}
 
@@ -287,12 +299,14 @@ function AttachmentRow({
   onRename,
   onDelete,
   onTranscribe,
+  onDescribeAudio,
 }: {
   attachment: JournalAttachment;
   editable: boolean;
   onRename: (name: string) => void;
   onDelete: () => void;
   onTranscribe: () => void;
+  onDescribeAudio: () => void;
 }) {
   const [name, setName] = useState(a.name);
 
@@ -367,6 +381,16 @@ function AttachmentRow({
           >
             {transcribeLabel(a)}
           </button>
+          {(a.kind === 'audio' || a.kind === 'video') && (
+            <button
+              type="button"
+              onClick={onDescribeAudio}
+              disabled={!canDescribeAudio(a)}
+              className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
+            >
+              {describeAudioLabel(a)}
+            </button>
+          )}
           <a
             href={a.url}
             download
@@ -394,6 +418,18 @@ function AttachmentRow({
         {a.transcript && (
           <div className="px-3 py-2 bg-white/5 rounded text-sm text-[var(--color-text-muted)] whitespace-pre-wrap italic">
             {a.transcript}
+          </div>
+        )}
+
+        {a.descriptionStatus === 'error' && a.descriptionError && (
+          <div className="px-2 py-1 rounded bg-red-500/10 border border-red-500/20 text-xs text-red-400">
+            {a.descriptionError}
+          </div>
+        )}
+
+        {a.description && (
+          <div className="px-3 py-2 bg-white/5 rounded text-sm text-[var(--color-text-muted)] whitespace-pre-wrap italic">
+            {a.description}
           </div>
         )}
       </div>
