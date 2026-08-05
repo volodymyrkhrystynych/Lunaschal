@@ -4,6 +4,12 @@ import { api } from '../../hooks/api';
 
 const DEFAULT_URL = 'http://localhost:8080';
 const DEFAULT_MODEL = 'gemma4';
+// Fixed router aliases for the vision/audio toggles below — there is nothing
+// to choose between (each names exactly one preset), so on/off is the whole
+// interface. Must match backend/ai/images.py / backend/ai/audio_description.py
+// and the section names in llama/presets.ini.
+const VISION_MODEL_ALIAS = 'gemma4-vision';
+const AUDIO_MODEL_ALIAS = 'gemma4-e4b-audio';
 
 export function LlamaConfigSection() {
   const [llamaUrl, setLlamaUrl] = useState(DEFAULT_URL);
@@ -136,52 +142,54 @@ export function LlamaConfigSection() {
                 </p>
               )}
               <div>
-                <label className="text-sm text-[var(--color-text-muted)]">
-                  Vision model (optional)
+                <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+                  <input
+                    type="checkbox"
+                    checked={!!llamaVisionModel}
+                    onChange={e =>
+                      setLlamaVisionModel(
+                        e.target.checked ? VISION_MODEL_ALIAS : ''
+                      )
+                    }
+                  />
+                  Photo captioning
                 </label>
-                <input
-                  type="text"
-                  value={llamaVisionModel}
-                  onChange={e => setLlamaVisionModel(e.target.value)}
-                  placeholder="off"
-                  className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
-                />
                 <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                  Enables AI captions for journal photo attachments. Needs its
-                  own preset with an{' '}
+                  Enables AI captions for journal photo attachments, via the{' '}
+                  <code className="text-[var(--color-text)]">
+                    [gemma4-vision]
+                  </code>{' '}
+                  preset with an{' '}
                   <code className="text-[var(--color-text)]">mmproj</code>{' '}
                   projector — both chat presets set{' '}
                   <code className="text-[var(--color-text)]">
                     mmproj-auto = false
                   </code>{' '}
                   because the ~1.1 GB vision tower doesn't fit alongside the
-                  26B. Leave empty to keep captioning off.
+                  26B.
                 </p>
               </div>
               <div>
-                <label className="text-sm text-[var(--color-text-muted)]">
-                  Audio description model (optional)
+                <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+                  <input
+                    type="checkbox"
+                    checked={!!llamaAudioModel}
+                    onChange={e =>
+                      setLlamaAudioModel(
+                        e.target.checked ? AUDIO_MODEL_ALIAS : ''
+                      )
+                    }
+                  />
+                  Audio description
                 </label>
-                <input
-                  type="text"
-                  value={llamaAudioModel}
-                  onChange={e => setLlamaAudioModel(e.target.value)}
-                  placeholder="off"
-                  className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
-                />
                 <p className="text-xs text-[var(--color-text-muted)] mt-1">
                   Describes non-speech audio in journal audio/video attachments
-                  — separate from speech transcription. Needs its own preset on
-                  a smaller, audio-capable Gemma 4 variant (E2B/E4B/12B); the
-                  26B chat model has no audio input at all. See{' '}
+                  — separate from speech transcription — via the{' '}
                   <code className="text-[var(--color-text)]">
                     [gemma4-e4b-audio]
                   </code>{' '}
-                  in{' '}
-                  <code className="text-[var(--color-text)]">
-                    llama/presets.ini
-                  </code>
-                  . Leave empty to keep it off.
+                  preset, a smaller, audio-capable Gemma 4 variant; the 26B chat
+                  model has no audio input at all.
                 </p>
               </div>
               <button
