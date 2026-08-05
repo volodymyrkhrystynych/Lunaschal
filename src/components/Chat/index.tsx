@@ -29,7 +29,16 @@ export function Chat() {
           </button>
         ))}
       </div>
-      <ChatPanel key={activeTab} mode={activeTab} />
+      {TABS.map(tab => (
+        <div
+          key={tab.mode}
+          data-tab-panel={tab.mode}
+          className="flex-1 flex flex-col overflow-hidden"
+          style={activeTab === tab.mode ? undefined : { display: 'none' }}
+        >
+          <ChatPanel mode={tab.mode} />
+        </div>
+      ))}
     </div>
   );
 }

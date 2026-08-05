@@ -11,7 +11,7 @@ FIXTURES = Path(__file__).parent / 'fixtures' / 'fanfic'
 
 SITE = 'forums.spacebattles.com'
 WATCHED_P1 = f'https://{SITE}/watched/threads?unread=0'
-WATCHED_P2 = f'https://{SITE}/watched/threads/page-2?unread=0'
+WATCHED_P2 = f'https://{SITE}/watched/threads?unread=0&page=2'
 
 
 class FakeResp:
