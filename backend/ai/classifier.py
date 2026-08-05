@@ -13,6 +13,14 @@ Intent Types:
   content. If the phrase is used but there isn't yet enough substance to form
   a lesson (e.g. just "note to self" alone), leave content empty and keep
   confidence below 0.7 so the assistant asks what the lesson actually is.
+- calorie_log: User mentions eating or drinking something and states (or clearly
+  implies) a calorie count. "I ate a burger, 650 calories", "just had a protein
+  shake, ~200 cal". Extract a short description of what was eaten and the
+  calorie count as an integer. Do not guess a calorie count if none is given or
+  implied — without a number this is not a calorie_log.
+- create_task: User asks to add/create a to-do or task, or a reminder to do
+  something later. "add 'call the dentist' to my todos", "remind me to buy
+  milk", "create a task to renew my passport". Extract the task's title.
 - conversation: General chat, greetings, commands.
 
 Rules:
@@ -22,11 +30,13 @@ Rules:
 
 Respond with valid JSON matching this schema:
 {
-  "intent": "calendar|question|conversation|flashcard_request|note_to_self",
+  "intent": "calendar|question|conversation|flashcard_request|note_to_self|calorie_log|create_task",
   "confidence": 0.0-1.0,
   "calendarEvent": {"title": "...", "description": "...", "date": "YYYY-MM-DD", "time": "HH:MM", "tags": ["..."]} (only if calendar),
   "flashcardRequest": {"topic": "..."} (only if flashcard_request),
-  "noteToSelf": {"content": "..."} (only if note_to_self)
+  "noteToSelf": {"content": "..."} (only if note_to_self),
+  "calorieLog": {"description": "...", "calories": 0} (only if calorie_log),
+  "createTask": {"title": "..."} (only if create_task)
 }"""
 
 
@@ -41,7 +51,8 @@ CLASSIFIER_SCHEMA = {
         'intent': {
             'type': 'string',
             'enum': ['calendar', 'question', 'conversation',
-                     'flashcard_request', 'note_to_self'],
+                     'flashcard_request', 'note_to_self',
+                     'calorie_log', 'create_task'],
         },
         'confidence': {'type': 'number', 'minimum': 0, 'maximum': 1},
         'calendarEvent': {'anyOf': [{
@@ -62,6 +73,17 @@ CLASSIFIER_SCHEMA = {
             'type': 'object',
             'properties': {'content': {'type': 'string'}},
             'required': ['content'],
+        }, {'type': 'null'}]},
+        'calorieLog': {'anyOf': [{
+            'type': 'object',
+            'properties': {'description': {'type': 'string'},
+                           'calories': {'type': 'integer', 'minimum': 0, 'maximum': 20000}},
+            'required': ['description', 'calories'],
+        }, {'type': 'null'}]},
+        'createTask': {'anyOf': [{
+            'type': 'object',
+            'properties': {'title': {'type': 'string'}},
+            'required': ['title'],
         }, {'type': 'null'}]},
     },
     'required': ['intent', 'confidence'],

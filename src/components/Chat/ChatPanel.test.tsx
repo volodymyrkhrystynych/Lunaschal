@@ -13,6 +13,8 @@ vi.mock('../../hooks/api', () => ({
       addMessage: vi.fn(),
       classify: vi.fn(),
       saveCalendar: vi.fn(),
+      saveCalories: vi.fn(),
+      saveTask: vi.fn(),
     },
     settings: { get: vi.fn() },
     learning: {
@@ -140,6 +142,67 @@ describe('Chat send ordering', () => {
     stream.close();
 
     expect(await screen.findByText(/Dentist appointment/)).toBeTruthy();
+  });
+
+  it('offers to log calories when the classifier comes back calorie_log', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    vi.mocked(api.chat.classify).mockResolvedValue({
+      intent: 'calorie_log',
+      confidence: 0.9,
+      calorieLog: { description: 'burger', calories: 650 },
+    } as never);
+    vi.mocked(api.chat.saveCalories).mockResolvedValue({ id: 'cal1' });
+
+    renderChat();
+    const input = await screen.findByPlaceholderText('Type a message...');
+    fireEvent.change(input, {
+      target: { value: 'I ate a burger, about 650 calories' },
+    });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+    stream.push('Nice!');
+    stream.close();
+
+    expect(await screen.findByText(/burger/)).toBeTruthy();
+    expect(screen.getByText(/650 cal/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Log'));
+    await waitFor(() => expect(api.chat.saveCalories).toHaveBeenCalled());
+    expect(vi.mocked(api.chat.saveCalories).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ description: 'burger', calories: 650 })
+    );
+  });
+
+  it('offers to add a task when the classifier comes back create_task', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    vi.mocked(api.chat.classify).mockResolvedValue({
+      intent: 'create_task',
+      confidence: 0.9,
+      createTask: { title: 'call the dentist' },
+    } as never);
+    vi.mocked(api.chat.saveTask).mockResolvedValue({ id: 'task1' });
+
+    renderChat();
+    const input = await screen.findByPlaceholderText('Type a message...');
+    fireEvent.change(input, {
+      target: { value: 'add call the dentist to my todos' },
+    });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+    stream.push('Done!');
+    stream.close();
+
+    expect(await screen.findByText('call the dentist')).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Add'));
+    await waitFor(() => expect(api.chat.saveTask).toHaveBeenCalled());
+    expect(vi.mocked(api.chat.saveTask).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ title: 'call the dentist' })
+    );
   });
 
   it('still shows "Saved to journal" on historical messages saved before the feature was removed', async () => {
