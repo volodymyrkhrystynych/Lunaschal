@@ -14,6 +14,7 @@ vi.mock('../hooks/api', () => ({
         rename: vi.fn(),
         delete: vi.fn(),
         transcribe: vi.fn(),
+        describeAudio: vi.fn(),
       },
     },
   },
@@ -35,6 +36,9 @@ function attachment(over: Partial<JournalAttachment> = {}): JournalAttachment {
     transcript: null,
     transcriptStatus: 'idle',
     transcriptError: null,
+    description: null,
+    descriptionStatus: 'idle',
+    descriptionError: null,
     createdAt: '2026-07-30T12:00:00Z',
     ...over,
   };
@@ -345,6 +349,55 @@ describe('JournalAttachments', () => {
       }),
     ]);
     expect(screen.getByText('No vision model configured')).toBeTruthy();
+  });
+
+  it('queues an audio description on demand and never on its own', async () => {
+    vi.mocked(api.journal.attachments.describeAudio).mockResolvedValue(
+      attachment({ descriptionStatus: 'running' })
+    );
+    renderIt([attachment()]);
+
+    expect(api.journal.attachments.describeAudio).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText('Describe audio'));
+    await waitFor(() =>
+      expect(api.journal.attachments.describeAudio).toHaveBeenCalledWith('a1')
+    );
+  });
+
+  it('offers no audio-description button for an image', () => {
+    renderIt([attachment({ kind: 'image' })]);
+    expect(screen.queryByText('Describe audio')).toBeNull();
+  });
+
+  it('disables the audio-description button while it is running', () => {
+    renderIt([attachment({ descriptionStatus: 'running' })]);
+    const button = screen.getByText('Describing audio…') as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+  });
+
+  it('shows the audio description once it lands', () => {
+    renderIt([
+      attachment({
+        description: 'A dog barks twice in the background.',
+        descriptionStatus: 'done',
+      }),
+    ]);
+    expect(
+      screen.getByText('A dog barks twice in the background.')
+    ).toBeTruthy();
+  });
+
+  it('shows why an audio description failed', () => {
+    renderIt([
+      attachment({
+        descriptionStatus: 'error',
+        descriptionError: 'No audio-description model configured',
+      }),
+    ]);
+    expect(
+      screen.getByText('No audio-description model configured')
+    ).toBeTruthy();
   });
 
   it('renames on blur, and only when the name actually changed', async () => {

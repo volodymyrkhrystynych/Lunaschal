@@ -107,6 +107,8 @@ def init_db() -> None:
     # After it: llama_vision_model is a llama-server-era column, so there is no
     # point adding it to a settings table that migration is still reshaping.
     _ensure_llama_vision_model(db)
+    _ensure_llama_audio_model(db)
+    _ensure_attachment_description_columns(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -404,6 +406,10 @@ def _reset_stale_attachment_transcripts(db: sqlite3.Connection) -> None:
         "UPDATE journal_attachments SET transcript_status='idle'"
         " WHERE transcript_status='running'"
     )
+    db.execute(
+        "UPDATE journal_attachments SET description_status='idle'"
+        " WHERE description_status='running'"
+    )
     db.commit()
 
 
@@ -637,6 +643,34 @@ def _ensure_llama_vision_model(db: sqlite3.Connection) -> None:
     if 'llama_vision_model' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN llama_vision_model TEXT')
         db.commit()
+
+
+def _ensure_llama_audio_model(db: sqlite3.Connection) -> None:
+    """Router alias for non-speech audio description (journal audio/video
+    attachments). Left NULL, same reasoning as llama_vision_model: it names a
+    completely different model (audio input is an E2B/E4B/12B capability, not
+    the 26B A4B chat model), off by default until that preset is downloaded and
+    the alias configured. See backend/ai/audio_description.py."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'llama_audio_model' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN llama_audio_model TEXT')
+        db.commit()
+
+
+def _ensure_attachment_description_columns(db: sqlite3.Connection) -> None:
+    """Non-speech audio/video description, kept separate from `transcript` —
+    see the column comment in schema.sql."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_attachments)')}
+    if 'description' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN description TEXT')
+    if 'description_status' not in cols:
+        db.execute(
+            "ALTER TABLE journal_attachments ADD COLUMN description_status"
+            " TEXT NOT NULL DEFAULT 'idle'"
+        )
+    if 'description_error' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN description_error TEXT')
+    db.commit()
 
 
 def _ensure_llama_server_settings(db: sqlite3.Connection) -> None:

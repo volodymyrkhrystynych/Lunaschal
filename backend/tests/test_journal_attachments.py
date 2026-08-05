@@ -351,3 +351,94 @@ def test_running_transcripts_are_reset_at_startup(client, entry_id, monkeypatch)
     connection._reset_stale_attachment_transcripts(connection.get_db())
     got = client.get(f'/api/journal/{entry_id}/attachments').get_json()[0]
     assert got['transcriptStatus'] == 'idle'
+
+
+# --- describe-audio ------------------------------------------------------------
+
+def test_describe_audio_queues_and_reports_running(client, entry_id, monkeypatch):
+    jobs = _run_pending_bg(monkeypatch)
+    a = _upload(client, entry_id).get_json()
+
+    r = client.post(f"/api/journal/attachments/{a['id']}/describe-audio")
+    assert r.status_code == 202
+    assert r.get_json()['descriptionStatus'] == 'running'
+    assert len(jobs) == 1
+
+
+def test_describe_audio_refuses_to_queue_twice(client, entry_id, monkeypatch):
+    _run_pending_bg(monkeypatch)
+    a = _upload(client, entry_id).get_json()
+    client.post(f"/api/journal/attachments/{a['id']}/describe-audio")
+    r = client.post(f"/api/journal/attachments/{a['id']}/describe-audio")
+    assert r.status_code == 409
+
+
+def test_describe_audio_refuses_an_image(client, entry_id, monkeypatch):
+    _run_pending_bg(monkeypatch)
+    a = _upload(client, entry_id, filename='sink.jpg', mime='image/jpeg').get_json()
+    r = client.post(f"/api/journal/attachments/{a['id']}/describe-audio")
+    assert r.status_code == 400
+
+
+def test_a_completed_audio_description_lands_on_the_row(client, entry_id, monkeypatch):
+    jobs = _run_pending_bg(monkeypatch)
+    seen = {}
+
+    def _describe(path, name):
+        seen['name'] = name
+        return 'A dog barks twice in the background.'
+    monkeypatch.setattr(journal_routes, '_do_attachment_audio_description', _describe)
+
+    a = _upload(client, entry_id, name='backyard recording').get_json()
+    client.post(f"/api/journal/attachments/{a['id']}/describe-audio")
+    jobs[0]()
+
+    assert seen['name'] == 'backyard recording'
+    got = client.get(f'/api/journal/{entry_id}/attachments').get_json()[0]
+    assert got['description'] == 'A dog barks twice in the background.'
+    assert got['descriptionStatus'] == 'done'
+    assert got['descriptionError'] is None
+
+
+def test_a_failed_audio_description_is_recorded_not_swallowed(client, entry_id, monkeypatch):
+    jobs = _run_pending_bg(monkeypatch)
+
+    def _boom(_path, _name):
+        raise RuntimeError('No audio-description model configured')
+    monkeypatch.setattr(journal_routes, '_do_attachment_audio_description', _boom)
+
+    a = _upload(client, entry_id).get_json()
+    client.post(f"/api/journal/attachments/{a['id']}/describe-audio")
+    jobs[0]()
+
+    got = client.get(f'/api/journal/{entry_id}/attachments').get_json()[0]
+    assert got['descriptionStatus'] == 'error'
+    assert got['descriptionError'] == 'No audio-description model configured'
+    assert got['description'] is None
+
+
+def test_video_can_also_be_described(client, entry_id, monkeypatch):
+    jobs = _run_pending_bg(monkeypatch)
+    monkeypatch.setattr(
+        journal_routes, '_do_attachment_audio_description',
+        lambda _p, _n: 'Wind noise and distant traffic.',
+    )
+    a = _upload(client, entry_id, filename='clip.mov', mime='video/quicktime').get_json()
+    r = client.post(f"/api/journal/attachments/{a['id']}/describe-audio")
+    assert r.status_code == 202
+    jobs[0]()
+
+    got = client.get(f'/api/journal/{entry_id}/attachments').get_json()[0]
+    assert got['description'] == 'Wind noise and distant traffic.'
+
+
+def test_running_descriptions_are_reset_at_startup(client, entry_id, monkeypatch):
+    from backend.db import connection
+
+    _run_pending_bg(monkeypatch)
+    a = _upload(client, entry_id).get_json()
+    client.post(f"/api/journal/attachments/{a['id']}/describe-audio")
+
+    connection._reset_stale_attachment_transcripts(connection.get_db())
+    got = client.get(f'/api/journal/{entry_id}/attachments').get_json()[0]
+    assert got['descriptionStatus'] == 'idle'

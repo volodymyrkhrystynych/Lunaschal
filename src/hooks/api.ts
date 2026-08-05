@@ -29,6 +29,10 @@ export interface JournalAttachment {
   transcript: string | null;
   transcriptStatus: 'idle' | 'running' | 'done' | 'error';
   transcriptError: string | null;
+  /** Non-speech audio content (ambient sound), audio/video only. Null until asked for. */
+  description: string | null;
+  descriptionStatus: 'idle' | 'running' | 'done' | 'error';
+  descriptionError: string | null;
   createdAt: string;
 }
 
@@ -469,6 +473,10 @@ export interface AppSettings {
   /** Separate alias for image captioning: the chat presets skip Gemma 4's vision
    * tower to fit in VRAM, so an empty string means photo captioning is off. */
   llamaVisionModel: string;
+  /** Separate alias for non-speech audio description: audio input is an
+   * E2B/E4B/12B capability, not the 26B chat model, so this names a
+   * different preset entirely. Empty means it's off. */
+  llamaAudioModel: string;
   /** Gemma 4's thinking channel is on or off; there are no graded levels. */
   llmThinking: boolean;
   llmMaxTokens: number;
@@ -1179,6 +1187,12 @@ export const api = {
       transcribe: (attachmentId: string) =>
         post<JournalAttachment>(
           `/api/journal/attachments/${attachmentId}/transcribe`
+        ),
+      // Separate from transcribe: describes non-speech audio content
+      // (audio/video only) via a different, audio-capable model.
+      describeAudio: (attachmentId: string) =>
+        post<JournalAttachment>(
+          `/api/journal/attachments/${attachmentId}/describe-audio`
         ),
     },
   },

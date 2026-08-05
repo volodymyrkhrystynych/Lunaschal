@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type { JournalAttachment } from '../hooks/api';
 import {
+  canDescribeAudio,
   canTranscribe,
   defaultNameFor,
+  describeAudioLabel,
   filesFromTransfer,
   formatBytes,
   hasRunningTranscription,
@@ -26,6 +28,9 @@ function attachment(over: Partial<JournalAttachment> = {}): JournalAttachment {
     transcript: null,
     transcriptStatus: 'idle',
     transcriptError: null,
+    description: null,
+    descriptionStatus: 'idle',
+    descriptionError: null,
     createdAt: '2026-07-30T12:00:00Z',
     ...over,
   };
@@ -226,6 +231,49 @@ describe('hasRunningTranscription', () => {
         attachment({ id: 'a2', transcriptStatus: 'running' }),
       ])
     ).toBe(true);
+  });
+
+  it('is also true while an audio description is in flight', () => {
+    expect(
+      hasRunningTranscription([
+        attachment({ id: 'a2', descriptionStatus: 'running' }),
+      ])
+    ).toBe(true);
+  });
+});
+
+describe('describeAudioLabel', () => {
+  it('reports work in flight', () => {
+    expect(
+      describeAudioLabel(attachment({ descriptionStatus: 'running' }))
+    ).toBe('Describing audio…');
+  });
+
+  it('offers a retry once a description exists', () => {
+    expect(describeAudioLabel(attachment({ description: 'a dog barks' }))).toBe(
+      'Re-describe audio'
+    );
+  });
+
+  it('otherwise invites a first run', () => {
+    expect(describeAudioLabel(attachment())).toBe('Describe audio');
+  });
+});
+
+describe('canDescribeAudio', () => {
+  it('allows audio and video but not images', () => {
+    expect(canDescribeAudio(attachment({ kind: 'audio' }))).toBe(true);
+    expect(canDescribeAudio(attachment({ kind: 'video' }))).toBe(true);
+    expect(canDescribeAudio(attachment({ kind: 'image' }))).toBe(false);
+  });
+
+  it('blocks only while a job is queued', () => {
+    expect(canDescribeAudio(attachment({ descriptionStatus: 'running' }))).toBe(
+      false
+    );
+    expect(canDescribeAudio(attachment({ descriptionStatus: 'error' }))).toBe(
+      true
+    );
   });
 });
 

@@ -145,7 +145,24 @@ export function canTranscribe(a: JournalAttachment): boolean {
 export function hasRunningTranscription(
   attachments: JournalAttachment[] | undefined
 ): boolean {
-  return (attachments ?? []).some(a => a.transcriptStatus === 'running');
+  return (attachments ?? []).some(
+    a => a.transcriptStatus === 'running' || a.descriptionStatus === 'running'
+  );
+}
+
+/**
+ * The label for the "describe the audio" action — separate from
+ * transcribeLabel because it answers a different question (what's audible
+ * beyond the words said, e.g. a dog barking) and only applies to audio/video.
+ */
+export function describeAudioLabel(a: JournalAttachment): string {
+  if (a.descriptionStatus === 'running') return 'Describing audio…';
+  return a.description ? 'Re-describe audio' : 'Describe audio';
+}
+
+/** A queued job is not re-queueable; everything else is. */
+export function canDescribeAudio(a: JournalAttachment): boolean {
+  return isSpoken(a.kind) && a.descriptionStatus !== 'running';
 }
 
 const KIND_NOUNS: Record<JournalAttachment['kind'], [string, string]> = {

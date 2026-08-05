@@ -9,6 +9,7 @@ export function LlamaConfigSection() {
   const [llamaUrl, setLlamaUrl] = useState(DEFAULT_URL);
   const [llamaModel, setLlamaModel] = useState(DEFAULT_MODEL);
   const [llamaVisionModel, setLlamaVisionModel] = useState('');
+  const [llamaAudioModel, setLlamaAudioModel] = useState('');
   const [message, setMessage] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -31,6 +32,7 @@ export function LlamaConfigSection() {
       setLlamaUrl(settings.llamaUrl || DEFAULT_URL);
       setLlamaModel(settings.llamaModel || DEFAULT_MODEL);
       setLlamaVisionModel(settings.llamaVisionModel || '');
+      setLlamaAudioModel(settings.llamaAudioModel || '');
     }
   }, [settings]);
 
@@ -156,9 +158,40 @@ export function LlamaConfigSection() {
                   26B. Leave empty to keep captioning off.
                 </p>
               </div>
+              <div>
+                <label className="text-sm text-[var(--color-text-muted)]">
+                  Audio description model (optional)
+                </label>
+                <input
+                  type="text"
+                  value={llamaAudioModel}
+                  onChange={e => setLlamaAudioModel(e.target.value)}
+                  placeholder="off"
+                  className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
+                />
+                <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                  Describes non-speech audio in journal audio/video attachments
+                  — separate from speech transcription. Needs its own preset on
+                  a smaller, audio-capable Gemma 4 variant (E2B/E4B/12B); the
+                  26B chat model has no audio input at all. See{' '}
+                  <code className="text-[var(--color-text)]">
+                    [gemma4-e4b-audio]
+                  </code>{' '}
+                  in{' '}
+                  <code className="text-[var(--color-text)]">
+                    llama/presets.ini
+                  </code>
+                  . Leave empty to keep it off.
+                </p>
+              </div>
               <button
                 onClick={() =>
-                  updateAI.mutate({ llamaUrl, llamaModel, llamaVisionModel })
+                  updateAI.mutate({
+                    llamaUrl,
+                    llamaModel,
+                    llamaVisionModel,
+                    llamaAudioModel,
+                  })
                 }
                 disabled={updateAI.isPending}
                 className="px-4 py-2 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"

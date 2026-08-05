@@ -68,6 +68,8 @@ def get_settings():
         'llamaModel': s.get('llama_model'),
         # Empty means journal photo captioning stays off — see backend/ai/images.py.
         'llamaVisionModel': s.get('llama_vision_model') or '',
+        # Empty means audio description stays off — see backend/ai/audio_description.py.
+        'llamaAudioModel': s.get('llama_audio_model') or '',
         'llmThinking': bool(s.get('llm_thinking', 0)),
         'llmMaxTokens': s.get('llm_max_tokens') or 4096,
         # No llmNumCtx: the context window is fixed when llama-server loads the
@@ -115,6 +117,7 @@ def update_ai():
     field_map = {
         'llamaUrl': 'llama_url', 'llamaModel': 'llama_model',
         'llamaVisionModel': 'llama_vision_model',
+        'llamaAudioModel': 'llama_audio_model',
         'llmThinking': 'llm_thinking',
         'llmMaxTokens': 'llm_max_tokens',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
