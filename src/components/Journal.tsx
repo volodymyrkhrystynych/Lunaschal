@@ -14,11 +14,14 @@ import {
 import { buildFeed } from '../lib/journalFeed';
 import { isBreak, parseProposedTodos } from '../lib/chatSegments';
 import {
+  ACCEPT_AUDIO,
+  ACCEPT_IMAGE,
   defaultNameFor,
   filesFromTransfer,
   rejectedFilesMessage,
 } from '../lib/journalAttachments';
 import { BriefingTodos } from './BriefingTodos';
+import { ImageLightbox, useLightbox } from './ImageLightbox';
 import { JournalAttachments } from './JournalAttachments';
 import { MessageMarkdown } from './MessageMarkdown';
 import type {
@@ -59,11 +62,6 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     null
   );
   const [showDelete, setShowDelete] = useState(false);
-  const [generatingFor, setGeneratingFor] = useState<string | null>(null);
-  const [generationResult, setGenerationResult] = useState<{
-    id: string;
-    count: number;
-  } | null>(null);
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
   const [polishError, setPolishError] = useState<{
     id: string;
@@ -71,6 +69,8 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   } | null>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
+  const newEntryAudioInputRef = useRef<HTMLInputElement>(null);
+  const newEntryImageInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
   const { data: curatedTags } = useQuery({
@@ -208,6 +208,14 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     setPendingFiles(current => [...current, ...accepted]);
   };
 
+  // Same staging as paste/drop, just reached through an explicit button — the
+  // entry has no server-side row yet, so files wait in pendingFiles either way.
+  const pickPendingFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (files.length) setPendingFiles(current => [...current, ...files]);
+  };
+
   const submitNewEntry = () => {
     if (!newEntry.trim()) return;
     const id = ulid();
@@ -302,18 +310,6 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
         id,
         message: (err as Error).message || 'Polish failed',
       }),
-  });
-
-  const generateFlashcards = useMutation({
-    mutationFn: ({ journalId }: { journalId: string }) =>
-      api.learning.generateFromJournal(journalId),
-    onSuccess: (result, vars) => {
-      setGeneratingFor(null);
-      setGenerationResult({ id: vars.journalId, count: result.count });
-      queryClient.invalidateQueries({ queryKey: ['learning'] });
-      setTimeout(() => setGenerationResult(null), 5000);
-    },
-    onError: () => setGeneratingFor(null),
   });
 
   const { selIndex, next, prev, isSelected, scrollSelectedIntoView } =
@@ -461,6 +457,38 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
             rows={4}
             className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none"
           />
+          <div className="flex items-center gap-2 mt-2">
+            <input
+              ref={newEntryAudioInputRef}
+              type="file"
+              accept={ACCEPT_AUDIO}
+              onChange={pickPendingFiles}
+              className="hidden"
+              data-testid="journal-new-entry-audio-input"
+            />
+            <input
+              ref={newEntryImageInputRef}
+              type="file"
+              accept={ACCEPT_IMAGE}
+              onChange={pickPendingFiles}
+              className="hidden"
+              data-testid="journal-new-entry-image-input"
+            />
+            <button
+              type="button"
+              onClick={() => newEntryAudioInputRef.current?.click()}
+              className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20"
+            >
+              Add audio or video
+            </button>
+            <button
+              type="button"
+              onClick={() => newEntryImageInputRef.current?.click()}
+              className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20"
+            >
+              Add photo
+            </button>
+          </div>
           {pendingFiles.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-2">
               {pendingFiles.map((f, i) => (
@@ -616,18 +644,6 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                   )}
                   <button
                     onClick={() => {
-                      setGeneratingFor(entry.id);
-                      generateFlashcards.mutate({ journalId: entry.id });
-                    }}
-                    disabled={generatingFor === entry.id}
-                    className="text-sm text-[var(--color-primary)] hover:text-[var(--color-primary)]/80 disabled:opacity-50"
-                  >
-                    {generatingFor === entry.id
-                      ? 'Generating...'
-                      : 'Flashcards'}
-                  </button>
-                  <button
-                    onClick={() => {
                       setEditingId(entry.id);
                       setEditContent(entry.content);
                       setEditTitle(entry.title ?? '');
@@ -646,13 +662,6 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                   )}
                 </div>
               </div>
-
-              {generationResult?.id === entry.id && (
-                <div className="mb-2 px-3 py-2 bg-green-500/10 border border-green-500/20 rounded text-sm text-green-400">
-                  Queued {generationResult.count} cards for approval in the
-                  Learning tab.
-                </div>
-              )}
 
               {polishError?.id === entry.id && (
                 <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
@@ -880,7 +889,7 @@ function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
 // horizontal filmstrip of page thumbnails. Tapping a page opens it full-screen.
 // View-only here — the paper is a record of what was drawn that day.
 function JournalPaperItem({ paper }: { paper: JournalPaper }) {
-  const [zoom, setZoom] = useState<string | null>(null);
+  const lightbox = useLightbox();
 
   const dayLabel = new Intl.DateTimeFormat('en-US', {
     weekday: 'short',
@@ -904,7 +913,7 @@ function JournalPaperItem({ paper }: { paper: JournalPaper }) {
         {pages.map(pg => (
           <button
             key={pg.id}
-            onClick={() => setZoom(pg.imageUrl)}
+            onClick={() => lightbox.open(pg.imageUrl)}
             className="shrink-0 w-24 aspect-[3/4] rounded-md overflow-hidden border border-white/10 bg-white hover:border-[var(--color-primary)] transition-colors"
             title="View"
           >
@@ -922,25 +931,7 @@ function JournalPaperItem({ paper }: { paper: JournalPaper }) {
         )}
       </div>
 
-      {zoom && (
-        <div
-          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-          onClick={() => setZoom(null)}
-        >
-          <img
-            src={zoom}
-            alt=""
-            className="max-w-full max-h-full rounded-lg shadow-2xl bg-white"
-            onClick={e => e.stopPropagation()}
-          />
-          <button
-            onClick={() => setZoom(null)}
-            className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl"
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
     </div>
   );
 }
@@ -1009,7 +1000,7 @@ function JournalTaskEventItem({
 // A food-log entry in the journal feed: dish/place/rating with a media
 // filmstrip. View-only here — editing happens in the Food tab.
 function JournalFoodItem({ food }: { food: FoodJournalItem }) {
-  const [zoom, setZoom] = useState<string | null>(null);
+  const lightbox = useLightbox();
   const stars = ratingStars(food.rating);
   const geoLink = mapLink(food.latitude, food.longitude);
 
@@ -1072,7 +1063,7 @@ function JournalFoodItem({ food }: { food: FoodJournalItem }) {
             ) : (
               <button
                 key={m.id}
-                onClick={() => setZoom(m.url)}
+                onClick={() => lightbox.open(m.url)}
                 className="shrink-0 h-28 aspect-square rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
                 title="View"
               >
@@ -1095,25 +1086,7 @@ function JournalFoodItem({ food }: { food: FoodJournalItem }) {
         </div>
       )}
 
-      {zoom && (
-        <div
-          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-          onClick={() => setZoom(null)}
-        >
-          <img
-            src={zoom}
-            alt=""
-            className="max-w-full max-h-full rounded-lg shadow-2xl"
-            onClick={e => e.stopPropagation()}
-          />
-          <button
-            onClick={() => setZoom(null)}
-            className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl"
-          >
-            ✕
-          </button>
-        </div>
-      )}
+      <ImageLightbox src={lightbox.src} onClose={lightbox.close} />
     </div>
   );
 }

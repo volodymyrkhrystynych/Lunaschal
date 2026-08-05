@@ -39,6 +39,8 @@ function attachment(over: Partial<JournalAttachment> = {}): JournalAttachment {
     description: null,
     descriptionStatus: 'idle',
     descriptionError: null,
+    latitude: null,
+    longitude: null,
     createdAt: '2026-07-30T12:00:00Z',
     ...over,
   };
@@ -65,7 +67,7 @@ function renderIt(
 beforeEach(() => vi.clearAllMocks());
 
 describe('JournalAttachments', () => {
-  it('summarizes the collapsed section', () => {
+  it('summarizes the attachment list', () => {
     renderIt([attachment(), attachment({ id: 'a2', kind: 'image' })]);
     expect(screen.getByText(/1 recording, 1 photo/)).toBeTruthy();
   });
@@ -123,6 +125,32 @@ describe('JournalAttachments', () => {
     expect(container.querySelector('video')?.getAttribute('src')).toBe(
       '/api/journal/attachments/a3/file'
     );
+  });
+
+  it('shows a map link for a located image, and opens it full-screen on click', () => {
+    renderIt([
+      attachment({
+        kind: 'image',
+        name: 'The sink',
+        latitude: 43.653056,
+        longitude: -79.383056,
+      }),
+    ]);
+
+    const map = screen.getByRole('link', { name: /map/ });
+    expect(map.getAttribute('href')).toContain('43.653056');
+    expect(map.getAttribute('href')).toContain('-79.383056');
+
+    // The thumbnail is a button, not the full-size image; clicking it opens
+    // the full-screen lightbox (its own close button appears only then).
+    expect(screen.queryByRole('button', { name: '✕' })).toBeNull();
+    fireEvent.click(screen.getByTitle('View'));
+    expect(screen.getByRole('button', { name: '✕' })).toBeTruthy();
+  });
+
+  it('shows no map link for an image with no GPS EXIF', () => {
+    renderIt([attachment({ kind: 'image', name: 'The sink' })]);
+    expect(screen.queryByRole('link', { name: /map/ })).toBeNull();
   });
 
   // The point of the whole paste path: a voice memo copied on a phone should not

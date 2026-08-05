@@ -191,6 +191,23 @@ def create_entry():
     return jsonify({'id': id}), 201
 
 
+def _attachment_polish_context(entry_id: str) -> str | None:
+    """Non-speech descriptions of the entry's audio/video attachments, offered
+    to the polish model as context for fixing a misheard word — the
+    description comes from a different model/listener, and may have gotten a
+    name right that raw_content's speech-to-text did not (see the 'Context:'
+    handling in backend/ai/journal.py's system prompt)."""
+    rows = get_db().execute(
+        "SELECT name, description FROM journal_attachments"
+        " WHERE entry_id=? AND kind IN ('audio','video')"
+        " AND description_status='done' AND description IS NOT NULL",
+        (entry_id,),
+    ).fetchall()
+    if not rows:
+        return None
+    return '\n'.join(f"{r['name']}: {r['description']}" for r in rows)
+
+
 @bp.post('/<id>/polish')
 def polish_entry(id):
     row = get_db().execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
@@ -200,7 +217,7 @@ def polish_entry(id):
     if not source.strip():
         return jsonify({'error': 'No original transcription to polish'}), 400
     try:
-        polished = polish_journal_entry(source)
+        polished = polish_journal_entry(source, context=_attachment_polish_context(id))
     except PolishUnavailable as e:
         # Leave `content` exactly as it is. Writing the raw transcript back here
         # is what used to make an offline llama-server look like a broken button.
@@ -244,7 +261,9 @@ def delete_entry(id):
 def _polish_bg(journal_id: str, raw_content: str) -> None:
     def _run():
         try:
-            polished = polish_journal_entry(raw_content)
+            polished = polish_journal_entry(
+                raw_content, context=_attachment_polish_context(journal_id)
+            )
             if polished == raw_content:
                 return
         except PolishUnavailable as e:
@@ -300,7 +319,8 @@ _DEFAULT_NAMES = {'audio': 'Audio', 'video': 'Video', 'image': 'Photo'}
 _ATTACHMENT_COLS = (
     'id, entry_id, kind, name, path, mime, size, position,'
     ' transcript, transcript_status, transcript_error,'
-    ' description, description_status, description_error, created_at'
+    ' description, description_status, description_error,'
+    ' latitude, longitude, created_at'
 )
 
 
@@ -393,6 +413,21 @@ def upload_attachment(id):
         storage.delete_attachment_dir(attachment_id)
         return jsonify({'error': 'file is too large'}), 413
 
+    # A photo should be located by where it was taken, not where it was
+    # uploaded from — same helper the food log uses (backend/food/exif.py).
+    latitude = longitude = None
+    if kind == 'image':
+        from backend.food.exif import extract_photo_meta
+        meta = extract_photo_meta(path)
+        latitude, longitude = meta['latitude'], meta['longitude']
+
+    # Non-speech audio description auto-fires on upload (unlike the transcript,
+    # which stays opt-in) as long as an audio model is actually configured —
+    # otherwise every clip would land with a dead 'no model configured' error.
+    from backend.ai.audio_description import is_audio_configured
+    auto_describe = kind in ('audio', 'video') and is_audio_configured()
+    description_status = 'running' if auto_describe else 'idle'
+
     db = get_db()
     position = db.execute(
         'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM journal_attachments'
@@ -402,10 +437,11 @@ def upload_attachment(id):
     try:
         db.execute(
             'INSERT INTO journal_attachments'
-            '(id, entry_id, kind, name, path, mime, size, position, transcript_status, created_at)'
-            " VALUES (?,?,?,?,?,?,?,?,'idle',?)",
+            '(id, entry_id, kind, name, path, mime, size, position,'
+            ' transcript_status, description_status, latitude, longitude, created_at)'
+            " VALUES (?,?,?,?,?,?,?,?,'idle',?,?,?,?)",
             (attachment_id, id, kind, name, str(path), file.mimetype or None,
-             size, position, int(time.time())),
+             size, position, description_status, latitude, longitude, int(time.time())),
         )
         db.commit()
     except Exception:
@@ -414,6 +450,8 @@ def upload_attachment(id):
         raise
 
     _notify_subscribers(id)
+    if auto_describe:
+        _describe_attachment_bg(attachment_id, id, str(path), name)
     return jsonify(_attachment_dict(_load_attachment(attachment_id))), 201
 
 

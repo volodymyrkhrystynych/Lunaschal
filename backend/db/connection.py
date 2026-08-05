@@ -109,6 +109,7 @@ def init_db() -> None:
     _ensure_llama_vision_model(db)
     _ensure_llama_audio_model(db)
     _ensure_attachment_description_columns(db)
+    _ensure_journal_attachment_location(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -670,6 +671,17 @@ def _ensure_attachment_description_columns(db: sqlite3.Connection) -> None:
         )
     if 'description_error' not in cols:
         db.execute('ALTER TABLE journal_attachments ADD COLUMN description_error TEXT')
+    db.commit()
+
+
+def _ensure_journal_attachment_location(db: sqlite3.Connection) -> None:
+    """EXIF-derived capture location for image attachments — see the column
+    comment in schema.sql."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_attachments)')}
+    if 'latitude' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN latitude REAL')
+    if 'longitude' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN longitude REAL')
     db.commit()
 
 

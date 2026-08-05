@@ -25,6 +25,40 @@ def test_polish_passes_system_prompt_and_returns_cleaned_text(monkeypatch):
     assert captured['system'] == journal._SYSTEM
 
 
+def test_polish_appends_attachment_context_when_given(monkeypatch):
+    captured = {}
+
+    def fake_chat_text(prompt, system=None):
+        captured['prompt'] = prompt
+        return 'Polished text.'
+
+    monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(journal, 'chat_text', fake_chat_text)
+
+    journal.polish_journal_entry(
+        'raw text', context='backyard recording: A dog barks twice.'
+    )
+
+    assert captured['prompt'] == (
+        'raw text\n\n---\nContext:\nbackyard recording: A dog barks twice.'
+    )
+
+
+def test_polish_omits_context_block_when_none_given(monkeypatch):
+    captured = {}
+
+    def fake_chat_text(prompt, system=None):
+        captured['prompt'] = prompt
+        return 'Polished text.'
+
+    monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(journal, 'chat_text', fake_chat_text)
+
+    journal.polish_journal_entry('raw text')
+
+    assert captured['prompt'] == 'raw text'
+
+
 def test_metadata_parses_and_caps_tags(monkeypatch):
     def fake_chat_json(prompt, system=None, **kwargs):
         assert prompt == 'some content'
