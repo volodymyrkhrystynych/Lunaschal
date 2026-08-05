@@ -32,6 +32,34 @@ def test_classify_intent_returns_note_to_self(monkeypatch):
     assert result['noteToSelf']['content'] == 'always warm up before deadlifts'
 
 
+def test_classify_intent_returns_calorie_log(monkeypatch):
+    def fake_chat_json(prompt, schema=None):
+        return {
+            'intent': 'calorie_log',
+            'confidence': 0.9,
+            'calorieLog': {'description': 'chicken and rice', 'calories': 650},
+        }
+
+    monkeypatch.setattr(classifier, 'chat_json', fake_chat_json)
+    result = classifier.classify_intent('I ate chicken and rice, about 650 calories')
+    assert result['intent'] == 'calorie_log'
+    assert result['calorieLog'] == {'description': 'chicken and rice', 'calories': 650}
+
+
+def test_classify_intent_returns_create_task(monkeypatch):
+    def fake_chat_json(prompt, schema=None):
+        return {
+            'intent': 'create_task',
+            'confidence': 0.9,
+            'createTask': {'title': 'call the dentist'},
+        }
+
+    monkeypatch.setattr(classifier, 'chat_json', fake_chat_json)
+    result = classifier.classify_intent('add call the dentist to my todos')
+    assert result['intent'] == 'create_task'
+    assert result['createTask']['title'] == 'call the dentist'
+
+
 def test_classify_intent_falls_back_to_conversation_on_error(monkeypatch):
     def raise_error(prompt, schema=None):
         raise RuntimeError('boom')

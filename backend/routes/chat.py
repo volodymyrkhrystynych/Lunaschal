@@ -11,6 +11,7 @@ from backend.ai.chat import chat_stream, build_chat_system_prompt
 from backend.ai import websearch_chat
 from backend.ai.chat_title import generate_conversation_title
 from backend.ai.classifier import classify_intent, should_classify
+from backend.todo_recurrence import VALID_LISTS
 
 bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 
@@ -322,6 +323,54 @@ def save_calendar():
     )
     if body.get('messageId'):
         _update_message_metadata(db, body['messageId'], 'savedAsCalendar', id)
+    db.commit()
+    return jsonify({'id': id}), 201
+
+
+@bp.post('/save-calories')
+def save_calories():
+    body = request.json or {}
+    description = (body.get('description') or '').strip()
+    if not description:
+        return jsonify({'error': 'description required'}), 400
+    calories = body.get('calories')
+    if isinstance(calories, bool) or not isinstance(calories, int) or not (0 <= calories <= 20000):
+        return jsonify({'error': 'calories must be an integer from 0 to 20000'}), 400
+
+    now = int(time.time())
+    id = str(ULID())
+    day = body.get('date') or date.today().isoformat()
+    db = get_db()
+    db.execute(
+        'INSERT INTO calorie_logs(id, date, description, calories, created_at) VALUES (?,?,?,?,?)',
+        (id, day, description, calories, now),
+    )
+    if body.get('messageId'):
+        _update_message_metadata(db, body['messageId'], 'savedAsCalories', id)
+    db.commit()
+    return jsonify({'id': id}), 201
+
+
+@bp.post('/save-task')
+def save_task():
+    body = request.json or {}
+    title = (body.get('title') or '').strip()
+    if not title:
+        return jsonify({'error': 'title required'}), 400
+    todo_list = body.get('list') or 'todo'
+    if todo_list not in VALID_LISTS:
+        return jsonify({'error': f'list must be one of {", ".join(VALID_LISTS)}'}), 400
+
+    now = int(time.time())
+    id = str(ULID())
+    db = get_db()
+    db.execute(
+        'INSERT INTO todos(id, title, done, list, notes, due, repeat_interval,'
+        ' repeat_unit, priority, created_at, updated_at) VALUES (?,?,0,?,?,?,?,?,?,?,?)',
+        (id, title, todo_list, None, None, None, None, 3, now, now),
+    )
+    if body.get('messageId'):
+        _update_message_metadata(db, body['messageId'], 'savedAsTask', id)
     db.commit()
     return jsonify({'id': id}), 201
 

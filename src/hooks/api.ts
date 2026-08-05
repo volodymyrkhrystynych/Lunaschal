@@ -1725,6 +1725,14 @@ export const api = {
       time?: string;
       tags: string[];
     }) => post<{ id: string }>('/api/chat/save-calendar', data),
+    saveCalories: (data: {
+      messageId?: string;
+      description: string;
+      calories: number;
+      date?: string;
+    }) => post<{ id: string }>('/api/chat/save-calories', data),
+    saveTask: (data: { messageId?: string; title: string; list?: string }) =>
+      post<{ id: string }>('/api/chat/save-task', data),
   },
 
   files: {

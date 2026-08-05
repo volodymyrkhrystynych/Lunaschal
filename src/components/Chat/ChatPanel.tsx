@@ -32,11 +32,23 @@ interface PendingQuiz {
   messageId: string;
 }
 
+interface PendingCalorie {
+  messageId: string;
+  data: { description: string; calories: number };
+}
+
+interface PendingTask {
+  messageId: string;
+  data: { title: string; list?: string };
+}
+
 interface ClassifyResult {
   intent:
     | 'calendar'
     | 'flashcard_request'
     | 'note_to_self'
+    | 'calorie_log'
+    | 'create_task'
     | 'question'
     | 'conversation';
   confidence: number;
@@ -49,6 +61,8 @@ interface ClassifyResult {
   };
   flashcardRequest?: { topic: string };
   noteToSelf?: { content: string };
+  calorieLog?: { description: string; calories: number };
+  createTask?: { title: string };
 }
 
 const BREAK_METADATA = JSON.stringify({ break: true });
@@ -64,6 +78,10 @@ export function ChatPanel({ mode }: ChatPanelProps) {
   const [liveSteps, setLiveSteps] = useState<WebSearchStep[]>([]);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
+  const [pendingCalorie, setPendingCalorie] = useState<PendingCalorie | null>(
+    null
+  );
+  const [pendingTask, setPendingTask] = useState<PendingTask | null>(null);
   const [queuedCards, setQueuedCards] = useState<number | null>(null);
   const [noteCards, setNoteCards] = useState<DraftCard[] | null>(null);
   // Which drafted note card has its "request changes" text box open.
@@ -150,6 +168,10 @@ export function ChatPanel({ mode }: ChatPanelProps) {
           setPendingQuiz({ topic: r.flashcardRequest.topic, messageId });
         } else if (r.intent === 'note_to_self' && r.noteToSelf?.content) {
           generateFromNote.mutate(r.noteToSelf.content);
+        } else if (r.intent === 'calorie_log' && r.calorieLog) {
+          setPendingCalorie({ messageId, data: r.calorieLog });
+        } else if (r.intent === 'create_task' && r.createTask) {
+          setPendingTask({ messageId, data: { title: r.createTask.title } });
         }
       },
     });
@@ -161,6 +183,25 @@ export function ChatPanel({ mode }: ChatPanelProps) {
       invalidateToday();
       queryClient.invalidateQueries({ queryKey: ['calendar'] });
       setPendingSave(null);
+    },
+  });
+
+  const saveCalories = useMutation({
+    mutationFn: api.chat.saveCalories,
+    onSuccess: () => {
+      invalidateToday();
+      queryClient.invalidateQueries({ queryKey: ['lifestyle', 'calories'] });
+      setPendingCalorie(null);
+    },
+  });
+
+  const saveTask = useMutation({
+    mutationFn: api.chat.saveTask,
+    onSuccess: () => {
+      invalidateToday();
+      queryClient.invalidateQueries({ queryKey: ['todos'] });
+      queryClient.invalidateQueries({ queryKey: ['tasks'] });
+      setPendingTask(null);
     },
   });
 
@@ -247,6 +288,8 @@ export function ChatPanel({ mode }: ChatPanelProps) {
     liveSteps,
     pendingSave,
     pendingQuiz,
+    pendingCalorie,
+    pendingTask,
     queuedCards,
     noteCards,
   ]);
@@ -389,6 +432,24 @@ export function ChatPanel({ mode }: ChatPanelProps) {
     });
   };
 
+  const handleSaveCalories = () => {
+    if (!pendingCalorie) return;
+    saveCalories.mutate({
+      messageId: pendingCalorie.messageId,
+      description: pendingCalorie.data.description,
+      calories: pendingCalorie.data.calories,
+    });
+  };
+
+  const handleSaveTask = () => {
+    if (!pendingTask) return;
+    saveTask.mutate({
+      messageId: pendingTask.messageId,
+      title: pendingTask.data.title,
+      list: pendingTask.data.list,
+    });
+  };
+
   const toggleRecording = async () => {
     if (isRecording) {
       mediaRecorderRef.current?.stop();
@@ -454,6 +515,8 @@ export function ChatPanel({ mode }: ChatPanelProps) {
 
   const isConfigured = !!settings?.llamaUrl;
   const isSaving = saveCalendar.isPending;
+  const isSavingCalories = saveCalories.isPending;
+  const isSavingTask = saveTask.isPending;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -516,7 +579,10 @@ export function ChatPanel({ mode }: ChatPanelProps) {
             ? JSON.parse(message.metadata)
             : null;
           const hasSaved =
-            metadata?.savedAsJournal || metadata?.savedAsCalendar;
+            metadata?.savedAsJournal ||
+            metadata?.savedAsCalendar ||
+            metadata?.savedAsCalories ||
+            metadata?.savedAsTask;
           // The overnight briefing's plan for the day — crossed off in place;
           // only an explicit "add to to-dos" ever reaches the list.
           const proposedTodos = parseProposedTodos(message.metadata);
@@ -580,7 +646,11 @@ export function ChatPanel({ mode }: ChatPanelProps) {
                       <span>
                         {metadata.savedAsJournal
                           ? 'Saved to journal'
-                          : 'Saved to calendar'}
+                          : metadata.savedAsCalories
+                            ? 'Logged calories'
+                            : metadata.savedAsTask
+                              ? 'Added to tasks'
+                              : 'Saved to calendar'}
                       </span>
                     )}
                     {sentAt && (
@@ -812,6 +882,73 @@ export function ChatPanel({ mode }: ChatPanelProps) {
                 className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
               >
                 {isSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingCalorie && (
+        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <div className="text-sm font-medium text-[var(--color-text)]">
+                Log calories?
+              </div>
+              <div className="text-sm text-[var(--color-text-muted)] mt-1">
+                <span className="font-medium">
+                  {pendingCalorie.data.description}
+                </span>
+                <span className="ml-2">
+                  ({pendingCalorie.data.calories} cal)
+                </span>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPendingCalorie(null)}
+                disabled={isSavingCalories}
+                className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={handleSaveCalories}
+                disabled={isSavingCalories}
+                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+              >
+                {isSavingCalories ? 'Logging...' : 'Log'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingTask && (
+        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
+          <div className="flex items-start gap-3">
+            <div className="flex-1">
+              <div className="text-sm font-medium text-[var(--color-text)]">
+                Add to your tasks?
+              </div>
+              <div className="text-sm text-[var(--color-text-muted)] mt-1">
+                <span className="font-medium">{pendingTask.data.title}</span>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPendingTask(null)}
+                disabled={isSavingTask}
+                className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={handleSaveTask}
+                disabled={isSavingTask}
+                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+              >
+                {isSavingTask ? 'Adding...' : 'Add'}
               </button>
             </div>
           </div>
