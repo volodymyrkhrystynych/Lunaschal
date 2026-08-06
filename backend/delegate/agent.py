@@ -61,10 +61,16 @@ web_search and web_fetch really do read the internet. Use them when the task \
 depends on current or specific information you are not confident about, and \
 read a page rather than answering from snippets.
 
-Work in as few steps as the task needs, then stop and write one short plain \
-summary of what you did — what you staged, what you found, and anything you \
-could not do. That summary is all the assistant will see, so leave nothing \
-important out of it and do not claim anything you did not actually do."""
+Work in as few steps as the task needs, then stop and write a closing summary. \
+That summary is all the assistant will see, so leave nothing important out of \
+it and do not claim anything you did not actually do.
+
+If the task was a question or asked you to look something up, your summary IS \
+the answer: state the actual facts, numbers, names or dates you found, not a \
+description of your search process ("found the release date: March 3, 2025", \
+not "searched for the release date and found some results"). If the task asked \
+you to stage something, keep the summary short — what you staged and anything \
+you could not do."""
 
 
 def run_events(task: str, *, checkpoint=None, max_turns: int = MAX_TOOL_TURNS,

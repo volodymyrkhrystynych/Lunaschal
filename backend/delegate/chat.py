@@ -73,11 +73,13 @@ Call delegate if the user asked for something to be done, recorded or looked up.
 Otherwise write nothing at all: anything you type in this turn is discarded."""
 
 ANSWER_INSTRUCTION = (
-    'Reply to the user now, in your own voice. If the delegate staged anything, '
-    'mention it in passing — a confirmation card is already showing, so do not '
-    'repeat its contents back and do not say it is saved, because they still '
-    'have to confirm it. If the delegate could not do something, say so plainly '
-    'rather than glossing over it.'
+    'Reply to the user now, in your own voice. If the delegate found '
+    'information, use it to actually answer the question — state the facts it '
+    'found, in full, do not just gesture at having looked something up. If the '
+    'delegate staged anything, mention that in passing — a confirmation card is '
+    'already showing, so do not repeat its contents back and do not say it is '
+    'saved, because they still have to confirm it. If the delegate could not do '
+    'something, say so plainly rather than glossing over it.'
 )
 
 
