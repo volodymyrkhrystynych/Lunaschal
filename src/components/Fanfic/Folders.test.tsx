@@ -4,7 +4,8 @@ import { render, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
-import { FolderBar } from './Folders';
+import type { Fic } from '../../hooks/api';
+import { FolderBar, FolderPicker } from './Folders';
 
 vi.mock('../../hooks/api', () => ({
   api: {
@@ -16,6 +17,8 @@ vi.mock('../../hooks/api', () => ({
         reorder: vi.fn().mockResolvedValue({ success: true }),
         delete: vi.fn(),
       },
+      addToFolder: vi.fn().mockResolvedValue({ success: true }),
+      removeFromFolder: vi.fn().mockResolvedValue({ success: true }),
     },
   },
 }));
@@ -117,5 +120,80 @@ describe('Recent pill', () => {
     fireEvent.click(await screen.findByText('Recent'));
     expect(onSelect).toHaveBeenCalledWith(null);
     expect(screen.queryByTitle(/Move folder/)).toBeNull();
+  });
+});
+
+describe('FolderPicker', () => {
+  const fic = { id: 'fic1', folderIds: [] } as unknown as Fic;
+
+  function renderPicker() {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    render(
+      <QueryClientProvider client={queryClient}>
+        <FolderPicker fic={fic} />
+      </QueryClientProvider>
+    );
+    return { invalidateSpy };
+  }
+
+  it('checking a folder does not refresh the fic list while the menu stays open', async () => {
+    const { invalidateSpy } = renderPicker();
+    fireEvent.click(await screen.findByTitle('Add to folders'));
+    fireEvent.click(await screen.findByLabelText('First'));
+
+    await waitFor(() =>
+      expect(api.fanfic.addToFolder).toHaveBeenCalledWith('fic1', 'f1')
+    );
+    // Persisted immediately, but the fic list itself must not be told to
+    // refetch yet — that would yank an Unsorted fic out of the list the user
+    // is still picking folders in.
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ['fanfic'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ['fanfic', 'folders'],
+    });
+  });
+
+  it('the checkbox reflects the just-made choice without waiting on a refetch', async () => {
+    renderPicker();
+    fireEvent.click(await screen.findByTitle('Add to folders'));
+    const checkbox = (await screen.findByLabelText(
+      'First'
+    )) as HTMLInputElement;
+
+    expect(checkbox.checked).toBe(false);
+    fireEvent.click(checkbox);
+    expect(checkbox.checked).toBe(true);
+  });
+
+  it('refreshes the fic list once the menu closes', async () => {
+    const { invalidateSpy } = renderPicker();
+    const button = await screen.findByTitle('Add to folders');
+    fireEvent.click(button);
+    fireEvent.click(await screen.findByLabelText('First'));
+    invalidateSpy.mockClear();
+
+    fireEvent.click(button);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['fanfic'] });
+  });
+
+  it('closing via the backdrop also refreshes the fic list', async () => {
+    const { invalidateSpy } = renderPicker();
+    fireEvent.click(await screen.findByTitle('Add to folders'));
+    invalidateSpy.mockClear();
+
+    // The backdrop is the only other element painted at inset-0; find it by
+    // its fixed positioning class rather than by role since it's a bare div.
+    const backdrop = document.querySelector('.fixed.inset-0');
+    expect(backdrop).not.toBeNull();
+    fireEvent.click(backdrop as Element);
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['fanfic'] });
   });
 });
