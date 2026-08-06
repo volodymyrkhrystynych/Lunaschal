@@ -12,6 +12,7 @@ import {
   parseProposedTodos,
 } from '@/lib/chatSegments';
 import { readSSE } from '@/lib/sse';
+import { isAtBottom } from '@/lib/chatScroll';
 import { formatMessageTime } from '@/lib/chatTime';
 import { parseAgentMeta, type AgentStep } from '@/lib/agentSteps';
 
@@ -255,15 +256,29 @@ export function ChatPanel() {
 
   const messages = conversation?.messages || [];
   const conversationId = conversation?.id ?? null;
-  const hasBreaks = messages.some(isBreak);
+  // A break with nothing after it yet — the only time the spacer below is
+  // wanted. Once the conversation resumes, its own content provides the room.
+  const isTrailingBreak =
+    messages.length > 0 && isBreak(messages[messages.length - 1]);
   // Only real user/assistant turns count toward "is there anything to clear".
   const hasChat = messages.some(m => m.role !== 'system');
   // The id of the last break marker, so only that divider carries the ref.
   const lastBreakId = [...messages].reverse().find(isBreak)?.id ?? null;
 
+  // Whether the view should follow new content. A ref, not state: it is read
+  // and written inside a scroll handler that fires at frame rate, and it must
+  // never itself cause a render.
+  const stickToBottomRef = useRef(true);
+
+  const handleTranscriptScroll = () => {
+    const c = scrollContainerRef.current;
+    if (c) stickToBottomRef.current = isAtBottom(c);
+  };
+
   useEffect(() => {
     if (justBrokeRef.current) {
       justBrokeRef.current = false;
+      stickToBottomRef.current = false;
       const c = scrollContainerRef.current;
       const b = lastBreakRef.current;
       if (c && b) {
@@ -273,7 +288,29 @@ export function ChatPanel() {
       }
       return;
     }
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Scroll the transcript itself rather than calling scrollIntoView on a
+    // sentinel inside it. scrollIntoView walks *every* scrollable ancestor, and
+    // `overflow: hidden` does not stop it — it only hides the scrollbar and
+    // blocks the user. The app shell is `h-dvh` inside a `height: 100%` body,
+    // so whenever dvh exceeds that (always on mobile with browser chrome up)
+    // the body overflows by a few pixels, and scrollIntoView scrolled *the
+    // body* — lurching the header, sidebar and SttPanel up with no scrollbar to
+    // explain why. Setting scrollTop can only ever move this one element.
+    const c = scrollContainerRef.current;
+    const end = messagesEndRef.current;
+    if (!c || !end || !stickToBottomRef.current) return;
+    // Aim at the end-of-messages sentinel, not at scrollHeight: the sentinel
+    // sits *above* the break spacer below, so this lands on the last message
+    // instead of on empty space.
+    //
+    // Instant, not smooth: during a delegate run this fires on every step and
+    // every reasoning delta, and overlapping smooth animations interrupt each
+    // other into one continuous drift.
+    const delta =
+      end.getBoundingClientRect().bottom - c.getBoundingClientRect().bottom;
+    // Only ever chase content *downward*. Correcting upward would fight a user
+    // who is deliberately looking at something higher up.
+    if (delta > 0) c.scrollTop += delta;
   }, [
     messages,
     streamingContent,
@@ -535,6 +572,7 @@ export function ChatPanel() {
       </div>
       <div
         ref={scrollContainerRef}
+        onScroll={handleTranscriptScroll}
         className="flex-1 overflow-y-auto p-4 space-y-4"
       >
         {!isConfigured && (
@@ -673,9 +711,12 @@ export function ChatPanel() {
           </div>
         )}
         <div ref={messagesEndRef} />
-        {/* After a "New chat" break, this gives the fresh segment room to pin
-            to the top of the viewport with empty space below. */}
-        {hasBreaks && <div aria-hidden className="min-h-[60vh]" />}
+        {/* Room for a fresh segment to pin to the top of the viewport after a
+            "New chat" break. Rendered only while the break is still the last
+            thing in the transcript: keyed on `hasBreaks` it stayed for the rest
+            of the day, leaving 60vh of empty space you could scroll into long
+            after the conversation had resumed and filled the screen itself. */}
+        {isTrailingBreak && <div aria-hidden className="min-h-[60vh]" />}
       </div>
 
       {queuedCards !== null && (

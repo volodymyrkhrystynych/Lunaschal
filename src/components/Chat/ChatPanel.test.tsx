@@ -81,7 +81,8 @@ async function sendAndReply(
 }
 
 beforeEach(() => {
-  // jsdom has no layout, so the auto-scroll-to-bottom effect needs a stub.
+  // Stubbed so the assertion below can prove it is never *called* — the
+  // transcript scrolls its own container instead.
   Element.prototype.scrollIntoView = vi.fn();
   vi.mocked(api.chat.today).mockResolvedValue(null);
   vi.mocked(api.settings.get).mockResolvedValue({
@@ -254,6 +255,163 @@ describe('delegate proposals become confirm cards', () => {
     renderChat();
 
     expect(await screen.findByText('Saved to journal')).toBeTruthy();
+  });
+});
+
+describe('auto-scroll', () => {
+  it('never calls scrollIntoView, which would scroll the whole app', async () => {
+    // scrollIntoView walks *every* scrollable ancestor, and `overflow: hidden`
+    // does not stop it — it only hides the scrollbar and blocks the user. The
+    // shell is `h-dvh` inside a `height: 100%` body, so on mobile (and by a few
+    // px elsewhere) the body overflows and scrollIntoView scrolled *the body*,
+    // lurching the header, sidebar and SttPanel up with no scrollbar to explain
+    // it. Delegation made it obvious by firing the effect on every tool step.
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderChat();
+    await sendAndReply('hello', stream, 'Hi there.');
+
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  /** jsdom has no layout, so every metric the effect reads is 0. Model a real
+   * one: a 600px viewport over content whose end sits at `contentBottom` in
+   * document space. The sentinel's rect is derived from the live scrollTop, so
+   * the effect converges the way it does in a browser instead of stepping the
+   * same delta again on every event. */
+  const layOut = (
+    container: HTMLElement,
+    { scrollTop, contentBottom }: { scrollTop: number; contentBottom: number }
+  ) => {
+    const transcript = container.querySelector(
+      '.overflow-y-auto'
+    ) as HTMLDivElement;
+    Object.defineProperty(transcript, 'clientHeight', {
+      value: 600,
+      configurable: true,
+    });
+    Object.defineProperty(transcript, 'scrollHeight', {
+      get: () => contentBottom,
+      configurable: true,
+    });
+    transcript.getBoundingClientRect = () =>
+      ({ top: 0, bottom: 600 }) as DOMRect;
+    // The sentinel is the transcript's last child whenever the break spacer is
+    // absent, which it is here (no "New chat" break in this conversation).
+    const sentinel = transcript.lastElementChild as HTMLElement;
+    const bottom = () => contentBottom - transcript.scrollTop;
+    sentinel.getBoundingClientRect = () =>
+      ({ top: bottom(), bottom: bottom() }) as DOMRect;
+    transcript.scrollTop = scrollTop;
+    fireEvent.scroll(transcript);
+    return {
+      transcript,
+      /** Content arriving makes the transcript taller. */
+      grow: (by: number) => {
+        contentBottom += by;
+      },
+    };
+  };
+
+  const streamADelegateRun = async (stream: ReturnType<typeof openStream>) => {
+    const input = await screen.findByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: 'hello' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+    // A delegate run emits a step and reasoning before a single token of reply.
+    stream.pushEvent({ tool: 'web_search', arg: 'x', ok: true, count: 1 });
+    stream.pushEvent({ thinking: 'weighing it up' });
+    stream.push('Hi there.');
+    await screen.findByText(/Hi there\./);
+  };
+
+  it('leaves the scroll position alone once the user has scrolled up', async () => {
+    // Every step and reasoning delta used to yank the view back down, which is
+    // why a streaming answer could not be read back through until it finished.
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    const { container } = renderChat();
+    await screen.findByPlaceholderText('Type a message...');
+    // Scrolled well up, reading back through the conversation.
+    const { transcript, grow } = layOut(container, {
+      scrollTop: 100,
+      contentBottom: 2000,
+    });
+    grow(300);
+
+    await streamADelegateRun(stream);
+
+    expect(transcript.scrollTop).toBe(100);
+    stream.close();
+  });
+
+  it('still follows new content while parked at the bottom', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    const { container } = renderChat();
+    await screen.findByPlaceholderText('Type a message...');
+    // 2000 - 1400 - 600 = 0 away from the bottom when the user last scrolled.
+    const { transcript, grow } = layOut(container, {
+      scrollTop: 1400,
+      contentBottom: 2000,
+    });
+    // The reply arriving makes the transcript 300px taller.
+    grow(300);
+
+    await streamADelegateRun(stream);
+
+    // Chased the sentinel back to the new bottom, and stopped there rather
+    // than stepping the same delta again on every event.
+    expect(transcript.scrollTop).toBe(1700);
+    stream.close();
+  });
+});
+
+describe('the "New chat" spacer', () => {
+  const withMessages = (messages: object[]) =>
+    vi.mocked(api.chat.today).mockResolvedValue({
+      id: 'c1',
+      messages,
+    } as never);
+
+  const breakMsg = {
+    id: 'b1',
+    role: 'system',
+    content: '',
+    metadata: JSON.stringify({ break: true }),
+    createdAt: '2026-01-01T08:00:00.000Z',
+  };
+  const userMsg = {
+    id: 'm2',
+    role: 'user',
+    content: 'back again',
+    metadata: null,
+    createdAt: '2026-01-01T08:01:00.000Z',
+  };
+
+  const spacer = (container: HTMLElement) =>
+    container.querySelector('[aria-hidden].min-h-\\[60vh\\]');
+
+  it('gives a fresh segment room while the break is still the last thing', async () => {
+    withMessages([breakMsg]);
+    const { container } = renderChat();
+    await screen.findByText('New chat', { selector: 'div' });
+
+    expect(spacer(container)).not.toBeNull();
+  });
+
+  it('reclaims the space once the conversation has resumed', async () => {
+    // Keyed on "a break exists anywhere", the spacer stayed for the rest of the
+    // day — 60vh of empty transcript you could scroll into long after the
+    // conversation had filled the screen on its own.
+    withMessages([breakMsg, userMsg]);
+    const { container } = renderChat();
+    await screen.findByText('back again');
+
+    expect(spacer(container)).toBeNull();
   });
 });
 
