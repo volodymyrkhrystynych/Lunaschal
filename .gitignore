@@ -17,3 +17,4 @@ scripts/.benchmark_cache/
 certs/
 .claude/
 .idea
+graphify-out/
