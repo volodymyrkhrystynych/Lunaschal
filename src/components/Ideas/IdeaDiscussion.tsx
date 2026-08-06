@@ -4,39 +4,11 @@ import { api } from '../../hooks/api';
 import { readSSE } from '../../lib/sse';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { MessageMarkdown } from '../MessageMarkdown';
+import { AgentSteps } from '../Chat/AgentSteps';
+import { stepLabel, type AgentStep as ToolStep } from '../../lib/agentSteps';
 
 interface IdeaDiscussionProps {
   ideaId: string;
-}
-
-interface ToolStep {
-  tool?: string;
-  arg?: string;
-  ok?: boolean;
-  count?: number;
-  title?: string;
-  error?: string;
-}
-
-/** "Searching the web for X" rather than a raw tool name. */
-function stepLabel(step: ToolStep): string {
-  const target = step.title || step.arg || '';
-  switch (step.tool) {
-    case 'web_search':
-      return step.ok
-        ? `Searched the web for “${target}” — ${step.count ?? 0} results`
-        : `Web search unavailable${step.error ? `: ${step.error}` : ''}`;
-    case 'web_fetch':
-      return step.ok ? `Read ${target}` : `Could not read ${target}`;
-    case 'wiki_list':
-      return `Checked the research wiki (${step.count ?? 0} articles)`;
-    case 'wiki_search':
-      return `Searched the wiki for “${target}”`;
-    case 'wiki_read':
-      return `Read wiki note: ${target}`;
-    default:
-      return step.tool ? `Ran ${step.tool}` : 'Thinking';
-  }
 }
 
 export function IdeaDiscussion({ ideaId }: IdeaDiscussionProps) {
@@ -164,19 +136,7 @@ export function IdeaDiscussion({ ideaId }: IdeaDiscussionProps) {
                   <MessageMarkdown content={message.content} />
                 )}
               </div>
-              {meta?.steps?.length ? (
-                <details className="mt-1 text-xs text-[var(--color-text-muted)]">
-                  <summary className="cursor-pointer">
-                    {meta.steps.length} research step
-                    {meta.steps.length === 1 ? '' : 's'}
-                  </summary>
-                  <ul className="mt-1 space-y-0.5">
-                    {meta.steps.map((step: ToolStep, i: number) => (
-                      <li key={i}>· {stepLabel(step)}</li>
-                    ))}
-                  </ul>
-                </details>
-              ) : null}
+              <AgentSteps steps={meta?.steps ?? []} />
               {meta?.sources?.length ? (
                 <ul className="mt-1 text-xs">
                   {meta.sources.map(

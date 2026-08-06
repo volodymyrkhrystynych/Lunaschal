@@ -94,15 +94,26 @@ def test_timestamp_labels(client):
 # --- /api/chat/stream prompt assembly ---
 
 def _capture_stream(monkeypatch):
+    """Capture the system prompt the model is actually handed.
+
+    Assembly moved out of the route and into backend/delegate/chat.py when the
+    delegate landed, so this patches the answering call rather than the route —
+    which is the more honest place to assert from anyway: what matters is the
+    prompt that reaches the model, not the argument the route passed on.
+
+    The decision turn is stubbed out to "no hand-off": these tests are about
+    prompt assembly, and a delegate run would only add noise.
+    """
     captured = {}
 
-    def fake_chat_stream(messages, system_prompt=''):
+    def fake_stream_events(messages):
         captured['messages'] = messages
-        captured['system_prompt'] = system_prompt
-        yield 'ok'
+        captured['system_prompt'] = messages[0]['content']
+        yield ('content', 'ok')
 
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
-    monkeypatch.setattr('backend.routes.chat.chat_stream', fake_chat_stream)
+    monkeypatch.setattr('backend.delegate.chat._delegate_call', lambda messages: None)
+    monkeypatch.setattr('backend.delegate.chat.chat_stream_events', fake_stream_events)
     return captured
 
 
@@ -122,11 +133,16 @@ def test_stream_default_prompt_gets_journal_context(client, monkeypatch):
 
 
 def test_stream_custom_prompt_untouched(client, monkeypatch):
+    """A caller-supplied prompt is never enriched with the user's journal.
+
+    It still picks up the time context (every prompt does), so this asserts the
+    prompt *opens* with the caller's text rather than equalling it.
+    """
     _insert_entry('e1', 'Baked sourdough bread today.', int(datetime.now().timestamp()) - 600)
     captured = _capture_stream(monkeypatch)
     custom = 'You are a creative writing partner.'
     _post_stream(client, {'messages': [], 'systemPrompt': custom})
-    assert captured['system_prompt'] == custom
+    assert captured['system_prompt'].startswith(custom)
     assert 'Baked sourdough bread today.' not in captured['system_prompt']
 
 
