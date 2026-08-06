@@ -97,6 +97,8 @@ def init_db() -> None:
     _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
     _ensure_research_settings(db)
+    # After both column sets exist: it reads one and writes the other.
+    _migrate_websearch_search_to_research(db)
     _ensure_idea_assessment_columns(db)
     _ensure_conversation_idea_id(db)
     _reset_stale_idea_research(db)
@@ -814,16 +816,53 @@ def _ensure_conversation_mode(db: sqlite3.Connection) -> None:
 
 
 def _ensure_websearch_settings(db: sqlite3.Connection) -> None:
+    """The retired web-search tab's own search-provider columns.
+
+    The tab is gone — searching is now something the chat delegate decides to
+    do, through the same backend/research/web.py the Ideas agent uses, so there
+    is one search provider for the whole app and one place in Settings to
+    configure it. These columns are kept (dropping one in SQLite means
+    rebuilding the table, and an unread column costs nothing) and their values
+    are folded into the research ones once, below.
+    """
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'websearch_search_provider' not in cols:
-        # '' | 'brave' | 'tavily' | 'searxng'. Empty means the web-search chat
-        # tab degrades to an explanatory failure per tool call instead of
-        # searching (see backend/websearch/tools.py:is_search_configured).
         db.execute("ALTER TABLE settings ADD COLUMN websearch_search_provider TEXT DEFAULT ''")
     if 'websearch_search_key' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN websearch_search_key TEXT')
     if 'websearch_searxng_url' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN websearch_searxng_url TEXT')
+    db.commit()
+
+
+def _migrate_websearch_search_to_research(db: sqlite3.Connection) -> None:
+    """Fold a web-search-tab provider config into the research one, once.
+
+    Someone who only ever configured search under the old Web Search tab would
+    otherwise find the delegate unable to search, with a working API key sitting
+    in a column nothing reads any more.
+
+    Only fills a *blank* research provider, so a user who configured both keeps
+    the one they chose deliberately. Idempotent by construction: after the copy
+    the research provider is non-empty, so the guard never fires again — no
+    version flag needed.
+    """
+    row = db.execute(
+        'SELECT research_search_provider, websearch_search_provider,'
+        ' websearch_search_key, websearch_searxng_url FROM settings LIMIT 1'
+    ).fetchone()
+    if not row:
+        return
+    if (row['research_search_provider'] or '').strip():
+        return
+    provider = (row['websearch_search_provider'] or '').strip()
+    if not provider:
+        return
+    db.execute(
+        'UPDATE settings SET research_search_provider=?, research_search_key=?,'
+        ' research_searxng_url=?',
+        (provider, row['websearch_search_key'], row['websearch_searxng_url']),
+    )
     db.commit()
 
 

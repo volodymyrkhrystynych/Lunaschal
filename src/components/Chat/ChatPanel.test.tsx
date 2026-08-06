@@ -11,7 +11,6 @@ vi.mock('../../hooks/api', () => ({
       today: vi.fn(),
       createConversation: vi.fn(),
       addMessage: vi.fn(),
-      classify: vi.fn(),
       saveCalendar: vi.fn(),
       saveCalories: vi.fn(),
       saveTask: vi.fn(),
@@ -31,21 +30,28 @@ vi.mock('../../hooks/api', () => ({
  * so we can inspect what the app does *while* a reply is generating. */
 function openStream() {
   let push!: (chunk: string) => void;
-  let close!: () => void;
+  let pushEvent!: (event: object) => void;
+  let close!: (done?: object) => void;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       const encode = new TextEncoder();
-      push = chunk =>
-        controller.enqueue(
-          encode.encode(`data: ${JSON.stringify({ content: chunk })}\n\n`)
-        );
-      close = () => {
+      const send = (event: object) =>
+        controller.enqueue(encode.encode(`data: ${JSON.stringify(event)}\n\n`));
+      push = chunk => send({ content: chunk });
+      pushEvent = send;
+      close = done => {
+        send({ done: true, steps: [], sources: [], proposals: [], ...done });
         controller.enqueue(encode.encode('data: [DONE]\n\n'));
         controller.close();
       };
     },
   });
-  return { response: { ok: true, body } as unknown as Response, push, close };
+  return {
+    response: { ok: true, body } as unknown as Response,
+    push,
+    pushEvent,
+    close,
+  };
 }
 
 const renderChat = () => {
@@ -54,10 +60,25 @@ const renderChat = () => {
   });
   return render(
     <QueryClientProvider client={client}>
-      <ChatPanel mode="chat" />
+      <ChatPanel />
     </QueryClientProvider>
   );
 };
+
+/** Send a message and run the reply to completion, staging `proposals`. */
+async function sendAndReply(
+  message: string,
+  stream: ReturnType<typeof openStream>,
+  reply: string,
+  proposals: object[] = []
+) {
+  const input = await screen.findByPlaceholderText('Type a message...');
+  fireEvent.change(input, { target: { value: message } });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+  stream.push(reply);
+  stream.close({ proposals });
+}
 
 beforeEach(() => {
   // jsdom has no layout, so the auto-scroll-to-bottom effect needs a stub.
@@ -68,67 +89,17 @@ beforeEach(() => {
   } as never);
   vi.mocked(api.chat.createConversation).mockResolvedValue({ id: 'c1' });
   vi.mocked(api.chat.addMessage).mockResolvedValue({ id: 'm1' });
-  vi.mocked(api.chat.classify).mockResolvedValue({
-    intent: 'conversation',
-    confidence: 1,
-  } as never);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('Chat send ordering', () => {
-  it('does not classify until the reply has finished streaming', async () => {
-    // Still true on llama-server: the chat model runs with two slots, so a
-    // classify fired in parallel with the reply takes the other one and competes
-    // for the same CPU-resident experts — the user waits out a second generation
-    // before their first token.
+describe('delegate proposals become confirm cards', () => {
+  it('holds a card back until the reply that mentions it is on screen', async () => {
     const stream = openStream();
     const fetchMock = vi.fn().mockResolvedValue(stream.response);
     vi.stubGlobal('fetch', fetchMock);
-
-    renderChat();
-    const input = await screen.findByPlaceholderText('Type a message...');
-    fireEvent.change(input, {
-      target: { value: 'went for a long run this morning and felt great' },
-    });
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    // The reply is underway...
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/chat/stream',
-        expect.anything()
-      )
-    );
-    stream.push('Nice, how far');
-    await screen.findByText(/Nice, how far/);
-
-    // ...and nothing else has been asked of the model yet.
-    expect(api.chat.classify).not.toHaveBeenCalled();
-
-    stream.close();
-    await waitFor(() =>
-      expect(api.chat.classify).toHaveBeenCalledWith(
-        'went for a long run this morning and felt great'
-      )
-    );
-  });
-
-  it('still offers to save when the classifier comes back calendar', async () => {
-    const stream = openStream();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.chat.classify).mockResolvedValue({
-      intent: 'calendar',
-      confidence: 0.9,
-      calendarEvent: {
-        title: 'Dentist appointment',
-        description: 'Checkup',
-        date: '2026-08-05',
-        tags: [],
-      },
-    } as never);
 
     renderChat();
     const input = await screen.findByPlaceholderText('Type a message...');
@@ -137,33 +108,62 @@ describe('Chat send ordering', () => {
     });
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
-    stream.push('Nice!');
-    stream.close();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/chat/stream',
+        expect.anything()
+      )
+    );
+    stream.push('Noted!');
+    await screen.findByText(/Noted!/);
+
+    // Mid-stream: the delegate's work is done but the reply is still coming.
+    // A card appearing before the sentence that refers to it reads as a
+    // non-sequitur.
+    expect(screen.queryByText(/Save as calendar event/)).toBeNull();
+
+    stream.close({
+      proposals: [
+        {
+          kind: 'calendar',
+          data: { title: 'Dentist appointment', date: '2026-08-05', tags: [] },
+        },
+      ],
+    });
+    expect(await screen.findByText(/Dentist appointment/)).toBeTruthy();
+  });
+
+  it('stages a calendar event with no confidence gate', async () => {
+    // The old classifier dropped everything under 0.7 with nothing shown,
+    // because it was guessing after the fact. A proposal is a commitment.
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderChat();
+    await sendAndReply('going to the dentist next week', stream, 'Nice!', [
+      {
+        kind: 'calendar',
+        data: {
+          title: 'Dentist appointment',
+          description: 'Checkup',
+          date: '2026-08-05',
+          tags: [],
+        },
+      },
+    ]);
 
     expect(await screen.findByText(/Dentist appointment/)).toBeTruthy();
   });
 
-  it('offers to log calories when the classifier comes back calorie_log', async () => {
+  it('stages a calorie entry and logs it on confirm', async () => {
     const stream = openStream();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.chat.classify).mockResolvedValue({
-      intent: 'calorie_log',
-      confidence: 0.9,
-      calorieLog: { description: 'burger', calories: 650 },
-    } as never);
     vi.mocked(api.chat.saveCalories).mockResolvedValue({ id: 'cal1' });
 
     renderChat();
-    const input = await screen.findByPlaceholderText('Type a message...');
-    fireEvent.change(input, {
-      target: { value: 'I ate a burger, about 650 calories' },
-    });
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
-    stream.push('Nice!');
-    stream.close();
+    await sendAndReply('I ate a burger, about 650 calories', stream, 'Nice!', [
+      { kind: 'calorie', data: { description: 'burger', calories: 650 } },
+    ]);
 
     expect(await screen.findByText(/burger/)).toBeTruthy();
     expect(screen.getByText(/650 cal/)).toBeTruthy();
@@ -175,34 +175,66 @@ describe('Chat send ordering', () => {
     );
   });
 
-  it('offers to add a task when the classifier comes back create_task', async () => {
+  it('stages a task and adds it on confirm', async () => {
     const stream = openStream();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.chat.classify).mockResolvedValue({
-      intent: 'create_task',
-      confidence: 0.9,
-      createTask: { title: 'call the dentist' },
-    } as never);
     vi.mocked(api.chat.saveTask).mockResolvedValue({ id: 'task1' });
 
     renderChat();
-    const input = await screen.findByPlaceholderText('Type a message...');
-    fireEvent.change(input, {
-      target: { value: 'add call the dentist to my todos' },
-    });
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
-    stream.push('Done!');
-    stream.close();
+    await sendAndReply('add call the dentist to my todos', stream, 'Done!', [
+      { kind: 'task', data: { title: 'call the dentist', list: 'todo' } },
+    ]);
 
     expect(await screen.findByText('call the dentist')).toBeTruthy();
 
     fireEvent.click(screen.getByText('Add'));
     await waitFor(() => expect(api.chat.saveTask).toHaveBeenCalled());
     expect(vi.mocked(api.chat.saveTask).mock.calls[0][0]).toEqual(
-      expect.objectContaining({ title: 'call the dentist' })
+      expect.objectContaining({ title: 'call the dentist', list: 'todo' })
     );
+  });
+
+  it('stages flashcards and queues them on confirm', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    vi.mocked(api.learning.generateForTopic).mockResolvedValue({
+      count: 4,
+    } as never);
+
+    renderChat();
+    await sendAndReply('quiz me on React hooks', stream, 'Sure.', [
+      { kind: 'flashcards', data: { topic: 'React hooks' } },
+    ]);
+
+    expect(await screen.findByText(/React hooks/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Queue Cards'));
+    await waitFor(() =>
+      expect(api.learning.generateForTopic).toHaveBeenCalledWith('React hooks')
+    );
+  });
+
+  it('drops a proposal missing its headline field instead of showing an empty card', async () => {
+    // An empty card the user is asked to confirm is a worse failure than a
+    // dropped one — and an unknown kind must not throw and take the reply
+    // down with it.
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderChat();
+    await sendAndReply('something', stream, 'Sure.', [
+      { kind: 'task', data: {} },
+      { kind: 'calorie', data: { description: 'burger' } },
+      { kind: 'unknown_kind', data: { title: 'x' } },
+    ]);
+
+    await waitFor(() =>
+      expect(api.chat.addMessage).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({ role: 'assistant' })
+      )
+    );
+    expect(screen.queryByText('Add to your tasks?')).toBeNull();
+    expect(screen.queryByText('Log calories?')).toBeNull();
   });
 
   it('still shows "Saved to journal" on historical messages saved before the feature was removed', async () => {
@@ -252,30 +284,34 @@ describe('reply persistence', () => {
     expect(await screen.findByText(/network blip/)).toBeTruthy();
     expect(screen.getByText(/General Kenobi/)).toBeTruthy();
   });
+
+  it('surfaces a mid-stream error rather than showing nothing at all', async () => {
+    // The bug the delegate replaced: a request that produced no reply, no
+    // error and no log entry.
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderChat();
+    const input = await screen.findByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: 'log 400 calories' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+
+    stream.pushEvent({ error: 'llama-server is down' });
+    stream.close();
+
+    expect(await screen.findByText(/llama-server is down/)).toBeTruthy();
+  });
 });
 
 describe('note to self', () => {
-  const sendAndClassify = async (
-    message: string,
-    stream: ReturnType<typeof openStream>,
-    reply: string
-  ) => {
-    const input = await screen.findByPlaceholderText('Type a message...');
-    fireEvent.change(input, { target: { value: message } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
-    stream.push(reply);
-    stream.close();
-  };
+  const noteProposal = [
+    { kind: 'note', data: { content: 'warm up before deadlifts' } },
+  ];
 
-  it('drafts and previews a lesson card when the classifier returns note_to_self', async () => {
+  it('drafts and previews a lesson card when the delegate stages a note', async () => {
     const stream = openStream();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.chat.classify).mockResolvedValue({
-      intent: 'note_to_self',
-      confidence: 0.9,
-      noteToSelf: { content: 'warm up before deadlifts' },
-    } as never);
     vi.mocked(api.learning.generateFromNote).mockResolvedValue({
       count: 1,
       ids: ['card-1'],
@@ -286,10 +322,11 @@ describe('note to self', () => {
     } as never);
 
     renderChat();
-    await sendAndClassify(
+    await sendAndReply(
       'note to self: warm up before deadlifts',
       stream,
-      'Noted.'
+      'Noted.',
+      noteProposal
     );
 
     await waitFor(() =>
@@ -305,11 +342,6 @@ describe('note to self', () => {
   it('removes the preview once the drafted card is approved', async () => {
     const stream = openStream();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.chat.classify).mockResolvedValue({
-      intent: 'note_to_self',
-      confidence: 0.9,
-      noteToSelf: { content: 'warm up before deadlifts' },
-    } as never);
     vi.mocked(api.learning.generateFromNote).mockResolvedValue({
       count: 1,
       ids: ['card-1'],
@@ -323,10 +355,11 @@ describe('note to self', () => {
     } as never);
 
     renderChat();
-    await sendAndClassify(
+    await sendAndReply(
       'note to self: warm up before deadlifts',
       stream,
-      'Noted.'
+      'Noted.',
+      noteProposal
     );
     await screen.findByText('Warm up before what?');
 
@@ -343,11 +376,6 @@ describe('note to self', () => {
   it('removes the preview once the drafted card is discarded', async () => {
     const stream = openStream();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.chat.classify).mockResolvedValue({
-      intent: 'note_to_self',
-      confidence: 0.9,
-      noteToSelf: { content: 'warm up before deadlifts' },
-    } as never);
     vi.mocked(api.learning.generateFromNote).mockResolvedValue({
       count: 1,
       ids: ['card-1'],
@@ -359,10 +387,11 @@ describe('note to self', () => {
     vi.mocked(api.learning.deny).mockResolvedValue({ success: true } as never);
 
     renderChat();
-    await sendAndClassify(
+    await sendAndReply(
       'note to self: warm up before deadlifts',
       stream,
-      'Noted.'
+      'Noted.',
+      noteProposal
     );
     await screen.findByText('Warm up before what?');
 
@@ -386,17 +415,6 @@ describe('note to self', () => {
         .mockResolvedValueOnce(streamA.response)
         .mockResolvedValueOnce(streamB.response)
     );
-    vi.mocked(api.chat.classify)
-      .mockResolvedValueOnce({
-        intent: 'note_to_self',
-        confidence: 0.9,
-        noteToSelf: { content: 'warm up before deadlifts' },
-      } as never)
-      .mockResolvedValueOnce({
-        intent: 'note_to_self',
-        confidence: 0.9,
-        noteToSelf: { content: 'stretch after too' },
-      } as never);
     vi.mocked(api.learning.generateFromNote)
       .mockResolvedValueOnce({
         count: 1,
@@ -420,18 +438,17 @@ describe('note to self', () => {
       } as never);
 
     renderChat();
-    await sendAndClassify(
+    await sendAndReply(
       'note to self: warm up before deadlifts',
       streamA,
-      'Noted.'
+      'Noted.',
+      noteProposal
     );
     await screen.findByText('Warm up before what?');
 
-    await sendAndClassify(
-      'note to self: stretch after too',
-      streamB,
-      'Got it.'
-    );
+    await sendAndReply('note to self: stretch after too', streamB, 'Got it.', [
+      { kind: 'note', data: { content: 'stretch after too' } },
+    ]);
     await screen.findByText('Stretch when?');
 
     // The first draft is still there — a second note-to-self must not wipe
