@@ -11,30 +11,26 @@ vi.mock('../../hooks/api', () => ({
       today: vi.fn(),
       createConversation: vi.fn(),
       addMessage: vi.fn(),
-      classify: vi.fn(),
       saveJournal: vi.fn(),
       saveCalendar: vi.fn(),
+      saveCalories: vi.fn(),
+      saveTask: vi.fn(),
     },
     settings: { get: vi.fn() },
-    learning: { generateForTopic: vi.fn() },
+    learning: { generateForTopic: vi.fn(), generateFromNote: vi.fn() },
   },
 }));
 
-/** A /api/chat/websearch/stream response whose body stays open until the test
- * closes it, so the live tool-step rendering can be inspected mid-stream. */
-function openWebSearchStream() {
-  let pushStep!: (step: object) => void;
-  let pushContent!: (chunk: string) => void;
+/** A /api/chat/stream response whose body stays open until the test closes it,
+ * so live delegate steps and reasoning can be inspected mid-stream. */
+function openStream() {
+  let push!: (event: object) => void;
   let close!: (done: object) => void;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       const encode = new TextEncoder();
-      pushStep = step =>
-        controller.enqueue(encode.encode(`data: ${JSON.stringify(step)}\n\n`));
-      pushContent = chunk =>
-        controller.enqueue(
-          encode.encode(`data: ${JSON.stringify({ content: chunk })}\n\n`)
-        );
+      push = event =>
+        controller.enqueue(encode.encode(`data: ${JSON.stringify(event)}\n\n`));
       close = done => {
         controller.enqueue(
           encode.encode(`data: ${JSON.stringify({ done: true, ...done })}\n\n`)
@@ -44,12 +40,7 @@ function openWebSearchStream() {
       };
     },
   });
-  return {
-    response: { ok: true, body } as unknown as Response,
-    pushStep,
-    pushContent,
-    close,
-  };
+  return { response: { ok: true, body } as unknown as Response, push, close };
 }
 
 const renderChat = () => {
@@ -63,6 +54,12 @@ const renderChat = () => {
   );
 };
 
+async function send(text: string) {
+  const input = await screen.findByPlaceholderText('Type a message...');
+  fireEvent.change(input, { target: { value: text } });
+  fireEvent.keyDown(input, { key: 'Enter' });
+}
+
 beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   vi.mocked(api.chat.today).mockResolvedValue(null);
@@ -71,136 +68,70 @@ beforeEach(() => {
   } as never);
   vi.mocked(api.chat.createConversation).mockResolvedValue({ id: 'c1' });
   vi.mocked(api.chat.addMessage).mockResolvedValue({ id: 'm1' });
-  vi.mocked(api.chat.classify).mockResolvedValue({
-    intent: 'conversation',
-    confidence: 1,
-  } as never);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('Chat tab switching', () => {
-  it('defaults to the regular Chat tab', async () => {
+describe('the chat has one mode', () => {
+  it('goes straight to the message box with no tab to pick first', async () => {
     renderChat();
     await screen.findByPlaceholderText('Type a message...');
-    expect(api.chat.today).toHaveBeenCalledWith('chat');
+    // Searching is something the delegate decides to do mid-conversation, so
+    // there is no longer a mode to choose before asking the question.
+    expect(screen.queryByText('Web Search')).toBeNull();
   });
 
-  it('switches to the Web Search tab and queries its own conversation', async () => {
-    renderChat();
-    await screen.findByPlaceholderText('Type a message...');
-
-    fireEvent.click(screen.getByText('Web Search'));
-
-    await screen.findByPlaceholderText('Ask something to look up...');
-    expect(api.chat.today).toHaveBeenCalledWith('websearch');
-  });
-
-  it("switching tabs does not carry over the other tab's conversation", async () => {
-    vi.mocked(api.chat.today).mockImplementation(async mode =>
-      mode === 'chat'
-        ? {
-            id: 'chat-conv',
-            title: null,
-            mode: 'chat',
-            createdAt: '',
-            updatedAt: '',
-            messages: [
-              {
-                id: 'm1',
-                conversationId: 'chat-conv',
-                role: 'user',
-                content: 'hello from regular chat',
-                metadata: null,
-                createdAt: '',
-              },
-            ],
-          }
-        : null
-    );
-
-    renderChat();
-    await screen.findByText('hello from regular chat');
-
-    fireEvent.click(screen.getByText('Web Search'));
-    await screen.findByPlaceholderText('Ask something to look up...');
-    // The Chat tab's panel stays mounted (so an in-progress stream survives a
-    // tab switch) but its wrapper is display:none while Web Search is active.
-    const chatWrapper = document.querySelector('[data-tab-panel="chat"]');
-    expect(chatWrapper).toHaveProperty('style.display', 'none');
-    expect(screen.getByText('hello from regular chat')).toBeTruthy();
-  });
-});
-
-describe('Chat tab switching mid-stream', () => {
-  it('keeps an in-progress Web Search reply alive when switching tabs and back', async () => {
-    const stream = openWebSearchStream();
+  it('posts to the single stream endpoint', async () => {
+    const stream = openStream();
     const fetchMock = vi.fn().mockResolvedValue(stream.response);
     vi.stubGlobal('fetch', fetchMock);
 
     renderChat();
-    await screen.findByPlaceholderText('Type a message...');
-    fireEvent.click(screen.getByText('Web Search'));
-    const input = await screen.findByPlaceholderText(
-      'Ask something to look up...'
-    );
-
-    fireEvent.change(input, { target: { value: 'who won the game' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    stream.pushContent('Team A won.');
-    await screen.findByText(/Team A won\./);
-
-    // Navigate away mid-stream and back — the old implementation remounted
-    // ChatPanel via `key={activeTab}`, wiping the in-progress reply.
-    fireEvent.click(screen.getByText('Chat'));
-    fireEvent.click(screen.getByText('Web Search'));
-
-    expect(screen.getByText(/Team A won\./)).toBeTruthy();
-  });
-});
-
-describe('Web Search tab streaming', () => {
-  it('streams tool steps live, then persists them on the assistant message', async () => {
-    const stream = openWebSearchStream();
-    const fetchMock = vi.fn().mockResolvedValue(stream.response);
-    vi.stubGlobal('fetch', fetchMock);
-
-    renderChat();
-    await screen.findByPlaceholderText('Type a message...');
-    fireEvent.click(screen.getByText('Web Search'));
-    const input = await screen.findByPlaceholderText(
-      'Ask something to look up...'
-    );
-
-    fireEvent.change(input, {
-      target: { value: 'who won the game last night' },
-    });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    await send('hello');
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/chat/websearch/stream',
+        '/api/chat/stream',
         expect.anything()
       )
     );
+  });
+});
 
-    stream.pushStep({
+describe('delegate steps', () => {
+  it('renders live steps collapsed, then persists them on the message', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderChat();
+    await send('who won the game last night');
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+
+    stream.push({
       tool: 'web_search',
       arg: 'game last night',
       ok: true,
       count: 2,
     });
+
+    // Collapsed by default *while streaming*, not only once saved: a growing
+    // list of steps used to push the reply down the page as it was being read.
+    const summary = await screen.findByText(/1 step so far/);
+    expect(summary.closest('details')).toHaveProperty('open', false);
+
+    fireEvent.click(summary);
     await screen.findByText(/Searched the web for/);
 
-    stream.pushContent('Team A won.');
+    stream.push({ content: 'Team A won.' });
     await screen.findByText(/Team A won\./);
-
     stream.close({
+      steps: [
+        { tool: 'web_search', arg: 'game last night', ok: true, count: 2 },
+      ],
       sources: [{ url: 'https://ex.com/score', title: 'Score' }],
+      proposals: [],
     });
 
     await waitFor(() =>
@@ -213,7 +144,56 @@ describe('Web Search tab streaming', () => {
         })
       )
     );
-    // A web-search lookup isn't journal/calendar material — no classify call.
-    expect(api.chat.classify).not.toHaveBeenCalled();
+  });
+
+  it('labels a staged proposal as staged, never as saved', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderChat();
+    await send('remind me to call the dentist');
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+
+    stream.push({
+      tool: 'propose_task',
+      arg: 'to-do "Call the dentist"',
+      ok: true,
+    });
+    fireEvent.click(await screen.findByText(/1 step so far/));
+
+    // Nothing is written until the user clicks the confirm card below, and a
+    // step list claiming otherwise is a lie they only catch by going to look.
+    const label = await screen.findByText(/Staged a to-do/);
+    expect(label.textContent).not.toMatch(/saved/i);
+  });
+});
+
+describe('reasoning', () => {
+  it('shows reasoning collapsed and keeps it out of the reply text', async () => {
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderChat();
+    await send('why is the sky blue');
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+
+    stream.push({ thinking: 'Rayleigh scattering, probably.' });
+    const summary = await screen.findByText('Reasoning');
+    expect(summary.closest('details')).toHaveProperty('open', false);
+
+    stream.push({ content: 'Because of Rayleigh scattering.' });
+    stream.close({ steps: [], sources: [], proposals: [] });
+
+    await waitFor(() =>
+      expect(api.chat.addMessage).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({ content: 'Because of Rayleigh scattering.' })
+      )
+    );
+    // Reasoning is the model talking to itself — never persisted, and never
+    // folded into the saved reply.
+    const saved = vi.mocked(api.chat.addMessage).mock.calls.at(-1)![1];
+    expect(saved.content).not.toContain('Rayleigh scattering, probably.');
+    expect(saved.metadata ?? '').not.toContain('probably');
   });
 });

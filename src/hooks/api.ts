@@ -452,8 +452,10 @@ export interface BriefingTodoDecision {
   list?: TodoList;
 }
 
-// The Chat tab's two sub-tabs: the regular daily chat, and one that answers by
-// actually searching the web. Each is its own conversation per chat day.
+// One conversation per chat day. `'websearch'` is a *historical* value only —
+// the tab that created those conversations is gone (searching is now something
+// the delegate decides to do mid-chat), but the rows remain and the Journal
+// feed still labels them, so this stays in the union as read-only history.
 export type ChatMode = 'chat' | 'websearch';
 
 // A past chat day shown in the Journal feed (collapsed, expand to load messages).
@@ -1689,8 +1691,8 @@ export const api = {
   },
 
   chat: {
-    today: (mode: ChatMode = 'chat') =>
-      get<ConversationWithMessages | null>(`/api/chat/today?mode=${mode}`),
+    today: () =>
+      get<ConversationWithMessages | null>('/api/chat/today?mode=chat'),
     journalConversations: () =>
       get<DatedConversation[]>('/api/chat/journal-conversations'),
     generateTitle: (id: string) =>
@@ -1701,7 +1703,7 @@ export const api = {
     listConversations: () => get<Conversation[]>('/api/chat/conversations'),
     getConversation: (id: string) =>
       get<ConversationWithMessages | null>(`/api/chat/conversations/${id}`),
-    createConversation: (data?: { title?: string; mode?: ChatMode }) =>
+    createConversation: (data?: { title?: string }) =>
       post<{ id: string }>('/api/chat/conversations', data ?? {}),
     updateTitle: (id: string, title: string) =>
       patch<{ success: boolean }>(`/api/chat/conversations/${id}/title`, {
@@ -1727,11 +1729,6 @@ export const api = {
       post<{ proposedTodos: ProposedTodo[]; created: number }>(
         `/api/chat/briefing/${messageId}/todos`,
         { decisions }
-      ),
-    classify: (message: string) =>
-      post<{ intent: string; confidence: number; [key: string]: unknown }>(
-        '/api/chat/classify',
-        { message }
       ),
     saveCalendar: (data: {
       conversationId: string;

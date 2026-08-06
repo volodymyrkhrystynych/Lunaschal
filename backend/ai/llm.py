@@ -178,9 +178,33 @@ def chat_messages(messages: list[dict]) -> str:
 def chat_stream_deltas(messages: list[dict]):
     """Streaming plain-text completion; yields assistant content deltas.
 
-    Thinking deltas are intentionally not yielded — they arrive either as
-    `reasoning_content` or inside a <think> block, and neither belongs in the
-    user-visible stream.
+    Thinking deltas are dropped here. Callers that want to show reasoning use
+    `chat_stream_events` below and label the two channels apart — a caller that
+    only wants the answer must not have to filter the thinking back out.
+    """
+    for kind, text in chat_stream_events(messages):
+        if kind == 'content':
+            yield text
+
+
+_THINK_OPEN = '<think>'
+_THINK_CLOSE = '</think>'
+
+
+def chat_stream_events(messages: list[dict]):
+    """Streaming completion as ('content' | 'thinking', delta) pairs.
+
+    Reasoning reaches us two different ways depending on how llama-server was
+    launched: as a separate `reasoning_content` field on the delta, or inline in
+    `content` wrapped in a <think> block. Both are handled, because which one
+    you get is a property of the server's flags rather than of this request —
+    and a UI that renders raw `<think>` tags into the reply is the failure this
+    exists to prevent.
+
+    The inline case is tracked with a running flag rather than a regex over the
+    finished text: the tags arrive split across chunks, so there is no complete
+    string to match against until the stream is over, by which point the answer
+    should already be on screen.
     """
     c = get_provider_config()
     client = get_llama_client(c)
@@ -188,13 +212,49 @@ def chat_stream_deltas(messages: list[dict]):
         model=get_model(c), messages=messages, stream=True, timeout=_TIMEOUT,
         **_request_kwargs(**default_generation_opts()),
     )
+    buffer = ''
+    thinking = False
     for chunk in stream:
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
+
+        reasoning = getattr(delta, 'reasoning_content', None)
+        if reasoning:
+            yield ('thinking', reasoning)
+
         text = getattr(delta, 'content', None)
-        if text:
-            yield text
+        if not text:
+            continue
+
+        buffer += text
+        # Hold back anything that could still turn out to be a partial tag, so
+        # a '<' that begins '<think>' is never emitted as answer text.
+        while buffer:
+            marker = _THINK_CLOSE if thinking else _THINK_OPEN
+            at = buffer.find(marker)
+            if at >= 0:
+                head, buffer = buffer[:at], buffer[at + len(marker):]
+                if head:
+                    yield ('thinking' if thinking else 'content', head)
+                thinking = not thinking
+                continue
+            keep = _partial_tag_len(buffer, marker)
+            emit, buffer = (buffer[:-keep], buffer[-keep:]) if keep else (buffer, '')
+            if emit:
+                yield ('thinking' if thinking else 'content', emit)
+            break
+
+    if buffer:
+        yield ('thinking' if thinking else 'content', buffer)
+
+
+def _partial_tag_len(buffer: str, marker: str) -> int:
+    """How many trailing chars of `buffer` could be the start of `marker`."""
+    for n in range(min(len(marker) - 1, len(buffer)), 0, -1):
+        if buffer.endswith(marker[:n]):
+            return n
+    return 0
 
 
 def chat_tool_turn(messages: list[dict], tools: list[dict], max_tokens: int | None = None):

@@ -7,10 +7,8 @@ from backend.db.connection import get_db, row_to_dict
 from backend.chat_day import day_key_for
 from backend.ai import priority
 from backend.ai.provider import is_ai_configured
-from backend.ai.chat import chat_stream, build_chat_system_prompt
-from backend.ai import websearch_chat
 from backend.ai.chat_title import generate_conversation_title
-from backend.ai.classifier import classify_intent, should_classify
+from backend.delegate import chat as delegate_chat
 from backend.todo_recurrence import VALID_LISTS
 
 bp = Blueprint('chat', __name__, url_prefix='/api/chat')
@@ -28,8 +26,9 @@ def list_conversations():
 def get_today():
     """The current chat day's conversation with its messages, or null if none yet.
 
-    `mode` selects which Chat-tab sub-tab: 'chat' (default) or 'websearch' —
-    each has its own conversation for the same day.
+    `mode` is a leftover of the retired Web Search tab, which kept its own
+    conversation per day. Only 'chat' is reachable now; the parameter stays so
+    the old rows remain addressable.
     """
     mode = request.args.get('mode', 'chat')
     db = get_db()
@@ -51,8 +50,9 @@ def get_today():
 def journal_conversations():
     """Past chat days for the Journal feed (excludes the current live day).
 
-    Both 'chat' and 'websearch' conversations qualify — the web-search tab
-    moves into the Journal at day's end exactly like the regular chat does.
+    Both 'chat' and the retired 'websearch' mode qualify: those days already
+    happened, and dropping them from the feed would erase history rather than
+    retire a feature.
     """
     rows = get_db().execute(
         '''SELECT c.id, c.title, c.day_key, c.mode, c.created_at, c.updated_at,
@@ -84,9 +84,9 @@ def get_conversation(id):
 
 @bp.post('/conversations')
 def create_conversation():
-    """Find-or-create the current chat day's conversation for the given `mode`
-    ('chat', default, or 'websearch'). Titles stay NULL until the nightly
-    title job fills them in."""
+    """Find-or-create the current chat day's conversation. Titles stay NULL
+    until the nightly title job fills them in. `mode` defaults to 'chat' —
+    see get_today for why the column outlived the tab."""
     body = request.get_json(silent=True) or {}
     mode = body.get('mode', 'chat')
     db = get_db()
@@ -300,15 +300,6 @@ def decide_briefing_todos(message_id):
     return jsonify({'proposedTodos': proposed, 'created': created})
 
 
-@bp.post('/classify')
-def classify():
-    body = request.json or {}
-    message = body.get('message', '')
-    if not should_classify(message):
-        return jsonify({'intent': 'conversation', 'confidence': 1.0})
-    return jsonify(classify_intent(message))
-
-
 @bp.post('/save-calendar')
 def save_calendar():
     body = request.json or {}
@@ -377,27 +368,45 @@ def save_task():
 
 @bp.post('/stream')
 def stream():
+    """The Chat tab's one streaming endpoint.
+
+    Four event kinds go out, all under SSE's single `data:` framing:
+    `{tool: ...}` as each delegate tool call finishes, `{thinking: ...}` and
+    `{content: ...}` as the reply streams, and one `{done: true, steps,
+    sources, proposals}` before `[DONE]`. The browser persists `steps`/`sources`
+    onto the assistant message and turns `proposals` into confirm cards — the
+    live events are gone after a reload, so the same trace has to arrive twice.
+    """
     if not is_ai_configured():
         return jsonify({'error': 'AI provider not configured'}), 400
     body = request.json or {}
     messages = body.get('messages', [])
     system_prompt = body.get('systemPrompt', '')
-    if not system_prompt:
-        # Plain chat (no caller-supplied prompt, e.g. the Chat tab) gets the
-        # default prompt enriched with the last day's journal entries.
-        system_prompt = build_chat_system_prompt()
 
     # Acquired here, in the view, rather than inside generate(): the generator
     # body does not run until Werkzeug pulls the first item, so acquiring there
     # would leave the window between "user pressed Enter" and "first token"
     # looking idle to background work. Released in the generator's finally,
     # which also runs on GeneratorExit when the client disconnects mid-stream.
+    # One mark spans the whole turn, delegate sub-loop included — the user is
+    # waiting on all of it, the same way ideas.discuss holds one across both its
+    # blocking gather and its streamed answer.
     token = priority.begin('chat.stream')
 
     def generate():
         try:
-            for chunk in chat_stream(messages, system_prompt):
-                yield f'data: {json.dumps({"content": chunk})}\n\n'
+            # A caller-supplied systemPrompt means this is not the Chat tab —
+            # it's the voice listener, a task nudge or the morning check-in,
+            # none of which have a card to confirm anything on.
+            for kind, payload in delegate_chat.stream_reply(
+                messages, system_prompt, delegate=not system_prompt
+            ):
+                if kind == 'step':
+                    yield f'data: {json.dumps(payload)}\n\n'
+                elif kind == 'done':
+                    yield f'data: {json.dumps({"done": True, **payload})}\n\n'
+                else:
+                    yield f'data: {json.dumps({kind: payload})}\n\n'
             yield 'data: [DONE]\n\n'
         except Exception as e:
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
@@ -405,37 +414,6 @@ def stream():
             # Must not yield here — that would raise "generator ignored
             # GeneratorExit". priority.end only touches a dict under a lock.
             priority.end(token)
-
-    return Response(
-        stream_with_context(generate()),
-        mimetype='text/event-stream',
-        headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'},
-    )
-
-
-@bp.post('/websearch/stream')
-def websearch_stream():
-    """Same request shape as /stream, but gathers with web_search/web_fetch
-    tools before answering. Tool-call events stream out as each one finishes
-    (so the gathering pass is legible instead of a spinner), then the answer
-    streams as content deltas — mirroring /stream's SSE framing."""
-    if not is_ai_configured():
-        return jsonify({'error': 'AI provider not configured'}), 400
-    body = request.json or {}
-    messages = body.get('messages', [])
-
-    def generate():
-        try:
-            for kind, payload in websearch_chat.stream_reply(messages):
-                if kind == 'step':
-                    yield f'data: {json.dumps(payload)}\n\n'
-                elif kind == 'content':
-                    yield f'data: {json.dumps({"content": payload})}\n\n'
-                elif kind == 'done':
-                    yield f'data: {json.dumps({"done": True, **payload})}\n\n'
-            yield 'data: [DONE]\n\n'
-        except Exception as e:
-            yield f'data: {json.dumps({"error": str(e)})}\n\n'
 
     return Response(
         stream_with_context(generate()),

@@ -104,17 +104,27 @@ def _settings() -> dict:
     return get_settings() or {}
 
 
+# One search provider for the whole app: the Ideas research agent and the chat
+# delegate both come through here. The retired Web Search tab's parallel
+# `websearch_*` columns are folded into these once at startup
+# (`_migrate_websearch_search_to_research` in backend/db/connection.py) rather
+# than being read as a fallback here — a setting that works but appears nowhere
+# in Settings is worse than one that was migrated into view.
+def _search_setting(settings: dict, name: str) -> str:
+    return (settings.get(f'research_{name}') or '').strip()
+
+
 def search_provider() -> str:
-    return (_settings().get('research_search_provider') or '').strip()
+    return _search_setting(_settings(), 'search_provider')
 
 
 def is_search_configured() -> bool:
     settings = _settings()
-    provider = (settings.get('research_search_provider') or '').strip()
+    provider = _search_setting(settings, 'search_provider')
     if provider in ('brave', 'tavily'):
-        return bool(settings.get('research_search_key'))
+        return bool(_search_setting(settings, 'search_key'))
     if provider == 'searxng':
-        return bool(settings.get('research_searxng_url'))
+        return bool(_search_setting(settings, 'searxng_url'))
     return False
 
 
@@ -124,8 +134,8 @@ def web_search(query: str, limit: int = DEFAULT_RESULTS) -> list[dict]:
     if not query:
         return []
     settings = _settings()
-    provider = (settings.get('research_search_provider') or '').strip()
-    key = settings.get('research_search_key') or ''
+    provider = _search_setting(settings, 'search_provider')
+    key = _search_setting(settings, 'search_key')
     limit = max(1, min(limit, 10))
 
     try:
@@ -138,7 +148,7 @@ def web_search(query: str, limit: int = DEFAULT_RESULTS) -> list[dict]:
                 raise SearchUnavailable('Tavily search needs an API key')
             return _search_tavily(query, key, limit)
         if provider == 'searxng':
-            url = (settings.get('research_searxng_url') or '').strip()
+            url = _search_setting(settings, 'searxng_url')
             if not url:
                 raise SearchUnavailable('SearXNG needs a base URL')
             return _search_searxng(query, url, limit)

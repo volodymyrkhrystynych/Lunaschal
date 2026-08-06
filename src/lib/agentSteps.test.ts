@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stepLabel, parseWebSearchMeta } from './websearchSteps';
+import { stepLabel, parseAgentMeta } from './agentSteps';
 
 describe('stepLabel', () => {
   it('describes a successful search with its result count', () => {
@@ -54,6 +54,60 @@ describe('stepLabel', () => {
     ).toBe('Could not read https://ex.com');
   });
 
+  it('describes the wiki tools the Ideas agent uses', () => {
+    // Folded in from IdeaDiscussion's own copy: one labeller, two callers.
+    expect(stepLabel({ tool: 'wiki_list', count: 12 })).toBe(
+      'Checked the research wiki (12 articles)'
+    );
+    expect(stepLabel({ tool: 'wiki_search', arg: 'fsrs' })).toBe(
+      'Searched the wiki for "fsrs"'
+    );
+    expect(stepLabel({ tool: 'wiki_read', arg: 'FSRS' })).toBe(
+      'Read wiki note: FSRS'
+    );
+  });
+
+  it('says a proposal was staged, never that it was saved', () => {
+    // Nothing is written until the user clicks the confirm card, so a step
+    // list claiming otherwise is a lie they only catch by going to look.
+    const label = stepLabel({
+      tool: 'propose_task',
+      arg: 'to-do "Call the dentist"',
+      ok: true,
+    });
+    expect(label).toBe('Staged a to-do: to-do "Call the dentist"');
+    expect(label).not.toMatch(/saved/i);
+  });
+
+  it('names every proposal kind rather than falling through to the raw tool name', () => {
+    expect(stepLabel({ tool: 'propose_calendar_event', ok: true })).toBe(
+      'Staged a calendar event'
+    );
+    expect(stepLabel({ tool: 'propose_calorie_log', ok: true })).toBe(
+      'Staged a calorie entry'
+    );
+    expect(stepLabel({ tool: 'propose_note_to_self', ok: true })).toBe(
+      'Staged a note to self'
+    );
+    // Plural: the article lives in the label map precisely so this one
+    // doesn't read as "a flashcards".
+    expect(stepLabel({ tool: 'propose_flashcards', ok: true })).toBe(
+      'Staged flashcards'
+    );
+  });
+
+  it('reports a refused proposal with its reason', () => {
+    expect(
+      stepLabel({
+        tool: 'propose_calorie_log',
+        ok: false,
+        error: 'calories must be a whole number the user actually gave',
+      })
+    ).toBe(
+      'Could not stage a calorie entry — calories must be a whole number the user actually gave'
+    );
+  });
+
   it('falls back to a generic label for an unknown tool', () => {
     expect(stepLabel({ tool: 'mystery_tool' })).toBe('Ran mystery_tool');
   });
@@ -63,19 +117,19 @@ describe('stepLabel', () => {
   });
 });
 
-describe('parseWebSearchMeta', () => {
+describe('parseAgentMeta', () => {
   it('returns empty arrays for null/undefined metadata', () => {
-    expect(parseWebSearchMeta(null)).toEqual({ steps: [], sources: [] });
-    expect(parseWebSearchMeta(undefined)).toEqual({ steps: [], sources: [] });
-    expect(parseWebSearchMeta('')).toEqual({ steps: [], sources: [] });
+    expect(parseAgentMeta(null)).toEqual({ steps: [], sources: [] });
+    expect(parseAgentMeta(undefined)).toEqual({ steps: [], sources: [] });
+    expect(parseAgentMeta('')).toEqual({ steps: [], sources: [] });
   });
 
   it('returns empty arrays for malformed JSON rather than throwing', () => {
-    expect(parseWebSearchMeta('not json')).toEqual({ steps: [], sources: [] });
+    expect(parseAgentMeta('not json')).toEqual({ steps: [], sources: [] });
   });
 
   it('returns empty arrays for metadata with no steps/sources (e.g. a break marker)', () => {
-    expect(parseWebSearchMeta(JSON.stringify({ break: true }))).toEqual({
+    expect(parseAgentMeta(JSON.stringify({ break: true }))).toEqual({
       steps: [],
       sources: [],
     });
@@ -86,7 +140,7 @@ describe('parseWebSearchMeta', () => {
       steps: [{ tool: 'web_search', ok: true, count: 1 }],
       sources: [{ url: 'https://ex.com', title: 'Example' }],
     });
-    expect(parseWebSearchMeta(meta)).toEqual({
+    expect(parseAgentMeta(meta)).toEqual({
       steps: [{ tool: 'web_search', ok: true, count: 1 }],
       sources: [{ url: 'https://ex.com', title: 'Example' }],
     });

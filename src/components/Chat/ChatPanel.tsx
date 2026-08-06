@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, type ChatMode, type DraftCard } from '../../hooks/api';
+import { api, type DraftCard } from '../../hooks/api';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { BriefingTodos } from '../BriefingTodos';
+import { AgentSteps } from './AgentSteps';
+import { ReasoningBlock } from './ReasoningBlock';
+import { ThinkingLabel } from './ThinkingLabel';
 import {
   contextMessages,
   isBreak,
@@ -10,11 +13,7 @@ import {
 } from '@/lib/chatSegments';
 import { readSSE } from '@/lib/sse';
 import { formatMessageTime } from '@/lib/chatTime';
-import {
-  parseWebSearchMeta,
-  stepLabel,
-  type WebSearchStep,
-} from '@/lib/websearchSteps';
+import { parseAgentMeta, type AgentStep } from '@/lib/agentSteps';
 
 interface PendingSave {
   messageId: string;
@@ -42,40 +41,22 @@ interface PendingTask {
   data: { title: string; list?: string };
 }
 
-interface ClassifyResult {
-  intent:
-    | 'calendar'
-    | 'flashcard_request'
-    | 'note_to_self'
-    | 'calorie_log'
-    | 'create_task'
-    | 'question'
-    | 'conversation';
-  confidence: number;
-  calendarEvent?: {
-    title: string;
-    description?: string;
-    date?: string;
-    time?: string;
-    tags: string[];
-  };
-  flashcardRequest?: { topic: string };
-  noteToSelf?: { content: string };
-  calorieLog?: { description: string; calories: number };
-  createTask?: { title: string };
+/** One staged action from the delegate's `done` event. The delegate writes
+ * nothing itself — these become the same confirm cards below that the retired
+ * classifier used to fill, so the click that actually saves is unchanged. */
+interface DelegateProposal {
+  kind: string;
+  data: Record<string, unknown>;
 }
 
 const BREAK_METADATA = JSON.stringify({ break: true });
 
-interface ChatPanelProps {
-  mode: ChatMode;
-}
-
-export function ChatPanel({ mode }: ChatPanelProps) {
+export function ChatPanel() {
   const [input, setInput] = useState('');
   const [streamingContent, setStreamingContent] = useState('');
+  const [streamingReasoning, setStreamingReasoning] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
-  const [liveSteps, setLiveSteps] = useState<WebSearchStep[]>([]);
+  const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
   const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
   const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
   const [pendingCalorie, setPendingCalorie] = useState<PendingCalorie | null>(
@@ -103,12 +84,11 @@ export function ChatPanel({ mode }: ChatPanelProps) {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const queryClient = useQueryClient();
-  const isWebSearch = mode === 'websearch';
 
-  // The single conversation for the current chat day (4am -> 4am), one per mode.
+  // The single conversation for the current chat day (4am -> 4am).
   const { data: conversation } = useQuery({
-    queryKey: ['chat', 'today', mode],
-    queryFn: () => api.chat.today(mode),
+    queryKey: ['chat', 'today', 'chat'],
+    queryFn: () => api.chat.today(),
   });
 
   const { data: settings } = useQuery({
@@ -117,10 +97,10 @@ export function ChatPanel({ mode }: ChatPanelProps) {
   });
 
   const invalidateToday = () =>
-    queryClient.invalidateQueries({ queryKey: ['chat', 'today', mode] });
+    queryClient.invalidateQueries({ queryKey: ['chat', 'today', 'chat'] });
 
   const createConversation = useMutation({
-    mutationFn: () => api.chat.createConversation({ mode }),
+    mutationFn: () => api.chat.createConversation(),
     onSuccess: invalidateToday,
   });
 
@@ -139,42 +119,54 @@ export function ChatPanel({ mode }: ChatPanelProps) {
     onSuccess: invalidateToday,
   });
 
-  const classifyMessage = useMutation({
-    mutationFn: (message: string) => api.chat.classify(message),
-  });
-
-  /** Ask the model whether the message was really a calendar event, a
-   * flashcard request or a note to self, and offer to save it if so.
-   * Fire-and-forget: a failed classification just means no offer. Only for
-   * the regular chat — a web-search lookup ("what's the weather in Tokyo")
-   * isn't calendar/note material and the offer would just be noise. */
-  const classifyUserMessage = (message: string, messageId: string) => {
-    classifyMessage.mutate(message, {
-      onSuccess: result => {
-        const r = result as ClassifyResult;
-        if (r.confidence < 0.7) return;
-        if (r.intent === 'calendar' && r.calendarEvent) {
-          setPendingSave({
-            messageId,
-            data: {
-              title: r.calendarEvent.title,
-              description: r.calendarEvent.description,
-              date: r.calendarEvent.date,
-              time: r.calendarEvent.time,
-              tags: r.calendarEvent.tags,
-            },
-          });
-        } else if (r.intent === 'flashcard_request' && r.flashcardRequest) {
-          setPendingQuiz({ topic: r.flashcardRequest.topic, messageId });
-        } else if (r.intent === 'note_to_self' && r.noteToSelf?.content) {
-          generateFromNote.mutate(r.noteToSelf.content);
-        } else if (r.intent === 'calorie_log' && r.calorieLog) {
-          setPendingCalorie({ messageId, data: r.calorieLog });
-        } else if (r.intent === 'create_task' && r.createTask) {
-          setPendingTask({ messageId, data: { title: r.createTask.title } });
-        }
-      },
-    });
+  /** Turn what the delegate staged into confirm cards.
+   *
+   * The delegate decided *before* the reply and its tools validated the
+   * payloads, so there is no confidence threshold to apply here — the old
+   * classifier's 0.7 gate existed because it was guessing after the fact, and
+   * it silently dropped everything below the line with nothing shown. A
+   * proposal that arrives is a proposal the model committed to. */
+  const applyProposals = (proposals: DelegateProposal[], messageId: string) => {
+    for (const { kind, data } of proposals) {
+      // The delegate's tools validate before staging, so a payload missing its
+      // headline field can't come from our own backend — but an empty card the
+      // user is asked to confirm is a worse failure than a dropped one, so the
+      // required field is re-checked here rather than trusted.
+      const str = (key: string) =>
+        typeof data?.[key] === 'string' ? (data[key] as string).trim() : '';
+      if (kind === 'calendar' && str('title')) {
+        setPendingSave({
+          messageId,
+          data: {
+            title: str('title'),
+            description: str('description'),
+            date: str('date'),
+            time: str('time') || undefined,
+            tags: Array.isArray(data.tags) ? (data.tags as string[]) : [],
+          },
+        });
+      } else if (kind === 'flashcards' && str('topic')) {
+        setPendingQuiz({ topic: str('topic'), messageId });
+      } else if (kind === 'note' && str('content')) {
+        // The only staged action with no confirm card of its own: it drafts
+        // cards immediately, and the draft *is* the review step.
+        generateFromNote.mutate(str('content'));
+      } else if (
+        kind === 'calorie' &&
+        str('description') &&
+        typeof data.calories === 'number'
+      ) {
+        setPendingCalorie({
+          messageId,
+          data: { description: str('description'), calories: data.calories },
+        });
+      } else if (kind === 'task' && str('title')) {
+        setPendingTask({
+          messageId,
+          data: { title: str('title'), list: str('list') || undefined },
+        });
+      }
+    }
   };
 
   const saveCalendar = useMutation({
@@ -285,6 +277,7 @@ export function ChatPanel({ mode }: ChatPanelProps) {
   }, [
     messages,
     streamingContent,
+    streamingReasoning,
     liveSteps,
     pendingSave,
     pendingQuiz,
@@ -343,19 +336,18 @@ export function ChatPanel({ mode }: ChatPanelProps) {
 
     setIsStreaming(true);
     setStreamingContent('');
+    setStreamingReasoning('');
     setLiveSteps([]);
 
     let fullContent = '';
+    let proposals: DelegateProposal[] = [];
     try {
-      const response = await fetch(
-        isWebSearch ? '/api/chat/websearch/stream' : '/api/chat/stream',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ messages: chatMessages }),
-        }
-      );
+      const response = await fetch('/api/chat/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ messages: chatMessages }),
+      });
 
       if (!response.ok) {
         const error = await response.json();
@@ -365,28 +357,41 @@ export function ChatPanel({ mode }: ChatPanelProps) {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
-      let steps: WebSearchStep[] = [];
+      let steps: AgentStep[] = [];
       let sources: { url: string; title?: string }[] = [];
+      let reasoning = '';
       for await (const parsed of readSSE(reader)) {
-        // Tool events arrive as each call finishes, so the gathering pass
+        // Tool events arrive as each delegate call finishes, so a hand-off
         // reads as progress rather than a spinner.
         if (parsed.tool) {
-          steps = [...steps, parsed as WebSearchStep];
+          steps = [...steps, parsed as AgentStep];
           setLiveSteps(steps);
+        }
+        if (parsed.thinking) {
+          reasoning += parsed.thinking;
+          setStreamingReasoning(reasoning);
         }
         if (parsed.content) {
           fullContent += parsed.content;
           setStreamingContent(fullContent);
         }
-        if (parsed.done && Array.isArray(parsed.sources)) {
-          sources = parsed.sources as { url: string; title?: string }[];
+        if (parsed.done) {
+          if (Array.isArray(parsed.sources)) {
+            sources = parsed.sources as { url: string; title?: string }[];
+          }
+          if (Array.isArray(parsed.proposals)) {
+            proposals = parsed.proposals as DelegateProposal[];
+          }
         }
         if (parsed.error) throw new Error(parsed.error);
       }
 
+      // Reasoning is deliberately not persisted: it is the model talking to
+      // itself, it dwarfs the reply, and re-reading it a day later has never
+      // once been the thing anyone wanted out of the chat log.
       const metadata =
-        isWebSearch && (steps.length > 0 || sources.length > 0)
-          ? JSON.stringify({ steps, sources })
+        steps.length > 0 || sources.length > 0
+          ? JSON.stringify({ agent: 'delegate', steps, sources })
           : undefined;
 
       await addMessage.mutateAsync({
@@ -402,6 +407,9 @@ export function ChatPanel({ mode }: ChatPanelProps) {
       // in the same tick it was set — a failed save (or a failed stream)
       // silently vanished the whole reply with nothing shown to the user.
       setStreamingContent('');
+      // Cards go up only once the reply they refer to is saved and on screen,
+      // so "I've put that on your list to confirm" and the card appear together.
+      applyProposals(proposals, userMsgResult.id);
     } catch (error) {
       setStreamingContent(
         `Error: ${error instanceof Error ? error.message : 'Failed to get response'}` +
@@ -410,12 +418,7 @@ export function ChatPanel({ mode }: ChatPanelProps) {
     } finally {
       setIsStreaming(false);
       setLiveSteps([]);
-      // Deliberately *after* the reply, not alongside it. llama-server serves one
-      // request at a time per model, so a classify fired in parallel simply
-      // wins the queue and the user waits out a whole second generation before
-      // their first token. The save/quiz prompts it produces are offered after
-      // the reply anyway.
-      if (!isWebSearch) classifyUserMessage(userMessage, userMsgResult.id);
+      setStreamingReasoning('');
     }
   };
 
@@ -541,20 +544,14 @@ export function ChatPanel({ mode }: ChatPanelProps) {
         )}
         {!hasChat && isConfigured && (
           <div className="text-center text-[var(--color-text-muted)] py-12">
-            <h2 className="text-xl mb-2">
-              {isWebSearch ? 'Search the web' : 'Welcome to Lunaschal'}
-            </h2>
+            <h2 className="text-xl mb-2">Welcome to Lunaschal</h2>
             <p>
-              {isWebSearch
-                ? "Ask a question that depends on what's actually out there — it'll search and read pages before answering."
-                : 'Start a conversation or ask me anything.'}
+              Start a conversation, ask me anything, or ask me to do something.
             </p>
-            {!isWebSearch && (
-              <p className="text-sm mt-4">
-                Try: "Quiz me on React hooks", "note to self: ...", or "I went
-                to the dentist"
-              </p>
-            )}
+            <p className="text-sm mt-4">
+              Try: "Quiz me on React hooks", "note to self: ...", "remind me to
+              call the dentist", or "what's the latest on ..."
+            </p>
           </div>
         )}
         {messages.map(message => {
@@ -586,7 +583,9 @@ export function ChatPanel({ mode }: ChatPanelProps) {
           // The overnight briefing's plan for the day — crossed off in place;
           // only an explicit "add to to-dos" ever reaches the list.
           const proposedTodos = parseProposedTodos(message.metadata);
-          const { steps, sources } = parseWebSearchMeta(message.metadata);
+          // Also covers replies saved by the retired web-search tab: they
+          // carry the same {steps, sources} shape.
+          const { steps, sources } = parseAgentMeta(message.metadata);
           const sentAt = formatMessageTime(message.createdAt);
           return (
             <div
@@ -603,19 +602,7 @@ export function ChatPanel({ mode }: ChatPanelProps) {
                     <MessageMarkdown content={message.content} />
                   )}
                 </div>
-                {steps.length > 0 && (
-                  <details className="mt-1 text-xs text-[var(--color-text-muted)]">
-                    <summary className="cursor-pointer">
-                      {steps.length} research step
-                      {steps.length === 1 ? '' : 's'}
-                    </summary>
-                    <ul className="mt-1 space-y-0.5">
-                      {steps.map((step, i) => (
-                        <li key={i}>· {stepLabel(step)}</li>
-                      ))}
-                    </ul>
-                  </details>
-                )}
+                <AgentSteps steps={steps} />
                 {sources.length > 0 && (
                   <ul className="mt-1 text-xs space-y-0.5">
                     {sources.map(source => (
@@ -662,26 +649,26 @@ export function ChatPanel({ mode }: ChatPanelProps) {
             </div>
           );
         })}
-        {isStreaming && liveSteps.length > 0 && (
-          <div className="text-xs text-[var(--color-text-muted)] space-y-0.5">
-            {liveSteps.map((step, i) => (
-              <div key={i}>· {stepLabel(step)}</div>
-            ))}
-          </div>
-        )}
-        {streamingContent && (
+        {(streamingContent || (isStreaming && streamingReasoning)) && (
           <div className="flex justify-start">
             <div className="max-w-[80%]">
-              <div className="content-text rounded-lg px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text)]">
-                <MessageMarkdown content={streamingContent} />
-              </div>
+              {streamingContent && (
+                <div className="content-text rounded-lg px-4 py-2 bg-[var(--color-surface)] text-[var(--color-text)]">
+                  <MessageMarkdown content={streamingContent} />
+                </div>
+              )}
+              <ReasoningBlock content={streamingReasoning} live={isStreaming} />
+              <AgentSteps steps={liveSteps} live />
             </div>
           </div>
         )}
-        {isStreaming && !streamingContent && (
+        {isStreaming && !streamingContent && !streamingReasoning && (
           <div className="flex justify-start">
-            <div className="bg-[var(--color-surface)] rounded-lg px-4 py-2 text-[var(--color-text-muted)]">
-              Thinking...
+            <div className="max-w-[80%]">
+              <div className="bg-[var(--color-surface)] rounded-lg px-4 py-2 text-[var(--color-text-muted)]">
+                <ThinkingLabel />
+              </div>
+              <AgentSteps steps={liveSteps} live />
             </div>
           </div>
         )}
@@ -963,9 +950,7 @@ export function ChatPanel({ mode }: ChatPanelProps) {
             onKeyDown={handleKeyDown}
             placeholder={
               isConfigured
-                ? isWebSearch
-                  ? 'Ask something to look up...'
-                  : 'Type a message...'
+                ? 'Type a message...'
                 : 'Configure AI provider first...'
             }
             disabled={!isConfigured || isStreaming}

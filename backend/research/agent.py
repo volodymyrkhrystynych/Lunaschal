@@ -51,6 +51,11 @@ ALL_TOOLS = web.TOOLS + wiki.TOOLS
 # Maps to the owning *module*, not to a bound function: `run_tool` is looked up
 # at call time so the handler stays swappable (and patchable in tests) rather
 # than frozen at import.
+#
+# Passed as a parameter rather than read from module scope, because this loop is
+# shared: the chat delegate (backend/delegate/) drives it with a different
+# toolbox entirely. Defaulting to the research map keeps every existing caller
+# unchanged.
 _DISPATCH = {
     'web_search': web,
     'web_fetch': web,
@@ -69,6 +74,7 @@ def gather_events(
     user: str,
     *,
     tools: list[dict] | None = None,
+    dispatch: dict | None = None,
     on_step=None,
     checkpoint=None,
     max_turns: int = MAX_TOOL_TURNS,
@@ -80,10 +86,14 @@ def gather_events(
     The SSE discussion endpoint needs this. With the blocking form below, every
     tool event only becomes available *after* gathering finishes — which is
     precisely the silent spinner the events exist to replace.
+
+    `tools` and `dispatch` travel together — a tool the model can see but the
+    dispatch can't run comes back as "Unknown tool", which reads to the model as
+    a broken tool rather than as one it should not have called.
     """
     yield from _loop(
-        system, user, tools=tools, on_step=on_step, checkpoint=checkpoint,
-        max_turns=max_turns, max_fetches=max_fetches,
+        system, user, tools=tools, dispatch=dispatch, on_step=on_step,
+        checkpoint=checkpoint, max_turns=max_turns, max_fetches=max_fetches,
     )
 
 
@@ -92,6 +102,7 @@ def gather(
     user: str,
     *,
     tools: list[dict] | None = None,
+    dispatch: dict | None = None,
     on_step=None,
     checkpoint=None,
     max_turns: int = MAX_TOOL_TURNS,
@@ -104,8 +115,8 @@ def gather(
     """
     result: dict = {}
     for kind, payload in gather_events(
-        system, user, tools=tools, on_step=on_step, checkpoint=checkpoint,
-        max_turns=max_turns, max_fetches=max_fetches,
+        system, user, tools=tools, dispatch=dispatch, on_step=on_step,
+        checkpoint=checkpoint, max_turns=max_turns, max_fetches=max_fetches,
     ):
         if kind == 'result':
             result = payload
@@ -117,12 +128,14 @@ def _loop(
     user: str,
     *,
     tools: list[dict] | None = None,
+    dispatch: dict | None = None,
     on_step=None,
     checkpoint=None,
     max_turns: int = MAX_TOOL_TURNS,
     max_fetches: int = MAX_FETCHES,
 ):
     tools = tools if tools is not None else ALL_TOOLS
+    dispatch = dispatch if dispatch is not None else _DISPATCH
     on_step = on_step or _noop
     checkpoint = checkpoint or _noop
 
@@ -178,7 +191,7 @@ def _loop(
             else:
                 if name == 'web_fetch':
                     fetches += 1
-                module = _DISPATCH.get(name)
+                module = dispatch.get(name)
                 if module is None:
                     text, event = f'Unknown tool: {name}', {'tool': name, 'ok': False}
                 else:
