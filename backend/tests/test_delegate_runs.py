@@ -78,6 +78,49 @@ def test_run_checkpoints_content_and_flips_to_done(client, monkeypatch):
     assert events == ['content', 'content', 'done', '_end']
 
 
+def test_run_checkpoints_steps_as_they_happen_not_just_at_the_end(client, monkeypatch):
+    """A client that reopens mid-run (a backgrounded tab, a dropped connection)
+    has to see what's actually happened so far — not a blank trace that only
+    fills in once the run is already done. Deep research in particular can run
+    for minutes with no content at all, so steps are the only signal there is."""
+    db = get_db()
+    conv_id = _new_conversation(db)
+    msg_id = _new_streaming_message(db, conv_id)
+
+    seen_after_first_step = {}
+
+    def fake_stream_reply(messages, system_prompt, delegate=True):
+        yield ('step', {'tool': 'web_search', 'ok': True, 'arg': 'q'})
+        # Snapshot the row mid-run, before the second step or 'done' arrive.
+        seen_after_first_step['metadata'] = json.loads(_row(db, msg_id)['metadata'])
+        seen_after_first_step['status'] = _row(db, msg_id)['status']
+        yield ('step', {'tool': 'web_fetch', 'ok': True, 'url': 'https://ex.com'})
+        yield ('done', {
+            'steps': [
+                {'tool': 'web_search', 'ok': True, 'arg': 'q'},
+                {'tool': 'web_fetch', 'ok': True, 'url': 'https://ex.com'},
+            ],
+            'sources': [{'url': 'https://ex.com', 'title': None}],
+            'proposals': [],
+        })
+
+    monkeypatch.setattr(runs.delegate_chat, 'stream_reply', fake_stream_reply)
+    runs._run(msg_id, [{'role': 'user', 'content': 'hi'}], '', True, queue.Queue())
+
+    # Mid-run: one step checkpointed, status still 'streaming', no sources yet
+    # (those aren't known until the run finishes).
+    assert seen_after_first_step['status'] == 'streaming'
+    assert seen_after_first_step['metadata']['steps'] == [
+        {'tool': 'web_search', 'ok': True, 'arg': 'q'}
+    ]
+    assert seen_after_first_step['metadata']['sources'] == []
+
+    # After 'done', the final write still wins.
+    final = json.loads(_row(db, msg_id)['metadata'])
+    assert len(final['steps']) == 2
+    assert final['sources'] == [{'url': 'https://ex.com', 'title': None}]
+
+
 def test_run_stamps_confirm_card_proposals_and_drops_note(client, monkeypatch):
     """Only calendar/calorie/task/flashcards are real confirm cards — each
     gets a stable id and 'pending' status so a later accept/dismiss

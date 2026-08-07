@@ -80,6 +80,10 @@ export function stepLabel(step: AgentStep): string {
         : `Web search unavailable${step.error ? `: ${step.error}` : ''}`;
     case 'web_fetch':
       return step.ok ? `Read ${target}` : `Could not read ${target}`;
+    case 'deep_research':
+      return step.ok
+        ? `Deep-researched "${target}" — ${step.count ?? 0} source${step.count === 1 ? '' : 's'}`
+        : `Deep research failed${step.error ? `: ${step.error}` : ''}`;
     // Only the Ideas agent has these; the delegate's toolbox carries no wiki
     // tools. Labelling them here rather than in a second copy is the point.
     case 'wiki_list':

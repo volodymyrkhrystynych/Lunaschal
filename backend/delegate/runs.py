@@ -76,16 +76,30 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, delegate: bo
     token = priority.begin('chat.stream')
     db = get_db()
     content = ''
+    steps: list[dict] = []
     last_flush = 0.0
     try:
         for kind, payload in delegate_chat.stream_reply(messages, system_prompt, delegate=delegate):
             q.put((kind, payload))
             if kind == 'content':
                 content += payload
+            elif kind == 'step':
+                steps.append(payload)
 
             now = time.monotonic()
             if kind == 'step' or now - last_flush >= _FLUSH_INTERVAL:
-                build_update(db, 'messages', {'content': content}, 'id=?', (message_id,))
+                # Steps ride along with every checkpoint, not just content, so
+                # a client that reopens mid-run (a backgrounded tab, a dropped
+                # connection) sees what has actually happened so far instead of
+                # a generic "still thinking" label with nothing behind it —
+                # metadata.steps is what src/lib/agentSteps.ts's AgentStep list
+                # already reads on reload; only proposals/sources wait for the
+                # 'done' write below, since neither is known before then.
+                build_update(db, 'messages', {
+                    'content': content,
+                    'metadata': json.dumps({'agent': 'delegate', 'steps': steps,
+                                             'sources': [], 'proposals': []}),
+                }, 'id=?', (message_id,))
                 db.commit()
                 last_flush = now
 

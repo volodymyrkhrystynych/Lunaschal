@@ -204,6 +204,11 @@ def _loop(
             # what the model later claims it read.
             if event.get('tool') == 'web_fetch' and event.get('ok'):
                 sources.append({'url': event.get('url'), 'title': event.get('title')})
+            # A tool that wraps its own nested pass (e.g. the delegate's
+            # deep_research) reports what it actually fetched as a `sources`
+            # list on its own event rather than as a single url/title pair.
+            elif event.get('sources'):
+                sources.extend(event['sources'])
 
             messages.append({
                 'role': 'tool',

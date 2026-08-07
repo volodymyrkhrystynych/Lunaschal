@@ -198,6 +198,29 @@ def test_sources_come_from_what_was_actually_fetched(client, monkeypatch):
     assert result['sources'] == [{'url': 'https://ex.com/final', 'title': 'Final'}]
 
 
+def test_a_tool_that_reports_its_own_sources_list_contributes_them(client, monkeypatch):
+    """A tool that wraps a nested pass of its own (the delegate's deep_research)
+    can't report a single url/title pair like web_fetch does — it reports a
+    `sources` list on its event instead, and the outer loop has to fold those
+    in too or the UI's Sources section would miss most of what was read."""
+    monkeypatch.setattr(
+        agent.wiki, 'run_tool',
+        lambda n, a: ('report', {'tool': 'deep_research', 'ok': True, 'sources': [
+            {'url': 'https://ex.com/a', 'title': 'A'},
+            {'url': 'https://ex.com/b', 'title': 'B'},
+        ]}),
+    )
+    _script(monkeypatch, [
+        _msg(tool_calls=[_call('wiki_list')]),
+        _msg(content='done'),
+    ])
+    result = agent.gather('sys', 'q')
+    assert result['sources'] == [
+        {'url': 'https://ex.com/a', 'title': 'A'},
+        {'url': 'https://ex.com/b', 'title': 'B'},
+    ]
+
+
 def test_a_failed_fetch_is_not_recorded_as_a_source(client, monkeypatch):
     monkeypatch.setattr(
         agent.web, 'run_tool',

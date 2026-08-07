@@ -494,7 +494,15 @@ export function ChatPanel() {
                     <MessageMarkdown content={message.content} />
                   )}
                 </div>
-                <AgentSteps steps={steps} />
+                {/* live is set from the persisted status (not local isStreaming
+                    state) so a reopened or reloaded tab shows the same
+                    "N steps so far ·" pulse as a tab that never left — the
+                    backend now checkpoints steps into metadata as they happen
+                    (backend/delegate/runs.py), not just once the run ends. */}
+                <AgentSteps
+                  steps={steps}
+                  live={message.status === 'streaming'}
+                />
                 {/* Only when NOT locally streaming: the ephemeral bubble below
                     already covers a reply this tab is actively watching. This
                     is what shows a reply that's still generating after a
