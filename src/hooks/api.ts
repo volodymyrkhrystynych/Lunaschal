@@ -1057,7 +1057,7 @@ export interface PracticeSnippetProgress {
 
 export interface PracticeSnippet {
   id: string;
-  language: 'react' | 'javascript' | 'html' | 'css';
+  language: 'react' | 'javascript' | 'html' | 'css' | 'dom';
   category: string;
   title: string;
   code: string;

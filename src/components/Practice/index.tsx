@@ -6,38 +6,45 @@ import { DrillSession } from './DrillSession';
 import { SessionSummary, type DrillResult } from './SessionSummary';
 import { StatsPanel } from './StatsPanel';
 
-const LANGUAGES = ['react', 'javascript', 'html', 'css'] as const;
+const LANGUAGES = ['react', 'javascript', 'html', 'css', 'dom'] as const;
 const FEEDBACK_DELAY_MS = 900;
+const DECK_SIZE = 10;
 
 export function Practice() {
   const [language, setLanguage] = useState('');
   const [category, setCategory] = useState('');
-  // Snapshotted once per session so a background refetch (e.g. from another
-  // tab) can't reorder or shrink the deck mid-pass, same as Learning's
-  // ReviewSession.
-  const [queue, setQueue] = useState<PracticeSnippet[] | null>(null);
+  // Fetched one at a time, not as a pre-shuffled batch: submitting an attempt
+  // changes that snippet's priority score, so the next snippet has to be
+  // re-ranked against the latest progress rather than served from a deck
+  // that was already fixed before any of it was practiced.
+  const [queue, setQueue] = useState<PracticeSnippet[]>([]);
   const [index, setIndex] = useState(0);
+  const [noSnippets, setNoSnippets] = useState(false);
   const [results, setResults] = useState<DrillResult[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
-  const { data: session, isLoading } = useQuery({
-    queryKey: ['practice', 'session', language, category],
+  const needsNext = !noSnippets && index === queue.length && index < DECK_SIZE;
+
+  const { data: nextSnippets } = useQuery({
+    queryKey: ['practice', 'next', language, category, index],
     queryFn: () =>
       api.practice.session({
         language: language || undefined,
         category: category || undefined,
+        size: 1,
       }),
-    enabled: queue === null,
+    enabled: needsNext,
   });
 
   useEffect(() => {
-    if (session && queue === null) {
-      setQueue(session);
-      setIndex(0);
-      setResults([]);
+    if (!needsNext || nextSnippets === undefined) return;
+    if (nextSnippets.length === 0) {
+      setNoSnippets(true);
+    } else {
+      setQueue(q => (q.length === index ? [...q, ...nextSnippets] : q));
     }
-  }, [session, queue]);
+  }, [nextSnippets, needsNext, index]);
 
   const submitAttempt = useMutation({
     mutationFn: api.practice.submitAttempt,
@@ -68,18 +75,21 @@ export function Practice() {
   }
 
   function startNewSession() {
-    setQueue(null);
+    setQueue([]);
+    setIndex(0);
+    setNoSnippets(false);
+    setResults([]);
   }
 
   function updateFilter(next: { language?: string; category?: string }) {
     if (next.language !== undefined) setLanguage(next.language);
     if (next.category !== undefined) setCategory(next.category);
-    setQueue(null);
+    startNewSession();
   }
 
-  const current = queue?.[index];
-  const empty = queue !== null && queue.length === 0;
-  const finished = queue !== null && queue.length > 0 && index >= queue.length;
+  const current = queue[index];
+  const empty = noSnippets && queue.length === 0;
+  const finished = !noSnippets && queue.length > 0 && index >= DECK_SIZE;
 
   return (
     <div className="flex-1 overflow-y-auto p-4 md:p-6">
@@ -109,7 +119,7 @@ export function Practice() {
           />
         </div>
 
-        {isLoading && queue === null && (
+        {!current && !empty && !finished && (
           <div className="text-[var(--color-text-muted)]">Loading…</div>
         )}
 
@@ -134,7 +144,7 @@ export function Practice() {
               </div>
             )}
             <div className="mt-2 text-center text-xs text-[var(--color-text-muted)]">
-              {index + 1} of {queue?.length}
+              {index + 1} of {DECK_SIZE}
             </div>
           </div>
         )}
