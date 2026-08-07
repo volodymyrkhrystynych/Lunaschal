@@ -146,3 +146,33 @@ def test_the_checkpoint_is_passed_through_to_the_shared_loop(monkeypatch):
     hits = []
     agent.run('add x', checkpoint=lambda: hits.append(1))
     assert len(hits) >= 2, 'expected a checkpoint before each model and tool call'
+
+
+def test_the_model_is_also_offered_deep_research(monkeypatch):
+    calls = _script(monkeypatch, [_msg(content='Nothing to do.')])
+    agent.run('hello')
+
+    offered = {t['function']['name'] for t in calls[0]['tools']}
+    assert 'deep_research' in offered
+
+
+def test_deep_research_receives_the_delegates_own_checkpoint(monkeypatch):
+    """A long deep_research call has to cooperate with the same yield-to-the-
+    user gate as the rest of the loop, or it would compete with the very chat
+    message it is answering. The module-level DISPATCH entry gets no
+    checkpoint at all, so this only holds if run_events rebinds it per call."""
+    seen = {}
+
+    def fake_run_tool(name, args, checkpoint=None):
+        seen['checkpoint'] = checkpoint
+        return ('a thorough answer', {'tool': 'deep_research', 'arg': args.get('query'), 'ok': True})
+
+    monkeypatch.setattr(agent.deep_research, 'run_tool', fake_run_tool)
+    _script(monkeypatch, [
+        _msg(tool_calls=[_call('deep_research', json.dumps({'query': 'x'}))]),
+        _msg(content='Found it.'),
+    ])
+
+    checkpoint = lambda: None
+    agent.run('research x thoroughly', checkpoint=checkpoint)
+    assert seen['checkpoint'] is checkpoint

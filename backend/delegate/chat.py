@@ -43,7 +43,8 @@ DELEGATE_TOOL = {
         'description': (
             'Hand a task to a delegate that can act: it stages to-dos, calendar '
             'events, calorie entries, notes to self and flashcards for the user '
-            'to confirm, and it can search and read the web. Call it whenever '
+            'to confirm, and it can search the web — quickly for a fact, or '
+            'with real depth for a broad research question. Call it whenever '
             'the message asks for something to be done, recorded or looked up, '
             'rather than just talked about. Do not call it for ordinary '
             'conversation, or for anything you can answer confidently yourself.'

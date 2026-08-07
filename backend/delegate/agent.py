@@ -16,11 +16,16 @@ as the model deciding it was finished).
 The budget is small on purpose. A delegate run sits between the user pressing
 Enter and their first token, so its worst case is latency the user is watching:
 six turns of at most 768 tokens each, with the fetch budget below that of a
-background research pass.
+background research pass. `deep_research` (backend/delegate/deep_research.py)
+is the one deliberate exception — it is a single tool call from this loop's own
+point of view, but internally runs a second, much deeper pass, because a
+question that actually needs that depth is worth the wait it costs.
 """
+import functools
 import logging
+from types import SimpleNamespace
 
-from backend.delegate import tools as proposals
+from backend.delegate import deep_research, tools as proposals
 from backend.research import agent, web
 
 logger = logging.getLogger(__name__)
@@ -31,11 +36,12 @@ MAX_TOOL_TURNS = 6
 # Per run. A delegate is answering one chat message, not writing an article.
 MAX_FETCHES = 4
 
-ALL_TOOLS = proposals.TOOLS + web.TOOLS
+ALL_TOOLS = proposals.TOOLS + web.TOOLS + deep_research.TOOLS
 
 DISPATCH = {
     'web_search': web,
     'web_fetch': web,
+    'deep_research': deep_research,
     **{name: proposals for name in (
         'propose_task',
         'propose_calendar_event',
@@ -61,6 +67,12 @@ web_search and web_fetch really do read the internet. Use them when the task \
 depends on current or specific information you are not confident about, and \
 read a page rather than answering from snippets.
 
+deep_research also reads the internet, but far more of it: many searches and \
+page reads across multiple angles instead of one or two, and it takes \
+noticeably longer as a result. Reach for it only when the task is broad or \
+open-ended enough that a single web_search would leave real gaps — not for a \
+quick fact, which web_search already handles.
+
 Work in as few steps as the task needs, then stop and write a closing summary. \
 That summary is all the assistant will see, so leave nothing important out of \
 it and do not claim anything you did not actually do.
@@ -82,10 +94,21 @@ def run_events(task: str, *, checkpoint=None, max_turns: int = MAX_TOOL_TURNS,
     the model's prose, and `summary` is the model's own closing message — the
     only part of a delegate run the main chat model is shown.
     """
+    # deep_research runs its own nested pass, which needs the same checkpoint
+    # this loop got — not the module-level DISPATCH entry, which the shared
+    # loop calls with no checkpoint at all. Rebuilding this dict per call is
+    # what lets each run bind its own checkpoint without research/agent.py's
+    # `_loop` needing to know this tool is any different from the rest.
+    dispatch = {
+        **DISPATCH,
+        'deep_research': SimpleNamespace(
+            run_tool=functools.partial(deep_research.run_tool, checkpoint=checkpoint)),
+    }
+
     result: dict = {}
     for kind, payload in agent.gather_events(
         SYSTEM_PROMPT, task,
-        tools=ALL_TOOLS, dispatch=DISPATCH, checkpoint=checkpoint,
+        tools=ALL_TOOLS, dispatch=dispatch, checkpoint=checkpoint,
         max_turns=max_turns, max_fetches=max_fetches,
     ):
         if kind == 'result':
