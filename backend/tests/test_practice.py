@@ -12,37 +12,29 @@ FAKE_SNIPPETS = [
 ]
 
 
-class NoShuffle:
-    """A stand-in rng whose `.shuffle` is a no-op, so ranking order (not the
-    randomized presentation order) can be asserted deterministically."""
-
-    def shuffle(self, seq):
-        return None
-
-
 def test_build_session_prioritizes_unattempted_then_weak_snippets():
     now = 1_000_000
     progress = {
         'a': {'attempts_count': 5, 'last_accuracy': 99.0, 'last_wpm': 80.0, 'last_practiced_at': now},
         'b': {'attempts_count': 3, 'last_accuracy': 50.0, 'last_wpm': 20.0, 'last_practiced_at': now},
     }
-    ids = queue.build_session(FAKE_SNIPPETS, progress, now=now, size=3, rng=NoShuffle())
+    ids = queue.build_session(FAKE_SNIPPETS, progress, now=now, size=3)
     # 'c' is never attempted -> always first; 'b' is weaker than 'a' -> scores higher
     assert ids == ['c', 'b', 'a']
 
 
 def test_build_session_respects_language_filter():
-    ids = queue.build_session(FAKE_SNIPPETS, {}, size=10, language='css', rng=NoShuffle())
+    ids = queue.build_session(FAKE_SNIPPETS, {}, size=10, language='css')
     assert ids == ['c']
 
 
 def test_build_session_respects_category_filter():
-    ids = queue.build_session(FAKE_SNIPPETS, {}, size=10, category='layout', rng=NoShuffle())
+    ids = queue.build_session(FAKE_SNIPPETS, {}, size=10, category='layout')
     assert ids == ['c']
 
 
 def test_build_session_caps_result_size():
-    ids = queue.build_session(FAKE_SNIPPETS, {}, size=2, rng=NoShuffle())
+    ids = queue.build_session(FAKE_SNIPPETS, {}, size=2)
     assert len(ids) == 2
 
 
@@ -58,8 +50,22 @@ def test_build_session_recency_breaks_ties_between_equally_weak_snippets():
             'last_practiced_at': now - 86400 * 10,  # practiced 10 days ago
         },
     }
-    ids = queue.build_session(FAKE_SNIPPETS, progress, now=now, size=3, rng=NoShuffle())
+    ids = queue.build_session(FAKE_SNIPPETS, progress, now=now, size=3)
     assert ids == ['c', 'b', 'a']
+
+
+def test_build_session_is_ordered_worst_first_not_shuffled():
+    """A batch larger than one snippet must come back strictly ranked, since
+    the frontend now walks it as "next lowest, next lowest" rather than
+    treating it as a shuffled bag of equally-due snippets."""
+    now = 1_000_000
+    progress = {
+        'a': {'attempts_count': 5, 'last_accuracy': 95.0, 'last_wpm': 60.0, 'last_practiced_at': now},
+        'b': {'attempts_count': 5, 'last_accuracy': 40.0, 'last_wpm': 10.0, 'last_practiced_at': now},
+    }
+    for _ in range(10):
+        ids = queue.build_session(FAKE_SNIPPETS, progress, now=now, size=3)
+        assert ids == ['c', 'b', 'a']
 
 
 def test_rating_label_thresholds():

@@ -1,14 +1,15 @@
 """Session selection for the Practice tab.
 
-Freeform weighted drill, not spaced repetition: no due dates. A session pulls
-a batch of snippets weighted toward ones never attempted, typed inaccurately,
-or typed slowly — and, among otherwise-equal snippets, ones not practiced
-recently. Pure and DB-free so it can be unit tested with fabricated progress
-dicts; the caller (backend/routes/practice.py) is responsible for loading
-`progress_by_id` from `practice_progress` and passing `now`.
+Freeform weighted drill, not spaced repetition: no due dates. A session
+ranks snippets worst-first — weighted toward ones never attempted, typed
+inaccurately, or typed slowly, and, among otherwise-equal snippets, ones not
+practiced recently — and returns them in that order rather than shuffled, so
+the next snippet served is always the one most in need of practice. Pure and
+DB-free so it can be unit tested with fabricated progress dicts; the caller
+(backend/routes/practice.py) is responsible for loading `progress_by_id`
+from `practice_progress` and passing `now`.
 """
 
-import random
 import time
 
 NEW_BONUS = 1000.0
@@ -37,11 +38,9 @@ def build_session(
     size: int = DEFAULT_SIZE,
     language: str | None = None,
     category: str | None = None,
-    rng: random.Random | None = None,
 ) -> list[str]:
-    """Return an ordered list of snippet ids for a drill session."""
+    """Return snippet ids ranked worst-first (most in need of practice)."""
     now = now if now is not None else int(time.time())
-    rng = rng if rng is not None else random
     pool = [
         s
         for s in snippets
@@ -49,6 +48,4 @@ def build_session(
         and (category is None or s['category'] == category)
     ]
     ranked = sorted(pool, key=lambda s: _score(progress_by_id.get(s['id']), now), reverse=True)
-    ids = [s['id'] for s in ranked[:size]]
-    rng.shuffle(ids)
-    return ids
+    return [s['id'] for s in ranked[:size]]
