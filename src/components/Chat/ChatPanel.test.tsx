@@ -11,13 +11,10 @@ vi.mock('../../hooks/api', () => ({
       today: vi.fn(),
       createConversation: vi.fn(),
       addMessage: vi.fn(),
-      saveCalendar: vi.fn(),
-      saveCalories: vi.fn(),
-      saveTask: vi.fn(),
+      resolveProposal: vi.fn(),
     },
     settings: { get: vi.fn() },
     learning: {
-      generateForTopic: vi.fn(),
       generateFromNote: vi.fn(),
       approve: vi.fn(),
       regenerate: vi.fn(),
@@ -32,6 +29,7 @@ function openStream() {
   let push!: (chunk: string) => void;
   let pushEvent!: (event: object) => void;
   let close!: (done?: object) => void;
+  let fail!: (error: Error) => void;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
       const encode = new TextEncoder();
@@ -44,6 +42,9 @@ function openStream() {
         controller.enqueue(encode.encode('data: [DONE]\n\n'));
         controller.close();
       };
+      // Models a dropped connection (a backgrounded tab, a network blip):
+      // the reader's next `read()` rejects, same as a real disconnect.
+      fail = error => controller.error(error);
     },
   });
   return {
@@ -51,6 +52,7 @@ function openStream() {
     push,
     pushEvent,
     close,
+    fail,
   };
 }
 
@@ -96,146 +98,205 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('delegate proposals become confirm cards', () => {
-  it('holds a card back until the reply that mentions it is on screen', async () => {
-    const stream = openStream();
-    const fetchMock = vi.fn().mockResolvedValue(stream.response);
-    vi.stubGlobal('fetch', fetchMock);
+describe('delegate proposals are durable confirm cards', () => {
+  // Cards render purely from the assistant message's persisted metadata now
+  // (backend/delegate/runs.py writes it when the run finishes) — no live
+  // stream involved, which is the whole point: they survive a reload or a
+  // dropped connection. DelegateProposals.test.tsx covers per-kind card
+  // content and the accept/dismiss mutation in isolation; these check that
+  // ChatPanel actually wires a message's proposals into it.
+  const conversationWithProposals = (proposals: object[]) => ({
+    id: 'c1',
+    messages: [
+      {
+        id: 'm-user',
+        role: 'user',
+        content: 'going to the dentist next week',
+        metadata: null,
+        status: 'done',
+        createdAt: '2026-01-01T08:00:00.000Z',
+      },
+      {
+        id: 'm-assistant',
+        role: 'assistant',
+        content: 'Noted!',
+        metadata: JSON.stringify({
+          agent: 'delegate',
+          steps: [],
+          sources: [],
+          proposals,
+        }),
+        status: 'done',
+        createdAt: '2026-01-01T08:00:01.000Z',
+      },
+    ],
+  });
 
-    renderChat();
-    const input = await screen.findByPlaceholderText('Type a message...');
-    fireEvent.change(input, {
-      target: { value: 'going to the dentist next week' },
-    });
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/chat/stream',
-        expect.anything()
-      )
-    );
-    stream.push('Noted!');
-    await screen.findByText(/Noted!/);
-
-    // Mid-stream: the delegate's work is done but the reply is still coming.
-    // A card appearing before the sentence that refers to it reads as a
-    // non-sequitur.
-    expect(screen.queryByText(/Save as calendar event/)).toBeNull();
-
-    stream.close({
-      proposals: [
+  it('renders a pending calendar card straight from metadata', async () => {
+    vi.mocked(api.chat.today).mockResolvedValue(
+      conversationWithProposals([
         {
+          id: 'p1',
           kind: 'calendar',
+          status: 'pending',
           data: { title: 'Dentist appointment', date: '2026-08-05', tags: [] },
         },
-      ],
-    });
-    expect(await screen.findByText(/Dentist appointment/)).toBeTruthy();
-  });
-
-  it('stages a calendar event with no confidence gate', async () => {
-    // The old classifier dropped everything under 0.7 with nothing shown,
-    // because it was guessing after the fact. A proposal is a commitment.
-    const stream = openStream();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+      ]) as never
+    );
 
     renderChat();
-    await sendAndReply('going to the dentist next week', stream, 'Nice!', [
-      {
-        kind: 'calendar',
-        data: {
-          title: 'Dentist appointment',
-          description: 'Checkup',
-          date: '2026-08-05',
-          tags: [],
+
+    expect(await screen.findByText('Save as calendar event?')).toBeTruthy();
+    expect(screen.getByText('Dentist appointment')).toBeTruthy();
+  });
+
+  it('accepts a proposal by resolving it on the server, not by saving locally', async () => {
+    vi.mocked(api.chat.today).mockResolvedValue(
+      conversationWithProposals([
+        {
+          id: 'p1',
+          kind: 'task',
+          status: 'pending',
+          data: { title: 'call the dentist' },
         },
+      ]) as never
+    );
+    vi.mocked(api.chat.resolveProposal).mockResolvedValue({
+      proposal: {
+        id: 'p1',
+        kind: 'task',
+        status: 'accepted',
+        data: {},
+        result: { id: 'task1' },
       },
-    ]);
-
-    expect(await screen.findByText(/Dentist appointment/)).toBeTruthy();
-  });
-
-  it('stages a calorie entry and logs it on confirm', async () => {
-    const stream = openStream();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.chat.saveCalories).mockResolvedValue({ id: 'cal1' });
-
-    renderChat();
-    await sendAndReply('I ate a burger, about 650 calories', stream, 'Nice!', [
-      { kind: 'calorie', data: { description: 'burger', calories: 650 } },
-    ]);
-
-    expect(await screen.findByText(/burger/)).toBeTruthy();
-    expect(screen.getByText(/650 cal/)).toBeTruthy();
-
-    fireEvent.click(screen.getByText('Log'));
-    await waitFor(() => expect(api.chat.saveCalories).toHaveBeenCalled());
-    expect(vi.mocked(api.chat.saveCalories).mock.calls[0][0]).toEqual(
-      expect.objectContaining({ description: 'burger', calories: 650 })
-    );
-  });
-
-  it('stages a task and adds it on confirm', async () => {
-    const stream = openStream();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.chat.saveTask).mockResolvedValue({ id: 'task1' });
-
-    renderChat();
-    await sendAndReply('add call the dentist to my todos', stream, 'Done!', [
-      { kind: 'task', data: { title: 'call the dentist', list: 'todo' } },
-    ]);
-
-    expect(await screen.findByText('call the dentist')).toBeTruthy();
-
-    fireEvent.click(screen.getByText('Add'));
-    await waitFor(() => expect(api.chat.saveTask).toHaveBeenCalled());
-    expect(vi.mocked(api.chat.saveTask).mock.calls[0][0]).toEqual(
-      expect.objectContaining({ title: 'call the dentist', list: 'todo' })
-    );
-  });
-
-  it('stages flashcards and queues them on confirm', async () => {
-    const stream = openStream();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.learning.generateForTopic).mockResolvedValue({
-      count: 4,
     } as never);
 
     renderChat();
-    await sendAndReply('quiz me on React hooks', stream, 'Sure.', [
-      { kind: 'flashcards', data: { topic: 'React hooks' } },
-    ]);
+    await screen.findByText('Add to your tasks?');
+    fireEvent.click(screen.getByText('Add'));
 
-    expect(await screen.findByText(/React hooks/)).toBeTruthy();
-    fireEvent.click(screen.getByText('Queue Cards'));
     await waitFor(() =>
-      expect(api.learning.generateForTopic).toHaveBeenCalledWith('React hooks')
+      expect(api.chat.resolveProposal).toHaveBeenCalledWith(
+        'm-assistant',
+        'p1',
+        'accept'
+      )
     );
   });
 
-  it('drops a proposal missing its headline field instead of showing an empty card', async () => {
-    // An empty card the user is asked to confirm is a worse failure than a
-    // dropped one — and an unknown kind must not throw and take the reply
-    // down with it.
-    const stream = openStream();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+  it('dismisses a proposal by resolving it on the server', async () => {
+    vi.mocked(api.chat.today).mockResolvedValue(
+      conversationWithProposals([
+        {
+          id: 'p1',
+          kind: 'calorie',
+          status: 'pending',
+          data: { description: 'burger', calories: 650 },
+        },
+      ]) as never
+    );
+    vi.mocked(api.chat.resolveProposal).mockResolvedValue({
+      proposal: { id: 'p1', kind: 'calorie', status: 'dismissed', data: {} },
+    } as never);
 
     renderChat();
-    await sendAndReply('something', stream, 'Sure.', [
-      { kind: 'task', data: {} },
-      { kind: 'calorie', data: { description: 'burger' } },
-      { kind: 'unknown_kind', data: { title: 'x' } },
-    ]);
+    await screen.findByText('Log calories?');
+    fireEvent.click(screen.getByText('Dismiss'));
 
     await waitFor(() =>
-      expect(api.chat.addMessage).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({ role: 'assistant' })
+      expect(api.chat.resolveProposal).toHaveBeenCalledWith(
+        'm-assistant',
+        'p1',
+        'dismiss'
       )
     );
-    expect(screen.queryByText('Add to your tasks?')).toBeNull();
-    expect(screen.queryByText('Log calories?')).toBeNull();
+  });
+
+  it('shows a resolved proposal as a quiet line, not an actionable card', async () => {
+    vi.mocked(api.chat.today).mockResolvedValue(
+      conversationWithProposals([
+        {
+          id: 'p1',
+          kind: 'flashcards',
+          status: 'accepted',
+          data: { topic: 'React hooks' },
+          result: { count: 4 },
+        },
+      ]) as never
+    );
+
+    renderChat();
+
+    expect(
+      await screen.findByText('Queued 4 cards for review in Learning')
+    ).toBeTruthy();
+    expect(screen.queryByText(/Generate flashcards for/)).toBeNull();
+  });
+
+  it("keeps an earlier turn's pending proposal visible once a later turn replies", async () => {
+    // Proposals used to live in one piece of "latest turn" React state, so a
+    // second reply silently replaced whatever card the first one staged.
+    // Reading from each message's own metadata means every still-pending
+    // proposal stays up, not just the most recent.
+    vi.mocked(api.chat.today).mockResolvedValue({
+      id: 'c1',
+      messages: [
+        {
+          id: 'm-user-1',
+          role: 'user',
+          content: 'remind me to call the dentist',
+          metadata: null,
+          status: 'done',
+          createdAt: '2026-01-01T08:00:00.000Z',
+        },
+        {
+          id: 'm-assistant-1',
+          role: 'assistant',
+          content: 'Sure.',
+          metadata: JSON.stringify({
+            agent: 'delegate',
+            steps: [],
+            sources: [],
+            proposals: [
+              {
+                id: 'p1',
+                kind: 'task',
+                status: 'pending',
+                data: { title: 'call the dentist' },
+              },
+            ],
+          }),
+          status: 'done',
+          createdAt: '2026-01-01T08:00:01.000Z',
+        },
+        {
+          id: 'm-user-2',
+          role: 'user',
+          content: 'what time is it',
+          metadata: null,
+          status: 'done',
+          createdAt: '2026-01-01T08:01:00.000Z',
+        },
+        {
+          id: 'm-assistant-2',
+          role: 'assistant',
+          content: "It's 8am.",
+          metadata: JSON.stringify({
+            agent: 'delegate',
+            steps: [],
+            sources: [],
+            proposals: [],
+          }),
+          status: 'done',
+          createdAt: '2026-01-01T08:01:01.000Z',
+        },
+      ],
+    } as never);
+
+    renderChat();
+
+    expect(await screen.findByText('Add to your tasks?')).toBeTruthy();
+    expect(screen.getByText("It's 8am.")).toBeTruthy();
   });
 
   it('still shows "Saved to journal" on historical messages saved before the feature was removed', async () => {
@@ -416,12 +477,35 @@ describe('the "New chat" spacer', () => {
 });
 
 describe('reply persistence', () => {
-  it('keeps the reply on screen with an error, instead of silently vanishing, when saving it fails', async () => {
+  it('recovers the reply from the persisted row when the connection drops mid-stream', async () => {
+    // The reply now generates on a background thread independent of this
+    // connection (backend/delegate/runs.py) — a drop here must not lose it,
+    // because the row it's checkpointing to is what `today` polls next.
     const stream = openStream();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
-    vi.mocked(api.chat.addMessage)
-      .mockResolvedValueOnce({ id: 'm-user' }) // saving the user's message
-      .mockRejectedValueOnce(new Error('network blip')); // saving the reply
+    vi.mocked(api.chat.today)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({
+        id: 'c1',
+        messages: [
+          {
+            id: 'm-user',
+            role: 'user',
+            content: 'hello there',
+            metadata: null,
+            status: 'done',
+            createdAt: '2026-01-01T08:00:00.000Z',
+          },
+          {
+            id: 'm-assistant',
+            role: 'assistant',
+            content: 'General Kenobi',
+            metadata: null,
+            status: 'done',
+            createdAt: '2026-01-01T08:00:01.000Z',
+          },
+        ],
+      } as never);
 
     renderChat();
     const input = await screen.findByPlaceholderText('Type a message...');
@@ -434,20 +518,46 @@ describe('reply persistence', () => {
         content: 'hello there',
       })
     );
-    stream.push('General Kenobi');
-    stream.close();
+    stream.push('General Ken');
+    await screen.findByText(/General Ken/);
+    stream.fail(new Error('Load failed'));
 
-    // The generated reply must stay visible along with the failure — not
-    // wiped out in the same tick it was reported.
-    expect(await screen.findByText(/network blip/)).toBeTruthy();
-    expect(screen.getByText(/General Kenobi/)).toBeTruthy();
+    // Recovered from the persisted row — no "Error:" wipeout, and the final
+    // (server-checkpointed) content, not the partial chunk this tab saw.
+    expect(await screen.findByText('General Kenobi')).toBeTruthy();
+    expect(screen.queryByText(/^Error:/)).toBeNull();
   });
 
-  it('surfaces a mid-stream error rather than showing nothing at all', async () => {
+  it('shows a backend-reported failure via the persisted row rather than a live wipeout', async () => {
     // The bug the delegate replaced: a request that produced no reply, no
-    // error and no log entry.
+    // error and no log entry. The error still has to surface — just from the
+    // row the background run wrote it to, not from the dropped connection.
     const stream = openStream();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    vi.mocked(api.chat.today)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({
+        id: 'c1',
+        messages: [
+          {
+            id: 'm-user',
+            role: 'user',
+            content: 'log 400 calories',
+            metadata: null,
+            status: 'done',
+            createdAt: '2026-01-01T08:00:00.000Z',
+          },
+          {
+            id: 'm-assistant',
+            role: 'assistant',
+            content: '',
+            metadata: null,
+            status: 'error',
+            error: 'llama-server is down',
+            createdAt: '2026-01-01T08:00:01.000Z',
+          },
+        ],
+      } as never);
 
     renderChat();
     const input = await screen.findByPlaceholderText('Type a message...');
@@ -459,6 +569,11 @@ describe('reply persistence', () => {
     stream.close();
 
     expect(await screen.findByText(/llama-server is down/)).toBeTruthy();
+    // Never fell back to persisting the reply itself client-side.
+    expect(api.chat.addMessage).not.toHaveBeenCalledWith(
+      'c1',
+      expect.objectContaining({ role: 'assistant' })
+    );
   });
 });
 

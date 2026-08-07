@@ -234,6 +234,98 @@ def test_the_priority_mark_is_released_after_the_turn(client, monkeypatch):
     assert priority.active() is False
 
 
+def _new_conversation(db):
+    import time
+    conv_id = 'conv1'
+    now = int(time.time())
+    db.execute(
+        'INSERT INTO conversations(id, title, created_at, updated_at) VALUES (?,?,?,?)',
+        (conv_id, None, now, now),
+    )
+    db.commit()
+    return conv_id
+
+
+def test_a_conversation_id_persists_the_reply_via_a_background_run(client, monkeypatch):
+    """The reply generates on a thread independent of this request — this
+    test drives the SSE route end-to-end (a real thread, a real DB row) and
+    checks the *row*, not just the framed events, since the row is what a
+    disconnected client recovers from."""
+    from backend.db.connection import get_db, row_to_dict
+
+    db = get_db()
+    conv_id = _new_conversation(db)
+    monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
+    monkeypatch.setattr(
+        'backend.routes.chat.delegate_chat.stream_reply',
+        lambda messages, system_prompt, delegate=True: iter([
+            ('content', 'Here you go.'),
+            ('done', {'steps': [{'tool': 'web_search', 'ok': True}],
+                      'sources': [{'url': 'https://ex.com'}], 'proposals': []}),
+        ]),
+    )
+
+    body = _post(client, {
+        'messages': [{'role': 'user', 'content': 'hi'}],
+        'conversationId': conv_id,
+    })
+
+    events = _events(body)
+    assert 'messageId' in events[0]
+    message_id = events[0]['messageId']
+    assert any(e.get('content') == 'Here you go.' for e in events)
+
+    row = row_to_dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone())
+    assert row['status'] == 'done'
+    assert row['content'] == 'Here you go.'
+    assert row['role'] == 'assistant'
+    assert row['conversationId'] == conv_id
+    metadata = json.loads(row['metadata'])
+    assert metadata['steps'] == [{'tool': 'web_search', 'ok': True}]
+
+
+def test_a_conversation_id_run_that_fails_leaves_an_error_row(client, monkeypatch):
+    from backend.db.connection import get_db, row_to_dict
+
+    db = get_db()
+    conv_id = _new_conversation(db)
+    monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
+
+    def exploding(messages, system_prompt, delegate=True):
+        yield ('content', 'partial')
+        raise RuntimeError('llama-server died')
+
+    monkeypatch.setattr('backend.routes.chat.delegate_chat.stream_reply', exploding)
+
+    body = _post(client, {'messages': [], 'conversationId': conv_id})
+    events = _events(body)
+    message_id = events[0]['messageId']
+    assert events[-1]['error'] == 'llama-server died'
+
+    row = row_to_dict(db.execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone())
+    assert row['status'] == 'error'
+    assert row['error'] == 'llama-server died'
+    assert row['content'] == 'partial'
+
+
+def test_no_conversation_id_keeps_the_inline_legacy_path(client, monkeypatch):
+    """Voice/morning-checkin/Writing discussions never pass a conversationId —
+    they must keep getting the original inline generator, with no message row
+    created anywhere."""
+    from backend.db.connection import get_db
+
+    db = get_db()
+    monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
+    monkeypatch.setattr(
+        'backend.routes.chat.delegate_chat.stream_reply',
+        lambda messages, system_prompt, delegate=True: iter([('content', 'hi')]),
+    )
+
+    _post(client, {'messages': [], 'systemPrompt': 'You are a nudge.'})
+
+    assert db.execute('SELECT COUNT(*) AS n FROM messages').fetchone()['n'] == 0
+
+
 def test_a_caller_supplied_prompt_turns_the_delegate_off(client, monkeypatch):
     seen = {}
 

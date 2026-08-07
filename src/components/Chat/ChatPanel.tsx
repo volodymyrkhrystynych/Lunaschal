@@ -4,6 +4,7 @@ import { api, type DraftCard } from '../../hooks/api';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { BriefingTodos } from '../BriefingTodos';
 import { AgentSteps } from './AgentSteps';
+import { DelegateProposals } from './DelegateProposals';
 import { ReasoningBlock } from './ReasoningBlock';
 import { ThinkingLabel } from './ThinkingLabel';
 import {
@@ -14,37 +15,17 @@ import {
 import { readSSE } from '@/lib/sse';
 import { isAtBottom } from '@/lib/chatScroll';
 import { formatMessageTime } from '@/lib/chatTime';
-import { parseAgentMeta, type AgentStep } from '@/lib/agentSteps';
+import {
+  parseAgentMeta,
+  parseDelegateProposals,
+  type AgentStep,
+} from '@/lib/agentSteps';
 
-interface PendingSave {
-  messageId: string;
-  data: {
-    title: string;
-    description?: string;
-    date?: string;
-    time?: string;
-    tags: string[];
-  };
-}
-
-interface PendingQuiz {
-  topic: string;
-  messageId: string;
-}
-
-interface PendingCalorie {
-  messageId: string;
-  data: { description: string; calories: number };
-}
-
-interface PendingTask {
-  messageId: string;
-  data: { title: string; list?: string };
-}
-
-/** One staged action from the delegate's `done` event. The delegate writes
- * nothing itself — these become the same confirm cards below that the retired
- * classifier used to fill, so the click that actually saves is unchanged. */
+/** One staged action from the delegate's `done` event. Only `note` is still
+ * read from this live shape — the other kinds (calendar/calorie/task/
+ * flashcards) are durable confirm cards read from `message.metadata.proposals`
+ * instead (parseDelegateProposals), so they survive a reload or a dropped
+ * connection. `note` drafts immediately with no confirm step of its own. */
 interface DelegateProposal {
   kind: string;
   data: Record<string, unknown>;
@@ -58,13 +39,6 @@ export function ChatPanel() {
   const [streamingReasoning, setStreamingReasoning] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
-  const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
-  const [pendingQuiz, setPendingQuiz] = useState<PendingQuiz | null>(null);
-  const [pendingCalorie, setPendingCalorie] = useState<PendingCalorie | null>(
-    null
-  );
-  const [pendingTask, setPendingTask] = useState<PendingTask | null>(null);
-  const [queuedCards, setQueuedCards] = useState<number | null>(null);
   const [noteCards, setNoteCards] = useState<DraftCard[] | null>(null);
   // Which drafted note card has its "request changes" text box open.
   const [noteRegenId, setNoteRegenId] = useState<string | null>(null);
@@ -87,9 +61,20 @@ export function ChatPanel() {
   const queryClient = useQueryClient();
 
   // The single conversation for the current chat day (4am -> 4am).
+  //
+  // refetchInterval keeps polling while the last message is still
+  // 'streaming' — the reply now generates on a background thread
+  // (backend/delegate/runs.py) independent of any one connection, so this is
+  // what picks it up whether we dropped mid-stream (sendMessage's catch below
+  // just invalidates and lets this take over) or the page was reloaded while
+  // a reply was still running.
   const { data: conversation } = useQuery({
     queryKey: ['chat', 'today', 'chat'],
     queryFn: () => api.chat.today(),
+    refetchInterval: query => {
+      const msgs = query.state.data?.messages ?? [];
+      return msgs[msgs.length - 1]?.status === 'streaming' ? 1500 : false;
+    },
   });
 
   const { data: settings } = useQuery({
@@ -120,93 +105,20 @@ export function ChatPanel() {
     onSuccess: invalidateToday,
   });
 
-  /** Turn what the delegate staged into confirm cards.
-   *
-   * The delegate decided *before* the reply and its tools validated the
-   * payloads, so there is no confidence threshold to apply here — the old
-   * classifier's 0.7 gate existed because it was guessing after the fact, and
-   * it silently dropped everything below the line with nothing shown. A
-   * proposal that arrives is a proposal the model committed to. */
-  const applyProposals = (proposals: DelegateProposal[], messageId: string) => {
+  /** `note` is the one proposal kind with no confirm card of its own — it
+   * drafts a lesson card immediately, and the draft *is* the review step —
+   * so it's still read straight off the live `done` event rather than from
+   * persisted metadata. The other four kinds are durable confirm cards
+   * rendered from `message.metadata.proposals` (DelegateProposals) instead. */
+  const stageNoteProposals = (proposals: DelegateProposal[]) => {
     for (const { kind, data } of proposals) {
-      // The delegate's tools validate before staging, so a payload missing its
-      // headline field can't come from our own backend — but an empty card the
-      // user is asked to confirm is a worse failure than a dropped one, so the
-      // required field is re-checked here rather than trusted.
-      const str = (key: string) =>
-        typeof data?.[key] === 'string' ? (data[key] as string).trim() : '';
-      if (kind === 'calendar' && str('title')) {
-        setPendingSave({
-          messageId,
-          data: {
-            title: str('title'),
-            description: str('description'),
-            date: str('date'),
-            time: str('time') || undefined,
-            tags: Array.isArray(data.tags) ? (data.tags as string[]) : [],
-          },
-        });
-      } else if (kind === 'flashcards' && str('topic')) {
-        setPendingQuiz({ topic: str('topic'), messageId });
-      } else if (kind === 'note' && str('content')) {
-        // The only staged action with no confirm card of its own: it drafts
-        // cards immediately, and the draft *is* the review step.
-        generateFromNote.mutate(str('content'));
-      } else if (
-        kind === 'calorie' &&
-        str('description') &&
-        typeof data.calories === 'number'
-      ) {
-        setPendingCalorie({
-          messageId,
-          data: { description: str('description'), calories: data.calories },
-        });
-      } else if (kind === 'task' && str('title')) {
-        setPendingTask({
-          messageId,
-          data: { title: str('title'), list: str('list') || undefined },
-        });
+      const content =
+        typeof data?.content === 'string' ? data.content.trim() : '';
+      if (kind === 'note' && content) {
+        generateFromNote.mutate(content);
       }
     }
   };
-
-  const saveCalendar = useMutation({
-    mutationFn: api.chat.saveCalendar,
-    onSuccess: () => {
-      invalidateToday();
-      queryClient.invalidateQueries({ queryKey: ['calendar'] });
-      setPendingSave(null);
-    },
-  });
-
-  const saveCalories = useMutation({
-    mutationFn: api.chat.saveCalories,
-    onSuccess: () => {
-      invalidateToday();
-      queryClient.invalidateQueries({ queryKey: ['lifestyle', 'calories'] });
-      setPendingCalorie(null);
-    },
-  });
-
-  const saveTask = useMutation({
-    mutationFn: api.chat.saveTask,
-    onSuccess: () => {
-      invalidateToday();
-      queryClient.invalidateQueries({ queryKey: ['todos'] });
-      queryClient.invalidateQueries({ queryKey: ['tasks'] });
-      setPendingTask(null);
-    },
-  });
-
-  const generateForTopic = useMutation({
-    mutationFn: (topic: string) => api.learning.generateForTopic(topic),
-    onSuccess: result => {
-      setQueuedCards(result.count);
-      setPendingQuiz(null);
-      queryClient.invalidateQueries({ queryKey: ['learning'] });
-      setTimeout(() => setQueuedCards(null), 8000);
-    },
-  });
 
   /** "note to self" drafts a lesson card right away — the preview appears
    * inline below so it can be approved or steered without leaving chat. */
@@ -311,18 +223,7 @@ export function ChatPanel() {
     // Only ever chase content *downward*. Correcting upward would fight a user
     // who is deliberately looking at something higher up.
     if (delta > 0) c.scrollTop += delta;
-  }, [
-    messages,
-    streamingContent,
-    streamingReasoning,
-    liveSteps,
-    pendingSave,
-    pendingQuiz,
-    pendingCalorie,
-    pendingTask,
-    queuedCards,
-    noteCards,
-  ]);
+  }, [messages, streamingContent, streamingReasoning, liveSteps, noteCards]);
 
   const startNewChat = async () => {
     if (!conversationId || !hasChat || isStreaming) return;
@@ -348,7 +249,7 @@ export function ChatPanel() {
       convId = result.id;
     }
 
-    const userMsgResult = await addMessage.mutateAsync({
+    await addMessage.mutateAsync({
       convId,
       role: 'user',
       content: userMessage,
@@ -383,7 +284,10 @@ export function ChatPanel() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ messages: chatMessages }),
+        body: JSON.stringify({
+          messages: chatMessages,
+          conversationId: convId,
+        }),
       });
 
       if (!response.ok) {
@@ -394,100 +298,52 @@ export function ChatPanel() {
       const reader = response.body?.getReader();
       if (!reader) throw new Error('No response body');
 
-      let steps: AgentStep[] = [];
-      let sources: { url: string; title?: string }[] = [];
-      let reasoning = '';
-      for await (const parsed of readSSE(reader)) {
-        // Tool events arrive as each delegate call finishes, so a hand-off
-        // reads as progress rather than a spinner.
-        if (parsed.tool) {
-          steps = [...steps, parsed as AgentStep];
-          setLiveSteps(steps);
-        }
-        if (parsed.thinking) {
-          reasoning += parsed.thinking;
-          setStreamingReasoning(reasoning);
-        }
-        if (parsed.content) {
-          fullContent += parsed.content;
-          setStreamingContent(fullContent);
-        }
-        if (parsed.done) {
-          if (Array.isArray(parsed.sources)) {
-            sources = parsed.sources as { url: string; title?: string }[];
+      // The reply now generates on a background thread (backend/delegate/
+      // runs.py), independent of this connection — the assistant message row
+      // already exists server-side by the time `response.ok` above is true.
+      // So a drop from here on (a network blip, `readSSE` throwing, or the
+      // backend forwarding its own `{error}` frame) isn't a dead end: the
+      // thread keeps going and checkpoints the row regardless, and the
+      // `today` query's refetchInterval picks up wherever it lands. Only a
+      // failure *before* that point (caught below) is a real, nothing-ever-
+      // started error worth showing.
+      try {
+        for await (const parsed of readSSE(reader)) {
+          // Tool events arrive as each delegate call finishes, so a hand-off
+          // reads as progress rather than a spinner.
+          if (parsed.tool) {
+            setLiveSteps(steps => [...steps, parsed as AgentStep]);
           }
-          if (Array.isArray(parsed.proposals)) {
+          if (parsed.thinking) {
+            setStreamingReasoning(reasoning => reasoning + parsed.thinking);
+          }
+          if (parsed.content) {
+            fullContent += parsed.content;
+            setStreamingContent(fullContent);
+          }
+          if (parsed.done && Array.isArray(parsed.proposals)) {
             proposals = parsed.proposals as DelegateProposal[];
           }
+          if (parsed.error) throw new Error(parsed.error);
         }
-        if (parsed.error) throw new Error(parsed.error);
+
+        invalidateToday();
+        setStreamingContent('');
+        stageNoteProposals(proposals);
+      } catch {
+        // The backend already has this reply — see the comment above.
+        invalidateToday();
+        setStreamingContent('');
       }
-
-      // Reasoning is deliberately not persisted: it is the model talking to
-      // itself, it dwarfs the reply, and re-reading it a day later has never
-      // once been the thing anyone wanted out of the chat log.
-      const metadata =
-        steps.length > 0 || sources.length > 0
-          ? JSON.stringify({ agent: 'delegate', steps, sources })
-          : undefined;
-
-      await addMessage.mutateAsync({
-        convId: convId!,
-        role: 'assistant',
-        content: fullContent,
-        metadata,
-      });
-      // Only clear on success: `messages` already carries the saved reply by
-      // this point (addMessage's onSuccess invalidates+refetches before
-      // mutateAsync resolves), so this can't leave a visible gap. Clearing
-      // unconditionally in a `finally` used to wipe the error message below
-      // in the same tick it was set — a failed save (or a failed stream)
-      // silently vanished the whole reply with nothing shown to the user.
-      setStreamingContent('');
-      // Cards go up only once the reply they refer to is saved and on screen,
-      // so "I've put that on your list to confirm" and the card appear together.
-      applyProposals(proposals, userMsgResult.id);
     } catch (error) {
       setStreamingContent(
-        `Error: ${error instanceof Error ? error.message : 'Failed to get response'}` +
-          (fullContent ? `\n\n(reply was not saved)\n\n${fullContent}` : '')
+        `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`
       );
     } finally {
       setIsStreaming(false);
       setLiveSteps([]);
       setStreamingReasoning('');
     }
-  };
-
-  const handleSave = () => {
-    if (!pendingSave || !conversationId) return;
-    saveCalendar.mutate({
-      conversationId,
-      messageId: pendingSave.messageId,
-      title: pendingSave.data.title,
-      description: pendingSave.data.description || '',
-      date: pendingSave.data.date || new Date().toISOString().split('T')[0],
-      time: pendingSave.data.time,
-      tags: pendingSave.data.tags,
-    });
-  };
-
-  const handleSaveCalories = () => {
-    if (!pendingCalorie) return;
-    saveCalories.mutate({
-      messageId: pendingCalorie.messageId,
-      description: pendingCalorie.data.description,
-      calories: pendingCalorie.data.calories,
-    });
-  };
-
-  const handleSaveTask = () => {
-    if (!pendingTask) return;
-    saveTask.mutate({
-      messageId: pendingTask.messageId,
-      title: pendingTask.data.title,
-      list: pendingTask.data.list,
-    });
   };
 
   const toggleRecording = async () => {
@@ -554,9 +410,6 @@ export function ChatPanel() {
   };
 
   const isConfigured = !!settings?.llamaUrl;
-  const isSaving = saveCalendar.isPending;
-  const isSavingCalories = saveCalories.isPending;
-  const isSavingTask = saveTask.isPending;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -613,17 +466,18 @@ export function ChatPanel() {
           const metadata = message.metadata
             ? JSON.parse(message.metadata)
             : null;
-          const hasSaved =
-            metadata?.savedAsJournal ||
-            metadata?.savedAsCalendar ||
-            metadata?.savedAsCalories ||
-            metadata?.savedAsTask;
+          const hasSaved = metadata?.savedAsJournal;
           // The overnight briefing's plan for the day — crossed off in place;
           // only an explicit "add to to-dos" ever reaches the list.
           const proposedTodos = parseProposedTodos(message.metadata);
           // Also covers replies saved by the retired web-search tab: they
           // carry the same {steps, sources} shape.
           const { steps, sources } = parseAgentMeta(message.metadata);
+          // The delegate's confirm cards — durable across a reload or a
+          // dropped connection, since the background run itself wrote them
+          // (backend/delegate/runs.py), and only removed from "pending" by an
+          // explicit accept/dismiss (DelegateProposals).
+          const delegateProposals = parseDelegateProposals(message.metadata);
           const sentAt = formatMessageTime(message.createdAt);
           return (
             <div
@@ -641,6 +495,23 @@ export function ChatPanel() {
                   )}
                 </div>
                 <AgentSteps steps={steps} />
+                {/* Only when NOT locally streaming: the ephemeral bubble below
+                    already covers a reply this tab is actively watching. This
+                    is what shows a reply that's still generating after a
+                    reload, or after this tab lost the connection and is
+                    waiting on the `today` query's poll to catch up. */}
+                {message.role === 'assistant' &&
+                  !isStreaming &&
+                  message.status === 'streaming' && (
+                    <div className="mt-1 text-xs text-[var(--color-text-muted)]">
+                      <ThinkingLabel />
+                    </div>
+                  )}
+                {message.role === 'assistant' && message.status === 'error' && (
+                  <div className="mt-1 text-xs text-red-400">
+                    Error: {message.error || 'The reply failed.'}
+                  </div>
+                )}
                 {sources.length > 0 && (
                   <ul className="mt-1 text-xs space-y-0.5">
                     {sources.map(source => (
@@ -663,21 +534,17 @@ export function ChatPanel() {
                     proposals={proposedTodos}
                   />
                 )}
+                {delegateProposals.length > 0 && (
+                  <DelegateProposals
+                    messageId={message.id}
+                    proposals={delegateProposals}
+                  />
+                )}
                 {(hasSaved || sentAt) && (
                   <div
                     className={`mt-1 flex items-center gap-2 text-xs text-[var(--color-text-muted)] ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
-                    {hasSaved && (
-                      <span>
-                        {metadata.savedAsJournal
-                          ? 'Saved to journal'
-                          : metadata.savedAsCalories
-                            ? 'Logged calories'
-                            : metadata.savedAsTask
-                              ? 'Added to tasks'
-                              : 'Saved to calendar'}
-                      </span>
-                    )}
+                    {hasSaved && <span>Saved to journal</span>}
                     {sentAt && (
                       <time dateTime={message.createdAt}>{sentAt}</time>
                     )}
@@ -718,15 +585,6 @@ export function ChatPanel() {
             after the conversation had resumed and filled the screen itself. */}
         {isTrailingBreak && <div aria-hidden className="min-h-[60vh]" />}
       </div>
-
-      {queuedCards !== null && (
-        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
-          <div className="text-sm text-green-400">
-            Queued {queuedCards} cards for approval — open the Learning tab to
-            review and approve them.
-          </div>
-        </div>
-      )}
 
       {noteCards && noteCards.length > 0 && (
         <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50 space-y-3">
@@ -835,151 +693,6 @@ export function ChatPanel() {
               )}
             </div>
           ))}
-        </div>
-      )}
-
-      {pendingQuiz && (
-        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
-          <div className="flex items-start gap-3">
-            <div className="flex-1">
-              <div className="text-sm font-medium text-[var(--color-text)]">
-                Generate flashcards for "{pendingQuiz.topic}"?
-              </div>
-              <div className="text-sm text-[var(--color-text-muted)] mt-1">
-                I'll generate atomic cards and queue them for your approval in
-                the Learning tab.
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setPendingQuiz(null)}
-                disabled={generateForTopic.isPending}
-                className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={() => generateForTopic.mutate(pendingQuiz.topic)}
-                disabled={generateForTopic.isPending}
-                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-              >
-                {generateForTopic.isPending ? 'Generating...' : 'Queue Cards'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {pendingSave && (
-        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
-          <div className="flex items-start gap-3">
-            <div className="flex-1">
-              <div className="text-sm font-medium text-[var(--color-text)]">
-                Save as calendar event?
-              </div>
-              <div className="text-sm text-[var(--color-text-muted)] mt-1">
-                <span className="font-medium">{pendingSave.data.title}</span>
-                {pendingSave.data.date && (
-                  <span className="ml-2">({pendingSave.data.date})</span>
-                )}
-              </div>
-              {pendingSave.data.tags.length > 0 && (
-                <div className="flex gap-1 mt-2">
-                  {pendingSave.data.tags.map(tag => (
-                    <span
-                      key={tag}
-                      className="px-2 py-0.5 text-xs bg-white/10 rounded text-[var(--color-text-muted)]"
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setPendingSave(null)}
-                disabled={isSaving}
-                className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={handleSave}
-                disabled={isSaving}
-                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-              >
-                {isSaving ? 'Saving...' : 'Save'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {pendingCalorie && (
-        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
-          <div className="flex items-start gap-3">
-            <div className="flex-1">
-              <div className="text-sm font-medium text-[var(--color-text)]">
-                Log calories?
-              </div>
-              <div className="text-sm text-[var(--color-text-muted)] mt-1">
-                <span className="font-medium">
-                  {pendingCalorie.data.description}
-                </span>
-                <span className="ml-2">
-                  ({pendingCalorie.data.calories} cal)
-                </span>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setPendingCalorie(null)}
-                disabled={isSavingCalories}
-                className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={handleSaveCalories}
-                disabled={isSavingCalories}
-                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-              >
-                {isSavingCalories ? 'Logging...' : 'Log'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {pendingTask && (
-        <div className="border-t border-white/10 p-4 bg-[var(--color-surface)]/50">
-          <div className="flex items-start gap-3">
-            <div className="flex-1">
-              <div className="text-sm font-medium text-[var(--color-text)]">
-                Add to your tasks?
-              </div>
-              <div className="text-sm text-[var(--color-text-muted)] mt-1">
-                <span className="font-medium">{pendingTask.data.title}</span>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setPendingTask(null)}
-                disabled={isSavingTask}
-                className="px-3 py-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={handleSaveTask}
-                disabled={isSavingTask}
-                className="px-3 py-1 text-sm bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-              >
-                {isSavingTask ? 'Adding...' : 'Add'}
-              </button>
-            </div>
-          </div>
         </div>
       )}
 

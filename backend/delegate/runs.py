@@ -1,0 +1,125 @@
+"""Runs the Chat tab's decision->delegate->answer loop on a daemon thread,
+independent of the HTTP request that asked for it.
+
+Without this, the whole loop lived inside the Flask request generator for
+POST /api/chat/stream, and the reply was only ever saved by the *client*,
+after the stream finished successfully. A connection dropped mid-reply (a
+backgrounded tab, a network blip) lost the reply outright — nothing had been
+written anywhere. Here the thread is the source of truth: it checkpoints the
+message row as it goes and finishes it regardless of whether anyone is still
+listening, the same shape backend/meetings/pipeline.py already uses for a
+recording that must survive a restart.
+
+There is deliberately no broadcast/replay mechanism for the live queue this
+returns — it has exactly one subscriber, the HTTP request that started the
+run. A client that loses the connection recovers by polling the message row
+(status flips to 'done'/'error' when the thread finishes), not by
+re-attaching to the same stream.
+"""
+import json
+import queue
+import threading
+import time
+
+from ulid import ULID
+
+from backend.ai import priority
+from backend.db.connection import build_update, get_db
+from backend.delegate import chat as delegate_chat
+
+# How often the accumulated content gets checkpointed to the DB while a run is
+# in progress, beyond the checkpoints that already happen on every 'step'
+# event. Anything shorter turns a fast reply into a DB write per token; this
+# just needs to be short enough that a drop loses at most a fraction of a
+# second of text.
+_FLUSH_INTERVAL = 0.5
+
+# Tracked the same way backend/ai/background.py tracks its executor's pending
+# futures: not for production (the module-global connection outlives every
+# run), but so a test's `client` fixture can wait for a run to actually finish
+# before closing the connection out from under it — the same "outlived its own
+# teardown" segfault the background/research-worker trackers already guard.
+_active: set["threading.Event"] = set()
+_lock = threading.Lock()
+
+
+def start(message_id: str, messages: list[dict], system_prompt: str, *, delegate: bool) -> "queue.Queue":
+    """Spawns the run; returns the queue the caller's SSE view should relay
+    from. Puts (kind, payload) tuples, same shape as stream_reply, plus a
+    terminal ('_end', None) once the thread is done (whether by 'done' or by
+    an exception putting an 'error' event first)."""
+    q: queue.Queue = queue.Queue()
+    done = threading.Event()
+    with _lock:
+        _active.add(done)
+    threading.Thread(
+        target=_run, args=(message_id, messages, system_prompt, delegate, q, done), daemon=True
+    ).start()
+    return q
+
+
+def wait_idle(timeout: float = 10.0) -> bool:
+    """Block until every run started via `start()` has finished. True if they
+    all did, False on timeout. Tests only — production never calls this."""
+    with _lock:
+        events = list(_active)
+    deadline = time.monotonic() + timeout
+    for event in events:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not event.wait(timeout=max(remaining, 0)):
+            return False
+    return True
+
+
+def _run(message_id: str, messages: list[dict], system_prompt: str, delegate: bool,
+          q: "queue.Queue", done: "threading.Event | None" = None) -> None:
+    token = priority.begin('chat.stream')
+    db = get_db()
+    content = ''
+    last_flush = 0.0
+    try:
+        for kind, payload in delegate_chat.stream_reply(messages, system_prompt, delegate=delegate):
+            q.put((kind, payload))
+            if kind == 'content':
+                content += payload
+
+            now = time.monotonic()
+            if kind == 'step' or now - last_flush >= _FLUSH_INTERVAL:
+                build_update(db, 'messages', {'content': content}, 'id=?', (message_id,))
+                db.commit()
+                last_flush = now
+
+            if kind == 'done':
+                # `note` proposals stage nothing to accept/dismiss — they draft
+                # flashcards immediately client-side, and those drafts are
+                # already durable rows the instant they exist. Only the other
+                # kinds are real confirm cards, so only they get the stable id
+                # + 'pending' status a later accept/dismiss resolves by
+                # (backend/routes/chat.py's resolve_proposal).
+                proposals = [
+                    {'id': str(ULID()), 'status': 'pending', **p}
+                    for p in payload.get('proposals', []) if p.get('kind') != 'note'
+                ]
+                metadata = json.dumps({
+                    'agent': 'delegate',
+                    'steps': payload.get('steps', []),
+                    'sources': payload.get('sources', []),
+                    'proposals': proposals,
+                })
+                build_update(db, 'messages', {
+                    'content': content, 'metadata': metadata, 'status': 'done',
+                }, 'id=?', (message_id,))
+                db.commit()
+    except Exception as e:
+        build_update(db, 'messages', {
+            'content': content, 'status': 'error', 'error': str(e),
+        }, 'id=?', (message_id,))
+        db.commit()
+        q.put(('error', str(e)))
+    finally:
+        priority.end(token)
+        q.put(('_end', None))
+        if done is not None:
+            done.set()
+            with _lock:
+                _active.discard(done)

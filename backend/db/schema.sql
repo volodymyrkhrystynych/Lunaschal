@@ -200,6 +200,10 @@ CREATE TABLE IF NOT EXISTS messages (
     role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
     content TEXT NOT NULL,
     metadata TEXT,
+    -- 'streaming' while a background run (backend/delegate/runs.py) is still
+    -- generating this reply, so a dropped client connection doesn't lose it.
+    status TEXT NOT NULL DEFAULT 'done' CHECK(status IN ('streaming','done','error')),
+    error TEXT,
     created_at INTEGER NOT NULL
 );
 

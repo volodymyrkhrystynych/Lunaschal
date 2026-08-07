@@ -3,6 +3,8 @@
 // both persist it on the assistant message's `metadata.steps`. `stepLabel`
 // turns one into human-readable progress text.
 
+import type { DelegateProposalRecord } from '@/hooks/api';
+
 export interface AgentStep {
   tool?: string;
   arg?: string;
@@ -11,8 +13,9 @@ export interface AgentStep {
   title?: string;
   error?: string;
   // Present only on the delegate's propose_* steps: what got staged for the
-  // user to confirm. The card itself is rendered from the `done` event's
-  // `proposals`; this is what makes the step list mention it too.
+  // user to confirm. The card itself renders from `metadata.proposals`
+  // (parseDelegateProposals below); this is what makes the step list mention
+  // it too.
   proposal?: { kind: string; data: unknown };
 }
 
@@ -39,6 +42,22 @@ export function parseAgentMeta(metadata: string | null | undefined): {
     };
   } catch {
     return { steps: [], sources: [] };
+  }
+}
+
+// Delegate confirm cards persisted on `metadata.proposals` (backend/delegate/
+// runs.py stamps each with an id + 'pending' status when the run finishes).
+// Fails open the same way parseAgentMeta does — a message with none, or with
+// malformed metadata, just renders no cards rather than throwing.
+export function parseDelegateProposals(
+  metadata: string | null | undefined
+): DelegateProposalRecord[] {
+  if (!metadata) return [];
+  try {
+    const parsed = JSON.parse(metadata);
+    return Array.isArray(parsed?.proposals) ? parsed.proposals : [];
+  } catch {
+    return [];
   }
 }
 

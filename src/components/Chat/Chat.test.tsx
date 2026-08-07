@@ -11,13 +11,10 @@ vi.mock('../../hooks/api', () => ({
       today: vi.fn(),
       createConversation: vi.fn(),
       addMessage: vi.fn(),
-      saveJournal: vi.fn(),
-      saveCalendar: vi.fn(),
-      saveCalories: vi.fn(),
-      saveTask: vi.fn(),
+      resolveProposal: vi.fn(),
     },
     settings: { get: vi.fn() },
-    learning: { generateForTopic: vi.fn(), generateFromNote: vi.fn() },
+    learning: { generateFromNote: vi.fn() },
   },
 }));
 
@@ -126,6 +123,42 @@ describe('delegate steps', () => {
 
     stream.push({ content: 'Team A won.' });
     await screen.findByText(/Team A won\./);
+
+    // The reply now generates on a background thread and persists itself —
+    // the client just invalidates `today` once the stream ends, so this is
+    // what stands in for the backend having already written the row.
+    vi.mocked(api.chat.today).mockResolvedValue({
+      id: 'c1',
+      messages: [
+        {
+          id: 'm-user',
+          role: 'user',
+          content: 'who won the game last night',
+          metadata: null,
+          status: 'done',
+          createdAt: '2026-01-01T08:00:00.000Z',
+        },
+        {
+          id: 'm-assistant',
+          role: 'assistant',
+          content: 'Team A won.',
+          metadata: JSON.stringify({
+            agent: 'delegate',
+            steps: [
+              {
+                tool: 'web_search',
+                arg: 'game last night',
+                ok: true,
+                count: 2,
+              },
+            ],
+            sources: [{ url: 'https://ex.com/score', title: 'Score' }],
+          }),
+          status: 'done',
+          createdAt: '2026-01-01T08:00:01.000Z',
+        },
+      ],
+    } as never);
     stream.close({
       steps: [
         { tool: 'web_search', arg: 'game last night', ok: true, count: 2 },
@@ -134,16 +167,7 @@ describe('delegate steps', () => {
       proposals: [],
     });
 
-    await waitFor(() =>
-      expect(api.chat.addMessage).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({
-          role: 'assistant',
-          content: 'Team A won.',
-          metadata: expect.stringContaining('web_search'),
-        })
-      )
-    );
+    expect(await screen.findByText('Score')).toBeTruthy();
   });
 
   it('labels a staged proposal as staged, never as saved', async () => {
@@ -182,18 +206,40 @@ describe('reasoning', () => {
     expect(summary.closest('details')).toHaveProperty('open', false);
 
     stream.push({ content: 'Because of Rayleigh scattering.' });
+
+    // Stands in for the background thread's own checkpoint, the same as the
+    // delegate-steps test above.
+    vi.mocked(api.chat.today).mockResolvedValue({
+      id: 'c1',
+      messages: [
+        {
+          id: 'm-user',
+          role: 'user',
+          content: 'why is the sky blue',
+          metadata: null,
+          status: 'done',
+          createdAt: '2026-01-01T08:00:00.000Z',
+        },
+        {
+          id: 'm-assistant',
+          role: 'assistant',
+          content: 'Because of Rayleigh scattering.',
+          metadata: JSON.stringify({
+            agent: 'delegate',
+            steps: [],
+            sources: [],
+          }),
+          status: 'done',
+          createdAt: '2026-01-01T08:00:01.000Z',
+        },
+      ],
+    } as never);
     stream.close({ steps: [], sources: [], proposals: [] });
 
-    await waitFor(() =>
-      expect(api.chat.addMessage).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({ content: 'Because of Rayleigh scattering.' })
-      )
-    );
+    const saved = await screen.findByText('Because of Rayleigh scattering.');
     // Reasoning is the model talking to itself — never persisted, and never
     // folded into the saved reply.
-    const saved = vi.mocked(api.chat.addMessage).mock.calls.at(-1)![1];
-    expect(saved.content).not.toContain('Rayleigh scattering, probably.');
-    expect(saved.metadata ?? '').not.toContain('probably');
+    expect(saved.textContent).not.toContain('Rayleigh scattering, probably.');
+    expect(screen.queryByText(/probably/i)).toBeNull();
   });
 });

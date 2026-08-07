@@ -414,6 +414,10 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   metadata: string | null;
+  // 'streaming' while a background run is still generating this reply
+  // (backend/delegate/runs.py) — absent/undefined on older cached data.
+  status?: 'streaming' | 'done' | 'error';
+  error?: string | null;
   createdAt: string;
 }
 
@@ -450,6 +454,23 @@ export interface BriefingTodoDecision {
   priority?: number;
   due?: number | null;
   list?: TodoList;
+}
+
+// A delegate confirm card — calendar/calorie/task/flashcards only. `note`
+// proposals draft immediately with no confirm step, so they never get one of
+// these (backend/delegate/runs.py). Written into the assistant message's
+// metadata the moment the run that staged it finishes, and resolved in place
+// by POST /api/chat/proposals/<messageId>/<id> — the only place `status`
+// ever changes, so a card survives a reload until it actually is.
+export interface DelegateProposalRecord {
+  id: string;
+  kind: 'calendar' | 'calorie' | 'task' | 'flashcards';
+  data: Record<string, unknown>;
+  status: 'pending' | 'accepted' | 'dismissed';
+  resolvedAt?: number;
+  // What accepting produced — {id} for calendar/calorie/task, {count} for
+  // flashcards — so the resolved state renders from metadata alone.
+  result?: { id?: string; count?: number };
 }
 
 // One conversation per chat day. `'websearch'` is a *historical* value only —
@@ -1730,23 +1751,15 @@ export const api = {
         `/api/chat/briefing/${messageId}/todos`,
         { decisions }
       ),
-    saveCalendar: (data: {
-      conversationId: string;
-      messageId?: string;
-      title: string;
-      description: string;
-      date: string;
-      time?: string;
-      tags: string[];
-    }) => post<{ id: string }>('/api/chat/save-calendar', data),
-    saveCalories: (data: {
-      messageId?: string;
-      description: string;
-      calories: number;
-      date?: string;
-    }) => post<{ id: string }>('/api/chat/save-calories', data),
-    saveTask: (data: { messageId?: string; title: string; list?: string }) =>
-      post<{ id: string }>('/api/chat/save-task', data),
+    resolveProposal: (
+      messageId: string,
+      proposalId: string,
+      action: 'accept' | 'dismiss'
+    ) =>
+      post<{ proposal: DelegateProposalRecord }>(
+        `/api/chat/proposals/${messageId}/${proposalId}`,
+        { action }
+      ),
   },
 
   files: {

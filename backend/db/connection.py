@@ -131,9 +131,11 @@ def init_db() -> None:
     _ensure_meeting_pause_columns(db)
     _ensure_meeting_whisper_columns(db)
     _migrate_workout_intensity_to_stars(db)
+    _ensure_message_status(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
+    _reset_stale_message_runs(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -383,6 +385,24 @@ def _migrate_workout_intensity_to_stars(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_message_status(db: sqlite3.Connection) -> None:
+    """`status`/`error` on `messages`, for chat replies that now generate on a
+    background thread (backend/delegate/runs.py) instead of inside the request
+    that streams them — a dropped connection no longer has to lose the reply,
+    because the thread checkpoints it here regardless of who's listening.
+    Existing rows default to 'done': every one of them is already a finished
+    reply from before this column existed."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(messages)')}
+    if 'status' not in cols:
+        db.execute(
+            "ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'done'"
+            " CHECK(status IN ('streaming','done','error'))"
+        )
+    if 'error' not in cols:
+        db.execute('ALTER TABLE messages ADD COLUMN error TEXT')
+    db.commit()
+
+
 def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
     """A fic's in-memory download progress (backend/fanfic/download.py's
     `_dl_progress`) never survives a process restart, but the persisted
@@ -412,6 +432,19 @@ def _reset_stale_attachment_transcripts(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE journal_attachments SET description_status='idle'"
         " WHERE description_status='running'"
+    )
+    db.commit()
+
+
+def _reset_stale_message_runs(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_fic_downloads: a chat reply's generation
+    thread (backend/delegate/runs.py) dies with the process, but a row it left
+    'streaming' persists — reset to 'error' so the reply reads as failed
+    rather than stuck forever, with whatever partial content it had checkpointed
+    kept in place."""
+    db.execute(
+        "UPDATE messages SET status='error', error='Interrupted by an app restart.'"
+        " WHERE status='streaming'"
     )
     db.commit()
 

@@ -9,6 +9,7 @@ from backend.ai import priority
 from backend.ai.provider import is_ai_configured
 from backend.ai.chat_title import generate_conversation_title
 from backend.delegate import chat as delegate_chat
+from backend.delegate import runs
 from backend.todo_recurrence import VALID_LISTS
 
 bp = Blueprint('chat', __name__, url_prefix='/api/chat')
@@ -300,70 +301,157 @@ def decide_briefing_todos(message_id):
     return jsonify({'proposedTodos': proposed, 'created': created})
 
 
-@bp.post('/save-calendar')
-def save_calendar():
-    body = request.json or {}
+class _AcceptRejected(ValueError):
+    """A proposal's data failed validation — 400, proposal stays pending."""
+
+
+class _GenerationFailed(RuntimeError):
+    """The LLM call an accept required came back empty — 502, proposal stays
+    pending so the user can retry."""
+
+
+def _accept_calendar(db, data: dict) -> dict:
     now = int(time.time())
     id = str(ULID())
-    tags = body.get('tags', [])
-    db = get_db()
     db.execute(
         'INSERT INTO calendar_events(id, title, description, date, time, tags, created_at) VALUES (?,?,?,?,?,?,?)',
-        (id, body.get('title', ''), body.get('description', ''),
-         body.get('date', ''), body.get('time'), json.dumps(tags), now),
+        (id, data.get('title', ''), data.get('description', ''),
+         data.get('date', ''), data.get('time'), json.dumps(data.get('tags', [])), now),
     )
-    if body.get('messageId'):
-        _update_message_metadata(db, body['messageId'], 'savedAsCalendar', id)
-    db.commit()
-    return jsonify({'id': id}), 201
+    return {'id': id}
 
 
-@bp.post('/save-calories')
-def save_calories():
-    body = request.json or {}
-    description = (body.get('description') or '').strip()
+def _accept_calorie(db, data: dict) -> dict:
+    description = (data.get('description') or '').strip()
     if not description:
-        return jsonify({'error': 'description required'}), 400
-    calories = body.get('calories')
+        raise _AcceptRejected('description required')
+    calories = data.get('calories')
     if isinstance(calories, bool) or not isinstance(calories, int) or not (0 <= calories <= 20000):
-        return jsonify({'error': 'calories must be an integer from 0 to 20000'}), 400
+        raise _AcceptRejected('calories must be an integer from 0 to 20000')
 
     now = int(time.time())
     id = str(ULID())
-    day = body.get('date') or date.today().isoformat()
-    db = get_db()
+    day = data.get('date') or date.today().isoformat()
     db.execute(
         'INSERT INTO calorie_logs(id, date, description, calories, created_at) VALUES (?,?,?,?,?)',
         (id, day, description, calories, now),
     )
-    if body.get('messageId'):
-        _update_message_metadata(db, body['messageId'], 'savedAsCalories', id)
-    db.commit()
-    return jsonify({'id': id}), 201
+    return {'id': id}
 
 
-@bp.post('/save-task')
-def save_task():
-    body = request.json or {}
-    title = (body.get('title') or '').strip()
+def _accept_task(db, data: dict) -> dict:
+    title = (data.get('title') or '').strip()
     if not title:
-        return jsonify({'error': 'title required'}), 400
-    todo_list = body.get('list') or 'todo'
+        raise _AcceptRejected('title required')
+    todo_list = data.get('list') or 'todo'
     if todo_list not in VALID_LISTS:
-        return jsonify({'error': f'list must be one of {", ".join(VALID_LISTS)}'}), 400
+        raise _AcceptRejected(f'list must be one of {", ".join(VALID_LISTS)}')
 
     now = int(time.time())
     id = str(ULID())
-    db = get_db()
     db.execute(
         'INSERT INTO todos(id, title, done, list, notes, due, repeat_interval,'
         ' repeat_unit, priority, created_at, updated_at) VALUES (?,?,0,?,?,?,?,?,?,?,?)',
         (id, title, todo_list, None, None, None, None, 3, now, now),
     )
-    if body.get('messageId'):
-        _update_message_metadata(db, body['messageId'], 'savedAsTask', id)
+    return {'id': id}
+
+
+def _accept_flashcards(db, data: dict) -> dict:
+    from backend.ai.learning_generation import generate_cards
+    from backend.routes.learning import _insert_cards
+    from backend.tags import tags_json
+
+    topic = (data.get('topic') or '').strip()
+    if not topic:
+        raise _AcceptRejected('topic required')
+    related = db.execute(
+        'SELECT content FROM journal_entries WHERE content LIKE ? LIMIT 3',
+        (f'%{topic}%',),
+    ).fetchall()
+    text = f'Topic to learn: {topic}'
+    if related:
+        context = '\n\n---\n\n'.join(r['content'] for r in related)
+        text += f"\n\nRelated notes from the user's journal:\n{context}"
+    cards = generate_cards(text)
+    if not cards:
+        raise _GenerationFailed('No cards could be generated')
+    ids = _insert_cards(
+        cards, folder_id=data.get('folderId'), tags=tags_json(data.get('tags')),
+        source_type='chat', source_id=None, derived_from=None,
+        generation_context=text[:8000],
+    )
+    return {'count': len(ids)}
+
+
+# The delegate only ever stages these four as real confirm cards — `note`
+# drafts immediately with no accept/dismiss step (backend/delegate/runs.py
+# filters it out before a proposal ever gets a persisted id).
+_ACCEPT_HANDLERS = {
+    'calendar': _accept_calendar,
+    'calorie': _accept_calorie,
+    'task': _accept_task,
+    'flashcards': _accept_flashcards,
+}
+
+
+@bp.post('/proposals/<message_id>/<proposal_id>')
+def resolve_proposal(message_id, proposal_id):
+    """Accept or dismiss one delegate confirm card in place — the same shape
+    as decide_briefing_todos, generalized across the delegate's proposal
+    kinds. A proposal is stamped with a stable id and 'pending' status the
+    moment the run that staged it finishes, so this is the only place one
+    ever leaves that state — surviving a reload or a dropped connection
+    exactly like the reply itself now does."""
+    body = request.json or {}
+    action = body.get('action')
+    if action not in ('accept', 'dismiss'):
+        return jsonify({'error': "action must be 'accept' or 'dismiss'"}), 400
+
+    db = get_db()
+    row = db.execute('SELECT metadata FROM messages WHERE id=?', (message_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'message not found'}), 404
+    meta = json.loads(row['metadata']) if row['metadata'] else {}
+    proposals = meta.get('proposals')
+    if not isinstance(proposals, list):
+        return jsonify({'error': 'message has no proposals'}), 404
+    proposal = next(
+        (p for p in proposals if isinstance(p, dict) and p.get('id') == proposal_id), None
+    )
+    if not proposal:
+        return jsonify({'error': 'proposal not found'}), 404
+    # Only pending proposals are actionable — a resolved card can't flip.
+    if proposal.get('status') != 'pending':
+        return jsonify({'error': 'proposal already resolved'}), 400
+
+    if action == 'dismiss':
+        proposal['status'] = 'dismissed'
+    else:
+        handler = _ACCEPT_HANDLERS.get(proposal.get('kind'))
+        if handler is None:
+            return jsonify({'error': f"unknown proposal kind {proposal.get('kind')!r}"}), 400
+        try:
+            proposal['result'] = handler(db, proposal.get('data') or {})
+        except _AcceptRejected as e:
+            return jsonify({'error': str(e)}), 400
+        except _GenerationFailed as e:
+            return jsonify({'error': str(e)}), 502
+        proposal['status'] = 'accepted'
+
+    proposal['resolvedAt'] = int(time.time())
+    meta['proposals'] = proposals
+    db.execute('UPDATE messages SET metadata=? WHERE id=?', (json.dumps(meta), message_id))
     db.commit()
-    return jsonify({'id': id}), 201
+    return jsonify({'proposal': proposal})
+
+
+def _format_event(kind: str, payload) -> str:
+    if kind == 'step':
+        return f'data: {json.dumps(payload)}\n\n'
+    if kind == 'done':
+        return f'data: {json.dumps({"done": True, **payload})}\n\n'
+    return f'data: {json.dumps({kind: payload})}\n\n'
 
 
 @bp.post('/stream')
@@ -376,12 +464,49 @@ def stream():
     sources, proposals}` before `[DONE]`. The browser persists `steps`/`sources`
     onto the assistant message and turns `proposals` into confirm cards — the
     live events are gone after a reload, so the same trace has to arrive twice.
+
+    A `conversationId` in the body means this is the Chat tab talking to a
+    real conversation it wants recorded — the reply then generates on a
+    background thread (backend/delegate/runs.py) instead of inside this
+    request, so a dropped connection doesn't lose it: the thread checkpoints
+    the assistant row itself and finishes it regardless of who's still
+    listening. Callers with no conversation to record into (the voice
+    listener, morning check-in, Writing discussions — none of which have
+    anywhere durable to put the reply) keep the original inline path.
     """
     if not is_ai_configured():
         return jsonify({'error': 'AI provider not configured'}), 400
     body = request.json or {}
     messages = body.get('messages', [])
     system_prompt = body.get('systemPrompt', '')
+    conversation_id = body.get('conversationId')
+
+    if conversation_id:
+        message_id = str(ULID())
+        now = int(time.time())
+        db = get_db()
+        db.execute(
+            "INSERT INTO messages(id, conversation_id, role, content, metadata,"
+            " status, created_at) VALUES (?,?,'assistant','',NULL,'streaming',?)",
+            (message_id, conversation_id, now),
+        )
+        db.commit()
+        q = runs.start(message_id, messages, system_prompt, delegate=not system_prompt)
+
+        def generate():
+            yield f'data: {json.dumps({"messageId": message_id})}\n\n'
+            while True:
+                kind, payload = q.get()
+                if kind == '_end':
+                    break
+                yield _format_event(kind, payload)
+            yield 'data: [DONE]\n\n'
+
+        return Response(
+            stream_with_context(generate()),
+            mimetype='text/event-stream',
+            headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'},
+        )
 
     # Acquired here, in the view, rather than inside generate(): the generator
     # body does not run until Werkzeug pulls the first item, so acquiring there
@@ -401,12 +526,7 @@ def stream():
             for kind, payload in delegate_chat.stream_reply(
                 messages, system_prompt, delegate=not system_prompt
             ):
-                if kind == 'step':
-                    yield f'data: {json.dumps(payload)}\n\n'
-                elif kind == 'done':
-                    yield f'data: {json.dumps({"done": True, **payload})}\n\n'
-                else:
-                    yield f'data: {json.dumps({kind: payload})}\n\n'
+                yield _format_event(kind, payload)
             yield 'data: [DONE]\n\n'
         except Exception as e:
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
@@ -420,12 +540,3 @@ def stream():
         mimetype='text/event-stream',
         headers={'Cache-Control': 'no-cache', 'Connection': 'keep-alive'},
     )
-
-
-def _update_message_metadata(db, message_id: str, key: str, value: str) -> None:
-    row = db.execute('SELECT metadata FROM messages WHERE id=?', (message_id,)).fetchone()
-    if not row:
-        return
-    meta = json.loads(row['metadata']) if row['metadata'] else {}
-    meta[key] = value
-    db.execute('UPDATE messages SET metadata=? WHERE id=?', (json.dumps(meta), message_id))
