@@ -5,6 +5,7 @@ import { Chat } from './components/Chat';
 import { Journal } from './components/Journal';
 import { Calendar } from './components/Calendar';
 import { Learning } from './components/Learning/Learning';
+import { Practice } from './components/Practice';
 import { Settings } from './components/Settings';
 import { Editor } from './components/Editor';
 import { Notebook } from './components/Notebook/Notebook';
@@ -151,6 +152,8 @@ export default function App() {
         return <Calendar />;
       case 'learning':
         return <Learning />;
+      case 'practice':
+        return <Practice />;
       case 'settings':
         return <Settings />;
       case 'files':

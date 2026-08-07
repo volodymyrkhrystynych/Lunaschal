@@ -13,7 +13,7 @@ TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'edited_at', 'started_at', 'ended_at', 'due',
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
-    'researched_at',
+    'researched_at', 'last_practiced_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}

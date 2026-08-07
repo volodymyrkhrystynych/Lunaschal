@@ -1044,6 +1044,47 @@ export interface CalorieDay {
   total: number;
 }
 
+export interface PracticeSnippetProgress {
+  snippetId: string;
+  attemptsCount: number;
+  lastWpm: number | null;
+  lastAccuracy: number | null;
+  bestWpm: number | null;
+  bestAccuracy: number | null;
+  lastPracticedAt: string | null;
+  updatedAt: string;
+}
+
+export interface PracticeSnippet {
+  id: string;
+  language: 'react' | 'javascript' | 'html' | 'css';
+  category: string;
+  title: string;
+  code: string;
+}
+
+export interface PracticeSnippetWithProgress extends PracticeSnippet {
+  progress: PracticeSnippetProgress | null;
+}
+
+export interface PracticeAttemptResult {
+  rating: string;
+  progress: PracticeSnippetProgress;
+}
+
+export interface PracticeLanguageStats {
+  attempts: number;
+  avgAccuracy: number | null;
+  avgWpm: number | null;
+}
+
+export interface PracticeStats {
+  totalAttempts: number;
+  avgAccuracy: number | null;
+  avgWpm: number | null;
+  byLanguage: Record<string, PracticeLanguageStats>;
+}
+
 // --- fetch helpers ---
 
 // A request to an unreachable backend (e.g. the Tailscale link is down in
@@ -2016,6 +2057,38 @@ export const api = {
       get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
     sync: () => post<SyncResult[]>('/api/newspapers/sync'),
   },
+
+  practice: {
+    session: (
+      params: { language?: string; category?: string; size?: number } = {}
+    ) => {
+      const qp = new URLSearchParams();
+      if (params.language) qp.set('language', params.language);
+      if (params.category) qp.set('category', params.category);
+      if (params.size !== undefined) qp.set('size', String(params.size));
+      const qs = qp.toString();
+      return get<PracticeSnippet[]>(
+        `/api/practice/session${qs ? `?${qs}` : ''}`
+      );
+    },
+    listSnippets: (params: { language?: string; category?: string } = {}) => {
+      const qp = new URLSearchParams();
+      if (params.language) qp.set('language', params.language);
+      if (params.category) qp.set('category', params.category);
+      const qs = qp.toString();
+      return get<PracticeSnippetWithProgress[]>(
+        `/api/practice/snippets${qs ? `?${qs}` : ''}`
+      );
+    },
+    submitAttempt: (body: {
+      snippetId: string;
+      wpm: number;
+      accuracy: number;
+      errorCount: number;
+    }) => post<PracticeAttemptResult>('/api/practice/attempts', body),
+    stats: () => get<PracticeStats>('/api/practice/stats'),
+  },
+
   paper: {
     list: (params: { limit?: number; offset?: number } = {}) => {
       const q = new URLSearchParams();

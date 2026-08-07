@@ -17,7 +17,8 @@ type View =
   | 'lifestyle'
   | 'fanfic'
   | 'newspapers'
-  | 'paper';
+  | 'paper'
+  | 'practice';
 
 interface SidebarProps {
   currentView: View;
@@ -32,6 +33,7 @@ interface SidebarProps {
 
 export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'learning', label: 'Learning', icon: '🧠' },
+  { view: 'practice', label: 'Practice', icon: '⌨️' },
   { view: 'chat', label: 'Chat', icon: '💬' },
   { view: 'tasks', label: 'Tasks', icon: '✅' },
   { view: 'journal', label: 'Journal', icon: '📓' },

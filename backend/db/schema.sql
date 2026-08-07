@@ -838,3 +838,28 @@ CREATE TABLE IF NOT EXISTS idea_plans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_idea_plans_idea ON idea_plans(idea_id, version DESC);
+
+-- Practice tab: per-snippet drill progress. snippet_id is a stable slug from
+-- the static bank in backend/practice/snippets.py, not a generated row id.
+CREATE TABLE IF NOT EXISTS practice_progress (
+    snippet_id TEXT PRIMARY KEY,
+    attempts_count INTEGER NOT NULL DEFAULT 0,
+    last_wpm REAL,
+    last_accuracy REAL,
+    best_wpm REAL,
+    best_accuracy REAL,
+    last_practiced_at INTEGER,
+    updated_at INTEGER NOT NULL
+);
+
+-- Append-only history of every drill attempt, for stats trends.
+CREATE TABLE IF NOT EXISTS practice_attempts (
+    id TEXT PRIMARY KEY,
+    snippet_id TEXT NOT NULL,
+    wpm REAL NOT NULL,
+    accuracy REAL NOT NULL,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_practice_attempts_snippet ON practice_attempts(snippet_id, created_at DESC);
