@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Codebase exploration
+
+**Use graphify to explore the codebase.** The code is organized into several interconnected modules (backend AI/scheduling/fanfic/research, frontend React components, daemon loops, API routes). Run `/graphify query "<question>"` to search the knowledge graph instead of grep — it understands cross-module dependencies, data flow, and architectural patterns. The graph is persistent and incrementally updated (`/graphify --update` via `/model haiku`).
+
 ## Working conventions
 
 Development happens on two machines: a desktop (comfortable, full mouse/keyboard) and a GPD Pocket 2 — a low-powered handheld with no usable mouse. On the Pocket 2, manual click-through testing is slow and painful, so the workflow leans on branches and automated tests so changes can be verified without a hands-on walkthrough.
