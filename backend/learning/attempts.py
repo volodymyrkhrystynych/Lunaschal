@@ -55,16 +55,18 @@ def grade_attempt(attempt_id: str) -> None:
             from backend.ai.learning_generation import normalize_transcript
             answer = normalize_transcript(answer)
 
+        speech = bool(attempt['speech_requested'])
+
         # Cheap gate: an answer nowhere near the stored one is graded Again
         # without the claim-check LLM call.
         coverage = None
         if card['answer_embedding'] is not None:
             sim = cosine(embed_answer(answer), card['answer_embedding'])
             if sim is not None and sim < learning_grading.GATE_LOW:
-                coverage = learning_grading.gated_coverage()
+                coverage = learning_grading.gated_coverage(speech=speech)
 
         if coverage is None:
-            coverage = learning_grading.check_coverage(card_claims(card), answer)
+            coverage = learning_grading.check_coverage(card_claims(card), answer, speech=speech)
 
         _finish(
             attempt_id,

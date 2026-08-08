@@ -41,18 +41,22 @@ def inline_bg(monkeypatch):
 @pytest.fixture
 def stub_llm(monkeypatch):
     """Stub decompose/coverage with call counters."""
-    calls = {'decompose': 0, 'coverage': 0, 'normalize': 0}
+    calls = {'decompose': 0, 'coverage': 0, 'normalize': 0, 'speech': []}
 
     def _decompose(question, answer):
         calls['decompose'] += 1
         return [{'text': 'X is a thing', 'essential': True}]
 
-    def _coverage(claims, user_answer):
+    def _coverage(claims, user_answer, speech=False):
         calls['coverage'] += 1
-        return {
+        calls['speech'].append(speech)
+        out = {
             'claims': [{**c, 'covered': True, 'note': ''} for c in claims],
             'summary': 'Got it.',
         }
+        if speech:
+            out['speechSummary'] = 'You got it.'
+        return out
 
     def _normalize(text):
         calls['normalize'] += 1
@@ -124,7 +128,7 @@ def test_grade_unconfigured_embeddings_falls_through(client, stub_llm):
 
 
 def test_grade_failure_marks_attempt_error(client, stub_llm, monkeypatch):
-    def _boom(claims, user_answer):
+    def _boom(claims, user_answer, speech=False):
         raise RuntimeError('model exploded')
 
     monkeypatch.setattr(learning_grading, 'check_coverage', _boom)
@@ -160,6 +164,43 @@ def test_attempt_validation(client, stub_llm):
                        json={'cardId': cid, 'mode': 'nonsense'}).status_code == 400
     assert client.post('/api/learning/attempts',
                        json={'cardId': 'nope', 'mode': 'skipped'}).status_code == 404
+
+
+def test_speech_summary_omitted_by_default(client, stub_llm):
+    cid = _make_card(client)
+    attempt = _grade(client, cid, 'X is a thing')
+    assert stub_llm['speech'] == [False]
+    assert 'speechSummary' not in attempt['coverage']
+
+
+def test_speech_summary_included_when_requested(client, stub_llm):
+    cid = _make_card(client)
+    attempt = _grade(client, cid, 'X is a thing', speechMode=True)
+    assert stub_llm['speech'] == [True]
+    assert attempt['coverage']['speechSummary'] == 'You got it.'
+
+
+def test_reanswering_updates_speech_requested(client, stub_llm):
+    """Re-answering a card re-stamps the toggle's current state — the point
+    of storing it per-attempt rather than per-session."""
+    cid = _make_card(client)
+    _grade(client, cid, 'first try')
+    assert stub_llm['speech'][-1] is False
+    attempt = _grade(client, cid, 'second try', speechMode=True)
+    assert stub_llm['speech'][-1] is True
+    assert 'speechSummary' in attempt['coverage']
+
+
+def test_gated_coverage_speech_summary(client, monkeypatch):
+    # Force the embedding gate to fire so gated_coverage() runs for real.
+    monkeypatch.setattr(learning_routes, 'embed_answer', lambda text: _vec(1.0, 0.0, 0.0))
+    from backend.learning import dedup
+    monkeypatch.setattr(dedup, 'embed_answer', lambda text: _vec(0.0, 1.0, 0.0))
+
+    cid = _make_card(client)
+    attempt = _grade(client, cid, 'total nonsense', speechMode=True)
+    assert attempt['coverage']['gated'] is True
+    assert attempt['coverage']['speechSummary']
 
 
 @pytest.mark.parametrize('claims,expected', [
