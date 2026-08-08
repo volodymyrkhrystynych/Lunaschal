@@ -244,7 +244,13 @@ def parse_watched_threads(html: str, domain: str) -> WatchedThreadsPage:
     rows = soup.select('.structItem--thread') or soup.select('.structItem')
     refs: list[ThreadRef] = []
     for row in rows:
-        a = row.select_one('.structItem-title a[href]')
+        # A prefixed thread (e.g. "[NSFW]") renders a labelLink "add to
+        # filters" anchor ahead of the real title link; for an unread thread
+        # an unreadLink happens to come first and masks this, but an
+        # already-read prefixed thread has nothing before the labelLink, so
+        # picking the first anchor blindly grabs the filter pill instead of
+        # the thread and silently drops the row.
+        a = row.select_one('.structItem-title a[href]:not(.labelLink)')
         if not a:
             continue
         ref = parse_thread_ref(urljoin(base, a['href']))
