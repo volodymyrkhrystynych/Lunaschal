@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import type { PracticeSnippet } from '../../hooks/api';
+import type { PracticeSpeedDrill } from '../../hooks/api';
 import { diffTyped, computeStats, type TypingStats } from '../../lib/practice';
 import { TypingCanvas } from './TypingCanvas';
 
 interface Props {
-  snippet: PracticeSnippet;
+  snippet: PracticeSpeedDrill;
   onComplete: (stats: TypingStats) => void;
 }
 

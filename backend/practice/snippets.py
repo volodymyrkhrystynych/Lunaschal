@@ -4,6 +4,17 @@ Content lives here, not in the DB — a fixed, git-versioned list rather than a
 user-editable library, so extending it is a PR. `id` is a stable slug (not a
 ULID) since it identifies content, not a generated row; per-snippet progress
 (attempts/accuracy/wpm) lives in the `practice_progress` table keyed by it.
+
+Every snippet carries a `prompt` as well as its `code`: the task as the blind
+drill states it, when the code is withheld and the snippet has to be written
+from memory. It is the only thing the writer sees, so it has to pin down
+everything that would otherwise be guesswork — the identifiers and literal
+values the reference uses, and any detail that changes what the code does — and
+nothing beyond that. `backend/ai/practice.py` grades the answer against this
+sentence, not against the reference character for character, so a prompt that
+underspecifies its snippet reads as an unfair grade rather than a vague
+question. Adding a snippet without a prompt breaks the blind drill for it;
+`test_every_snippet_has_a_prompt` is the guard.
 """
 
 SNIPPETS = [
@@ -13,6 +24,7 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useState',
+        'prompt': 'Declare a state variable `count` starting at 0, together with its setter.',
         'code': 'const [count, setCount] = useState(0);',
     },
     {
@@ -20,6 +32,7 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useEffect',
+        'prompt': 'Call `fetchData()` from an effect that re-runs whenever `id` changes.',
         'code': 'useEffect(() => {\n  fetchData();\n}, [id]);',
     },
     {
@@ -27,6 +40,7 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useRef',
+        'prompt': 'Create a ref for an input, then focus it, guarding against the ref being empty.',
         'code': 'const inputRef = useRef(null);\ninputRef.current?.focus();',
     },
     {
@@ -34,6 +48,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useMemo',
+        'prompt': (
+            'Memoize a `total` that sums the `price` of every entry in `items`, recomputed only '
+            'when `items` changes.'
+        ),
         'code': 'const total = useMemo(\n  () => items.reduce((sum, i) => sum + i.price, 0),\n  [items]\n);',
     },
     {
@@ -41,6 +59,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useCallback',
+        'prompt': (
+            'Memoize a `handleClick` that calls `onSelect(id)`, keeping the same function while '
+            '`id` and `onSelect` are unchanged.'
+        ),
         'code': 'const handleClick = useCallback(() => {\n  onSelect(id);\n}, [id, onSelect]);',
     },
     {
@@ -48,6 +70,7 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useContext',
+        'prompt': 'Read the current value of `ThemeContext` into a `theme` variable.',
         'code': 'const theme = useContext(ThemeContext);',
     },
     {
@@ -55,6 +78,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'Custom hook',
+        'prompt': (
+            'Write a `useToggle(initial = false)` hook returning the boolean and a function that '
+            'flips it, updating from the previous value.'
+        ),
         'code': (
             'function useToggle(initial = false) {\n'
             '  const [value, setValue] = useState(initial);\n'
@@ -68,6 +95,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'rendering',
         'title': 'List rendering with key',
+        'prompt': (
+            'Render `items` as a list of `<li>` elements in JSX, each showing `item.name` and '
+            'identified by its id.'
+        ),
         'code': '{items.map(item => (\n  <li key={item.id}>{item.name}</li>\n))}',
     },
     {
@@ -75,6 +106,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'conditionals',
         'title': 'Conditional render',
+        'prompt': (
+            'In JSX, render `<Spinner />` while `isLoading`, otherwise `<Content />` with `data` '
+            'passed as a prop.'
+        ),
         'code': '{isLoading ? <Spinner /> : <Content data={data} />}',
     },
     {
@@ -82,6 +117,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'destructuring',
         'title': 'Props destructuring',
+        'prompt': (
+            'Write a `Card` component that destructures `title`, `subtitle` and `onClick` in its '
+            'parameter list and returns a div showing the title and firing onClick.'
+        ),
         'code': 'function Card({ title, subtitle, onClick }) {\n  return <div onClick={onClick}>{title}</div>;\n}',
     },
     {
@@ -89,6 +128,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'data',
         'title': 'useQuery',
+        'prompt': (
+            "Fetch a user with React Query: key it on `['user', id]`, call `api.users.get(id)`, and "
+            "take `data` and `isLoading` off the result."
+        ),
         'code': (
             "const { data, isLoading } = useQuery({\n"
             "  queryKey: ['user', id],\n"
@@ -101,6 +144,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'data',
         'title': 'useMutation',
+        'prompt': (
+            "Set up a React Query mutation calling `api.users.update` that invalidates the "
+            "`['user', id]` query when it succeeds."
+        ),
         'code': (
             'const updateUser = useMutation({\n'
             '  mutationFn: api.users.update,\n'
@@ -115,6 +162,11 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useReducer',
+        'prompt': (
+            'Write a reducer handling an `increment` action by adding 1 to `state.count` and '
+            'returning the state untouched by default, then wire it up with useReducer starting '
+            'from a count of 0.'
+        ),
         'code': (
             'function reducer(state, action) {\n'
             "  switch (action.type) {\n"
@@ -132,6 +184,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useLayoutEffect',
+        'prompt': (
+            'Measure the height of `ref.current` with getBoundingClientRect and store it with '
+            '`setHeight`, before the browser paints, once on mount.'
+        ),
         'code': (
             'useLayoutEffect(() => {\n'
             '  const { height } = ref.current.getBoundingClientRect();\n'
@@ -144,6 +200,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'performance',
         'title': 'React.memo',
+        'prompt': (
+            'Wrap a `Row` component rendering `item.name` in an `<li>` so it only re-renders when '
+            'its props change.'
+        ),
         'code': (
             'const Row = memo(function Row({ item }) {\n'
             '  return <li>{item.name}</li>;\n'
@@ -155,6 +215,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'refs',
         'title': 'forwardRef',
+        'prompt': (
+            'Write an `Input` component that forwards a ref onto the underlying `<input>` and '
+            'spreads the rest of its props onto it.'
+        ),
         'code': (
             'const Input = forwardRef(function Input(props, ref) {\n'
             '  return <input ref={ref} {...props} />;\n'
@@ -166,6 +230,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'forms',
         'title': 'Controlled input',
+        'prompt': (
+            "Hold an input's text in state and make it a controlled input: value from state, "
+            "onChange writing the event's value back."
+        ),
         'code': (
             'const [value, setValue] = useState(\'\');\n'
             '<input value={value} onChange={e => setValue(e.target.value)} />'
@@ -176,6 +244,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'rendering',
         'title': 'Fragment shorthand',
+        'prompt': (
+            'Return a `<dt>` and `<dd>` pair from JSX with no wrapper element, using the shorthand '
+            'syntax.'
+        ),
         'code': '<>\n  <dt>{term}</dt>\n  <dd>{definition}</dd>\n</>',
     },
     {
@@ -183,6 +255,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'composition',
         'title': 'children prop',
+        'prompt': (
+            'Write a `Panel` component taking `title` and `children`, rendering a section with the '
+            'title as an `<h2>` above the children.'
+        ),
         'code': (
             'function Panel({ title, children }) {\n'
             '  return (\n'
@@ -199,6 +275,11 @@ SNIPPETS = [
         'language': 'react',
         'category': 'error-handling',
         'title': 'Error boundary',
+        'prompt': (
+            'Write an error boundary class component: a `hasError` state, the static lifecycle '
+            'method that flips it when a child throws, and a render showing `<Fallback />` when it '
+            'is set and the children otherwise.'
+        ),
         'code': (
             'class ErrorBoundary extends React.Component {\n'
             '  state = { hasError: false };\n'
@@ -217,6 +298,7 @@ SNIPPETS = [
         'language': 'react',
         'category': 'rendering',
         'title': 'createPortal',
+        'prompt': 'Render a modal div into `document.body` through a portal.',
         'code': (
             'createPortal(\n'
             '  <div className="modal">{children}</div>,\n'
@@ -229,6 +311,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'Context provider',
+        'prompt': (
+            "Create a `ThemeContext` defaulting to 'light', then have an `App` render `<Page />` "
+            "inside a provider supplying 'dark'."
+        ),
         'code': (
             'const ThemeContext = createContext(\'light\');\n\n'
             'function App() {\n'
@@ -245,6 +331,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'Custom hook with cleanup',
+        'prompt': (
+            'Write a `useEventListener(event, handler)` hook adding a window listener in an effect '
+            'and removing it in the cleanup, re-running when either argument changes.'
+        ),
         'code': (
             'function useEventListener(event, handler) {\n'
             '  useEffect(() => {\n'
@@ -259,6 +349,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'performance',
         'title': 'Lazy loading + Suspense',
+        'prompt': (
+            'Lazily import a `Settings` component and render it inside a Suspense boundary falling '
+            'back to `<Spinner />`.'
+        ),
         'code': (
             "const Settings = lazy(() => import('./Settings'));\n\n"
             '<Suspense fallback={<Spinner />}>\n'
@@ -271,6 +365,7 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useId',
+        'prompt': 'Generate a unique id with the React hook and use it to tie a `<label>` to its `<input>`.',
         'code': (
             'const id = useId();\n'
             '<label htmlFor={id}>Name</label>\n'
@@ -282,6 +377,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'performance',
         'title': 'useTransition',
+        'prompt': (
+            'Mark a `setResults(filterItems(value))` update as non-urgent with a transition, also '
+            'taking the pending flag.'
+        ),
         'code': (
             'const [isPending, startTransition] = useTransition();\n\n'
             'function handleChange(value) {\n'
@@ -296,6 +395,10 @@ SNIPPETS = [
         'language': 'react',
         'category': 'conditionals',
         'title': 'Conditional className',
+        'prompt': (
+            'Give a button the class `btn`, plus `btn-active` only while `isActive`, built with a '
+            'template literal.'
+        ),
         'code': "<button className={`btn ${isActive ? 'btn-active' : ''}`}>Save</button>",
     },
     # --- JavaScript ---
@@ -304,6 +407,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'loops',
         'title': 'for loop',
+        'prompt': 'Log every entry of `items` with a classic indexed for loop.',
         'code': 'for (let i = 0; i < items.length; i++) {\n  console.log(items[i]);\n}',
     },
     {
@@ -311,6 +415,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'loops',
         'title': 'for...of',
+        'prompt': 'Log every entry of `items` with a for...of loop.',
         'code': 'for (const item of items) {\n  console.log(item);\n}',
     },
     {
@@ -318,6 +423,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'iteration',
         'title': 'map/filter/reduce chain',
+        'prompt': (
+            "From `items`, keep the active ones, take each one's `price`, and sum them into `total` "
+            "in a single chain."
+        ),
         'code': (
             'const total = items\n'
             '  .filter(i => i.active)\n'
@@ -330,6 +439,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'functions',
         'title': 'Arrow function',
+        'prompt': (
+            'Define `add` as an arrow function of two numbers returning their sum, with no function '
+            'body braces.'
+        ),
         'code': 'const add = (a, b) => a + b;',
     },
     {
@@ -337,6 +450,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'destructuring',
         'title': 'Array destructuring',
+        'prompt': (
+            'Pull the first two entries of `values` into `first` and `second`, collecting the '
+            'remainder into `rest`.'
+        ),
         'code': 'const [first, second, ...rest] = values;',
     },
     {
@@ -344,6 +461,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'destructuring',
         'title': 'Object destructuring',
+        'prompt': 'Pull `id` and `name` off `user`, collecting the remaining properties into `rest`.',
         'code': 'const { id, name, ...rest } = user;',
     },
     {
@@ -351,6 +469,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'strings',
         'title': 'Template literal',
+        'prompt': 'Build a greeting string interpolating `name` and `count` with a template literal.',
         'code': 'const message = `Hello, ${name}! You have ${count} new messages.`;',
     },
     {
@@ -358,6 +477,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'async',
         'title': 'async/await + try/catch',
+        'prompt': (
+            'Write an async `loadUser(id)` that awaits a fetch of the users endpoint for that id, '
+            'returns the parsed JSON, and logs anything thrown from a catch.'
+        ),
         'code': (
             'async function loadUser(id) {\n'
             '  try {\n'
@@ -374,6 +497,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'async',
         'title': 'fetch with .then',
+        'prompt': 'Fetch `/api/data` and log the parsed JSON, chaining with .then rather than awaiting.',
         'code': "fetch('/api/data')\n  .then(res => res.json())\n  .then(data => console.log(data));",
     },
     {
@@ -381,6 +505,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'destructuring',
         'title': 'Object spread',
+        'prompt': 'Build `merged` from `defaults` overridden by `overrides`, using object spread.',
         'code': 'const merged = { ...defaults, ...overrides };',
     },
     {
@@ -388,6 +513,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'operators',
         'title': 'Optional chaining',
+        'prompt': "Read `user.address.city` safely when either link may be missing, defaulting to 'Unknown'.",
         'code': 'const city = user?.address?.city ?? \'Unknown\';',
     },
     {
@@ -395,6 +521,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'operators',
         'title': 'Nullish coalescing',
+        'prompt': 'Read `options.pageSize`, defaulting to 20 only when it is null or undefined.',
         'code': 'const pageSize = options.pageSize ?? 20;',
     },
     {
@@ -402,6 +529,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'iteration',
         'title': 'Array.find',
+        'prompt': "Find the first entry of `users` whose role is 'admin'.",
         'code': 'const admin = users.find(u => u.role === \'admin\');',
     },
     {
@@ -409,6 +537,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'iteration',
         'title': 'Array.some / Array.every',
+        'prompt': (
+            'Check whether any entry of `users` is an admin, and separately whether every one of '
+            'them is active.'
+        ),
         'code': (
             'const hasAdmin = users.some(u => u.role === \'admin\');\n'
             'const allActive = users.every(u => u.active);'
@@ -419,6 +551,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'collections',
         'title': 'Dedupe with Set',
+        'prompt': 'Turn `values` into a new array with the duplicates removed, by way of a Set.',
         'code': 'const unique = [...new Set(values)];',
     },
     {
@@ -426,6 +559,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'collections',
         'title': 'Map usage',
+        'prompt': "Create a Map, store 3 under the key 'apple', and log the value read back out of it.",
         'code': (
             "const counts = new Map();\n"
             'counts.set(\'apple\', 3);\n'
@@ -437,6 +571,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'async',
         'title': 'Promise.all',
+        'prompt': (
+            'Await `fetchUser(id)` and `fetchPosts(id)` concurrently rather than one after the '
+            'other, destructuring both results.'
+        ),
         'code': (
             'const [user, posts] = await Promise.all([\n'
             '  fetchUser(id),\n'
@@ -449,6 +587,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'functions',
         'title': 'Debounce',
+        'prompt': (
+            'Write a `debounce(fn, delay)` returning a wrapper that resets its timer on every call '
+            'and forwards all its arguments when it finally fires.'
+        ),
         'code': (
             'function debounce(fn, delay) {\n'
             '  let timer;\n'
@@ -464,6 +606,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'classes',
         'title': 'Class with constructor',
+        'prompt': (
+            'Write a `Rectangle` class taking width and height in its constructor, with an `area` '
+            'getter returning their product.'
+        ),
         'code': (
             'class Rectangle {\n'
             '  constructor(width, height) {\n'
@@ -481,6 +627,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'functions',
         'title': 'Default parameters',
+        'prompt': (
+            "Write a `greet(name)` defaulting the name to 'friend' and returning a greeting built "
+            "with a template literal."
+        ),
         'code': 'function greet(name = \'friend\') {\n  return `Hello, ${name}!`;\n}',
     },
     {
@@ -488,6 +638,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'functions',
         'title': 'Rest parameters',
+        'prompt': (
+            'Write a `sum` taking any number of arguments as a rest parameter and reducing them to '
+            'a total.'
+        ),
         'code': 'function sum(...numbers) {\n  return numbers.reduce((a, b) => a + b, 0);\n}',
     },
     {
@@ -495,6 +649,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'conditionals',
         'title': 'Switch statement',
+        'prompt': (
+            "Switch on `status`, returning a loading message for 'loading', an error message for "
+            "'error', and a ready message by default."
+        ),
         'code': (
             "switch (status) {\n"
             "  case 'loading':\n"
@@ -511,6 +669,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'error-handling',
         'title': 'try/catch/finally',
+        'prompt': (
+            'Call `saveDraft(entry)` guarded by try/catch, reporting the error, and clear the '
+            'saving flag whether or not it threw.'
+        ),
         'code': (
             'try {\n'
             '  saveDraft(entry);\n'
@@ -526,6 +688,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'serialization',
         'title': 'JSON.stringify / parse',
+        'prompt': (
+            "Serialize `entry` into localStorage under the key 'draft', then read it back out and "
+            "parse it."
+        ),
         'code': (
             'localStorage.setItem(\'draft\', JSON.stringify(entry));\n'
             "const restored = JSON.parse(localStorage.getItem('draft'));"
@@ -536,6 +702,7 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'iteration',
         'title': 'Array.sort with comparator',
+        'prompt': 'Sort `items` by ascending `price` without mutating the original array.',
         'code': 'const sorted = [...items].sort((a, b) => a.price - b.price);',
     },
     {
@@ -543,6 +710,10 @@ SNIPPETS = [
         'language': 'javascript',
         'category': 'iteration',
         'title': 'flat / flatMap',
+        'prompt': (
+            'Collect every tag across `posts` with flatMap, and separately flatten a two-level '
+            'nested array.'
+        ),
         'code': (
             'const tags = posts.flatMap(post => post.tags);\n'
             'const nested = [[1, 2], [3, [4, 5]]].flat(2);'
@@ -554,6 +725,10 @@ SNIPPETS = [
         'language': 'html',
         'category': 'layout',
         'title': 'Page boilerplate',
+        'prompt': (
+            'Write a minimal HTML5 document: the doctype, an html element with a language, a head '
+            'carrying the UTF-8 charset and a title, and an empty body.'
+        ),
         'code': (
             '<!DOCTYPE html>\n'
             '<html lang="en">\n'
@@ -571,6 +746,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'forms',
         'title': 'Labeled input',
+        'prompt': 'Write a required email input with a matching name and id, tied to its own label.',
         'code': '<label for="email">Email</label>\n<input type="email" id="email" name="email" required>',
     },
     {
@@ -578,6 +754,10 @@ SNIPPETS = [
         'language': 'html',
         'category': 'layout',
         'title': 'Semantic layout skeleton',
+        'prompt': (
+            'Write the three top-level semantic landmarks of a page — header, main and footer — all '
+            'empty.'
+        ),
         'code': '<header></header>\n<main></main>\n<footer></footer>',
     },
     {
@@ -585,6 +765,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'elements',
         'title': 'Linked image',
+        'prompt': 'Wrap an image in a link that opens in a new tab safely, giving the image alt text.',
         'code': '<a href="https://example.com" target="_blank" rel="noopener">\n  <img src="photo.jpg" alt="A photo">\n</a>',
     },
     {
@@ -592,6 +773,10 @@ SNIPPETS = [
         'language': 'html',
         'category': 'elements',
         'title': 'Table skeleton',
+        'prompt': (
+            'Write a table with a Name/Age header row and one row of data, each in its proper '
+            'section element.'
+        ),
         'code': (
             '<table>\n'
             '  <thead>\n'
@@ -608,6 +793,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'elements',
         'title': 'Unordered list',
+        'prompt': 'Write an unordered list of two items.',
         'code': '<ul>\n  <li>First</li>\n  <li>Second</li>\n</ul>',
     },
     {
@@ -615,6 +801,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'forms',
         'title': 'Submit button',
+        'prompt': 'Write a submit button carrying the class `btn-primary`.',
         'code': '<button type="submit" class="btn-primary">Submit</button>',
     },
     {
@@ -622,6 +809,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'forms',
         'title': 'Select dropdown',
+        'prompt': 'Write a dropdown named `color` offering red and blue, each option carrying a value.',
         'code': '<select name="color">\n  <option value="red">Red</option>\n  <option value="blue">Blue</option>\n</select>',
     },
     {
@@ -629,6 +817,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'layout',
         'title': 'Meta viewport',
+        'prompt': 'Write the viewport meta tag that maps the layout to the device width at a scale of 1.',
         'code': '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
     },
     {
@@ -636,6 +825,10 @@ SNIPPETS = [
         'language': 'html',
         'category': 'media',
         'title': 'Video element',
+        'prompt': (
+            'Embed an mp4 with visible controls and a poster image, pointing at the file through a '
+            'nested source element.'
+        ),
         'code': '<video controls poster="thumb.jpg">\n  <source src="clip.mp4" type="video/mp4">\n</video>',
     },
     {
@@ -643,6 +836,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'media',
         'title': 'Audio element',
+        'prompt': 'Embed an mp3 with controls, sourced from an attribute rather than a child element.',
         'code': '<audio controls src="voice-memo.mp3"></audio>',
     },
     {
@@ -650,6 +844,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'elements',
         'title': 'Details / summary',
+        'prompt': "Write a collapsible disclosure labelled 'More info' with a paragraph hidden inside it.",
         'code': '<details>\n  <summary>More info</summary>\n  <p>Hidden until expanded.</p>\n</details>',
     },
     {
@@ -657,6 +852,10 @@ SNIPPETS = [
         'language': 'html',
         'category': 'elements',
         'title': 'Dialog element',
+        'prompt': (
+            'Write a dialog with an id, a confirmation question and an OK button that takes focus '
+            'when it opens.'
+        ),
         'code': '<dialog id="confirm">\n  <p>Are you sure?</p>\n  <button autofocus>OK</button>\n</dialog>',
     },
     {
@@ -664,6 +863,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'forms',
         'title': 'Progress bar',
+        'prompt': 'Write a progress bar sitting at 70 out of 100.',
         'code': '<progress value="70" max="100"></progress>',
     },
     {
@@ -671,6 +871,10 @@ SNIPPETS = [
         'language': 'html',
         'category': 'forms',
         'title': 'Datalist suggestions',
+        'prompt': (
+            'Offer an input a list of suggestions (Chrome, Firefox) through a datalist, wired to it '
+            'by id.'
+        ),
         'code': (
             '<input list="browsers" name="browser">\n'
             '<datalist id="browsers">\n'
@@ -684,6 +888,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'forms',
         'title': 'Textarea',
+        'prompt': 'Write a four-row textarea with an id, tied to its own label.',
         'code': '<label for="notes">Notes</label>\n<textarea id="notes" rows="4"></textarea>',
     },
     {
@@ -691,6 +896,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'forms',
         'title': 'Fieldset / legend',
+        'prompt': "Group a street input inside a fieldset captioned 'Shipping address'.",
         'code': (
             '<fieldset>\n'
             '  <legend>Shipping address</legend>\n'
@@ -703,6 +909,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'forms',
         'title': 'Radio group',
+        'prompt': 'Write two radio buttons in one `theme` group, light and dark, each with its own label.',
         'code': (
             '<input type="radio" id="light" name="theme" value="light">\n'
             '<label for="light">Light</label>\n'
@@ -715,6 +922,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'forms',
         'title': 'Checkbox',
+        'prompt': 'Write a checkbox with a matching name and id, tied to its own label.',
         'code': '<input type="checkbox" id="agree" name="agree">\n<label for="agree">I agree</label>',
     },
     {
@@ -722,6 +930,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'elements',
         'title': 'Figure / figcaption',
+        'prompt': 'Write a figure holding an image with alt text and a caption underneath it.',
         'code': '<figure>\n  <img src="chart.png" alt="Sales chart">\n  <figcaption>Q3 sales</figcaption>\n</figure>',
     },
     {
@@ -729,6 +938,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'layout',
         'title': 'Nav with links',
+        'prompt': 'Write a nav containing links to the home and about pages.',
         'code': '<nav>\n  <a href="/">Home</a>\n  <a href="/about">About</a>\n</nav>',
     },
     {
@@ -736,6 +946,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'layout',
         'title': 'Article / section',
+        'prompt': 'Nest a section carrying an `<h2>` inside an article.',
         'code': '<article>\n  <section>\n    <h2>Overview</h2>\n  </section>\n</article>',
     },
     {
@@ -743,6 +954,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'elements',
         'title': 'Iframe',
+        'prompt': 'Embed an external page in an iframe with an accessible title, loaded lazily.',
         'code': '<iframe src="https://example.com/embed" title="Embedded content" loading="lazy"></iframe>',
     },
     {
@@ -750,6 +962,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'elements',
         'title': 'Custom data attribute',
+        'prompt': 'Write a list item carrying custom data attributes for an id and a status.',
         'code': '<li data-id="42" data-status="done">Buy milk</li>',
     },
     {
@@ -757,6 +970,7 @@ SNIPPETS = [
         'language': 'html',
         'category': 'accessibility',
         'title': 'ARIA label',
+        'prompt': 'Write a close button whose only content is a times entity, given an accessible name.',
         'code': '<button aria-label="Close dialog">&times;</button>',
     },
     {
@@ -764,6 +978,10 @@ SNIPPETS = [
         'language': 'html',
         'category': 'media',
         'title': 'Picture with srcset',
+        'prompt': (
+            'Serve a large image above 800px wide and a small one otherwise, through a picture '
+            'element with a fallback img carrying alt text.'
+        ),
         'code': (
             '<picture>\n'
             '  <source srcset="photo-large.jpg" media="(min-width: 800px)">\n'
@@ -777,6 +995,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'layout',
         'title': 'Flexbox center',
+        'prompt': "Centre a container's children both horizontally and vertically with flexbox.",
         'code': '.container {\n  display: flex;\n  align-items: center;\n  justify-content: center;\n}',
     },
     {
@@ -784,6 +1003,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'layout',
         'title': 'Grid template',
+        'prompt': 'Lay a grid out in three equal columns with a 16px gap.',
         'code': '.grid {\n  display: grid;\n  grid-template-columns: repeat(3, 1fr);\n  gap: 16px;\n}',
     },
     {
@@ -791,6 +1011,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'responsive',
         'title': 'Media query',
+        'prompt': 'Hide `.sidebar` at viewports 768px wide and under.',
         'code': '@media (max-width: 768px) {\n  .sidebar {\n    display: none;\n  }\n}',
     },
     {
@@ -798,6 +1019,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'animation',
         'title': 'Transition',
+        'prompt': "Transition a button's background colour over 0.2s on an ease-in-out curve.",
         'code': '.button {\n  transition: background-color 0.2s ease-in-out;\n}',
     },
     {
@@ -805,6 +1027,10 @@ SNIPPETS = [
         'language': 'css',
         'category': 'variables',
         'title': 'Custom property',
+        'prompt': (
+            "Define a `--primary-color` custom property on the root, then use it as a button's text "
+            "colour."
+        ),
         'code': ':root {\n  --primary-color: #3b82f6;\n}\n.button {\n  color: var(--primary-color);\n}',
     },
     {
@@ -812,6 +1038,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'selectors',
         'title': 'Hover/focus selector',
+        'prompt': 'Underline a link on both hover and keyboard focus, in a single rule.',
         'code': '.link:hover,\n.link:focus {\n  text-decoration: underline;\n}',
     },
     {
@@ -819,6 +1046,10 @@ SNIPPETS = [
         'language': 'css',
         'category': 'effects',
         'title': 'Box shadow',
+        'prompt': (
+            'Give a card a soft drop shadow: no horizontal offset, 2px down, 8px of blur, black at '
+            '15%.'
+        ),
         'code': '.card {\n  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);\n}',
     },
     {
@@ -826,6 +1057,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'selectors',
         'title': 'Child + pseudo-class selector',
+        'prompt': 'Bold only the first `<li>` that is a direct child of `.list`.',
         'code': '.list > li:first-child {\n  font-weight: bold;\n}',
     },
     {
@@ -833,6 +1065,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'layout',
         'title': 'Absolute positioning',
+        'prompt': 'Pin a badge to the top-right corner of its positioned ancestor.',
         'code': '.badge {\n  position: absolute;\n  top: 0;\n  right: 0;\n}',
     },
     {
@@ -840,6 +1073,10 @@ SNIPPETS = [
         'language': 'css',
         'category': 'layout',
         'title': 'Grid template areas',
+        'prompt': (
+            'Lay a grid out by named areas — a sidebar spanning two rows beside a header and a main '
+            '— and assign the sidebar to its area.'
+        ),
         'code': (
             '.layout {\n'
             '  display: grid;\n'
@@ -855,6 +1092,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'layout',
         'title': 'Flex wrap',
+        'prompt': 'Lay tags out in a row that wraps onto further lines, with an 8px gap.',
         'code': '.tags {\n  display: flex;\n  flex-wrap: wrap;\n  gap: 8px;\n}',
     },
     {
@@ -862,6 +1100,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'sizing',
         'title': 'calc()',
+        'prompt': 'Size a sidebar to the full width minus 240px.',
         'code': '.sidebar {\n  width: calc(100% - 240px);\n}',
     },
     {
@@ -869,6 +1108,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'sizing',
         'title': 'clamp()',
+        'prompt': 'Scale an h1 with the viewport between 1.5rem and 3rem, preferring 4vw.',
         'code': 'h1 {\n  font-size: clamp(1.5rem, 4vw, 3rem);\n}',
     },
     {
@@ -876,6 +1116,10 @@ SNIPPETS = [
         'language': 'css',
         'category': 'animation',
         'title': 'Keyframe animation',
+        'prompt': (
+            'Define a `spin` keyframe rotating a full turn, and apply it to a loader looping once a '
+            'second at a constant speed.'
+        ),
         'code': (
             '@keyframes spin {\n'
             '  to { transform: rotate(360deg); }\n'
@@ -890,6 +1134,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'animation',
         'title': 'Transform',
+        'prompt': 'On hover, scale a card up 5% and tilt it one degree anticlockwise, in one transform.',
         'code': '.card:hover {\n  transform: scale(1.05) rotate(-1deg);\n}',
     },
     {
@@ -897,6 +1142,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'selectors',
         'title': '::before pseudo-element',
+        'prompt': 'Insert a red asterisk before `.required`, with 4px of space after it.',
         'code': '.required::before {\n  content: "*";\n  color: red;\n  margin-right: 4px;\n}',
     },
     {
@@ -904,6 +1150,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'selectors',
         'title': 'nth-child',
+        'prompt': 'Give every even table row a different background, taken from a custom property.',
         'code': 'tr:nth-child(even) {\n  background: var(--color-bg-alt);\n}',
     },
     {
@@ -911,6 +1158,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'media',
         'title': 'object-fit',
+        'prompt': 'Crop an avatar to a 48px square without distorting it.',
         'code': '.avatar {\n  width: 48px;\n  height: 48px;\n  object-fit: cover;\n}',
     },
     {
@@ -918,6 +1166,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'sizing',
         'title': 'aspect-ratio',
+        'prompt': 'Hold a full-width thumbnail at a 16:9 shape.',
         'code': '.thumbnail {\n  aspect-ratio: 16 / 9;\n  width: 100%;\n}',
     },
     {
@@ -925,6 +1174,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'variables',
         'title': 'Custom property with fallback',
+        'prompt': 'Colour a button from `--accent-color`, falling back to a blue hex when it is not set.',
         'code': '.button {\n  color: var(--accent-color, #3b82f6);\n}',
     },
     {
@@ -932,6 +1182,10 @@ SNIPPETS = [
         'language': 'css',
         'category': 'responsive',
         'title': 'Container query',
+        'prompt': (
+            'Make a wrapper a size container, then switch the card inside it to a row once the '
+            'container is at least 400px wide.'
+        ),
         'code': (
             '.card-wrapper {\n'
             '  container-type: inline-size;\n'
@@ -948,6 +1202,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'effects',
         'title': 'Backdrop filter',
+        'prompt': 'Blur whatever sits behind an overlay by 8px, over a 30% black tint.',
         'code': '.overlay {\n  backdrop-filter: blur(8px);\n  background: rgba(0, 0, 0, 0.3);\n}',
     },
     {
@@ -955,6 +1210,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'layout',
         'title': 'Sticky positioning',
+        'prompt': 'Stick a toolbar to the top of its scroll container, above the content it scrolls over.',
         'code': '.toolbar {\n  position: sticky;\n  top: 0;\n  z-index: 10;\n}',
     },
     {
@@ -962,6 +1218,7 @@ SNIPPETS = [
         'language': 'css',
         'category': 'typography',
         'title': 'Text overflow ellipsis',
+        'prompt': 'Truncate one line of text with an ellipsis — all three properties it takes.',
         'code': (
             '.truncate {\n'
             '  white-space: nowrap;\n'
@@ -975,6 +1232,10 @@ SNIPPETS = [
         'language': 'css',
         'category': 'selectors',
         'title': 'Attribute selector',
+        'prompt': (
+            "Turn an email input's border red while its value is invalid, selecting it by its type "
+            "attribute."
+        ),
         'code': 'input[type="email"]:invalid {\n  border-color: red;\n}',
     },
     # --- DOM / Browser APIs ---
@@ -983,6 +1244,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'selection',
         'title': 'querySelector / querySelectorAll',
+        'prompt': 'Grab the first `.btn-primary` element, and separately every `li.active`.',
         'code': (
             'const button = document.querySelector(\'.btn-primary\');\n'
             "const items = document.querySelectorAll('li.active');"
@@ -993,6 +1255,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'events',
         'title': 'addEventListener',
+        'prompt': "Listen for clicks on `button` and log the event's target.",
         'code': (
             "button.addEventListener('click', event => {\n"
             '  console.log(\'clicked\', event.target);\n'
@@ -1004,6 +1267,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'selection',
         'title': 'classList add/remove/toggle',
+        'prompt': 'On `el`, add one class, remove another, and toggle a third.',
         'code': (
             "el.classList.add('active');\n"
             "el.classList.remove('hidden');\n"
@@ -1015,6 +1279,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'manipulation',
         'title': 'createElement + appendChild',
+        'prompt': 'Build an `<li>` with text in it and append it to `list`.',
         'code': (
             "const li = document.createElement('li');\n"
             "li.textContent = 'New item';\n"
@@ -1026,6 +1291,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'selection',
         'title': 'dataset access',
+        'prompt': "Read a `data-user-id` attribute off an event's target through the dataset API.",
         'code': "const userId = event.target.dataset.userId;",
     },
     {
@@ -1033,6 +1299,10 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'network',
         'title': 'fetch with headers + POST',
+        'prompt': (
+            'POST a JSON body of `{ name }` to `/api/users` with the matching content-type header, '
+            'awaiting the response.'
+        ),
         'code': (
             "const res = await fetch('/api/users', {\n"
             "  method: 'POST',\n"
@@ -1046,6 +1316,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'storage',
         'title': 'localStorage get/set',
+        'prompt': "Store a theme of 'dark' in localStorage, then read it back defaulting to 'light'.",
         'code': (
             "localStorage.setItem('theme', 'dark');\n"
             "const theme = localStorage.getItem('theme') ?? 'light';"
@@ -1056,6 +1327,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'storage',
         'title': 'sessionStorage',
+        'prompt': 'Store `draftId` in sessionStorage, then remove it again.',
         'code': (
             "sessionStorage.setItem('draftId', draftId);\n"
             "sessionStorage.removeItem('draftId');"
@@ -1066,6 +1338,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'timers',
         'title': 'setTimeout / clearTimeout',
+        'prompt': 'Schedule a log two seconds out, keeping the handle, then cancel it.',
         'code': (
             'const timer = setTimeout(() => {\n'
             "  console.log('done');\n"
@@ -1078,6 +1351,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'timers',
         'title': 'setInterval / clearInterval',
+        'prompt': 'Call `tick()` once a second, keeping the handle, then cancel it.',
         'code': (
             'const interval = setInterval(() => {\n'
             '  tick();\n'
@@ -1090,6 +1364,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'forms',
         'title': 'FormData',
+        'prompt': 'Read the email field out of a form element through FormData.',
         'code': (
             'const formData = new FormData(formEl);\n'
             "const email = formData.get('email');"
@@ -1100,6 +1375,10 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'events',
         'title': 'preventDefault / stopPropagation',
+        'prompt': (
+            "On a form's submit, stop the page reloading and stop the event bubbling, then call "
+            "`submitForm()`."
+        ),
         'code': (
             "form.addEventListener('submit', event => {\n"
             '  event.preventDefault();\n'
@@ -1113,6 +1392,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'observers',
         'title': 'IntersectionObserver',
+        'prompt': 'Observe a sentinel element and call `loadMore()` whenever it comes into view.',
         'code': (
             'const observer = new IntersectionObserver(entries => {\n'
             '  entries.forEach(entry => {\n'
@@ -1127,6 +1407,10 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'observers',
         'title': 'MutationObserver',
+        'prompt': (
+            'Watch a target for nodes added or removed anywhere beneath it, logging how many '
+            'mutations fired.'
+        ),
         'code': (
             'const observer = new MutationObserver(mutations => {\n'
             '  console.log(mutations.length, \'changes\');\n'
@@ -1139,6 +1423,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'responsive',
         'title': 'matchMedia',
+        'prompt': 'Query the dark-scheme preference and re-apply the theme whenever it changes.',
         'code': (
             "const isDark = window.matchMedia('(prefers-color-scheme: dark)');\n"
             "isDark.addEventListener('change', e => applyTheme(e.matches));"
@@ -1149,6 +1434,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'misc',
         'title': 'Clipboard API',
+        'prompt': 'Copy `shareUrl` to the clipboard, awaiting it.',
         'code': "await navigator.clipboard.writeText(shareUrl);",
     },
     {
@@ -1156,6 +1442,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'navigation',
         'title': 'history.pushState',
+        'prompt': 'Push a new history entry for page 2 at `/items?page=2`, carrying that page in its state.',
         'code': "history.pushState({ page: 2 }, '', '/items?page=2');",
     },
     {
@@ -1163,6 +1450,10 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'timers',
         'title': 'requestAnimationFrame',
+        'prompt': (
+            'Write a `tick` that updates a position and re-schedules itself before every frame, '
+            'then start it off.'
+        ),
         'code': (
             'function tick() {\n'
             '  updatePosition();\n'
@@ -1176,6 +1467,7 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'events',
         'title': 'CustomEvent + dispatchEvent',
+        'prompt': 'Dispatch an `item-added` event on the document, carrying an id in its detail.',
         'code': (
             "const event = new CustomEvent('item-added', { detail: { id } });\n"
             'document.dispatchEvent(event);'
@@ -1186,6 +1478,10 @@ SNIPPETS = [
         'language': 'dom',
         'category': 'selection',
         'title': 'closest()',
+        'prompt': (
+            "From an event's target, find the nearest ancestor — or the target itself — matching "
+            "`.card`."
+        ),
         'code': "const card = event.target.closest('.card');",
     },
 ]

@@ -7,7 +7,8 @@ export function StatsPanel() {
     queryFn: api.practice.stats,
   });
 
-  if (!data || data.totalAttempts === 0) return null;
+  if (!data || (data.totalAttempts === 0 && data.recall.attempts === 0))
+    return null;
 
   return (
     <div className="bg-[var(--color-surface)] rounded-lg border border-white/10 p-4 flex flex-col gap-3">
@@ -18,6 +19,14 @@ export function StatsPanel() {
         {data.totalAttempts} attempts · {data.avgWpm?.toFixed(0) ?? 0} avg wpm ·{' '}
         {data.avgAccuracy?.toFixed(0) ?? 0}% avg accuracy
       </div>
+      {/* Recall is reported on its own line, never folded into the averages
+          above: those measure typing, this measures knowing it. */}
+      {data.recall.attempts > 0 && (
+        <div className="text-sm text-[var(--color-text-muted)]">
+          {data.recall.attempts} from memory ·{' '}
+          {data.recall.passRate?.toFixed(0) ?? 0}% recalled
+        </div>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {Object.entries(data.byLanguage).map(([lang, s]) => (
           <div

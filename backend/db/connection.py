@@ -13,7 +13,7 @@ TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'edited_at', 'started_at', 'ended_at', 'due',
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
-    'researched_at', 'last_practiced_at',
+    'researched_at', 'last_practiced_at', 'last_recall_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -132,6 +132,7 @@ def init_db() -> None:
     _ensure_meeting_whisper_columns(db)
     _migrate_workout_intensity_to_stars(db)
     _ensure_message_status(db)
+    _ensure_practice_recall_columns(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
@@ -818,6 +819,28 @@ def _migrate_flashcards_to_learning(db: sqlite3.Connection) -> None:
     )
     db.execute('DROP TABLE flashcards')
     db.execute('DROP INDEX IF EXISTS idx_flashcard_next_review')
+    db.commit()
+
+
+def _ensure_practice_recall_columns(db: sqlite3.Connection) -> None:
+    # Blind-drill counters on an existing practice_progress row. The two counts
+    # default to 0 and the two "last recall" columns stay NULL, which is exactly
+    # what modes.next_mode reads as "never asked for this one from memory" — so
+    # a pre-existing row keeps its speed history and unlocks blind on the same
+    # terms as a fresh one.
+    cols = {r[1] for r in db.execute('PRAGMA table_info(practice_progress)')}
+    if 'recall_attempts_count' not in cols:
+        db.execute(
+            'ALTER TABLE practice_progress ADD COLUMN recall_attempts_count INTEGER NOT NULL DEFAULT 0'
+        )
+    if 'recall_passes' not in cols:
+        db.execute(
+            'ALTER TABLE practice_progress ADD COLUMN recall_passes INTEGER NOT NULL DEFAULT 0'
+        )
+    if 'last_recall_passed' not in cols:
+        db.execute('ALTER TABLE practice_progress ADD COLUMN last_recall_passed INTEGER')
+    if 'last_recall_at' not in cols:
+        db.execute('ALTER TABLE practice_progress ADD COLUMN last_recall_at INTEGER')
     db.commit()
 
 
