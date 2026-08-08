@@ -57,6 +57,7 @@ const { CHAPTERS, FIC } = vi.hoisted(() => {
     rating: null,
     createdAt: '',
     updatedAt: '',
+    folderIds: [],
   };
   return { CHAPTERS, FIC };
 });
@@ -79,6 +80,11 @@ vi.mock('../../hooks/api', () => ({
       }),
       saveProgress: vi.fn().mockResolvedValue({ success: true }),
       setRead: vi.fn().mockResolvedValue({ success: true, readCount: 0 }),
+      folders: {
+        list: vi.fn().mockResolvedValue([]),
+      },
+      addToFolder: vi.fn().mockResolvedValue({ success: true }),
+      removeFromFolder: vi.fn().mockResolvedValue({ success: true }),
     },
     shortcuts: {
       get: vi.fn().mockResolvedValue({ bindings: {} }),
