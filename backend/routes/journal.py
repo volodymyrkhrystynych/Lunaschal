@@ -369,37 +369,33 @@ def list_attachments(id):
     return jsonify([_attachment_dict(r) for r in rows])
 
 
-@bp.post('/<id>/attachments')
-def upload_attachment(id):
-    entry = get_db().execute(
-        'SELECT id FROM journal_entries WHERE id=?', (id,)
-    ).fetchone()
-    if not entry:
-        return jsonify({'error': 'Not found'}), 404
+def _store_attachment(entry_id: str, file, name: str | None):
+    """Save one uploaded file as an attachment of `entry_id`.
 
-    file = request.files.get('file')
-    if file is None:
-        return jsonify({'error': 'file is required'}), 400
-
+    Returns `(attachment_dict, None)` on success and `(None, (error, status))`
+    on a rejected upload. Split out of the upload route so the one-shot
+    recording route below can reuse it — the two differ only in where the entry
+    comes from, not in how a file becomes an attachment.
+    """
     # NOT `or not file.filename`: a voice memo dragged out of the iOS Voice Memos
     # app arrives as a File with an empty name, and rejecting it here turned a
     # working drag-and-drop into "file is required". A nameless upload is fine —
     # the mime type carries the extension and _DEFAULT_NAMES carries the label.
     resolved = storage.resolve_upload(file.mimetype, file.filename)
     if resolved is None:
-        return jsonify({'error': _UNSUPPORTED_TYPE}), 400
+        return None, (_UNSUPPORTED_TYPE, 400)
     ext, kind = resolved
 
     # The user's label for the attachment. Falling back to the filename keeps a
     # list of attachments readable even when someone skips naming them.
-    name = (request.form.get('name') or '').strip()
+    name = (name or '').strip()
     if not name:
         name = (file.filename or '').rsplit('/', 1)[-1] or _DEFAULT_NAMES[kind]
 
     attachment_id = str(ULID())
     path = storage.attachment_path(attachment_id, ext)
     if path is None:
-        return jsonify({'error': _UNSUPPORTED_TYPE}), 400
+        return None, (_UNSUPPORTED_TYPE, 400)
     path.parent.mkdir(parents=True, exist_ok=True)
     # Streamed to disk rather than read() into memory: a phone video is happily
     # several hundred MB, and this app also runs on a handheld with 8 GB of RAM.
@@ -408,10 +404,10 @@ def upload_attachment(id):
     size = path.stat().st_size
     if size == 0:
         storage.delete_attachment_dir(attachment_id)
-        return jsonify({'error': 'file is empty'}), 400
+        return None, ('file is empty', 400)
     if size > _MAX_BYTES_BY_KIND[kind]:
         storage.delete_attachment_dir(attachment_id)
-        return jsonify({'error': 'file is too large'}), 413
+        return None, ('file is too large', 413)
 
     # A photo should be located by where it was taken, not where it was
     # uploaded from — same helper the food log uses (backend/food/exif.py).
@@ -432,7 +428,7 @@ def upload_attachment(id):
     position = db.execute(
         'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM journal_attachments'
         ' WHERE entry_id=?',
-        (id,),
+        (entry_id,),
     ).fetchone()['next']
     try:
         db.execute(
@@ -440,7 +436,7 @@ def upload_attachment(id):
             '(id, entry_id, kind, name, path, mime, size, position,'
             ' transcript_status, description_status, latitude, longitude, created_at)'
             " VALUES (?,?,?,?,?,?,?,?,'idle',?,?,?,?)",
-            (attachment_id, id, kind, name, str(path), file.mimetype or None,
+            (attachment_id, entry_id, kind, name, str(path), file.mimetype or None,
              size, position, description_status, latitude, longitude, int(time.time())),
         )
         db.commit()
@@ -449,10 +445,77 @@ def upload_attachment(id):
         storage.delete_attachment_dir(attachment_id)
         raise
 
-    _notify_subscribers(id)
+    _notify_subscribers(entry_id)
     if auto_describe:
-        _describe_attachment_bg(attachment_id, id, str(path), name)
-    return jsonify(_attachment_dict(_load_attachment(attachment_id))), 201
+        _describe_attachment_bg(attachment_id, entry_id, str(path), name)
+    return _attachment_dict(_load_attachment(attachment_id)), None
+
+
+@bp.post('/<id>/attachments')
+def upload_attachment(id):
+    entry = get_db().execute(
+        'SELECT id FROM journal_entries WHERE id=?', (id,)
+    ).fetchone()
+    if not entry:
+        return jsonify({'error': 'Not found'}), 404
+
+    file = request.files.get('file')
+    if file is None:
+        return jsonify({'error': 'file is required'}), 400
+
+    attachment, failure = _store_attachment(id, file, request.form.get('name'))
+    if failure is not None:
+        message, status = failure
+        return jsonify({'error': message}), status
+    return jsonify(attachment), 201
+
+
+@bp.post('/recordings')
+def create_recording_entry():
+    """Save a recording as a journal entry *without* transcribing it.
+
+    The bottom bar's Record button. The clip is the entry — there is no body
+    text to write, so the row is created with an empty `content` and the audio
+    hangs off it as an attachment. Nothing goes to speech-to-text and no
+    metadata is generated: an empty body would only produce an invented title.
+    The attachment's own Transcribe button is still there if the words are
+    wanted later.
+
+    Entry and attachment are created in one request so a failed upload can't
+    leave an empty entry behind — the entry row is removed if the file is
+    rejected.
+    """
+    file = request.files.get('file')
+    if file is None:
+        return jsonify({'error': 'file is required'}), 400
+
+    now = int(time.time())
+    entry_id = str(ULID())
+    db = get_db()
+    db.execute(
+        'INSERT INTO journal_entries(id, content, raw_content, title, tags,'
+        ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+        (entry_id, '', None, (request.form.get('title') or '').strip() or None,
+         None, now, now),
+    )
+    db.commit()
+
+    try:
+        attachment, failure = _store_attachment(
+            entry_id, file, request.form.get('name') or 'Recording'
+        )
+    except Exception:
+        db.execute('DELETE FROM journal_entries WHERE id=?', (entry_id,))
+        db.commit()
+        raise
+    if failure is not None:
+        db.execute('DELETE FROM journal_entries WHERE id=?', (entry_id,))
+        db.commit()
+        message, status = failure
+        return jsonify({'error': message}), status
+
+    _notify_subscribers(entry_id)
+    return jsonify({'id': entry_id, 'attachment': attachment}), 201
 
 
 @bp.patch('/attachments/<attachment_id>')

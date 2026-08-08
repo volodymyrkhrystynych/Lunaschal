@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
@@ -8,8 +8,13 @@ interface Props {
   onMeetingUploaded: (id: string) => void;
 }
 
-type Status = 'idle' | 'recording' | 'transcribing';
+type Status = 'idle' | 'recording' | 'transcribing' | 'saving';
 type CorrectStatus = 'idle' | 'working';
+
+// Which of the three buttons is holding the microphone. Only one recording can
+// run at a time, so each button reflects its own state off this rather than off
+// the shared recorder status.
+type RecordMode = 'normal' | 'journal' | 'audio';
 
 interface CorrectResult {
   raw: string;
@@ -17,10 +22,8 @@ interface CorrectResult {
 }
 
 export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
-  const [lastText, setLastText] = useState('');
   const [error, setError] = useState('');
-  const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const recordModeRef = useRef<'normal' | 'journal'>('normal');
+  const recordModeRef = useRef<RecordMode>('normal');
   const queryClient = useQueryClient();
 
   const saveJournalFromVoice = useMutation({
@@ -32,13 +35,17 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
       ),
   });
 
+  // Errors deliberately propagate out of here: the recorder surfaces them on
+  // the button's own error line, which is where the recording was started.
+  const saveRecordingEntry = async (blob: Blob) => {
+    await api.journal.createRecording(blob);
+    queryClient.invalidateQueries({ queryKey: ['journal'] });
+  };
+
   const recorder = useRecorder(text => {
-    setLastText(text);
     if (recordModeRef.current === 'journal') saveJournalFromVoice.mutate(text);
     else onTranscribed(text);
-    if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
-    clearTimerRef.current = setTimeout(() => setLastText(''), 8000);
-  });
+  }, saveRecordingEntry);
   const status = recorder.status;
 
   const [expanded, setExpanded] = useState(false);
@@ -77,13 +84,6 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
       ),
   });
 
-  useEffect(
-    () => () => {
-      if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
-    },
-    []
-  );
-
   const startRecording = () => {
     setError('');
     recordModeRef.current = 'normal';
@@ -93,6 +93,11 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
     setError('');
     recordModeRef.current = 'journal';
     void recorder.start();
+  };
+  const startAudioRecording = () => {
+    setError('');
+    recordModeRef.current = 'audio';
+    void recorder.start('audio');
   };
   const stopRecording = recorder.stop;
 
@@ -135,38 +140,43 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const isListenerControlling = isListenerActive && status === 'idle';
   const isJournalMode = isListenerControlling && listenerMode === 'journal';
 
-  // The in-app Journal button shares the same recorder/mic as the Record
-  // button (only one recording can run at a time) — recordModeRef tracks
-  // which one is "holding" it so each button reflects its own state.
-  const inAppJournalActive =
-    status !== 'idle' && recordModeRef.current === 'journal';
-  const inAppNormalActive =
-    status !== 'idle' && recordModeRef.current === 'normal';
+  // The in-app Journal and Record buttons share the same recorder/mic as the
+  // Transcribe button (only one recording can run at a time) — recordModeRef
+  // tracks which one is "holding" it so each button reflects its own state.
+  const holding = (mode: RecordMode) =>
+    status !== 'idle' && recordModeRef.current === mode;
+  const inAppJournalActive = holding('journal');
+  const inAppNormalActive = holding('normal');
+  const inAppAudioActive = holding('audio');
+  // Another button owns the mic, so this one can only get in the way.
+  const busyElsewhere = (mode: RecordMode) =>
+    (status !== 'idle' && recordModeRef.current !== mode) ||
+    isListenerControlling;
+  // This button's own work is finishing (transcribing, or saving the entry) —
+  // its label is a status, not something to click.
+  const settling = (mode: RecordMode) =>
+    holding(mode) && status !== 'recording';
+  const unavailable = (mode: RecordMode) =>
+    busyElsewhere(mode) || settling(mode);
 
-  const buttonDisabled =
-    effectiveStatus === 'transcribing' ||
-    isListenerControlling ||
-    inAppJournalActive;
+  const buttonDisabled = unavailable('normal');
 
-  const buttonLabel = inAppJournalActive
-    ? 'Record'
-    : effectiveStatus === 'recording'
+  const buttonLabel = !inAppNormalActive
+    ? effectiveStatus === 'recording' && isListenerControlling
       ? isJournalMode
         ? 'Journal…'
-        : isListenerControlling
-          ? 'Recording…'
-          : 'Stop'
-      : effectiveStatus === 'transcribing'
+        : 'Recording…'
+      : effectiveStatus === 'transcribing' && isListenerControlling
         ? isJournalMode
           ? 'Saving journal…'
           : 'Transcribing…'
-        : 'Record';
+        : 'Transcribe'
+    : status === 'recording'
+      ? 'Stop'
+      : 'Transcribing…';
 
   const journalButtonDisabled =
-    inAppNormalActive ||
-    isListenerControlling ||
-    saveJournalFromVoice.isPending ||
-    (status === 'transcribing' && !inAppJournalActive);
+    unavailable('journal') || saveJournalFromVoice.isPending;
 
   const journalButtonLabel = inAppJournalActive
     ? status === 'recording'
@@ -175,6 +185,14 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
     : saveJournalFromVoice.isPending
       ? 'Saving…'
       : 'Journal';
+
+  const audioButtonDisabled = unavailable('audio');
+
+  const audioButtonLabel = inAppAudioActive
+    ? status === 'recording'
+      ? 'Stop'
+      : 'Saving…'
+    : 'Record';
 
   return (
     <div className="shrink-0 border-t border-white/10 bg-[var(--color-surface)]">
@@ -301,23 +319,24 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
               : startRecording
           }
           disabled={buttonDisabled}
+          title="Record → transcribe into the active editor or the clipboard"
           className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
             effectiveStatus === 'recording' && isJournalMode
               ? 'bg-amber-600 hover:bg-amber-700 text-white'
-              : effectiveStatus === 'recording'
+              : effectiveStatus === 'recording' &&
+                  (inAppNormalActive || isListenerControlling)
                 ? 'bg-red-600 hover:bg-red-700 text-white'
                 : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
           }`}
         >
           <span
             className={`w-2 h-2 rounded-full ${
-              effectiveStatus === 'recording' && isJournalMode
+              effectiveStatus === 'recording' &&
+              (inAppNormalActive || isListenerControlling)
                 ? 'bg-white animate-pulse'
-                : effectiveStatus === 'recording'
-                  ? 'bg-white animate-pulse'
-                  : effectiveStatus === 'transcribing'
-                    ? 'bg-yellow-400'
-                    : 'bg-[var(--color-text-muted)]'
+                : inAppNormalActive && status === 'transcribing'
+                  ? 'bg-yellow-400'
+                  : 'bg-[var(--color-text-muted)]'
             }`}
           />
           {buttonLabel}
@@ -349,24 +368,39 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           {journalButtonLabel}
         </button>
 
+        {/* Keeps the audio itself: a journal entry whose body is the recording,
+            with nothing sent to speech-to-text. */}
+        <button
+          onClick={
+            inAppAudioActive && status === 'recording'
+              ? stopRecording
+              : startAudioRecording
+          }
+          disabled={audioButtonDisabled}
+          title="Record → save as a journal entry with the audio attached, without transcribing it"
+          className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
+            inAppAudioActive && status === 'recording'
+              ? 'bg-red-600 hover:bg-red-700 text-white'
+              : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
+          }`}
+        >
+          <span
+            className={`w-2 h-2 rounded-full ${
+              inAppAudioActive && status === 'recording'
+                ? 'bg-white animate-pulse'
+                : inAppAudioActive && status === 'saving'
+                  ? 'bg-yellow-400'
+                  : 'bg-[var(--color-text-muted)]'
+            }`}
+          />
+          {audioButtonLabel}
+        </button>
+
         {(error || recorder.error) && (
           <span className="text-xs text-red-400 truncate">
             {error || recorder.error}
           </span>
         )}
-        {!error && !recorder.error && lastText && (
-          <span className="hidden md:inline text-xs text-[var(--color-text-muted)] truncate">
-            "{lastText}"
-          </span>
-        )}
-        {!error &&
-          !recorder.error &&
-          !lastText &&
-          effectiveStatus === 'idle' && (
-            <span className="hidden md:inline text-xs text-[var(--color-text-muted)]">
-              Voice input — transcribes into active editor or clipboard
-            </span>
-          )}
 
         <button
           onClick={() => {

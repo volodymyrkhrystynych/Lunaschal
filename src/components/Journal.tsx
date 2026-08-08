@@ -33,6 +33,7 @@ import type {
 import { ratingStars, foodTitle, mapLink } from '../lib/food';
 import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
+import { useRecorder } from '../hooks/useRecorder';
 
 interface JournalProps {
   /** Navigate to the fanfic reader (chip on entries linked to a fic chapter). */
@@ -62,6 +63,13 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     null
   );
   const [showDelete, setShowDelete] = useState(false);
+  // Dictation into the entry being edited. Only one entry is editable at a
+  // time, so one recorder serves the whole list. The transcript is appended
+  // rather than submitted (the BrainDump/IdeaCapture pattern) — it can be
+  // corrected, or a second thought added, before Save.
+  const editRecorder = useRecorder(text =>
+    setEditContent(prev => (prev ? `${prev}\n${text}` : text))
+  );
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
   const [polishError, setPolishError] = useState<{
     id: string;
@@ -698,10 +706,41 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                       className="w-full bg-transparent text-[var(--color-text)] resize-none focus:outline-none border border-white/10 rounded p-2"
                     />
                   </JournalAttachments>
-                  <div className="flex justify-end gap-2 mt-2">
+                  {editRecorder.error && (
+                    <p className="mt-2 text-xs text-red-400">
+                      {editRecorder.error}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (editRecorder.status === 'recording')
+                          editRecorder.stop();
+                        else if (editRecorder.status === 'idle')
+                          void editRecorder.start();
+                      }}
+                      disabled={editRecorder.status === 'transcribing'}
+                      aria-label={
+                        editRecorder.status === 'recording'
+                          ? 'Stop recording'
+                          : 'Dictate into this entry'
+                      }
+                      className={`px-2 py-1 rounded text-sm ${
+                        editRecorder.status === 'recording'
+                          ? 'bg-red-500/25 text-red-300'
+                          : 'bg-white/10 text-[var(--color-text)] hover:bg-white/15'
+                      } disabled:opacity-50`}
+                    >
+                      {editRecorder.status === 'recording'
+                        ? '■ Stop'
+                        : editRecorder.status === 'transcribing'
+                          ? 'Transcribing…'
+                          : '● Record'}
+                    </button>
                     <button
                       onClick={() => setEditingId(null)}
-                      className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                      className="ml-auto px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                     >
                       Cancel
                     </button>
@@ -914,13 +953,15 @@ function JournalPaperItem({ paper }: { paper: JournalPaper }) {
           <button
             key={pg.id}
             onClick={() => lightbox.open(pg.imageUrl)}
-            className="shrink-0 w-24 aspect-[3/4] rounded-md overflow-hidden border border-white/10 bg-white hover:border-[var(--color-primary)] transition-colors"
+            className="shrink-0 h-32 rounded-md overflow-hidden border border-white/10 bg-white hover:border-[var(--color-primary)] transition-colors"
             title="View"
           >
+            {/* Fixed height, width follows the page — a landscape page used to
+                be cropped to its top-left corner. */}
             <img
               src={pg.imageUrl!}
               alt=""
-              className="w-full h-full object-cover object-top"
+              className="h-full w-auto object-contain"
             />
           </button>
         ))}
@@ -1064,13 +1105,15 @@ function JournalFoodItem({ food }: { food: FoodJournalItem }) {
               <button
                 key={m.id}
                 onClick={() => lightbox.open(m.url)}
-                className="shrink-0 h-28 aspect-square rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
+                className="shrink-0 h-28 rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
                 title="View"
               >
+                {/* Fixed height, width follows the photo — a wide meal shot in
+                    a square box lost its edges. */}
                 <img
                   src={m.url}
                   alt=""
-                  className="w-full h-full object-cover"
+                  className="h-full w-auto object-contain"
                 />
               </button>
             )
