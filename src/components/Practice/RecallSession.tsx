@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PracticeBlindDrill, PracticeRecallResult } from '../../hooks/api';
+import { ExplanationPanel } from './ExplanationPanel';
 import { TypingCanvas } from './TypingCanvas';
 
 interface Props {
@@ -147,6 +148,9 @@ export function RecallSession({
               caret={false}
             />
           </div>
+          {/* Open, unlike the speed drill's: there is nothing left to type, and
+              this is the part of the drill worth reading. */}
+          <ExplanationPanel explanation={result.explanation} defaultOpen />
           <button
             ref={nextRef}
             onClick={onNext}

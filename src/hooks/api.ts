@@ -1062,12 +1062,29 @@ export interface PracticeSnippetProgress {
   updatedAt: string;
 }
 
+// What a snippet is, rather than what it looks like: a sentence, then a line per
+// option/field/parameter it uses, then what turns up alongside it. `parts` is a
+// list rather than prose so it can be read against the code line by line.
+// Nullable because it is keyed by snippet id server-side and a snippet could in
+// principle arrive unexplained.
+export interface PracticeExplanationPart {
+  name: string;
+  detail: string;
+}
+
+export interface PracticeExplanation {
+  summary: string;
+  parts: PracticeExplanationPart[];
+  related: string;
+}
+
 export interface PracticeSnippet {
   id: string;
   language: 'react' | 'javascript' | 'html' | 'css' | 'dom';
   category: string;
   title: string;
   code: string;
+  explanation: PracticeExplanation | null;
 }
 
 // One item of a session. A drill is a snippet plus how it is to be practiced,
@@ -1088,6 +1105,7 @@ interface PracticeDrillBase {
 export interface PracticeSpeedDrill extends PracticeDrillBase {
   mode: 'speed';
   code: string;
+  explanation: PracticeExplanation | null;
 }
 
 export interface PracticeBlindDrill extends PracticeDrillBase {
@@ -1105,6 +1123,9 @@ export interface PracticeRecallResult {
   // text comparison, not a reading of the code — the UI says so.
   gradedBy: 'model' | 'fallback' | 'empty';
   reference: string;
+  // Withheld from the blind drill itself — naming every field of the snippet
+  // gives most of the answer away — so it arrives here with the grade.
+  explanation: PracticeExplanation | null;
   progress: PracticeSnippetProgress;
 }
 

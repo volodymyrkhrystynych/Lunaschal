@@ -15,6 +15,12 @@ sentence, not against the reference character for character, so a prompt that
 underspecifies its snippet reads as an unfair grade rather than a vague
 question. Adding a snippet without a prompt breaks the blind drill for it;
 `test_every_snippet_has_a_prompt` is the guard.
+
+What a snippet *means* lives next door in `explanations.py`, keyed by the same
+id, so this file stays a bank of code. A snippet whose code needs an import to
+run carries that import as its first line — the drill is worth nothing if it
+teaches the hook call and not where the hook comes from — and its prompt says so,
+since the blind grade is made against the prompt.
 """
 
 SNIPPETS = [
@@ -24,24 +30,39 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useState',
-        'prompt': 'Declare a state variable `count` starting at 0, together with its setter.',
-        'code': 'const [count, setCount] = useState(0);',
+        'prompt': (
+            'Import the hook from React, then declare a state variable `count` starting at 0, '
+            'together with its setter.'
+        ),
+        'code': "import { useState } from 'react';\n\nconst [count, setCount] = useState(0);",
     },
     {
         'id': 'react-useeffect',
         'language': 'react',
         'category': 'hooks',
         'title': 'useEffect',
-        'prompt': 'Call `fetchData()` from an effect that re-runs whenever `id` changes.',
-        'code': 'useEffect(() => {\n  fetchData();\n}, [id]);',
+        'prompt': (
+            'Import the hook from React, then call `fetchData()` from an effect that re-runs '
+            'whenever `id` changes.'
+        ),
+        'code': (
+            "import { useEffect } from 'react';\n\n"
+            'useEffect(() => {\n  fetchData();\n}, [id]);'
+        ),
     },
     {
         'id': 'react-useref',
         'language': 'react',
         'category': 'hooks',
         'title': 'useRef',
-        'prompt': 'Create a ref for an input, then focus it, guarding against the ref being empty.',
-        'code': 'const inputRef = useRef(null);\ninputRef.current?.focus();',
+        'prompt': (
+            'Import the hook from React, then create a ref for an input and focus it, guarding '
+            'against the ref being empty.'
+        ),
+        'code': (
+            "import { useRef } from 'react';\n\n"
+            'const inputRef = useRef(null);\ninputRef.current?.focus();'
+        ),
     },
     {
         'id': 'react-usememo',
@@ -49,10 +70,13 @@ SNIPPETS = [
         'category': 'hooks',
         'title': 'useMemo',
         'prompt': (
-            'Memoize a `total` that sums the `price` of every entry in `items`, recomputed only '
-            'when `items` changes.'
+            'Import the hook from React, then memoize a `total` that sums the `price` of every '
+            'entry in `items`, recomputed only when `items` changes.'
         ),
-        'code': 'const total = useMemo(\n  () => items.reduce((sum, i) => sum + i.price, 0),\n  [items]\n);',
+        'code': (
+            "import { useMemo } from 'react';\n\n"
+            'const total = useMemo(\n  () => items.reduce((sum, i) => sum + i.price, 0),\n  [items]\n);'
+        ),
     },
     {
         'id': 'react-usecallback',
@@ -60,18 +84,27 @@ SNIPPETS = [
         'category': 'hooks',
         'title': 'useCallback',
         'prompt': (
-            'Memoize a `handleClick` that calls `onSelect(id)`, keeping the same function while '
-            '`id` and `onSelect` are unchanged.'
+            'Import the hook from React, then memoize a `handleClick` that calls `onSelect(id)`, '
+            'keeping the same function while `id` and `onSelect` are unchanged.'
         ),
-        'code': 'const handleClick = useCallback(() => {\n  onSelect(id);\n}, [id, onSelect]);',
+        'code': (
+            "import { useCallback } from 'react';\n\n"
+            'const handleClick = useCallback(() => {\n  onSelect(id);\n}, [id, onSelect]);'
+        ),
     },
     {
         'id': 'react-usecontext',
         'language': 'react',
         'category': 'hooks',
         'title': 'useContext',
-        'prompt': 'Read the current value of `ThemeContext` into a `theme` variable.',
-        'code': 'const theme = useContext(ThemeContext);',
+        'prompt': (
+            'Import the hook from React, then read the current value of `ThemeContext` into a '
+            '`theme` variable.'
+        ),
+        'code': (
+            "import { useContext } from 'react';\n\n"
+            'const theme = useContext(ThemeContext);'
+        ),
     },
     {
         'id': 'react-custom-hook',
@@ -79,10 +112,11 @@ SNIPPETS = [
         'category': 'hooks',
         'title': 'Custom hook',
         'prompt': (
-            'Write a `useToggle(initial = false)` hook returning the boolean and a function that '
-            'flips it, updating from the previous value.'
+            'Importing whatever it needs from React, write a `useToggle(initial = false)` hook '
+            'returning the boolean and a function that flips it, updating from the previous value.'
         ),
         'code': (
+            "import { useState } from 'react';\n\n"
             'function useToggle(initial = false) {\n'
             '  const [value, setValue] = useState(initial);\n'
             '  const toggle = () => setValue(v => !v);\n'
@@ -129,10 +163,12 @@ SNIPPETS = [
         'category': 'data',
         'title': 'useQuery',
         'prompt': (
-            "Fetch a user with React Query: key it on `['user', id]`, call `api.users.get(id)`, and "
-            "take `data` and `isLoading` off the result."
+            "Fetch a user with React Query, importing the hook from its package: key it on "
+            "`['user', id]`, call `api.users.get(id)`, and take `data` and `isLoading` off the "
+            "result."
         ),
         'code': (
+            "import { useQuery } from '@tanstack/react-query';\n\n"
             "const { data, isLoading } = useQuery({\n"
             "  queryKey: ['user', id],\n"
             "  queryFn: () => api.users.get(id),\n"
@@ -145,10 +181,13 @@ SNIPPETS = [
         'category': 'data',
         'title': 'useMutation',
         'prompt': (
-            "Set up a React Query mutation calling `api.users.update` that invalidates the "
-            "`['user', id]` query when it succeeds."
+            "Importing what you need from React Query, take the query client and set up a "
+            "mutation calling `api.users.update` that invalidates the `['user', id]` query when it "
+            "succeeds."
         ),
         'code': (
+            "import { useMutation, useQueryClient } from '@tanstack/react-query';\n\n"
+            'const queryClient = useQueryClient();\n'
             'const updateUser = useMutation({\n'
             '  mutationFn: api.users.update,\n'
             '  onSuccess: () => {\n'
@@ -163,11 +202,12 @@ SNIPPETS = [
         'category': 'hooks',
         'title': 'useReducer',
         'prompt': (
-            'Write a reducer handling an `increment` action by adding 1 to `state.count` and '
-            'returning the state untouched by default, then wire it up with useReducer starting '
-            'from a count of 0.'
+            'Importing the hook from React, write a reducer handling an `increment` action by '
+            'adding 1 to `state.count` and returning the state untouched by default, then wire it '
+            'up with useReducer starting from a count of 0.'
         ),
         'code': (
+            "import { useReducer } from 'react';\n\n"
             'function reducer(state, action) {\n'
             "  switch (action.type) {\n"
             "    case 'increment':\n"
@@ -185,10 +225,12 @@ SNIPPETS = [
         'category': 'hooks',
         'title': 'useLayoutEffect',
         'prompt': (
-            'Measure the height of `ref.current` with getBoundingClientRect and store it with '
-            '`setHeight`, before the browser paints, once on mount.'
+            'Importing the hook from React, measure the height of `ref.current` with '
+            'getBoundingClientRect and store it with `setHeight`, before the browser paints, once '
+            'on mount.'
         ),
         'code': (
+            "import { useLayoutEffect } from 'react';\n\n"
             'useLayoutEffect(() => {\n'
             '  const { height } = ref.current.getBoundingClientRect();\n'
             '  setHeight(height);\n'
@@ -201,10 +243,11 @@ SNIPPETS = [
         'category': 'performance',
         'title': 'React.memo',
         'prompt': (
-            'Wrap a `Row` component rendering `item.name` in an `<li>` so it only re-renders when '
-            'its props change.'
+            'Importing it from React, wrap a `Row` component rendering `item.name` in an `<li>` so '
+            'it only re-renders when its props change.'
         ),
         'code': (
+            "import { memo } from 'react';\n\n"
             'const Row = memo(function Row({ item }) {\n'
             '  return <li>{item.name}</li>;\n'
             '});'
@@ -216,10 +259,11 @@ SNIPPETS = [
         'category': 'refs',
         'title': 'forwardRef',
         'prompt': (
-            'Write an `Input` component that forwards a ref onto the underlying `<input>` and '
-            'spreads the rest of its props onto it.'
+            'Importing it from React, write an `Input` component that forwards a ref onto the '
+            'underlying `<input>` and spreads the rest of its props onto it.'
         ),
         'code': (
+            "import { forwardRef } from 'react';\n\n"
             'const Input = forwardRef(function Input(props, ref) {\n'
             '  return <input ref={ref} {...props} />;\n'
             '});'
@@ -231,10 +275,11 @@ SNIPPETS = [
         'category': 'forms',
         'title': 'Controlled input',
         'prompt': (
-            "Hold an input's text in state and make it a controlled input: value from state, "
-            "onChange writing the event's value back."
+            "Importing the hook from React, hold an input's text in state and make it a controlled "
+            "input: value from state, onChange writing the event's value back."
         ),
         'code': (
+            "import { useState } from 'react';\n\n"
             'const [value, setValue] = useState(\'\');\n'
             '<input value={value} onChange={e => setValue(e.target.value)} />'
         ),
@@ -278,9 +323,10 @@ SNIPPETS = [
         'prompt': (
             'Write an error boundary class component: a `hasError` state, the static lifecycle '
             'method that flips it when a child throws, and a render showing `<Fallback />` when it '
-            'is set and the children otherwise.'
+            'is set and the children otherwise. Import React itself for the base class.'
         ),
         'code': (
+            "import React from 'react';\n\n"
             'class ErrorBoundary extends React.Component {\n'
             '  state = { hasError: false };\n'
             '  static getDerivedStateFromError() {\n'
@@ -298,8 +344,12 @@ SNIPPETS = [
         'language': 'react',
         'category': 'rendering',
         'title': 'createPortal',
-        'prompt': 'Render a modal div into `document.body` through a portal.',
+        'prompt': (
+            'Render a modal div into `document.body` through a portal, importing it from the '
+            'package it actually lives in.'
+        ),
         'code': (
+            "import { createPortal } from 'react-dom';\n\n"
             'createPortal(\n'
             '  <div className="modal">{children}</div>,\n'
             '  document.body\n'
@@ -312,10 +362,11 @@ SNIPPETS = [
         'category': 'hooks',
         'title': 'Context provider',
         'prompt': (
-            "Create a `ThemeContext` defaulting to 'light', then have an `App` render `<Page />` "
-            "inside a provider supplying 'dark'."
+            "Importing it from React, create a `ThemeContext` defaulting to 'light', then have an "
+            "`App` render `<Page />` inside a provider supplying 'dark'."
         ),
         'code': (
+            "import { createContext } from 'react';\n\n"
             'const ThemeContext = createContext(\'light\');\n\n'
             'function App() {\n'
             '  return (\n'
@@ -332,10 +383,12 @@ SNIPPETS = [
         'category': 'hooks',
         'title': 'Custom hook with cleanup',
         'prompt': (
-            'Write a `useEventListener(event, handler)` hook adding a window listener in an effect '
-            'and removing it in the cleanup, re-running when either argument changes.'
+            'Importing the hook from React, write a `useEventListener(event, handler)` hook adding '
+            'a window listener in an effect and removing it in the cleanup, re-running when either '
+            'argument changes.'
         ),
         'code': (
+            "import { useEffect } from 'react';\n\n"
             'function useEventListener(event, handler) {\n'
             '  useEffect(() => {\n'
             '    window.addEventListener(event, handler);\n'
@@ -350,10 +403,11 @@ SNIPPETS = [
         'category': 'performance',
         'title': 'Lazy loading + Suspense',
         'prompt': (
-            'Lazily import a `Settings` component and render it inside a Suspense boundary falling '
-            'back to `<Spinner />`.'
+            'Importing both from React, lazily load a `Settings` component and render it inside a '
+            'Suspense boundary falling back to `<Spinner />`.'
         ),
         'code': (
+            "import { lazy, Suspense } from 'react';\n\n"
             "const Settings = lazy(() => import('./Settings'));\n\n"
             '<Suspense fallback={<Spinner />}>\n'
             '  <Settings />\n'
@@ -365,8 +419,12 @@ SNIPPETS = [
         'language': 'react',
         'category': 'hooks',
         'title': 'useId',
-        'prompt': 'Generate a unique id with the React hook and use it to tie a `<label>` to its `<input>`.',
+        'prompt': (
+            'Importing it from React, generate a unique id with the hook for it and use it to tie '
+            'a `<label>` to its `<input>`.'
+        ),
         'code': (
+            "import { useId } from 'react';\n\n"
             'const id = useId();\n'
             '<label htmlFor={id}>Name</label>\n'
             '<input id={id} />'
@@ -378,10 +436,11 @@ SNIPPETS = [
         'category': 'performance',
         'title': 'useTransition',
         'prompt': (
-            'Mark a `setResults(filterItems(value))` update as non-urgent with a transition, also '
-            'taking the pending flag.'
+            'Importing the hook from React, mark a `setResults(filterItems(value))` update as '
+            'non-urgent with a transition, also taking the pending flag.'
         ),
         'code': (
+            "import { useTransition } from 'react';\n\n"
             'const [isPending, startTransition] = useTransition();\n\n'
             'function handleChange(value) {\n'
             '  startTransition(() => {\n'

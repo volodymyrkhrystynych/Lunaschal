@@ -170,6 +170,7 @@ export function Practice() {
             placeholder="category (optional)"
             className="px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] text-sm placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
           />
+          <StatsPanel />
         </div>
 
         {!current && !empty && !finished && (
@@ -217,8 +218,6 @@ export function Practice() {
         {finished && (
           <SessionSummary results={results} onRestart={startNewSession} />
         )}
-
-        <StatsPanel />
       </div>
     </div>
   );
