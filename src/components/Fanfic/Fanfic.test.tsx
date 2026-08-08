@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Fanfic } from './Fanfic';
@@ -107,6 +107,55 @@ describe('Fanfic reload resume', () => {
 
     await screen.findByText('Test Fic');
     expect(localStorage.getItem('lunaschal:openFic')).toBeNull();
+  });
+});
+
+describe('Library infinite scroll', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.scrollTo = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetches the next page once the sentinel intersects', async () => {
+    const { api } = await import('../../hooks/api');
+    const page1 = Array.from({ length: 50 }, (_, i) => ({
+      ...FIC,
+      id: `fic${i}`,
+      title: `Fic ${i}`,
+    }));
+    const page2 = [{ ...FIC, id: 'fic50', title: 'Fic 50' }];
+    vi.mocked(api.fanfic.list)
+      .mockResolvedValueOnce(page1)
+      .mockResolvedValueOnce(page2);
+
+    let intersect: IntersectionObserverCallback = () => {};
+    class FakeIntersectionObserver {
+      constructor(cb: IntersectionObserverCallback) {
+        intersect = cb;
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    }
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
+
+    renderFanfic();
+    await screen.findByText('Fic 0');
+
+    intersect(
+      [{ isIntersecting: true } as IntersectionObserverEntry],
+      {} as IntersectionObserver
+    );
+
+    await screen.findByText('Fic 50');
+    expect(api.fanfic.list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ limit: 50, offset: 50 })
+    );
   });
 });
 

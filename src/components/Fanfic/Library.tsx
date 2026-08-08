@@ -1,5 +1,10 @@
-import { useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { Fic, RefreshAlertsResult } from '../../hooks/api';
 import {
@@ -26,6 +31,8 @@ const formatDate = (date: string) =>
     day: 'numeric',
   }).format(new Date(date));
 
+const PAGE_SIZE = 50;
+
 export function Library({ onOpen }: LibraryProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showImport, setShowImport] = useState(false);
@@ -38,29 +45,72 @@ export function Library({ onOpen }: LibraryProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
 
-  const { data: fics, isLoading } = useQuery({
-    queryKey: searchQuery
-      ? ['fanfic', 'search', searchQuery]
-      : ['fanfic', 'list', folderId, tag],
-    queryFn: () =>
-      searchQuery
-        ? api.fanfic.search(searchQuery)
-        : api.fanfic.list({
-            folderId: folderId && folderId !== 'recent' ? folderId : undefined,
-            tag: tag ?? undefined,
-            sort: folderId === 'recent' ? 'recent' : undefined,
-          }),
+  const listQuery = useInfiniteQuery({
+    queryKey: ['fanfic', 'list', folderId, tag],
+    queryFn: ({ pageParam }) =>
+      api.fanfic.list({
+        folderId: folderId && folderId !== 'recent' ? folderId : undefined,
+        tag: tag ?? undefined,
+        sort: folderId === 'recent' ? 'recent' : undefined,
+        limit: PAGE_SIZE,
+        offset: pageParam,
+      }),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length === PAGE_SIZE ? allPages.length * PAGE_SIZE : undefined,
+    enabled: !searchQuery,
     // Poll while any fic is still downloading or queued behind the serial
     // update worker so progress bars and queued badges advance.
     refetchInterval: query =>
-      query.state.data?.some(
-        (f: Fic) => f.downloadStatus === 'downloading' || f.updatePending
+      query.state.data?.pages.some(page =>
+        page.some(
+          (f: Fic) => f.downloadStatus === 'downloading' || f.updatePending
+        )
       )
         ? 1500
         : false,
   });
+
+  const searchResults = useQuery({
+    queryKey: ['fanfic', 'search', searchQuery],
+    queryFn: () => api.fanfic.search(searchQuery),
+    enabled: !!searchQuery,
+  });
+
+  const fics = searchQuery ? searchResults.data : listQuery.data?.pages.flat();
+  const isLoading = searchQuery ? searchResults.isLoading : listQuery.isLoading;
+
+  // Fetch the next page once the sentinel at the bottom of the scrollable
+  // list comes near view, instead of the library ever loading it all at once.
+  useEffect(() => {
+    if (searchQuery) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    const sentinel = sentinelRef.current;
+    const root = listRef.current;
+    if (!sentinel || !root) return;
+    const observer = new IntersectionObserver(
+      entries => {
+        if (
+          entries[0].isIntersecting &&
+          listQuery.hasNextPage &&
+          !listQuery.isFetchingNextPage
+        ) {
+          listQuery.fetchNextPage();
+        }
+      },
+      { root, rootMargin: '200px' }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [
+    searchQuery,
+    listQuery.hasNextPage,
+    listQuery.isFetchingNextPage,
+    listQuery.fetchNextPage,
+  ]);
 
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ['fanfic'] });
@@ -329,6 +379,16 @@ export function Library({ onOpen }: LibraryProps) {
             {searchQuery
               ? 'No fics match'
               : 'Nothing here yet — import a fic from a forum or upload an EPUB/DOCX/PDF.'}
+          </div>
+        )}
+
+        {!searchQuery && (
+          <div ref={sentinelRef} className="h-1">
+            {listQuery.isFetchingNextPage && (
+              <div className="text-center text-[var(--color-text-muted)] text-sm py-2">
+                Loading more…
+              </div>
+            )}
           </div>
         )}
       </div>
