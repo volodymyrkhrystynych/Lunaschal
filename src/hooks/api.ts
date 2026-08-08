@@ -1271,6 +1271,18 @@ export const api = {
     // raw transcript immediately, polish it in the background.
     createFromVoice: (rawContent: string) =>
       post<{ id: string }>('/api/journal', { raw_content: rawContent }),
+    // The bottom bar's Record button: keep the recording itself as the entry,
+    // no speech-to-text. One request so a rejected upload leaves no empty entry
+    // behind; the clip lands as the entry's first attachment.
+    createRecording: (audio: Blob, name?: string) => {
+      const form = new FormData();
+      form.append('file', audio, 'recording.webm');
+      if (name?.trim()) form.append('name', name.trim());
+      return upload<{ id: string; attachment: JournalAttachment }>(
+        '/api/journal/recordings',
+        form
+      );
+    },
     update: (
       id: string,
       data: { content?: string; title?: string; tags?: string[] }

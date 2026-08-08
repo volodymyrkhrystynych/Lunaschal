@@ -62,6 +62,17 @@ vi.mock('../hooks/api', () => ({
   },
 }));
 
+// The edit-mode dictation button. Only the transcript matters here — the
+// microphone plumbing is covered by useRecorder's own test.
+vi.mock('../hooks/useRecorder', () => ({
+  useRecorder: (onTranscript: (text: string) => void) => ({
+    status: 'idle',
+    error: '',
+    start: vi.fn(async () => onTranscript('and one more thing')),
+    stop: vi.fn(),
+  }),
+}));
+
 class FakeEventSource {
   onmessage: unknown = null;
   close() {}
@@ -136,6 +147,32 @@ describe('Journal keyboard editing', () => {
 
     expect(screen.getByText('First entry')).toBeTruthy();
     expect(screen.queryByDisplayValue('First entry')).toBeNull();
+  });
+});
+
+describe('Journal edit-mode dictation', () => {
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  it('appends the transcript to the entry being edited rather than replacing it', async () => {
+    renderJournal();
+    await screen.findByText('First entry');
+    openEditWithKeyboard();
+
+    // Held by reference: getByDisplayValue collapses the newline the
+    // transcript is appended on, so the assertion reads the value directly.
+    const textarea = screen.getByDisplayValue(
+      'First entry'
+    ) as HTMLTextAreaElement;
+    fireEvent.click(screen.getByLabelText('Dictate into this entry'));
+
+    await waitFor(() =>
+      expect(textarea.value).toBe('First entry\nand one more thing')
+    );
+    // Dictating is not saving — the entry only changes when Save is pressed.
+    expect(api.journal.update).not.toHaveBeenCalled();
   });
 });
 

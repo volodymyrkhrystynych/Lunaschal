@@ -358,17 +358,19 @@ function AttachmentRow({
       )}
       {a.kind === 'image' && (
         <div className="flex items-center gap-2">
+          {/* Fixed height, width follows the photo: a landscape shot in a
+              portrait box was being cropped to its middle third. */}
           <button
             type="button"
             onClick={() => lightbox.open(a.url)}
-            className="shrink-0 w-24 aspect-[3/4] rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
+            className="shrink-0 h-32 max-w-full rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
             title="View"
           >
             <img
               src={a.url}
               alt={a.name}
               loading="lazy"
-              className="w-full h-full object-cover"
+              className="h-full w-auto max-w-full object-contain"
             />
           </button>
           {geoLink && (

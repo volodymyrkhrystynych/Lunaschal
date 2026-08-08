@@ -7,11 +7,18 @@ import { api } from '../../hooks/api';
 import { SttPanel } from './SttPanel';
 
 vi.mock('../../hooks/useRecorder', () => ({
-  useRecorder: (onTranscript: (text: string) => void) => ({
+  useRecorder: (
+    onTranscript: (text: string) => void,
+    onAudio?: (blob: Blob) => void | Promise<void>
+  ) => ({
     status: 'idle',
     error: '',
-    start: vi.fn(async () => {
-      onTranscript('hello from the journal button');
+    // start('audio') is the no-transcription path: the blob goes straight to
+    // onAudio and nothing is ever handed to onTranscript.
+    start: vi.fn(async (mode?: string) => {
+      if (mode === 'audio')
+        await onAudio?.(new Blob(['fake-audio'], { type: 'audio/webm' }));
+      else onTranscript('hello from the journal button');
     }),
     stop: vi.fn(),
   }),
@@ -33,6 +40,7 @@ vi.mock('../../hooks/api', () => ({
     },
     journal: {
       createFromVoice: vi.fn().mockResolvedValue({ id: 'j1' }),
+      createRecording: vi.fn().mockResolvedValue({ id: 'j2', attachment: {} }),
     },
   },
 }));
@@ -49,6 +57,7 @@ function renderWithProviders(children: ReactNode) {
 describe('SttPanel', () => {
   beforeEach(() => {
     vi.mocked(api.journal.createFromVoice).mockClear();
+    vi.mocked(api.journal.createRecording).mockClear();
   });
 
   it('routes the Journal button transcript to the journal API, not the editor callback', async () => {
@@ -67,7 +76,23 @@ describe('SttPanel', () => {
     expect(onTranscribed).not.toHaveBeenCalled();
   });
 
-  it('the Record button still routes its transcript to the editor callback', async () => {
+  it('the Transcribe button routes its transcript to the editor callback', async () => {
+    const onTranscribed = vi.fn();
+    renderWithProviders(
+      <SttPanel onTranscribed={onTranscribed} onMeetingUploaded={() => {}} />
+    );
+
+    fireEvent.click(await screen.findByText('Transcribe'));
+
+    await waitFor(() =>
+      expect(onTranscribed).toHaveBeenCalledWith(
+        'hello from the journal button'
+      )
+    );
+    expect(api.journal.createFromVoice).not.toHaveBeenCalled();
+  });
+
+  it('the Record button saves the audio as a journal entry without transcribing it', async () => {
     const onTranscribed = vi.fn();
     renderWithProviders(
       <SttPanel onTranscribed={onTranscribed} onMeetingUploaded={() => {}} />
@@ -76,10 +101,12 @@ describe('SttPanel', () => {
     fireEvent.click(await screen.findByText('Record'));
 
     await waitFor(() =>
-      expect(onTranscribed).toHaveBeenCalledWith(
-        'hello from the journal button'
-      )
+      expect(api.journal.createRecording).toHaveBeenCalledTimes(1)
     );
+    const [blob] = vi.mocked(api.journal.createRecording).mock.calls[0];
+    expect(blob).toBeInstanceOf(Blob);
+    // The whole point: no speech-to-text, and nothing typed into the editor.
     expect(api.journal.createFromVoice).not.toHaveBeenCalled();
+    expect(onTranscribed).not.toHaveBeenCalled();
   });
 });

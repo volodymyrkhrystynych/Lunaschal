@@ -520,3 +520,71 @@ def test_running_descriptions_are_reset_at_startup(client, entry_id, monkeypatch
     connection._reset_stale_attachment_transcripts(connection.get_db())
     got = client.get(f'/api/journal/{entry_id}/attachments').get_json()[0]
     assert got['descriptionStatus'] == 'idle'
+
+
+# --- recording entries (the bottom bar's Record button) ----------------------
+#
+# The clip is the entry: nothing goes to speech-to-text, so the row is created
+# with an empty body and the audio hangs off it. The point of the one-shot route
+# is that a rejected file leaves no empty entry behind.
+
+def _record(client, *, filename='recording.webm', data=b'\x00' * 2048,
+            mime='audio/webm', name=None):
+    form = {'file': (io.BytesIO(data), filename, mime)}
+    if name is not None:
+        form['name'] = name
+    return client.post(
+        '/api/journal/recordings', data=form, content_type='multipart/form-data'
+    )
+
+
+def test_recording_creates_an_entry_carrying_the_audio(client):
+    r = _record(client)
+    assert r.status_code == 201
+    body = r.get_json()
+
+    entry = client.get(f"/api/journal/{body['id']}").get_json()
+    assert entry['content'] == ''
+    # Not transcribed, and not queued for transcription either.
+    assert entry['rawContent'] is None
+    assert [(a['kind'], a['name'], a['transcriptStatus']) for a in entry['attachments']] == [
+        ('audio', 'Recording', 'idle')
+    ]
+
+
+def test_recording_honours_a_supplied_name(client):
+    body = _record(client, name='Walking home').get_json()
+    entry = client.get(f"/api/journal/{body['id']}").get_json()
+    assert entry['attachments'][0]['name'] == 'Walking home'
+
+
+def test_recording_generates_no_metadata(client, monkeypatch):
+    """An empty body would only produce an invented title and tags."""
+    called = []
+    monkeypatch.setattr(journal_routes, '_generate_metadata_bg',
+                        lambda *a, **k: called.append(a))
+    monkeypatch.setattr(journal_routes, '_polish_bg', lambda *a, **k: called.append(a))
+    _record(client)
+    assert called == []
+
+
+def test_recording_needs_a_file(client):
+    before = len(client.get('/api/journal?limit=100').get_json())
+    r = client.post('/api/journal/recordings', data={},
+                    content_type='multipart/form-data')
+    assert r.status_code == 400
+    assert len(client.get('/api/journal?limit=100').get_json()) == before
+
+
+def test_a_rejected_file_leaves_no_empty_entry_behind(client):
+    before = len(client.get('/api/journal?limit=100').get_json())
+    r = _record(client, filename='notes.txt', mime='text/plain')
+    assert r.status_code == 400
+    assert len(client.get('/api/journal?limit=100').get_json()) == before
+
+
+def test_an_empty_recording_leaves_no_entry_behind(client):
+    before = len(client.get('/api/journal?limit=100').get_json())
+    r = _record(client, data=b'')
+    assert r.status_code == 400
+    assert len(client.get('/api/journal?limit=100').get_json()) == before
