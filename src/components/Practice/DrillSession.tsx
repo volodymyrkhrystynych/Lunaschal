@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import type { PracticeSpeedDrill } from '../../hooks/api';
 import { diffTyped, computeStats, type TypingStats } from '../../lib/practice';
+import { ExplanationPanel } from './ExplanationPanel';
 import { TypingCanvas } from './TypingCanvas';
 
 interface Props {
@@ -65,34 +66,42 @@ export function DrillSession({ snippet, onComplete }: Props) {
 
   const statuses = diffTyped(code, typed);
 
+  // The click-to-focus wrapper deliberately stops at the typing area, so a click
+  // on the explanation's toggle is not also a click that returns focus to the
+  // hidden textarea — expanding it would otherwise scroll the drill away and put
+  // the caret straight back in the snippet.
   return (
-    <div
-      className="flex flex-col gap-3"
-      onClick={() => inputRef.current?.focus()}
-    >
-      <div className="flex items-center justify-between text-sm text-[var(--color-text-muted)]">
-        <span>{snippet.title}</span>
-        <span className="capitalize">
-          {snippet.language} · {snippet.category}
-        </span>
+    <div className="flex flex-col gap-3">
+      <div
+        className="flex flex-col gap-3"
+        onClick={() => inputRef.current?.focus()}
+      >
+        <div className="flex items-center justify-between text-sm text-[var(--color-text-muted)]">
+          <span>{snippet.title}</span>
+          <span className="capitalize">
+            {snippet.language} · {snippet.category}
+          </span>
+        </div>
+        <TypingCanvas
+          language={snippet.language}
+          code={code}
+          statuses={statuses}
+        />
+        <textarea
+          ref={inputRef}
+          value={typed}
+          onChange={handleChange}
+          onPaste={e => e.preventDefault()}
+          autoComplete="off"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          className="sr-only"
+          aria-label={`Type the ${snippet.title} snippet`}
+        />
       </div>
-      <TypingCanvas
-        language={snippet.language}
-        code={code}
-        statuses={statuses}
-      />
-      <textarea
-        ref={inputRef}
-        value={typed}
-        onChange={handleChange}
-        onPaste={e => e.preventDefault()}
-        autoComplete="off"
-        autoCapitalize="off"
-        autoCorrect="off"
-        spellCheck={false}
-        className="sr-only"
-        aria-label={`Type the ${snippet.title} snippet`}
-      />
+
+      <ExplanationPanel explanation={snippet.explanation} />
     </div>
   );
 }

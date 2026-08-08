@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PracticeStats } from '../../hooks/api';
 import { StatsPanel } from './StatsPanel';
@@ -29,8 +29,17 @@ const current: PracticeStats = {
 };
 
 describe('StatsPanel', () => {
-  it('reports recall on its own line, apart from the typing averages', () => {
+  it('starts collapsed behind a Progress toggle', () => {
     renderWithCache(current);
+
+    expect(screen.getByRole('button', { name: 'Progress' })).toBeTruthy();
+    expect(screen.queryByText(/12 attempts/)).toBeNull();
+  });
+
+  it('reports recall on its own line, apart from the typing averages, once opened', () => {
+    renderWithCache(current);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Progress' }));
 
     expect(screen.getByText(/12 attempts/)).toBeTruthy();
     expect(screen.getByText(/4 from memory/)).toBeTruthy();
@@ -44,6 +53,7 @@ describe('StatsPanel', () => {
     const { recall: _recall, ...preRecall } = current;
 
     renderWithCache(preRecall);
+    fireEvent.click(screen.getByRole('button', { name: 'Progress' }));
 
     expect(screen.getByText(/12 attempts/)).toBeTruthy();
     expect(screen.queryByText(/from memory/)).toBeNull();

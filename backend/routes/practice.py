@@ -6,6 +6,7 @@ from ulid import ULID
 from backend.ai import priority
 from backend.ai.practice import grade_recall
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
+from backend.practice.explanations import explanation_for
 from backend.practice.grading import rating_label
 from backend.practice.modes import BLIND, next_mode
 from backend.practice.queue import DEFAULT_SIZE, build_session
@@ -25,6 +26,8 @@ def _drill(snippet: dict, mode: str) -> dict:
     A blind drill carries the prompt and **not** the code. Withholding it here
     rather than asking the component not to render it is the only way the answer
     isn't sitting in the network tab of the drill that exists to test memory.
+    The explanation is withheld on the same grounds — naming every field of the
+    snippet gives most of it away — and arrives with the grade instead.
     """
     drill = {k: snippet[k] for k in ('id', 'language', 'category', 'title')}
     drill['mode'] = mode
@@ -32,6 +35,7 @@ def _drill(snippet: dict, mode: str) -> dict:
         drill['prompt'] = snippet['prompt']
     else:
         drill['code'] = snippet['code']
+        drill['explanation'] = explanation_for(snippet['id'])
     return drill
 
 
@@ -69,6 +73,7 @@ def list_snippets():
         [
             {
                 **s,
+                'explanation': explanation_for(s['id']),
                 'progress': mapping_to_dict(progress[s['id']]) if s['id'] in progress else None,
             }
             for s in _filter_snippets(language, category)
@@ -137,8 +142,9 @@ def submit_recall():
     The verdict comes from `backend/ai/practice.py`, which never raises — an
     unreachable model degrades to a text comparison tagged `gradedBy:
     'fallback'` rather than costing the attempt. The reference code comes back
-    in the response and not before it: this is the first moment in a blind drill
-    that the client is allowed to see the answer.
+    in the response and not before it, alongside the explanation of what was
+    being recalled: this is the first moment in a blind drill that the client is
+    allowed to see the answer.
     """
     body = request.get_json(force=True) or {}
     snippet_id = body.get('snippetId')
@@ -193,6 +199,7 @@ def submit_recall():
         {
             **graded,
             'reference': snippet['code'],
+            'explanation': explanation_for(snippet_id),
             'progress': row_to_dict(progress_row),
         }
     )

@@ -5,6 +5,7 @@ import pytest
 
 from backend.ai import practice as ai_practice
 from backend.practice import modes, queue
+from backend.practice.explanations import EXPLANATIONS, explanation_for
 from backend.practice.grading import fallback_grade, normalize_code, rating_label
 from backend.practice.snippets import SNIPPETS
 
@@ -214,6 +215,28 @@ def test_every_snippet_has_a_prompt():
     assert missing == []
 
 
+def test_every_snippet_has_an_explanation():
+    """The explanations are keyed by snippet id in a separate file, so the two
+    lists can drift apart silently — a snippet added without one simply renders
+    no panel, which reads as a broken feature rather than a missing entry."""
+    ids = {s['id'] for s in SNIPPETS}
+    assert sorted(ids - set(EXPLANATIONS)) == []
+    # And nothing keyed to a snippet that no longer exists.
+    assert sorted(set(EXPLANATIONS) - ids) == []
+
+
+def test_every_explanation_names_at_least_one_part():
+    """A summary on its own is a paragraph; the per-part lines are what make it
+    readable against the code that was just typed."""
+    thin = [
+        snippet_id
+        for snippet_id in EXPLANATIONS
+        if not explanation_for(snippet_id)['parts']
+        or not explanation_for(snippet_id)['summary'].strip()
+    ]
+    assert thin == []
+
+
 def test_normalize_code_folds_formatting_but_not_content():
     assert normalize_code('const a = 1;') == normalize_code('const   a=1 ;')
     assert normalize_code('()   => {\n  go();\n}') == normalize_code('()=>{go();}')
@@ -349,6 +372,8 @@ def test_session_serves_speed_drills_with_the_code(client):
     assert data
     assert all(d['mode'] == 'speed' for d in data)  # nothing practiced yet
     assert all(d['code'] for d in data)
+    # The code is already on screen in a speed drill, so what it means comes with it.
+    assert all(d['explanation']['summary'] for d in data)
 
 
 def _make_fluent(client, snippet_id):
@@ -376,6 +401,9 @@ def test_a_blind_drill_withholds_the_code_and_carries_the_prompt(client):
     # The whole drill is "write it without seeing it": shipping the answer to
     # the browser would put it one devtools panel away.
     assert 'code' not in drill
+    # The explanation names every field the reference uses, so it is withheld on
+    # the same grounds and arrives with the grade instead.
+    assert 'explanation' not in drill
 
 
 def test_recall_endpoint_records_a_pass_and_reveals_the_reference(client, monkeypatch):
@@ -393,8 +421,10 @@ def test_recall_endpoint_records_a_pass_and_reveals_the_reference(client, monkey
     data = resp.get_json()
     assert data['passed'] is True
     assert data['gradedBy'] == 'model'
-    # The reference arrives with the grade and not before it.
+    # The reference arrives with the grade and not before it, and so does the
+    # explanation of what was being recalled.
     assert data['reference'] == snippet['code']
+    assert data['explanation'] == explanation_for(snippet['id'])
     assert data['progress']['recallAttemptsCount'] == 1
     assert data['progress']['recallPasses'] == 1
     assert data['progress']['lastRecallPassed'] == 1
@@ -472,6 +502,12 @@ def test_stats_reports_recall_separately_from_typing(client, monkeypatch):
     # The typing averages are computed over practice_attempts alone, so a blind
     # run leaves them empty rather than dragging a 0 wpm through them.
     assert stats['totalAttempts'] == 0
+
+
+def test_snippet_listing_carries_each_explanation(client):
+    data = client.get('/api/practice/snippets?language=css').get_json()
+    assert data
+    assert all(s['explanation']['parts'] for s in data)
 
 
 def test_stats_endpoint_aggregates_by_language(client):
