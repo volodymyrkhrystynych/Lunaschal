@@ -20,7 +20,9 @@ export const QUERY_GC_TIME = 1000 * 60 * 60 * 24 * 20; // 20 days, < 2^31-1 ms
 // mismatch makes react-query-persist-client discard the old cache on restore.
 // v2: journal list moved from a flat JournalEntry[] to useInfiniteQuery's
 // InfiniteData shape — restoring the old array crashed the Journal feed.
-export const PERSIST_BUSTER = 'v2';
+// v3: practice stats grew a `recall` object — a restored pre-recall row has no
+// such key, and reading through it blanked the whole Practice tab.
+export const PERSIST_BUSTER = 'v3';
 
 const IDB_KEY = 'lunaschal-react-query';
 
