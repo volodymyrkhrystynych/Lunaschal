@@ -22,7 +22,7 @@ fi
 # on the interactive path.
 exec "$LLAMA_BIN" \
   --models-preset "$PRESETS" \
-  --models-max 2 \
+  --models-max 3 \
   --host 127.0.0.1 \
   --port "$PORT" \
   "$@"
