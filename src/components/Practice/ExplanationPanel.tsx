@@ -1,11 +1,16 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { PracticeExplanation } from '../../hooks/api';
+import {
+  getStoredExplanationOpen,
+  setStoredExplanationOpen,
+} from '../../lib/practicePrefs';
 
 interface Props {
   explanation: PracticeExplanation | null;
-  // A speed drill shows this while the snippet is still being typed, so it
-  // starts closed and stays out of the way; a graded recall opens it, because
-  // reading it is the whole payoff of having just written the thing from memory.
+  // Only consulted until the user first opens or closes the panel themselves —
+  // after that their choice carries across every drill. A speed drill starts it
+  // closed and out of the way; a graded recall starts it open, because reading
+  // it is the whole payoff of having just written the thing from memory.
   defaultOpen?: boolean;
 }
 
@@ -36,20 +41,26 @@ function renderInline(text: string) {
 }
 
 export function ExplanationPanel({ explanation, defaultOpen = false }: Props) {
-  const [open, setOpen] = useState(defaultOpen);
+  // Read on every mount, and the drills remount per snippet — so whichever way
+  // the panel was left is the way the next snippet finds it. There is
+  // deliberately no effect re-syncing this to `defaultOpen`: that is precisely
+  // what used to collapse the panel again on each new drill.
+  const [open, setOpen] = useState(
+    () => getStoredExplanationOpen() ?? defaultOpen
+  );
 
-  // The panel outlives a drill when only the snippet inside it changes, so the
-  // open state is re-synced rather than left wherever the last drill put it.
-  useEffect(() => {
-    setOpen(defaultOpen);
-  }, [defaultOpen, explanation]);
+  function toggle() {
+    const next = !open;
+    setOpen(next);
+    setStoredExplanationOpen(next);
+  }
 
   if (!explanation) return null;
 
   return (
     <div className="rounded-lg border border-white/10 bg-[var(--color-surface)]">
       <button
-        onClick={() => setOpen(o => !o)}
+        onClick={toggle}
         aria-expanded={open}
         className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs uppercase tracking-wide text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
       >
