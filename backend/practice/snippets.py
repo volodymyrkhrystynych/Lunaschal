@@ -144,7 +144,13 @@ SNIPPETS = [
             'In JSX, render `<Spinner />` while `isLoading`, otherwise `<Content />` with `data` '
             'passed as a prop.'
         ),
-        'code': '{isLoading ? <Spinner /> : <Content data={data} />}',
+        'code': (
+            '{isLoading ? (\n'
+            '  <Spinner />\n'
+            ') : (\n'
+            '  <Content data={data} />\n'
+            ')}'
+        ),
     },
     {
         'id': 'react-props-destructure',
@@ -186,12 +192,18 @@ SNIPPETS = [
             "succeeds."
         ),
         'code': (
-            "import { useMutation, useQueryClient } from '@tanstack/react-query';\n\n"
+            'import {\n'
+            '  useMutation,\n'
+            '  useQueryClient,\n'
+            "} from '@tanstack/react-query';\n"
+            '\n'
             'const queryClient = useQueryClient();\n'
             'const updateUser = useMutation({\n'
             '  mutationFn: api.users.update,\n'
             '  onSuccess: () => {\n'
-            "    queryClient.invalidateQueries({ queryKey: ['user', id] });\n"
+            '    queryClient.invalidateQueries({\n'
+            "      queryKey: ['user', id],\n"
+            '    });\n'
             '  },\n'
             '});'
         ),
@@ -207,16 +219,20 @@ SNIPPETS = [
             'up with useReducer starting from a count of 0.'
         ),
         'code': (
-            "import { useReducer } from 'react';\n\n"
+            "import { useReducer } from 'react';\n"
+            '\n'
             'function reducer(state, action) {\n'
-            "  switch (action.type) {\n"
+            '  switch (action.type) {\n'
             "    case 'increment':\n"
             '      return { count: state.count + 1 };\n'
             '    default:\n'
             '      return state;\n'
             '  }\n'
             '}\n'
-            'const [state, dispatch] = useReducer(reducer, { count: 0 });'
+            'const [state, dispatch] = useReducer(\n'
+            '  reducer,\n'
+            '  { count: 0 }\n'
+            ');'
         ),
     },
     {
@@ -230,9 +246,11 @@ SNIPPETS = [
             'on mount.'
         ),
         'code': (
-            "import { useLayoutEffect } from 'react';\n\n"
+            "import { useLayoutEffect } from 'react';\n"
+            '\n'
             'useLayoutEffect(() => {\n'
-            '  const { height } = ref.current.getBoundingClientRect();\n'
+            '  const { height } =\n'
+            '    ref.current.getBoundingClientRect();\n'
             '  setHeight(height);\n'
             '}, []);'
         ),
@@ -263,10 +281,13 @@ SNIPPETS = [
             'underlying `<input>` and spreads the rest of its props onto it.'
         ),
         'code': (
-            "import { forwardRef } from 'react';\n\n"
-            'const Input = forwardRef(function Input(props, ref) {\n'
-            '  return <input ref={ref} {...props} />;\n'
-            '});'
+            "import { forwardRef } from 'react';\n"
+            '\n'
+            'const Input = forwardRef(\n'
+            '  function Input(props, ref) {\n'
+            '    return <input ref={ref} {...props} />;\n'
+            '  }\n'
+            ');'
         ),
     },
     {
@@ -279,9 +300,13 @@ SNIPPETS = [
             "input: value from state, onChange writing the event's value back."
         ),
         'code': (
-            "import { useState } from 'react';\n\n"
-            'const [value, setValue] = useState(\'\');\n'
-            '<input value={value} onChange={e => setValue(e.target.value)} />'
+            "import { useState } from 'react';\n"
+            '\n'
+            "const [value, setValue] = useState('');\n"
+            '<input\n'
+            '  value={value}\n'
+            '  onChange={e => setValue(e.target.value)}\n'
+            '/>'
         ),
     },
     {
@@ -388,11 +413,13 @@ SNIPPETS = [
             'argument changes.'
         ),
         'code': (
-            "import { useEffect } from 'react';\n\n"
+            "import { useEffect } from 'react';\n"
+            '\n'
             'function useEventListener(event, handler) {\n'
             '  useEffect(() => {\n'
             '    window.addEventListener(event, handler);\n'
-            '    return () => window.removeEventListener(event, handler);\n'
+            '    return () =>\n'
+            '      window.removeEventListener(event, handler);\n'
             '  }, [event, handler]);\n'
             '}'
         ),
@@ -440,8 +467,11 @@ SNIPPETS = [
             'non-urgent with a transition, also taking the pending flag.'
         ),
         'code': (
-            "import { useTransition } from 'react';\n\n"
-            'const [isPending, startTransition] = useTransition();\n\n'
+            "import { useTransition } from 'react';\n"
+            '\n'
+            'const [isPending, startTransition] =\n'
+            '  useTransition();\n'
+            '\n'
             'function handleChange(value) {\n'
             '  startTransition(() => {\n'
             '    setResults(filterItems(value));\n'
@@ -458,7 +488,13 @@ SNIPPETS = [
             'Give a button the class `btn`, plus `btn-active` only while `isActive`, built with a '
             'template literal.'
         ),
-        'code': "<button className={`btn ${isActive ? 'btn-active' : ''}`}>Save</button>",
+        'code': (
+            '<button\n'
+            "  className={`btn ${isActive ? 'btn-active' : ''}`}\n"
+            '>\n'
+            '  Save\n'
+            '</button>'
+        ),
     },
     # --- JavaScript ---
     {
@@ -529,7 +565,10 @@ SNIPPETS = [
         'category': 'strings',
         'title': 'Template literal',
         'prompt': 'Build a greeting string interpolating `name` and `count` with a template literal.',
-        'code': 'const message = `Hello, ${name}! You have ${count} new messages.`;',
+        'code': (
+            'const message =\n'
+            '  `Hello, ${name}! You have ${count} messages.`;'
+        ),
     },
     {
         'id': 'js-async-await',
@@ -601,7 +640,9 @@ SNIPPETS = [
             'them is active.'
         ),
         'code': (
-            'const hasAdmin = users.some(u => u.role === \'admin\');\n'
+            'const hasAdmin = users.some(\n'
+            "  u => u.role === 'admin'\n"
+            ');\n'
             'const allActive = users.every(u => u.active);'
         ),
     },
@@ -752,8 +793,13 @@ SNIPPETS = [
             "parse it."
         ),
         'code': (
-            'localStorage.setItem(\'draft\', JSON.stringify(entry));\n'
-            "const restored = JSON.parse(localStorage.getItem('draft'));"
+            'localStorage.setItem(\n'
+            "  'draft',\n"
+            '  JSON.stringify(entry)\n'
+            ');\n'
+            'const restored = JSON.parse(\n'
+            "  localStorage.getItem('draft')\n"
+            ');'
         ),
     },
     {
@@ -762,7 +808,11 @@ SNIPPETS = [
         'category': 'iteration',
         'title': 'Array.sort with comparator',
         'prompt': 'Sort `items` by ascending `price` without mutating the original array.',
-        'code': 'const sorted = [...items].sort((a, b) => a.price - b.price);',
+        'code': (
+            'const sorted = [...items].sort(\n'
+            '  (a, b) => a.price - b.price\n'
+            ');'
+        ),
     },
     {
         'id': 'js-flat-flatmap',
@@ -806,7 +856,15 @@ SNIPPETS = [
         'category': 'forms',
         'title': 'Labeled input',
         'prompt': 'Write a required email input with a matching name and id, tied to its own label.',
-        'code': '<label for="email">Email</label>\n<input type="email" id="email" name="email" required>',
+        'code': (
+            '<label for="email">Email</label>\n'
+            '<input\n'
+            '  type="email"\n'
+            '  id="email"\n'
+            '  name="email"\n'
+            '  required\n'
+            '>'
+        ),
     },
     {
         'id': 'html-semantic-layout',
@@ -825,7 +883,15 @@ SNIPPETS = [
         'category': 'elements',
         'title': 'Linked image',
         'prompt': 'Wrap an image in a link that opens in a new tab safely, giving the image alt text.',
-        'code': '<a href="https://example.com" target="_blank" rel="noopener">\n  <img src="photo.jpg" alt="A photo">\n</a>',
+        'code': (
+            '<a\n'
+            '  href="https://example.com"\n'
+            '  target="_blank"\n'
+            '  rel="noopener"\n'
+            '>\n'
+            '  <img src="photo.jpg" alt="A photo">\n'
+            '</a>'
+        ),
     },
     {
         'id': 'html-table',
@@ -861,7 +927,11 @@ SNIPPETS = [
         'category': 'forms',
         'title': 'Submit button',
         'prompt': 'Write a submit button carrying the class `btn-primary`.',
-        'code': '<button type="submit" class="btn-primary">Submit</button>',
+        'code': (
+            '<button type="submit" class="btn-primary">\n'
+            '  Submit\n'
+            '</button>'
+        ),
     },
     {
         'id': 'html-select',
@@ -877,7 +947,12 @@ SNIPPETS = [
         'category': 'layout',
         'title': 'Meta viewport',
         'prompt': 'Write the viewport meta tag that maps the layout to the device width at a scale of 1.',
-        'code': '<meta name="viewport" content="width=device-width, initial-scale=1.0">',
+        'code': (
+            '<meta\n'
+            '  name="viewport"\n'
+            '  content="width=device-width, initial-scale=1.0"\n'
+            '>'
+        ),
     },
     {
         'id': 'html-video',
@@ -970,9 +1045,19 @@ SNIPPETS = [
         'title': 'Radio group',
         'prompt': 'Write two radio buttons in one `theme` group, light and dark, each with its own label.',
         'code': (
-            '<input type="radio" id="light" name="theme" value="light">\n'
+            '<input\n'
+            '  type="radio"\n'
+            '  id="light"\n'
+            '  name="theme"\n'
+            '  value="light"\n'
+            '>\n'
             '<label for="light">Light</label>\n'
-            '<input type="radio" id="dark" name="theme" value="dark">\n'
+            '<input\n'
+            '  type="radio"\n'
+            '  id="dark"\n'
+            '  name="theme"\n'
+            '  value="dark"\n'
+            '>\n'
             '<label for="dark">Dark</label>'
         ),
     },
@@ -1014,7 +1099,13 @@ SNIPPETS = [
         'category': 'elements',
         'title': 'Iframe',
         'prompt': 'Embed an external page in an iframe with an accessible title, loaded lazily.',
-        'code': '<iframe src="https://example.com/embed" title="Embedded content" loading="lazy"></iframe>',
+        'code': (
+            '<iframe\n'
+            '  src="https://example.com/embed"\n'
+            '  title="Embedded content"\n'
+            '  loading="lazy"\n'
+            '></iframe>'
+        ),
     },
     {
         'id': 'html-data-attribute',
@@ -1043,7 +1134,10 @@ SNIPPETS = [
         ),
         'code': (
             '<picture>\n'
-            '  <source srcset="photo-large.jpg" media="(min-width: 800px)">\n'
+            '  <source\n'
+            '    srcset="photo-large.jpg"\n'
+            '    media="(min-width: 800px)"\n'
+            '  >\n'
             '  <img src="photo-small.jpg" alt="A landscape">\n'
             '</picture>'
         ),
@@ -1305,8 +1399,10 @@ SNIPPETS = [
         'title': 'querySelector / querySelectorAll',
         'prompt': 'Grab the first `.btn-primary` element, and separately every `li.active`.',
         'code': (
-            'const button = document.querySelector(\'.btn-primary\');\n'
-            "const items = document.querySelectorAll('li.active');"
+            'const button =\n'
+            "  document.querySelector('.btn-primary');\n"
+            'const items =\n'
+            "  document.querySelectorAll('li.active');"
         ),
     },
     {
@@ -1378,7 +1474,8 @@ SNIPPETS = [
         'prompt': "Store a theme of 'dark' in localStorage, then read it back defaulting to 'light'.",
         'code': (
             "localStorage.setItem('theme', 'dark');\n"
-            "const theme = localStorage.getItem('theme') ?? 'light';"
+            'const theme =\n'
+            "  localStorage.getItem('theme') ?? 'light';"
         ),
     },
     {
@@ -1453,11 +1550,13 @@ SNIPPETS = [
         'title': 'IntersectionObserver',
         'prompt': 'Observe a sentinel element and call `loadMore()` whenever it comes into view.',
         'code': (
-            'const observer = new IntersectionObserver(entries => {\n'
-            '  entries.forEach(entry => {\n'
-            '    if (entry.isIntersecting) loadMore();\n'
-            '  });\n'
-            '});\n'
+            'const observer = new IntersectionObserver(\n'
+            '  entries => {\n'
+            '    entries.forEach(entry => {\n'
+            '      if (entry.isIntersecting) loadMore();\n'
+            '    });\n'
+            '  }\n'
+            ');\n'
             'observer.observe(sentinel);'
         ),
     },
@@ -1472,9 +1571,12 @@ SNIPPETS = [
         ),
         'code': (
             'const observer = new MutationObserver(mutations => {\n'
-            '  console.log(mutations.length, \'changes\');\n'
+            "  console.log(mutations.length, 'changes');\n"
             '});\n'
-            'observer.observe(target, { childList: true, subtree: true });'
+            'observer.observe(target, {\n'
+            '  childList: true,\n'
+            '  subtree: true,\n'
+            '});'
         ),
     },
     {
@@ -1484,8 +1586,12 @@ SNIPPETS = [
         'title': 'matchMedia',
         'prompt': 'Query the dark-scheme preference and re-apply the theme whenever it changes.',
         'code': (
-            "const isDark = window.matchMedia('(prefers-color-scheme: dark)');\n"
-            "isDark.addEventListener('change', e => applyTheme(e.matches));"
+            'const isDark = window.matchMedia(\n'
+            "  '(prefers-color-scheme: dark)'\n"
+            ');\n'
+            "isDark.addEventListener('change', e =>\n"
+            '  applyTheme(e.matches)\n'
+            ');'
         ),
     },
     {
@@ -1528,7 +1634,9 @@ SNIPPETS = [
         'title': 'CustomEvent + dispatchEvent',
         'prompt': 'Dispatch an `item-added` event on the document, carrying an id in its detail.',
         'code': (
-            "const event = new CustomEvent('item-added', { detail: { id } });\n"
+            "const event = new CustomEvent('item-added', {\n"
+            '  detail: { id },\n'
+            '});\n'
             'document.dispatchEvent(event);'
         ),
     },

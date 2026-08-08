@@ -215,6 +215,25 @@ def test_every_snippet_has_a_prompt():
     assert missing == []
 
 
+# The drill renders the snippet in a fixed-width editor that scrolls sideways
+# rather than wrapping, and the text being typed sits on the same line as the
+# caret — so a line wider than the pane pushes what is currently being written
+# off the right edge, out of sight. Wrapping the code in the bank is the fix
+# that costs nothing at read time; 52 leaves room on the handheld, where the
+# sidebar takes a third of an already small screen.
+MAX_SNIPPET_LINE = 52
+
+
+def test_no_snippet_line_scrolls_the_drill_sideways():
+    over = [
+        (s['id'], len(line), line)
+        for s in SNIPPETS
+        for line in s['code'].split('\n')
+        if len(line) > MAX_SNIPPET_LINE
+    ]
+    assert over == []
+
+
 def test_every_snippet_has_an_explanation():
     """The explanations are keyed by snippet id in a separate file, so the two
     lists can drift apart silently — a snippet added without one simply renders
