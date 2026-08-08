@@ -333,6 +333,48 @@ def test_parse_watched_threads_p1():
     assert page.last_page == 2
 
 
+def test_parse_watched_threads_prefixed_already_read_row():
+    # An already-read thread with a prefix label (e.g. "[NSFW]") has no
+    # unreadLink to mask the labelLink "add to filters" anchor that precedes
+    # the real title — picking the first anchor blindly would grab the
+    # filter pill instead of the thread and silently drop the row.
+    html = """
+    <div class="structItem structItem--thread is-prefix1">
+      <div class="structItem-cell structItem-cell--main">
+        <div class="structItem-title">
+          <a class="labelLink" href="/watched/threads?unread=0&amp;prefix_id[0]=1" title="Add to filters">
+            <span class="label label--hidden">NSFW</span>
+          </a>
+          <a href="/threads/already-read-prefixed-fic.33333/">Already-Read Prefixed Fic</a>
+        </div>
+      </div>
+    </div>
+    """
+    page = xenforo.parse_watched_threads(html, 'forum.questionablequesting.com')
+    assert [r.thread_id for r in page.refs] == ['33333']
+    assert page.refs[0].slug == 'already-read-prefixed-fic'
+
+
+def test_parse_watched_threads_unread_prefixed_row_still_works():
+    # When unread, an unreadLink precedes the labelLink and happens to
+    # resolve correctly on its own — guard against a fix that breaks this.
+    html = """
+    <div class="structItem structItem--thread is-prefix1">
+      <div class="structItem-cell structItem-cell--main">
+        <div class="structItem-title">
+          <a class="unreadLink" href="/threads/unread-prefixed-fic.44444/unread?new=1"></a>
+          <a class="labelLink" href="/watched/threads?unread=0&amp;prefix_id[0]=1" title="Add to filters">
+            <span class="label label--hidden">NSFW</span>
+          </a>
+          <a href="/threads/unread-prefixed-fic.44444/">Unread Prefixed Fic</a>
+        </div>
+      </div>
+    </div>
+    """
+    page = xenforo.parse_watched_threads(html, 'forum.questionablequesting.com')
+    assert [r.thread_id for r in page.refs] == ['44444']
+
+
 def test_parse_watched_threads_p2_skips_unresolvable_rows():
     page = xenforo.parse_watched_threads(
         fixture('watched_threads_p2.html'), 'forums.spacebattles.com')
