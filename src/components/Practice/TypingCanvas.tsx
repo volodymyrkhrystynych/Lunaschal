@@ -25,9 +25,15 @@ class CaretWidget extends WidgetType {
   }
 }
 
-const setDiff = StateEffect.define<CharStatus[]>();
+const setDiff = StateEffect.define<{
+  statuses: CharStatus[];
+  caret: boolean;
+}>();
 
-function buildDecorations(statuses: CharStatus[]): DecorationSet {
+function buildDecorations(
+  statuses: CharStatus[],
+  caret: boolean
+): DecorationSet {
   const marks = statuses
     .map((status, i) =>
       status === 'pending'
@@ -40,11 +46,13 @@ function buildDecorations(statuses: CharStatus[]): DecorationSet {
           }).range(i, i + 1)
     )
     .filter((m): m is NonNullable<typeof m> => m !== null);
-  const firstPending = statuses.findIndex(s => s === 'pending');
-  const caretPos = firstPending === -1 ? statuses.length : firstPending;
-  marks.push(
-    Decoration.widget({ widget: new CaretWidget(), side: -1 }).range(caretPos)
-  );
+  if (caret) {
+    const firstPending = statuses.findIndex(s => s === 'pending');
+    const caretPos = firstPending === -1 ? statuses.length : firstPending;
+    marks.push(
+      Decoration.widget({ widget: new CaretWidget(), side: -1 }).range(caretPos)
+    );
+  }
   return Decoration.set(marks, true);
 }
 
@@ -52,7 +60,8 @@ const diffField = StateField.define<DecorationSet>({
   create: () => Decoration.none,
   update(deco, tr) {
     for (const e of tr.effects) {
-      if (e.is(setDiff)) return buildDecorations(e.value);
+      if (e.is(setDiff))
+        return buildDecorations(e.value.statuses, e.value.caret);
     }
     return deco;
   },
@@ -63,13 +72,21 @@ interface Props {
   language: string;
   code: string;
   statuses: CharStatus[];
+  // Off when the canvas is showing an answer rather than tracking typing — a
+  // blinking caret on the revealed reference reads as somewhere to type.
+  caret?: boolean;
 }
 
 // Read-only, syntax-highlighted display of the target snippet — deliberately
 // not the surface that captures keystrokes (DrillSession's hidden <input>
 // does that). CodeMirror here only renders the code plus the correctness
 // overlay pushed in via `setDiff`.
-export function TypingCanvas({ language, code, statuses }: Props) {
+export function TypingCanvas({
+  language,
+  code,
+  statuses,
+  caret = true,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
 
@@ -103,8 +120,8 @@ export function TypingCanvas({ language, code, statuses }: Props) {
   }, [code, language]);
 
   useEffect(() => {
-    viewRef.current?.dispatch({ effects: setDiff.of(statuses) });
-  }, [statuses]);
+    viewRef.current?.dispatch({ effects: setDiff.of({ statuses, caret }) });
+  }, [statuses, caret]);
 
   return (
     <div

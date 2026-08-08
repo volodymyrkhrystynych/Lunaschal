@@ -849,10 +849,17 @@ CREATE TABLE IF NOT EXISTS practice_progress (
     best_wpm REAL,
     best_accuracy REAL,
     last_practiced_at INTEGER,
+    -- Blind (from-memory) drill counters. Kept on the same row because
+    -- backend/practice/modes.py decides the next drill from the *mix* of the
+    -- two, so a mode decision must never need a second lookup.
+    recall_attempts_count INTEGER NOT NULL DEFAULT 0,
+    recall_passes INTEGER NOT NULL DEFAULT 0,
+    last_recall_passed INTEGER,
+    last_recall_at INTEGER,
     updated_at INTEGER NOT NULL
 );
 
--- Append-only history of every drill attempt, for stats trends.
+-- Append-only history of every speed drill attempt, for stats trends.
 CREATE TABLE IF NOT EXISTS practice_attempts (
     id TEXT PRIMARY KEY,
     snippet_id TEXT NOT NULL,
@@ -863,3 +870,24 @@ CREATE TABLE IF NOT EXISTS practice_attempts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_practice_attempts_snippet ON practice_attempts(snippet_id, created_at DESC);
+
+-- Append-only history of blind drill attempts. A separate table from
+-- practice_attempts because it records something else entirely: a pass/fail
+-- judgement with prose feedback over the text that was written, with no wpm and
+-- no per-character accuracy to speak of. Splitting them also keeps every query
+-- over practice_attempts meaning "typing speed" without a mode filter.
+CREATE TABLE IF NOT EXISTS practice_recall_attempts (
+    id TEXT PRIMARY KEY,
+    snippet_id TEXT NOT NULL,
+    submitted TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    passed INTEGER NOT NULL DEFAULT 0,
+    feedback TEXT,
+    -- 'model' when the grader read it, 'fallback' when llama-server was down
+    -- and it fell back to a text comparison. Stored so a run of harsh verdicts
+    -- can be traced to an offline grader rather than to the answers.
+    graded_by TEXT NOT NULL DEFAULT 'model',
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_practice_recall_attempts_snippet ON practice_recall_attempts(snippet_id, created_at DESC);

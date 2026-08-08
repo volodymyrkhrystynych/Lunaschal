@@ -1,8 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type PracticeSnippet } from '../../hooks/api';
+import {
+  api,
+  type PracticeBlindDrill,
+  type PracticeDrill,
+  type PracticeRecallResult,
+  type PracticeSpeedDrill,
+} from '../../hooks/api';
 import type { TypingStats } from '../../lib/practice';
 import { DrillSession } from './DrillSession';
+import { RecallSession } from './RecallSession';
 import { SessionSummary, type DrillResult } from './SessionSummary';
 import { StatsPanel } from './StatsPanel';
 
@@ -14,14 +21,18 @@ export function Practice() {
   const [language, setLanguage] = useState('');
   const [category, setCategory] = useState('');
   // Fetched one at a time, not as a pre-shuffled batch: submitting an attempt
-  // changes that snippet's priority score, so the next snippet has to be
-  // re-ranked against the latest progress rather than served from a deck
+  // changes that snippet's priority score *and* whether it comes back as a
+  // typing drill or a from-memory one, so the next drill has to be re-ranked
+  // and re-moded against the latest progress rather than served from a deck
   // that was already fixed before any of it was practiced.
-  const [queue, setQueue] = useState<PracticeSnippet[]>([]);
+  const [queue, setQueue] = useState<PracticeDrill[]>([]);
   const [index, setIndex] = useState(0);
   const [noSnippets, setNoSnippets] = useState(false);
   const [results, setResults] = useState<DrillResult[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [recallResult, setRecallResult] = useState<PracticeRecallResult | null>(
+    null
+  );
   const queryClient = useQueryClient();
 
   const needsNext = !noSnippets && index === queue.length && index < DECK_SIZE;
@@ -53,7 +64,14 @@ export function Practice() {
     },
   });
 
-  function handleComplete(snippet: PracticeSnippet, stats: TypingStats) {
+  const gradeRecall = useMutation({
+    mutationFn: api.practice.gradeRecall,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['practice', 'stats'] });
+    },
+  });
+
+  function handleComplete(snippet: PracticeSpeedDrill, stats: TypingStats) {
     submitAttempt.mutate(
       {
         snippetId: snippet.id,
@@ -63,7 +81,10 @@ export function Practice() {
       },
       {
         onSuccess: result => {
-          setResults(r => [...r, { snippet, stats, rating: result.rating }]);
+          setResults(r => [
+            ...r,
+            { mode: 'speed', snippet, stats, rating: result.rating },
+          ]);
           setFeedback(result.rating);
           setTimeout(() => {
             setFeedback(null);
@@ -74,11 +95,43 @@ export function Practice() {
     );
   }
 
+  // A graded recall does *not* auto-advance the way a typing drill does. The
+  // 900ms flash works for a one-word rating; here there is a paragraph of
+  // feedback and the reference answer to read, and that is the whole payoff of
+  // the drill — so the next snippet waits for a button.
+  function handleRecall(snippet: PracticeBlindDrill, submitted: string) {
+    gradeRecall.mutate(
+      { snippetId: snippet.id, submitted },
+      {
+        onSuccess: result => {
+          setRecallResult(result);
+          setResults(r => [
+            ...r,
+            {
+              mode: 'blind',
+              snippet,
+              verdict: result.verdict,
+              passed: result.passed,
+            },
+          ]);
+        },
+      }
+    );
+  }
+
+  function advance() {
+    setRecallResult(null);
+    gradeRecall.reset();
+    setIndex(i => i + 1);
+  }
+
   function startNewSession() {
     setQueue([]);
     setIndex(0);
     setNoSnippets(false);
     setResults([]);
+    setRecallResult(null);
+    gradeRecall.reset();
   }
 
   function updateFilter(next: { language?: string; category?: string }) {
@@ -131,11 +184,23 @@ export function Practice() {
 
         {current && !finished && (
           <div className="relative">
-            <DrillSession
-              key={current.id}
-              snippet={current}
-              onComplete={stats => handleComplete(current, stats)}
-            />
+            {current.mode === 'blind' ? (
+              <RecallSession
+                key={current.id}
+                snippet={current}
+                result={recallResult}
+                grading={gradeRecall.isPending}
+                error={gradeRecall.isError}
+                onSubmit={submitted => handleRecall(current, submitted)}
+                onNext={advance}
+              />
+            ) : (
+              <DrillSession
+                key={current.id}
+                snippet={current}
+                onComplete={stats => handleComplete(current, stats)}
+              />
+            )}
             {feedback && (
               <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-lg pointer-events-none">
                 <span className="text-2xl font-semibold text-white">

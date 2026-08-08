@@ -1052,6 +1052,10 @@ export interface PracticeSnippetProgress {
   bestWpm: number | null;
   bestAccuracy: number | null;
   lastPracticedAt: string | null;
+  recallAttemptsCount: number;
+  recallPasses: number;
+  lastRecallPassed: number | null;
+  lastRecallAt: string | null;
   updatedAt: string;
 }
 
@@ -1061,6 +1065,44 @@ export interface PracticeSnippet {
   category: string;
   title: string;
   code: string;
+}
+
+// One item of a session. A drill is a snippet plus how it is to be practiced,
+// and the two modes carry different payloads: a blind drill gets the task
+// description and deliberately no `code` — the server withholds the answer to
+// the drill that exists to test memory, and it arrives only in the grade
+// response. Modelled as a union rather than optional fields so a component
+// cannot read `code` without first narrowing on the mode it exists in.
+export type PracticeDrillMode = 'speed' | 'blind';
+
+interface PracticeDrillBase {
+  id: string;
+  language: 'react' | 'javascript' | 'html' | 'css' | 'dom';
+  category: string;
+  title: string;
+}
+
+export interface PracticeSpeedDrill extends PracticeDrillBase {
+  mode: 'speed';
+  code: string;
+}
+
+export interface PracticeBlindDrill extends PracticeDrillBase {
+  mode: 'blind';
+  prompt: string;
+}
+
+export type PracticeDrill = PracticeSpeedDrill | PracticeBlindDrill;
+
+export interface PracticeRecallResult {
+  verdict: 'correct' | 'partial' | 'wrong';
+  passed: boolean;
+  feedback: string;
+  // 'fallback' means llama-server was unreachable and the verdict came from a
+  // text comparison, not a reading of the code — the UI says so.
+  gradedBy: 'model' | 'fallback' | 'empty';
+  reference: string;
+  progress: PracticeSnippetProgress;
 }
 
 export interface PracticeSnippetWithProgress extends PracticeSnippet {
@@ -1078,11 +1120,19 @@ export interface PracticeLanguageStats {
   avgWpm: number | null;
 }
 
+export interface PracticeRecallStats {
+  attempts: number;
+  passes: number;
+  // null with no attempts: "never asked to recall anything" is not 0%.
+  passRate: number | null;
+}
+
 export interface PracticeStats {
   totalAttempts: number;
   avgAccuracy: number | null;
   avgWpm: number | null;
   byLanguage: Record<string, PracticeLanguageStats>;
+  recall: PracticeRecallStats;
 }
 
 // --- fetch helpers ---
@@ -2067,9 +2117,7 @@ export const api = {
       if (params.category) qp.set('category', params.category);
       if (params.size !== undefined) qp.set('size', String(params.size));
       const qs = qp.toString();
-      return get<PracticeSnippet[]>(
-        `/api/practice/session${qs ? `?${qs}` : ''}`
-      );
+      return get<PracticeDrill[]>(`/api/practice/session${qs ? `?${qs}` : ''}`);
     },
     listSnippets: (params: { language?: string; category?: string } = {}) => {
       const qp = new URLSearchParams();
@@ -2086,6 +2134,8 @@ export const api = {
       accuracy: number;
       errorCount: number;
     }) => post<PracticeAttemptResult>('/api/practice/attempts', body),
+    gradeRecall: (body: { snippetId: string; submitted: string }) =>
+      post<PracticeRecallResult>('/api/practice/recall', body),
     stats: () => get<PracticeStats>('/api/practice/stats'),
   },
 

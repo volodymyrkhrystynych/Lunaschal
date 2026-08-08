@@ -3,8 +3,11 @@ import time
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
+from backend.ai import priority
+from backend.ai.practice import grade_recall
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.practice.grading import rating_label
+from backend.practice.modes import BLIND, next_mode
 from backend.practice.queue import DEFAULT_SIZE, build_session
 from backend.practice.snippets import LANGUAGES, SNIPPETS, SNIPPETS_BY_ID
 
@@ -14,6 +17,22 @@ bp = Blueprint('practice', __name__, url_prefix='/api/practice')
 def _load_progress(db) -> dict[str, dict]:
     rows = db.execute('SELECT * FROM practice_progress').fetchall()
     return {r['snippet_id']: dict(r) for r in rows}
+
+
+def _drill(snippet: dict, mode: str) -> dict:
+    """One item of a session: the snippet plus how it is to be practiced.
+
+    A blind drill carries the prompt and **not** the code. Withholding it here
+    rather than asking the component not to render it is the only way the answer
+    isn't sitting in the network tab of the drill that exists to test memory.
+    """
+    drill = {k: snippet[k] for k in ('id', 'language', 'category', 'title')}
+    drill['mode'] = mode
+    if mode == BLIND:
+        drill['prompt'] = snippet['prompt']
+    else:
+        drill['code'] = snippet['code']
+    return drill
 
 
 def _filter_snippets(language: str | None, category: str | None) -> list[dict]:
@@ -35,7 +54,9 @@ def session():
     ids = build_session(
         SNIPPETS, progress, size=size, language=language, category=category
     )
-    return jsonify([SNIPPETS_BY_ID[i] for i in ids])
+    return jsonify(
+        [_drill(SNIPPETS_BY_ID[i], next_mode(progress.get(i))) for i in ids]
+    )
 
 
 @bp.get('/snippets')
@@ -109,6 +130,74 @@ def submit_attempt():
     )
 
 
+@bp.post('/recall')
+def submit_recall():
+    """Grade one blind drill: what was written from memory, against the prompt.
+
+    The verdict comes from `backend/ai/practice.py`, which never raises — an
+    unreachable model degrades to a text comparison tagged `gradedBy:
+    'fallback'` rather than costing the attempt. The reference code comes back
+    in the response and not before it: this is the first moment in a blind drill
+    that the client is allowed to see the answer.
+    """
+    body = request.get_json(force=True) or {}
+    snippet_id = body.get('snippetId')
+    snippet = SNIPPETS_BY_ID.get(snippet_id)
+    if snippet is None:
+        return jsonify({'error': 'Unknown snippet'}), 400
+    submitted = body.get('submitted')
+    submitted = submitted if isinstance(submitted, str) else ''
+
+    with priority.interactive('practice.recall'):
+        graded = grade_recall(
+            title=snippet['title'],
+            task=snippet['prompt'],
+            language=snippet['language'],
+            reference=snippet['code'],
+            submitted=submitted,
+        )
+
+    passed = 1 if graded['passed'] else 0
+    db = get_db()
+    now = int(time.time())
+    db.execute(
+        'INSERT INTO practice_recall_attempts '
+        '(id, snippet_id, submitted, verdict, passed, feedback, graded_by, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        (
+            str(ULID()), snippet_id, submitted, graded['verdict'], passed,
+            graded.get('feedback') or '', graded['gradedBy'], now,
+        ),
+    )
+    # Counters are incremented in SQL rather than read-then-written, so the
+    # recall history is untouched by whatever the speed path last wrote.
+    db.execute(
+        '''INSERT INTO practice_progress
+               (snippet_id, recall_attempts_count, recall_passes,
+                last_recall_passed, last_recall_at, updated_at)
+           VALUES (?, 1, ?, ?, ?, ?)
+           ON CONFLICT(snippet_id) DO UPDATE SET
+               recall_attempts_count = recall_attempts_count + 1,
+               recall_passes = recall_passes + excluded.recall_passes,
+               last_recall_passed = excluded.last_recall_passed,
+               last_recall_at = excluded.last_recall_at,
+               updated_at = excluded.updated_at''',
+        (snippet_id, passed, passed, now, now),
+    )
+    db.commit()
+
+    progress_row = db.execute(
+        'SELECT * FROM practice_progress WHERE snippet_id = ?', (snippet_id,)
+    ).fetchone()
+    return jsonify(
+        {
+            **graded,
+            'reference': snippet['code'],
+            'progress': row_to_dict(progress_row),
+        }
+    )
+
+
 @bp.get('/stats')
 def stats():
     db = get_db()
@@ -132,11 +221,27 @@ def stats():
             'avgWpm': row['avg_wpm'],
         }
 
+    recall = db.execute(
+        'SELECT COUNT(*) as attempts, COALESCE(SUM(passed), 0) as passes '
+        'FROM practice_recall_attempts'
+    ).fetchone()
+    recall_attempts = recall['attempts']
+
     return jsonify(
         {
             'totalAttempts': totals['attempts'],
             'avgAccuracy': totals['avg_accuracy'],
             'avgWpm': totals['avg_wpm'],
             'byLanguage': by_language,
+            'recall': {
+                'attempts': recall_attempts,
+                'passes': recall['passes'],
+                # None rather than 0 with no attempts: "0% recalled" and "never
+                # asked to recall anything" are different states, and the panel
+                # renders them differently.
+                'passRate': (
+                    recall['passes'] / recall_attempts * 100 if recall_attempts else None
+                ),
+            },
         }
     )
