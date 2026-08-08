@@ -34,6 +34,21 @@ Respond with valid JSON:
 {"claims": [{"text": "...", "essential": true, "covered": true, "note": ""}, ...],
  "summary": "..."}"""
 
+# Appended to COVERAGE_SYSTEM only when the caller requests speech feedback —
+# a distinct, spoken-friendly field, not a rephrase of "summary" (which is
+# rendered as text and is allowed to be denser/technical).
+SPEECH_ADDENDUM = """
+
+Also include "speechSummary": one to two short sentences, addressed to the
+user, that will be read aloud by text-to-speech. Name the one or two main
+things they got wrong (or a brief "you got it" if nothing essential was
+missed). Plain spoken language only — no code, no symbols, no markdown, no
+quoted literals, nothing that only makes sense written down.
+
+Respond with valid JSON:
+{"claims": [{"text": "...", "essential": true, "covered": true, "note": ""}, ...],
+ "summary": "...", "speechSummary": "..."}"""
+
 
 CLAIMS_SCHEMA = {
     'type': 'object',
@@ -73,6 +88,14 @@ COVERAGE_SCHEMA = {
     'required': ['claims', 'summary'],
 }
 
+# Same as COVERAGE_SCHEMA plus the spoken blurb, used only when speech
+# feedback was requested — kept separate so a normal grade never pays for it.
+COVERAGE_SCHEMA_SPEECH = {
+    **COVERAGE_SCHEMA,
+    'properties': {**COVERAGE_SCHEMA['properties'], 'speechSummary': {'type': 'string'}},
+    'required': [*COVERAGE_SCHEMA['required'], 'speechSummary'],
+}
+
 
 def decompose_claims(question: str, answer: str) -> list[dict]:
     result = chat_json(f'Question: {question}\n\nGround-truth answer: {answer}',
@@ -86,13 +109,15 @@ def decompose_claims(question: str, answer: str) -> list[dict]:
     return claims or [{'text': answer, 'essential': True}]
 
 
-def check_coverage(claims: list[dict], user_answer: str) -> dict:
+def check_coverage(claims: list[dict], user_answer: str, speech: bool = False) -> dict:
     claims_text = '\n'.join(
         f"- {c['text']} (essential: {c['essential']})" for c in claims
     )
+    system = COVERAGE_SYSTEM + SPEECH_ADDENDUM if speech else COVERAGE_SYSTEM
+    schema = COVERAGE_SCHEMA_SPEECH if speech else COVERAGE_SCHEMA
     result = chat_json(
         f"Ground-truth claims:\n{claims_text}\n\nUser's answer:\n{user_answer}",
-        system=COVERAGE_SYSTEM, schema=COVERAGE_SCHEMA,
+        system=system, schema=schema,
     )
     graded = []
     by_text = {c['text']: c for c in claims}
@@ -108,16 +133,22 @@ def check_coverage(claims: list[dict], user_answer: str) -> dict:
         })
     if not graded:  # model dropped the structure; grade conservatively
         graded = [{**c, 'covered': False, 'note': ''} for c in claims]
-    return {'claims': graded, 'summary': str(result.get('summary') or '')}
+    out = {'claims': graded, 'summary': str(result.get('summary') or '')}
+    if speech:
+        out['speechSummary'] = str(result.get('speechSummary') or '')
+    return out
 
 
-def gated_coverage() -> dict:
+def gated_coverage(speech: bool = False) -> dict:
     """Coverage returned when the embedding gate short-circuits the LLM."""
-    return {
+    out = {
         'claims': [],
         'summary': "Your answer doesn't resemble the stored answer.",
         'gated': True,
     }
+    if speech:
+        out['speechSummary'] = "That didn't match the stored answer — worth a re-read."
+    return out
 
 
 def suggest_rating(coverage: dict) -> int:

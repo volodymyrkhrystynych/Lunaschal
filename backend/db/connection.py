@@ -133,6 +133,7 @@ def init_db() -> None:
     _migrate_workout_intensity_to_stars(db)
     _ensure_message_status(db)
     _ensure_practice_recall_columns(db)
+    _ensure_learning_attempts_speech_requested(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
@@ -277,6 +278,13 @@ def _ensure_fic_folder_position(db: sqlite3.Connection) -> None:
         rows = db.execute('SELECT id FROM fic_folders ORDER BY created_at, rowid').fetchall()
         db.executemany('UPDATE fic_folders SET position=? WHERE id=?',
                        [(i, r['id']) for i, r in enumerate(rows)])
+        db.commit()
+
+
+def _ensure_learning_attempts_speech_requested(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(learning_attempts)')}
+    if 'speech_requested' not in cols:
+        db.execute('ALTER TABLE learning_attempts ADD COLUMN speech_requested INTEGER NOT NULL DEFAULT 0')
         db.commit()
 
 

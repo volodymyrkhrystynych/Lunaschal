@@ -322,6 +322,9 @@ export interface ClaimCoverage {
   claims: CoverageClaim[];
   summary: string;
   gated?: boolean;
+  /** 1-2 sentence, code-free version of the mistake for text-to-speech.
+   *  Only present when the answer was submitted with speech mode on. */
+  speechSummary?: string;
 }
 
 export interface GradeResult {
@@ -1214,6 +1217,19 @@ async function upload<T>(url: string, form: FormData): Promise<T> {
   return r.json();
 }
 
+async function uploadForBlob(url: string, form: FormData): Promise<Blob> {
+  const r = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    body: form,
+  });
+  if (!r.ok) {
+    const b = await r.json().catch(() => ({}));
+    throw new Error(b.error || `HTTP ${r.status}`);
+  }
+  return r.blob();
+}
+
 // --- API namespaces ---
 
 export const api = {
@@ -1679,6 +1695,8 @@ export const api = {
       mode: 'answered' | 'skipped';
       answer?: string;
       answerMode?: 'typed' | 'voice';
+      // Speech mode's toggle state at submit time — see ReviewSession.
+      speechMode?: boolean;
     }) =>
       post<{ success: boolean; id: string }>('/api/learning/attempts', data),
     review: (
@@ -2332,6 +2350,16 @@ export const api = {
       }) => post<CalorieLog>('/api/lifestyle/calories', data),
       delete: (id: string) =>
         del<{ success: boolean }>(`/api/lifestyle/calories/${id}`),
+    },
+  },
+
+  tts: {
+    // Existing /api/tts endpoint (backend/routes/stt.py), previously only
+    // consumed by the standalone STT listener; this is the first browser caller.
+    speak: (text: string) => {
+      const form = new FormData();
+      form.set('text', text);
+      return uploadForBlob('/api/tts', form);
     },
   },
 };

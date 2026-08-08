@@ -16,6 +16,10 @@ import {
   getStoredLearningFontSize,
   setStoredLearningFontSize,
 } from '../../lib/fontSize';
+import {
+  getStoredSpeechMode,
+  setStoredSpeechMode,
+} from '../../lib/learningSpeechMode';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { CardChat } from './CardChat';
 import { CoverageResult } from './CoverageResult';
@@ -64,6 +68,11 @@ export function ReviewSession({ folderId, tag }: Props) {
   const [verifying, setVerifying] = useState<LearningCard | null>(null);
   const [showChat, setShowChat] = useState(false);
   const [fontSize, setFontSize] = useState(getStoredLearningFontSize);
+  // Session-scoped, persisted to localStorage: on/off at the moment a card is
+  // answered decides whether *that* attempt gets a spoken blurb — toggling it
+  // mid-session never touches cards already answered. See gradeOf/the
+  // playback effect below.
+  const [speechMode, setSpeechMode] = useState(getStoredSpeechMode);
   const { setLevel } = useShortcuts();
   const queryClient = useQueryClient();
 
@@ -167,6 +176,42 @@ export function ReviewSession({ folderId, tag }: Props) {
   // not effect-synced, so a fast Space press can't commit a stale default).
   const selRating = ratingOverride ?? resolvedGrade?.suggestedRating ?? 3;
 
+  // Speaks the spoken-mistake blurb once per attempt: the effect below fires
+  // whenever a card with a fresh speechSummary comes into view (immediately,
+  // or once its background grade lands while the card is still on screen),
+  // and the replay button below reuses this for a manual re-play. A TTS
+  // failure must never block rating the card — it just stays silent.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [speaking, setSpeaking] = useState(false);
+  const speak = async (text: string) => {
+    audioRef.current?.pause();
+    try {
+      setSpeaking(true);
+      const blob = await api.tts.speak(text);
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => URL.revokeObjectURL(url);
+      await audio.play();
+    } catch {
+      // TTS unconfigured or failed — the review flow doesn't depend on it.
+    } finally {
+      setSpeaking(false);
+    }
+  };
+
+  const speechSummary = resolvedGrade?.coverage.speechSummary;
+  const spokenRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (current && speechSummary && !spokenRef.current.has(current.id)) {
+      spokenRef.current.add(current.id);
+      void speak(speechSummary);
+    }
+    // Moving to the next result (or leaving the results pass) stops whatever
+    // was still playing rather than letting it run under the next card.
+    return () => audioRef.current?.pause();
+  }, [current?.id, speechSummary]);
+
   const recorder = useRecorder(text => {
     setAnswer(prev => (prev ? `${prev} ${text}` : text));
     setUsedVoice(true);
@@ -195,6 +240,7 @@ export function ReviewSession({ folderId, tag }: Props) {
       mode: 'answered',
       answer,
       answerMode: usedVoice ? 'voice' : 'typed',
+      speechMode,
     });
     setAttempts(a => [...a, attempt]);
     setAnswer('');
@@ -387,6 +433,16 @@ export function ReviewSession({ folderId, tag }: Props) {
                 Answers are checked in the background — results after the last
                 card.
               </p>
+              <label className="flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]">
+                <input
+                  type="checkbox"
+                  checked={speechMode}
+                  onChange={e =>
+                    setSpeechMode(setStoredSpeechMode(e.target.checked))
+                  }
+                />
+                🔊 Speech mode — hear what you got wrong
+              </label>
             </div>
           </div>
         </div>
@@ -455,6 +511,18 @@ export function ReviewSession({ folderId, tag }: Props) {
                   current.usedVoice ? resolvedGrade.normalizedAnswer : undefined
                 }
               />
+            )}
+            {speechSummary && (
+              <div className="text-center">
+                <button
+                  onClick={() => void speak(speechSummary)}
+                  disabled={speaking}
+                  className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] underline disabled:opacity-50"
+                  title="Replay the spoken feedback"
+                >
+                  🔊 {speaking ? 'Speaking…' : 'Replay'}
+                </button>
+              </div>
             )}
 
             <div className="text-center text-sm text-[var(--color-text-muted)]">

@@ -167,6 +167,10 @@ CREATE TABLE IF NOT EXISTS learning_attempts (
     coverage TEXT,
     suggested_rating INTEGER,
     normalized_answer TEXT,
+    -- Speech mode's live toggle state at submit time, not at grade time — a
+    -- card answered before the toggle was on never gets a spoken blurb, even
+    -- if grading finishes after it's switched on. Re-answering re-stamps it.
+    speech_requested INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
