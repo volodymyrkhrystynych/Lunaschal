@@ -190,6 +190,22 @@ export function summarizeAttachments(
 }
 
 /**
+ * True for an entry that is nothing but a single recording — no title, no
+ * body text, no other attachments. That's exactly the shape the bottom bar's
+ * Record button produces (`create_recording_entry`), and it's the only shape
+ * eligible to be merged into another entry: merging anything with real
+ * content would mean silently dropping it.
+ */
+export function isVoiceOnlyEntry(entry: {
+  content: string;
+  attachments?: JournalAttachment[];
+}): boolean {
+  if (entry.content.trim()) return false;
+  const attachments = entry.attachments ?? [];
+  return attachments.length === 1 && attachments[0].kind === 'audio';
+}
+
+/**
  * A default name for a newly picked file: the filename without its extension,
  * so "voice-memo-004.m4a" becomes a label the user can accept or overwrite
  * rather than a blank box they must fill before the upload means anything.
