@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { PracticeBlindDrill, PracticeRecallResult } from '../../hooks/api';
-import { ExplanationPanel } from './ExplanationPanel';
+import { ExplanationPanel, ExplanationWithheld } from './ExplanationPanel';
 import { TypingCanvas } from './TypingCanvas';
 
 interface Props {
@@ -118,6 +118,10 @@ export function RecallSession({
           Grading failed. Try again — nothing has been recorded.
         </div>
       )}
+
+      {/* Sits where the speed drill's panel sits, so the row stays put from one
+          drill to the next; the explanation itself arrives with the grade. */}
+      {!result && <ExplanationWithheld />}
 
       {result && (
         <div className="flex flex-col gap-3">

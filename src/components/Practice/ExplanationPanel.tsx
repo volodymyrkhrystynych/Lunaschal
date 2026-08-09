@@ -40,6 +40,25 @@ function renderInline(text: string) {
   });
 }
 
+// The same row, for a drill that has an explanation the server is deliberately
+// holding back — a blind drill, where naming the fields is most of the answer.
+//
+// It exists because the alternative is the row simply not being there, and a
+// control that disappears between one drill and the next reads as a bug rather
+// than as a rule: the panel was open, the next snippet arrived, and it was gone.
+// Static rather than a toggle, on purpose. There is nothing behind it to open,
+// and collapsing this would otherwise write "closed" into the stored preference
+// and carry that to every drill that does have something to show.
+export function ExplanationWithheld() {
+  return (
+    <div className="rounded-lg border border-white/10 bg-[var(--color-surface)]">
+      <div className="px-3 py-2 text-xs uppercase tracking-wide text-[var(--color-text-muted)]">
+        What this is · after you answer
+      </div>
+    </div>
+  );
+}
+
 export function ExplanationPanel({ explanation, defaultOpen = false }: Props) {
   // Read on every mount, and the drills remount per snippet — so whichever way
   // the panel was left is the way the next snippet finds it. There is

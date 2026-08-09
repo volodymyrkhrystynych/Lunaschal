@@ -17,6 +17,15 @@ const LANGUAGES = ['react', 'javascript', 'html', 'css', 'dom'] as const;
 const FEEDBACK_DELAY_MS = 900;
 const DECK_SIZE = 10;
 
+let sessionSeq = 0;
+
+// A fresh id for every session, mixed into the drill query key below.
+//
+// `Date.now()` alone repeats within a millisecond, which is exactly how fast a
+// tab switch remounts this; the counter alone repeats across a reload, where the
+// persisted React Query cache is still there to be hit. Together they don't.
+const newSessionId = () => `${Date.now()}-${++sessionSeq}`;
+
 export function Practice() {
   const [language, setLanguage] = useState('');
   const [category, setCategory] = useState('');
@@ -27,6 +36,13 @@ export function Practice() {
   // that was already fixed before any of it was practiced.
   const [queue, setQueue] = useState<PracticeDrill[]>([]);
   const [index, setIndex] = useState(0);
+  // Without this the query key below is only "the Nth drill of this filter",
+  // which is a position in a sequence and not an identity. Leaving the tab and
+  // coming back starts a new session at index 0 and re-observes the *cached*
+  // response for that key — handing back a snippet drilled a minute ago instead
+  // of asking which one is now most in need of practice, since submitting an
+  // attempt is precisely what changes the answer.
+  const [sessionId, setSessionId] = useState(newSessionId);
   const [noSnippets, setNoSnippets] = useState(false);
   const [results, setResults] = useState<DrillResult[]>([]);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -38,7 +54,7 @@ export function Practice() {
   const needsNext = !noSnippets && index === queue.length && index < DECK_SIZE;
 
   const { data: nextSnippets } = useQuery({
-    queryKey: ['practice', 'next', language, category, index],
+    queryKey: ['practice', 'next', language, category, sessionId, index],
     queryFn: () =>
       api.practice.session({
         language: language || undefined,
@@ -126,6 +142,7 @@ export function Practice() {
   }
 
   function startNewSession() {
+    setSessionId(newSessionId());
     setQueue([]);
     setIndex(0);
     setNoSnippets(false);

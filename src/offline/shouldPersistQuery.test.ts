@@ -33,6 +33,18 @@ describe('shouldPersistQuery', () => {
     );
   });
 
+  it('never persists the next-drill pick', () => {
+    // Restoring one serves a snippet already drilled, and — since the cached
+    // value is a whole drill object — one shaped by whichever build wrote it.
+    expect(
+      shouldPersistQuery(makeQuery(['practice', 'next', '', '', 's1', 0], []))
+    ).toBe(false);
+  });
+
+  it('still persists the other practice queries', () => {
+    expect(shouldPersistQuery(makeQuery(['practice', 'stats'], {}))).toBe(true);
+  });
+
   it('persists an authenticated auth status', () => {
     expect(
       shouldPersistQuery(
