@@ -108,7 +108,10 @@ export function formatDue(
 // Priority is 1 (very unimportant) … 5 (very important); 3 is neutral. The row
 // shows a colored flag only when priority differs from neutral. Returns null
 // for the neutral case so callers can skip rendering.
-const PRIORITY_LABELS: Record<number, string> = {
+// Exported because the todo form and the chat's confirm card both build a
+// priority select from it. The words are the point — a bare 1-5 asks the user
+// to remember which end is urgent, so neither picker renders the number alone.
+export const PRIORITY_LABELS: Record<number, string> = {
   1: 'Very unimportant',
   2: 'Unimportant',
   3: 'Normal',

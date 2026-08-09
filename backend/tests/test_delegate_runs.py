@@ -46,7 +46,7 @@ def test_run_checkpoints_content_and_flips_to_done(client, monkeypatch):
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, delegate=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
         yield ('content', 'Hello ')
         yield ('content', 'there.')
         yield ('done', {
@@ -89,7 +89,7 @@ def test_run_checkpoints_steps_as_they_happen_not_just_at_the_end(client, monkey
 
     seen_after_first_step = {}
 
-    def fake_stream_reply(messages, system_prompt, delegate=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
         yield ('step', {'tool': 'web_search', 'ok': True, 'arg': 'q'})
         # Snapshot the row mid-run, before the second step or 'done' arrive.
         seen_after_first_step['metadata'] = json.loads(_row(db, msg_id)['metadata'])
@@ -131,7 +131,7 @@ def test_run_stamps_confirm_card_proposals_and_drops_note(client, monkeypatch):
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, delegate=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
         yield ('done', {
             'steps': [],
             'sources': [],
@@ -159,7 +159,7 @@ def test_run_marks_error_on_exception_and_keeps_partial_content(client, monkeypa
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, delegate=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
         yield ('content', 'partial')
         raise RuntimeError('llama-server died')
 
@@ -190,7 +190,7 @@ def test_run_releases_the_priority_mark_even_on_failure(client, monkeypatch):
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def boom(messages, system_prompt, delegate=True):
+    def boom(messages, system_prompt, tools_enabled=True):
         raise RuntimeError('boom')
         yield  # pragma: no cover - unreachable, keeps this a generator
 
@@ -205,13 +205,13 @@ def test_start_runs_on_a_real_thread_and_finishes_the_row(client, monkeypatch):
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, delegate=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
         yield ('content', 'async reply')
         yield ('done', {'steps': [], 'sources': [], 'proposals': []})
 
     monkeypatch.setattr(runs.delegate_chat, 'stream_reply', fake_stream_reply)
 
-    q = runs.start(msg_id, [{'role': 'user', 'content': 'hi'}], '', delegate=True)
+    q = runs.start(msg_id, [{'role': 'user', 'content': 'hi'}], '', tools_enabled=True)
 
     # Drain the live queue to its terminal sentinel — the same thing the SSE
     # view's generator does — which only arrives once the thread is done.
@@ -235,14 +235,14 @@ def test_start_creates_the_row_as_streaming_before_the_thread_finishes(client, m
 
     release = threading.Event()
 
-    def slow_stream_reply(messages, system_prompt, delegate=True):
+    def slow_stream_reply(messages, system_prompt, tools_enabled=True):
         release.wait(timeout=5)
         yield ('content', 'done waiting')
         yield ('done', {'steps': [], 'sources': [], 'proposals': []})
 
     monkeypatch.setattr(runs.delegate_chat, 'stream_reply', slow_stream_reply)
 
-    q = runs.start(msg_id, [{'role': 'user', 'content': 'hi'}], '', delegate=True)
+    q = runs.start(msg_id, [{'role': 'user', 'content': 'hi'}], '', tools_enabled=True)
 
     # The thread is blocked on `release`, so the row must still read exactly
     # what the view inserted: 'streaming', empty content.

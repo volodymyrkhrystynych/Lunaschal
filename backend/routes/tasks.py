@@ -5,7 +5,10 @@ from flask import Blueprint, jsonify, request
 from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
-from backend.todo_recurrence import VALID_LISTS, VALID_UNITS, next_due
+from backend.todo_recurrence import (
+    VALID_LISTS, next_due, parse_priority as _parse_priority,
+    parse_repeat as _parse_repeat,
+)
 
 bp = Blueprint('tasks', __name__, url_prefix='/api/tasks')
 
@@ -192,28 +195,6 @@ def _parse_due(value):
         return None, None
     if isinstance(value, bool) or not isinstance(value, int):
         return None, 'due must be a unix timestamp'
-    return value, None
-
-
-def _parse_repeat(interval, unit):
-    """Returns ((interval, unit) or (None, None), error_or_None)."""
-    if interval is None and unit is None:
-        return (None, None), None
-    if interval is None or unit is None:
-        return None, 'repeatInterval and repeatUnit must be set together'
-    if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
-        return None, 'repeatInterval must be a positive integer'
-    if unit not in VALID_UNITS:
-        return None, f'repeatUnit must be one of {", ".join(VALID_UNITS)}'
-    return (interval, unit), None
-
-
-def _parse_priority(value):
-    """Returns (int_1_to_5, error_or_None). Absent/None -> default 3 (neutral)."""
-    if value is None:
-        return 3, None
-    if isinstance(value, bool) or not isinstance(value, int) or not (1 <= value <= 5):
-        return None, 'priority must be an integer from 1 to 5'
     return value, None
 
 

@@ -1900,14 +1900,18 @@ export const api = {
         `/api/chat/briefing/${messageId}/todos`,
         { decisions }
       ),
+    // `data` carries the card's edited values on accept — the card is a form,
+    // so what gets written is what the user is looking at, not what the model
+    // first staged. Omitted on dismiss, and on an accept with no edits.
     resolveProposal: (
       messageId: string,
       proposalId: string,
-      action: 'accept' | 'dismiss'
+      action: 'accept' | 'dismiss',
+      data?: Record<string, unknown>
     ) =>
       post<{ proposal: DelegateProposalRecord }>(
         `/api/chat/proposals/${messageId}/${proposalId}`,
-        { action }
+        data ? { action, data } : { action }
       ),
   },
 

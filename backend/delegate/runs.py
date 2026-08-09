@@ -43,7 +43,7 @@ _active: set["threading.Event"] = set()
 _lock = threading.Lock()
 
 
-def start(message_id: str, messages: list[dict], system_prompt: str, *, delegate: bool) -> "queue.Queue":
+def start(message_id: str, messages: list[dict], system_prompt: str, *, tools_enabled: bool) -> "queue.Queue":
     """Spawns the run; returns the queue the caller's SSE view should relay
     from. Puts (kind, payload) tuples, same shape as stream_reply, plus a
     terminal ('_end', None) once the thread is done (whether by 'done' or by
@@ -53,7 +53,8 @@ def start(message_id: str, messages: list[dict], system_prompt: str, *, delegate
     with _lock:
         _active.add(done)
     threading.Thread(
-        target=_run, args=(message_id, messages, system_prompt, delegate, q, done), daemon=True
+        target=_run, args=(message_id, messages, system_prompt, tools_enabled, q, done),
+        daemon=True,
     ).start()
     return q
 
@@ -71,7 +72,7 @@ def wait_idle(timeout: float = 10.0) -> bool:
     return True
 
 
-def _run(message_id: str, messages: list[dict], system_prompt: str, delegate: bool,
+def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enabled: bool,
           q: "queue.Queue", done: "threading.Event | None" = None) -> None:
     token = priority.begin('chat.stream')
     db = get_db()
@@ -79,7 +80,7 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, delegate: bo
     steps: list[dict] = []
     last_flush = 0.0
     try:
-        for kind, payload in delegate_chat.stream_reply(messages, system_prompt, delegate=delegate):
+        for kind, payload in delegate_chat.stream_reply(messages, system_prompt, tools_enabled=tools_enabled):
             q.put((kind, payload))
             if kind == 'content':
                 content += payload

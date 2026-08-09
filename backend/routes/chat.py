@@ -10,7 +10,9 @@ from backend.ai.provider import is_ai_configured
 from backend.ai.chat_title import generate_conversation_title
 from backend.delegate import chat as delegate_chat
 from backend.delegate import runs
-from backend.todo_recurrence import VALID_LISTS
+from backend.todo_recurrence import (
+    VALID_LISTS, parse_due_date, parse_priority, parse_repeat,
+)
 
 bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 
@@ -311,12 +313,28 @@ class _GenerationFailed(RuntimeError):
 
 
 def _accept_calendar(db, data: dict) -> dict:
+    title = (data.get('title') or '').strip()
+    if not title:
+        raise _AcceptRejected('title required')
+    when = (data.get('date') or '').strip()
+    _, err = parse_due_date(when)
+    if err or not when:
+        raise _AcceptRejected('date must be a real date as YYYY-MM-DD')
+
+    # all_day is explicitly the whole day, not merely untimed, so setting it
+    # clears the clock rather than sitting alongside one. Rows with a NULL time
+    # and all_day=0 predate the flag and stay merely untimed.
+    all_day = data.get('allDay') is True
+    start = None if all_day else ((data.get('time') or '').strip() or None)
+    end = None if all_day else ((data.get('endTime') or '').strip() or None)
+
     now = int(time.time())
     id = str(ULID())
     db.execute(
-        'INSERT INTO calendar_events(id, title, description, date, time, tags, created_at) VALUES (?,?,?,?,?,?,?)',
-        (id, data.get('title', ''), data.get('description', ''),
-         data.get('date', ''), data.get('time'), json.dumps(data.get('tags', [])), now),
+        'INSERT INTO calendar_events(id, title, description, date, time, end_time,'
+        ' all_day, tags, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        (id, title, data.get('description', ''), when, start, end,
+         1 if all_day else 0, json.dumps(data.get('tags', [])), now),
     )
     return {'id': id}
 
@@ -347,12 +365,27 @@ def _accept_task(db, data: dict) -> dict:
     if todo_list not in VALID_LISTS:
         raise _AcceptRejected(f'list must be one of {", ".join(VALID_LISTS)}')
 
+    # These four used to be hard-coded null/null/null/3 here, so a to-do the
+    # user had given a deadline and an urgency for landed in the list bare.
+    # `due` travels through the proposal as the YYYY-MM-DD the model wrote and
+    # becomes a timestamp only here, at the DB boundary.
+    due, err = parse_due_date(data.get('due'))
+    if err:
+        raise _AcceptRejected(err)
+    priority, err = parse_priority(data.get('priority'))
+    if err:
+        raise _AcceptRejected(err)
+    repeat, err = parse_repeat(data.get('repeatInterval'), data.get('repeatUnit'))
+    if err:
+        raise _AcceptRejected(err)
+    notes = (data.get('notes') or '').strip() or None
+
     now = int(time.time())
     id = str(ULID())
     db.execute(
         'INSERT INTO todos(id, title, done, list, notes, due, repeat_interval,'
         ' repeat_unit, priority, created_at, updated_at) VALUES (?,?,0,?,?,?,?,?,?,?,?)',
-        (id, title, todo_list, None, None, None, None, 3, now, now),
+        (id, title, todo_list, notes, due, repeat[0], repeat[1], priority, now, now),
     )
     return {'id': id}
 
@@ -431,12 +464,28 @@ def resolve_proposal(message_id, proposal_id):
         handler = _ACCEPT_HANDLERS.get(proposal.get('kind'))
         if handler is None:
             return jsonify({'error': f"unknown proposal kind {proposal.get('kind')!r}"}), 400
+        # The card is editable, so the accepted values are whatever the user
+        # has in front of them, not what the model first staged. Edited data
+        # replaces the staged payload wholesale and goes through the same
+        # handler — the handlers are the validation boundary, and nothing
+        # arriving here is trusted just because a proposal exists.
+        edited = body.get('data')
+        if edited is not None and not isinstance(edited, dict):
+            return jsonify({'error': 'data must be an object'}), 400
+        data = edited if edited is not None else (proposal.get('data') or {})
         try:
-            proposal['result'] = handler(db, proposal.get('data') or {})
+            result = handler(db, data)
         except _AcceptRejected as e:
+            # Left 'pending' on purpose: a card that failed validation is one
+            # the user still has to fix, so it must not collapse to a resolved
+            # line that quietly lost their edit.
             return jsonify({'error': str(e)}), 400
         except _GenerationFailed as e:
             return jsonify({'error': str(e)}), 502
+        # Stored back so a reload renders what was actually saved rather than
+        # what was originally proposed.
+        proposal['data'] = data
+        proposal['result'] = result
         proposal['status'] = 'accepted'
 
     proposal['resolvedAt'] = int(time.time())
@@ -491,7 +540,7 @@ def stream():
             (message_id, conversation_id, now),
         )
         db.commit()
-        q = runs.start(message_id, messages, system_prompt, delegate=not system_prompt)
+        q = runs.start(message_id, messages, system_prompt, tools_enabled=not system_prompt)
 
         def generate():
             yield f'data: {json.dumps({"messageId": message_id})}\n\n'
@@ -524,7 +573,7 @@ def stream():
             # it's the voice listener, a task nudge or the morning check-in,
             # none of which have a card to confirm anything on.
             for kind, payload in delegate_chat.stream_reply(
-                messages, system_prompt, delegate=not system_prompt
+                messages, system_prompt, tools_enabled=not system_prompt
             ):
                 yield _format_event(kind, payload)
             yield 'data: [DONE]\n\n'

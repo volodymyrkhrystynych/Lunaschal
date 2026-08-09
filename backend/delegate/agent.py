@@ -1,9 +1,19 @@
-"""The chat delegate: one tool loop, spawned by the main chat model.
+"""The chat research delegate: one tool loop, spawned by the main chat model.
 
-The main chat model carries exactly one tool — `delegate({task})` — so its only
-decision is the binary "does this need a hand-off". Every capability lives in
-*this* loop's toolbox instead, which is what keeps the main chat's context from
-growing a token of schema every time the app learns to do something new.
+The toolbox is split along one line: **tools that need conversation context live
+in the main chat; tools that generate volume live here.** The `propose_*` tools
+used to live in this loop, and that was the mistake — a delegate is handed a
+single `task` string and cannot see the conversation, so every detail the main
+model forgot to restate ("by Friday", "it's urgent", "the thing I mentioned
+earlier") was simply gone by the time a to-do got staged. Those tools are cheap
+schemas that return one short string, so they cost the main chat almost nothing
+and gain the whole conversation. See backend/delegate/chat.py.
+
+What stays here is the opposite kind: `web_search`, `web_fetch` and
+`deep_research` are multi-step, retry-prone, and their results are enormous. The
+point of delegating them is that only the closing summary crosses back — a
+`web_fetch` page dump in the persistent chat transcript would be paid for on
+every subsequent turn of the conversation.
 
 This is deliberately not a fourth tool loop. It drives
 backend/research/agent.py's, with its own tools and dispatch passed in — that
@@ -25,43 +35,29 @@ import functools
 import logging
 from types import SimpleNamespace
 
-from backend.delegate import deep_research, tools as proposals
+from backend.ai.chat import format_now_context
+from backend.delegate import deep_research
 from backend.research import agent, web
 
 logger = logging.getLogger(__name__)
 
-# Enough for search → read → propose with room to recover from one failure.
-# Above this the user is waiting on a spinner longer than the reply is worth.
+# Enough for search → read → read with room to recover from one failure. Above
+# this the user is waiting on a spinner longer than the reply is worth.
 MAX_TOOL_TURNS = 6
 # Per run. A delegate is answering one chat message, not writing an article.
 MAX_FETCHES = 4
 
-ALL_TOOLS = proposals.TOOLS + web.TOOLS + deep_research.TOOLS
+ALL_TOOLS = web.TOOLS + deep_research.TOOLS
 
 DISPATCH = {
     'web_search': web,
     'web_fetch': web,
     'deep_research': deep_research,
-    **{name: proposals for name in (
-        'propose_task',
-        'propose_calendar_event',
-        'propose_calorie_log',
-        'propose_note_to_self',
-        'propose_flashcards',
-    )},
 }
 
-SYSTEM_PROMPT = """You are Lunaschal's delegate. The assistant handed you one \
-task from a chat with the user, because it needed something done rather than \
-just said.
-
-You have two kinds of tool.
-
-The propose_* tools stage something for the user to confirm — a to-do, a \
-calendar event, a calorie entry, a note to self, a set of flashcards. They save \
-nothing on their own; the user gets a card to click. Stage what the task \
-actually asked for and no more. Do not stage a calorie count the user did not \
-give, and do not stage a note to self when they have not said what the lesson is.
+SYSTEM_PROMPT = """You are Lunaschal's research delegate. The assistant handed \
+you one task from a chat with the user, because it needed something looked up \
+rather than just said.
 
 web_search and web_fetch really do read the internet. Use them when the task \
 depends on current or specific information you are not confident about, and \
@@ -77,22 +73,30 @@ Work in as few steps as the task needs, then stop and write a closing summary. \
 That summary is all the assistant will see, so leave nothing important out of \
 it and do not claim anything you did not actually do.
 
-If the task was a question or asked you to look something up, your summary IS \
-the answer: state the actual facts, numbers, names or dates you found, not a \
-description of your search process ("found the release date: March 3, 2025", \
-not "searched for the release date and found some results"). If the task asked \
-you to stage something, keep the summary short — what you staged and anything \
-you could not do."""
+Your summary IS the answer: state the actual facts, numbers, names or dates you \
+found, not a description of your search process ("found the release date: March \
+3, 2025", not "searched for the release date and found some results"). If you \
+could not find something, say so plainly rather than padding the summary."""
+
+
+def _system_prompt() -> str:
+    """The prompt with today's date on it.
+
+    Built per call, not at import: a process that outlives midnight would
+    otherwise keep telling the model it is yesterday. The main chat has carried
+    `format_now_context()` all along — this loop never did, so a task like
+    "what's on this weekend" reached a model with no idea when now was.
+    """
+    return f'{SYSTEM_PROMPT}\n\n{format_now_context()}'
 
 
 def run_events(task: str, *, checkpoint=None, max_turns: int = MAX_TOOL_TURNS,
                max_fetches: int = MAX_FETCHES):
     """Yield ('step', event) per tool call, then one ('result', {...}).
 
-    The result adds `proposals` and `summary` to what the shared loop returns:
-    `proposals` are pulled off the step events rather than parsed back out of
-    the model's prose, and `summary` is the model's own closing message — the
-    only part of a delegate run the main chat model is shown.
+    The result adds `summary` to what the shared loop returns: the model's own
+    closing message, and the only part of a delegate run the main chat model is
+    ever shown.
     """
     # deep_research runs its own nested pass, which needs the same checkpoint
     # this loop got — not the module-level DISPATCH entry, which the shared
@@ -107,7 +111,7 @@ def run_events(task: str, *, checkpoint=None, max_turns: int = MAX_TOOL_TURNS,
 
     result: dict = {}
     for kind, payload in agent.gather_events(
-        SYSTEM_PROMPT, task,
+        _system_prompt(), task,
         tools=ALL_TOOLS, dispatch=dispatch, checkpoint=checkpoint,
         max_turns=max_turns, max_fetches=max_fetches,
     ):
@@ -116,11 +120,9 @@ def run_events(task: str, *, checkpoint=None, max_turns: int = MAX_TOOL_TURNS,
         else:
             yield (kind, payload)
 
-    steps = result.get('steps', [])
     yield ('result', {
-        'steps': steps,
+        'steps': result.get('steps', []),
         'sources': result.get('sources', []),
-        'proposals': [s['proposal'] for s in steps if s.get('proposal')],
         'summary': _summary(result),
         'truncated': result.get('truncated', False),
     })
@@ -150,14 +152,7 @@ def _summary(result: dict) -> str:
             return text
 
     steps = result.get('steps') or []
-    staged = [s for s in steps if s.get('proposal')]
-    if staged:
-        return (
-            'Staged for the user to confirm: '
-            + '; '.join(s.get('arg') or s.get('tool', '') for s in staged)
-            + '. (The delegate ran out of room before summarising.)'
-        )
     if steps:
-        return ('The delegate tried but did not finish — '
-                f'{len(steps)} step(s) ran and nothing was staged.')
-    return 'The delegate could not do anything with that task.'
+        return ('The delegate ran out of room before it could answer — '
+                f'{len(steps)} step(s) ran but it never summarised what it found.')
+    return 'The delegate could not look anything up for that task.'

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { RepeatUnit, TodoList } from '../../hooks/api';
 import { ulid } from '../../lib/ulid';
 import { useTodoCreate } from '../../offline/mutationDefaults';
-import { dueInputToUnix } from '../../lib/todos';
+import { PRIORITY_LABELS, dueInputToUnix } from '../../lib/todos';
 
 interface TodoFormProps {
   list: Exclude<TodoList, 'archive'>;
@@ -143,11 +143,11 @@ export function TodoForm({ list, onCancel }: TodoFormProps) {
           onKeyDown={e => handleKey(e, 5)}
           className={fieldClass}
         >
-          <option value={1}>1 — Very unimportant</option>
-          <option value={2}>2 — Unimportant</option>
-          <option value={3}>3 — Normal</option>
-          <option value={4}>4 — Important</option>
-          <option value={5}>5 — Very important</option>
+          {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
+            <option key={value} value={value}>
+              {value} — {label}
+            </option>
+          ))}
         </select>
       </div>
       <div className="flex gap-2 justify-end">
