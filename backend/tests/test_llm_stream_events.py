@@ -28,7 +28,7 @@ def stream(monkeypatch):
                 return iter(chunks)
 
         monkeypatch.setattr(llm, 'get_provider_config', lambda: {})
-        monkeypatch.setattr(llm, 'get_model', lambda c: 'gemma4')
+        monkeypatch.setattr(llm, 'get_model', lambda c: 'qwen36')
         monkeypatch.setattr(llm, 'default_generation_opts',
                             lambda: {'thinking': True, 'max_tokens': 100})
         monkeypatch.setattr(llm, 'get_llama_client', lambda c: SimpleNamespace(
@@ -102,7 +102,7 @@ def test_chat_stream_deltas_yields_only_the_answer(stream, monkeypatch):
                 return iter(chunks)
 
         monkeypatch.setattr(llm, 'get_provider_config', lambda: {})
-        monkeypatch.setattr(llm, 'get_model', lambda c: 'gemma4')
+        monkeypatch.setattr(llm, 'get_model', lambda c: 'qwen36')
         monkeypatch.setattr(llm, 'default_generation_opts',
                             lambda: {'thinking': True, 'max_tokens': 100})
         monkeypatch.setattr(llm, 'get_llama_client', lambda c: SimpleNamespace(

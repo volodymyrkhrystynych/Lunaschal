@@ -15,7 +15,7 @@ done
 
 # llama-server is assumed to be already running — install it as a systemd --user
 # unit (llama/lunaschal-llama.service) so the model outlives any one session.
-# Loading Gemma 4 26B takes tens of seconds, and this script used to pay that
+# Loading Qwen3.6 35B takes tens of seconds, and this script used to pay that
 # cost on every start; it is not something a dev run should own.
 if ! curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
   echo "WARNING: llama-server is not responding on :8080 — AI features will fail."

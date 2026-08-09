@@ -96,7 +96,7 @@ flowchart LR
     end
 
     subgraph EXT["External"]
-        LLMS["llama-server (router :8080)<br/>gemma4 · gemma4-long · embed"]
+        LLMS["llama-server (router :8080)<br/>qwen36 · gemma4-12b-omni · embed"]
         WHISPER["Whisper + Kokoro TTS<br/>(local or OpenAI API)"]
         PYANNOTE["pyannote (HF token)"]
         FORUMS["XenForo forums<br/>(SB / SV / QQ)"]

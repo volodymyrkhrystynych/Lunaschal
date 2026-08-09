@@ -7,7 +7,6 @@ import time
 import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
-from backend.ai.provider import DEFAULT_MODEL
 from backend.db.connection import build_update, get_db
 
 _sleep_inhibitor: subprocess.Popen | None = None

@@ -8,12 +8,15 @@ content a word-for-word transcript throws away.
 It is also gated behind its own model alias (`llama_audio_model`), the same
 pattern as backend/ai/images.py's `llama_vision_model`, and for a stronger
 reason than VRAM headroom: audio input is a capability of the Gemma 4
-E2B/E4B/12B "encoder-free" variants, not the 26B A4B MoE model this router
-already loads for chat. There is no shared-weights trick here — describing
-audio means loading genuinely different weights, so this stays off until a
-`[gemma4-e4b-audio]`-style preset is downloaded and configured (see the
-comment in llama/presets.ini). `AudioUnavailable` is what the UI shows instead
-of a mysteriously dead button.
+"encoder-free" variants, not of the text-only MoE this router loads for chat.
+There is no shared-weights trick here — describing audio means loading
+genuinely different weights, so this stays off until `[gemma4-12b-omni]` is
+downloaded and configured (see the comment in llama/presets.ini).
+`AudioUnavailable` is what the UI shows instead of a mysteriously dead button.
+
+That preset is any-to-any, so it is the same model backend/ai/images.py uses
+for photos, and Settings sets both aliases with one checkbox. The two columns
+stay separate because the two features fail independently.
 
 **A long recording is described in windows, not in one call.** The audio
 encoder emits a token per 160 ms frame, so a recording costs ~6.25 tokens per
@@ -62,7 +65,7 @@ _MAX_TOKENS = 300
 
 # --- Window sizing -----------------------------------------------------------
 #
-# `ctx-size` for the audio preset in llama/presets.ini. There is no way to ask
+# `ctx-size` for [gemma4-12b-omni] in llama/presets.ini. There is no way to ask
 # llama-server for it at runtime (see backend/ai/llm.py: the context window
 # belongs to the server, not the request), so it is mirrored here — the two have
 # to move together, and _MAX_WINDOW_SECONDS below is what makes the consequence
@@ -198,6 +201,13 @@ def _describe_one(client, model: str, audio_b64: str, prompt: str) -> str:
             ]},
         ],
         max_tokens=_MAX_TOKENS,
+        # Thinking off, explicitly — same reason as backend/ai/images.py, and
+        # worse here: _MAX_TOKENS is 300 per window, so reasoning would eat the
+        # budget of every window in a long recording and `_reduce` would be
+        # handed nothing to summarise. Gemma 4's template defaults it on, and
+        # this call bypasses backend/ai/llm.py's `_request_kwargs`, so it has to
+        # set it here.
+        extra_body={'chat_template_kwargs': {'enable_thinking': False}},
         timeout=_TIMEOUT,
     )
     return (resp.choices[0].message.content or '').strip()

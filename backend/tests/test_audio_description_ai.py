@@ -70,9 +70,9 @@ def slices(monkeypatch):
 def test_get_audio_model_reads_the_configured_alias(monkeypatch):
     monkeypatch.setattr(
         audio_ai, 'get_provider_config',
-        lambda: {'llama_audio_model': 'gemma4-e4b-audio'},
+        lambda: {'llama_audio_model': 'gemma4-12b-omni'},
     )
-    assert audio_ai.get_audio_model() == 'gemma4-e4b-audio'
+    assert audio_ai.get_audio_model() == 'gemma4-12b-omni'
     assert audio_ai.is_audio_configured() is True
 
 
@@ -92,7 +92,7 @@ def test_describe_audio_raises_when_unconfigured(monkeypatch, tmp_path):
 
 def test_describe_audio_raises_when_file_missing(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     with pytest.raises(audio_ai.AudioUnavailable, match='missing'):
         audio_ai.describe_audio(tmp_path / 'nope.wav')
@@ -100,7 +100,7 @@ def test_describe_audio_raises_when_file_missing(monkeypatch, tmp_path):
 
 def test_describe_audio_returns_the_model_text_and_sends_the_hint(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     client = _FakeClient(content='  A dog barks twice.  ')
     monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
@@ -111,16 +111,40 @@ def test_describe_audio_returns_the_model_text_and_sends_the_hint(monkeypatch, t
 
     assert result == 'A dog barks twice.'
     call = client.completions.calls[0]
-    assert call['model'] == 'gemma4-e4b-audio'
+    assert call['model'] == 'gemma4-12b-omni'
     user_content = call['messages'][1]['content']
     assert 'backyard recording' in user_content[0]['text']
     assert user_content[1]['type'] == 'input_audio'
     assert user_content[1]['input_audio']['format'] == 'wav'
 
 
+def test_describe_audio_turns_thinking_off(monkeypatch, tmp_path):
+    """Gemma 4's chat template defaults thinking *on*, and this module builds its
+    own request instead of going through backend/ai/llm.py's `_request_kwargs`,
+    so nothing else can switch it off for it.
+
+    Measured against the live model, not assumed: with thinking on, the 300-token
+    per-window budget is spent on reasoning and `content` comes back empty — which
+    reaches the user as "The model returned an empty description" from a model
+    that heard the recording perfectly well.
+    """
+    monkeypatch.setattr(
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
+    )
+    client = _FakeClient(content='A dog barks twice.')
+    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+
+    p = tmp_path / 'clip.wav'
+    p.write_bytes(b'\x00')
+    audio_ai.describe_audio(p)
+
+    kwargs = client.completions.calls[0]['extra_body']['chat_template_kwargs']
+    assert kwargs['enable_thinking'] is False
+
+
 def test_describe_audio_wraps_client_errors(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     client = _FakeClient(error=RuntimeError('connection refused'))
     monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
@@ -133,7 +157,7 @@ def test_describe_audio_wraps_client_errors(monkeypatch, tmp_path):
 
 def test_describe_audio_raises_on_empty_result(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     client = _FakeClient(content='   ')
     monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
@@ -187,7 +211,7 @@ def test_plan_windows_samples_a_recording_too_long_to_cover():
 
 def test_a_long_recording_is_sliced_described_and_reduced(monkeypatch, tmp_path, slices):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(content='A dog barks.')
@@ -225,7 +249,7 @@ def test_reduce_uses_the_chat_model_not_the_audio_one(monkeypatch, tmp_path):
     """The audio alias is loaded for its encoder; the summary is plain text, so
     it goes to the default chat model like every other summarisation here."""
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(content='A dog barks.')
@@ -236,14 +260,14 @@ def test_reduce_uses_the_chat_model_not_the_audio_one(monkeypatch, tmp_path):
     p.write_bytes(b'\x00')
     audio_ai.describe_audio(p)
 
-    assert {c['model'] for c in client.completions.calls} == {'gemma4-e4b-audio'}
+    assert {c['model'] for c in client.completions.calls} == {'gemma4-12b-omni'}
 
 
 def test_a_failed_summary_falls_back_to_the_window_notes(monkeypatch, tmp_path):
     """Losing the notes to a failed summary would throw away the whole expensive
     half of the work — a blockier description still describes the recording."""
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(content='A dog barks.')
@@ -263,7 +287,7 @@ def test_a_failed_summary_falls_back_to_the_window_notes(monkeypatch, tmp_path):
 
 def test_one_unreadable_window_does_not_cost_the_others(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 3.0)
     client = _FakeClient(content='A dog barks.')
@@ -289,7 +313,7 @@ def test_one_unreadable_window_does_not_cost_the_others(monkeypatch, tmp_path):
 
 def test_a_recording_that_fails_every_window_still_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(error=RuntimeError('exceeds the available context size'))
@@ -305,7 +329,7 @@ def test_a_sampled_description_says_so(monkeypatch, tmp_path):
     """A description that quietly covers 2 of 3 hours reads as a description of
     the whole recording, so the shortfall is stated rather than left implied."""
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: 3.0 * 60 * 60)
     client = _FakeClient(content='Traffic noise.')
@@ -323,7 +347,7 @@ def test_a_sampled_description_says_so(monkeypatch, tmp_path):
 
 def test_a_fully_covered_recording_says_nothing_about_sampling(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(content='A dog barks.')
@@ -339,7 +363,7 @@ def test_an_unprobeable_file_still_gets_one_whole_file_call(monkeypatch, tmp_pat
     """ffprobe failing costs the windowing, not the description — that's the
     behaviour this module had before windows existed."""
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: None)
     client = _FakeClient(content='A dog barks.')

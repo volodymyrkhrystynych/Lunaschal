@@ -7,7 +7,7 @@
 #   systemctl --user enable --now lunaschal-llama
 #
 # The point of running it as a unit rather than from start.sh: the model survives
-# Flask restarts, terminal closes, and `npm run dev` reloads. Loading Gemma 4 26B
+# Flask restarts, terminal closes, and `npm run dev` reloads. Loading Qwen3.6 35B
 # takes tens of seconds, so anything that reloads it per backend restart is
 # unusable in practice.
 

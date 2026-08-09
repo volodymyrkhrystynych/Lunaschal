@@ -9,8 +9,8 @@ before the reply, the model makes it, and a failure is a visible error on the
 stream.
 
 **The decision turn is separate from the answer, and its prose is discarded.**
-llama-server rebuilds OpenAI `tool_calls` by running its peg-gemma4 grammar over
-Gemma 4's native call notation, and reassembling partial tool-call deltas across
+llama-server rebuilds OpenAI `tool_calls` by running a grammar over the model's
+native call notation, and reassembling partial tool-call deltas across
 chunks is how an argument goes missing in production — so the turn that may
 carry a tool call cannot be streamed. It is capped hard (`DECISION_MAX_TOKENS`)
 and told to emit nothing when nothing needs doing, which keeps the cost of the
@@ -135,7 +135,7 @@ def _decision_calls(messages: list[dict]) -> list:
     """
     try:
         # Appended as a user turn, not a system one: the same shape the Ideas
-        # discussion uses for its answer instruction, and the one Gemma 4's
+        # discussion uses for its answer instruction, and the one a chat
         # template actually attends to at the end of a conversation.
         msg, finish_reason = chat_tool_turn(
             messages + [{'role': 'user', 'content': DECISION_NOTE}],
