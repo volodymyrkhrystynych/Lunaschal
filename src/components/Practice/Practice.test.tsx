@@ -1,9 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { PracticeDrill, PracticeExplanation } from '../../hooks/api';
-import { requiredMask } from '../../lib/practice';
 
 vi.mock('../../hooks/api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../hooks/api')>();
@@ -78,25 +77,10 @@ function renderPractice() {
   );
 }
 
-// Types a drill the way the writer does now: one keystroke per position the
-// drill actually asks for, with the box's own value read back between them
-// because accepting one character can pull a filled-in run along behind it.
-async function typeOut(drill: PracticeDrill, keystrokes?: string) {
+async function typeOut(drill: PracticeDrill) {
   if (drill.mode !== 'speed') throw new Error('speed drills only');
-  const box = (await screen.findByLabelText(
-    `Type the ${drill.title} snippet`
-  )) as HTMLTextAreaElement;
-  const mask = requiredMask(drill.code);
-  const chars =
-    keystrokes ??
-    drill.code
-      .split('')
-      .filter((_, i) => mask[i])
-      .join('');
-  for (const ch of chars) {
-    fireEvent.change(box, { target: { value: box.value + ch } });
-  }
-  return box;
+  const box = await screen.findByLabelText(`Type the ${drill.title} snippet`);
+  fireEvent.change(box, { target: { value: drill.code } });
 }
 
 beforeEach(() => {
@@ -118,75 +102,6 @@ beforeEach(() => {
       lastRecallPassed: null,
       lastRecallAt: null,
     },
-  });
-});
-
-describe('Practice typing', () => {
-  const multiline: PracticeDrill = {
-    ...(speedDrill(1) as Extract<PracticeDrill, { mode: 'speed' }>),
-    code: 'if (a) {\n  const b = 1;\n}',
-  };
-
-  it('completes without the writer typing any layout', async () => {
-    session.mockResolvedValueOnce([multiline]);
-    renderPractice();
-    await screen.findByText('Snippet 1');
-
-    // 'if(a){const b=1;}' — every indent and line break filled in.
-    await typeOut(multiline);
-
-    await waitFor(() => expect(submitAttempt).toHaveBeenCalled());
-    expect(submitAttempt.mock.calls[0][0]).toMatchObject({
-      snippetId: 'snippet-1',
-      accuracy: 100,
-      errorCount: 0,
-    });
-  });
-
-  it('scores only the characters it asked for', async () => {
-    session.mockResolvedValueOnce([multiline]);
-    renderPractice();
-    await screen.findByText('Snippet 1');
-
-    // One wrong character out of the 17 required, so 16/17 — not 16/25, which
-    // is what counting the layout the writer never touched would have given.
-    await typeOut(multiline, 'if(a){const X=1;}');
-
-    await waitFor(() => expect(submitAttempt).toHaveBeenCalled());
-    const { accuracy, errorCount } = submitAttempt.mock.calls[0][0];
-    expect(errorCount).toBe(1);
-    expect(accuracy).toBeCloseTo((16 / 17) * 100, 5);
-  });
-
-  it('takes a space for a line break that separates two words', async () => {
-    const html: PracticeDrill = {
-      ...(speedDrill(1) as Extract<PracticeDrill, { mode: 'speed' }>),
-      code: '<input\n  type="text"\n/>',
-    };
-    session.mockResolvedValueOnce([html]);
-    renderPractice();
-    await screen.findByText('Snippet 1');
-
-    await typeOut(html, '<input type="text"/>');
-
-    await waitFor(() => expect(submitAttempt).toHaveBeenCalled());
-    expect(submitAttempt.mock.calls[0][0]).toMatchObject({
-      accuracy: 100,
-      errorCount: 0,
-    });
-  });
-
-  it('steps a backspace over the filled-in run', async () => {
-    session.mockResolvedValueOnce([multiline]);
-    renderPractice();
-    await screen.findByText('Snippet 1');
-
-    const box = await typeOut(multiline, 'if(a){');
-    // '{' pulled the line break and indent in with it; one backspace has to
-    // land on '{' rather than nibble at whitespace the writer never produced.
-    expect(box.value).toBe('if (a) {\n  ');
-    fireEvent.change(box, { target: { value: box.value.slice(0, -1) } });
-    expect(box.value).toBe('if (a) ');
   });
 });
 

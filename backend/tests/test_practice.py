@@ -131,11 +131,11 @@ def test_next_mode_is_speed_until_the_snippet_is_typed_well():
 
 
 def test_accuracy_unlocks_at_ninety():
-    """The gate sits at 90, over characters that decide what the program does.
+    """The gate sits at 90, over every character of the reference.
 
-    The speed drill fills in indentation and line breaks, so a reported 90 is
-    90 of the code — a stricter measure than the old 95 over a figure that
-    counted layout the writer never touched.
+    Layout counts toward that figure, so a run that knows the syntax and is a
+    couple of keystrokes off still reads well short of 95 — which is how a
+    whole language stayed locked for a steady 94% typist.
     """
     assert modes.next_mode(fluent(best_accuracy=90.0)) == modes.BLIND
     assert modes.next_mode(fluent(best_accuracy=89.9)) == modes.SPEED
