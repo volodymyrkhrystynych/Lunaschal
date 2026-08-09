@@ -44,9 +44,9 @@ describe('pending cards', () => {
     ]);
 
     expect(screen.getByText('Save as calendar event?')).toBeTruthy();
-    expect(screen.getByText('Dentist appointment')).toBeTruthy();
-    expect(screen.getByText('(2026-08-05)')).toBeTruthy();
-    expect(screen.getByText('health')).toBeTruthy();
+    expect(screen.getByDisplayValue('Dentist appointment')).toBeTruthy();
+    expect(screen.getByDisplayValue('2026-08-05')).toBeTruthy();
+    expect(screen.getByDisplayValue('health')).toBeTruthy();
   });
 
   it('renders a calorie proposal', () => {
@@ -60,22 +60,26 @@ describe('pending cards', () => {
     ]);
 
     expect(screen.getByText('Log calories?')).toBeTruthy();
-    expect(screen.getByText('burger')).toBeTruthy();
-    expect(screen.getByText('(650 cal)')).toBeTruthy();
+    expect(screen.getByDisplayValue('burger')).toBeTruthy();
+    expect(screen.getByDisplayValue('650')).toBeTruthy();
   });
 
-  it('renders a task proposal', () => {
+  it('renders a task proposal with the due date and priority it was staged with', () => {
+    // These two were not shown at all — and before that, not even carried —
+    // so a to-do was confirmed without the user seeing what it was due.
     renderProposals([
       {
         id: 'p1',
         kind: 'task',
         status: 'pending',
-        data: { title: 'call the dentist' },
+        data: { title: 'call the dentist', due: '2026-08-14', priority: 5 },
       },
     ]);
 
     expect(screen.getByText('Add to your tasks?')).toBeTruthy();
-    expect(screen.getByText('call the dentist')).toBeTruthy();
+    expect(screen.getByDisplayValue('call the dentist')).toBeTruthy();
+    expect(screen.getByDisplayValue('2026-08-14')).toBeTruthy();
+    expect(screen.getByDisplayValue('5 — Very important')).toBeTruthy();
   });
 
   it('renders a flashcards proposal', () => {
@@ -88,12 +92,40 @@ describe('pending cards', () => {
       },
     ]);
 
-    expect(
-      screen.getByText('Generate flashcards for "React hooks"?')
-    ).toBeTruthy();
+    expect(screen.getByText('Generate flashcards?')).toBeTruthy();
+    expect(screen.getByDisplayValue('React hooks')).toBeTruthy();
   });
 
-  it('accepting posts an accept action for that proposal id', async () => {
+  it('hides the clocks on an all-day event, which means the whole day', () => {
+    renderProposals([
+      {
+        id: 'p1',
+        kind: 'calendar',
+        status: 'pending',
+        data: { title: 'Holiday', date: '2026-08-05', allDay: true },
+      },
+    ]);
+
+    expect(screen.queryByText('From')).toBeNull();
+    fireEvent.click(screen.getByLabelText('All day'));
+    expect(screen.getByText('From')).toBeTruthy();
+  });
+
+  it('accepting posts the card values for that proposal id', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: { id: 'p1', kind: 'task', status: 'accepted', data: {} },
+    } as never);
+    const data = { title: 'call the dentist', list: 'todo', priority: 3 };
+    renderProposals([{ id: 'p1', kind: 'task', status: 'pending', data }]);
+
+    fireEvent.click(screen.getByText('Add'));
+
+    await waitFor(() =>
+      expect(resolveProposal()).toHaveBeenCalledWith('m1', 'p1', 'accept', data)
+    );
+  });
+
+  it('accepting an edited card posts the edit, not what was staged', async () => {
     resolveProposal().mockResolvedValue({
       proposal: { id: 'p1', kind: 'task', status: 'accepted', data: {} },
     } as never);
@@ -102,18 +134,34 @@ describe('pending cards', () => {
         id: 'p1',
         kind: 'task',
         status: 'pending',
-        data: { title: 'call the dentist' },
+        data: {
+          title: 'Book flights',
+          list: 'todo',
+          due: '2026-08-14',
+          priority: 3,
+        },
       },
     ]);
 
+    fireEvent.change(screen.getByDisplayValue('2026-08-14'), {
+      target: { value: '2026-08-20' },
+    });
+    fireEvent.change(screen.getByDisplayValue('3 — Normal'), {
+      target: { value: '5' },
+    });
     fireEvent.click(screen.getByText('Add'));
 
     await waitFor(() =>
-      expect(resolveProposal()).toHaveBeenCalledWith('m1', 'p1', 'accept')
+      expect(resolveProposal()).toHaveBeenCalledWith(
+        'm1',
+        'p1',
+        'accept',
+        expect.objectContaining({ due: '2026-08-20', priority: 5 })
+      )
     );
   });
 
-  it('dismissing posts a dismiss action for that proposal id', async () => {
+  it('dismissing posts a dismiss action with no data', async () => {
     resolveProposal().mockResolvedValue({
       proposal: { id: 'p1', kind: 'task', status: 'dismissed', data: {} },
     } as never);
@@ -129,7 +177,12 @@ describe('pending cards', () => {
     fireEvent.click(screen.getByText('Dismiss'));
 
     await waitFor(() =>
-      expect(resolveProposal()).toHaveBeenCalledWith('m1', 'p1', 'dismiss')
+      expect(resolveProposal()).toHaveBeenCalledWith(
+        'm1',
+        'p1',
+        'dismiss',
+        undefined
+      )
     );
   });
 

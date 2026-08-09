@@ -1,9 +1,13 @@
-"""The delegate loop.
+"""The research delegate's loop.
 
-The model is a scripted fake throughout: what's under test is how the loop
-collects proposals, what it hands back to the main chat model as a summary, and
-that it inherits the shared loop's budget and truncation behaviour rather than
-re-implementing them.
+The model is a scripted fake throughout: what's under test is what the loop
+hands back to the main chat model as a summary, and that it inherits the shared
+loop's budget and truncation behaviour rather than re-implementing them.
+
+The `propose_*` tools used to live here and no longer do — they are on the main
+chat's own turn now (test_delegate_chat.py), because a delegate is handed one
+`task` string and cannot see the conversation, so every detail the main model
+did not restate was lost before a to-do was ever staged.
 """
 import json
 from types import SimpleNamespace
@@ -13,6 +17,17 @@ import pytest
 from backend.ai import priority
 from backend.delegate import agent
 from backend.research import agent as shared
+
+
+@pytest.fixture(autouse=True)
+def stub_web(monkeypatch):
+    """The real web tools read settings out of the DB and then the internet;
+    these tests are about the loop, not either."""
+    def fake(name, args):
+        query = args.get('query') or args.get('url') or ''
+        return (f'results for {query}', {'tool': name, 'arg': query, 'ok': True, 'count': 1})
+
+    monkeypatch.setattr(agent.web, 'run_tool', fake)
 
 
 def _call(name, arguments='{}', call_id='c1'):
@@ -50,32 +65,17 @@ def clean_gate():
     priority.reset()
 
 
-def test_a_proposal_is_collected_off_the_step_event(monkeypatch):
-    """Proposals come from what the tools actually staged, never parsed back
-    out of the model's prose — the same stance research/agent.py takes about
-    recording sources from what was fetched."""
+def test_the_summary_is_the_models_own_closing_message(monkeypatch):
+    """Only the summary crosses back into the main conversation, never the
+    transcript — that compression is the point of delegating."""
     _script(monkeypatch, [
-        _msg(tool_calls=[_call('propose_task', json.dumps({'title': 'Call the dentist'}))]),
-        _msg(content='Staged the to-do.'),
+        _msg(tool_calls=[_call('web_search', json.dumps({'query': 'fsrs release date'}))]),
+        _msg(content='FSRS 5 was released in July 2024.'),
     ])
-    result = agent.run('add call the dentist to my todos')
+    result = agent.run('when was FSRS 5 released')
 
-    assert result['proposals'] == [
-        {'kind': 'task', 'data': {'title': 'Call the dentist', 'list': 'todo'}}
-    ]
-    assert result['summary'] == 'Staged the to-do.'
-
-
-def test_a_refused_proposal_is_not_collected(monkeypatch):
-    _script(monkeypatch, [
-        _msg(tool_calls=[_call('propose_calorie_log',
-                               json.dumps({'description': 'burger'}))]),
-        _msg(content='I could not stage that without a calorie count.'),
-    ])
-    result = agent.run('I ate a burger')
-
-    assert result['proposals'] == []
-    assert result['steps'][0]['ok'] is False
+    assert result['summary'] == 'FSRS 5 was released in July 2024.'
+    assert 'messages' not in result
 
 
 def test_steps_stream_before_the_result(monkeypatch):
@@ -83,10 +83,10 @@ def test_steps_stream_before_the_result(monkeypatch):
     blocking form the events all arrive after the run, which is the silent
     spinner they exist to replace."""
     _script(monkeypatch, [
-        _msg(tool_calls=[_call('propose_flashcards', json.dumps({'topic': 'FSRS'}))]),
+        _msg(tool_calls=[_call('web_search', json.dumps({'query': 'FSRS'}))]),
         _msg(content='Done.'),
     ])
-    kinds = [kind for kind, _ in agent.run_events('quiz me on FSRS')]
+    kinds = [kind for kind, _ in agent.run_events('look up FSRS')]
     assert kinds == ['step', 'result']
 
 
@@ -95,31 +95,47 @@ def test_a_truncated_run_does_not_pass_off_a_half_sentence_as_its_summary(monkey
     like a finished one. Handing that fragment to the main model as the summary
     is how the reply ends up describing work that never completed."""
     _script(monkeypatch, [
-        _msg(tool_calls=[_call('propose_task', json.dumps({'title': 'Buy milk'}))]),
-        _msg(content='I staged the to-do and then went on to'),
+        _msg(tool_calls=[_call('web_search', json.dumps({'query': 'FSRS'}))]),
+        _msg(content='I read the page and then went on to'),
     ], finish_reasons=['tool_calls', 'length'])
-    result = agent.run('remind me to buy milk')
+    result = agent.run('look up FSRS')
 
     assert result['truncated'] is True
     assert 'went on to' not in result['summary']
-    # The proposal still survives — it was staged before the turn was cut off.
-    assert result['proposals'][0]['data']['title'] == 'Buy milk'
-    assert 'Buy milk' in result['summary']
+    assert 'never summarised' in result['summary']
 
 
 def test_a_run_that_did_nothing_says_so(monkeypatch):
     """An empty summary is one the main model will paper over with a guess."""
     _script(monkeypatch, [_msg(content='')], finish_reasons=['stop'])
-    assert agent.run('...')['summary'] == 'The delegate could not do anything with that task.'
+    assert agent.run('...')['summary'] == (
+        'The delegate could not look anything up for that task.'
+    )
 
 
-def test_the_model_is_offered_both_proposal_and_web_tools(monkeypatch):
+def test_the_proposal_tools_are_no_longer_offered_here(monkeypatch):
+    """They moved to the main chat's own turn. Left here they would be handed a
+    task string with the conversation already paraphrased out of it — which is
+    how "by Friday" stopped reaching the to-do it belonged on."""
     calls = _script(monkeypatch, [_msg(content='Nothing to do.')])
     agent.run('hello')
 
     offered = {t['function']['name'] for t in calls[0]['tools']}
-    assert 'propose_task' in offered
+    assert not any(name.startswith('propose_') for name in offered)
+    assert 'ask_user' not in offered
     assert 'web_search' in offered
+
+
+def test_the_delegate_knows_what_day_it_is(monkeypatch):
+    """It never did. A task like "what's on this weekend" reached a model with
+    no idea when now was, so any date it produced was invented."""
+    from datetime import datetime
+
+    calls = _script(monkeypatch, [_msg(content='Nothing to do.')])
+    agent.run('hello')
+
+    system = calls[0]['messages'][0]['content']
+    assert datetime.now().strftime('%d %B %Y') in system
 
 
 def test_every_offered_tool_can_actually_be_dispatched():
@@ -140,11 +156,11 @@ def test_the_checkpoint_is_passed_through_to_the_shared_loop(monkeypatch):
     """That hook is where "yield to the user" lives; a delegate that skipped it
     would compete with the very chat message it is answering."""
     _script(monkeypatch, [
-        _msg(tool_calls=[_call('propose_task', json.dumps({'title': 'x'}))]),
+        _msg(tool_calls=[_call('web_search', json.dumps({'query': 'x'}))]),
         _msg(content='ok'),
     ])
     hits = []
-    agent.run('add x', checkpoint=lambda: hits.append(1))
+    agent.run('look up x', checkpoint=lambda: hits.append(1))
     assert len(hits) >= 2, 'expected a checkpoint before each model and tool call'
 
 

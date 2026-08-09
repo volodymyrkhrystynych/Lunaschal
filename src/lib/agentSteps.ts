@@ -92,6 +92,12 @@ export function stepLabel(step: AgentStep): string {
       return `Searched the wiki for "${target}"`;
     case 'wiki_read':
       return `Read wiki note: ${target}`;
+    // Not a proposal — ask_user stages nothing, which is the whole point of
+    // it, so it must not read as though a card is waiting somewhere.
+    case 'ask_user':
+      return target
+        ? `Asked for clarification about ${target}`
+        : 'Asked for clarification';
     default: {
       const kind = step.tool ? PROPOSAL_LABELS[step.tool] : undefined;
       if (kind) {

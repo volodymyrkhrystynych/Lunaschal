@@ -147,7 +147,7 @@ describe('delegate proposals are durable confirm cards', () => {
     renderChat();
 
     expect(await screen.findByText('Save as calendar event?')).toBeTruthy();
-    expect(screen.getByText('Dentist appointment')).toBeTruthy();
+    expect(screen.getByDisplayValue('Dentist appointment')).toBeTruthy();
   });
 
   it('accepts a proposal by resolving it on the server, not by saving locally', async () => {
@@ -179,7 +179,8 @@ describe('delegate proposals are durable confirm cards', () => {
       expect(api.chat.resolveProposal).toHaveBeenCalledWith(
         'm-assistant',
         'p1',
-        'accept'
+        'accept',
+        { title: 'call the dentist' }
       )
     );
   });
@@ -207,7 +208,8 @@ describe('delegate proposals are durable confirm cards', () => {
       expect(api.chat.resolveProposal).toHaveBeenCalledWith(
         'm-assistant',
         'p1',
-        'dismiss'
+        'dismiss',
+        undefined
       )
     );
   });

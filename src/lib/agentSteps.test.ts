@@ -108,6 +108,24 @@ describe('stepLabel', () => {
     );
   });
 
+  it('reports a clarifying question without implying a card is waiting', () => {
+    // ask_user stages nothing — that is the whole point of it — so it must not
+    // read like the propose_ tools it sits alongside.
+    const label = stepLabel({
+      tool: 'ask_user',
+      arg: 'the flights to-do',
+      ok: true,
+    });
+    expect(label).toBe('Asked for clarification about the flights to-do');
+    expect(label).not.toMatch(/staged/i);
+  });
+
+  it('labels a clarifying question with no subject', () => {
+    expect(stepLabel({ tool: 'ask_user', ok: true })).toBe(
+      'Asked for clarification'
+    );
+  });
+
   it('falls back to a generic label for an unknown tool', () => {
     expect(stepLabel({ tool: 'mystery_tool' })).toBe('Ran mystery_tool');
   });

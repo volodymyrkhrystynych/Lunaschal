@@ -1,29 +1,35 @@
-"""The chat delegate's toolbox.
+"""The main chat model's toolbox: stage something, or ask about it.
 
-Two kinds of tool live here, and the split is the whole design:
-
-**Read-only tools run.** `web_search` / `web_fetch` are executed for real,
-straight through backend/research/web.py — the same SSRF-guarded implementation
-the Ideas agent uses, not a second copy of it. The delegate retries a failed
-fetch on its own budget, which is the thing a one-shot proposal could never do.
-
-**Writing tools only ever propose.** `propose_task`, `propose_calendar_event`,
+**These tools only ever propose.** `propose_task`, `propose_calendar_event`,
 `propose_calorie_log`, `propose_note_to_self` and `propose_flashcards` write
-nothing. They hand back a staged payload that the chat UI renders as the same
-confirm card it always has, and the row is inserted by the existing
-`/api/chat/save-*` routes when the user clicks. So the delegate replaces the
-*classifier* — which guessed an intent after the reply and swallowed its own
-failures — without also quietly taking the confirm click away.
+nothing. They hand back a staged payload the chat UI renders as a confirm card,
+and the row is inserted by `resolve_proposal` in backend/routes/chat.py when the
+user clicks. So this replaces the *classifier* — which guessed an intent after
+the reply and swallowed its own failures — without also quietly taking the
+confirm click away.
 
-A proposal is carried on the tool's own step event under `proposal`, so the loop
-in backend/research/agent.py needs to know nothing about it: it collects events
-already, and the caller filters. Every `run_tool` here returns
-`(text for the model, event for the UI)` and never raises, matching web.py's
-contract — a tool that raised would abandon a turn that is otherwise fine.
+**They run in the main chat, not in the delegate.** They used to live in the
+delegate's loop, which is handed one `task` string and cannot see the
+conversation — so "by Friday" and "it's urgent" were routinely lost in the
+paraphrase and the row came out bare. These are cheap schemas returning one
+short string, so the main chat can afford them, and it has the whole
+conversation plus `format_now_context()` to resolve "Friday" against. The
+delegate keeps the tools whose *output* is enormous (backend/delegate/agent.py).
+
+**`ask_user` is the alternative to guessing.** Every silent default here was a
+small lie — a calendar event with no date used to be stamped with today's. When
+a field was clearly implied but named too loosely to resolve, the model asks
+instead. It stages nothing, so it can never produce a card built on a guess.
+
+A proposal is carried on the tool's own step event under `proposal`, so the
+caller just filters events; nothing else needs to know. Every `run_tool` here
+returns `(text for the model, event for the UI)` and never raises, matching
+web.py's contract — a tool that raised would abandon a turn that is otherwise
+fine.
 """
-from datetime import date
-
-from backend.todo_recurrence import VALID_LISTS
+from backend.todo_recurrence import (
+    VALID_LISTS, VALID_UNITS, parse_due_date, parse_priority, parse_repeat,
+)
 
 # Bounds mirrored from the routes that will eventually do the insert
 # (backend/routes/chat.py's save_calories), so a bad number is rejected here —
@@ -39,7 +45,10 @@ TOOLS = [
             'name': 'propose_task',
             'description': (
                 'Stage a to-do for the user to confirm. Use when they ask to add '
-                'a task, or to be reminded to do something later.'
+                'a task, or to be reminded to do something later. Fill in every '
+                'field the user actually gave — a to-do staged without the '
+                'deadline or the urgency they just told you is one they have to '
+                'go and fix by hand.'
             ),
             'parameters': {
                 'type': 'object',
@@ -53,6 +62,42 @@ TOOLS = [
                         'enum': sorted(VALID_LISTS),
                         'description': 'Which list it belongs on. Defaults to todo.',
                     },
+                    'due': {
+                        'type': 'string',
+                        'description': (
+                            'When it is due, as YYYY-MM-DD. Resolve relative '
+                            'wording ("Friday", "in two weeks") against the '
+                            'current date yourself. Omit if the user gave no '
+                            'deadline; if they implied one too vaguely to '
+                            'resolve ("soon", "before the trip"), call ask_user '
+                            'instead of guessing.'
+                        ),
+                    },
+                    'priority': {
+                        'type': 'integer',
+                        'minimum': 1,
+                        'maximum': 5,
+                        'description': (
+                            'How important: 1 very unimportant, 2 unimportant, '
+                            '3 normal, 4 important, 5 very important. Defaults '
+                            'to 3. Only move off 3 when the user said something '
+                            'about urgency or importance.'
+                        ),
+                    },
+                    'notes': {
+                        'type': 'string',
+                        'description': 'Extra detail that does not belong in the title.',
+                    },
+                    'repeatInterval': {
+                        'type': 'integer',
+                        'minimum': 1,
+                        'description': 'For a repeating to-do: every N units. Needs repeatUnit.',
+                    },
+                    'repeatUnit': {
+                        'type': 'string',
+                        'enum': list(VALID_UNITS),
+                        'description': 'Unit for repeatInterval. Needs repeatInterval.',
+                    },
                 },
                 'required': ['title'],
             },
@@ -64,14 +109,31 @@ TOOLS = [
             'name': 'propose_calendar_event',
             'description': (
                 'Stage a calendar event for the user to confirm. Use for things '
-                'that happened or are going to happen at a particular time.'
+                'that happened or are going to happen at a particular time. An '
+                'event needs a real date: if you cannot work one out from what '
+                'the user said, call ask_user rather than staging one.'
             ),
             'parameters': {
                 'type': 'object',
                 'properties': {
                     'title': {'type': 'string'},
-                    'date': {'type': 'string', 'description': 'YYYY-MM-DD.'},
+                    'date': {
+                        'type': 'string',
+                        'description': (
+                            'YYYY-MM-DD. Resolve relative wording ("next '
+                            'Tuesday") against the current date yourself.'
+                        ),
+                    },
                     'time': {'type': 'string', 'description': 'HH:MM, 24-hour. Omit if untimed.'},
+                    'endTime': {'type': 'string', 'description': 'HH:MM, 24-hour. Omit if open-ended.'},
+                    'allDay': {
+                        'type': 'boolean',
+                        'description': (
+                            'True only when the user meant the whole day. This is '
+                            'not the same as simply not knowing the time — leave '
+                            'it false and omit time for that.'
+                        ),
+                    },
                     'description': {'type': 'string'},
                     'tags': {'type': 'array', 'items': {'type': 'string'}},
                 },
@@ -135,6 +197,43 @@ TOOLS = [
             },
         },
     },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'ask_user',
+            'description': (
+                'Ask the user one question instead of staging something built on '
+                'a guess. Nothing is saved and no card appears.\n'
+                'Use it when they clearly meant a detail but named it too loosely '
+                'to act on: a deadline given as "soon" or "before the trip", an '
+                'urgency given as "when you get a chance", an event with no date '
+                'you can work out, a meal with no calorie count.\n'
+                'Do NOT use it when nothing was implied. "Add buy milk" is a '
+                'complete request — stage it undated at normal priority and say '
+                'nothing. Never ask which list something goes on, never ask for '
+                'tags, and never ask the user to confirm what they just plainly '
+                'said. One question at most per reply.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'question': {
+                        'type': 'string',
+                        'description': (
+                            'The question, in one sentence, naming the specific '
+                            'detail you are missing — "is that this Friday or '
+                            'next?", not "can you give me more detail?".'
+                        ),
+                    },
+                    'about': {
+                        'type': 'string',
+                        'description': 'What you were about to stage, in a few words.',
+                    },
+                },
+                'required': ['question'],
+            },
+        },
+    },
 ]
 
 
@@ -172,24 +271,67 @@ def _propose_task(args: dict) -> tuple[str, dict]:
     todo_list = _text(args.get('list')) or 'todo'
     if todo_list not in VALID_LISTS:
         todo_list = 'todo'
-    return _staged('task', 'propose_task', {'title': title, 'list': todo_list},
-                   f'to-do "{title}"')
+
+    # Validated here, against the same rules /api/tasks/todos enforces, so a bad
+    # value comes back as text the model can correct on its next turn rather
+    # than as a card that fails at the click. `due` is staged as the YYYY-MM-DD
+    # the model wrote and converted to a timestamp only at accept time — that
+    # keeps the proposal payload readable, editable in the card, and one
+    # representation the whole way through the confirm step.
+    due = _text(args.get('due')) or None
+    if due is not None:
+        _, err = parse_due_date(due)
+        if err:
+            return _refused('propose_task', err)
+    priority, err = parse_priority(args.get('priority'))
+    if err:
+        return _refused('propose_task', err)
+    repeat, err = parse_repeat(args.get('repeatInterval'), args.get('repeatUnit'))
+    if err:
+        return _refused('propose_task', err)
+
+    data = {
+        'title': title,
+        'list': todo_list,
+        'due': due,
+        'priority': priority,
+        'notes': _text(args.get('notes')) or None,
+        'repeatInterval': repeat[0],
+        'repeatUnit': repeat[1],
+    }
+    detail = f' (due {due})' if due else ''
+    return _staged('task', 'propose_task', data, f'to-do "{title}"{detail}')
 
 
 def _propose_calendar_event(args: dict) -> tuple[str, dict]:
     title = _text(args.get('title'))[:MAX_TITLE_CHARS]
     if not title:
         return _refused('propose_calendar_event', 'an event needs a title')
-    # An event with no date can't be saved, and the model omitting one is far
-    # more common than it inventing a wrong one — so today is the honest
-    # default, and the card shows the date for the user to correct.
-    when = _text(args.get('date')) or date.today().isoformat()
+    # No date used to mean today. That default was a guess wearing a fact's
+    # clothes — the card showed a real-looking date the user had never given,
+    # and confirming it was one click. Now the model is told to go and ask.
+    when = _text(args.get('date'))
+    if not when:
+        return _refused(
+            'propose_calendar_event',
+            'an event needs a date — work one out from what the user said, or '
+            'use ask_user to find out when they meant',
+        )
+    _, err = parse_due_date(when)
+    if err:
+        return _refused('propose_calendar_event', 'date must be a real date as YYYY-MM-DD')
+
     tags = args.get('tags')
     tags = [_text(t) for t in tags if _text(t)] if isinstance(tags, list) else []
+    all_day = args.get('allDay') is True
     data = {
         'title': title,
         'date': when,
-        'time': _text(args.get('time')) or None,
+        # An all-day event is explicitly the whole day, not merely untimed, so
+        # setting the flag clears any clock the model also volunteered.
+        'time': None if all_day else (_text(args.get('time')) or None),
+        'endTime': None if all_day else (_text(args.get('endTime')) or None),
+        'allDay': all_day,
         'description': _text(args.get('description')),
         'tags': tags,
     }
@@ -232,12 +374,38 @@ def _propose_flashcards(args: dict) -> tuple[str, dict]:
                    f'flashcards on "{topic}"')
 
 
+def _ask_user(args: dict) -> tuple[str, dict]:
+    """The one tool here that stages nothing.
+
+    Its event carries no `proposal` key, so it can never reach the confirm-card
+    path — which is the point: the whole reason to ask is that there is no
+    honest payload to stage yet. The instruction back to the model is where the
+    ask/stage exclusivity is enforced, per item rather than per turn: staging an
+    unrelated to-do alongside a question is normal ("add buy milk, and remind me
+    about the Dave thing"), so the proposals from this turn are deliberately not
+    thrown away.
+    """
+    question = _text(args.get('question'))
+    if not question:
+        return _refused('ask_user', 'there is no question here — say what detail you need')
+    about = _text(args.get('about'))
+    return (
+        f'Nothing has been staged. Put this question to the user in your reply, '
+        f'in your own words: {question}\n'
+        'Do not stage a guess at the thing you are asking about, and do not '
+        'apologise for asking. Anything else you staged this turn is unaffected '
+        'and still needs mentioning.',
+        {'tool': 'ask_user', 'ok': True, 'arg': about or question},
+    )
+
+
 _HANDLERS = {
     'propose_task': _propose_task,
     'propose_calendar_event': _propose_calendar_event,
     'propose_calorie_log': _propose_calorie_log,
     'propose_note_to_self': _propose_note_to_self,
     'propose_flashcards': _propose_flashcards,
+    'ask_user': _ask_user,
 }
 
 
