@@ -110,6 +110,9 @@ def init_db() -> None:
     # point adding it to a settings table that migration is still reshaping.
     _ensure_llama_vision_model(db)
     _ensure_llama_audio_model(db)
+    # After all four alias columns exist: it clears the ones naming presets that
+    # llama/presets.ini no longer defines.
+    _migrate_gemma_aliases_to_qwen36(db)
     _ensure_attachment_description_columns(db)
     _ensure_journal_attachment_location(db)
     _ensure_todo_completed_at(db)
@@ -680,10 +683,10 @@ def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
 
 def _ensure_llama_vision_model(db: sqlite3.Connection) -> None:
     """Router alias for image captioning (journal photo attachments). Left NULL,
-    which means captioning is off: the chat presets set `mmproj-auto = false`
-    and there is no VRAM headroom for the projector alongside the 26B, so
-    defaulting this to anything would just produce a button that always errors.
-    See backend/ai/images.py."""
+    which means captioning is off: the chat preset sets `mmproj-auto = false`
+    and takes text only, so images go to a separate model that is a separate
+    download. Defaulting this to anything would just produce a button that
+    always errors. See backend/ai/images.py."""
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'llama_vision_model' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN llama_vision_model TEXT')
@@ -692,14 +695,67 @@ def _ensure_llama_vision_model(db: sqlite3.Connection) -> None:
 
 def _ensure_llama_audio_model(db: sqlite3.Connection) -> None:
     """Router alias for non-speech audio description (journal audio/video
-    attachments). Left NULL, same reasoning as llama_vision_model: it names a
-    completely different model (audio input is an E2B/E4B/12B capability, not
-    the 26B A4B chat model), off by default until that preset is downloaded and
-    the alias configured. See backend/ai/audio_description.py."""
+    attachments). Left NULL, same reasoning as llama_vision_model, and in
+    practice it holds the same value: one any-to-any model covers images and
+    audio both, so Settings writes the two columns together. They stay separate
+    columns because they gate two independent features. Off by default until
+    that preset is downloaded. See backend/ai/audio_description.py."""
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'llama_audio_model' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN llama_audio_model TEXT')
         db.commit()
+
+
+def _migrate_gemma_aliases_to_qwen36(db: sqlite3.Connection) -> None:
+    """Clear the retired `gemma4*` router aliases, exactly once.
+
+    llama/presets.ini no longer defines `gemma4`, `gemma4-medium`, `gemma4-max`
+    or `gemma4-e4b-audio` — the chat model is Qwen3.6 35B A3B and everything
+    non-text is one CPU-resident `gemma4-12b-omni` preset. Nothing anywhere
+    validates a stored alias against the router, so a settings row still naming
+    a deleted section would 404 every call: the same failure `_ensure_llama_
+    server_settings` refused to carry an Ollama tag into, for the same reason.
+
+    So all four alias columns are nulled, and NULL is the right resting state
+    for each:
+
+    - `llama_model` — NULL means "whatever `DEFAULT_MODEL` says", which is now
+      `qwen36`. Writing the new alias in instead would pin it, and a user who
+      never chose a model should not end up with an explicit choice.
+    - `briefing_model` — NULL means "same as the chat model".
+    - `llama_vision_model` / `llama_audio_model` — NULL means the feature is
+      off, which is correct: gemma-4-12b-it is a separate ~7.4 GB download that
+      almost certainly is not on disk when this runs, and both
+      `_ensure_llama_*_model` already argue that pointing these at an absent
+      model "would just produce a button that always errors". One tick in
+      Settings → llama.cpp turns them both back on.
+
+    `llama_vision_model` also gets a *fix* out of this rather than only a
+    reset: the value it held was `gemma4-vision`, a preset that never existed
+    in presets.ini at all, so photo captioning has been failing at the router
+    since the column was added.
+
+    Latched on a marker column the way `_migrate_workout_intensity_to_stars`
+    is — its existence is the marker, so this cannot undo a deliberate later
+    choice, and a settings table with no row still latches.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'qwen36_aliases_migrated' in cols:
+        return
+    db.execute(
+        'ALTER TABLE settings ADD COLUMN qwen36_aliases_migrated INTEGER NOT NULL DEFAULT 0'
+    )
+    # Listed exactly, not matched as a `gemma4%` prefix: `gemma4-12b-omni` is
+    # also a gemma4 alias and is the one that survives the swap, so a prefix
+    # would turn the multimodal toggle off the first time it was ticked.
+    for col in ('llama_model', 'briefing_model', 'llama_vision_model', 'llama_audio_model'):
+        if col in cols:
+            db.execute(
+                f'UPDATE settings SET {col} = NULL WHERE {col} IN'
+                " ('gemma4', 'gemma4-medium', 'gemma4-max', 'gemma4-e4b-audio', 'gemma4-vision')"
+            )
+    db.execute('UPDATE settings SET qwen36_aliases_migrated=1')
+    db.commit()
 
 
 def _ensure_attachment_description_columns(db: sqlite3.Connection) -> None:

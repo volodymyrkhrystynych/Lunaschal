@@ -7,10 +7,11 @@ the asyncio machinery buys nothing and is dropped entirely.
 Two shape decisions worth knowing:
 
 **Tool turns are not streamed.** llama-server assembles OpenAI-shaped
-`tool_calls` by running its peg-gemma4 grammar over Gemma 4's native
-`<|tool_call>call:NAME{...}` text. Reassembling partial tool-call deltas out of
-that parser across chunks is the kind of thing that works in testing and
-silently drops an argument in production. Tool turns stay blocking and capped.
+`tool_calls` by running a grammar over the model's own native call notation,
+choosing the parser from its chat template. Reassembling partial tool-call
+deltas out of that parser across chunks is the kind of thing that works in
+testing and silently drops an argument in production. Tool turns stay blocking
+and capped.
 
 **Gathering and answering are separate turns.** This loop only collects
 evidence; the caller produces the answer in its own turn, which is what lets
@@ -29,10 +30,15 @@ from backend.research import web, wiki
 
 logger = logging.getLogger(__name__)
 
-# Gemma 4 calls one tool per turn far more often than it batches, and the first
-# few go on orienting — a wiki_list and two wiki_reads before the web is touched
-# at all. At 6 the budget ran out mid-search, which is why the loop never got as
-# far as reading a page: a live run that ends in a fetch needs 8.
+# Measured against Gemma 4, which called one tool per turn far more often than
+# it batched, and spent the first few orienting — a wiki_list and two wiki_reads
+# before the web was touched at all. At 6 the budget ran out mid-search, which is
+# why the loop never got as far as reading a page: a live run that ends in a
+# fetch needed 8. Kept at 12 across the swap to Qwen3.6 because it is a ceiling,
+# not a target — a model that batches its calls simply finishes sooner. Worth
+# re-observing on a live run: if Qwen consistently ends well under it, the
+# headroom is free, and if it ever hits 12 the number was tuned for the wrong
+# model.
 MAX_TOOL_TURNS = 12
 # Tool-selection turns are short by construction — a few tokens of reasoning
 # and a call. Capping them keeps the worst-case overlap with an interactive

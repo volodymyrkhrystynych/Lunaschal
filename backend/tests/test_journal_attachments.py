@@ -196,7 +196,7 @@ def test_upload_does_not_auto_describe_when_unconfigured(client, entry_id):
 
 def test_upload_auto_fires_audio_description_when_configured(client, entry_id, monkeypatch):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     jobs = _run_pending_bg(monkeypatch)
     monkeypatch.setattr(
@@ -216,7 +216,7 @@ def test_upload_auto_fires_audio_description_when_configured(client, entry_id, m
 
 def test_image_upload_never_auto_describes(client, entry_id, monkeypatch):
     monkeypatch.setattr(
-        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-e4b-audio'}
+        audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     jobs = _run_pending_bg(monkeypatch)
     a = _upload(client, entry_id, filename='sink.jpg', mime='image/jpeg').get_json()

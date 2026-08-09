@@ -1,26 +1,26 @@
 """Image captioning for journal photo attachments.
 
 This is the project's only vision call, and it is deliberately gated behind its
-own model alias (`llama_vision_model`) rather than reusing `llama_model`:
+own model alias (`llama_vision_model`) rather than reusing `llama_model`: the
+chat preset takes text only and sets `mmproj-auto = false`, because the card has
+no room for a projector next to it (docs/learnings/moe-expert-placement.md).
 
-Both presets in `llama/presets.ini` set `mmproj-auto = false`, which skips
-Gemma 4's ~1.1 GB vision tower. That is not an oversight — the 26B preset already
-sits at 5604 MiB on a 7.8 GB card with ~870 MiB of headroom, so loading the
-projector would not fit alongside it (docs/learnings/moe-expert-placement.md).
-Captioning therefore stays off until a vision-capable alias is configured, and
-`VisionUnavailable` is what the UI shows instead of a mysteriously dead button.
+Images go to `[gemma4-12b-omni]` instead — an any-to-any Gemma 4 12B pinned to
+the CPU, which is also what serves `backend/ai/audio_description.py`. One model,
+one ~175 MB projector, both non-text inputs, and no contention with the chat
+model for the GPU. Settings writes the one alias into both `llama_vision_model`
+and `llama_audio_model`.
 
-To enable it, add a preset with the projector attached, e.g.
+Captioning stays off until that alias is configured — those weights are a
+separate ~7.4 GB download — and `VisionUnavailable` is what the UI shows instead
+of a mysteriously dead button.
 
-    [gemma4-vision]
-    model       = /home/volodya/.cache/llama.cpp/gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf
-    mmproj      = /home/volodya/.cache/llama.cpp/mmproj-gemma-4-26B-A4B-it-f16.gguf
-    ctx-size    = 16384
-    n-gpu-layers = 999
-    n-cpu-moe   = 30
-
-then set it in Settings → llama.cpp. Note that the router loading it will evict
-the chat model, so the first caption after a chat costs a model load.
+Historical note worth keeping: this used to tell you to create a `[gemma4-vision]`
+preset, and the Settings checkbox wrote that alias, but no such section ever
+existed in `llama/presets.ini`. Captioning had never once worked; it 404'd at the
+router, and the error surfaced as attachment text rather than as anything
+identifying a missing preset. A gate that names a model nobody defined fails
+exactly like a model that is merely slow to load.
 """
 import base64
 import logging
@@ -109,6 +109,16 @@ def caption_image(path: Path, hint: str | None = None) -> str:
                 ]},
             ],
             max_tokens=_MAX_TOKENS,
+            # Thinking off, explicitly. Gemma 4's chat template defaults it *on*,
+            # and a caption is a 300-token budget: the reasoning consumes the
+            # whole allowance and `content` comes back empty, which surfaces as
+            # "The model returned an empty description" with nothing to suggest
+            # the model saw the image perfectly well. Measured, not assumed —
+            # the same request with thinking on returns '' and with it off
+            # returns the caption. This call builds its own request rather than
+            # going through backend/ai/llm.py, which is why it has to say so
+            # itself; see `_request_kwargs` there for the same reasoning.
+            extra_body={'chat_template_kwargs': {'enable_thinking': False}},
             timeout=600,
         )
         text = (resp.choices[0].message.content or '').strip()

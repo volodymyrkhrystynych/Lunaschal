@@ -12,8 +12,10 @@ force this module onto Ollama's native endpoint — and both are now *better*:
   construction rather than parsed out of prose. And unlike Ollama's grammar mode,
   it composes with thinking: the grammar applies to the answer channel only.
 
-Thinking is a boolean, not a level. Gemma 4 has one thinking channel, toggled by
-a chat-template kwarg — there is no low/medium/high/max to map onto.
+Thinking is a boolean, not a level: the chat model has one thinking channel,
+toggled by a chat-template kwarg — there is no low/medium/high/max to map onto.
+That was true of Gemma 4 and stays true of Qwen3.6, which is why the swap needed
+no change here.
 """
 import json
 import re
@@ -36,8 +38,8 @@ JSON_MAX_TOKENS = 4096
 
 # Output length ceiling (`max_tokens`) for the default conversational model. A
 # hard stop, not a reservation, so it costs nothing until a generation runs long —
-# but it has to stay reachable within `_TIMEOUT`. Gemma 4 26B A4B with its experts
-# served from system RAM measures 25 tok/s, so a ceiling in the tens of thousands
+# but it has to stay reachable within `_TIMEOUT`. The chat model serves its experts
+# from system RAM and measures tens of tok/s, so a ceiling in the tens of thousands
 # of tokens could not finish, turning a runaway generation into a lost reply
 # rather than a capped one.
 LLM_MAX_TOKENS = 4096
@@ -104,7 +106,10 @@ def _request_kwargs(*, thinking: bool, max_tokens: int | None,
 
     `chat_template_kwargs` rides in `extra_body` because it is a llama.cpp
     extension the OpenAI SDK doesn't model. Thinking is disabled explicitly
-    rather than by omission — Gemma 4's template defaults it *on*.
+    rather than by omission, because the chat template defaults it *on* — that
+    was true of Gemma 4 and is true of Qwen3.6. Being explicit is also what
+    makes the setting safe across a model swap: a template that doesn't know
+    the kwarg ignores it, so the worst case is the default, never a crash.
     """
     kwargs: dict = {
         'extra_body': {'chat_template_kwargs': {'enable_thinking': thinking}},
@@ -278,9 +283,11 @@ def chat_tool_turn(messages: list[dict], tools: list[dict], max_tokens: int | No
 def chat_with_tools(messages: list[dict], tools: list[dict], max_tokens: int | None = None):
     """One tool-calling turn; returns the assistant message.
 
-    llama-server parses Gemma 4's native `<|tool_call>call:NAME{...}` notation into
-    OpenAI-shaped `tool_calls` via its peg-gemma4 grammar, which requires the
-    server to run with `--jinja` (see llama/start-llama.sh).
+    llama-server parses the model's native tool-call notation into OpenAI-shaped
+    `tool_calls`. It picks the parser by reading the model's own chat template,
+    so this works across model families without the app knowing which notation
+    is in play — but only when the server runs with `--jinja` (`jinja = true` in
+    llama/presets.ini, set globally for exactly this reason).
 
     `max_tokens` defaults to unbounded, as it always has — verification wants a
     whole case. Background loops should pass a small ceiling: nothing preempts a

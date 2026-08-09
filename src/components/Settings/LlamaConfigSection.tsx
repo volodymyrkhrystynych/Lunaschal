@@ -3,13 +3,15 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 
 const DEFAULT_URL = 'http://localhost:8080';
-const DEFAULT_MODEL = 'gemma4';
-// Fixed router aliases for the vision/audio toggles below — there is nothing
-// to choose between (each names exactly one preset), so on/off is the whole
-// interface. Must match backend/ai/images.py / backend/ai/audio_description.py
-// and the section names in llama/presets.ini.
-const VISION_MODEL_ALIAS = 'gemma4-vision';
-const AUDIO_MODEL_ALIAS = 'gemma4-e4b-audio';
+const DEFAULT_MODEL = 'qwen36';
+// One fixed router alias behind the multimodal toggle below. It is *one*
+// because the model is any-to-any: images and audio go through the same
+// weights and the same projector, so there is nothing to choose between and
+// on/off is the whole interface. It writes to both llamaVisionModel and
+// llamaAudioModel — two backend columns because they gate two independent
+// features, one setting because they name one download. Must match the section
+// name in llama/presets.ini.
+const OMNI_MODEL_ALIAS = 'gemma4-12b-omni';
 
 export function LlamaConfigSection() {
   const [llamaUrl, setLlamaUrl] = useState(DEFAULT_URL);
@@ -118,7 +120,7 @@ export function LlamaConfigSection() {
                     llama/presets.ini
                   </code>
                   , not a file name. Switching to a model that isn't loaded
-                  costs a load (tens of seconds for the 26B).
+                  costs a load (tens of seconds for the 35B).
                   {models && models.length === 0 && (
                     <>
                       {' '}
@@ -145,51 +147,30 @@ export function LlamaConfigSection() {
                 <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
                   <input
                     type="checkbox"
-                    checked={!!llamaVisionModel}
-                    onChange={e =>
-                      setLlamaVisionModel(
-                        e.target.checked ? VISION_MODEL_ALIAS : ''
-                      )
-                    }
+                    checked={!!llamaVisionModel || !!llamaAudioModel}
+                    onChange={e => {
+                      const alias = e.target.checked ? OMNI_MODEL_ALIAS : '';
+                      setLlamaVisionModel(alias);
+                      setLlamaAudioModel(alias);
+                    }}
                   />
-                  Photo captioning
+                  Multimodal input (audio + images)
                 </label>
                 <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                  Enables AI captions for journal photo attachments, via the{' '}
+                  Captions journal photo attachments, and describes non-speech
+                  audio in audio/video ones — the latter separate from speech
+                  transcription, which Parakeet/Whisper still handles. Both go
+                  through the{' '}
                   <code className="text-[var(--color-text)]">
-                    [gemma4-vision]
+                    [gemma4-12b-omni]
                   </code>{' '}
-                  preset with an{' '}
-                  <code className="text-[var(--color-text)]">mmproj</code>{' '}
-                  projector — both chat presets set{' '}
+                  preset: one any-to-any model, CPU-only, so it never competes
+                  with the chat model for the card. Needs a separate ~7.4 GB
+                  download — see the comments in{' '}
                   <code className="text-[var(--color-text)]">
-                    mmproj-auto = false
-                  </code>{' '}
-                  because the ~1.1 GB vision tower doesn't fit alongside the
-                  26B.
-                </p>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
-                  <input
-                    type="checkbox"
-                    checked={!!llamaAudioModel}
-                    onChange={e =>
-                      setLlamaAudioModel(
-                        e.target.checked ? AUDIO_MODEL_ALIAS : ''
-                      )
-                    }
-                  />
-                  Audio description
-                </label>
-                <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                  Describes non-speech audio in journal audio/video attachments
-                  — separate from speech transcription — via the{' '}
-                  <code className="text-[var(--color-text)]">
-                    [gemma4-e4b-audio]
-                  </code>{' '}
-                  preset, a smaller, audio-capable Gemma 4 variant; the 26B chat
-                  model has no audio input at all.
+                    llama/presets.ini
+                  </code>
+                  .
                 </p>
               </div>
               <button
