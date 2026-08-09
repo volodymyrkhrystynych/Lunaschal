@@ -1327,6 +1327,13 @@ export const api = {
     delete: (id: string) => del<{ success: boolean }>(`/api/journal/${id}`),
     polish: (id: string) =>
       post<{ success: boolean; content: string }>(`/api/journal/${id}/polish`),
+    // Other entries from the same local day, for the voice-only merge picker.
+    mergeCandidates: (id: string) =>
+      get<JournalEntry[]>(`/api/journal/${id}/merge-candidates`),
+    // Folds a voice-only entry's single recording into `targetId` and deletes
+    // the now-empty source entry.
+    merge: (id: string, targetId: string) =>
+      post<JournalEntry>(`/api/journal/${id}/merge`, { targetId }),
 
     attachments: {
       list: (entryId: string) =>

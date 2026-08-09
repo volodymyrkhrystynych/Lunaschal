@@ -184,6 +184,25 @@ export function JournalAttachments({
   };
 
   const shown = error ?? uploadError;
+  // Images and audio/video are laid out differently: a photo is small and
+  // several fit side by side, while a recording's controls (rename,
+  // transcribe, transcript text) need the full width to stay readable. Rather
+  // than one full-width card per attachment regardless of kind — which used
+  // to leave a small thumbnail with most of the row empty beside it — images
+  // get their own wrapping strip and everything else keeps the vertical list.
+  const images = list.filter(a => a.kind === 'image');
+  const others = list.filter(a => a.kind !== 'image');
+  const attachmentRow = (a: JournalAttachment) => (
+    <AttachmentRow
+      key={a.id}
+      attachment={a}
+      editable={editable}
+      onRename={name => renameAttachment.mutate({ id: a.id, name })}
+      onDelete={() => deleteAttachment.mutate(a.id)}
+      onTranscribe={() => transcribeAttachment.mutate(a.id)}
+      onDescribeAudio={() => describeAudioAttachment.mutate(a.id)}
+    />
+  );
   const body =
     list.length === 0 && !editable ? null : (
       <div className="mt-3">
@@ -200,17 +219,17 @@ export function JournalAttachments({
             </div>
           )}
 
-          {list.map(a => (
-            <AttachmentRow
-              key={a.id}
-              attachment={a}
-              editable={editable}
-              onRename={name => renameAttachment.mutate({ id: a.id, name })}
-              onDelete={() => deleteAttachment.mutate(a.id)}
-              onTranscribe={() => transcribeAttachment.mutate(a.id)}
-              onDescribeAudio={() => describeAudioAttachment.mutate(a.id)}
-            />
-          ))}
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {images.map(a => (
+                <div key={a.id} className="w-56 shrink-0">
+                  {attachmentRow(a)}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {others.map(attachmentRow)}
 
           {editable && (
             <div className="flex items-center gap-2 pt-1">

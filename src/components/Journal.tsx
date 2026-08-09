@@ -18,6 +18,7 @@ import {
   ACCEPT_IMAGE,
   defaultNameFor,
   filesFromTransfer,
+  isVoiceOnlyEntry,
   rejectedFilesMessage,
 } from '../lib/journalAttachments';
 import { BriefingTodos } from './BriefingTodos';
@@ -26,6 +27,7 @@ import { JournalAttachments } from './JournalAttachments';
 import { MessageMarkdown } from './MessageMarkdown';
 import type {
   DatedConversation,
+  JournalEntry,
   JournalPaper,
   FoodJournalItem,
   TaskEvent,
@@ -706,6 +708,12 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                       className="w-full bg-transparent text-[var(--color-text)] resize-none focus:outline-none border border-white/10 rounded p-2"
                     />
                   </JournalAttachments>
+                  {isVoiceOnlyEntry(entry) && (
+                    <MergeIntoPicker
+                      entry={entry}
+                      onMerged={() => setEditingId(null)}
+                    />
+                  )}
                   {editRecorder.error && (
                     <p className="mt-2 text-xs text-red-400">
                       {editRecorder.error}
@@ -840,6 +848,94 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Shown in edit mode for an entry that's nothing but a single recording
+// (isVoiceOnlyEntry): offers to fold that recording into another entry from
+// the same day instead of the recording living as its own bare entry. Only
+// entries from the same local day are candidates — the backend enforces this
+// too (backend/routes/journal.py's merge route), this just keeps the picker
+// from offering something the server would reject.
+function MergeIntoPicker({
+  entry,
+  onMerged,
+}: {
+  entry: JournalEntry;
+  onMerged: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [targetId, setTargetId] = useState('');
+
+  const {
+    data: candidates,
+    isLoading,
+    isError,
+    error: candidatesError,
+  } = useQuery({
+    queryKey: ['journal', 'mergeCandidates', entry.id],
+    queryFn: () => api.journal.mergeCandidates(entry.id),
+  });
+
+  const merge = useMutation({
+    mutationFn: (targetId: string) => api.journal.merge(entry.id, targetId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['journal'] });
+      onMerged();
+    },
+  });
+
+  if (isLoading) return null;
+
+  // Surfaced rather than swallowed: a request that 404s (e.g. a backend that
+  // hasn't picked up this route yet) used to look identical to "no other
+  // entries today" — silence either way — which made the feature look absent
+  // instead of broken.
+  if (isError) {
+    return (
+      <div className="mt-3 px-3 py-2 rounded border border-red-500/20 bg-red-500/10 text-xs text-red-400">
+        Couldn't check for other entries to merge into:{' '}
+        {(candidatesError as Error).message}
+      </div>
+    );
+  }
+
+  if (!candidates || candidates.length === 0) return null;
+
+  return (
+    <div className="mt-3 p-2 rounded border border-white/10 bg-white/5">
+      <div className="text-xs text-[var(--color-text-muted)] mb-1.5">
+        Just a recording — attach it to another entry from today instead?
+      </div>
+      <div className="flex items-center gap-2">
+        <select
+          value={targetId}
+          onChange={e => setTargetId(e.target.value)}
+          aria-label="Entry to merge into"
+          className="flex-1 min-w-0 bg-[var(--color-surface)] border border-white/10 rounded px-2 py-1 text-sm text-[var(--color-text)]"
+        >
+          <option value="">Choose an entry…</option>
+          {candidates.map(c => (
+            <option key={c.id} value={c.id}>
+              {(c.title || c.content || '(untitled)').slice(0, 60)}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => targetId && merge.mutate(targetId)}
+          disabled={!targetId || merge.isPending}
+          className="shrink-0 px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
+        >
+          {merge.isPending ? 'Merging…' : 'Merge'}
+        </button>
+      </div>
+      {merge.isError && (
+        <div className="mt-1.5 text-xs text-red-400">
+          {(merge.error as Error).message}
+        </div>
+      )}
     </div>
   );
 }

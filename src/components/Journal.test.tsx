@@ -47,6 +47,8 @@ vi.mock('../hooks/api', () => ({
       update: vi.fn(),
       delete: vi.fn(),
       polish: vi.fn(),
+      mergeCandidates: vi.fn().mockResolvedValue([]),
+      merge: vi.fn(),
       attachments: {
         list: vi.fn(),
         upload: vi.fn(),
@@ -79,7 +81,9 @@ class FakeEventSource {
 }
 
 function renderJournal() {
-  const queryClient = new QueryClient();
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="journal" onViewChange={() => {}}>
@@ -396,5 +400,121 @@ describe('Journal new-entry attachments', () => {
     expect(
       await screen.findByText(/The entry was saved, but its attachment failed/)
     ).toBeTruthy();
+  });
+});
+
+// A voice-only entry (nothing but a single recording) offers to fold itself
+// into another entry from the same day — see isVoiceOnlyEntry and
+// backend/routes/journal.py's merge route.
+describe('Journal merge picker', () => {
+  const listMock = api.journal.list as ReturnType<typeof vi.fn>;
+  const mergeCandidatesMock = api.journal.mergeCandidates as ReturnType<
+    typeof vi.fn
+  >;
+  const mergeMock = api.journal.merge as ReturnType<typeof vi.fn>;
+
+  const voiceOnlyEntry: JournalEntry = {
+    id: 'e-voice',
+    content: '',
+    rawContent: null,
+    title: null,
+    tags: null,
+    curatedTags: [],
+    ficRefs: [],
+    attachments: [
+      {
+        id: 'a1',
+        entryId: 'e-voice',
+        kind: 'audio',
+        name: 'Recording',
+        url: '/api/journal/attachments/a1/file',
+        mime: 'audio/mp4',
+        size: 1024,
+        position: 0,
+        transcript: null,
+        transcriptStatus: 'idle',
+        transcriptError: null,
+        description: null,
+        descriptionStatus: 'idle',
+        descriptionError: null,
+        latitude: null,
+        longitude: null,
+        createdAt: '2026-07-02T10:00:00Z',
+      },
+    ],
+    createdAt: '2026-07-02T10:00:00Z',
+    updatedAt: '',
+  };
+
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    Element.prototype.scrollIntoView = vi.fn();
+    listMock.mockResolvedValue([voiceOnlyEntry]);
+    mergeCandidatesMock.mockReset();
+    mergeMock.mockReset();
+  });
+
+  afterEach(() => listMock.mockResolvedValue(ENTRIES));
+
+  async function openVoiceOnlyEntryForEdit() {
+    renderJournal();
+    fireEvent.click(await screen.findByText('Edit'));
+  }
+
+  it('offers to merge when another entry exists from the same day', async () => {
+    mergeCandidatesMock.mockResolvedValue([
+      { ...ENTRIES[0], id: 'e-same-day', content: 'Notes from lunch.' },
+    ]);
+    await openVoiceOnlyEntryForEdit();
+
+    expect(
+      await screen.findByText(
+        'Just a recording — attach it to another entry from today instead?'
+      )
+    ).toBeTruthy();
+    expect(mergeCandidatesMock).toHaveBeenCalledWith('e-voice');
+  });
+
+  it('stays silent when there are no same-day candidates', async () => {
+    mergeCandidatesMock.mockResolvedValue([]);
+    await openVoiceOnlyEntryForEdit();
+
+    await waitFor(() => expect(mergeCandidatesMock).toHaveBeenCalled());
+    expect(
+      screen.queryByText(
+        'Just a recording — attach it to another entry from today instead?'
+      )
+    ).toBeNull();
+  });
+
+  it('shows an error rather than silently disappearing when the check fails', async () => {
+    // E.g. a backend process that hasn't picked up the merge route yet — that
+    // used to look identical to "no candidates today" (both rendered nothing).
+    mergeCandidatesMock.mockRejectedValue(new Error('HTTP 404'));
+    await openVoiceOnlyEntryForEdit();
+
+    expect(
+      await screen.findByText(/Couldn't check for other entries to merge into/)
+    ).toBeTruthy();
+  });
+
+  it('merges into the chosen entry', async () => {
+    mergeCandidatesMock.mockResolvedValue([
+      { ...ENTRIES[0], id: 'e-same-day', content: 'Notes from lunch.' },
+    ]);
+    mergeMock.mockResolvedValue({ ...ENTRIES[0], id: 'e-same-day' });
+    await openVoiceOnlyEntryForEdit();
+    await screen.findByText(
+      'Just a recording — attach it to another entry from today instead?'
+    );
+
+    fireEvent.change(screen.getByLabelText('Entry to merge into'), {
+      target: { value: 'e-same-day' },
+    });
+    fireEvent.click(screen.getByText('Merge'));
+
+    await waitFor(() =>
+      expect(mergeMock).toHaveBeenCalledWith('e-voice', 'e-same-day')
+    );
   });
 });

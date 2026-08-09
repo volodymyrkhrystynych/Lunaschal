@@ -2,6 +2,7 @@ import json
 import queue
 import threading
 import time
+from datetime import datetime
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
@@ -256,6 +257,103 @@ def delete_entry(id):
     get_db().execute('DELETE FROM journal_entries WHERE id=?', (id,))
     get_db().commit()
     return jsonify({'success': True})
+
+
+# --- Merging voice-only entries -----------------------------------------------
+#
+# A recording made with the bottom bar's Record button (create_recording_entry,
+# below) lands as its own entry with no body text. If it turns out to belong
+# with something already written that day, the entry as a whole is pointless —
+# only merging is: fold its one attachment into another entry and delete the
+# now-empty husk. Restricted to "nothing but a single recording" so a merge can
+# never silently drop text or other attachments the source entry was carrying.
+
+def _local_day(created_at: int) -> str:
+    return datetime.fromtimestamp(created_at).strftime('%Y-%m-%d')
+
+
+def _is_voice_only_entry(db, entry_id: str) -> bool:
+    row = db.execute(
+        'SELECT content FROM journal_entries WHERE id=?', (entry_id,)
+    ).fetchone()
+    if row is None or (row['content'] or '').strip():
+        return False
+    attachments = db.execute(
+        'SELECT kind FROM journal_attachments WHERE entry_id=?', (entry_id,)
+    ).fetchall()
+    return len(attachments) == 1 and attachments[0]['kind'] == 'audio'
+
+
+@bp.get('/<id>/merge-candidates')
+def merge_candidates(id):
+    """Other entries from the same local day as `id`, for the merge picker —
+    matches the day window backend/routes/calendar.py's related-journals
+    uses, since journal timestamps are local unix seconds either way."""
+    db = get_db()
+    row = db.execute(
+        'SELECT created_at FROM journal_entries WHERE id=?', (id,)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    day = _local_day(row['created_at'])
+    start = int(datetime.fromisoformat(f'{day}T00:00:00').timestamp())
+    end = int(datetime.fromisoformat(f'{day}T23:59:59').timestamp())
+    rows = db.execute(
+        'SELECT * FROM journal_entries WHERE created_at BETWEEN ? AND ? AND id != ?'
+        ' ORDER BY created_at DESC',
+        (start, end, id),
+    ).fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
+
+
+@bp.post('/<id>/merge')
+def merge_entry(id):
+    body = request.json or {}
+    target_id = body.get('targetId')
+    if not target_id:
+        return jsonify({'error': 'targetId required'}), 400
+    if target_id == id:
+        return jsonify({'error': 'Cannot merge an entry into itself'}), 400
+
+    db = get_db()
+    source = db.execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
+    if not source:
+        return jsonify({'error': 'Not found'}), 404
+    target = db.execute(
+        'SELECT * FROM journal_entries WHERE id=?', (target_id,)
+    ).fetchone()
+    if not target:
+        return jsonify({'error': 'Target entry not found'}), 404
+
+    if not _is_voice_only_entry(db, id):
+        return jsonify({
+            'error': 'Only an entry with nothing but a single recording can be merged into another entry',
+        }), 400
+    if _local_day(source['created_at']) != _local_day(target['created_at']):
+        return jsonify({'error': 'Entries must be from the same day'}), 400
+
+    attachment = db.execute(
+        'SELECT id FROM journal_attachments WHERE entry_id=?', (id,)
+    ).fetchone()
+    next_position = db.execute(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM journal_attachments'
+        ' WHERE entry_id=?',
+        (target_id,),
+    ).fetchone()['next']
+    db.execute(
+        'UPDATE journal_attachments SET entry_id=?, position=? WHERE id=?',
+        (target_id, next_position, attachment['id']),
+    )
+    db.execute('DELETE FROM journal_entries WHERE id=?', (id,))
+    db.commit()
+    _notify_subscribers(target_id)
+
+    merged = row_to_dict(
+        db.execute('SELECT * FROM journal_entries WHERE id=?', (target_id,)).fetchone()
+    )
+    return jsonify(_enrich_with_attachments(
+        db, _enrich_with_fic_refs(db, _enrich_with_curated_tags(db, [merged]))
+    )[0])
 
 
 def _polish_bg(journal_id: str, raw_content: str) -> None:
