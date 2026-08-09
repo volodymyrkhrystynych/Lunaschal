@@ -26,8 +26,14 @@ BLIND = 'blind'
 # copies rather than one, so a single lucky run doesn't unlock it, and accuracy
 # gates harder than speed: knowing the characters is what recall tests, and
 # being slow at typing them is not a reason to withhold it.
+#
+# 90 rather than 95: the speed drill now fills in indentation and line breaks
+# (src/lib/practice.ts), so the accuracy it reports is over characters that
+# decide what the program does. A run of 95 against a figure that included
+# layout was a stricter gate than it looked, and it left blind runs unreachable
+# in a whole language for anyone typing a steady 94.
 UNLOCK_ATTEMPTS = 2
-UNLOCK_ACCURACY = 95.0
+UNLOCK_ACCURACY = 90.0
 UNLOCK_WPM = 25.0
 
 # Above this the snippet is fluent under the fingers and there is little left to

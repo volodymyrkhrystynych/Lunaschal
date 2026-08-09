@@ -1,7 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import type { PracticeSpeedDrill } from '../../hooks/api';
-import { diffTyped, computeStats, type TypingStats } from '../../lib/practice';
+import {
+  acceptsChar,
+  computeStats,
+  diffTyped,
+  nextRequired,
+  previousRequired,
+  requiredMask,
+  type TypingStats,
+} from '../../lib/practice';
 import { ExplanationPanel } from './ExplanationPanel';
 import { TypingCanvas } from './TypingCanvas';
 
@@ -17,36 +25,64 @@ interface Props {
 // bank contain. CodeMirror (in TypingCanvas) is used purely for the
 // highlighted, read-only display.
 export function DrillSession({ snippet, onComplete }: Props) {
-  const [typed, setTyped] = useState('');
+  const code = snippet.code;
+  const mask = useMemo(() => requiredMask(code), [code]);
+  // Whatever leads the snippet in is already on screen before the first
+  // keystroke, so the caret starts on a character worth typing.
+  const [typed, setTyped] = useState(() =>
+    code.slice(0, nextRequired(mask, 0))
+  );
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const keystrokes = useRef(0);
   const mistakes = useRef(0);
   const startedAt = useRef<number | null>(null);
   const finished = useRef(false);
-  const code = snippet.code;
 
   useEffect(() => {
-    setTyped('');
+    setTyped(code.slice(0, nextRequired(mask, 0)));
     keystrokes.current = 0;
     mistakes.current = 0;
     startedAt.current = null;
     finished.current = false;
     inputRef.current?.focus();
+    // `code`/`mask` are derived from the snippet, so its id is the whole change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snippet.id]);
 
   function handleChange(e: ChangeEvent<HTMLTextAreaElement>) {
     if (finished.current) return;
-    if (startedAt.current === null) startedAt.current = performance.now();
-
     const raw = e.target.value;
-    if (raw.length > typed.length) {
-      for (let i = typed.length; i < raw.length && i < code.length; i++) {
-        keystrokes.current += 1;
-        if (raw[i] !== code[i]) mistakes.current += 1;
-      }
+
+    // A backspace steps back over the run the drill filled in, to the last
+    // character the writer produced. Keystrokes already spent are not refunded:
+    // fixing a typo before submitting must not read as having typed it right.
+    if (raw.length <= typed.length) {
+      setTyped(code.slice(0, previousRequired(mask, typed.length)));
+      return;
     }
 
-    const next = raw.slice(0, code.length);
+    if (startedAt.current === null) startedAt.current = performance.now();
+
+    // One character at a time, because each accepted keystroke can pull in a
+    // filled-in run behind it and move where the next one lands.
+    let next = typed;
+    for (
+      let i = typed.length;
+      i < raw.length && next.length < code.length;
+      i++
+    ) {
+      const pos = next.length;
+      keystrokes.current += 1;
+      if (acceptsChar(code, pos, raw[i])) {
+        // The target's own character, not the keystroke: a space answering a
+        // required newline is right, and should render as right.
+        next += code[pos];
+      } else {
+        mistakes.current += 1;
+        next += raw[i];
+      }
+      next += code.slice(next.length, nextRequired(mask, next.length));
+    }
     setTyped(next);
 
     if (next.length === code.length) {
@@ -55,6 +91,10 @@ export function DrillSession({ snippet, onComplete }: Props) {
         startedAt.current !== null ? performance.now() - startedAt.current : 0;
       onComplete(
         computeStats({
+          // The whole snippet, including what was filled in — wpm measures how
+          // fast this snippet gets produced, and every attempt already recorded
+          // measured it that way. Narrowing it to typed characters would make
+          // every `best_wpm` in the table unbeatable.
           targetLength: code.length,
           keystrokes: keystrokes.current,
           mistakes: mistakes.current,
@@ -99,6 +139,10 @@ export function DrillSession({ snippet, onComplete }: Props) {
           className="sr-only"
           aria-label={`Type the ${snippet.title} snippet`}
         />
+        <p className="text-xs text-[var(--color-text-muted)]">
+          Indentation and line breaks are filled in for you — type only the
+          spacing that keeps two words apart.
+        </p>
       </div>
 
       <ExplanationPanel explanation={snippet.explanation} />
