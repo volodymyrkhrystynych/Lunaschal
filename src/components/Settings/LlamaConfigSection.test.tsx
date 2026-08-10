@@ -135,3 +135,32 @@ describe('LlamaConfigSection multimodal toggle', () => {
     );
   });
 });
+
+describe('chat model reads photos', () => {
+  const chatVision = () =>
+    screen.getByLabelText(/chat model reads photos/i) as HTMLInputElement;
+
+  it('is off by default and saves when ticked', async () => {
+    // Off is the safe default: `[qwen36]` ships with no projector, so sending
+    // images to it would look like the model hallucinating rather than like a
+    // missing mmproj.
+    renderSection();
+    await seeded();
+    expect(chatVision().checked).toBe(false);
+
+    fireEvent.click(chatVision());
+    fireEvent.click(save());
+    expect(await saved()).toMatchObject({ llamaChatVision: true });
+  });
+
+  it('is independent of the omni model checkbox', async () => {
+    // They gate different things: the omni model still serves journal audio
+    // description, which Qwen3.6 cannot do at all.
+    renderSection();
+    await seeded();
+
+    fireEvent.click(chatVision());
+    expect(toggle().checked).toBe(false);
+    expect(chatVision().checked).toBe(true);
+  });
+});

@@ -40,6 +40,9 @@ def get_provider_config() -> dict:
         # legitimately fail (heic, say) while the other works. See
         # backend/ai/audio_description.py. NULL/empty means it's off.
         'llama_audio_model': s.get('llama_audio_model') if s else None,
+        # Whether the *chat* model itself can be handed an image, rather than
+        # being read a description of one. See chat_vision_enabled below.
+        'llama_chat_vision': bool(s.get('llama_chat_vision')) if s else False,
         'openai_api_key': (s.get('openai_api_key') if s else None) or os.environ.get('OPENAI_API_KEY'),
         'google_api_key': (s.get('google_api_key') if s else None) or os.environ.get('GOOGLE_API_KEY'),
     }
@@ -56,6 +59,19 @@ def get_model(config: dict | None = None) -> str:
     """The configured chat alias, or the default one."""
     c = config or get_provider_config()
     return c['llama_model'] or DEFAULT_MODEL
+
+
+def chat_vision_enabled(config: dict | None = None) -> bool:
+    """Whether a chat turn may carry an image rather than a description of one.
+
+    Off by default, and it has to stay a setting rather than something inferred:
+    nothing in the OpenAI API says whether the loaded preset has a projector, and
+    guessing wrong means sending image parts to a model that answers about an
+    image it never decoded — a failure that reads as the model hallucinating
+    rather than as a misconfiguration.
+    """
+    c = config or get_provider_config()
+    return bool(c.get('llama_chat_vision'))
 
 
 def is_ai_configured() -> bool:

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, type DraftCard } from '../../hooks/api';
+import { api, type ChatAttachment, type DraftCard } from '../../hooks/api';
+import { useRecorder } from '../../hooks/useRecorder';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { BriefingTodos } from '../BriefingTodos';
 import { AgentSteps } from './AgentSteps';
@@ -20,6 +21,12 @@ import {
   parseDelegateProposals,
   type AgentStep,
 } from '@/lib/agentSteps';
+import {
+  ACCEPT_PHOTO,
+  photoStatusMessage,
+  photosFromTransfer,
+  rejectedPhotosMessage,
+} from '@/lib/chatAttachments';
 
 /** One staged action from the delegate's `done` event. Only `note` is still
  * read from this live shape — the other kinds (calendar/calorie/task/
@@ -48,16 +55,24 @@ export function ChatPanel() {
     similar: { question: string; answer: string };
     score: number;
   } | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  // Photos staged for the next message. They exist server-side already (the
+  // reading has to start while the user is still talking — it runs on a CPU-only
+  // model), so this holds real rows, not File objects.
+  const [staged, setStaged] = useState<ChatAttachment[]>([]);
+  const [attachError, setAttachError] = useState('');
+  const [isUploading, setIsUploading] = useState(false);
+  // The verbatim transcript behind whatever is in the box, when it was dictated.
+  // Kept so it can be shown, and so it rides to the server as the message's
+  // `rawContent` — corrected or not, what was said must survive.
+  const [dictated, setDictated] = useState<string | null>(null);
+  const [isPolishing, setIsPolishing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const lastBreakRef = useRef<HTMLDivElement>(null);
   // When set, the next scroll effect pins the newest break divider to the top
   // (the "New chat" clear) instead of scrolling to the bottom.
   const justBrokeRef = useRef(false);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
   const queryClient = useQueryClient();
 
   // The single conversation for the current chat day (4am -> 4am).
@@ -96,12 +111,23 @@ export function ChatPanel() {
       role,
       content,
       metadata,
+      rawContent,
+      attachmentIds,
     }: {
       convId: string;
       role: string;
       content: string;
       metadata?: string;
-    }) => api.chat.addMessage(convId, { role, content, metadata }),
+      rawContent?: string | null;
+      attachmentIds?: string[];
+    }) =>
+      api.chat.addMessage(convId, {
+        role,
+        content,
+        metadata,
+        rawContent,
+        attachmentIds,
+      }),
     onSuccess: invalidateToday,
   });
 
@@ -238,9 +264,21 @@ export function ChatPanel() {
 
   const sendMessage = async (messageText?: string) => {
     const userMessage = (messageText ?? input).trim();
-    if (!userMessage || isStreaming) return;
+    // A photo on its own is a complete message — "what is this?" is implied by
+    // sending it — so an empty box no longer blocks the send.
+    if ((!userMessage && staged.length === 0) || isStreaming) return;
+
+    const attachmentIds = staged.map(a => a.id);
+    // Only ever the transcript that produced *this* text, and only when it
+    // differs — a typed message must leave rawContent null, exactly as a typed
+    // journal entry does.
+    const rawContent =
+      dictated && dictated !== userMessage ? dictated : undefined;
 
     if (messageText === undefined) setInput('');
+    setStaged([]);
+    setDictated(null);
+    setAttachError('');
 
     let convId = conversationId;
 
@@ -253,22 +291,28 @@ export function ChatPanel() {
       convId,
       role: 'user',
       content: userMessage,
+      rawContent,
+      attachmentIds,
     });
 
     // Only the current segment (since the last "New chat") is sent to the model,
     // so the button acts as a true clear while history stays visible/saved.
     // createdAt rides along so the backend can prefix each turn with when it
     // was sent — the model is otherwise blind to gaps in the conversation.
+    // attachmentIds ride along too: the server expands them into the readings of
+    // the photos, since the chat model cannot see an image itself.
     const chatMessages = [
       ...contextMessages(messages).map(m => ({
         role: m.role,
         content: m.content,
         createdAt: m.createdAt,
+        attachmentIds: (m.attachments ?? []).map(a => a.id),
       })),
       {
         role: 'user' as const,
         content: userMessage,
         createdAt: new Date().toISOString(),
+        attachmentIds,
       },
     ];
 
@@ -346,61 +390,118 @@ export function ChatPanel() {
     }
   };
 
-  const toggleRecording = async () => {
-    if (isRecording) {
-      mediaRecorderRef.current?.stop();
-      return;
-    }
+  /**
+   * Dictation lands in the box, it doesn't send.
+   *
+   * This used to POST the transcript straight through as the message, which is
+   * the one place in the app that did — every other view appends to a textarea
+   * (BrainDump, IdeaCapture, Journal, FoodCapture) precisely so a mangled proper
+   * noun can be fixed before it becomes a record. It also made the correction
+   * pass below impossible: there was no moment between transcribing and sending.
+   */
+  const handleTranscript = async (text: string) => {
+    const raw = text.trim();
+    if (!raw) return;
+    setInput(prev => (prev.trim() ? `${prev.trim()} ${raw}` : raw));
+    setDictated(prev => (prev ? `${prev} ${raw}` : raw));
+
+    // Correct it against the memory document and whatever the vision model read
+    // out of the attached photos. Best-effort: the transcript is already in the
+    // box, so a failure here costs the user nothing.
+    setIsPolishing(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-          ? 'audio/webm'
-          : 'audio/ogg';
-      const recorder = new MediaRecorder(stream, { mimeType });
-      audioChunksRef.current = [];
-      recorder.ondataavailable = e => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-      recorder.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        setIsRecording(false);
-        const blob = new Blob(audioChunksRef.current, { type: mimeType });
-        if (blob.size < 1000) return;
-        setIsTranscribing(true);
-        try {
-          const ext = mimeType.includes('webm') ? '.webm' : '.ogg';
-          const form = new FormData();
-          form.append('audio', blob, `chat${ext}`);
-          const r = await fetch('/api/transcribe', {
-            method: 'POST',
-            credentials: 'include',
-            body: form,
-          });
-          if (!r.ok) {
-            const err = await r.json().catch(() => ({}));
-            throw new Error(
-              (err as { error?: string }).error || 'Transcription failed'
-            );
-          }
-          const data = (await r.json()) as { text?: string };
-          if (data.text?.trim()) {
-            await sendMessage(data.text.trim());
-          }
-        } catch (err) {
-          console.error('Voice transcription error:', err);
-        } finally {
-          setIsTranscribing(false);
-        }
-      };
-      recorder.start();
-      mediaRecorderRef.current = recorder;
-      setIsRecording(true);
-    } catch (err) {
-      console.error('Microphone access error:', err);
+      const { corrected } = await api.chat.polishTranscript(
+        raw,
+        staged.map(a => a.id)
+      );
+      if (corrected && corrected !== raw) {
+        setInput(prev => {
+          // Only rewrite the part we just added; anything typed alongside it is
+          // the user's and must not be touched.
+          const trimmed = prev.trimEnd();
+          return trimmed.endsWith(raw)
+            ? trimmed.slice(0, trimmed.length - raw.length) + corrected
+            : prev;
+        });
+      }
+    } catch {
+      // Nothing to do — the raw transcript stands.
+    } finally {
+      setIsPolishing(false);
     }
   };
+
+  const recorder = useRecorder(handleTranscript);
+  const isRecording = recorder.status === 'recording';
+  const isTranscribing = recorder.status === 'transcribing';
+
+  const toggleRecording = () =>
+    isRecording ? recorder.stop() : recorder.start();
+
+  const attachPhotos = async (files: File[]) => {
+    if (files.length === 0) return;
+    setAttachError('');
+    setIsUploading(true);
+    try {
+      let convId = conversationId;
+      if (!convId) convId = (await createConversation.mutateAsync()).id;
+      const uploaded = await api.chat.uploadAttachments(convId, files);
+      setStaged(prev => [...prev, ...uploaded]);
+    } catch (err) {
+      setAttachError(
+        err instanceof Error ? err.message : "Couldn't attach that photo"
+      );
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const removeStaged = async (id: string) => {
+    setStaged(prev => prev.filter(a => a.id !== id));
+    try {
+      await api.chat.deleteAttachment(id);
+    } catch {
+      // The row is orphaned rather than leaked — it belongs to this
+      // conversation and goes with it. Not worth putting an error in the way.
+    }
+  };
+
+  /** Paste and drop are first-class: on a phone, exporting a photo to Files and
+   * picking it back out is precisely the step being deleted. A paste carrying no
+   * image falls through to the textarea untouched. */
+  const handleTransfer = (
+    data: DataTransfer | null,
+    event: { preventDefault: () => void }
+  ) => {
+    const { accepted, rejected } = photosFromTransfer(data);
+    if (accepted.length === 0 && rejected.length === 0) return;
+    event.preventDefault();
+    setAttachError(rejectedPhotosMessage(rejected) ?? '');
+    void attachPhotos(accepted);
+  };
+
+  /** Poll the staged photos while any is still being read.
+   *
+   * There is no chat SSE event stream to push this on, and the reading runs on a
+   * CPU-only model that takes real seconds — so the composer says "Reading the
+   * photo…" and finds out when it lands, the same way the Learning grade poll
+   * works. Stops the moment nothing is 'running'. */
+  useEffect(() => {
+    const pending = staged.filter(a => a.descriptionStatus === 'running');
+    if (pending.length === 0) return;
+    const timer = setInterval(async () => {
+      const updated = await Promise.all(
+        pending.map(a => api.chat.getAttachment(a.id).catch(() => null))
+      );
+      const byId = new Map(
+        updated
+          .filter((a): a is ChatAttachment => a != null)
+          .map(a => [a.id, a])
+      );
+      setStaged(prev => prev.map(a => byId.get(a.id) ?? a));
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [staged]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -410,6 +511,12 @@ export function ChatPanel() {
   };
 
   const isConfigured = !!settings?.llamaUrl;
+  // With neither the omni model nor a projector on the chat model, nothing can
+  // read a photo — and the composer says so rather than showing a spinner that
+  // never resolves, the mistake the Ideas sketch caption exists to warn about.
+  const visionConfigured = !!settings?.llamaVisionModel;
+  const chatVision = !!settings?.llamaChatVision;
+  const photoStatus = photoStatusMessage(staged, visionConfigured, chatVision);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -488,12 +595,46 @@ export function ChatPanel() {
                 <div
                   className={`content-text rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-surface)] text-[var(--color-text)]'}`}
                 >
+                  {(message.attachments ?? []).length > 0 && (
+                    <div className="mb-2 flex flex-wrap gap-2">
+                      {(message.attachments ?? []).map(attachment => (
+                        <a
+                          key={attachment.id}
+                          href={attachment.url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                        >
+                          <img
+                            src={attachment.url}
+                            // The reading is the alt text on purpose: it is
+                            // literally the description of this picture, and it
+                            // is the only thing the model ever saw of it.
+                            alt={attachment.description || 'Attached photo'}
+                            className="max-h-48 rounded-lg"
+                          />
+                        </a>
+                      ))}
+                    </div>
+                  )}
                   {message.role === 'user' ? (
                     <div className="whitespace-pre-wrap">{message.content}</div>
                   ) : (
                     <MessageMarkdown content={message.content} />
                   )}
                 </div>
+                {/* What was actually dictated, kept whenever the correction pass
+                    or an edit changed it — the journal's "As captured". Only
+                    ever present on a message that was spoken. */}
+                {message.role === 'user' && message.rawContent && (
+                  <details className="mt-1 text-xs text-[var(--color-text-muted)] text-right">
+                    <summary className="cursor-pointer select-none">
+                      As dictated
+                    </summary>
+                    <div className="mt-1 whitespace-pre-wrap text-left">
+                      {message.rawContent}
+                    </div>
+                  </details>
+                )}
                 {/* live is set from the persisted status (not local isStreaming
                     state) so a reopened or reloaded tab shows the same
                     "N steps so far ·" pulse as a tab that never left — the
@@ -704,8 +845,65 @@ export function ChatPanel() {
         </div>
       )}
 
-      <div className="border-t border-white/10 p-4">
+      <div
+        className="border-t border-white/10 p-4"
+        onPaste={e => handleTransfer(e.clipboardData, e)}
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => handleTransfer(e.dataTransfer, e)}
+      >
+        {staged.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {staged.map(attachment => (
+              <div key={attachment.id} className="relative">
+                <img
+                  src={attachment.url}
+                  alt={attachment.description || 'Attached photo'}
+                  className="h-20 w-20 rounded-lg object-cover"
+                />
+                {attachment.descriptionStatus === 'running' && (
+                  <div className="absolute inset-0 rounded-lg bg-black/40" />
+                )}
+                <button
+                  onClick={() => removeStaged(attachment.id)}
+                  aria-label="Remove photo"
+                  title="Remove photo"
+                  className="absolute -right-1 -top-1 h-5 w-5 rounded-full bg-[var(--color-surface)] border border-white/20 text-xs leading-none text-[var(--color-text)]"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {(photoStatus || attachError || dictated) && (
+          <div className="mb-2 space-y-1 text-xs text-[var(--color-text-muted)]">
+            {attachError && <div className="text-red-400">{attachError}</div>}
+            {photoStatus && <div>{photoStatus}</div>}
+            {isPolishing && <div>Checking the transcript…</div>}
+            {/* Shown before sending, not just after: the point of no longer
+                auto-submitting is that a mangled name can be caught here. */}
+            {dictated && !isPolishing && dictated !== input.trim() && (
+              <details>
+                <summary className="cursor-pointer select-none">
+                  As dictated
+                </summary>
+                <div className="mt-1 whitespace-pre-wrap">{dictated}</div>
+              </details>
+            )}
+          </div>
+        )}
         <div className="flex gap-2">
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept={ACCEPT_PHOTO}
+            multiple
+            className="hidden"
+            onChange={e => {
+              void attachPhotos(Array.from(e.target.files ?? []));
+              e.target.value = '';
+            }}
+          />
           <textarea
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -719,6 +917,29 @@ export function ChatPanel() {
             rows={1}
             className="flex-1 bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-50"
           />
+          <button
+            onClick={() => photoInputRef.current?.click()}
+            disabled={!isConfigured || isStreaming || isUploading}
+            aria-label="Attach a photo"
+            title="Attach a photo"
+            className="px-3 py-2 rounded-lg bg-[var(--color-surface)] border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <rect x="3" y="5" width="18" height="14" rx="2" />
+              <circle cx="8.5" cy="10.5" r="1.5" />
+              <path d="m21 15-4.5-4.5L7 20" />
+            </svg>
+          </button>
           <button
             onClick={toggleRecording}
             disabled={!isConfigured || isStreaming || isTranscribing}
@@ -764,7 +985,11 @@ export function ChatPanel() {
           </button>
           <button
             onClick={() => sendMessage()}
-            disabled={!input.trim() || !isConfigured || isStreaming}
+            disabled={
+              (!input.trim() && staged.length === 0) ||
+              !isConfigured ||
+              isStreaming
+            }
             className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Send

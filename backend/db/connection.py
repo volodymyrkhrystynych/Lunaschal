@@ -110,6 +110,7 @@ def init_db() -> None:
     # point adding it to a settings table that migration is still reshaping.
     _ensure_llama_vision_model(db)
     _ensure_llama_audio_model(db)
+    _ensure_llama_chat_vision(db)
     # After all four alias columns exist: it clears the ones naming presets that
     # llama/presets.ini no longer defines.
     _migrate_gemma_aliases_to_qwen36(db)
@@ -135,11 +136,13 @@ def init_db() -> None:
     _ensure_meeting_whisper_columns(db)
     _migrate_workout_intensity_to_stars(db)
     _ensure_message_status(db)
+    _ensure_message_raw_content(db)
     _ensure_practice_recall_columns(db)
     _ensure_learning_attempts_speech_requested(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
+    _reset_stale_chat_attachment_descriptions(db)
     _reset_stale_message_runs(db)
 
 
@@ -415,6 +418,32 @@ def _ensure_message_status(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_message_raw_content(db: sqlite3.Connection) -> None:
+    """`raw_content` on `messages`: what was actually dictated, before the
+    transcript-correction pass rewrote it and before the user edited it in the
+    composer. Same contract as `journal_entries.raw_content` — NULL when the
+    message was typed, and never overwritten once set. Existing rows stay NULL,
+    which is correct: none of them went through a correction pass."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(messages)')}
+    if 'raw_content' not in cols:
+        db.execute('ALTER TABLE messages ADD COLUMN raw_content TEXT')
+    db.commit()
+
+
+def _reset_stale_chat_attachment_descriptions(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_attachment_transcripts: reading a photo
+    runs on a background worker whose state dies with the process. 'error'
+    rather than 'idle' because a chat attachment has no re-read button — the
+    photo simply didn't make it into that turn's context, and the row should
+    say so instead of claiming to still be working."""
+    db.execute(
+        "UPDATE chat_attachments SET description_status='error',"
+        " description_error='Interrupted by an app restart.'"
+        " WHERE description_status='running'"
+    )
+    db.commit()
+
+
 def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
     """A fic's in-memory download progress (backend/fanfic/download.py's
     `_dl_progress`) never survives a process restart, but the persisted
@@ -678,6 +707,26 @@ def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
         # nothing reads this column. It stays only so the migration remains an
         # append-only ALTER — see docs/learnings/local-model-context-budget.md.
         db.execute('ALTER TABLE settings ADD COLUMN llm_num_ctx INTEGER DEFAULT 8192')
+    db.commit()
+
+
+def _ensure_llama_chat_vision(db: sqlite3.Connection) -> None:
+    """Whether the *chat* model can be sent an image directly.
+
+    Separate from `llama_vision_model`, which names a different model for
+    one-shot captioning. This is a property of the chat preset: Qwen3.6 35B A3B
+    is a vision-language model (its GGUF carries mRoPE's four rope sections and
+    the `image-text-to-text` tag), but `llama/presets.ini` ships with no `mmproj`
+    on `[qwen36]` because the projector has to be downloaded and there is only
+    ~878 MiB of VRAM headroom to load it into.
+
+    Defaults to **0** for that reason: turning it on without a projector
+    configured would send images to a model that cannot decode them. Ticking it
+    is the deliberate act that follows a preset that actually loaded.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'llama_chat_vision' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN llama_chat_vision INTEGER DEFAULT 0')
     db.commit()
 
 

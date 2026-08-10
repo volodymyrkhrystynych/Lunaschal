@@ -18,6 +18,10 @@ function resolvedLabel(p: DelegateProposalRecord): string {
       return 'Saved to calendar';
     case 'calorie':
       return 'Logged calories';
+    case 'food':
+      return p.result?.calorieLogId
+        ? 'Saved to your food log, with calories'
+        : 'Saved to your food log';
     case 'task':
       return 'Added to tasks';
     case 'flashcards':
@@ -30,6 +34,7 @@ function resolvedLabel(p: DelegateProposalRecord): string {
 const HEADLINE: Record<string, string> = {
   calendar: 'Save as calendar event?',
   calorie: 'Log calories?',
+  food: 'Add to your food log?',
   task: 'Add to your tasks?',
   flashcards: 'Generate flashcards?',
 };
@@ -37,6 +42,7 @@ const HEADLINE: Record<string, string> = {
 const ACCEPT_LABEL: Record<string, string> = {
   calendar: 'Save',
   calorie: 'Log',
+  food: 'Log Meal',
   task: 'Add',
   flashcards: 'Queue Cards',
 };
@@ -44,6 +50,7 @@ const ACCEPT_LABEL: Record<string, string> = {
 const ACCEPT_PENDING_LABEL: Record<string, string> = {
   calendar: 'Saving...',
   calorie: 'Logging...',
+  food: 'Logging...',
   task: 'Adding...',
   flashcards: 'Generating...',
 };
@@ -285,6 +292,70 @@ function ProposalForm({
         </div>
       );
 
+    case 'food':
+      return (
+        <div className="space-y-1.5">
+          <input
+            aria-label="Dish"
+            value={str(data, 'dish')}
+            onChange={e => set({ dish: e.target.value })}
+            className={`${fieldClass} w-full`}
+          />
+          <div className="flex flex-wrap gap-x-4 gap-y-1.5 items-center">
+            <Field label="Place">
+              <input
+                value={str(data, 'place')}
+                onChange={e => set({ place: e.target.value })}
+                className={`${fieldClass} w-36`}
+              />
+            </Field>
+            <Field label="Calories">
+              <input
+                type="number"
+                min={0}
+                value={str(data, 'calories')}
+                onChange={e =>
+                  set({
+                    calories: e.target.value ? Number(e.target.value) : null,
+                  })
+                }
+                placeholder="—"
+                className={`${fieldClass} w-24`}
+              />
+            </Field>
+            <Field label="Rating">
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={str(data, 'rating')}
+                onChange={e =>
+                  set({
+                    rating: e.target.value ? Number(e.target.value) : null,
+                  })
+                }
+                placeholder="—"
+                className={`${fieldClass} w-16`}
+              />
+            </Field>
+          </div>
+          <textarea
+            aria-label="Notes"
+            value={str(data, 'notes')}
+            onChange={e => set({ notes: e.target.value })}
+            rows={2}
+            placeholder="What you said about it"
+            className={`${fieldClass} w-full resize-none`}
+          />
+          {/* Said plainly because neither is an editable field here: both come
+              off the message itself when the card is accepted, so an edit can't
+              rewrite what was actually said. */}
+          <div className="text-xs text-[var(--color-text-muted)]">
+            Your photo and exactly what you said are saved with it.
+          </div>
+        </div>
+      );
+
     case 'flashcards':
       return (
         <div className="space-y-1.5">
@@ -378,6 +449,7 @@ export function DelegateProposals({ messageId, proposals }: Props) {
       queryClient.invalidateQueries({ queryKey: ['chat', 'today'] });
       queryClient.invalidateQueries({ queryKey: ['calendar'] });
       queryClient.invalidateQueries({ queryKey: ['lifestyle', 'calories'] });
+      queryClient.invalidateQueries({ queryKey: ['food'] });
       queryClient.invalidateQueries({ queryKey: ['todos'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['learning'] });

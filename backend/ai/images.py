@@ -43,7 +43,24 @@ _SYSTEM = (
     "composition. Return only the description."
 )
 
+_CHAT_SYSTEM = (
+    "You are reading a photo on behalf of an assistant that cannot see images, so "
+    "your description is the only thing it will ever know about this picture. Be "
+    "concrete and factual. Name what is in the frame as specifically as you can — "
+    "if it is food, name the dish, its components and roughly how much is there; "
+    "if it is a product, name it. Quote any text that is legible — a menu, a "
+    "label, a sign, packaging, a receipt — exactly as written, spelling included, "
+    "because the assistant relies on it to get names right. Say plainly when "
+    "something is unreadable or you are unsure rather than guessing at it. Do not "
+    "speculate about how anyone feels and do not editorialise about the photo. "
+    "Return only the description."
+)
+
 _MAX_TOKENS = 300
+
+# More room than a journal caption: quoting a menu or an ingredient label
+# verbatim is the point of this pass, and that is where the tokens go.
+_CHAT_MAX_TOKENS = 500
 
 # Matches backend/journal/storage.py's IMAGE_EXTS, mapped back to the mime types
 # a data: URI needs. heic/heif are stored but not sent — llama.cpp's projector
@@ -67,23 +84,30 @@ def is_vision_configured() -> bool:
     return get_vision_model() is not None
 
 
-def _data_uri(path: Path) -> str:
+def data_uri(path: Path) -> str:
+    """The `data:` URI an `image_url` content part needs.
+
+    Exported (not `_`-prefixed) because `backend/chat/context.py` builds image
+    parts for the chat model's own turn and must use the same mime table — heic
+    is stored but never sendable, and two copies of that rule would drift.
+    """
     ext = path.suffix.lower().lstrip('.')
     mime = _EXT_MIME.get(ext)
     if not mime:
         raise VisionUnavailable(
-            f'{ext or "this"} images cannot be captioned — convert to JPEG or PNG'
+            f'{ext or "this"} images cannot be read — convert to JPEG or PNG'
         )
     encoded = base64.b64encode(path.read_bytes()).decode('ascii')
     return f'data:{mime};base64,{encoded}'
 
 
-def caption_image(path: Path, hint: str | None = None) -> str:
-    """Describe the image at `path`, or raise VisionUnavailable.
+def describe_image(path: Path, *, system: str, prompt: str, max_tokens: int = _MAX_TOKENS) -> str:
+    """Ask the vision model about the image at `path`, or raise VisionUnavailable.
 
-    `hint` is the user's name for the attachment; it is passed as context so a
-    photo labelled "the leak under the sink" gets described as such rather than
-    as an anonymous close-up of a pipe.
+    The one place in the app that sends an image anywhere. Callers supply their
+    own system prompt because what a description is *for* differs: a journal
+    caption is prose about a memory, while a chat photo is read for the facts in
+    the frame that the conversation is about to need.
     """
     model = get_vision_model()
     if not model:
@@ -93,22 +117,18 @@ def caption_image(path: Path, hint: str | None = None) -> str:
     if not path.is_file():
         raise VisionUnavailable('The image file is missing')
 
-    prompt = 'Describe this photo.'
-    if hint and hint.strip():
-        prompt = f'Describe this photo. The person who saved it called it: "{hint.strip()}".'
-
     try:
         client = get_llama_client()
         resp = client.chat.completions.create(
             model=model,
             messages=[
-                {'role': 'system', 'content': _SYSTEM},
+                {'role': 'system', 'content': system},
                 {'role': 'user', 'content': [
                     {'type': 'text', 'text': prompt},
-                    {'type': 'image_url', 'image_url': {'url': _data_uri(path)}},
+                    {'type': 'image_url', 'image_url': {'url': data_uri(path)}},
                 ]},
             ],
-            max_tokens=_MAX_TOKENS,
+            max_tokens=max_tokens,
             # Thinking off, explicitly. Gemma 4's chat template defaults it *on*,
             # and a caption is a 300-token budget: the reasoning consumes the
             # whole allowance and `content` comes back empty, which surfaces as
@@ -131,3 +151,36 @@ def caption_image(path: Path, hint: str | None = None) -> str:
     if not text:
         raise VisionUnavailable('The model returned an empty description')
     return text
+
+
+def caption_image(path: Path, hint: str | None = None) -> str:
+    """Describe a journal photo attachment.
+
+    `hint` is the user's name for the attachment; it is passed as context so a
+    photo labelled "the leak under the sink" gets described as such rather than
+    as an anonymous close-up of a pipe.
+    """
+    prompt = 'Describe this photo.'
+    if hint and hint.strip():
+        prompt = f'Describe this photo. The person who saved it called it: "{hint.strip()}".'
+    return describe_image(path, system=_SYSTEM, prompt=prompt)
+
+
+def read_chat_photo(path: Path, hint: str | None = None) -> str:
+    """Read a photo attached to a chat message, for the text-only chat model.
+
+    Not the journal caption. The chat model never sees the picture, so this text
+    *is* the picture as far as the conversation is concerned — and its most
+    valuable job is transcribing legible text. A photographed menu, label or
+    receipt routinely spells the exact proper noun speech-to-text just mangled,
+    which is what makes the transcript correction in `POST /api/chat/
+    polish-transcript` able to fix a dish or place name instead of guessing.
+    """
+    prompt = 'Describe this photo.'
+    if hint and hint.strip():
+        prompt = (
+            'Describe this photo. For context, the person sending it said: '
+            f'"{hint.strip()}" — but that came from speech-to-text and may have '
+            'misheard names, so trust the image over it.'
+        )
+    return describe_image(path, system=_CHAT_SYSTEM, prompt=prompt, max_tokens=_CHAT_MAX_TOKENS)

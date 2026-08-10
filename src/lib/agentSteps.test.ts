@@ -126,6 +126,42 @@ describe('stepLabel', () => {
     );
   });
 
+  it('labels a staged food entry', () => {
+    expect(
+      stepLabel({
+        tool: 'propose_food_log',
+        arg: 'food log for "Vareniki"',
+        ok: true,
+      })
+    ).toBe('Staged a food entry: food log for "Vareniki"');
+  });
+
+  it('says a memory was written, not staged', () => {
+    // `remember` writes immediately with no confirm card, so "Staged" would be
+    // the same lie in the other direction — the user needs to know something
+    // was written in order to go and unwrite it.
+    const label = stepLabel({
+      tool: 'remember',
+      arg: 'Their gym is Movati',
+      ok: true,
+    });
+    expect(label).toBe('Remembered: Their gym is Movati');
+    expect(label).not.toMatch(/staged/i);
+  });
+
+  it('says when a memory could not be written, and why', () => {
+    expect(
+      stepLabel({ tool: 'remember', ok: false, error: 'the memory is full' })
+    ).toBe("Didn't remember that — the memory is full");
+  });
+
+  it('labels a queued memory revision as in progress', () => {
+    // The rewrite runs in the background, so this is deliberately not past tense.
+    expect(
+      stepLabel({ tool: 'revise_memory', arg: 'they switched gyms', ok: true })
+    ).toBe("Updating what's remembered: they switched gyms");
+  });
+
   it('falls back to a generic label for an unknown tool', () => {
     expect(stepLabel({ tool: 'mystery_tool' })).toBe('Ran mystery_tool');
   });
