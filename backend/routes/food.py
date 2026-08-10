@@ -11,6 +11,7 @@ from backend.ai.food import parse_food_entry
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.food import storage
 from backend.food.exif import extract_photo_meta
+from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.routes.cookbook import _insert_recipe
 from backend.tags import tag_counts, tags_json
 
@@ -84,8 +85,6 @@ def _parse_tags_field(raw) -> list | None:
 
 # --- Media persistence ---
 
-_HEIC_EXTS = {'heic', 'heif'}
-
 
 def _save_media_file(entry_id: str, file, position: int):
     """Persist one upload. Returns (public_dict, disk_path, kind), or None if the
@@ -95,7 +94,7 @@ def _save_media_file(entry_id: str, file, position: int):
     ext = storage.resolve_ext(file.mimetype, file.filename)
     if ext is None:
         return None
-    is_heic = ext in _HEIC_EXTS
+    is_heic = ext in HEIC_EXTS
     mime = file.mimetype
     if is_heic:
         ext, mime = 'jpg', 'image/jpeg'
@@ -107,7 +106,7 @@ def _save_media_file(entry_id: str, file, position: int):
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if is_heic:
-        if not _transcode_to_jpeg(file, path):
+        if not transcode_to_jpeg(file, path):
             return None
     else:
         file.save(path)
@@ -120,23 +119,6 @@ def _save_media_file(entry_id: str, file, position: int):
     )
     public = {'id': media_id, 'kind': kind, 'position': position, 'url': _media_url(media_id)}
     return public, path, kind
-
-
-def _transcode_to_jpeg(file, path) -> bool:
-    """Re-encode a HEIC/HEIF upload to JPEG at `path`, baking in EXIF orientation
-    but preserving the rest of the EXIF (date, GPS). Returns False on failure."""
-    try:
-        from PIL import Image, ImageOps
-        img = ImageOps.exif_transpose(Image.open(file.stream))
-        exif_bytes = img.info.get('exif')
-        kwargs = {'quality': 90}
-        if exif_bytes:
-            kwargs['exif'] = exif_bytes
-        img.convert('RGB').save(path, 'JPEG', **kwargs)
-        return True
-    except Exception as e:
-        print(f'HEIC transcode failed: {e}')
-        return False
 
 
 def _photo_meta_from(paths: list) -> dict:

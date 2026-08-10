@@ -518,6 +518,9 @@ describe('reply persistence', () => {
       expect(api.chat.addMessage).toHaveBeenCalledWith('c1', {
         role: 'user',
         content: 'hello there',
+        // Typed, not dictated, and no photo attached — both stay empty.
+        rawContent: undefined,
+        attachmentIds: [],
       })
     );
     stream.push('General Ken');

@@ -250,3 +250,109 @@ describe('resolved cards', () => {
     expect(screen.queryByText('Add to your tasks?')).toBeNull();
   });
 });
+
+describe('the food card', () => {
+  const foodProposal = (
+    data: Record<string, unknown> = {}
+  ): DelegateProposalRecord => ({
+    id: 'p1',
+    kind: 'food',
+    status: 'pending',
+    data: {
+      dish: 'Vareniki',
+      place: 'Movati',
+      notes: 'really good',
+      calories: 600,
+      rating: 4,
+      tags: [],
+      ...data,
+    },
+  });
+
+  it('shows every field the model filled in', () => {
+    renderProposals([foodProposal()]);
+    expect((screen.getByLabelText('Dish') as HTMLInputElement).value).toBe(
+      'Vareniki'
+    );
+    expect((screen.getByLabelText('Place') as HTMLInputElement).value).toBe(
+      'Movati'
+    );
+    expect((screen.getByLabelText('Calories') as HTMLInputElement).value).toBe(
+      '600'
+    );
+    expect((screen.getByLabelText('Rating') as HTMLInputElement).value).toBe(
+      '4'
+    );
+  });
+
+  it('says the photo and the exact words come along', () => {
+    // Neither is an editable field: both are resolved from the message itself
+    // at accept time, so an edit cannot rewrite what was actually said.
+    renderProposals([foodProposal()]);
+    expect(screen.getByText(/exactly what you said/i)).toBeTruthy();
+  });
+
+  it('posts the edited values, not what was staged', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: { id: 'p1', kind: 'food', status: 'accepted', data: {} },
+    } as never);
+    renderProposals([foodProposal()]);
+    fireEvent.change(screen.getByLabelText('Dish'), {
+      target: { value: 'Pierogi' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Log Meal' }));
+
+    await waitFor(() =>
+      expect(resolveProposal()).toHaveBeenCalledWith(
+        'm1',
+        'p1',
+        'accept',
+        expect.objectContaining({ dish: 'Pierogi' })
+      )
+    );
+  });
+
+  it('clears a calorie count rather than sending an empty string', async () => {
+    // Most meals are logged without a number; the backend refuses anything that
+    // is not an integer or null.
+    resolveProposal().mockResolvedValue({
+      proposal: { id: 'p1', kind: 'food', status: 'accepted', data: {} },
+    } as never);
+    renderProposals([foodProposal()]);
+    fireEvent.change(screen.getByLabelText('Calories'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Log Meal' }));
+
+    await waitFor(() =>
+      expect(resolveProposal()).toHaveBeenCalledWith(
+        'm1',
+        'p1',
+        'accept',
+        expect.objectContaining({ calories: null })
+      )
+    );
+  });
+
+  it('collapses to one line once accepted, saying whether calories went too', () => {
+    renderProposals([
+      {
+        ...foodProposal(),
+        status: 'accepted',
+        result: { id: 'f1', photos: 1 },
+      },
+    ]);
+    expect(screen.getByText('Saved to your food log')).toBeTruthy();
+
+    renderProposals([
+      {
+        ...foodProposal(),
+        status: 'accepted',
+        result: { id: 'f1', photos: 1, calorieLogId: 'cl1' },
+      },
+    ]);
+    expect(
+      screen.getByText('Saved to your food log, with calories')
+    ).toBeTruthy();
+  });
+});

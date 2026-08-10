@@ -208,8 +208,56 @@ CREATE TABLE IF NOT EXISTS messages (
     -- generating this reply, so a dropped client connection doesn't lose it.
     status TEXT NOT NULL DEFAULT 'done' CHECK(status IN ('streaming','done','error')),
     error TEXT,
+    -- What was actually dictated, before the transcript-correction pass and
+    -- before the user edited it in the composer. NULL when the message was
+    -- typed. Never overwritten -- the journal_entries raw_content contract.
+    raw_content TEXT,
     created_at INTEGER NOT NULL
 );
+
+-- Photos attached to a chat message. The chat model is text-only
+-- (llama/presets.ini sets mmproj-auto = false on [qwen36]), so `description` --
+-- written by the CPU-only omni model in backend/ai/images.py -- is how the
+-- picture actually reaches the conversation.
+CREATE TABLE IF NOT EXISTS chat_attachments (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    -- NULL until the message is sent. The photo is uploaded (and reading it
+    -- starts) while the user is still dictating, before any message row exists.
+    message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    mime TEXT,
+    description TEXT,
+    description_status TEXT,
+    description_error TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON chat_attachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_conversation ON chat_attachments(conversation_id);
+
+-- One free-text document the assistant keeps up to date about the user: proper
+-- names speech-to-text keeps mangling, standing preferences, things worth
+-- carrying between conversations. Read into every chat system prompt.
+CREATE TABLE IF NOT EXISTS user_memory (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    content TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+
+-- Copy-on-write, the wiki_revisions/learning_revisions pattern. The assistant
+-- writes to the memory without asking, so every change has to be inspectable and
+-- undoable; `content` is the document as it stood BEFORE the change.
+CREATE TABLE IF NOT EXISTS user_memory_revisions (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL,
+    note TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_memory_revisions_created ON user_memory_revisions(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY DEFAULT 1,

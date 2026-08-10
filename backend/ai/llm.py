@@ -163,6 +163,27 @@ def chat_json(prompt: str, system: str | None = None, model: str | None = None,
     return _parse_json_response(_content(resp.choices[0].message))
 
 
+def chat_json_messages(messages: list[dict], *, schema: dict | None = None,
+                       max_tokens: int = JSON_MAX_TOKENS,
+                       thinking: bool = False) -> dict:
+    """`chat_json` over a prebuilt message list.
+
+    Exists for the one caller that needs a grammar-constrained answer *about an
+    image* (backend/ai/transcript.py): `chat_json` takes a prompt string, and a
+    multimodal message is a list of content parts. Everything else about the
+    request is identical, grammar included.
+    """
+    c = get_provider_config()
+    client = get_llama_client(c)
+    resp = client.chat.completions.create(
+        model=get_model(c),
+        messages=messages,
+        timeout=_TIMEOUT,
+        **_request_kwargs(thinking=thinking, max_tokens=max_tokens, schema=schema),
+    )
+    return _parse_json_response(_content(resp.choices[0].message))
+
+
 def chat_text(prompt: str, system: str | None = None) -> str:
     """Blocking plain-text completion (default model's thinking/token settings)."""
     return chat_messages(_messages(prompt, system))

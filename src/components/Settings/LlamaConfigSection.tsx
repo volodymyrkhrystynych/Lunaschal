@@ -18,6 +18,7 @@ export function LlamaConfigSection() {
   const [llamaModel, setLlamaModel] = useState(DEFAULT_MODEL);
   const [llamaVisionModel, setLlamaVisionModel] = useState('');
   const [llamaAudioModel, setLlamaAudioModel] = useState('');
+  const [llamaChatVision, setLlamaChatVision] = useState(false);
   const [message, setMessage] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -41,6 +42,7 @@ export function LlamaConfigSection() {
       setLlamaModel(settings.llamaModel || DEFAULT_MODEL);
       setLlamaVisionModel(settings.llamaVisionModel || '');
       setLlamaAudioModel(settings.llamaAudioModel || '');
+      setLlamaChatVision(!!settings.llamaChatVision);
     }
   }, [settings]);
 
@@ -173,6 +175,33 @@ export function LlamaConfigSection() {
                   .
                 </p>
               </div>
+              <div>
+                <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+                  <input
+                    type="checkbox"
+                    checked={llamaChatVision}
+                    onChange={e => setLlamaChatVision(e.target.checked)}
+                  />
+                  Chat model reads photos
+                </label>
+                <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                  Sends photos attached in Chat to the chat model itself instead
+                  of having the CPU-only omni model describe them first — it
+                  then looks at the picture with your question in hand, and can
+                  answer follow-ups about it. Qwen3.6 is a vision-language
+                  model, but{' '}
+                  <code className="text-[var(--color-text)]">[qwen36]</code>{' '}
+                  ships with no projector: download an{' '}
+                  <code className="text-[var(--color-text)]">mmproj</code>, add
+                  it to{' '}
+                  <code className="text-[var(--color-text)]">
+                    llama/presets.ini
+                  </code>{' '}
+                  and confirm the preset still loads <em>before</em> ticking
+                  this. Leave it off and photos keep going through the omni
+                  model.
+                </p>
+              </div>
               <button
                 onClick={() =>
                   updateAI.mutate({
@@ -180,6 +209,7 @@ export function LlamaConfigSection() {
                     llamaModel,
                     llamaVisionModel,
                     llamaAudioModel,
+                    llamaChatVision,
                   })
                 }
                 disabled={updateAI.isPending}

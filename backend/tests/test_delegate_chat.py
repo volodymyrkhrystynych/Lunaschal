@@ -215,8 +215,9 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
     assert seen['max_tokens'] == delegate_chat.DECISION_MAX_TOKENS
     offered = {t['function']['name'] for t in seen['tools']}
     assert offered == {'delegate', 'propose_task', 'propose_calendar_event',
-                       'propose_calorie_log', 'propose_note_to_self',
-                       'propose_flashcards', 'ask_user'}
+                       'propose_calorie_log', 'propose_food_log',
+                       'propose_note_to_self', 'propose_flashcards',
+                       'remember', 'revise_memory', 'ask_user'}
 
 
 def test_a_tool_call_the_model_invented_is_ignored(monkeypatch, answered):
@@ -436,3 +437,30 @@ def test_a_caller_supplied_prompt_turns_the_tools_off(client, monkeypatch):
 
     _post(client, {'messages': []})
     assert seen['tools_enabled'] is True
+
+
+def test_an_attached_photos_reading_reaches_the_answering_prompt(client, monkeypatch, answered):
+    """The photo has to become text *before* `stamp_messages` runs — that helper
+    rebuilds each message as `[today 21:58] <content>`, so anything not already
+    in `content` by then never reaches the model at all."""
+    _no_tools(monkeypatch)
+    db = client.application  # noqa: F841 - the fixture is what gives us a DB
+    from backend.db.connection import get_db
+
+    conn = get_db()
+    conn.execute("INSERT INTO conversations(id, day_key, mode, created_at, updated_at)"
+                 " VALUES ('c1','2026-08-09','chat',0,0)")
+    conn.execute(
+        "INSERT INTO chat_attachments(id, conversation_id, path, description,"
+        " description_status, position, created_at)"
+        " VALUES ('a1','c1','/tmp/x.jpg','A plate of vareniki.','done',0,0)"
+    )
+    conn.commit()
+
+    _drain([{'role': 'user', 'content': 'what is this',
+             'createdAt': '2026-08-09T12:00:00', 'attachmentIds': ['a1']}])
+
+    user_turn = next(m for m in answered['messages'] if m['role'] == 'user')
+    assert 'A plate of vareniki.' in user_turn['content']
+    # Still stamped, so the two features compose rather than one clobbering the other.
+    assert user_turn['content'].startswith('[')

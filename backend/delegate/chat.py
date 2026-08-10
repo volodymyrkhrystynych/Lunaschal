@@ -39,6 +39,7 @@ from backend.ai.chat import (
 )
 from backend.ai.llm import chat_stream_events, chat_tool_turn
 from backend.ai.mcp_client import serialize_tool_calls
+from backend.chat.context import expand_attachments
 from backend.delegate import agent, tools as proposal_tools
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,11 @@ logger = logging.getLogger(__name__)
 # `tool_calls` at all — silently indistinguishable from the model deciding it
 # had nothing to do. Still a hard cap, because its job is to stop a model that
 # decided *not* to act from writing a whole reply we are about to throw away.
-DECISION_MAX_TOKENS = 320
+#
+# 320 -> 512 when propose_food_log joined: dish, place, notes, calories, rating
+# and tags in one call is the largest argument set on this turn, and a food
+# message often stages that *and* a `remember` for a name in the same breath.
+DECISION_MAX_TOKENS = 512
 
 DELEGATE_TOOL = {
     'type': 'function',
@@ -185,7 +190,12 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     a word.
     """
     system = _system_prompt(messages, system_prompt)
-    conversation = [{'role': 'system', 'content': system}] + stamp_messages(messages)
+    # Photos become text before stamping, not after: stamp_messages flattens a
+    # message to `[today 21:58] <content>`, so anything that must reach the model
+    # has to already be in `content` by then.
+    conversation = [{'role': 'system', 'content': system}] + stamp_messages(
+        expand_attachments(messages)
+    )
 
     steps: list[dict] = []
     sources: list[dict] = []

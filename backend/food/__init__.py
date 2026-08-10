@@ -1,13 +1,9 @@
 """Food-log storage helpers.
 
-Registering the HEIF opener here (once, at import) lets Pillow open the HEIC/HEIF
-photos iPhones produce, so their EXIF (capture date + GPS) is readable and they
-can be transcoded to JPEG. Optional — degrades gracefully if pillow-heif isn't
-installed.
+Importing `backend.imaging` here registers Pillow's HEIF opener, so the HEIC/HEIF
+photos iPhones produce can be opened at all — both to read their EXIF (capture
+date + GPS) and to transcode them to JPEG. That registration moved to
+`backend/imaging.py` when chat attachments needed the same guarantee; this import
+is what keeps it happening for any code path that reaches food storage first.
 """
-try:
-    from pillow_heif import register_heif_opener
-
-    register_heif_opener()
-except Exception:  # pragma: no cover - optional dependency
-    pass
+import backend.imaging  # noqa: F401

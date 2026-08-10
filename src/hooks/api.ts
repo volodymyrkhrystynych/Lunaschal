@@ -411,6 +411,23 @@ export interface Conversation {
   updatedAt: string;
 }
 
+// A photo attached to a chat message. The chat model is text-only, so
+// `description` — written by the CPU-only omni model — is how the picture
+// actually reaches the conversation. Uploaded before the message exists, hence
+// the null `messageId` while it is still staged in the composer.
+export interface ChatAttachment {
+  id: string;
+  conversationId: string;
+  messageId: string | null;
+  mime: string | null;
+  url: string;
+  description: string | null;
+  descriptionStatus: 'running' | 'done' | 'error' | null;
+  descriptionError: string | null;
+  position: number;
+  createdAt: string;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
@@ -421,6 +438,11 @@ export interface Message {
   // (backend/delegate/runs.py) — absent/undefined on older cached data.
   status?: 'streaming' | 'done' | 'error';
   error?: string | null;
+  // What was dictated, before the correction pass and before the user edited it
+  // in the composer. Null when the message was typed — same contract as
+  // journalEntry.rawContent, and never overwritten.
+  rawContent?: string | null;
+  attachments?: ChatAttachment[];
   createdAt: string;
 }
 
@@ -459,21 +481,28 @@ export interface BriefingTodoDecision {
   list?: TodoList;
 }
 
-// A delegate confirm card — calendar/calorie/task/flashcards only. `note`
+// A delegate confirm card — calendar/calorie/food/task/flashcards only. `note`
 // proposals draft immediately with no confirm step, so they never get one of
-// these (backend/delegate/runs.py). Written into the assistant message's
-// metadata the moment the run that staged it finishes, and resolved in place
-// by POST /api/chat/proposals/<messageId>/<id> — the only place `status`
-// ever changes, so a card survives a reload until it actually is.
+// these (backend/delegate/runs.py), and `remember` writes straight away with no
+// card at all. Written into the assistant message's metadata the moment the run
+// that staged it finishes, and resolved in place by POST
+// /api/chat/proposals/<messageId>/<id> — the only place `status` ever changes,
+// so a card survives a reload until it actually is.
 export interface DelegateProposalRecord {
   id: string;
-  kind: 'calendar' | 'calorie' | 'task' | 'flashcards';
+  kind: 'calendar' | 'calorie' | 'food' | 'task' | 'flashcards';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
   // What accepting produced — {id} for calendar/calorie/task, {count} for
-  // flashcards — so the resolved state renders from metadata alone.
-  result?: { id?: string; count?: number };
+  // flashcards, {id, photos, calorieLogId} for food — so the resolved state
+  // renders from metadata alone.
+  result?: {
+    id?: string;
+    count?: number;
+    photos?: number;
+    calorieLogId?: string;
+  };
 }
 
 // One conversation per chat day. `'websearch'` is a *historical* value only —
@@ -493,6 +522,23 @@ export interface DatedConversation {
   updatedAt: string;
 }
 
+// One free-text document of standing facts, read into every chat system prompt.
+export interface UserMemory {
+  content: string;
+  maxChars: number;
+}
+
+// A snapshot of the document as it stood *before* one change — copy-on-write,
+// the wiki_revisions pattern. This is what makes an unconfirmed write by the
+// assistant safe to allow.
+export interface MemoryRevision {
+  id: string;
+  content: string;
+  source: 'remember' | 'revise' | 'user' | 'restore';
+  note: string | null;
+  createdAt: string;
+}
+
 export interface AppSettings {
   hasHfToken: boolean;
   llamaUrl: string | null;
@@ -506,6 +552,11 @@ export interface AppSettings {
    * E2B/E4B/12B capability, not the 26B chat model, so this names a
    * different preset entirely. Empty means it's off. */
   llamaAudioModel: string;
+  /** Whether the chat model itself is handed photos attached in Chat, rather
+   * than being read a description of them. Qwen3.6 is a vision-language model,
+   * but `[qwen36]` ships with no projector — so this stays off until an mmproj
+   * is configured and the preset has been confirmed to still load. */
+  llamaChatVision: boolean;
   /** Gemma 4's thinking channel is on or off; there are no graded levels. */
   llmThinking: boolean;
   llmMaxTokens: number;
@@ -1881,10 +1932,40 @@ export const api = {
       }),
     deleteConversation: (id: string) =>
       del<{ success: boolean }>(`/api/chat/conversations/${id}`),
+    // `rawContent` is the verbatim transcript when the message was dictated;
+    // `attachmentIds` claims the photos staged before this message existed.
     addMessage: (
       id: string,
-      data: { role: string; content: string; metadata?: string }
+      data: {
+        role: string;
+        content: string;
+        metadata?: string;
+        rawContent?: string | null;
+        attachmentIds?: string[];
+      }
     ) => post<{ id: string }>(`/api/chat/conversations/${id}/messages`, data),
+    uploadAttachments: (conversationId: string, files: File[]) => {
+      const form = new FormData();
+      for (const file of files) {
+        form.append('image', file, uploadFilenameFor(file));
+      }
+      return upload<ChatAttachment[]>(
+        `/api/chat/conversations/${conversationId}/attachments`,
+        form
+      );
+    },
+    getAttachment: (id: string) =>
+      get<ChatAttachment>(`/api/chat/attachments/${id}`),
+    deleteAttachment: (id: string) =>
+      del<{ success: boolean }>(`/api/chat/attachments/${id}`),
+    // Fixes what speech-to-text misheard, against the memory document and
+    // whatever the vision model read out of the attached photos. Returns the
+    // raw text too — that is what gets stored as the message's rawContent.
+    polishTranscript: (text: string, attachmentIds: string[] = []) =>
+      post<{ raw: string; corrected: string }>('/api/chat/polish-transcript', {
+        text,
+        attachmentIds,
+      }),
     runBriefing: () =>
       post<{
         conversationId: string;
@@ -1913,6 +1994,17 @@ export const api = {
         `/api/chat/proposals/${messageId}/${proposalId}`,
         data ? { action, data } : { action }
       ),
+  },
+
+  // The standing document the assistant keeps about the user. It writes here
+  // without a confirm card (backend/delegate/tools.py's `remember`), which is
+  // only reasonable because these routes make every change visible and undoable.
+  memory: {
+    get: () => get<UserMemory>('/api/memory'),
+    update: (content: string) => put<UserMemory>('/api/memory', { content }),
+    revisions: () => get<MemoryRevision[]>('/api/memory/revisions'),
+    restore: (id: string) =>
+      post<UserMemory>(`/api/memory/revisions/${id}/restore`, {}),
   },
 
   files: {
