@@ -43,6 +43,73 @@ class HistoryExpiredError(Exception):
     """
 
 
+class GmailApiError(requests.HTTPError):
+    """An HTTP error from Google that keeps the message Google actually sent.
+
+    `requests`' own HTTPError stringifies to the status line and nothing else
+    ("403 Client Error: Forbidden for url: ..."), which is identical text for
+    a disabled Gmail API, a declined scope and a revoked token — three
+    problems with three different fixes. Google puts the distinguishing
+    detail in the response body, and `str(e)` here is what the user is shown
+    when a connect or sync fails (routes/email.py::oauth_callback, the
+    last_sync_error column), so throwing the body away is throwing away the
+    only part that says what to do next.
+
+    Subclasses HTTPError so existing `except requests.RequestException`
+    handlers keep catching it.
+    """
+
+    def __init__(self, message: str, *, status_code: int, reason: str | None, response=None):
+        super().__init__(message, response=response)
+        self.status_code = status_code
+        # Google's machine-readable code — 'PERMISSION_DENIED',
+        # 'accessNotConfigured', 'invalid_grant' — for callers that want to
+        # branch on the cause rather than print it.
+        self.reason = reason
+
+
+def _error_detail(resp) -> tuple[str | None, str | None]:
+    """Pull (message, reason) out of a Google error body.
+
+    Two shapes: the Gmail API nests an object under `error`, while the OAuth
+    token endpoint puts a bare code there with the prose in
+    `error_description`. Anything unrecognized (an HTML error page from a
+    proxy, say) falls back to the raw text — truncated, since it lands in a
+    DB column and an HTML page is not a sentence.
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        text = (resp.text or '').strip()
+        return (text[:300] or None), None
+    if not isinstance(body, dict):
+        return None, None
+    err = body.get('error')
+    if isinstance(err, str):
+        return body.get('error_description') or err, err
+    if isinstance(err, dict):
+        reason = err.get('status')
+        errors = err.get('errors')
+        if not reason and isinstance(errors, list) and errors and isinstance(errors[0], dict):
+            reason = errors[0].get('reason')
+        return err.get('message'), reason
+    return None, None
+
+
+def _raise_for_status(resp) -> None:
+    """`resp.raise_for_status()` with Google's explanation kept."""
+    if resp.status_code < 400:
+        return
+    message, reason = _error_detail(resp)
+    head = f'{resp.status_code} {reason}' if reason else str(resp.status_code)
+    raise GmailApiError(
+        f'{head}: {message}' if message else f'{head} from {resp.url}',
+        status_code=resp.status_code,
+        reason=reason,
+        response=resp,
+    )
+
+
 def _auth_headers(access_token: str) -> dict:
     return {'Authorization': f'Bearer {access_token}'}
 
@@ -70,7 +137,7 @@ def exchange_code(client_id: str, client_secret: str, redirect_uri: str, code: s
         'code': code,
         'grant_type': 'authorization_code',
     }, timeout=_REQUEST_TIMEOUT)
-    resp.raise_for_status()
+    _raise_for_status(resp)
     return resp.json()
 
 
@@ -81,7 +148,7 @@ def refresh_access_token(client_id: str, client_secret: str, refresh_token: str)
         'refresh_token': refresh_token,
         'grant_type': 'refresh_token',
     }, timeout=_REQUEST_TIMEOUT)
-    resp.raise_for_status()
+    _raise_for_status(resp)
     return resp.json()
 
 
@@ -116,7 +183,7 @@ def get_profile(access_token: str) -> dict:
         f'{GMAIL_API_BASE}/users/me/profile',
         headers=_auth_headers(access_token), timeout=_REQUEST_TIMEOUT,
     )
-    resp.raise_for_status()
+    _raise_for_status(resp)
     return resp.json()
 
 
@@ -130,7 +197,7 @@ def list_history(access_token: str, start_history_id: str, page_token: str | Non
     )
     if resp.status_code == 404:
         raise HistoryExpiredError('Gmail history cursor expired')
-    resp.raise_for_status()
+    _raise_for_status(resp)
     return resp.json()
 
 
@@ -146,7 +213,7 @@ def list_all_message_ids(access_token: str, page_token: str | None = None) -> di
         f'{GMAIL_API_BASE}/users/me/messages',
         headers=_auth_headers(access_token), params=params, timeout=_REQUEST_TIMEOUT,
     )
-    resp.raise_for_status()
+    _raise_for_status(resp)
     return resp.json()
 
 
@@ -155,7 +222,7 @@ def get_message(access_token: str, gmail_id: str) -> dict:
         f'{GMAIL_API_BASE}/users/me/messages/{gmail_id}',
         headers=_auth_headers(access_token), params={'format': 'full'}, timeout=_REQUEST_TIMEOUT,
     )
-    resp.raise_for_status()
+    _raise_for_status(resp)
     return resp.json()
 
 

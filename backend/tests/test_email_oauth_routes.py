@@ -3,6 +3,7 @@ gmail_client HTTP call is monkeypatched, matching test_newspapers.py's style."""
 import pytest
 
 from backend.db.connection import get_db
+from backend.email import gmail_client
 from backend.routes.email import _get_account
 
 
@@ -174,3 +175,51 @@ def test_disconnect_is_soft_and_idempotent(client, monkeypatch):
 def test_disconnect_with_no_account_is_a_noop(client):
     resp = client.post('/api/email/oauth/disconnect')
     assert resp.get_json() == {'success': True}
+
+
+# --- what the connect tab shows when Google says no ---
+
+
+def _valid_state():
+    from backend.routes.email import _new_state
+    return _new_state()
+
+
+def test_callback_shows_googles_reason_not_just_the_status_line(client, monkeypatch):
+    """The reported failure: consent succeeds, then users/me/profile 403s
+    because the Gmail API was never enabled on the project. The page has to
+    carry Google's explanation — 'Forbidden for url: ...' names a problem
+    the user cannot act on, and it reads identically for a declined scope."""
+    _set_oauth_client(client)
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.exchange_code',
+        lambda *a, **k: {'access_token': 'at', 'refresh_token': 'rt', 'expires_in': 3600},
+    )
+
+    def _boom(_token):
+        raise gmail_client.GmailApiError(
+            '403 PERMISSION_DENIED: Gmail API has not been used in project 12345 '
+            'before or it is disabled.',
+            status_code=403, reason='PERMISSION_DENIED',
+        )
+
+    monkeypatch.setattr('backend.routes.email.gmail_client.get_profile', _boom)
+
+    resp = client.get(f'/api/email/oauth/callback?state={_valid_state()}&code=abc')
+
+    assert resp.status_code == 502
+    body = resp.get_data(as_text=True)
+    assert 'has not been used in project 12345' in body
+    assert _get_account() is None
+
+
+def test_callback_escapes_the_provider_error_it_reflects(client):
+    """`error` is a query parameter, so a crafted link controls it. It is
+    echoed into an HTML page served from the app's own origin, so it must be
+    escaped rather than interpolated raw."""
+    resp = client.get('/api/email/oauth/callback?error=%3Cscript%3Ealert(1)%3C/script%3E')
+
+    assert resp.status_code == 400
+    body = resp.get_data(as_text=True)
+    assert '<script>' not in body
+    assert '&lt;script&gt;' in body
