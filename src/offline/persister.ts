@@ -24,7 +24,12 @@ export const QUERY_GC_TIME = 1000 * 60 * 60 * 24 * 20; // 20 days, < 2^31-1 ms
 // such key, and reading through it blanked the whole Practice tab.
 // v4: fanfic library list moved from a flat Fic[] to useInfiniteQuery's
 // InfiniteData shape — restoring the old array crashed the Library view.
-export const PERSIST_BUSTER = 'v4';
+// v5: email list did the same. Third time for this exact shape change, and
+// the crash is the same each time: react-query reads data.pages.length on a
+// restored flat array and throws "Cannot read properties of undefined
+// (reading 'length')" before anything renders. Any query moving to
+// useInfiniteQuery needs a bump here in the same commit.
+export const PERSIST_BUSTER = 'v5';
 
 const IDB_KEY = 'lunaschal-react-query';
 
