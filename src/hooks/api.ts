@@ -925,6 +925,10 @@ export interface EmailMessage {
   senderEmail: string | null;
   snippet: string | null;
   bodyText: string;
+  /** Sanitized at import (backend/email/sanitize.py). Empty for plain-text
+   *  mail and for anything synced before HTML was stored, which is why
+   *  EmailDetail falls back to bodyText. */
+  bodyHtml: string;
   receivedAt: string;
   category: EmailCategory | null;
   jobStatus: JobApplicationStatus | null;
@@ -938,6 +942,17 @@ export interface EmailStats {
   interviewNextStepCount: number;
   otherUpdateCount: number;
   nextSteps: EmailMessage[];
+}
+
+export interface EmailImageStatus {
+  pending: number;
+  stored: number;
+  failed: number;
+  skipped: number;
+  /** False when the external media drive isn't mounted — fetching pauses
+   *  rather than failing, so pending work simply waits. */
+  storeAvailable: boolean;
+  storeRoot: string;
 }
 
 export interface EmailSyncResult {
@@ -2354,6 +2369,7 @@ export const api = {
     },
     get: (id: string) => get<EmailMessage>(`/api/email/${id}`),
     stats: () => get<EmailStats>('/api/email/stats'),
+    imageStatus: () => get<EmailImageStatus>('/api/email/image-status'),
   },
 
   practice: {

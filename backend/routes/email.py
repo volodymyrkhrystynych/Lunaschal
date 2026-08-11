@@ -1,7 +1,7 @@
 import secrets
 import time
 
-from flask import Blueprint, jsonify, redirect, request
+from flask import Blueprint, current_app, jsonify, redirect, request
 from markupsafe import escape
 from ulid import ULID
 
@@ -205,6 +205,65 @@ def list_emails():
         (*params, limit, offset),
     ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
+
+
+@bp.get('/images/<url_hash>')
+def get_image(url_hash: str):
+    """Serve a stored email image by the hash of its original URL.
+
+    That key is what lets sanitize.py write this path into the markup at
+    import time, before the bytes exist. A row that hasn't been fetched yet
+    answers 404 — the reader sees a broken image for a while rather than the
+    page blocking on a download, and the fetcher will fill it in.
+
+    The response is deliberately same-origin and cacheable forever: the file
+    is content-addressed, so the bytes behind a given hash never change.
+    """
+    from backend.email import media
+
+    row = get_db().execute(
+        'SELECT content_hash, extension, content_type, status FROM email_images WHERE url_hash=?',
+        (url_hash,),
+    ).fetchone()
+    if not row or row['status'] != 'stored' or not row['content_hash']:
+        return jsonify({'error': 'Image not available'}), 404
+    data = media.read(row['content_hash'], row['extension'] or 'bin')
+    if data is None:
+        # Row says stored but the file is gone — the external drive is
+        # unmounted, or it was pruned. Not an error worth logging loudly;
+        # the image simply isn't here right now.
+        return jsonify({'error': 'Image not available'}), 404
+    resp = current_app.response_class(data, mimetype=row['content_type'] or 'application/octet-stream')
+    resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    # Never let a stored SVG execute in our origin: it is remote markup that
+    # happens to be served from here, which is precisely the case CSP exists
+    # for. Belt and braces alongside the sandbox attribute.
+    resp.headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'"
+    resp.headers['X-Content-Type-Options'] = 'nosniff'
+    return resp
+
+
+# Not '/images/status': that is a legal url_hash as far as the route above is
+# concerned, and relying on Werkzeug's static-beats-dynamic ordering to
+# disambiguate is a subtlety no reader should have to know about.
+@bp.get('/image-status')
+def images_status():
+    from backend.email import images as image_worker
+    from backend.email import media
+
+    db = get_db()
+    counts = {
+        r['status']: r['c']
+        for r in db.execute('SELECT status, COUNT(*) c FROM email_images GROUP BY status')
+    }
+    return jsonify({
+        'pending': image_worker.pending_count(db),
+        'stored': counts.get('stored', 0),
+        'failed': counts.get('failed', 0),
+        'skipped': counts.get('skipped', 0),
+        'storeAvailable': media.is_available(),
+        'storeRoot': str(media.media_root()),
+    })
 
 
 @bp.get('/stats')

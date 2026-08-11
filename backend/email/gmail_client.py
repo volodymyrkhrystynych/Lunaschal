@@ -264,7 +264,16 @@ def _walk_leaf_parts(payload: dict):
         yield from _walk_leaf_parts(part)
 
 
-def _extract_body_text(payload: dict) -> str:
+def _extract_bodies(payload: dict) -> tuple[str, str]:
+    """Return (plain text, raw html) for one message.
+
+    Both are kept now, and they answer different questions: the HTML is what
+    the reader sees (sanitized on the way into the DB), while the text is
+    what the classifier reads and what FTS indexes. Deriving one from the
+    other at read time would mean either re-flattening HTML on every
+    classification or losing formatting forever, so a multipart/alternative
+    message stores both of the alternatives it already sent us.
+    """
     plain, html = [], []
     for mime, data in _walk_leaf_parts(payload):
         decoded = _decode_b64url(data)
@@ -272,11 +281,12 @@ def _extract_body_text(payload: dict) -> str:
             plain.append(decoded)
         elif mime == 'text/html':
             html.append(decoded)
+    raw_html = '\n'.join(html)
     if plain:
-        return '\n'.join(plain).strip()
+        return '\n'.join(plain).strip(), raw_html
     if html:
-        return html_to_text('\n'.join(html))
-    return ''
+        return html_to_text(raw_html), raw_html
+    return '', ''
 
 
 def parse_message(raw: dict) -> dict:
@@ -287,6 +297,7 @@ def parse_message(raw: dict) -> dict:
     sender_name, sender_email = _split_sender(_header(headers, 'From'))
     internal_date = raw.get('internalDate')
     received_at = int(internal_date) // 1000 if internal_date else int(time.time())
+    body_text, body_html = _extract_bodies(payload)
     return {
         'gmailId': raw.get('id'),
         'threadId': raw.get('threadId'),
@@ -294,7 +305,11 @@ def parse_message(raw: dict) -> dict:
         'sender': sender_name,
         'senderEmail': sender_email,
         'snippet': raw.get('snippet'),
-        'bodyText': _extract_body_text(payload),
+        'bodyText': body_text,
+        # Raw, unsanitized — sanitizing here would put a policy decision in a
+        # pure parser. sync.py runs it through backend/email/sanitize.py on
+        # the way into the row.
+        'bodyHtml': body_html,
         'labelIds': raw.get('labelIds') or [],
         'receivedAt': received_at,
     }

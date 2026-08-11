@@ -11,6 +11,7 @@ state — for both never-attempted and previously-failed rows — so a crash
 mid-classification needs no separate in-progress flag to reset; a startup
 sweep (sweep_unclassified) just re-enqueues anything still NULL.
 """
+import re
 import time
 
 from backend.ai.llm import chat_json
@@ -60,10 +61,43 @@ _JOB_STATUS_SCHEMA = {
 }
 
 
+_URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
+
+# Long enough to keep a human-meaningful link ("acme.com/careers") while
+# collapsing the tracking monsters. Measured over a real mailbox: URLs are
+# ~51% of all body text, and the longest single one was 2,328 characters —
+# 39% of the whole budget below, spent on one redirect token.
+_URL_KEEP_CHARS = 60
+
+
+def _strip_urls(text: str) -> str:
+    """Replace tracking URLs with a short marker.
+
+    A link's query string is opaque entropy — campaign ids, HMACs, base64
+    blobs — that says nothing about whether a message is a rejection or a
+    newsletter, and it competes for the same character budget as the prose
+    that does. Keeping a truncated head preserves the one part that can
+    carry signal (the domain), and leaving a marker rather than deleting
+    outright keeps "click here to schedule" from reading as a dangling
+    sentence about nothing.
+    """
+    def shorten(match: re.Match[str]) -> str:
+        url = match.group(0)
+        return url if len(url) <= _URL_KEEP_CHARS else f'{url[:_URL_KEEP_CHARS]}…[link]'
+
+    return _URL_RE.sub(shorten, text)
+
+
 def _prompt_text(row) -> str:
     subject = row['subject'] or ''
     sender = row['sender'] or row['sender_email'] or ''
-    body = (row['body_text'] or '')[:_MAX_BODY_CHARS]
+    # Strip before truncating, or a single long link at the top of a
+    # newsletter can consume the window before the body is even reached.
+    body = _strip_urls(row['body_text'] or '')
+    # Marketing mail arrives with vertical whitespace used as layout; it
+    # survives html_to_text as runs of blank lines that cost tokens and mean
+    # nothing to a classifier.
+    body = re.sub(r'\n{3,}', '\n\n', body)[:_MAX_BODY_CHARS]
     return f'From: {sender}\nSubject: {subject}\n\n{body}'
 
 

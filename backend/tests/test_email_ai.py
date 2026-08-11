@@ -141,3 +141,50 @@ def test_sweep_unclassified_reenqueues_pending_rows(client, monkeypatch):
     assert count == 1
     assert len(enqueued) == 1
     assert done_id  # sanity: the classified row exists and wasn't touched
+
+
+# --- what the classifier is actually shown ---
+
+
+def _row(body_text, subject='Subject', sender='a@b.example'):
+    return {'subject': subject, 'sender': sender, 'sender_email': sender, 'body_text': body_text}
+
+
+def test_long_tracking_urls_are_collapsed():
+    """Measured on a real mailbox: URLs were 51% of all body text and the
+    longest single one was 2,328 characters — 39% of the whole prompt budget
+    spent on one redirect token."""
+    tracking = 'https://click.example/r/' + 'A1b2C3d4' * 100
+    text = email_ai._prompt_text(_row(f'You have been rejected. {tracking} Regards'))
+
+    assert 'You have been rejected.' in text
+    assert 'Regards' in text
+    assert tracking not in text
+    assert '[link]' in text
+    assert len(text) < 500
+
+
+def test_a_short_link_is_left_alone():
+    """The domain can carry signal — 'acme.com/careers' says something a
+    hashed redirect does not — so only the monsters are collapsed."""
+    text = email_ai._prompt_text(_row('Apply at https://acme.example/careers now'))
+    assert 'https://acme.example/careers' in text
+
+
+def test_url_stripping_happens_before_truncation():
+    """Otherwise one long link at the top of a newsletter consumes the
+    window before the body is even reached."""
+    tracking = 'https://click.example/' + 'x' * 6000
+    text = email_ai._prompt_text(_row(f'{tracking}\n\nYour interview is on Tuesday.'))
+    assert 'Your interview is on Tuesday.' in text
+
+
+def test_layout_whitespace_is_collapsed():
+    text = email_ai._prompt_text(_row('Hello' + '\n' * 40 + 'World'))
+    assert '\n\n\n' not in text
+    assert 'Hello' in text and 'World' in text
+
+
+def test_subject_and_sender_still_lead_the_prompt():
+    text = email_ai._prompt_text(_row('body', subject='Offer', sender='hr@acme.example'))
+    assert text.startswith('From: hr@acme.example\nSubject: Offer')

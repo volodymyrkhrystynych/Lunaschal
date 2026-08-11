@@ -1,4 +1,5 @@
 import type { EmailMessage } from '../../hooks/api';
+import { EmailBody } from './EmailBody';
 import {
   EMAIL_CATEGORY_LABELS,
   JOB_STATUS_LABELS,
@@ -50,9 +51,7 @@ export function EmailDetail({
         </div>
       )}
       <div className="flex-1 overflow-y-auto p-4">
-        <pre className="whitespace-pre-wrap break-words font-sans text-sm text-[var(--color-text)]">
-          {email.bodyText || '(no body)'}
-        </pre>
+        <EmailBody html={email.bodyHtml || ''} text={email.bodyText} />
       </div>
     </div>
   );

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { EmailCategory, EmailMessage } from '../../hooks/api';
 import {
@@ -7,6 +7,8 @@ import {
   JOB_STATUS_LABELS,
   formatEmailDate,
 } from '../../lib/email';
+
+const PAGE_SIZE = 50;
 
 export function EmailList({
   onSelect,
@@ -17,15 +19,47 @@ export function EmailList({
 }) {
   const [category, setCategory] = useState<EmailCategory | ''>('');
   const [query, setQuery] = useState('');
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
-  const { data: emails, isLoading } = useQuery({
+  const listQuery = useInfiniteQuery({
     queryKey: ['email', 'list', category, query],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       api.email.list({
         category: category || undefined,
         query: query || undefined,
+        limit: PAGE_SIZE,
+        offset: pageParam,
       }),
+    initialPageParam: 0,
+    // A short last page means the end. Counting pages rather than summing
+    // lengths keeps the offset aligned with what the server was actually
+    // asked for, the same way Fanfic/Library.tsx does it.
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.length === PAGE_SIZE ? allPages.length * PAGE_SIZE : undefined,
   });
+
+  const emails = listQuery.data?.pages.flat();
+  const isLoading = listQuery.isLoading;
+  const { hasNextPage, isFetchingNextPage, fetchNextPage } = listQuery;
+
+  useEffect(() => {
+    // jsdom has no IntersectionObserver; component tests render the first
+    // page and never scroll, so bailing out keeps them on the same path the
+    // browser takes before any scrolling happens.
+    if (typeof IntersectionObserver === 'undefined') return;
+    const node = sentinelRef.current;
+    if (!node) return;
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries[0]?.isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { rootMargin: '200px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   return (
     <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -113,6 +147,16 @@ export function EmailList({
               )}
             </button>
           ))
+        )}
+        {/* Sits inside the scroll container so the observer fires against it,
+            and is always rendered (not gated on hasNextPage) — an element
+            mounted only once more pages exist can't be observed in time to
+            request them. */}
+        <div ref={sentinelRef} />
+        {isFetchingNextPage && (
+          <div className="text-xs text-[var(--color-text-muted)] p-3 text-center">
+            Loading more…
+          </div>
         )}
       </div>
     </div>
