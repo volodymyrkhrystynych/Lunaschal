@@ -2,6 +2,7 @@ import secrets
 import time
 
 from flask import Blueprint, jsonify, redirect, request
+from markupsafe import escape
 from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict, search_emails_fts
@@ -71,9 +72,15 @@ def oauth_authorize():
 
 @bp.get('/oauth/callback')
 def oauth_callback():
+    # Both branches escape: `error` is a query parameter, so it is whatever a
+    # crafted link put there, and Google's own message goes into the same
+    # HTML further down. Neither is trusted enough to interpolate raw.
     error = request.args.get('error')
     if error:
-        return f'<p>Gmail connection failed: {error}. You can close this tab and try again.</p>', 400
+        return (
+            f'<p>Gmail connection failed: {escape(error)}. '
+            'You can close this tab and try again.</p>'
+        ), 400
 
     if not _consume_state(request.args.get('state')):
         return '<p>This connection link expired or was already used. Close this tab and try again.</p>', 400
@@ -90,7 +97,10 @@ def oauth_callback():
         token_data = gmail_client.exchange_code(client_id, client_secret, _redirect_uri(), code)
         profile = gmail_client.get_profile(token_data['access_token'])
     except Exception as e:
-        return f'<p>Gmail connection failed: {e}. You can close this tab and try again.</p>', 502
+        return (
+            f'<p>Gmail connection failed: {escape(str(e))}. '
+            'You can close this tab and try again.</p>'
+        ), 502
 
     db = get_db()
     now = int(time.time())
