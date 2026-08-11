@@ -44,6 +44,8 @@ def test_parse_plain_text_message():
         'senderEmail': 'recruiting@acme.example',
         'snippet': 'Thanks for applying...',
         'bodyText': 'Thanks for applying to Acme Corp!',
+        # A text/plain-only message has no HTML alternative to keep.
+        'bodyHtml': '',
         'labelIds': ['INBOX', 'UNREAD'],
         'receivedAt': 1700000000,
     }
@@ -209,3 +211,57 @@ def test_gmail_api_error_is_caught_as_a_requests_error():
     """sync.py and the scheduler catch broadly, but anything narrowing to
     requests.RequestException must keep working."""
     assert issubclass(gmail_client.GmailApiError, requests.RequestException)
+
+
+# --- both bodies are kept, because they answer different questions ---
+
+
+def test_multipart_keeps_the_html_alternative_as_well_as_the_text():
+    """The reader sees HTML; the classifier and FTS read text. Deriving one
+    from the other at read time would mean re-flattening on every
+    classification or losing formatting forever."""
+    raw = {
+        'id': 'm5', 'threadId': 't5', 'labelIds': [], 'snippet': '',
+        'internalDate': '1700000000000',
+        'payload': {
+            'headers': [],
+            'mimeType': 'multipart/alternative',
+            'parts': [
+                {'mimeType': 'text/plain', 'body': {'data': _b64url('plain body')}},
+                {'mimeType': 'text/html', 'body': {'data': _b64url('<p>html body</p>')}},
+            ],
+        },
+    }
+    result = parse_message(raw)
+    assert result['bodyText'] == 'plain body'
+    assert result['bodyHtml'] == '<p>html body</p>'
+
+
+def test_html_only_message_keeps_html_and_derives_the_text():
+    raw = {
+        'id': 'm6', 'threadId': 't6', 'labelIds': [], 'snippet': '',
+        'internalDate': '1700000000000',
+        'payload': {
+            'headers': [],
+            'mimeType': 'text/html',
+            'body': {'data': _b64url('<div>Hello <b>world</b></div>')},
+        },
+    }
+    result = parse_message(raw)
+    assert result['bodyHtml'] == '<div>Hello <b>world</b></div>'
+    assert 'Hello' in result['bodyText']
+    assert '<' not in result['bodyText']
+
+
+def test_parse_message_returns_raw_html_not_sanitized_html():
+    """Sanitizing here would put a policy decision inside a pure parser;
+    sync.py runs it through backend/email/sanitize.py on the way to the row."""
+    raw = {
+        'id': 'm7', 'threadId': 't7', 'labelIds': [], 'snippet': '',
+        'internalDate': '1700000000000',
+        'payload': {
+            'headers': [], 'mimeType': 'text/html',
+            'body': {'data': _b64url('<p onclick="x()">hi</p>')},
+        },
+    }
+    assert 'onclick' in parse_message(raw)['bodyHtml']

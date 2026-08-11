@@ -979,6 +979,10 @@ CREATE TABLE IF NOT EXISTS emails (
     sender_email TEXT,
     snippet TEXT,
     body_text TEXT NOT NULL DEFAULT '',
+    -- Sanitized at import (backend/email/sanitize.py), rendered as trusted
+    -- markup — the fanfic chapter contract. Empty for plain-text-only mail,
+    -- which is why body_text stays the thing the classifier reads.
+    body_html TEXT NOT NULL DEFAULT '',
     label_ids TEXT,
     received_at INTEGER NOT NULL,
     category TEXT CHECK(category IN ('job_application','newsletter','notification','personal','other')),
@@ -992,3 +996,33 @@ CREATE TABLE IF NOT EXISTS emails (
 CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at DESC);
 CREATE INDEX IF NOT EXISTS idx_emails_category ON emails(category);
 CREATE INDEX IF NOT EXISTS idx_emails_job_status ON emails(job_status) WHERE job_status IS NOT NULL;
+
+-- One row per distinct image URL seen in email HTML. Keyed by a hash of the
+-- URL rather than a ULID because backend/email/sanitize.py has to name the
+-- local path at import time, before anything is fetched — the key must be
+-- derivable from the URL alone.
+--
+-- The bytes live on disk under content_hash (backend/email/media.py), never
+-- here: identical logos across thousands of messages converge on one file,
+-- and a mail archive's images are what the external drive is for.
+-- content_hash is NULL until fetched, and many rows share one — it is
+-- deliberately not unique.
+CREATE TABLE IF NOT EXISTS email_images (
+    url_hash TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    content_hash TEXT,
+    extension TEXT,
+    content_type TEXT,
+    byte_size INTEGER,
+    -- pending -> stored | failed | skipped. 'skipped' is terminal and means
+    -- the URL was refused (not public, wrong content type, too big); 'failed'
+    -- is retryable and carries attempt_count so a dead CDN stops being asked.
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','stored','failed','skipped')),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    fetched_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_email_images_status ON email_images(status, attempt_count);
+CREATE INDEX IF NOT EXISTS idx_email_images_content ON email_images(content_hash) WHERE content_hash IS NOT NULL;

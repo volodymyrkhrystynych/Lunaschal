@@ -185,3 +185,75 @@ body {
     opacity: 0;
   }
 }
+
+/* Email HTML, sanitized at import (backend/email/sanitize.py). Marketing mail
+   is built out of fixed-width tables and inline styles written for a desktop
+   client; the sanitizer drops the styles, so the job here is keeping what
+   remains inside the pane. */
+.email-body {
+  color: var(--color-text);
+  line-height: 1.6;
+  /* Same reason as .fanfic-prose: unbreakable runs (tracking URLs left as
+     visible text, base64 alt text) otherwise widen the pane and scroll the
+     whole app sideways. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.email-body p,
+.email-body div {
+  margin-bottom: 0.6em;
+}
+.email-body h1,
+.email-body h2,
+.email-body h3,
+.email-body h4,
+.email-body h5,
+.email-body h6 {
+  font-weight: 700;
+  margin: 1em 0 0.5em;
+}
+.email-body a {
+  color: var(--color-primary);
+  text-decoration: underline;
+}
+.email-body img {
+  max-width: 100%;
+  height: auto;
+}
+/* A deferred image has no src, so it collapses to nothing and the layout
+   jumps when images are loaded. A dashed box holds the space and makes the
+   "not shown" state visible rather than invisible. */
+.email-body img[data-src]:not([src]) {
+  display: inline-block;
+  min-width: 1rem;
+  min-height: 1rem;
+  border: 1px dashed var(--color-text-muted);
+  border-radius: 2px;
+  opacity: 0.4;
+}
+/* Newsletter layout tables are authored at 600px+ and will not fit a phone,
+   or the detail pane. Let the wide ones scroll inside their own box instead
+   of pushing the page. */
+.email-body table {
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.email-body td,
+.email-body th {
+  padding: 0.25em 0.4em;
+  vertical-align: top;
+}
+.email-body blockquote {
+  border-left: 2px solid var(--color-text-muted);
+  padding-left: 0.8em;
+  margin: 0.6em 0;
+  opacity: 0.85;
+}
+.email-body hr {
+  border: 0;
+  border-top: 1px solid var(--color-text-muted);
+  opacity: 0.3;
+  margin: 1em 0;
+}

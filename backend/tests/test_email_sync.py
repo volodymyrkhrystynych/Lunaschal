@@ -233,3 +233,145 @@ def test_exception_is_recorded_and_never_raises(client, monkeypatch, account_row
     assert result == {'status': 'error', 'error': 'token refresh failed'}
     updated = get_db().execute('SELECT * FROM email_accounts WHERE id=?', (account_row['id'],)).fetchone()
     assert updated['last_sync_error'] == 'token refresh failed'
+
+
+# --- HTML, images, concurrency, and when classification is queued ---
+
+
+def _html_message(gmail_id, html):
+    import base64
+    return {
+        'id': gmail_id, 'threadId': f'thread-{gmail_id}', 'labelIds': ['INBOX'], 'snippet': 's',
+        'internalDate': '1700000000000',
+        'payload': {
+            'headers': [{'name': 'Subject', 'value': 'HTML mail'}],
+            'mimeType': 'text/html',
+            'body': {'data': base64.urlsafe_b64encode(html.encode()).decode()},
+        },
+    }
+
+
+def test_html_is_stored_sanitized_and_images_are_queued(client, monkeypatch, account_row):
+    html = '<p onclick="x()">Hello<img src="https://cdn.example/logo.png"></p>'
+    monkeypatch.setattr(gmail_client, 'get_profile', lambda t: {'historyId': '9'})
+    monkeypatch.setattr(
+        gmail_client, 'list_all_message_ids',
+        lambda t, p=None: {'messages': [{'id': 'g1'}]},
+    )
+    monkeypatch.setattr(gmail_client, 'get_message', lambda t, gid: _html_message(gid, html))
+
+    sync.sync_account(account_row)
+
+    row = get_db().execute('SELECT body_html, body_text FROM emails').fetchone()
+    assert 'onclick' not in row['body_html']
+    assert 'Hello' in row['body_html']
+    # Rewritten to a local path, never left pointing at the sender.
+    assert 'cdn.example' not in row['body_html']
+    assert '/api/email/images/' in row['body_html']
+    # And the fetch was queued for the background worker.
+    queued = get_db().execute('SELECT url, status FROM email_images').fetchall()
+    assert [(r['url'], r['status']) for r in queued] == [
+        ('https://cdn.example/logo.png', 'pending')
+    ]
+
+
+def test_plain_text_mail_stores_empty_html(client, monkeypatch, account_row):
+    monkeypatch.setattr(gmail_client, 'get_profile', lambda t: {'historyId': '9'})
+    monkeypatch.setattr(
+        gmail_client, 'list_all_message_ids', lambda t, p=None: {'messages': [{'id': 'g1'}]}
+    )
+    monkeypatch.setattr(gmail_client, 'get_message', lambda t, gid: _gmail_message(gid))
+
+    sync.sync_account(account_row)
+
+    row = get_db().execute('SELECT body_html, body_text FROM emails').fetchone()
+    assert row['body_html'] == ''
+    assert row['body_text'] == 'body text'
+
+
+def test_classification_is_queued_per_message_during_the_walk(
+    client, monkeypatch, account_row, run_bg_sync
+):
+    """Regression: the enqueue used to happen once, after the whole sync
+    returned. On a multi-hour first backfill that left every category NULL
+    until the last page landed, and a crash mid-walk discarded the queue for
+    everything already imported."""
+    seen_during_walk = []
+
+    def _list(token, page_token=None):
+        if page_token is None:
+            return {'messages': [{'id': 'g1'}], 'nextPageToken': 'p2'}
+        # By the time the second page is requested, page one's message must
+        # already have been handed to the classifier.
+        seen_during_walk.append(list(run_bg_sync))
+        return {'messages': [{'id': 'g2'}]}
+
+    monkeypatch.setattr(gmail_client, 'get_profile', lambda t: {'historyId': '9'})
+    monkeypatch.setattr(gmail_client, 'list_all_message_ids', _list)
+    monkeypatch.setattr(gmail_client, 'get_message', lambda t, gid: _gmail_message(gid))
+
+    sync.sync_account(account_row)
+
+    assert len(seen_during_walk[0]) == 1, 'page 1 was not classified before page 2 was fetched'
+    assert len(run_bg_sync) == 2
+
+
+def test_a_second_concurrent_sync_is_refused_rather_than_racing(
+    client, monkeypatch, account_row
+):
+    """Regression for `UNIQUE constraint failed: emails.account_id,
+    emails.gmail_id`. The scheduler treats an account as due for the whole
+    time last_synced_at IS NULL — the entire backfill — so a manual sync
+    landing mid-walk started a second one over the same mailbox."""
+    reentered = []
+
+    def _list(token, page_token=None):
+        # Re-enter exactly as the scheduler would, from inside the first run.
+        reentered.append(sync.sync_account(account_row))
+        return {'messages': [{'id': 'g1'}]}
+
+    monkeypatch.setattr(gmail_client, 'get_profile', lambda t: {'historyId': '9'})
+    monkeypatch.setattr(gmail_client, 'list_all_message_ids', _list)
+    monkeypatch.setattr(gmail_client, 'get_message', lambda t, gid: _gmail_message(gid))
+
+    result = sync.sync_account(account_row)
+
+    assert reentered == [{'status': 'busy', 'newCount': 0}]
+    assert result['status'] == 'ok'
+    assert get_db().execute('SELECT COUNT(*) c FROM emails').fetchone()['c'] == 1
+
+
+def test_a_duplicate_gmail_id_does_not_abort_the_sync(client, monkeypatch, account_row):
+    """Belt to the lock's braces: even if two writers get past the SELECT,
+    the unique index must resolve it as 'already have it', not an
+    IntegrityError that kills the run and discards its progress."""
+    db = get_db()
+
+    def _get_message(token, gmail_id):
+        # Lose the race precisely: _insert_message's SELECT has already run
+        # and found nothing, and the competing writer commits the row while
+        # we are still fetching. Only the unique index can catch this.
+        if gmail_id == 'g1':
+            now = int(time.time())
+            db.execute(
+                'INSERT INTO emails (id, account_id, gmail_id, body_text, received_at, created_at)'
+                " VALUES ('other-writer', ?, 'g1', 'x', ?, ?)",
+                (account_row['id'], now, now),
+            )
+            db.commit()
+        return _gmail_message(gmail_id)
+
+    monkeypatch.setattr(gmail_client, 'get_profile', lambda t: {'historyId': '9'})
+    monkeypatch.setattr(
+        gmail_client, 'list_all_message_ids',
+        lambda t, p=None: {'messages': [{'id': 'g1'}, {'id': 'g2'}]},
+    )
+    monkeypatch.setattr(gmail_client, 'get_message', _get_message)
+
+    result = sync.sync_account(account_row)
+
+    # The run survived the conflict and went on to import g2.
+    assert result['status'] == 'ok'
+    assert result['newCount'] == 1
+    assert db.execute('SELECT COUNT(*) c FROM emails').fetchone()['c'] == 2
+    assert db.execute("SELECT id FROM emails WHERE gmail_id='g1'").fetchone()['id'] == 'other-writer'

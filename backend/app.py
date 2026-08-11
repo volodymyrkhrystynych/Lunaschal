@@ -120,4 +120,8 @@ def create_app():
         start_research_scheduler()
         from backend.email_scheduler import start_email_scheduler
         start_email_scheduler()
+        # Lowest-priority loop in the app: nothing waits on an email image,
+        # so it gets its own slow thread rather than a share of anything.
+        from backend.email.images import start_image_fetcher
+        start_image_fetcher()
     return app

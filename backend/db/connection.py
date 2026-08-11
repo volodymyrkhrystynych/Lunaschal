@@ -105,6 +105,7 @@ def init_db() -> None:
     _ensure_conversation_idea_id(db)
     _reset_stale_idea_research(db)
     _ensure_email_settings(db)
+    _ensure_email_body_html(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -728,6 +729,21 @@ def _ensure_email_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_id TEXT')
     if 'google_oauth_client_secret' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_secret TEXT')
+    db.commit()
+
+
+def _ensure_email_body_html(db: sqlite3.Connection) -> None:
+    """Add emails.body_html for mail synced before HTML was kept.
+
+    Left empty rather than backfilled: the HTML is not recoverable from the
+    stored text, so filling it would need a re-fetch of every message from
+    Gmail. EmailDetail falls back to body_text when this is empty, so old
+    mail keeps rendering exactly as it did — it just doesn't gain formatting
+    until (and unless) it is re-synced.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(emails)')}
+    if 'body_html' not in cols:
+        db.execute("ALTER TABLE emails ADD COLUMN body_html TEXT NOT NULL DEFAULT ''")
     db.commit()
 
 
