@@ -163,9 +163,10 @@ export function BriefingSection() {
                 )}
               </select>
               <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Runs overnight, so a slower preset is fine here — this is the
-                natural place for <code>gemma4-long</code> if a briefing ever
-                needs the bigger context window.
+                Runs overnight, so a slower preset is fine here. There is only
+                one chat preset now — <code>qwen36</code> — so leave this on the
+                default unless you add another to <code>llama/presets.ini</code>
+                .
               </p>
             </div>
             <div>
@@ -214,8 +215,8 @@ export function BriefingSection() {
             <p className="text-xs text-[var(--color-text-muted)]">
               The context window isn't an app setting: llama-server allocates
               the KV cache when it loads the model, so it's fixed per preset in{' '}
-              <code>llama/presets.ini</code>. Pick the <code>gemma4-long</code>{' '}
-              preset above if a briefing needs a bigger one.
+              <code>llama/presets.ini</code>. Raise <code>ctx-size</code> there
+              and restart llama-server if a briefing ever needs a bigger one.
             </p>
             <div>
               <label className="text-sm text-[var(--color-text-muted)]">

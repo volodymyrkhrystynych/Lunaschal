@@ -12,8 +12,10 @@ force this module onto Ollama's native endpoint — and both are now *better*:
   construction rather than parsed out of prose. And unlike Ollama's grammar mode,
   it composes with thinking: the grammar applies to the answer channel only.
 
-Thinking is a boolean, not a level. Gemma 4 has one thinking channel, toggled by
-a chat-template kwarg — there is no low/medium/high/max to map onto.
+Thinking is a boolean, not a level: the chat model has one thinking channel,
+toggled by a chat-template kwarg — there is no low/medium/high/max to map onto.
+That was true of Gemma 4 and stays true of Qwen3.6, which is why the swap needed
+no change here.
 """
 import json
 import re
@@ -36,8 +38,8 @@ JSON_MAX_TOKENS = 4096
 
 # Output length ceiling (`max_tokens`) for the default conversational model. A
 # hard stop, not a reservation, so it costs nothing until a generation runs long —
-# but it has to stay reachable within `_TIMEOUT`. Gemma 4 26B A4B with its experts
-# served from system RAM measures 25 tok/s, so a ceiling in the tens of thousands
+# but it has to stay reachable within `_TIMEOUT`. The chat model serves its experts
+# from system RAM and measures tens of tok/s, so a ceiling in the tens of thousands
 # of tokens could not finish, turning a runaway generation into a lost reply
 # rather than a capped one.
 LLM_MAX_TOKENS = 4096
@@ -104,7 +106,10 @@ def _request_kwargs(*, thinking: bool, max_tokens: int | None,
 
     `chat_template_kwargs` rides in `extra_body` because it is a llama.cpp
     extension the OpenAI SDK doesn't model. Thinking is disabled explicitly
-    rather than by omission — Gemma 4's template defaults it *on*.
+    rather than by omission, because the chat template defaults it *on* — that
+    was true of Gemma 4 and is true of Qwen3.6. Being explicit is also what
+    makes the setting safe across a model swap: a template that doesn't know
+    the kwarg ignores it, so the worst case is the default, never a crash.
     """
     kwargs: dict = {
         'extra_body': {'chat_template_kwargs': {'enable_thinking': thinking}},
@@ -158,6 +163,27 @@ def chat_json(prompt: str, system: str | None = None, model: str | None = None,
     return _parse_json_response(_content(resp.choices[0].message))
 
 
+def chat_json_messages(messages: list[dict], *, schema: dict | None = None,
+                       max_tokens: int = JSON_MAX_TOKENS,
+                       thinking: bool = False) -> dict:
+    """`chat_json` over a prebuilt message list.
+
+    Exists for the one caller that needs a grammar-constrained answer *about an
+    image* (backend/ai/transcript.py): `chat_json` takes a prompt string, and a
+    multimodal message is a list of content parts. Everything else about the
+    request is identical, grammar included.
+    """
+    c = get_provider_config()
+    client = get_llama_client(c)
+    resp = client.chat.completions.create(
+        model=get_model(c),
+        messages=messages,
+        timeout=_TIMEOUT,
+        **_request_kwargs(thinking=thinking, max_tokens=max_tokens, schema=schema),
+    )
+    return _parse_json_response(_content(resp.choices[0].message))
+
+
 def chat_text(prompt: str, system: str | None = None) -> str:
     """Blocking plain-text completion (default model's thinking/token settings)."""
     return chat_messages(_messages(prompt, system))
@@ -178,9 +204,33 @@ def chat_messages(messages: list[dict]) -> str:
 def chat_stream_deltas(messages: list[dict]):
     """Streaming plain-text completion; yields assistant content deltas.
 
-    Thinking deltas are intentionally not yielded — they arrive either as
-    `reasoning_content` or inside a <think> block, and neither belongs in the
-    user-visible stream.
+    Thinking deltas are dropped here. Callers that want to show reasoning use
+    `chat_stream_events` below and label the two channels apart — a caller that
+    only wants the answer must not have to filter the thinking back out.
+    """
+    for kind, text in chat_stream_events(messages):
+        if kind == 'content':
+            yield text
+
+
+_THINK_OPEN = '<think>'
+_THINK_CLOSE = '</think>'
+
+
+def chat_stream_events(messages: list[dict]):
+    """Streaming completion as ('content' | 'thinking', delta) pairs.
+
+    Reasoning reaches us two different ways depending on how llama-server was
+    launched: as a separate `reasoning_content` field on the delta, or inline in
+    `content` wrapped in a <think> block. Both are handled, because which one
+    you get is a property of the server's flags rather than of this request —
+    and a UI that renders raw `<think>` tags into the reply is the failure this
+    exists to prevent.
+
+    The inline case is tracked with a running flag rather than a regex over the
+    finished text: the tags arrive split across chunks, so there is no complete
+    string to match against until the stream is over, by which point the answer
+    should already be on screen.
     """
     c = get_provider_config()
     client = get_llama_client(c)
@@ -188,13 +238,49 @@ def chat_stream_deltas(messages: list[dict]):
         model=get_model(c), messages=messages, stream=True, timeout=_TIMEOUT,
         **_request_kwargs(**default_generation_opts()),
     )
+    buffer = ''
+    thinking = False
     for chunk in stream:
         if not chunk.choices:
             continue
         delta = chunk.choices[0].delta
+
+        reasoning = getattr(delta, 'reasoning_content', None)
+        if reasoning:
+            yield ('thinking', reasoning)
+
         text = getattr(delta, 'content', None)
-        if text:
-            yield text
+        if not text:
+            continue
+
+        buffer += text
+        # Hold back anything that could still turn out to be a partial tag, so
+        # a '<' that begins '<think>' is never emitted as answer text.
+        while buffer:
+            marker = _THINK_CLOSE if thinking else _THINK_OPEN
+            at = buffer.find(marker)
+            if at >= 0:
+                head, buffer = buffer[:at], buffer[at + len(marker):]
+                if head:
+                    yield ('thinking' if thinking else 'content', head)
+                thinking = not thinking
+                continue
+            keep = _partial_tag_len(buffer, marker)
+            emit, buffer = (buffer[:-keep], buffer[-keep:]) if keep else (buffer, '')
+            if emit:
+                yield ('thinking' if thinking else 'content', emit)
+            break
+
+    if buffer:
+        yield ('thinking' if thinking else 'content', buffer)
+
+
+def _partial_tag_len(buffer: str, marker: str) -> int:
+    """How many trailing chars of `buffer` could be the start of `marker`."""
+    for n in range(min(len(marker) - 1, len(buffer)), 0, -1):
+        if buffer.endswith(marker[:n]):
+            return n
+    return 0
 
 
 def chat_tool_turn(messages: list[dict], tools: list[dict], max_tokens: int | None = None):
@@ -218,9 +304,11 @@ def chat_tool_turn(messages: list[dict], tools: list[dict], max_tokens: int | No
 def chat_with_tools(messages: list[dict], tools: list[dict], max_tokens: int | None = None):
     """One tool-calling turn; returns the assistant message.
 
-    llama-server parses Gemma 4's native `<|tool_call>call:NAME{...}` notation into
-    OpenAI-shaped `tool_calls` via its peg-gemma4 grammar, which requires the
-    server to run with `--jinja` (see llama/start-llama.sh).
+    llama-server parses the model's native tool-call notation into OpenAI-shaped
+    `tool_calls`. It picks the parser by reading the model's own chat template,
+    so this works across model families without the app knowing which notation
+    is in play — but only when the server runs with `--jinja` (`jinja = true` in
+    llama/presets.ini, set globally for exactly this reason).
 
     `max_tokens` defaults to unbounded, as it always has — verification wants a
     whole case. Background loops should pass a small ceiling: nothing preempts a

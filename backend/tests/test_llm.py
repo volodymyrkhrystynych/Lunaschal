@@ -113,8 +113,8 @@ def _stub_client(monkeypatch, captured, content='{"ok": true}'):
     completions = _FakeCompletions(captured, content)
     client = type('Client', (), {'chat': type('Chat', (), {'completions': completions})()})()
     monkeypatch.setattr(llm, 'get_llama_client', lambda *a, **k: client)
-    monkeypatch.setattr(llm, 'get_provider_config', lambda: {'llama_model': 'gemma4'})
-    monkeypatch.setattr(llm, 'get_model', lambda *a, **k: 'gemma4')
+    monkeypatch.setattr(llm, 'get_provider_config', lambda: {'llama_model': 'qwen36'})
+    monkeypatch.setattr(llm, 'get_model', lambda *a, **k: 'qwen36')
     return captured
 
 
@@ -122,7 +122,7 @@ def test_chat_json_sends_schema_and_thinking(monkeypatch):
     captured = _stub_client(monkeypatch, {})
     schema = {'type': 'object'}
     assert llm.chat_json('hi', thinking=True, schema=schema) == {'ok': True}
-    assert captured['model'] == 'gemma4'
+    assert captured['model'] == 'qwen36'
     assert captured['response_format']['json_schema']['schema'] is schema
     assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is True
 

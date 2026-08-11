@@ -161,3 +161,27 @@ body {
   overflow-x: auto;
   margin: 0.9em 0;
 }
+
+/* Practice tab: correctness overlay drawn as CodeMirror decorations on top of
+   the read-only, syntax-highlighted target snippet. */
+.practice-char-correct {
+  background: rgba(34, 197, 94, 0.25);
+}
+.practice-char-incorrect {
+  background: rgba(239, 68, 68, 0.35);
+  text-decoration: underline wavy rgba(239, 68, 68, 0.9);
+}
+.practice-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  vertical-align: text-bottom;
+  margin-left: -1px;
+  background: var(--color-primary, #fff);
+  animation: practice-caret-blink 1s step-end infinite;
+}
+@keyframes practice-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}

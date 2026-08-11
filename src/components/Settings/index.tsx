@@ -14,7 +14,7 @@ import { FanficCookiesSection } from './FanficCookiesSection';
 import { EmailSection } from './EmailSection';
 import { DisplaySection } from './DisplaySection';
 import { LlamaConfigSection } from './LlamaConfigSection';
-import { WebSearchSection } from './WebSearchSection';
+import { MemorySection } from './MemorySection';
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<'general' | 'tags' | 'shortcuts'>(
@@ -70,6 +70,8 @@ export function Settings() {
 
           <LlamaConfigSection />
 
+          <MemorySection />
+
           <STTStatusSection />
 
           <ShortcutsSection />
@@ -77,8 +79,6 @@ export function Settings() {
           <NudgeSection />
 
           <BriefingSection />
-
-          <WebSearchSection />
 
           <ResearchSection />
 

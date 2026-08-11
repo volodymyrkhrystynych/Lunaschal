@@ -856,6 +856,10 @@ def save_attempt():
     # A flipped card is always self-rated; a typed answer is the default.
     answer_mode = (body.get('answerMode') or 'typed') if mode == 'answered' else 'self'
     grade_status = 'pending' if mode == 'answered' else 'skipped'
+    # Stamped from the client's live toggle at submit time, not at grade time —
+    # re-answering re-stamps it, which is what makes turning speech mode on
+    # mid-session only affect cards answered after that point.
+    speech_requested = 1 if body.get('speechMode') else 0
 
     id = body.get('id') or str(ULID())
     now = int(time.time())
@@ -864,15 +868,16 @@ def save_attempt():
     # replayed (offline-queued) save with the same id is a no-op.
     db.execute(
         'INSERT INTO learning_attempts'
-        ' (id, card_id, mode, answer, answer_mode, grade_status, created_at, updated_at)'
-        ' VALUES (?,?,?,?,?,?,?,?)'
+        ' (id, card_id, mode, answer, answer_mode, grade_status, speech_requested, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?)'
         ' ON CONFLICT(card_id) DO UPDATE SET'
         '  id=excluded.id, mode=excluded.mode, answer=excluded.answer,'
         '  answer_mode=excluded.answer_mode, grade_status=excluded.grade_status,'
+        '  speech_requested=excluded.speech_requested,'
         '  coverage=NULL, suggested_rating=NULL, normalized_answer=NULL,'
         '  updated_at=excluded.updated_at'
         ' WHERE learning_attempts.id != excluded.id',
-        (id, card_id, mode, answer, answer_mode, grade_status, now, now),
+        (id, card_id, mode, answer, answer_mode, grade_status, speech_requested, now, now),
     )
     db.commit()
     stored = db.execute(

@@ -35,7 +35,7 @@ A self-hosted personal knowledge management desktop app with local AI. Journal, 
 
 - Python 3.11+
 - Node.js 18+ and npm
-- [llama.cpp](https://github.com/ggml-org/llama.cpp) built with CUDA, serving Gemma 4 26B A4B — see [docs/learnings/moe-expert-placement.md](docs/learnings/moe-expert-placement.md) for the build and tuning notes
+- [llama.cpp](https://github.com/ggml-org/llama.cpp) built with CUDA, serving Qwen3.6 35B A3B — see [docs/learnings/moe-expert-placement.md](docs/learnings/moe-expert-placement.md) for the build and tuning notes, and [docs/learnings/qwen36-context-budget.md](docs/learnings/qwen36-context-budget.md) for why this model and how big its context can be
 
 ### Install and run
 

@@ -1,5 +1,12 @@
 # Placing MoE expert tensors: why `--n-cpu-moe` beats whole-layer offload
 
+> **The method holds; the numbers are Gemma's.** The chat model is now
+> Qwen3.6 35B A3B (40 layers, 256 experts), so every measured `n-cpu-moe` value
+> below applies to a model the router no longer loads — see
+> [qwen36-context-budget.md](qwen36-context-budget.md). Re-measure rather than
+> translate: one published run on this same card found the speed curve sloping
+> the _opposite_ way for this model.
+
 The machine has an RTX 3070 (8 GB, ~7.8 GB usable) and 62 GB of system RAM.
 Gemma 4 26B A4B is ~17 GB at Q4_K_XL. It cannot be VRAM-resident, so the only
 question that matters for speed is **which tensors go where** — and for a

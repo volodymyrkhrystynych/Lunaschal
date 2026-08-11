@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { Fic } from '../../hooks/api';
@@ -226,9 +227,16 @@ export function FolderBar({
 /** "Folders ▾" popover on a fic card: check/uncheck folder membership. */
 export function FolderPicker({ fic }: { fic: Fic }) {
   const [open, setOpen] = useState(false);
+  // Seeded from fic.folderIds when the menu opens, then updated locally as the
+  // user checks boxes. Driving the checkboxes off this instead of fic.folderIds
+  // directly is what lets the fic list itself stay put — see closeMenu below.
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(
+    null
+  );
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
-  const invalidate = () =>
-    queryClient.invalidateQueries({ queryKey: ['fanfic'] });
 
   const { data: folders } = useQuery({
     queryKey: ['fanfic', 'folders'],
@@ -247,46 +255,103 @@ export function FolderPicker({ fic }: { fic: Fic }) {
       member
         ? api.fanfic.removeFromFolder(fic.id, folderId)
         : api.fanfic.addToFolder(fic.id, folderId),
-    onSuccess: invalidate,
+    // Only the folder pills' counts refresh live. The fic list query is
+    // invalidated on close (below), not per checkbox — otherwise a fic
+    // being viewed via the Unsorted filter vanishes from under the user
+    // after their first click, before they've picked every folder they want.
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['fanfic', 'folders'] }),
   });
+
+  const openMenu = () => {
+    setPendingIds(new Set(fic.folderIds ?? []));
+    setOpen(true);
+  };
+
+  const closeMenu = () => {
+    setOpen(false);
+    queryClient.invalidateQueries({ queryKey: ['fanfic'] });
+  };
+
+  // Positions the menu in the viewport rather than relative to the button, and
+  // clamps it inside the screen — the button sits inside a horizontally
+  // clipped scroll container (the library list), so an absolutely-positioned
+  // menu anchored to it gets cut off on a narrow phone screen instead of
+  // simply overflowing where it's visible.
+  useLayoutEffect(() => {
+    if (!open) {
+      setMenuPos(null);
+      return;
+    }
+    const button = buttonRef.current;
+    const menu = menuRef.current;
+    if (!button || !menu) return;
+    const margin = 8;
+    const buttonRect = button.getBoundingClientRect();
+    const menuWidth = menu.offsetWidth;
+    const left = Math.min(
+      Math.max(buttonRect.right - menuWidth, margin),
+      window.innerWidth - menuWidth - margin
+    );
+    setMenuPos({ top: buttonRect.bottom + 4, left });
+  }, [open, folders]);
 
   return (
     <span className="relative">
       <button
-        onClick={() => setOpen(!open)}
+        ref={buttonRef}
+        onClick={() => (open ? closeMenu() : openMenu())}
         className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
         title="Add to folders"
       >
         Folders ▾
       </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-6 z-20 min-w-40 p-2 bg-[var(--color-surface)] border border-white/15 rounded-lg shadow-xl">
-            {folders?.length === 0 && (
-              <div className="px-2 py-1 text-xs text-[var(--color-text-muted)]">
-                No folders yet — create one above the list.
-              </div>
-            )}
-            {folders?.map(f => {
-              const member = fic.folderIds?.includes(f.id) ?? false;
-              return (
-                <label
-                  key={f.id}
-                  className="flex items-center gap-2 px-2 py-1 text-sm text-[var(--color-text)] rounded hover:bg-white/5 cursor-pointer whitespace-nowrap"
-                >
-                  <input
-                    type="checkbox"
-                    checked={member}
-                    onChange={() => toggle.mutate({ folderId: f.id, member })}
-                  />
-                  {f.name}
-                </label>
-              );
-            })}
-          </div>
-        </>
-      )}
+      {open &&
+        createPortal(
+          <>
+            <div className="fixed inset-0 z-40" onClick={closeMenu} />
+            <div
+              ref={menuRef}
+              className="fixed z-50 min-w-40 max-w-[calc(100vw-16px)] p-2 bg-[var(--color-surface)] border border-white/15 rounded-lg shadow-xl"
+              style={{
+                top: menuPos?.top ?? 0,
+                left: menuPos?.left ?? 0,
+                visibility: menuPos ? 'visible' : 'hidden',
+              }}
+            >
+              {folders?.length === 0 && (
+                <div className="px-2 py-1 text-xs text-[var(--color-text-muted)]">
+                  No folders yet — create one above the list.
+                </div>
+              )}
+              {folders?.map(f => {
+                const member = pendingIds.has(f.id);
+                return (
+                  <label
+                    key={f.id}
+                    className="flex items-center gap-2 px-2 py-1 text-sm text-[var(--color-text)] rounded hover:bg-white/5 cursor-pointer whitespace-nowrap"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={member}
+                      onChange={() => {
+                        setPendingIds(prev => {
+                          const next = new Set(prev);
+                          if (member) next.delete(f.id);
+                          else next.add(f.id);
+                          return next;
+                        });
+                        toggle.mutate({ folderId: f.id, member });
+                      }}
+                    />
+                    {f.name}
+                  </label>
+                );
+              })}
+            </div>
+          </>,
+          document.body
+        )}
     </span>
   );
 }

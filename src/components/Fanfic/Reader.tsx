@@ -6,6 +6,7 @@ import {
   useFanficSetRead,
 } from '../../offline/mutationDefaults';
 import { FicDownloadButton } from './FicDownloadButton';
+import { FolderPicker } from './Folders';
 import {
   adjacentChapter,
   chapterIdsUpTo,
@@ -211,6 +212,11 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
             {fic?.author && (
               <div className="text-sm text-[var(--color-text-muted)]">
                 {fic.author}
+              </div>
+            )}
+            {fic && (
+              <div className="mt-1">
+                <FolderPicker fic={fic} />
               </div>
             )}
             <FicDownloadButton chapters={chapters} />

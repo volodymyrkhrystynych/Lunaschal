@@ -167,6 +167,10 @@ CREATE TABLE IF NOT EXISTS learning_attempts (
     coverage TEXT,
     suggested_rating INTEGER,
     normalized_answer TEXT,
+    -- Speech mode's live toggle state at submit time, not at grade time — a
+    -- card answered before the toggle was on never gets a spoken blurb, even
+    -- if grading finishes after it's switched on. Re-answering re-stamps it.
+    speech_requested INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -200,8 +204,60 @@ CREATE TABLE IF NOT EXISTS messages (
     role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
     content TEXT NOT NULL,
     metadata TEXT,
+    -- 'streaming' while a background run (backend/delegate/runs.py) is still
+    -- generating this reply, so a dropped client connection doesn't lose it.
+    status TEXT NOT NULL DEFAULT 'done' CHECK(status IN ('streaming','done','error')),
+    error TEXT,
+    -- What was actually dictated, before the transcript-correction pass and
+    -- before the user edited it in the composer. NULL when the message was
+    -- typed. Never overwritten -- the journal_entries raw_content contract.
+    raw_content TEXT,
     created_at INTEGER NOT NULL
 );
+
+-- Photos attached to a chat message. The chat model is text-only
+-- (llama/presets.ini sets mmproj-auto = false on [qwen36]), so `description` --
+-- written by the CPU-only omni model in backend/ai/images.py -- is how the
+-- picture actually reaches the conversation.
+CREATE TABLE IF NOT EXISTS chat_attachments (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    -- NULL until the message is sent. The photo is uploaded (and reading it
+    -- starts) while the user is still dictating, before any message row exists.
+    message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+    path TEXT NOT NULL,
+    mime TEXT,
+    description TEXT,
+    description_status TEXT,
+    description_error TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_message ON chat_attachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_conversation ON chat_attachments(conversation_id);
+
+-- One free-text document the assistant keeps up to date about the user: proper
+-- names speech-to-text keeps mangling, standing preferences, things worth
+-- carrying between conversations. Read into every chat system prompt.
+CREATE TABLE IF NOT EXISTS user_memory (
+    id INTEGER PRIMARY KEY CHECK(id = 1),
+    content TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL
+);
+
+-- Copy-on-write, the wiki_revisions/learning_revisions pattern. The assistant
+-- writes to the memory without asking, so every change has to be inspectable and
+-- undoable; `content` is the document as it stood BEFORE the change.
+CREATE TABLE IF NOT EXISTS user_memory_revisions (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    source TEXT NOT NULL,
+    note TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_memory_revisions_created ON user_memory_revisions(created_at DESC);
 
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY DEFAULT 1,
@@ -834,6 +890,59 @@ CREATE TABLE IF NOT EXISTS idea_plans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_idea_plans_idea ON idea_plans(idea_id, version DESC);
+
+-- Practice tab: per-snippet drill progress. snippet_id is a stable slug from
+-- the static bank in backend/practice/snippets.py, not a generated row id.
+CREATE TABLE IF NOT EXISTS practice_progress (
+    snippet_id TEXT PRIMARY KEY,
+    attempts_count INTEGER NOT NULL DEFAULT 0,
+    last_wpm REAL,
+    last_accuracy REAL,
+    best_wpm REAL,
+    best_accuracy REAL,
+    last_practiced_at INTEGER,
+    -- Blind (from-memory) drill counters. Kept on the same row because
+    -- backend/practice/modes.py decides the next drill from the *mix* of the
+    -- two, so a mode decision must never need a second lookup.
+    recall_attempts_count INTEGER NOT NULL DEFAULT 0,
+    recall_passes INTEGER NOT NULL DEFAULT 0,
+    last_recall_passed INTEGER,
+    last_recall_at INTEGER,
+    updated_at INTEGER NOT NULL
+);
+
+-- Append-only history of every speed drill attempt, for stats trends.
+CREATE TABLE IF NOT EXISTS practice_attempts (
+    id TEXT PRIMARY KEY,
+    snippet_id TEXT NOT NULL,
+    wpm REAL NOT NULL,
+    accuracy REAL NOT NULL,
+    error_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_practice_attempts_snippet ON practice_attempts(snippet_id, created_at DESC);
+
+-- Append-only history of blind drill attempts. A separate table from
+-- practice_attempts because it records something else entirely: a pass/fail
+-- judgement with prose feedback over the text that was written, with no wpm and
+-- no per-character accuracy to speak of. Splitting them also keeps every query
+-- over practice_attempts meaning "typing speed" without a mode filter.
+CREATE TABLE IF NOT EXISTS practice_recall_attempts (
+    id TEXT PRIMARY KEY,
+    snippet_id TEXT NOT NULL,
+    submitted TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    passed INTEGER NOT NULL DEFAULT 0,
+    feedback TEXT,
+    -- 'model' when the grader read it, 'fallback' when llama-server was down
+    -- and it fell back to a text comparison. Stored so a run of harsh verdicts
+    -- can be traced to an offline grader rather than to the answers.
+    graded_by TEXT NOT NULL DEFAULT 'model',
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_practice_recall_attempts_snippet ON practice_recall_attempts(snippet_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS email_accounts (
     id TEXT PRIMARY KEY,

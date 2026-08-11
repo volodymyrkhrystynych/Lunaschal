@@ -23,6 +23,7 @@ export const VIEWS = [
   'newspapers',
   'paper',
   'email',
+  'practice',
 ] as const;
 
 export type View = (typeof VIEWS)[number];

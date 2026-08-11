@@ -156,6 +156,17 @@ def test_listing_requeues_a_grade_orphaned_by_a_restart(client, no_bg):
     assert len(no_bg) == 2
 
 
+def test_speech_requested_persists_and_is_restamped_on_reanswer(client, no_bg):
+    """The live toggle state at submit time, not session-wide — re-answering
+    with a different value must overwrite the stored flag."""
+    cid = _make_card(client)
+    _answer(client, cid, 'first try')
+    assert client.get('/api/learning/attempts').json[0]['speechRequested'] == 0
+
+    _answer(client, cid, 'second try', speechMode=True)
+    assert client.get('/api/learning/attempts').json[0]['speechRequested'] == 1
+
+
 def test_attempt_on_a_pending_card_is_rejected(client):
     """Only active cards are reviewable, so only they can be answered."""
     from backend.db.connection import get_db

@@ -7,7 +7,6 @@ import time
 import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
-from backend.ai.provider import DEFAULT_MODEL
 from backend.db.connection import build_update, get_db
 
 _sleep_inhibitor: subprocess.Popen | None = None
@@ -70,6 +69,9 @@ def get_settings():
         'llamaVisionModel': s.get('llama_vision_model') or '',
         # Empty means audio description stays off — see backend/ai/audio_description.py.
         'llamaAudioModel': s.get('llama_audio_model') or '',
+        # Whether the chat model itself reads photos attached to a message.
+        # Needs an mmproj on the chat preset — see backend/ai/provider.py.
+        'llamaChatVision': bool(s.get('llama_chat_vision', 0)),
         'llmThinking': bool(s.get('llm_thinking', 0)),
         'llmMaxTokens': s.get('llm_max_tokens') or 4096,
         # No llmNumCtx: the context window is fixed when llama-server loads the
@@ -121,6 +123,7 @@ def update_ai():
         'llamaUrl': 'llama_url', 'llamaModel': 'llama_model',
         'llamaVisionModel': 'llama_vision_model',
         'llamaAudioModel': 'llama_audio_model',
+        'llamaChatVision': 'llama_chat_vision',
         'llmThinking': 'llm_thinking',
         'llmMaxTokens': 'llm_max_tokens',
         'sttPasteKey': 'stt_paste_key', 'sttVoiceKey': 'stt_voice_key', 'sttJournalKey': 'stt_journal_key',
@@ -160,7 +163,7 @@ def update_ai():
         if camel in body:
             value = body[camel]
             if camel in ('briefingThinking', 'llmThinking', 'repoContextEnabled',
-                         'researchEnabled'):
+                         'researchEnabled', 'llamaChatVision'):
                 # Stored as 0/1 — Gemma 4's thinking channel is on or off, with no
                 # graded levels to validate against.
                 value = 1 if value else 0

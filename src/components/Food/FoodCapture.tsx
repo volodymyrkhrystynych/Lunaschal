@@ -113,7 +113,7 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
         />
         <button
           type="button"
-          onClick={recording ? stop : start}
+          onClick={() => (recording ? stop() : void start())}
           disabled={transcribing}
           title={recording ? 'Stop recording' : 'Dictate'}
           className={`absolute top-2 right-2 w-9 h-9 rounded-full flex items-center justify-center transition-colors ${

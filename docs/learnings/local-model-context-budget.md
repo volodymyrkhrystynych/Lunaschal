@@ -1,5 +1,12 @@
 # Sizing the context window for a local model (and why parameter count doesn't tell you)
 
+> **Still the right way to think about it; the worked example is Gemma's.** The
+> chat model is now Qwen3.6 35B A3B, whose KV cache costs half as much per token,
+> so the ~90k ceiling described below no longer binds — 190k does. The successor
+> derivation is [qwen36-context-budget.md](qwen36-context-budget.md), and it is
+> the same method applied to a different attention geometry, which is rather the
+> point of this document.
+
 The context window is the one setting that costs VRAM before a single token is
 generated: the KV cache is allocated for the **whole** window when the model
 loads. The output ceiling (`max_tokens`) is just a stop condition and reserves

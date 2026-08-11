@@ -149,6 +149,9 @@ export function ResearchSection() {
           Research in the background
         </label>
 
+        {/* One provider for the whole app: the research agent and the chat
+            delegate both search through it. The Web Search tab that used to
+            configure its own is gone. */}
         <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
           Web search
           <select

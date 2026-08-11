@@ -17,12 +17,16 @@ if [ ! -x "$LLAMA_BIN" ]; then
   exit 1
 fi
 
-# --models-max 2: the chat model and the embedder resident together. A third
-# would evict one of them, and re-loading 17 GB of Gemma is not something to do
-# on the interactive path.
+# --models-max 3: exactly the three presets in presets.ini — qwen36,
+# gemma4-12b-omni and embed — resident together. Three rather than two because
+# evicting any of them is expensive on the interactive path: re-loading 22 GB of
+# Qwen costs tens of seconds, and the embedder is called from the Learning flow
+# while a card is on screen. If the omni model ever causes memory pressure
+# (it is another ~7.4 GB of page cache), drop this to 2 and let it reload on
+# demand — its two callers are opt-in background jobs with no one waiting.
 exec "$LLAMA_BIN" \
   --models-preset "$PRESETS" \
-  --models-max 2 \
+  --models-max 3 \
   --host 127.0.0.1 \
   --port "$PORT" \
   "$@"

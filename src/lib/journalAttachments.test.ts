@@ -9,6 +9,7 @@ import {
   formatBytes,
   hasRunningTranscription,
   isAttachableFile,
+  isVoiceOnlyEntry,
   rejectedFilesMessage,
   summarizeAttachments,
   transcribeLabel,
@@ -313,6 +314,46 @@ describe('summarizeAttachments', () => {
         attachment({ id: 'a3', kind: 'audio' }),
       ])
     ).toBe('1 recording, 2 videos');
+  });
+});
+
+describe('isVoiceOnlyEntry', () => {
+  it('is true for an entry with no text and exactly one audio attachment', () => {
+    expect(isVoiceOnlyEntry({ content: '', attachments: [attachment()] })).toBe(
+      true
+    );
+  });
+
+  it('is false when the entry has body text', () => {
+    expect(
+      isVoiceOnlyEntry({ content: 'Some notes.', attachments: [attachment()] })
+    ).toBe(false);
+  });
+
+  it('treats whitespace-only content as empty, matching the backend check', () => {
+    expect(
+      isVoiceOnlyEntry({ content: '   ', attachments: [attachment()] })
+    ).toBe(true);
+  });
+
+  it('is false with no attachments or more than one', () => {
+    expect(isVoiceOnlyEntry({ content: '', attachments: [] })).toBe(false);
+    expect(isVoiceOnlyEntry({ content: '' })).toBe(false);
+    expect(
+      isVoiceOnlyEntry({
+        content: '',
+        attachments: [attachment(), attachment({ id: 'a2' })],
+      })
+    ).toBe(false);
+  });
+
+  it('is false when the one attachment is not audio', () => {
+    expect(
+      isVoiceOnlyEntry({
+        content: '',
+        attachments: [attachment({ kind: 'image' })],
+      })
+    ).toBe(false);
   });
 });
 

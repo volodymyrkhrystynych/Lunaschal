@@ -98,6 +98,7 @@ export interface LearningAttemptVars {
   mode: 'answered' | 'skipped';
   answer?: string;
   answerMode?: 'typed' | 'voice';
+  speechMode?: boolean;
 }
 export interface LearningReviewVars {
   cardId: string;
@@ -329,6 +330,7 @@ const learningAttemptCfg = (
       mode: vars.mode,
       answer: vars.answer,
       answerMode: vars.answerMode,
+      speechMode: vars.speechMode,
     }),
   onSettled: () => qc.invalidateQueries({ queryKey: ['learning', 'attempts'] }),
 });

@@ -18,6 +18,7 @@ import {
   ACCEPT_IMAGE,
   defaultNameFor,
   filesFromTransfer,
+  isVoiceOnlyEntry,
   rejectedFilesMessage,
 } from '../lib/journalAttachments';
 import { BriefingTodos } from './BriefingTodos';
@@ -26,6 +27,7 @@ import { JournalAttachments } from './JournalAttachments';
 import { MessageMarkdown } from './MessageMarkdown';
 import type {
   DatedConversation,
+  JournalEntry,
   JournalPaper,
   FoodJournalItem,
   TaskEvent,
@@ -33,6 +35,7 @@ import type {
 import { ratingStars, foodTitle, mapLink } from '../lib/food';
 import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
+import { useRecorder } from '../hooks/useRecorder';
 
 interface JournalProps {
   /** Navigate to the fanfic reader (chip on entries linked to a fic chapter). */
@@ -62,6 +65,13 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     null
   );
   const [showDelete, setShowDelete] = useState(false);
+  // Dictation into the entry being edited. Only one entry is editable at a
+  // time, so one recorder serves the whole list. The transcript is appended
+  // rather than submitted (the BrainDump/IdeaCapture pattern) — it can be
+  // corrected, or a second thought added, before Save.
+  const editRecorder = useRecorder(text =>
+    setEditContent(prev => (prev ? `${prev}\n${text}` : text))
+  );
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
   const [polishError, setPolishError] = useState<{
     id: string;
@@ -698,10 +708,47 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                       className="w-full bg-transparent text-[var(--color-text)] resize-none focus:outline-none border border-white/10 rounded p-2"
                     />
                   </JournalAttachments>
-                  <div className="flex justify-end gap-2 mt-2">
+                  {isVoiceOnlyEntry(entry) && (
+                    <MergeIntoPicker
+                      entry={entry}
+                      onMerged={() => setEditingId(null)}
+                    />
+                  )}
+                  {editRecorder.error && (
+                    <p className="mt-2 text-xs text-red-400">
+                      {editRecorder.error}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (editRecorder.status === 'recording')
+                          editRecorder.stop();
+                        else if (editRecorder.status === 'idle')
+                          void editRecorder.start();
+                      }}
+                      disabled={editRecorder.status === 'transcribing'}
+                      aria-label={
+                        editRecorder.status === 'recording'
+                          ? 'Stop recording'
+                          : 'Dictate into this entry'
+                      }
+                      className={`px-2 py-1 rounded text-sm ${
+                        editRecorder.status === 'recording'
+                          ? 'bg-red-500/25 text-red-300'
+                          : 'bg-white/10 text-[var(--color-text)] hover:bg-white/15'
+                      } disabled:opacity-50`}
+                    >
+                      {editRecorder.status === 'recording'
+                        ? '■ Stop'
+                        : editRecorder.status === 'transcribing'
+                          ? 'Transcribing…'
+                          : '● Record'}
+                    </button>
                     <button
                       onClick={() => setEditingId(null)}
-                      className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                      className="ml-auto px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                     >
                       Cancel
                     </button>
@@ -801,6 +848,94 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// Shown in edit mode for an entry that's nothing but a single recording
+// (isVoiceOnlyEntry): offers to fold that recording into another entry from
+// the same day instead of the recording living as its own bare entry. Only
+// entries from the same local day are candidates — the backend enforces this
+// too (backend/routes/journal.py's merge route), this just keeps the picker
+// from offering something the server would reject.
+function MergeIntoPicker({
+  entry,
+  onMerged,
+}: {
+  entry: JournalEntry;
+  onMerged: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [targetId, setTargetId] = useState('');
+
+  const {
+    data: candidates,
+    isLoading,
+    isError,
+    error: candidatesError,
+  } = useQuery({
+    queryKey: ['journal', 'mergeCandidates', entry.id],
+    queryFn: () => api.journal.mergeCandidates(entry.id),
+  });
+
+  const merge = useMutation({
+    mutationFn: (targetId: string) => api.journal.merge(entry.id, targetId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['journal'] });
+      onMerged();
+    },
+  });
+
+  if (isLoading) return null;
+
+  // Surfaced rather than swallowed: a request that 404s (e.g. a backend that
+  // hasn't picked up this route yet) used to look identical to "no other
+  // entries today" — silence either way — which made the feature look absent
+  // instead of broken.
+  if (isError) {
+    return (
+      <div className="mt-3 px-3 py-2 rounded border border-red-500/20 bg-red-500/10 text-xs text-red-400">
+        Couldn't check for other entries to merge into:{' '}
+        {(candidatesError as Error).message}
+      </div>
+    );
+  }
+
+  if (!candidates || candidates.length === 0) return null;
+
+  return (
+    <div className="mt-3 p-2 rounded border border-white/10 bg-white/5">
+      <div className="text-xs text-[var(--color-text-muted)] mb-1.5">
+        Just a recording — attach it to another entry from today instead?
+      </div>
+      <div className="flex items-center gap-2">
+        <select
+          value={targetId}
+          onChange={e => setTargetId(e.target.value)}
+          aria-label="Entry to merge into"
+          className="flex-1 min-w-0 bg-[var(--color-surface)] border border-white/10 rounded px-2 py-1 text-sm text-[var(--color-text)]"
+        >
+          <option value="">Choose an entry…</option>
+          {candidates.map(c => (
+            <option key={c.id} value={c.id}>
+              {(c.title || c.content || '(untitled)').slice(0, 60)}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => targetId && merge.mutate(targetId)}
+          disabled={!targetId || merge.isPending}
+          className="shrink-0 px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
+        >
+          {merge.isPending ? 'Merging…' : 'Merge'}
+        </button>
+      </div>
+      {merge.isError && (
+        <div className="mt-1.5 text-xs text-red-400">
+          {(merge.error as Error).message}
+        </div>
+      )}
     </div>
   );
 }
@@ -914,13 +1049,15 @@ function JournalPaperItem({ paper }: { paper: JournalPaper }) {
           <button
             key={pg.id}
             onClick={() => lightbox.open(pg.imageUrl)}
-            className="shrink-0 w-24 aspect-[3/4] rounded-md overflow-hidden border border-white/10 bg-white hover:border-[var(--color-primary)] transition-colors"
+            className="shrink-0 h-32 rounded-md overflow-hidden border border-white/10 bg-white hover:border-[var(--color-primary)] transition-colors"
             title="View"
           >
+            {/* Fixed height, width follows the page — a landscape page used to
+                be cropped to its top-left corner. */}
             <img
               src={pg.imageUrl!}
               alt=""
-              className="w-full h-full object-cover object-top"
+              className="h-full w-auto object-contain"
             />
           </button>
         ))}
@@ -1064,13 +1201,15 @@ function JournalFoodItem({ food }: { food: FoodJournalItem }) {
               <button
                 key={m.id}
                 onClick={() => lightbox.open(m.url)}
-                className="shrink-0 h-28 aspect-square rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
+                className="shrink-0 h-28 rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
                 title="View"
               >
+                {/* Fixed height, width follows the photo — a wide meal shot in
+                    a square box lost its edges. */}
                 <img
                   src={m.url}
                   alt=""
-                  className="w-full h-full object-cover"
+                  className="h-full w-auto object-contain"
                 />
               </button>
             )

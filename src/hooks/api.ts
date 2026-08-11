@@ -322,6 +322,9 @@ export interface ClaimCoverage {
   claims: CoverageClaim[];
   summary: string;
   gated?: boolean;
+  /** 1-2 sentence, code-free version of the mistake for text-to-speech.
+   *  Only present when the answer was submitted with speech mode on. */
+  speechSummary?: string;
 }
 
 export interface GradeResult {
@@ -408,12 +411,38 @@ export interface Conversation {
   updatedAt: string;
 }
 
+// A photo attached to a chat message. The chat model is text-only, so
+// `description` — written by the CPU-only omni model — is how the picture
+// actually reaches the conversation. Uploaded before the message exists, hence
+// the null `messageId` while it is still staged in the composer.
+export interface ChatAttachment {
+  id: string;
+  conversationId: string;
+  messageId: string | null;
+  mime: string | null;
+  url: string;
+  description: string | null;
+  descriptionStatus: 'running' | 'done' | 'error' | null;
+  descriptionError: string | null;
+  position: number;
+  createdAt: string;
+}
+
 export interface Message {
   id: string;
   conversationId: string;
   role: 'user' | 'assistant' | 'system';
   content: string;
   metadata: string | null;
+  // 'streaming' while a background run is still generating this reply
+  // (backend/delegate/runs.py) — absent/undefined on older cached data.
+  status?: 'streaming' | 'done' | 'error';
+  error?: string | null;
+  // What was dictated, before the correction pass and before the user edited it
+  // in the composer. Null when the message was typed — same contract as
+  // journalEntry.rawContent, and never overwritten.
+  rawContent?: string | null;
+  attachments?: ChatAttachment[];
   createdAt: string;
 }
 
@@ -452,8 +481,34 @@ export interface BriefingTodoDecision {
   list?: TodoList;
 }
 
-// The Chat tab's two sub-tabs: the regular daily chat, and one that answers by
-// actually searching the web. Each is its own conversation per chat day.
+// A delegate confirm card — calendar/calorie/food/task/flashcards only. `note`
+// proposals draft immediately with no confirm step, so they never get one of
+// these (backend/delegate/runs.py), and `remember` writes straight away with no
+// card at all. Written into the assistant message's metadata the moment the run
+// that staged it finishes, and resolved in place by POST
+// /api/chat/proposals/<messageId>/<id> — the only place `status` ever changes,
+// so a card survives a reload until it actually is.
+export interface DelegateProposalRecord {
+  id: string;
+  kind: 'calendar' | 'calorie' | 'food' | 'task' | 'flashcards';
+  data: Record<string, unknown>;
+  status: 'pending' | 'accepted' | 'dismissed';
+  resolvedAt?: number;
+  // What accepting produced — {id} for calendar/calorie/task, {count} for
+  // flashcards, {id, photos, calorieLogId} for food — so the resolved state
+  // renders from metadata alone.
+  result?: {
+    id?: string;
+    count?: number;
+    photos?: number;
+    calorieLogId?: string;
+  };
+}
+
+// One conversation per chat day. `'websearch'` is a *historical* value only —
+// the tab that created those conversations is gone (searching is now something
+// the delegate decides to do mid-chat), but the rows remain and the Journal
+// feed still labels them, so this stays in the union as read-only history.
 export type ChatMode = 'chat' | 'websearch';
 
 // A past chat day shown in the Journal feed (collapsed, expand to load messages).
@@ -465,6 +520,23 @@ export interface DatedConversation {
   messageCount: number;
   createdAt: string;
   updatedAt: string;
+}
+
+// One free-text document of standing facts, read into every chat system prompt.
+export interface UserMemory {
+  content: string;
+  maxChars: number;
+}
+
+// A snapshot of the document as it stood *before* one change — copy-on-write,
+// the wiki_revisions pattern. This is what makes an unconfirmed write by the
+// assistant safe to allow.
+export interface MemoryRevision {
+  id: string;
+  content: string;
+  source: 'remember' | 'revise' | 'user' | 'restore';
+  note: string | null;
+  createdAt: string;
 }
 
 export interface AppSettings {
@@ -480,6 +552,11 @@ export interface AppSettings {
    * E2B/E4B/12B capability, not the 26B chat model, so this names a
    * different preset entirely. Empty means it's off. */
   llamaAudioModel: string;
+  /** Whether the chat model itself is handed photos attached in Chat, rather
+   * than being read a description of them. Qwen3.6 is a vision-language model,
+   * but `[qwen36]` ships with no projector — so this stays off until an mmproj
+   * is configured and the preset has been confirmed to still load. */
+  llamaChatVision: boolean;
   /** Gemma 4's thinking channel is on or off; there are no graded levels. */
   llmThinking: boolean;
   llmMaxTokens: number;
@@ -1069,6 +1146,118 @@ export interface CalorieDay {
   total: number;
 }
 
+export interface PracticeSnippetProgress {
+  snippetId: string;
+  attemptsCount: number;
+  lastWpm: number | null;
+  lastAccuracy: number | null;
+  bestWpm: number | null;
+  bestAccuracy: number | null;
+  lastPracticedAt: string | null;
+  recallAttemptsCount: number;
+  recallPasses: number;
+  lastRecallPassed: number | null;
+  lastRecallAt: string | null;
+  updatedAt: string;
+}
+
+// What a snippet is, rather than what it looks like: a sentence, then a line per
+// option/field/parameter it uses, then what turns up alongside it. `parts` is a
+// list rather than prose so it can be read against the code line by line.
+// Nullable because it is keyed by snippet id server-side and a snippet could in
+// principle arrive unexplained.
+export interface PracticeExplanationPart {
+  name: string;
+  detail: string;
+}
+
+export interface PracticeExplanation {
+  summary: string;
+  parts: PracticeExplanationPart[];
+  related: string;
+}
+
+export interface PracticeSnippet {
+  id: string;
+  language: 'react' | 'javascript' | 'html' | 'css' | 'dom';
+  category: string;
+  title: string;
+  code: string;
+  explanation: PracticeExplanation | null;
+}
+
+// One item of a session. A drill is a snippet plus how it is to be practiced,
+// and the two modes carry different payloads: a blind drill gets the task
+// description and deliberately no `code` — the server withholds the answer to
+// the drill that exists to test memory, and it arrives only in the grade
+// response. Modelled as a union rather than optional fields so a component
+// cannot read `code` without first narrowing on the mode it exists in.
+export type PracticeDrillMode = 'speed' | 'blind';
+
+interface PracticeDrillBase {
+  id: string;
+  language: 'react' | 'javascript' | 'html' | 'css' | 'dom';
+  category: string;
+  title: string;
+}
+
+export interface PracticeSpeedDrill extends PracticeDrillBase {
+  mode: 'speed';
+  code: string;
+  explanation: PracticeExplanation | null;
+}
+
+export interface PracticeBlindDrill extends PracticeDrillBase {
+  mode: 'blind';
+  prompt: string;
+}
+
+export type PracticeDrill = PracticeSpeedDrill | PracticeBlindDrill;
+
+export interface PracticeRecallResult {
+  verdict: 'correct' | 'partial' | 'wrong';
+  passed: boolean;
+  feedback: string;
+  // 'fallback' means llama-server was unreachable and the verdict came from a
+  // text comparison, not a reading of the code — the UI says so.
+  gradedBy: 'model' | 'fallback' | 'empty';
+  reference: string;
+  // Withheld from the blind drill itself — naming every field of the snippet
+  // gives most of the answer away — so it arrives here with the grade.
+  explanation: PracticeExplanation | null;
+  progress: PracticeSnippetProgress;
+}
+
+export interface PracticeSnippetWithProgress extends PracticeSnippet {
+  progress: PracticeSnippetProgress | null;
+}
+
+export interface PracticeAttemptResult {
+  rating: string;
+  progress: PracticeSnippetProgress;
+}
+
+export interface PracticeLanguageStats {
+  attempts: number;
+  avgAccuracy: number | null;
+  avgWpm: number | null;
+}
+
+export interface PracticeRecallStats {
+  attempts: number;
+  passes: number;
+  // null with no attempts: "never asked to recall anything" is not 0%.
+  passRate: number | null;
+}
+
+export interface PracticeStats {
+  totalAttempts: number;
+  avgAccuracy: number | null;
+  avgWpm: number | null;
+  byLanguage: Record<string, PracticeLanguageStats>;
+  recall: PracticeRecallStats;
+}
+
 // --- fetch helpers ---
 
 // A request to an unreachable backend (e.g. the Tailscale link is down in
@@ -1148,6 +1337,19 @@ async function upload<T>(url: string, form: FormData): Promise<T> {
   return r.json();
 }
 
+async function uploadForBlob(url: string, form: FormData): Promise<Blob> {
+  const r = await fetch(url, {
+    method: 'POST',
+    credentials: 'include',
+    body: form,
+  });
+  if (!r.ok) {
+    const b = await r.json().catch(() => ({}));
+    throw new Error(b.error || `HTTP ${r.status}`);
+  }
+  return r.blob();
+}
+
 // --- API namespaces ---
 
 export const api = {
@@ -1210,6 +1412,18 @@ export const api = {
     // raw transcript immediately, polish it in the background.
     createFromVoice: (rawContent: string) =>
       post<{ id: string }>('/api/journal', { raw_content: rawContent }),
+    // The bottom bar's Record button: keep the recording itself as the entry,
+    // no speech-to-text. One request so a rejected upload leaves no empty entry
+    // behind; the clip lands as the entry's first attachment.
+    createRecording: (audio: Blob, name?: string) => {
+      const form = new FormData();
+      form.append('file', audio, 'recording.webm');
+      if (name?.trim()) form.append('name', name.trim());
+      return upload<{ id: string; attachment: JournalAttachment }>(
+        '/api/journal/recordings',
+        form
+      );
+    },
     update: (
       id: string,
       data: { content?: string; title?: string; tags?: string[] }
@@ -1217,6 +1431,13 @@ export const api = {
     delete: (id: string) => del<{ success: boolean }>(`/api/journal/${id}`),
     polish: (id: string) =>
       post<{ success: boolean; content: string }>(`/api/journal/${id}/polish`),
+    // Other entries from the same local day, for the voice-only merge picker.
+    mergeCandidates: (id: string) =>
+      get<JournalEntry[]>(`/api/journal/${id}/merge-candidates`),
+    // Folds a voice-only entry's single recording into `targetId` and deletes
+    // the now-empty source entry.
+    merge: (id: string, targetId: string) =>
+      post<JournalEntry>(`/api/journal/${id}/merge`, { targetId }),
 
     attachments: {
       list: (entryId: string) =>
@@ -1606,6 +1827,8 @@ export const api = {
       mode: 'answered' | 'skipped';
       answer?: string;
       answerMode?: 'typed' | 'voice';
+      // Speech mode's toggle state at submit time — see ReviewSession.
+      speechMode?: boolean;
     }) =>
       post<{ success: boolean; id: string }>('/api/learning/attempts', data),
     review: (
@@ -1742,8 +1965,8 @@ export const api = {
   },
 
   chat: {
-    today: (mode: ChatMode = 'chat') =>
-      get<ConversationWithMessages | null>(`/api/chat/today?mode=${mode}`),
+    today: () =>
+      get<ConversationWithMessages | null>('/api/chat/today?mode=chat'),
     journalConversations: () =>
       get<DatedConversation[]>('/api/chat/journal-conversations'),
     generateTitle: (id: string) =>
@@ -1754,7 +1977,7 @@ export const api = {
     listConversations: () => get<Conversation[]>('/api/chat/conversations'),
     getConversation: (id: string) =>
       get<ConversationWithMessages | null>(`/api/chat/conversations/${id}`),
-    createConversation: (data?: { title?: string; mode?: ChatMode }) =>
+    createConversation: (data?: { title?: string }) =>
       post<{ id: string }>('/api/chat/conversations', data ?? {}),
     updateTitle: (id: string, title: string) =>
       patch<{ success: boolean }>(`/api/chat/conversations/${id}/title`, {
@@ -1762,10 +1985,40 @@ export const api = {
       }),
     deleteConversation: (id: string) =>
       del<{ success: boolean }>(`/api/chat/conversations/${id}`),
+    // `rawContent` is the verbatim transcript when the message was dictated;
+    // `attachmentIds` claims the photos staged before this message existed.
     addMessage: (
       id: string,
-      data: { role: string; content: string; metadata?: string }
+      data: {
+        role: string;
+        content: string;
+        metadata?: string;
+        rawContent?: string | null;
+        attachmentIds?: string[];
+      }
     ) => post<{ id: string }>(`/api/chat/conversations/${id}/messages`, data),
+    uploadAttachments: (conversationId: string, files: File[]) => {
+      const form = new FormData();
+      for (const file of files) {
+        form.append('image', file, uploadFilenameFor(file));
+      }
+      return upload<ChatAttachment[]>(
+        `/api/chat/conversations/${conversationId}/attachments`,
+        form
+      );
+    },
+    getAttachment: (id: string) =>
+      get<ChatAttachment>(`/api/chat/attachments/${id}`),
+    deleteAttachment: (id: string) =>
+      del<{ success: boolean }>(`/api/chat/attachments/${id}`),
+    // Fixes what speech-to-text misheard, against the memory document and
+    // whatever the vision model read out of the attached photos. Returns the
+    // raw text too — that is what gets stored as the message's rawContent.
+    polishTranscript: (text: string, attachmentIds: string[] = []) =>
+      post<{ raw: string; corrected: string }>('/api/chat/polish-transcript', {
+        text,
+        attachmentIds,
+      }),
     runBriefing: () =>
       post<{
         conversationId: string;
@@ -1781,28 +2034,30 @@ export const api = {
         `/api/chat/briefing/${messageId}/todos`,
         { decisions }
       ),
-    classify: (message: string) =>
-      post<{ intent: string; confidence: number; [key: string]: unknown }>(
-        '/api/chat/classify',
-        { message }
+    // `data` carries the card's edited values on accept — the card is a form,
+    // so what gets written is what the user is looking at, not what the model
+    // first staged. Omitted on dismiss, and on an accept with no edits.
+    resolveProposal: (
+      messageId: string,
+      proposalId: string,
+      action: 'accept' | 'dismiss',
+      data?: Record<string, unknown>
+    ) =>
+      post<{ proposal: DelegateProposalRecord }>(
+        `/api/chat/proposals/${messageId}/${proposalId}`,
+        data ? { action, data } : { action }
       ),
-    saveCalendar: (data: {
-      conversationId: string;
-      messageId?: string;
-      title: string;
-      description: string;
-      date: string;
-      time?: string;
-      tags: string[];
-    }) => post<{ id: string }>('/api/chat/save-calendar', data),
-    saveCalories: (data: {
-      messageId?: string;
-      description: string;
-      calories: number;
-      date?: string;
-    }) => post<{ id: string }>('/api/chat/save-calories', data),
-    saveTask: (data: { messageId?: string; title: string; list?: string }) =>
-      post<{ id: string }>('/api/chat/save-task', data),
+  },
+
+  // The standing document the assistant keeps about the user. It writes here
+  // without a confirm card (backend/delegate/tools.py's `remember`), which is
+  // only reasonable because these routes make every change visible and undoable.
+  memory: {
+    get: () => get<UserMemory>('/api/memory'),
+    update: (content: string) => put<UserMemory>('/api/memory', { content }),
+    revisions: () => get<MemoryRevision[]>('/api/memory/revisions'),
+    restore: (id: string) =>
+      post<UserMemory>(`/api/memory/revisions/${id}/restore`, {}),
   },
 
   files: {
@@ -2059,6 +2314,7 @@ export const api = {
       get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
     sync: () => post<SyncResult[]>('/api/newspapers/sync'),
   },
+
   email: {
     oauthStatus: () => get<EmailOauthStatus>('/api/email/oauth/status'),
     disconnect: () => post<{ success: boolean }>('/api/email/oauth/disconnect'),
@@ -2084,6 +2340,38 @@ export const api = {
     get: (id: string) => get<EmailMessage>(`/api/email/${id}`),
     stats: () => get<EmailStats>('/api/email/stats'),
   },
+
+  practice: {
+    session: (
+      params: { language?: string; category?: string; size?: number } = {}
+    ) => {
+      const qp = new URLSearchParams();
+      if (params.language) qp.set('language', params.language);
+      if (params.category) qp.set('category', params.category);
+      if (params.size !== undefined) qp.set('size', String(params.size));
+      const qs = qp.toString();
+      return get<PracticeDrill[]>(`/api/practice/session${qs ? `?${qs}` : ''}`);
+    },
+    listSnippets: (params: { language?: string; category?: string } = {}) => {
+      const qp = new URLSearchParams();
+      if (params.language) qp.set('language', params.language);
+      if (params.category) qp.set('category', params.category);
+      const qs = qp.toString();
+      return get<PracticeSnippetWithProgress[]>(
+        `/api/practice/snippets${qs ? `?${qs}` : ''}`
+      );
+    },
+    submitAttempt: (body: {
+      snippetId: string;
+      wpm: number;
+      accuracy: number;
+      errorCount: number;
+    }) => post<PracticeAttemptResult>('/api/practice/attempts', body),
+    gradeRecall: (body: { snippetId: string; submitted: string }) =>
+      post<PracticeRecallResult>('/api/practice/recall', body),
+    stats: () => get<PracticeStats>('/api/practice/stats'),
+  },
+
   paper: {
     list: (params: { limit?: number; offset?: number } = {}) => {
       const q = new URLSearchParams();
@@ -2265,6 +2553,16 @@ export const api = {
       }) => post<CalorieLog>('/api/lifestyle/calories', data),
       delete: (id: string) =>
         del<{ success: boolean }>(`/api/lifestyle/calories/${id}`),
+    },
+  },
+
+  tts: {
+    // Existing /api/tts endpoint (backend/routes/stt.py), previously only
+    // consumed by the standalone STT listener; this is the first browser caller.
+    speak: (text: string) => {
+      const form = new FormData();
+      form.set('text', text);
+      return uploadForBlob('/api/tts', form);
     },
   },
 };

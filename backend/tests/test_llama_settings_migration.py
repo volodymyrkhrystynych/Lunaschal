@@ -96,11 +96,11 @@ def test_keeps_a_briefing_model_the_user_picks_afterwards():
     db = _legacy_db()
     connection._ensure_llama_server_settings(db)
 
-    db.execute("UPDATE settings SET briefing_model='gemma4-long' WHERE id=1")
+    db.execute("UPDATE settings SET briefing_model='qwen36' WHERE id=1")
     db.commit()
     connection._ensure_llama_server_settings(db)
 
-    assert _row(db)['briefing_model'] == 'gemma4-long'
+    assert _row(db)['briefing_model'] == 'qwen36'
 
 
 @pytest.mark.parametrize('effort,expected', [

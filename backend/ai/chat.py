@@ -3,15 +3,26 @@ from datetime import date, datetime, timedelta
 
 from backend.ai.llm import chat_stream_deltas
 
-SYSTEM_PROMPT = """You are Lunaschal, a warm, curious companion the user chats with throughout the day.
+SYSTEM_PROMPT = """You are Lunaschal, the user's seneschal — their second-in-command, running
+the day-to-day so nothing falls through the cracks.
 
-Talk like a good friend rather than a product: react to what the user says, ask natural
-follow-up questions, and share a genuine take when asked. Keep replies short and
-conversational — a couple of sentences unless the user clearly wants depth. Don't list
-your capabilities or turn every message into a task; it's fine for a chat to just be a chat.
+Talk like a trusted chief of staff, not a hype-man or a yes-man: direct, organized, and
+plainly on the user's side. React to what they actually said, ask the practical follow-up
+question that moves things forward, and give a real opinion when asked rather than hedging.
+If something they say doesn't add up against what you know of their day — a plan that
+conflicts with their schedule, a task abandoned mid-stream, a habit slipping — say so plainly
+("what happened to X?") rather than letting it pass unremarked; pushback in service of the
+user's own goals is part of the job, not rudeness. Keep replies short and to the point — a
+couple of sentences unless the user clearly wants depth. Don't list your capabilities or
+turn every message into a task; it's fine for a chat to just be a chat.
 
-If the user mentions something worth keeping — a memory, a plan, something they learned —
-you may gently offer to save it, but never push.
+You keep one short document of standing facts about the user, shown below when it isn't
+empty. Add to it with `remember` when something is worth carrying into later conversations
+— above all a proper name and its exact spelling, especially one you just watched
+speech-to-text get wrong. Correcting you *is* the signal: when they say "no, it's X", write
+X down. Don't narrate it beyond a few words, don't ask permission, and don't fill it with
+passing detail — a lunch is not a standing fact. Use `revise_memory` when something in it is
+now wrong or needs tidying, not to add.
 
 If the user says "note to self" without saying what the lesson actually is,
 ask them to spell it out before it can be saved.
@@ -123,7 +134,12 @@ def format_schedule_context(events: list[dict], now: int | None = None) -> str:
 
 
 def build_chat_system_prompt(now: int | None = None) -> str:
+    from backend.memory import format_memory_context
+
     blocks = [
+        # First of the three: it is the only block that is the same tomorrow, and
+        # the spellings in it are what the model should trust over a transcript.
+        format_memory_context(),
         format_journal_context(get_recent_journal_entries(now), now),
         format_schedule_context(get_upcoming_schedule(now), now),
     ]
@@ -155,6 +171,26 @@ def _parse_iso(value) -> int | None:
         return None
 
 
+def _stamp_content(content, prefix: str):
+    """Apply the time prefix without destroying a multimodal message.
+
+    `content` is a plain string for almost every message, but a chat turn
+    carrying a photo is a list of OpenAI content parts (see
+    backend/chat/context.py). Stamping used to `f`-string whatever it was
+    given, which turned that list into its own `repr` — the image silently
+    became text describing a Python list. So the prefix goes onto the first
+    text part instead, and a message with no text part gets one.
+    """
+    if isinstance(content, list):
+        parts = list(content)
+        for i, part in enumerate(parts):
+            if isinstance(part, dict) and part.get('type') == 'text':
+                parts[i] = {**part, 'text': f"{prefix}{part.get('text', '')}"}
+                return parts
+        return [{'type': 'text', 'text': prefix.rstrip()}] + parts
+    return f'{prefix}{content}'
+
+
 def stamp_messages(messages: list[dict], now: int | None = None) -> list[dict]:
     """Prefix each message with when it was sent, as `[today 21:58] ...`.
 
@@ -167,7 +203,7 @@ def stamp_messages(messages: list[dict], now: int | None = None) -> list[dict]:
         content = m.get('content', '')
         ts = _parse_iso(m.get('createdAt'))
         if ts is not None and m.get('role') != 'system':
-            content = f"[{_format_entry_time(ts, now)}] {content}"
+            content = _stamp_content(content, f'[{_format_entry_time(ts, now)}] ')
         out.append({'role': m.get('role'), 'content': content})
     return out
 

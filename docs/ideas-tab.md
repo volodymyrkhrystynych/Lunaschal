@@ -378,10 +378,12 @@ Three bugs only a live run could produce, all fixed:
 - **The 24 h cooldown is a guess.** It exists to stop a tight re-research loop; whether a
   researched idea deserves revisiting daily, weekly, or only when edited is unknown until this has
   run on a real backlog.
-- **`gemma4-long` stays unused.** Tempting for whole-repo prompts, but switching aliases makes the
-  router unload and reload the 26B — the two presets have opposite tensor placement — so the next
-  chat message pays a full model load. It also sets `parallel = 1`, which removes the second slot
-  the gate's whole premise depends on.
+- **A second, longer-context alias stays unused.** Tempting for whole-repo prompts, but switching
+  aliases makes the router unload and reload the chat model — a long-context preset needs different
+  tensor placement — so the next chat message pays a full model load, and a `parallel = 1` preset
+  would also remove the second slot the gate's whole premise depends on. Moot since the swap to
+  Qwen3.6: there is now one chat preset at 190k, which is more context than the alternate alias
+  ever offered.
 - **Idea → Writing / Learning handoff** isn't wired. A finished plan is copied by hand.
 
 ## Build order

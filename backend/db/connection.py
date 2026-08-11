@@ -13,8 +13,8 @@ TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'edited_at', 'started_at', 'ended_at', 'due',
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
-    'researched_at', 'received_at', 'classified_at', 'last_synced_at',
-    'token_expires_at',
+    'researched_at', 'last_practiced_at', 'last_recall_at',
+    'received_at', 'classified_at', 'last_synced_at', 'token_expires_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -99,6 +99,8 @@ def init_db() -> None:
     _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
     _ensure_research_settings(db)
+    # After both column sets exist: it reads one and writes the other.
+    _migrate_websearch_search_to_research(db)
     _ensure_idea_assessment_columns(db)
     _ensure_conversation_idea_id(db)
     _reset_stale_idea_research(db)
@@ -111,6 +113,10 @@ def init_db() -> None:
     # point adding it to a settings table that migration is still reshaping.
     _ensure_llama_vision_model(db)
     _ensure_llama_audio_model(db)
+    _ensure_llama_chat_vision(db)
+    # After all four alias columns exist: it clears the ones naming presets that
+    # llama/presets.ini no longer defines.
+    _migrate_gemma_aliases_to_qwen36(db)
     _ensure_attachment_description_columns(db)
     _ensure_journal_attachment_location(db)
     _ensure_todo_completed_at(db)
@@ -132,9 +138,15 @@ def init_db() -> None:
     _ensure_meeting_pause_columns(db)
     _ensure_meeting_whisper_columns(db)
     _migrate_workout_intensity_to_stars(db)
+    _ensure_message_status(db)
+    _ensure_message_raw_content(db)
+    _ensure_practice_recall_columns(db)
+    _ensure_learning_attempts_speech_requested(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
+    _reset_stale_chat_attachment_descriptions(db)
+    _reset_stale_message_runs(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -278,6 +290,13 @@ def _ensure_fic_folder_position(db: sqlite3.Connection) -> None:
         db.commit()
 
 
+def _ensure_learning_attempts_speech_requested(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(learning_attempts)')}
+    if 'speech_requested' not in cols:
+        db.execute('ALTER TABLE learning_attempts ADD COLUMN speech_requested INTEGER NOT NULL DEFAULT 0')
+        db.commit()
+
+
 def _ensure_fic_update_pending(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
     if 'update_pending' not in cols:
@@ -384,6 +403,50 @@ def _migrate_workout_intensity_to_stars(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_message_status(db: sqlite3.Connection) -> None:
+    """`status`/`error` on `messages`, for chat replies that now generate on a
+    background thread (backend/delegate/runs.py) instead of inside the request
+    that streams them — a dropped connection no longer has to lose the reply,
+    because the thread checkpoints it here regardless of who's listening.
+    Existing rows default to 'done': every one of them is already a finished
+    reply from before this column existed."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(messages)')}
+    if 'status' not in cols:
+        db.execute(
+            "ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'done'"
+            " CHECK(status IN ('streaming','done','error'))"
+        )
+    if 'error' not in cols:
+        db.execute('ALTER TABLE messages ADD COLUMN error TEXT')
+    db.commit()
+
+
+def _ensure_message_raw_content(db: sqlite3.Connection) -> None:
+    """`raw_content` on `messages`: what was actually dictated, before the
+    transcript-correction pass rewrote it and before the user edited it in the
+    composer. Same contract as `journal_entries.raw_content` — NULL when the
+    message was typed, and never overwritten once set. Existing rows stay NULL,
+    which is correct: none of them went through a correction pass."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(messages)')}
+    if 'raw_content' not in cols:
+        db.execute('ALTER TABLE messages ADD COLUMN raw_content TEXT')
+    db.commit()
+
+
+def _reset_stale_chat_attachment_descriptions(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_attachment_transcripts: reading a photo
+    runs on a background worker whose state dies with the process. 'error'
+    rather than 'idle' because a chat attachment has no re-read button — the
+    photo simply didn't make it into that turn's context, and the row should
+    say so instead of claiming to still be working."""
+    db.execute(
+        "UPDATE chat_attachments SET description_status='error',"
+        " description_error='Interrupted by an app restart.'"
+        " WHERE description_status='running'"
+    )
+    db.commit()
+
+
 def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
     """A fic's in-memory download progress (backend/fanfic/download.py's
     `_dl_progress`) never survives a process restart, but the persisted
@@ -413,6 +476,19 @@ def _reset_stale_attachment_transcripts(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE journal_attachments SET description_status='idle'"
         " WHERE description_status='running'"
+    )
+    db.commit()
+
+
+def _reset_stale_message_runs(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_fic_downloads: a chat reply's generation
+    thread (backend/delegate/runs.py) dies with the process, but a row it left
+    'streaming' persists — reset to 'error' so the reply reads as failed
+    rather than stuck forever, with whatever partial content it had checkpointed
+    kept in place."""
+    db.execute(
+        "UPDATE messages SET status='error', error='Interrupted by an app restart.'"
+        " WHERE status='streaming'"
     )
     db.commit()
 
@@ -650,12 +726,32 @@ def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_llama_chat_vision(db: sqlite3.Connection) -> None:
+    """Whether the *chat* model can be sent an image directly.
+
+    Separate from `llama_vision_model`, which names a different model for
+    one-shot captioning. This is a property of the chat preset: Qwen3.6 35B A3B
+    is a vision-language model (its GGUF carries mRoPE's four rope sections and
+    the `image-text-to-text` tag), but `llama/presets.ini` ships with no `mmproj`
+    on `[qwen36]` because the projector has to be downloaded and there is only
+    ~878 MiB of VRAM headroom to load it into.
+
+    Defaults to **0** for that reason: turning it on without a projector
+    configured would send images to a model that cannot decode them. Ticking it
+    is the deliberate act that follows a preset that actually loaded.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'llama_chat_vision' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN llama_chat_vision INTEGER DEFAULT 0')
+    db.commit()
+
+
 def _ensure_llama_vision_model(db: sqlite3.Connection) -> None:
     """Router alias for image captioning (journal photo attachments). Left NULL,
-    which means captioning is off: the chat presets set `mmproj-auto = false`
-    and there is no VRAM headroom for the projector alongside the 26B, so
-    defaulting this to anything would just produce a button that always errors.
-    See backend/ai/images.py."""
+    which means captioning is off: the chat preset sets `mmproj-auto = false`
+    and takes text only, so images go to a separate model that is a separate
+    download. Defaulting this to anything would just produce a button that
+    always errors. See backend/ai/images.py."""
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'llama_vision_model' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN llama_vision_model TEXT')
@@ -664,14 +760,67 @@ def _ensure_llama_vision_model(db: sqlite3.Connection) -> None:
 
 def _ensure_llama_audio_model(db: sqlite3.Connection) -> None:
     """Router alias for non-speech audio description (journal audio/video
-    attachments). Left NULL, same reasoning as llama_vision_model: it names a
-    completely different model (audio input is an E2B/E4B/12B capability, not
-    the 26B A4B chat model), off by default until that preset is downloaded and
-    the alias configured. See backend/ai/audio_description.py."""
+    attachments). Left NULL, same reasoning as llama_vision_model, and in
+    practice it holds the same value: one any-to-any model covers images and
+    audio both, so Settings writes the two columns together. They stay separate
+    columns because they gate two independent features. Off by default until
+    that preset is downloaded. See backend/ai/audio_description.py."""
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'llama_audio_model' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN llama_audio_model TEXT')
         db.commit()
+
+
+def _migrate_gemma_aliases_to_qwen36(db: sqlite3.Connection) -> None:
+    """Clear the retired `gemma4*` router aliases, exactly once.
+
+    llama/presets.ini no longer defines `gemma4`, `gemma4-medium`, `gemma4-max`
+    or `gemma4-e4b-audio` — the chat model is Qwen3.6 35B A3B and everything
+    non-text is one CPU-resident `gemma4-12b-omni` preset. Nothing anywhere
+    validates a stored alias against the router, so a settings row still naming
+    a deleted section would 404 every call: the same failure `_ensure_llama_
+    server_settings` refused to carry an Ollama tag into, for the same reason.
+
+    So all four alias columns are nulled, and NULL is the right resting state
+    for each:
+
+    - `llama_model` — NULL means "whatever `DEFAULT_MODEL` says", which is now
+      `qwen36`. Writing the new alias in instead would pin it, and a user who
+      never chose a model should not end up with an explicit choice.
+    - `briefing_model` — NULL means "same as the chat model".
+    - `llama_vision_model` / `llama_audio_model` — NULL means the feature is
+      off, which is correct: gemma-4-12b-it is a separate ~7.4 GB download that
+      almost certainly is not on disk when this runs, and both
+      `_ensure_llama_*_model` already argue that pointing these at an absent
+      model "would just produce a button that always errors". One tick in
+      Settings → llama.cpp turns them both back on.
+
+    `llama_vision_model` also gets a *fix* out of this rather than only a
+    reset: the value it held was `gemma4-vision`, a preset that never existed
+    in presets.ini at all, so photo captioning has been failing at the router
+    since the column was added.
+
+    Latched on a marker column the way `_migrate_workout_intensity_to_stars`
+    is — its existence is the marker, so this cannot undo a deliberate later
+    choice, and a settings table with no row still latches.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'qwen36_aliases_migrated' in cols:
+        return
+    db.execute(
+        'ALTER TABLE settings ADD COLUMN qwen36_aliases_migrated INTEGER NOT NULL DEFAULT 0'
+    )
+    # Listed exactly, not matched as a `gemma4%` prefix: `gemma4-12b-omni` is
+    # also a gemma4 alias and is the one that survives the swap, so a prefix
+    # would turn the multimodal toggle off the first time it was ticked.
+    for col in ('llama_model', 'briefing_model', 'llama_vision_model', 'llama_audio_model'):
+        if col in cols:
+            db.execute(
+                f'UPDATE settings SET {col} = NULL WHERE {col} IN'
+                " ('gemma4', 'gemma4-medium', 'gemma4-max', 'gemma4-e4b-audio', 'gemma4-vision')"
+            )
+    db.execute('UPDATE settings SET qwen36_aliases_migrated=1')
+    db.commit()
 
 
 def _ensure_attachment_description_columns(db: sqlite3.Connection) -> None:
@@ -802,6 +951,28 @@ def _migrate_flashcards_to_learning(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_practice_recall_columns(db: sqlite3.Connection) -> None:
+    # Blind-drill counters on an existing practice_progress row. The two counts
+    # default to 0 and the two "last recall" columns stay NULL, which is exactly
+    # what modes.next_mode reads as "never asked for this one from memory" — so
+    # a pre-existing row keeps its speed history and unlocks blind on the same
+    # terms as a fresh one.
+    cols = {r[1] for r in db.execute('PRAGMA table_info(practice_progress)')}
+    if 'recall_attempts_count' not in cols:
+        db.execute(
+            'ALTER TABLE practice_progress ADD COLUMN recall_attempts_count INTEGER NOT NULL DEFAULT 0'
+        )
+    if 'recall_passes' not in cols:
+        db.execute(
+            'ALTER TABLE practice_progress ADD COLUMN recall_passes INTEGER NOT NULL DEFAULT 0'
+        )
+    if 'last_recall_passed' not in cols:
+        db.execute('ALTER TABLE practice_progress ADD COLUMN last_recall_passed INTEGER')
+    if 'last_recall_at' not in cols:
+        db.execute('ALTER TABLE practice_progress ADD COLUMN last_recall_at INTEGER')
+    db.commit()
+
+
 def _ensure_writing_project_id(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(conversations)')}
     if 'writing_project_id' not in cols:
@@ -830,16 +1001,53 @@ def _ensure_conversation_mode(db: sqlite3.Connection) -> None:
 
 
 def _ensure_websearch_settings(db: sqlite3.Connection) -> None:
+    """The retired web-search tab's own search-provider columns.
+
+    The tab is gone — searching is now something the chat delegate decides to
+    do, through the same backend/research/web.py the Ideas agent uses, so there
+    is one search provider for the whole app and one place in Settings to
+    configure it. These columns are kept (dropping one in SQLite means
+    rebuilding the table, and an unread column costs nothing) and their values
+    are folded into the research ones once, below.
+    """
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'websearch_search_provider' not in cols:
-        # '' | 'brave' | 'tavily' | 'searxng'. Empty means the web-search chat
-        # tab degrades to an explanatory failure per tool call instead of
-        # searching (see backend/websearch/tools.py:is_search_configured).
         db.execute("ALTER TABLE settings ADD COLUMN websearch_search_provider TEXT DEFAULT ''")
     if 'websearch_search_key' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN websearch_search_key TEXT')
     if 'websearch_searxng_url' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN websearch_searxng_url TEXT')
+    db.commit()
+
+
+def _migrate_websearch_search_to_research(db: sqlite3.Connection) -> None:
+    """Fold a web-search-tab provider config into the research one, once.
+
+    Someone who only ever configured search under the old Web Search tab would
+    otherwise find the delegate unable to search, with a working API key sitting
+    in a column nothing reads any more.
+
+    Only fills a *blank* research provider, so a user who configured both keeps
+    the one they chose deliberately. Idempotent by construction: after the copy
+    the research provider is non-empty, so the guard never fires again — no
+    version flag needed.
+    """
+    row = db.execute(
+        'SELECT research_search_provider, websearch_search_provider,'
+        ' websearch_search_key, websearch_searxng_url FROM settings LIMIT 1'
+    ).fetchone()
+    if not row:
+        return
+    if (row['research_search_provider'] or '').strip():
+        return
+    provider = (row['websearch_search_provider'] or '').strip()
+    if not provider:
+        return
+    db.execute(
+        'UPDATE settings SET research_search_provider=?, research_search_key=?,'
+        ' research_searxng_url=?',
+        (provider, row['websearch_search_key'], row['websearch_searxng_url']),
+    )
     db.commit()
 
 
