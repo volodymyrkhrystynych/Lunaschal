@@ -22,6 +22,7 @@ export const VIEWS = [
   'fanfic',
   'newspapers',
   'paper',
+  'email',
   'practice',
 ] as const;
 

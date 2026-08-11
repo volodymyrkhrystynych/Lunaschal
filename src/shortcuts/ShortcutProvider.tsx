@@ -81,6 +81,7 @@ export type AppView =
   | 'fanfic'
   | 'newspapers'
   | 'paper'
+  | 'email'
   | 'practice';
 
 // Must stay in the same order as the sidebar's navItems (src/components/Sidebar
@@ -101,6 +102,7 @@ export const VIEW_ORDER: AppView[] = [
   'lifestyle',
   'fanfic',
   'newspapers',
+  'email',
   'paper',
   'files',
   'settings',

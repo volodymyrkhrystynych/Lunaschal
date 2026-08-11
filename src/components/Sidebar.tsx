@@ -18,6 +18,7 @@ type View =
   | 'fanfic'
   | 'newspapers'
   | 'paper'
+  | 'email'
   | 'practice';
 
 interface SidebarProps {
@@ -46,6 +47,7 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'lifestyle', label: 'Lifestyle', icon: '🏋️' },
   { view: 'fanfic', label: 'Library', icon: '📚' },
   { view: 'newspapers', label: 'Newspapers', icon: '📰' },
+  { view: 'email', label: 'Email', icon: '📧' },
   { view: 'paper', label: 'Paper', icon: '🖊️' },
   { view: 'files', label: 'Files', icon: '📁' },
   { view: 'settings', label: 'Settings', icon: '⚙️' },

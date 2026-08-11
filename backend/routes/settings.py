@@ -110,6 +110,9 @@ def get_settings():
         # Never the key itself, following hasHfToken.
         'hasResearchSearchKey': bool(s.get('research_search_key')),
         'researchSearxngUrl': s.get('research_searxng_url') or '',
+        'hasGoogleOauthClient': bool(s.get('google_oauth_client_id')) and bool(s.get('google_oauth_client_secret')),
+        'emailSyncEnabled': bool(s.get('email_sync_enabled', 1)),
+        'emailSyncIntervalMinutes': s.get('email_sync_interval_minutes') or 15,
     })
 
 
@@ -150,6 +153,10 @@ def update_ai():
         'websearchSearchProvider': 'websearch_search_provider',
         'websearchSearchKey': 'websearch_search_key',
         'websearchSearxngUrl': 'websearch_searxng_url',
+        'googleOauthClientId': 'google_oauth_client_id',
+        'googleOauthClientSecret': 'google_oauth_client_secret',
+        'emailSyncEnabled': 'email_sync_enabled',
+        'emailSyncIntervalMinutes': 'email_sync_interval_minutes',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():

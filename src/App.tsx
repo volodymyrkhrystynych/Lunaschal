@@ -20,6 +20,7 @@ import { Lifestyle } from './components/Lifestyle/Lifestyle';
 import { Fanfic } from './components/Fanfic/Fanfic';
 import type { FicTarget } from './components/Fanfic/Fanfic';
 import { Newspapers } from './components/Newspapers';
+import { Email } from './components/Email';
 import { Paper } from './components/Paper/Paper';
 import { Meetings } from './components/Meetings';
 import { api } from './hooks/api';
@@ -184,6 +185,8 @@ export default function App() {
         );
       case 'newspapers':
         return <Newspapers />;
+      case 'email':
+        return <Email />;
       case 'paper':
         return <Paper />;
       case 'meetings':

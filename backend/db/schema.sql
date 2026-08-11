@@ -943,3 +943,46 @@ CREATE TABLE IF NOT EXISTS practice_recall_attempts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_practice_recall_attempts_snippet ON practice_recall_attempts(snippet_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS email_accounts (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL DEFAULT 'gmail' CHECK(provider IN ('gmail')),
+    email_address TEXT NOT NULL,
+    access_token TEXT,
+    refresh_token TEXT,
+    token_expires_at INTEGER,
+    scope TEXT,
+    history_id TEXT,
+    last_synced_at INTEGER,
+    last_sync_error TEXT,
+    sync_enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(provider, email_address)
+);
+
+-- category/job_status/classified_at stay NULL until the background classifier
+-- runs; classified_at IS NULL is itself the "pending" state (see ai/email.py).
+CREATE TABLE IF NOT EXISTS emails (
+    id TEXT PRIMARY KEY,
+    account_id TEXT NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
+    gmail_id TEXT NOT NULL,
+    thread_id TEXT,
+    subject TEXT,
+    sender TEXT,
+    sender_email TEXT,
+    snippet TEXT,
+    body_text TEXT NOT NULL DEFAULT '',
+    label_ids TEXT,
+    received_at INTEGER NOT NULL,
+    category TEXT CHECK(category IN ('job_application','newsletter','notification','personal','other')),
+    job_status TEXT CHECK(job_status IN ('sent','rejection','interview_next_step','other_update')),
+    classified_at INTEGER,
+    classification_error TEXT,
+    created_at INTEGER NOT NULL,
+    UNIQUE(account_id, gmail_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_emails_category ON emails(category);
+CREATE INDEX IF NOT EXISTS idx_emails_job_status ON emails(job_status) WHERE job_status IS NOT NULL;
