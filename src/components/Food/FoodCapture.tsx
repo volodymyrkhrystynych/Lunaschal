@@ -3,31 +3,14 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import { mediaKind } from '../../lib/food';
+// Best-effort device GPS; resolves null if unavailable or denied, so a log is
+// never blocked by location. Shared with the Chat composer — see src/lib/geo.ts.
+import { currentPosition } from '../../lib/geo';
 
 interface PickedMedia {
   file: File;
   url: string;
   kind: 'image' | 'video';
-}
-
-/** Best-effort device GPS; resolves null if unavailable or denied (never throws
- * so a log is never blocked by location). */
-function currentPosition(): Promise<{
-  latitude: number;
-  longitude: number;
-} | null> {
-  return new Promise(resolve => {
-    if (!navigator.geolocation) return resolve(null);
-    navigator.geolocation.getCurrentPosition(
-      pos =>
-        resolve({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-        }),
-      () => resolve(null),
-      { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
-    );
-  });
 }
 
 /**

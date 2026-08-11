@@ -27,6 +27,7 @@ import {
   photosFromTransfer,
   rejectedPhotosMessage,
 } from '@/lib/chatAttachments';
+import { currentPosition } from '@/lib/geo';
 
 /** One staged action from the delegate's `done` event. Only `note` is still
  * read from this live shape — the other kinds (calendar/calorie/task/
@@ -445,7 +446,11 @@ export function ChatPanel() {
     try {
       let convId = conversationId;
       if (!convId) convId = (await createConversation.mutateAsync()).id;
-      const uploaded = await api.chat.uploadAttachments(convId, files);
+      // Asked for at attach time, which is the moment closest to the meal — and
+      // kept only as a fallback for the photo's EXIF, which a pasted image has
+      // already lost. Resolves null when denied or slow; that costs nothing.
+      const coords = await currentPosition();
+      const uploaded = await api.chat.uploadAttachments(convId, files, coords);
       setStaged(prev => [...prev, ...uploaded]);
     } catch (err) {
       setAttachError(

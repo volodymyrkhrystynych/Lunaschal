@@ -140,6 +140,7 @@ def init_db() -> None:
     _migrate_workout_intensity_to_stars(db)
     _ensure_message_status(db)
     _ensure_message_raw_content(db)
+    _ensure_chat_attachment_location(db)
     _ensure_practice_recall_columns(db)
     _ensure_learning_attempts_speech_requested(db)
     _reset_stale_fic_downloads(db)
@@ -430,6 +431,26 @@ def _ensure_message_raw_content(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(messages)')}
     if 'raw_content' not in cols:
         db.execute('ALTER TABLE messages ADD COLUMN raw_content TEXT')
+    db.commit()
+
+
+def _ensure_chat_attachment_location(db: sqlite3.Connection) -> None:
+    """Device coordinates on a chat photo, as a fallback for its EXIF GPS.
+
+    The EXIF is the better answer — it says where the photo was *taken* — but it
+    is routinely absent: iOS re-encodes and strips location whenever an image
+    goes through the clipboard or a share sheet, which is exactly what the chat
+    composer's paste and drop paths produce. Measured on a real upload: the same
+    iPhone photo arrived as plain JPEG with Make, Model, DateTime and GPSInfo all
+    gone, where the Food tab's file picker delivered the untouched MPO original.
+
+    Existing rows stay NULL, which is honest: nothing recorded a position for
+    them."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(chat_attachments)')}
+    if 'latitude' not in cols:
+        db.execute('ALTER TABLE chat_attachments ADD COLUMN latitude REAL')
+    if 'longitude' not in cols:
+        db.execute('ALTER TABLE chat_attachments ADD COLUMN longitude REAL')
     db.commit()
 
 

@@ -424,6 +424,10 @@ export interface ChatAttachment {
   description: string | null;
   descriptionStatus: 'running' | 'done' | 'error' | null;
   descriptionError: string | null;
+  /** Where the device was when the photo was attached — the fallback behind the
+   * photo's own EXIF GPS, which a pasted image no longer has. */
+  latitude: number | null;
+  longitude: number | null;
   position: number;
   createdAt: string;
 }
@@ -1997,10 +2001,21 @@ export const api = {
         attachmentIds?: string[];
       }
     ) => post<{ id: string }>(`/api/chat/conversations/${id}/messages`, data),
-    uploadAttachments: (conversationId: string, files: File[]) => {
+    // `coords` is the device's position, kept as a fallback for the photo's own
+    // EXIF GPS — iOS strips that whenever an image goes through the clipboard or
+    // a share sheet, which is exactly what paste and drop produce.
+    uploadAttachments: (
+      conversationId: string,
+      files: File[],
+      coords?: { latitude: number; longitude: number } | null
+    ) => {
       const form = new FormData();
       for (const file of files) {
         form.append('image', file, uploadFilenameFor(file));
+      }
+      if (coords) {
+        form.append('latitude', String(coords.latitude));
+        form.append('longitude', String(coords.longitude));
       }
       return upload<ChatAttachment[]>(
         `/api/chat/conversations/${conversationId}/attachments`,

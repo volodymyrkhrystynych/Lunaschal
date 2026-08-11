@@ -19,6 +19,8 @@ const attachment = (over: Partial<ChatAttachment> = {}): ChatAttachment => ({
   description: 'A plate.',
   descriptionStatus: 'done',
   descriptionError: null,
+  latitude: null,
+  longitude: null,
   position: 0,
   createdAt: '2026-01-01T08:00:00.000Z',
   ...over,

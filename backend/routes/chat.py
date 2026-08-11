@@ -7,6 +7,7 @@ from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.chat import storage as chat_storage
 from backend.chat_day import day_key_for
+from backend.geo import coord_pair
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.ai import priority
 from backend.ai.background import run_bg
@@ -187,7 +188,8 @@ _UNSUPPORTED_IMAGE = 'Unsupported file type — images only'
 
 _ATTACHMENT_COLS = (
     'id, conversation_id, message_id, path, mime,'
-    ' description, description_status, description_error, position, created_at'
+    ' description, description_status, description_error,'
+    ' latitude, longitude, position, created_at'
 )
 
 
@@ -241,11 +243,15 @@ def _bind_attachments(db, conversation_id: str, message_id: str, attachment_ids)
         )
 
 
-def _store_attachment(conversation_id: str, file, position: int):
+def _store_attachment(conversation_id: str, file, position: int, coords=None):
     """Save one uploaded photo against `conversation_id`.
 
     Returns `(attachment_dict, None)` on success and `(None, (error, status))`
     on a rejected upload — the journal `_store_attachment` contract.
+
+    `coords` is where the device was when the photo was attached, kept as a
+    fallback for the photo's own EXIF GPS rather than a replacement: EXIF says
+    where the picture was taken, this says where its owner was a moment ago.
     """
     ext = chat_storage.resolve_ext(file.mimetype, file.filename)
     if ext is None:
@@ -295,9 +301,12 @@ def _store_attachment(conversation_id: str, file, position: int):
     try:
         db.execute(
             'INSERT INTO chat_attachments(id, conversation_id, message_id, path, mime,'
-            ' description_status, position, created_at) VALUES (?,?,NULL,?,?,?,?,?)',
+            ' description_status, latitude, longitude, position, created_at)'
+            ' VALUES (?,?,NULL,?,?,?,?,?,?,?)',
             (attachment_id, conversation_id, str(path), mime,
-             'running' if pre_read else None, position, now),
+             'running' if pre_read else None,
+             coords[0] if coords else None, coords[1] if coords else None,
+             position, now),
         )
         db.commit()
     except Exception:
@@ -361,9 +370,14 @@ def upload_attachments(id):
     ).fetchone()
     position = row['n']
 
+    # Best-effort: the browser sends these only when the user has granted
+    # location and the reading arrived in time. Absent is the normal case, not
+    # an error.
+    coords = coord_pair(request.form.get('latitude'), request.form.get('longitude'))
+
     saved = []
     for f in files:
-        attachment, err = _store_attachment(id, f, position + len(saved))
+        attachment, err = _store_attachment(id, f, position + len(saved), coords)
         if err:
             # Anything already saved stays: the user attached several photos and
             # one being a .txt is no reason to throw the good ones away.
@@ -740,6 +754,26 @@ def _source_user_message(db, message_id: str):
     ).fetchone()
 
 
+def _device_position(db, message_id: str | None):
+    """The device coordinates recorded when this message's photos were attached.
+
+    The fallback behind EXIF, and it earns its place: iOS re-encodes an image
+    that goes through the clipboard or a share sheet and drops its GPS, which is
+    exactly what the composer's paste and drop paths produce. Without this a
+    pasted meal photo is unlocatable even though the phone knew perfectly well
+    where it was.
+    """
+    if not message_id:
+        return None
+    row = db.execute(
+        'SELECT latitude, longitude FROM chat_attachments'
+        ' WHERE message_id=? AND latitude IS NOT NULL AND longitude IS NOT NULL'
+        ' ORDER BY position, created_at LIMIT 1',
+        (message_id,),
+    ).fetchone()
+    return (row['latitude'], row['longitude']) if row else None
+
+
 def _copy_attachments_to_food(db, message_id: str | None, entry_id: str) -> list:
     """Copy the message's photos into the food entry's own storage.
 
@@ -845,6 +879,15 @@ def _accept_food(db, data: dict, ctx: dict) -> dict:
         if meta['latitude'] is not None and 'latitude' not in overrides:
             overrides['latitude'] = meta['latitude']
             overrides['longitude'] = meta['longitude']
+
+    # Only when the photo itself said nothing. EXIF is where the picture was
+    # taken; this is where the phone was when it was attached, which is the same
+    # place often enough to be worth having and never better than the EXIF.
+    if 'latitude' not in overrides:
+        device = _device_position(db, source['id'] if source else None)
+        if device:
+            overrides['latitude'], overrides['longitude'] = device
+
     if overrides:
         build_update(db, 'food_entries', overrides, 'id=?', (entry_id,))
 

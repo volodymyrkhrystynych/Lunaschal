@@ -244,3 +244,47 @@ def test_a_failed_image_correction_still_returns_the_transcript(client, monkeypa
     r = client.post('/api/chat/polish-transcript',
                     json={'text': 'had vary nikki', 'attachmentIds': [att['id']]})
     assert r.get_json()['corrected'] == 'had vary nikki'
+
+
+# --- Location ---
+
+
+def test_the_device_position_is_stored_with_the_photo(client):
+    conv = client.post('/api/chat/conversations', json={}).get_json()['id']
+    r = client.post(
+        f'/api/chat/conversations/{conv}/attachments',
+        data={'image': (io.BytesIO(_jpeg()), 'meal.jpg'),
+              'latitude': '43.6446', 'longitude': '-79.3975'},
+        content_type='multipart/form-data',
+    )
+    att = r.get_json()[0]
+    assert (att['latitude'], att['longitude']) == (43.6446, -79.3975)
+
+
+def test_a_half_position_is_refused(client):
+    """A lone latitude is not half a location — it produces a row that looks
+    located and isn't."""
+    conv = client.post('/api/chat/conversations', json={}).get_json()['id']
+    r = client.post(
+        f'/api/chat/conversations/{conv}/attachments',
+        data={'image': (io.BytesIO(_jpeg()), 'meal.jpg'), 'latitude': '43.6446'},
+        content_type='multipart/form-data',
+    )
+    att = r.get_json()[0]
+    assert att['latitude'] is None and att['longitude'] is None
+
+
+def test_a_junk_position_is_ignored_rather_than_stored(client):
+    conv = client.post('/api/chat/conversations', json={}).get_json()['id']
+    r = client.post(
+        f'/api/chat/conversations/{conv}/attachments',
+        data={'image': (io.BytesIO(_jpeg()), 'meal.jpg'),
+              'latitude': 'nan', 'longitude': '-79.3975'},
+        content_type='multipart/form-data',
+    )
+    assert r.get_json()[0]['latitude'] is None
+
+
+def test_no_position_is_the_normal_case_and_is_fine(client):
+    _, att = _attach(client)
+    assert att['latitude'] is None and att['longitude'] is None

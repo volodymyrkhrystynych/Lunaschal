@@ -230,6 +230,12 @@ CREATE TABLE IF NOT EXISTS chat_attachments (
     description TEXT,
     description_status TEXT,
     description_error TEXT,
+    -- Where the device was when the photo was attached. A *fallback* for the
+    -- photo's own EXIF GPS, which iOS strips whenever an image goes through the
+    -- clipboard or a share sheet rather than being handed over as the original
+    -- file — exactly the paths this composer supports.
+    latitude REAL,
+    longitude REAL,
     position INTEGER NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
 );

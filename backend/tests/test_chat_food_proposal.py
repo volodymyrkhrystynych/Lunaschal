@@ -261,3 +261,83 @@ def test_other_proposal_kinds_still_work_through_the_widened_handler(client):
     r = client.post(f'/api/chat/proposals/{assistant_id}/p1', json={'action': 'accept'})
     assert r.status_code == 200
     assert db.execute('SELECT title FROM todos').fetchone()['title'] == 'buy milk'
+
+
+# --- Location on the food entry ---
+
+
+def _exif_jpeg_gps(dt='2026:03:14 09:30:00'):
+    """A photo carrying both a capture date and a GPS fix, as an untouched
+    iPhone original does."""
+    img = Image.new('RGB', (8, 8), (120, 120, 120))
+    exif = img.getexif()
+    exif[0x0132] = dt
+    exif.get_ifd(0x8769)[0x9003] = dt
+    g = exif.get_ifd(0x8825)
+    g[1], g[2] = 'N', (43.0, 39.0, 11.0)
+    g[3], g[4] = 'W', (79.0, 22.0, 59.0)
+    buf = io.BytesIO()
+    img.save(buf, 'JPEG', exif=exif)
+    return buf.getvalue()
+
+
+def _attach_with_coords(client, conv, photo, latitude=None, longitude=None):
+    data = {'image': (io.BytesIO(photo), 'meal.jpg')}
+    if latitude is not None:
+        data['latitude'], data['longitude'] = str(latitude), str(longitude)
+    r = client.post(f'/api/chat/conversations/{conv}/attachments',
+                    data=data, content_type='multipart/form-data')
+    return [a['id'] for a in r.get_json()]
+
+
+def _seed_with(client, photo, latitude=None, longitude=None):
+    conv = client.post('/api/chat/conversations', json={}).get_json()['id']
+    ids = _attach_with_coords(client, conv, photo, latitude, longitude)
+    client.post(f'/api/chat/conversations/{conv}/messages',
+                json={'role': 'user', 'content': 'had this', 'attachmentIds': ids})
+    assistant_id = client.post(f'/api/chat/conversations/{conv}/messages',
+                               json={'role': 'assistant', 'content': 'noted'}).get_json()['id']
+    return assistant_id
+
+
+def _entry(client):
+    return get_db().execute('SELECT * FROM food_entries').fetchone()
+
+
+def test_the_photos_own_gps_wins(client):
+    """EXIF says where the picture was taken; the device says where its owner was
+    a moment ago. When both exist the photo is the better answer."""
+    assistant_id = _seed_with(client, _exif_jpeg_gps(), latitude=1.0, longitude=2.0)
+    _stage(client, assistant_id, {'dish': 'Vareniki'})
+    _accept(client, assistant_id)
+
+    row = _entry(client)
+    assert round(row['latitude'], 3) == 43.653
+    assert round(row['longitude'], 3) == -79.383
+
+
+def test_the_device_position_fills_in_when_the_photo_was_stripped(client):
+    """The case this exists for: iOS re-encodes a pasted image and drops its GPS,
+    so without this a pasted meal photo is unlocatable."""
+    assistant_id = _seed_with(client, _exif_jpeg(), latitude=43.6446, longitude=-79.3975)
+    _stage(client, assistant_id, {'dish': 'Vareniki'})
+    _accept(client, assistant_id)
+
+    row = _entry(client)
+    assert (row['latitude'], row['longitude']) == (43.6446, -79.3975)
+
+
+def test_no_location_anywhere_leaves_it_null(client):
+    assistant_id = _seed_with(client, _exif_jpeg())
+    _stage(client, assistant_id, {'dish': 'Vareniki'})
+    _accept(client, assistant_id)
+
+    row = _entry(client)
+    assert row['latitude'] is None and row['longitude'] is None
+
+
+def test_a_meal_with_no_photo_at_all_still_saves(client):
+    _, assistant_id = _seed(client)
+    _stage(client, assistant_id, {'dish': 'Vareniki'})
+    assert _accept(client, assistant_id).status_code == 200
+    assert _entry(client)['latitude'] is None

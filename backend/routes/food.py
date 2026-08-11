@@ -1,5 +1,4 @@
 import json
-import math
 import time
 from datetime import datetime, timezone
 
@@ -11,6 +10,7 @@ from backend.ai.food import parse_food_entry
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.food import storage
 from backend.food.exif import extract_photo_meta
+from backend.geo import parse_coord
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.routes.cookbook import _insert_recipe
 from backend.tags import tag_counts, tags_json
@@ -57,14 +57,6 @@ def _parse_rating(raw) -> int | None:
     except (TypeError, ValueError):
         return None
     return n if 1 <= n <= 5 else None
-
-
-def _parse_coord(raw) -> float | None:
-    try:
-        v = float(raw)
-    except (TypeError, ValueError):
-        return None
-    return v if math.isfinite(v) and -180 <= v <= 180 else None
 
 
 def _parse_tags_field(raw) -> list | None:
@@ -256,8 +248,8 @@ def create_entry():
     notes = (form.get('notes') or '').strip() or None
     rating = _parse_rating(form.get('rating'))
     tags = _parse_tags_field(form.get('tags'))
-    latitude = _parse_coord(form.get('latitude'))
-    longitude = _parse_coord(form.get('longitude'))
+    latitude = parse_coord(form.get('latitude'))
+    longitude = parse_coord(form.get('longitude'))
 
     if not text and not files and not dish and not notes:
         return jsonify({'error': 'provide text, media, or details'}), 400
