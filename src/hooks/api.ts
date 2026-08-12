@@ -1,6 +1,11 @@
 // Typed API client — replaces tRPC hooks
 
 import { uploadFilenameFor } from '../lib/journalAttachments';
+// The shape is defined next to the geometry that consumes it, so the payload
+// and the band math can't drift apart.
+import type { SleepDay } from '../lib/sleep';
+
+export type { SleepDay };
 
 export interface JournalEntry {
   id: string;
@@ -1795,6 +1800,15 @@ export const api = {
     // classifiedAt land once the background classification finishes.
     transcribe: (id: string, text: string) =>
       post<CalendarEvent>(`/api/calendar/${id}/transcribe`, { text }),
+    // Wake/sleep for a day. Derived from when the user was active unless they
+    // set it by hand; `set` takes the whole manual state, so omitting an end
+    // hands it back to the derived value, and `clear` releases both.
+    sleep: {
+      get: (date: string) => get<SleepDay>(`/api/calendar/sleep/${date}`),
+      set: (date: string, times: { wake?: string; sleep?: string }) =>
+        put<SleepDay>(`/api/calendar/sleep/${date}`, times),
+      clear: (date: string) => del<SleepDay>(`/api/calendar/sleep/${date}`),
+    },
   },
 
   learning: {

@@ -11,6 +11,7 @@ import {
   type EventTimeRange,
 } from '@/lib/calendarDayLayout';
 import { toLocalISO } from '@/lib/calendar';
+import { sleepBands } from '@/lib/sleep';
 import { DayEventLayer, type LaidOutEvent } from './DayEventLayer';
 
 /** 60px-tall hour rows. */
@@ -20,9 +21,10 @@ const HOURS = Array.from({ length: 24 }, (_, h) => h);
 interface DayViewProps {
   date: string;
   onOpenEvent: (event: CalendarEvent) => void;
+  onEditSleep: () => void;
 }
 
-export function DayView({ date, onOpenEvent }: DayViewProps) {
+export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
   const queryClient = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrolledRef = useRef(false);
@@ -38,6 +40,16 @@ export function DayView({ date, onOpenEvent }: DayViewProps) {
       return list?.some(e => e.description && !e.classifiedAt) ? 2000 : false;
     },
   });
+
+  const { data: sleep } = useQuery({
+    queryKey: ['calendar', 'sleep', date],
+    queryFn: () => api.calendar.sleep.get(date),
+  });
+
+  const bands = useMemo(
+    () => (sleep ? sleepBands(sleep, date) : []),
+    [sleep, date]
+  );
 
   const timed = useMemo(
     () => (events || []).filter(e => !e.allDay && e.time),
@@ -152,10 +164,36 @@ export function DayView({ date, onOpenEvent }: DayViewProps) {
           className="relative"
           style={{ height: MINUTES_PER_DAY * PX_PER_MINUTE }}
         >
+          {/* Drawn first so the hour grid and the events sit on top of them.
+              A band is a surface, not a control: it takes a tap to open the
+              editor, but the event layer above it is pointer-events-none
+              except on the blocks themselves, so a line inside a shaded
+              region still wins its own drags. */}
+          {bands.map(band => (
+            <button
+              key={band.kind}
+              type="button"
+              data-testid={`sleep-band-${band.kind}`}
+              onClick={onEditSleep}
+              className="absolute left-0 right-0 bg-black/30 text-left"
+              style={{
+                top: band.startMinutes * PX_PER_MINUTE,
+                height: (band.endMinutes - band.startMinutes) * PX_PER_MINUTE,
+              }}
+            >
+              <span className="absolute left-12 top-1 text-[10px] text-[var(--color-text-muted)]">
+                {band.label}
+              </span>
+            </button>
+          ))}
+
           {HOURS.map(h => (
             <div
               key={h}
-              className="absolute left-0 right-0 border-t border-white/5"
+              // Transparent to pointers: an hour row is a rule, not a target,
+              // and its label strip would otherwise punch a hole in the sleep
+              // band behind it every 60px.
+              className="absolute left-0 right-0 border-t border-white/5 pointer-events-none"
               style={{ top: h * 60 * PX_PER_MINUTE }}
             >
               <div className="w-12 shrink-0 -mt-2 text-[10px] text-[var(--color-text-muted)] text-right pr-1">
@@ -170,7 +208,10 @@ export function DayView({ date, onOpenEvent }: DayViewProps) {
             </div>
           ))}
 
-          <div className="absolute left-12 right-2 top-0 bottom-0">
+          {/* pointer-events-none so the sleep bands underneath stay tappable
+              across the whole row; each EventBlock turns them back on for
+              itself. */}
+          <div className="absolute left-12 right-2 top-0 bottom-0 pointer-events-none">
             <DayEventLayer
               events={laidOut}
               pxPerMinute={PX_PER_MINUTE}
