@@ -216,7 +216,7 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
     assert seen['max_tokens'] == delegate_chat.DECISION_MAX_TOKENS
     offered = {t['function']['name'] for t in seen['tools']}
     assert offered == {'delegate', 'propose_task', 'propose_calendar_event',
-                       'propose_calorie_log', 'propose_food_log',
+                       'propose_calorie_log', 'propose_food_log', 'propose_recipe',
                        'propose_note_to_self', 'propose_flashcards',
                        'remember', 'revise_memory', 'ask_user'}
 

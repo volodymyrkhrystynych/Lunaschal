@@ -206,12 +206,20 @@ export interface ActiveMeeting {
   startedAt: string | null;
 }
 
+export interface RecipeMedia {
+  id: string;
+  kind: 'image' | 'video';
+  position: number;
+  url: string;
+}
+
 export interface Recipe {
   id: string;
   title: string;
   content: string;
   tags: string | null;
   sourceUrl: string | null;
+  media: RecipeMedia[];
   createdAt: string;
   updatedAt: string;
 }
@@ -498,16 +506,25 @@ export interface BriefingTodoDecision {
   list?: TodoList;
 }
 
-// A delegate confirm card — calendar/calorie/food/task/flashcards only. `note`
-// proposals draft immediately with no confirm step, so they never get one of
-// these (backend/delegate/runs.py), and `remember` writes straight away with no
-// card at all. Written into the assistant message's metadata the moment the run
-// that staged it finishes, and resolved in place by POST
-// /api/chat/proposals/<messageId>/<id> — the only place `status` ever changes,
-// so a card survives a reload until it actually is.
+// A delegate confirm card — calendar/calorie/food/recipe/task/flashcards from
+// a live chat turn, plus recipe_link from the background homemade-match check
+// (backend/food/recipe_match.py). `note` proposals draft immediately with no
+// confirm step, so they never get one of these (backend/delegate/runs.py),
+// and `remember` writes straight away with no card at all. Written into the
+// assistant message's metadata the moment the run that staged it finishes (or,
+// for recipe_link, the moment the background check finds a match), and
+// resolved in place by POST /api/chat/proposals/<messageId>/<id> — the only
+// place `status` ever changes, so a card survives a reload until it actually is.
 export interface DelegateProposalRecord {
   id: string;
-  kind: 'calendar' | 'calorie' | 'food' | 'task' | 'flashcards';
+  kind:
+    | 'calendar'
+    | 'calorie'
+    | 'food'
+    | 'recipe'
+    | 'recipe_link'
+    | 'task'
+    | 'flashcards';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
@@ -1575,8 +1592,20 @@ export const api = {
       ),
     tags: () => get<RecipeTag[]>('/api/cookbook/tags'),
     get: (id: string) => get<Recipe>(`/api/cookbook/${id}`),
-    create: (data: { title: string; content: string; tags?: string[] }) =>
-      post<{ id: string }>('/api/cookbook', data),
+    // Create a recipe from title/content + optional photos/videos (one multipart POST).
+    create: (data: {
+      title: string;
+      content: string;
+      tags?: string[];
+      media?: File[];
+    }) => {
+      const form = new FormData();
+      form.set('title', data.title);
+      form.set('content', data.content);
+      if (data.tags) form.set('tags', JSON.stringify(data.tags));
+      for (const f of data.media ?? []) form.append('media', f);
+      return upload<Recipe>('/api/cookbook', form);
+    },
     update: (
       id: string,
       data: { title?: string; content?: string; tags?: string[] }
@@ -1584,6 +1613,16 @@ export const api = {
     delete: (id: string) => del<{ success: boolean }>(`/api/cookbook/${id}`),
     importRecipe: (data: { text?: string; url?: string }) =>
       post<{ id: string; recipe: Recipe }>('/api/cookbook/import', data),
+    addMedia: (id: string, media: File[]) => {
+      const form = new FormData();
+      for (const f of media) form.append('media', f);
+      return upload<{ media: RecipeMedia[] }>(
+        `/api/cookbook/${id}/media`,
+        form
+      );
+    },
+    deleteMedia: (mediaId: string) =>
+      del<{ success: boolean }>(`/api/cookbook/media/${mediaId}`),
   },
 
   food: {

@@ -2,16 +2,39 @@
 
 LLM parsing and URL fetching are mocked so these tests cover the routes' own
 logic — CRUD, FTS search (including the index triggers), tag aggregation and
-filtering, and the import endpoint's validation — with no network calls.
+filtering, media upload/serve/delete, and the import endpoint's validation —
+with no network calls.
 """
+import io
+
+import pytest
+
 from backend.db.connection import get_db
 from backend.routes import cookbook
+
+
+@pytest.fixture(autouse=True)
+def recipe_root(monkeypatch, tmp_path):
+    root = tmp_path / 'recipes'
+    monkeypatch.setenv('RECIPE_ROOT', str(root))
+    return root
 
 
 def _create(client, title='Borscht', content='Beets, beef, simmer.', tags=None):
     r = client.post('/api/cookbook', json={'title': title, 'content': content, 'tags': tags})
     assert r.status_code == 201
     return r.get_json()['id']
+
+
+def _create_multipart(client, media=None, **fields):
+    data = {'title': 'Borscht', 'content': 'Beets, beef, simmer.', **fields}
+    if media is not None:
+        data['media'] = media
+    return client.post('/api/cookbook', data=data, content_type='multipart/form-data')
+
+
+def _file(name='photo.jpg', content=b'JPEGBYTES'):
+    return (io.BytesIO(content), name)
 
 
 # --- CRUD ---
@@ -147,6 +170,77 @@ def test_import_requires_exactly_one_of_text_or_url(client):
 
 def test_import_rejects_non_http_url(client):
     assert client.post('/api/cookbook/import', json={'url': 'file:///etc/passwd'}).status_code == 400
+
+
+# --- Media ---
+
+def test_create_with_media_saves_file_and_serves_it(client, recipe_root):
+    r = _create_multipart(client, media=_file(content=b'JPEGBYTES'))
+    assert r.status_code == 201
+    body = r.get_json()
+    assert len(body['media']) == 1
+    m = body['media'][0]
+    assert m['kind'] == 'image'
+    assert (recipe_root / body['id']).is_dir()
+
+    served = client.get(m['url'])
+    assert served.status_code == 200
+    assert served.data == b'JPEGBYTES'
+
+
+def test_video_media_detected_as_video(client):
+    r = _create_multipart(client, media=_file(name='clip.mov', content=b'MOVDATA'))
+    assert r.get_json()['media'][0]['kind'] == 'video'
+
+
+def test_multipart_create_accepts_tags_as_json_array(client):
+    r = _create_multipart(client, tags='["soup", "beets"]')
+    body = r.get_json()
+    assert body['tags'] == '["soup", "beets"]'
+
+
+def test_multipart_create_accepts_tags_as_comma_string(client):
+    r = _create_multipart(client, tags='soup, beets')
+    body = r.get_json()
+    assert body['tags'] == '["soup", "beets"]'
+
+
+def test_add_media_to_existing_recipe(client):
+    id = _create(client)
+    r = client.post(f'/api/cookbook/{id}/media', data={'media': _file()},
+                    content_type='multipart/form-data')
+    assert r.status_code == 201
+    assert len(client.get(f'/api/cookbook/{id}').get_json()['media']) == 1
+
+
+def test_delete_single_media(client):
+    id = _create(client)
+    added = client.post(f'/api/cookbook/{id}/media', data={'media': _file()},
+                        content_type='multipart/form-data').get_json()
+    media_id = added['media'][0]['id']
+
+    r = client.delete(f'/api/cookbook/media/{media_id}')
+    assert r.status_code == 200
+    assert client.get(f'/api/cookbook/media/{media_id}').status_code == 404
+    assert client.get(f'/api/cookbook/{id}').get_json()['media'] == []
+
+
+def test_delete_recipe_removes_media_and_dir(client, recipe_root):
+    r = _create_multipart(client, media=_file())
+    body = r.get_json()
+    id, media_id = body['id'], body['media'][0]['id']
+    assert (recipe_root / id).is_dir()
+
+    assert client.delete(f'/api/cookbook/{id}').status_code == 200
+    assert client.get(f'/api/cookbook/media/{media_id}').status_code == 404  # cascaded
+    assert not (recipe_root / id).exists()
+
+
+def test_media_missing_404s(client):
+    assert client.get('/api/cookbook/media/nope').status_code == 404
+    assert client.delete('/api/cookbook/media/nope').status_code == 404
+    assert client.post('/api/cookbook/nope/media', data={'media': _file()},
+                       content_type='multipart/form-data').status_code == 404
 
 
 # --- HTML stripping (pure unit) ---

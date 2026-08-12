@@ -728,6 +728,43 @@ def _accept_flashcards(db, data: dict, ctx: dict) -> dict:
     return {'count': len(ids)}
 
 
+def _accept_recipe_link(db, data: dict, ctx: dict) -> dict:
+    """Link a food entry to the recipe backend/food/recipe_match.py suspected
+    it was cooked from. Both ids come off the proposal, not the (non-editable)
+    card, so there's nothing here to validate beyond "do they still exist"."""
+    entry_id = (data.get('entryId') or '').strip()
+    recipe_id = (data.get('recipeId') or '').strip()
+    if not entry_id or not recipe_id:
+        raise _AcceptRejected('missing entry or recipe')
+    if not db.execute('SELECT 1 FROM food_entries WHERE id=?', (entry_id,)).fetchone():
+        raise _AcceptRejected('food entry no longer exists')
+    recipe = db.execute('SELECT title FROM recipes WHERE id=?', (recipe_id,)).fetchone()
+    if not recipe:
+        raise _AcceptRejected('recipe no longer exists')
+    db.execute(
+        'UPDATE food_entries SET recipe_id=?, updated_at=? WHERE id=?',
+        (recipe_id, int(time.time()), entry_id),
+    )
+    return {'recipeId': recipe_id, 'recipeTitle': recipe['title']}
+
+
+def _accept_recipe(db, data: dict, ctx: dict) -> dict:
+    from backend.routes.cookbook import _insert_recipe
+
+    title = (data.get('title') or '').strip()
+    if not title:
+        raise _AcceptRejected('title required')
+    content = (data.get('content') or '').strip()
+    if not content:
+        raise _AcceptRejected('content required')
+    raw_tags = data.get('tags')
+    tags = [t.strip() for t in raw_tags if isinstance(t, str) and t.strip()] \
+        if isinstance(raw_tags, list) else []
+
+    id = _insert_recipe(title, content, tags or None)
+    return {'id': id}
+
+
 def _source_user_message(db, message_id: str):
     """The user message this assistant reply was answering.
 
@@ -915,6 +952,8 @@ _ACCEPT_HANDLERS = {
     'calendar': _accept_calendar,
     'calorie': _accept_calorie,
     'food': _accept_food,
+    'recipe': _accept_recipe,
+    'recipe_link': _accept_recipe_link,
     'task': _accept_task,
     'flashcards': _accept_flashcards,
 }
@@ -987,6 +1026,15 @@ def resolve_proposal(message_id, proposal_id):
     meta['proposals'] = proposals
     db.execute('UPDATE messages SET metadata=? WHERE id=?', (json.dumps(meta), message_id))
     db.commit()
+
+    # A newly-accepted food entry may be a homemade match for something
+    # already in the recipe collection. Deferred to here (rather than inside
+    # _accept_food) and run only after the commit above, since a background
+    # thread opens its own connection and would otherwise race the write.
+    if action == 'accept' and proposal.get('kind') == 'food' and proposal.get('result', {}).get('id'):
+        from backend.food.recipe_match import check_homemade_recipe_match
+        run_bg(lambda: check_homemade_recipe_match(proposal['result']['id']))
+
     return jsonify({'proposal': proposal})
 
 

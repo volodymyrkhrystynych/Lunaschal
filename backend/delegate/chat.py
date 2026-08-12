@@ -54,7 +54,11 @@ logger = logging.getLogger(__name__)
 # 320 -> 512 when propose_food_log joined: dish, place, notes, calories, rating
 # and tags in one call is the largest argument set on this turn, and a food
 # message often stages that *and* a `remember` for a name in the same breath.
-DECISION_MAX_TOKENS = 512
+#
+# 512 -> 768 when propose_recipe joined: its `content` is a whole markdown
+# recipe (ingredients + numbered instructions), the largest single string any
+# tool here writes — larger than propose_food_log's notes field alone.
+DECISION_MAX_TOKENS = 768
 
 DELEGATE_TOOL = {
     'type': 'function',

@@ -269,6 +269,45 @@ TOOLS = [
     {
         'type': 'function',
         'function': {
+            'name': 'propose_recipe',
+            'description': (
+                'Stage a recipe for the user to confirm, for their recipe '
+                'collection. Use when they ask you to write up or save a '
+                'recipe — for a dish they described making, or one you are '
+                'putting together for them. Write the actual recipe yourself: '
+                'a short title and the full content as markdown with an '
+                '"## Ingredients" bulleted list and an "## Instructions" '
+                'numbered list, using quantities and steps from the '
+                'conversation where they were given. Keep it complete but '
+                'concise — this is not the place for a life story.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'title': {'type': 'string', 'description': 'A short recipe name.'},
+                    'content': {
+                        'type': 'string',
+                        'description': (
+                            'The full recipe as markdown: "## Ingredients" '
+                            '(bulleted) then "## Instructions" (numbered).'
+                        ),
+                    },
+                    'tags': {
+                        'type': 'array',
+                        'items': {'type': 'string'},
+                        'description': (
+                            '1-5 lowercase tags (cuisine, meal type, main '
+                            'ingredient), or none.'
+                        ),
+                    },
+                },
+                'required': ['title', 'content'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
             'name': 'remember',
             'description': (
                 'Write one line into the standing document you keep about the '
@@ -542,6 +581,22 @@ def _propose_food_log(args: dict) -> tuple[str, dict]:
     return _staged('food', 'propose_food_log', data, f'food log for {summary}')
 
 
+def _propose_recipe(args: dict) -> tuple[str, dict]:
+    title = _text(args.get('title'))[:MAX_TITLE_CHARS]
+    if not title:
+        return _refused('propose_recipe', 'a recipe needs a title')
+    content = _text(args.get('content'))
+    if not content:
+        return _refused('propose_recipe', 'a recipe needs ingredients and instructions')
+
+    raw_tags = args.get('tags')
+    tags = [t.strip() for t in raw_tags if isinstance(t, str) and t.strip()] \
+        if isinstance(raw_tags, list) else []
+
+    data = {'title': title, 'content': content, 'tags': tags}
+    return _staged('recipe', 'propose_recipe', data, f'recipe "{title}"')
+
+
 def _remember(args: dict) -> tuple[str, dict]:
     """The one tool here that writes. Its event carries no `proposal`, the
     `ask_user` shape, so nothing about it can reach the confirm-card path.
@@ -637,6 +692,7 @@ _HANDLERS = {
     'propose_calendar_event': _propose_calendar_event,
     'propose_calorie_log': _propose_calorie_log,
     'propose_food_log': _propose_food_log,
+    'propose_recipe': _propose_recipe,
     'propose_note_to_self': _propose_note_to_self,
     'propose_flashcards': _propose_flashcards,
     'remember': _remember,

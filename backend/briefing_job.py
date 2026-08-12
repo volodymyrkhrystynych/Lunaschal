@@ -36,7 +36,7 @@ from backend.routes.tasks import _parse_priority, _parse_due
 from backend.todo_recurrence import VALID_LISTS
 
 
-def _find_or_create_day_conversation(db, day_key: str, now: int) -> str:
+def find_or_create_day_conversation(db, day_key: str, now: int) -> str:
     row = db.execute(
         'SELECT id FROM conversations WHERE day_key=? AND writing_project_id IS NULL AND idea_id IS NULL',
         (day_key,),
@@ -171,7 +171,7 @@ def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
     now = now if now is not None else int(time.time())
     db = get_db()
     day_key = day_key_for(now)
-    conv_id = _find_or_create_day_conversation(db, day_key, now)
+    conv_id = find_or_create_day_conversation(db, day_key, now)
 
     if _has_briefing(db, conv_id) and not force:
         db.commit()  # persist the conversation if we just created it
