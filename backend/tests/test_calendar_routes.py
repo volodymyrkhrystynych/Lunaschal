@@ -2,6 +2,8 @@
 recurring series into concrete occurrences across the range/date/week reads."""
 import json
 
+from backend.ai import background as ai_background
+
 
 def create(client, **body):
     body.setdefault('title', 'Work')

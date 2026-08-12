@@ -70,7 +70,15 @@ CREATE TABLE IF NOT EXISTS calendar_events (
     -- Set when a series was split by a "this and future" edit: this row starts
     -- where the referenced one was capped. A breadcrumb only, like
     -- learning_cards.revised_from.
-    split_from TEXT REFERENCES calendar_events(id) ON DELETE SET NULL
+    split_from TEXT REFERENCES calendar_events(id) ON DELETE SET NULL,
+    -- AI-assigned category tags (leisure/work/exercise/family/outside/indoors,
+    -- backend/ai/calendar.py), JSON array, separate from the free-text `tags`
+    -- column above so a user-typed pill can never collide with a classifier
+    -- result. classified_at IS NULL = still pending, same idiom as
+    -- emails.classified_at.
+    category_tags TEXT,
+    classified_at INTEGER,
+    classification_error TEXT
 );
 
 -- Per-occurrence edits to a recurring series: a template row plus dated

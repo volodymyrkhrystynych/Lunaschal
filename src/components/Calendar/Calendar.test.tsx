@@ -2,10 +2,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { api, type CalendarEvent } from '../hooks/api';
-import { Calendar } from './Calendar';
+import { api, type CalendarEvent } from '../../hooks/api';
+import { Calendar } from './index';
 
-vi.mock('../hooks/api', () => ({
+vi.mock('../../hooks/api', () => ({
   api: {
     calendar: {
       listByRange: vi.fn(),
@@ -39,6 +39,9 @@ const event = (over: Partial<CalendarEvent> = {}): CalendarEvent => ({
   repeatInterval: null,
   repeatByweekday: null,
   repeatUntil: null,
+  categoryTags: null,
+  classifiedAt: null,
+  classificationError: null,
   ...over,
 });
 

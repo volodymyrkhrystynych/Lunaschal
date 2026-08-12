@@ -242,6 +242,14 @@ export interface CalendarEvent {
   repeatInterval: number | null;
   repeatByweekday: string | null; // CSV of 0-6, Sunday=0
   repeatUntil: string | null;
+  // AI-assigned categories (leisure/work/exercise/family/outside/indoors),
+  // JSON array string — parse with parseCategoryTags from lib/calendarCategories.
+  // Separate from the free-text `tags` above so a classifier result can never
+  // collide with a user-typed pill. classifiedAt null = still pending, for
+  // both never-transcribed events and a previously-failed classification.
+  categoryTags: string | null;
+  classifiedAt: string | null;
+  classificationError: string | null;
   // Set on events returned by the range/date/week endpoints, which expand
   // recurring series: `id` stays the series id, `occurrenceDate` identifies
   // this instance. Absent from the single-event GET, which returns the series.
@@ -1780,6 +1788,13 @@ export const api = {
       post<{ id: string }>(`/api/calendar/${id}/link`, { journalEntryId }),
     unlinkJournal: (id: string, journalEntryId: string) =>
       del<{ success: boolean }>(`/api/calendar/${id}/link/${journalEntryId}`),
+    // Saves an already-transcribed recording as the event's description and
+    // queues AI category classification — no confirm step. `text` comes from
+    // /api/transcribe, run client-side first (same as every other useRecorder
+    // caller). Returns the updated event immediately; categoryTags/
+    // classifiedAt land once the background classification finishes.
+    transcribe: (id: string, text: string) =>
+      post<CalendarEvent>(`/api/calendar/${id}/transcribe`, { text }),
   },
 
   learning: {

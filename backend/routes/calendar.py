@@ -3,6 +3,7 @@ import json
 from datetime import date as dt, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from ulid import ULID
+from backend.ai.background import run_bg
 from backend.calendar_query import events_in_range
 from backend.calendar_recurrence import VALID_FREQS, format_byweekday
 from backend.db.connection import build_update, get_db, mapping_to_dict, row_to_dict
@@ -167,6 +168,38 @@ def get_event(id):
 
     event['linkedJournals'] = linked_journals
     return jsonify(event)
+
+
+@bp.post('/<id>/transcribe')
+def transcribe_event(id):
+    """Save an already-transcribed recording as the event's description and
+    queue AI category classification — no confirm step, matching the other
+    record-and-save-immediately voice paths in the app (e.g. the Journal
+    button on the bottom SttPanel). `text` is transcribed client-side via the
+    existing /api/transcribe endpoint before this is called.
+    """
+    body = request.json or {}
+    text = (body.get('text') or '').strip()
+    if not text:
+        return jsonify({'error': 'text required'}), 400
+
+    db = get_db()
+    row = db.execute('SELECT id FROM calendar_events WHERE id=?', (id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+
+    build_update(
+        db, 'calendar_events',
+        {'description': text, 'classified_at': None, 'classification_error': None},
+        'id=?', (id,),
+    )
+    db.commit()
+
+    from backend.ai.calendar import classify_event_categories
+    run_bg(lambda: classify_event_categories(id))
+
+    updated = db.execute('SELECT * FROM calendar_events WHERE id=?', (id,)).fetchone()
+    return jsonify(row_to_dict(updated))
 
 
 @bp.post('')
