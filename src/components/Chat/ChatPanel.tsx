@@ -6,7 +6,6 @@ import { MessageMarkdown } from '../MessageMarkdown';
 import { BriefingTodos } from '../BriefingTodos';
 import { AgentSteps } from './AgentSteps';
 import { DelegateProposals } from './DelegateProposals';
-import { ReasoningBlock } from './ReasoningBlock';
 import { ThinkingLabel } from './ThinkingLabel';
 import {
   contextMessages,
@@ -584,7 +583,22 @@ export function ChatPanel() {
           const proposedTodos = parseProposedTodos(message.metadata);
           // Also covers replies saved by the retired web-search tab: they
           // carry the same {steps, sources} shape.
-          const { steps, sources } = parseAgentMeta(message.metadata);
+          const { steps, sources, thinking, truncated } = parseAgentMeta(
+            message.metadata
+          );
+          // A reply can legitimately end up with no text at all — a turn that
+          // spent itself reasoning, or one that dropped. The bubble used to
+          // render regardless, leaving an empty padded rectangle that read as
+          // a broken message; the trace below it is the actual account of what
+          // happened, so that is all this shows.
+          const hasBody =
+            message.content.trim().length > 0 ||
+            (message.attachments ?? []).length > 0;
+          const isBlankReply =
+            message.role === 'assistant' &&
+            !hasBody &&
+            message.status !== 'streaming' &&
+            message.status !== 'error';
           // The delegate's confirm cards — durable across a reload or a
           // dropped connection, since the background run itself wrote them
           // (backend/delegate/runs.py), and only removed from "pending" by an
@@ -597,36 +611,47 @@ export function ChatPanel() {
               className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               <div className="max-w-[80%]">
-                <div
-                  className={`content-text rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-surface)] text-[var(--color-text)]'}`}
-                >
-                  {(message.attachments ?? []).length > 0 && (
-                    <div className="mb-2 flex flex-wrap gap-2">
-                      {(message.attachments ?? []).map(attachment => (
-                        <a
-                          key={attachment.id}
-                          href={attachment.url}
-                          target="_blank"
-                          rel="noreferrer noopener"
-                        >
-                          <img
-                            src={attachment.url}
-                            // The reading is the alt text on purpose: it is
-                            // literally the description of this picture, and it
-                            // is the only thing the model ever saw of it.
-                            alt={attachment.description || 'Attached photo'}
-                            className="max-h-48 rounded-lg"
-                          />
-                        </a>
-                      ))}
-                    </div>
-                  )}
-                  {message.role === 'user' ? (
-                    <div className="whitespace-pre-wrap">{message.content}</div>
-                  ) : (
-                    <MessageMarkdown content={message.content} />
-                  )}
-                </div>
+                {hasBody && (
+                  <div
+                    className={`content-text rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-surface)] text-[var(--color-text)]'}`}
+                  >
+                    {(message.attachments ?? []).length > 0 && (
+                      <div className="mb-2 flex flex-wrap gap-2">
+                        {(message.attachments ?? []).map(attachment => (
+                          <a
+                            key={attachment.id}
+                            href={attachment.url}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                          >
+                            <img
+                              src={attachment.url}
+                              // The reading is the alt text on purpose: it is
+                              // literally the description of this picture, and it
+                              // is the only thing the model ever saw of it.
+                              alt={attachment.description || 'Attached photo'}
+                              className="max-h-48 rounded-lg"
+                            />
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                    {message.role === 'user' ? (
+                      <div className="whitespace-pre-wrap">
+                        {message.content}
+                      </div>
+                    ) : (
+                      <MessageMarkdown content={message.content} />
+                    )}
+                  </div>
+                )}
+                {isBlankReply && (
+                  <div className="text-xs text-[var(--color-text-muted)] italic">
+                    {truncated
+                      ? 'No reply — it hit the output token limit while reasoning (Settings → llama.cpp)'
+                      : 'No reply'}
+                  </div>
+                )}
                 {/* What was actually dictated, kept whenever the correction pass
                     or an edit changed it — the journal's "As captured". Only
                     ever present on a message that was spoken. */}
@@ -647,6 +672,7 @@ export function ChatPanel() {
                     (backend/delegate/runs.py), not just once the run ends. */}
                 <AgentSteps
                   steps={steps}
+                  thinking={thinking}
                   live={message.status === 'streaming'}
                 />
                 {/* Only when NOT locally streaming: the ephemeral bubble below
@@ -716,8 +742,14 @@ export function ChatPanel() {
                   <MessageMarkdown content={streamingContent} />
                 </div>
               )}
-              <ReasoningBlock content={streamingReasoning} live={isStreaming} />
-              <AgentSteps steps={liveSteps} live />
+              {/* Same shape the reload path renders (AgentSteps above), so
+                  reasoning doesn't move from one disclosure to another the
+                  moment the run finishes and the row takes over. */}
+              <AgentSteps
+                steps={liveSteps}
+                thinking={streamingReasoning}
+                live
+              />
             </div>
           </div>
         )}

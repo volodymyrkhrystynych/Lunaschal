@@ -24,24 +24,33 @@ export interface AgentSource {
   title?: string;
 }
 
-// The assistant message's agent metadata: `{"steps": [...], "sources": [...]}`.
+// The assistant message's agent metadata:
+// `{"steps": [...], "sources": [...], "thinking": "..."}`.
 // Falls back to empty arrays for any message that doesn't carry one (including
 // malformed metadata), matching the fail-open shape of parseProposedTodos in
 // chatSegments.ts. Messages saved by the retired web-search tab used exactly
-// this shape, so old conversations keep rendering unchanged.
+// this shape, so old conversations keep rendering unchanged — as do all the
+// messages written before `thinking` was persisted, which simply have none.
 export function parseAgentMeta(metadata: string | null | undefined): {
   steps: AgentStep[];
   sources: AgentSource[];
+  thinking: string;
+  truncated: boolean;
 } {
-  if (!metadata) return { steps: [], sources: [] };
+  const empty = { steps: [], sources: [], thinking: '', truncated: false };
+  if (!metadata) return empty;
   try {
     const parsed = JSON.parse(metadata);
     return {
       steps: Array.isArray(parsed?.steps) ? parsed.steps : [],
       sources: Array.isArray(parsed?.sources) ? parsed.sources : [],
+      thinking: typeof parsed?.thinking === 'string' ? parsed.thinking : '',
+      // The reply stopped at the output ceiling — which is how a turn ends up
+      // with reasoning and no answer at all.
+      truncated: parsed?.truncated === true,
     };
   } catch {
-    return { steps: [], sources: [] };
+    return empty;
   }
 }
 

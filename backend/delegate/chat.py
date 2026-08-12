@@ -177,7 +177,7 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
                  tools_enabled: bool = True, checkpoint=None):
     """Yields ('step', event) as each tool call finishes, then ('thinking',
     delta) and ('content', delta) as the reply streams, then one
-    ('done', {steps, sources, proposals}).
+    ('done', {steps, sources, proposals, truncated}).
 
     Steps and proposals go out on the `done` payload as well as live, because
     the browser persists them onto the assistant message's metadata — a reload
@@ -246,7 +246,15 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
             })
 
     conversation.append({'role': 'user', 'content': ANSWER_INSTRUCTION})
+    truncated = False
     for kind, delta in chat_stream_events(conversation):
+        # Rides out on `done` rather than as its own live event: it is only
+        # known once the stream ends, and it is a fact *about* the reply, which
+        # is what the browser persists alongside the steps.
+        if kind == 'truncated':
+            truncated = True
+            continue
         yield (kind, delta)
 
-    yield ('done', {'steps': steps, 'sources': sources, 'proposals': proposals})
+    yield ('done', {'steps': steps, 'sources': sources, 'proposals': proposals,
+                    'truncated': truncated})
