@@ -218,6 +218,21 @@ def chat_stream_deltas(messages: list[dict]):
 
 _THINK_OPEN = '<think>'
 _THINK_CLOSE = '</think>'
+# Qwen's native tool-call notation. llama-server only turns this back into
+# OpenAI `tool_calls` when the request carried `tools=`, and the answering turn
+# deliberately carries none — so a model that decides to call something here
+# emits the raw notation straight into `content`, where it renders as the reply.
+_TOOL_OPEN = '<tool_call>'
+_TOOL_CLOSE = '</tool_call>'
+
+# Which markers end each state, and what state each leads to. 'content' and
+# 'thinking' are also the channel names yielded for text in them; 'tool_call'
+# has no channel, because that text is dropped.
+_EXITS = {
+    'content': ((_THINK_OPEN, 'thinking'), (_TOOL_OPEN, 'tool_call')),
+    'thinking': ((_THINK_CLOSE, 'content'),),
+    'tool_call': ((_TOOL_CLOSE, 'content'),),
+}
 
 
 def chat_stream_events(messages: list[dict]):
@@ -240,6 +255,15 @@ def chat_stream_events(messages: list[dict]):
     `max_tokens` budget inside one <think> block and stop before writing a word
     of answer — which arrives here as a perfectly successful stream carrying no
     content at all, indistinguishable from a model that had nothing to say.
+
+    **Native tool-call notation is dropped, not shown.** llama-server rebuilds
+    OpenAI `tool_calls` by running a grammar over the model's own notation, and
+    it only does that when the request carried `tools=`. This one never does —
+    tools belong to the blocking decision turn — so a model that decides to call
+    something anyway emits `<tool_call><function=remember>…` as plain content,
+    and it was rendering as the reply. Dropping it is the only honest option:
+    nothing here can execute the call, and printing a request the app silently
+    ignored is worse than printing nothing.
     """
     c = get_provider_config()
     client = get_llama_client(c)
@@ -248,7 +272,8 @@ def chat_stream_events(messages: list[dict]):
         **_request_kwargs(**default_generation_opts()),
     )
     buffer = ''
-    thinking = False
+    state = 'content'
+    dropped = False
     finish_reason = None
     for chunk in stream:
         if not chunk.choices:
@@ -268,22 +293,35 @@ def chat_stream_events(messages: list[dict]):
         # Hold back anything that could still turn out to be a partial tag, so
         # a '<' that begins '<think>' is never emitted as answer text.
         while buffer:
-            marker = _THINK_CLOSE if thinking else _THINK_OPEN
-            at = buffer.find(marker)
-            if at >= 0:
+            exits = _EXITS[state]
+            hit = None
+            for marker, nxt in exits:
+                at = buffer.find(marker)
+                if at >= 0 and (hit is None or at < hit[0]):
+                    hit = (at, marker, nxt)
+            if hit:
+                at, marker, nxt = hit
                 head, buffer = buffer[:at], buffer[at + len(marker):]
-                if head:
-                    yield ('thinking' if thinking else 'content', head)
-                thinking = not thinking
+                if head and state != 'tool_call':
+                    yield (state, head)
+                dropped = dropped or nxt == 'tool_call'
+                state = nxt
                 continue
-            keep = _partial_tag_len(buffer, marker)
+            # Any of this state's markers could be the one starting here, so the
+            # longest possible partial is what has to be held back.
+            keep = max(_partial_tag_len(buffer, m) for m, _ in exits)
             emit, buffer = (buffer[:-keep], buffer[-keep:]) if keep else (buffer, '')
-            if emit:
-                yield ('thinking' if thinking else 'content', emit)
+            if emit and state != 'tool_call':
+                yield (state, emit)
             break
 
-    if buffer:
-        yield ('thinking' if thinking else 'content', buffer)
+    # An unclosed <tool_call> takes the rest of the reply with it, the same way
+    # an unclosed <think> stays reasoning: half a call is no more printable than
+    # a whole one.
+    if buffer and state != 'tool_call':
+        yield (state, buffer)
+    if dropped:
+        logger.warning('Dropped native tool-call notation from a streamed reply')
     if finish_reason == 'length':
         logger.warning('Reply hit the output ceiling (%s tokens)',
                        default_generation_opts()['max_tokens'])
