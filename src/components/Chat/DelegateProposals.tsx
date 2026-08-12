@@ -24,6 +24,10 @@ function resolvedLabel(p: DelegateProposalRecord): string {
         : 'Saved to your food log';
     case 'task':
       return 'Added to tasks';
+    case 'recipe':
+      return 'Saved to your recipes';
+    case 'recipe_link':
+      return 'Linked to your recipe';
     case 'flashcards':
       return `Queued ${p.result?.count ?? 0} card${p.result?.count === 1 ? '' : 's'} for review in Learning`;
     default:
@@ -36,6 +40,8 @@ const HEADLINE: Record<string, string> = {
   calorie: 'Log calories?',
   food: 'Add to your food log?',
   task: 'Add to your tasks?',
+  recipe: 'Save this recipe?',
+  recipe_link: 'Link this meal to that recipe?',
   flashcards: 'Generate flashcards?',
 };
 
@@ -44,6 +50,8 @@ const ACCEPT_LABEL: Record<string, string> = {
   calorie: 'Log',
   food: 'Log Meal',
   task: 'Add',
+  recipe: 'Save',
+  recipe_link: 'Link',
   flashcards: 'Queue Cards',
 };
 
@@ -52,6 +60,8 @@ const ACCEPT_PENDING_LABEL: Record<string, string> = {
   calorie: 'Logging...',
   food: 'Logging...',
   task: 'Adding...',
+  recipe: 'Saving...',
+  recipe_link: 'Linking...',
   flashcards: 'Generating...',
 };
 
@@ -356,6 +366,56 @@ function ProposalForm({
         </div>
       );
 
+    case 'recipe':
+      return (
+        <div className="space-y-1.5">
+          <input
+            aria-label="Title"
+            value={str(data, 'title')}
+            onChange={e => set({ title: e.target.value })}
+            className={`${fieldClass} w-full`}
+          />
+          <textarea
+            aria-label="Content"
+            value={str(data, 'content')}
+            onChange={e => set({ content: e.target.value })}
+            rows={10}
+            className={`${fieldClass} w-full resize-none`}
+          />
+          <Field label="Tags">
+            <input
+              value={
+                Array.isArray(data.tags)
+                  ? (data.tags as string[]).join(', ')
+                  : ''
+              }
+              onChange={e =>
+                set({
+                  tags: e.target.value
+                    .split(',')
+                    .map(t => t.trim())
+                    .filter(Boolean),
+                })
+              }
+              placeholder="comma, separated"
+              className={`${fieldClass} flex-1 text-xs`}
+            />
+          </Field>
+        </div>
+      );
+
+    case 'recipe_link':
+      // Not editable: entryId/recipeId are the whole point of this card, and
+      // rewriting either would point the link at a different row than what
+      // was actually offered.
+      return (
+        <div className="text-sm text-[var(--color-text)]">
+          <span className="font-medium">{str(data, 'dish')}</span>
+          {' → '}
+          <span className="font-medium">{str(data, 'recipeTitle')}</span>
+        </div>
+      );
+
     case 'flashcards':
       return (
         <div className="space-y-1.5">
@@ -450,6 +510,7 @@ export function DelegateProposals({ messageId, proposals }: Props) {
       queryClient.invalidateQueries({ queryKey: ['calendar'] });
       queryClient.invalidateQueries({ queryKey: ['lifestyle', 'calories'] });
       queryClient.invalidateQueries({ queryKey: ['food'] });
+      queryClient.invalidateQueries({ queryKey: ['cookbook'] });
       queryClient.invalidateQueries({ queryKey: ['todos'] });
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['learning'] });

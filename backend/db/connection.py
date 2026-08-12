@@ -133,6 +133,7 @@ def init_db() -> None:
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
     _ensure_food_location(db)
+    _ensure_food_recipe_match_status(db)
     _ensure_hf_token(db)
     _ensure_meeting_speaker_names(db)
     _ensure_meeting_echo_cancel(db)
@@ -397,6 +398,19 @@ def _ensure_food_location(db: sqlite3.Connection) -> None:
     if 'longitude' not in cols:
         db.execute('ALTER TABLE food_entries ADD COLUMN longitude REAL')
     db.commit()
+
+
+def _ensure_food_recipe_match_status(db: sqlite3.Connection) -> None:
+    """NULL = not checked yet for a homemade/existing-recipe match; 'proposed'
+    = a link was offered in chat; 'none' = checked, nothing to offer. Purely an
+    idempotency guard — see backend/food/recipe_match.py — so the background
+    check never re-fires for the same entry."""
+    if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='food_entries'").fetchone():
+        return
+    cols = {r[1] for r in db.execute('PRAGMA table_info(food_entries)')}
+    if 'recipe_match_status' not in cols:
+        db.execute('ALTER TABLE food_entries ADD COLUMN recipe_match_status TEXT')
+        db.commit()
 
 
 def _migrate_workout_intensity_to_stars(db: sqlite3.Connection) -> None:

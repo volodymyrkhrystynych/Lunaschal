@@ -103,3 +103,87 @@ def parse_food_entry(text: str) -> dict | None:
         'tags': tags,
         'recipe': recipe,
     }
+
+
+_MATCH_SYSTEM = (
+    "You look at one food-log entry and decide two things: whether the meal was "
+    "homemade (cooked by the user, not a restaurant/takeout/store-bought item), "
+    "and — only if it was — whether it matches one of the user's own saved "
+    "recipes, listed below by number.\n"
+    'Return ONLY valid JSON with these fields:\n'
+    '- "homemade": true only if the entry clearly describes something the user '
+    "cooked themselves; false for anything eaten out, ordered, or bought "
+    "prepared\n"
+    '- "matchIndex": the number of the recipe this is almost certainly the same '
+    "dish as, or null if it was not homemade, none of the recipes match, or "
+    "you are only guessing\n"
+    '- "confidence": "high" only when the dish, and any details given, line up '
+    'closely with that recipe; "medium" for a plausible but not certain match; '
+    '"low" for a weak guess — never invent a match to fill the field\n'
+    "Cite a recipe only by its number in the list; never describe one that "
+    "isn't listed."
+)
+
+# matchIndex is bounded to the real candidate list (1-indexed, so the model
+# selects a recipe rather than describing one that doesn't exist) — the same
+# grammar-enforced-citation pattern backend/ai/idea_assessment.py uses for
+# evidenceIndexes.
+_MATCH_SCHEMA_BASE = {
+    'homemade': {'type': 'boolean'},
+    'confidence': {'type': 'string', 'enum': ['low', 'medium', 'high']},
+}
+
+
+def _match_schema(candidate_count: int) -> dict:
+    return {
+        'type': 'object',
+        'properties': {
+            **_MATCH_SCHEMA_BASE,
+            'matchIndex': {
+                'anyOf': [
+                    {'type': 'integer', 'minimum': 1, 'maximum': candidate_count},
+                    {'type': 'null'},
+                ]
+            },
+        },
+        'required': ['homemade', 'matchIndex', 'confidence'],
+    }
+
+
+def classify_homemade_match(
+    dish: str, place: str | None, notes: str | None, candidates: list[dict]
+) -> dict | None:
+    """Decide whether a food entry was homemade and, if so, whether it matches
+    one of `candidates` (each `{id, title, tags}`). Returns
+    `{homemade, matchIndex, confidence}` with `matchIndex` 1-indexed into
+    `candidates`, or `None` when unusable/unconfigured — never guesses when
+    the model isn't available. `candidates` must be non-empty."""
+    if not candidates or not is_ai_configured():
+        return None
+    lines = [f'{i + 1}. {c["title"]}' + (f' ({", ".join(c["tags"])})' if c.get('tags') else '')
+             for i, c in enumerate(candidates)]
+    parts = [f'Dish: {dish}']
+    if place:
+        parts.append(f'Place: {place}')
+    if notes:
+        parts.append(f'Notes: {notes}')
+    parts.append('Saved recipes:\n' + '\n'.join(lines))
+    text = '\n'.join(parts)
+    try:
+        data = chat_json(text, system=_MATCH_SYSTEM, schema=_match_schema(len(candidates)))
+    except Exception as e:
+        print(f'Homemade match classification failed: {e}')
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    homemade = data.get('homemade') is True
+    confidence = data.get('confidence')
+    if confidence not in ('low', 'medium', 'high'):
+        confidence = 'low'
+    match_index = data.get('matchIndex')
+    if isinstance(match_index, bool) or not isinstance(match_index, int) \
+            or not (1 <= match_index <= len(candidates)):
+        match_index = None
+
+    return {'homemade': homemade, 'matchIndex': match_index, 'confidence': confidence}

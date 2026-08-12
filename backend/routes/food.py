@@ -10,6 +10,7 @@ from backend.ai.food import parse_food_entry
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.food import storage
 from backend.food.exif import extract_photo_meta
+from backend.food.recipe_match import check_homemade_recipe_match
 from backend.geo import parse_coord
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.routes.cookbook import _insert_recipe
@@ -141,34 +142,39 @@ def _next_media_position(db, entry_id: str) -> int:
 def structure_food_entry(entry_id: str, text: str) -> None:
     """Fill empty fields on a food entry from its raw text via the LLM, and
     create+link a recipe if one was described. Only overwrites columns that are
-    still empty, so manual input always wins. Safe to run in a worker thread."""
+    still empty, so manual input always wins. Safe to run in a worker thread.
+
+    Always finishes by checking for a homemade/existing-recipe match — even
+    when parsing found nothing new to fill in, since that's independent of
+    whether this text described a *new* recipe."""
     parsed = parse_food_entry(text)
-    if not parsed:
-        return
     db = get_db()
     row = db.execute('SELECT * FROM food_entries WHERE id=?', (entry_id,)).fetchone()
     if not row:
         return
 
-    updates: dict = {}
-    for col in ('dish', 'place', 'notes'):
-        if not row[col] and parsed.get(col):
-            updates[col] = parsed[col]
-    if row['rating'] is None and parsed.get('rating') is not None:
-        updates['rating'] = parsed['rating']
-    if not row['tags'] and parsed.get('tags'):
-        updates['tags'] = tags_json(parsed['tags'])
+    if parsed:
+        updates: dict = {}
+        for col in ('dish', 'place', 'notes'):
+            if not row[col] and parsed.get(col):
+                updates[col] = parsed[col]
+        if row['rating'] is None and parsed.get('rating') is not None:
+            updates['rating'] = parsed['rating']
+        if not row['tags'] and parsed.get('tags'):
+            updates['tags'] = tags_json(parsed['tags'])
 
-    recipe = parsed.get('recipe')
-    new_recipe_id = None
-    if recipe and row['recipe_id'] is None:
-        new_recipe_id = _insert_recipe(recipe['title'], recipe['content'], recipe.get('tags'))
-        updates['recipe_id'] = new_recipe_id
+        recipe = parsed.get('recipe')
+        if recipe and row['recipe_id'] is None:
+            updates['recipe_id'] = _insert_recipe(
+                recipe['title'], recipe['content'], recipe.get('tags')
+            )
 
-    if updates:
-        updates['updated_at'] = int(time.time())
-        build_update(db, 'food_entries', updates, 'id=?', (entry_id,))
-        db.commit()
+        if updates:
+            updates['updated_at'] = int(time.time())
+            build_update(db, 'food_entries', updates, 'id=?', (entry_id,))
+            db.commit()
+
+    check_homemade_recipe_match(entry_id)
 
 
 # --- Entries ---
@@ -287,9 +293,14 @@ def create_entry():
     db.commit()
 
     # Structure the raw note in the background (fills empty fields, extracts a
-    # recipe). No-op when AI is unconfigured or nothing new was parsed.
+    # recipe, and checks for a homemade/existing-recipe match). No-op when AI
+    # is unconfigured or nothing new was parsed. When there's no text to
+    # structure but a dish was given directly, still run the match check on
+    # its own — it only needs dish/place/notes, not the raw note.
     if text:
         run_bg(lambda: structure_food_entry(entry_id, text))
+    elif dish:
+        run_bg(lambda: check_homemade_recipe_match(entry_id))
 
     row = db.execute('SELECT * FROM food_entries WHERE id=?', (entry_id,)).fetchone()
     return jsonify(_entry_dict(db, row)), 201

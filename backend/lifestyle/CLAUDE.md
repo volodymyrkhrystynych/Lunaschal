@@ -1,0 +1,13 @@
+# Lifestyle (`backend/routes/lifestyle.py`, `backend/lifestyle/`, `src/components/Lifestyle/`)
+
+Workouts, activity heatmap, progression charts, chores, daily selfie, calories — one scrollable column. Design record and the decisions the build settled: [docs/lifestyle-tab.md](../../docs/lifestyle-tab.md). Things to know before touching it:
+
+- **Chores are not a new table.** They're `todos` rows with `list='chores'`, so the Lifestyle section and the Tasks view edit the same rows through `/api/tasks/todos`.
+- **Workout entry is freeform text, parsed in the background** (`backend/ai/workouts.py` → `run_bg`), same pattern as the food/recipe extractors. `raw_text` is never overwritten and `parse_status` tracks the attempt, so a bad parse is retryable via `POST /workouts/<id>/reparse` rather than lost.
+- **Exercise names fold one way only** (`backend/lifestyle/exercises.py`): an abbreviation folds onto a known fuller name, but a more specific name starts its own series. Over-merging can't be undone; splitting costs one `POST /exercises/merge`.
+- **The workout form mirrors itself to `localStorage`** (`src/lib/workoutDraft.ts`) — logging happens mid-set on a phone, and a backgrounded tab reload would otherwise wipe the textarea.
+- **The heatmap's four activity colours were validated, not chosen by eye** — CVD separation and contrast against both surfaces. Re-run the check if they change; identity is never colour-alone (legend + per-day labels).
+- **No charting library**: geometry is pure functions in `src/lib/lifestyle.ts`, rendered as inline SVG.
+- Selfie images live under `./data/lifestyle/<id>/` (`LIFESTYLE_ROOT`), one per day, never as blobs. **Take selfie goes through the native camera** (a hidden `capture="user"` file input), not `getUserMedia` — the in-page preview was wrong on a tablet. And the history strip is **read-only**: tapping a thumbnail previews it, never deletes. Replacing a day means retaking it that day; removing one is a manual DB edit, because an accidental tap used to destroy a selfie outright.
+- **Workout intensity is 1-5 stars, not 1-10 RPE** (`INTENSITY_LABELS` in `src/lib/lifestyle.ts`, `IntensityStars.tsx`): a ten-point scale was too subjective to answer honestly. The five labels are the feature — surface them, and never render the rating as glyphs alone. Old 1-10 values were folded once by `_migrate_workout_intensity_to_stars`, latched on the existence of the `settings.workout_intensity_five_star` column.
+- **Bodyweight sets carry `weight: null`**, explicitly required by the parser's JSON schema rather than omitted ("squats 10 10 10 10" is four sets of ten). Anything consuming set weights has to render that as bodyweight and keep it off the weight charts — `Progression.tsx` plots total reps instead.

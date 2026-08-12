@@ -421,6 +421,18 @@ CREATE TABLE IF NOT EXISTS recipes (
 
 CREATE INDEX IF NOT EXISTS idx_recipes_created ON recipes(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS recipe_media (
+    id TEXT PRIMARY KEY,
+    recipe_id TEXT NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,                   -- 'image' | 'video'
+    path TEXT NOT NULL,
+    mime TEXT,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_recipe_media_recipe ON recipe_media(recipe_id);
+
 -- Food log: what was eaten, where, whether it was good, plus photos/videos.
 -- Shown in both the Food tab and the Journal feed; stored once here.
 CREATE TABLE IF NOT EXISTS food_entries (
