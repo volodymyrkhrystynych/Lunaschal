@@ -14,9 +14,11 @@ import pytest
 from backend.ai import llm
 
 
-def _chunk(content=None, reasoning=None):
+def _chunk(content=None, reasoning=None, finish_reason=None):
     delta = SimpleNamespace(content=content, reasoning_content=reasoning)
-    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+    return SimpleNamespace(
+        choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)]
+    )
 
 
 @pytest.fixture
@@ -118,3 +120,22 @@ def test_chunks_without_choices_are_skipped(stream):
     """llama-server emits a final usage-only chunk with an empty choices list."""
     events = stream([_chunk('Hi'), SimpleNamespace(choices=[])])
     assert _joined(events, 'content') == 'Hi'
+
+
+def test_a_reply_cut_off_at_the_ceiling_says_so(stream):
+    """The empty-reply case: a thinking model can spend the whole max_tokens
+    budget inside one <think> block and stop before writing a word of answer.
+    On the wire that is a perfectly successful stream carrying no content —
+    only `finish_reason` tells it apart from a model with nothing to say."""
+    events = stream([
+        _chunk('<think>going round in circles'),
+        _chunk(finish_reason='length'),
+    ])
+    assert _joined(events, 'content') == ''
+    assert _joined(events, 'thinking') == 'going round in circles'
+    assert events[-1] == ('truncated', True)
+
+
+def test_a_reply_that_finished_normally_is_not_flagged(stream):
+    events = stream([_chunk('Hello'), _chunk(finish_reason='stop')])
+    assert [k for k, _ in events] == ['content']

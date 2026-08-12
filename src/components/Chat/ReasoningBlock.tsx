@@ -12,6 +12,14 @@ interface ReasoningBlockProps {
  * default because reasoning is not the answer: it is long, it is written to
  * itself rather than to the user, and Gemma 4 emits far more of it than reply.
  *
+ * Rendered from `metadata.thinking` (backend/delegate/runs.py persists it) as
+ * well as from the live stream, so a reload shows the same trace — and so a
+ * reply that came out empty still has an account of where the turn went. It is
+ * shown, never sent: nothing feeds this text back to the model.
+ *
+ * Normally nested inside AgentSteps rather than used directly; it stands alone
+ * only when a turn produced reasoning and no tool steps.
+ *
  * Kept as plain pre-wrapped text rather than markdown. Reasoning is riddled with
  * half-finished lists and stray `#`/`*` that a markdown renderer turns into
  * headings and italics — formatting the model never meant, applied to text it

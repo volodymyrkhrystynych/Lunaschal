@@ -172,21 +172,20 @@ describe('stepLabel', () => {
 });
 
 describe('parseAgentMeta', () => {
+  const empty = { steps: [], sources: [], thinking: '', truncated: false };
+
   it('returns empty arrays for null/undefined metadata', () => {
-    expect(parseAgentMeta(null)).toEqual({ steps: [], sources: [] });
-    expect(parseAgentMeta(undefined)).toEqual({ steps: [], sources: [] });
-    expect(parseAgentMeta('')).toEqual({ steps: [], sources: [] });
+    expect(parseAgentMeta(null)).toEqual(empty);
+    expect(parseAgentMeta(undefined)).toEqual(empty);
+    expect(parseAgentMeta('')).toEqual(empty);
   });
 
   it('returns empty arrays for malformed JSON rather than throwing', () => {
-    expect(parseAgentMeta('not json')).toEqual({ steps: [], sources: [] });
+    expect(parseAgentMeta('not json')).toEqual(empty);
   });
 
   it('returns empty arrays for metadata with no steps/sources (e.g. a break marker)', () => {
-    expect(parseAgentMeta(JSON.stringify({ break: true }))).toEqual({
-      steps: [],
-      sources: [],
-    });
+    expect(parseAgentMeta(JSON.stringify({ break: true }))).toEqual(empty);
   });
 
   it('parses steps and sources from a websearch assistant message', () => {
@@ -197,6 +196,31 @@ describe('parseAgentMeta', () => {
     expect(parseAgentMeta(meta)).toEqual({
       steps: [{ tool: 'web_search', ok: true, count: 1 }],
       sources: [{ url: 'https://ex.com', title: 'Example' }],
+      thinking: '',
+      truncated: false,
     });
+  });
+
+  it('parses the persisted reasoning of a delegate reply', () => {
+    const meta = JSON.stringify({
+      agent: 'delegate',
+      steps: [],
+      sources: [],
+      thinking: 'weighing it up',
+    });
+    expect(parseAgentMeta(meta).thinking).toBe('weighing it up');
+  });
+
+  // Every message written before reasoning was persisted has no `thinking` at
+  // all, and a non-string there must not reach the renderer as one.
+  it('treats a missing or non-string thinking field as no reasoning', () => {
+    expect(parseAgentMeta(JSON.stringify({ steps: [] })).thinking).toBe('');
+    expect(parseAgentMeta(JSON.stringify({ thinking: 42 })).thinking).toBe('');
+  });
+
+  it('parses the flag that says the reply was cut off at the ceiling', () => {
+    expect(parseAgentMeta(JSON.stringify({ truncated: true })).truncated).toBe(
+      true
+    );
   });
 });

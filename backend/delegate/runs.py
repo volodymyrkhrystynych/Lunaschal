@@ -34,6 +34,14 @@ from backend.delegate import chat as delegate_chat
 # second of text.
 _FLUSH_INTERVAL = 0.5
 
+# Reasoning is kept, but bounded. Unlike steps it is unbounded model output —
+# a thinking model can spend thousands of tokens on one turn — and it rides in
+# `metadata` on every message the transcript loads and re-polls. The head is
+# what is kept: the trace is read from the top, and a block that starts
+# mid-sentence is worse than one that stops mid-sentence.
+_MAX_THINKING = 20_000
+_THINKING_TRUNCATED = '\n\n[reasoning truncated]'
+
 # Tracked the same way backend/ai/background.py tracks its executor's pending
 # futures: not for production (the module-global connection outlives every
 # run), but so a test's `client` fixture can wait for a run to actually finish
@@ -72,11 +80,24 @@ def wait_idle(timeout: float = 10.0) -> bool:
     return True
 
 
+def _append_thinking(current: str, delta: str) -> str:
+    """Accumulates reasoning up to `_MAX_THINKING`, then stops. Appending the
+    marker once (rather than re-slicing on every delta) keeps a long thinking
+    turn from rebuilding a 20 KB string per token."""
+    if current.endswith(_THINKING_TRUNCATED):
+        return current
+    grown = current + delta
+    if len(grown) <= _MAX_THINKING:
+        return grown
+    return grown[:_MAX_THINKING] + _THINKING_TRUNCATED
+
+
 def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enabled: bool,
           q: "queue.Queue", done: "threading.Event | None" = None) -> None:
     token = priority.begin('chat.stream')
     db = get_db()
     content = ''
+    thinking = ''
     steps: list[dict] = []
     last_flush = 0.0
     try:
@@ -84,6 +105,8 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enable
             q.put((kind, payload))
             if kind == 'content':
                 content += payload
+            elif kind == 'thinking':
+                thinking = _append_thinking(thinking, payload)
             elif kind == 'step':
                 steps.append(payload)
 
@@ -99,6 +122,7 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enable
                 build_update(db, 'messages', {
                     'content': content,
                     'metadata': json.dumps({'agent': 'delegate', 'steps': steps,
+                                             'thinking': thinking,
                                              'sources': [], 'proposals': []}),
                 }, 'id=?', (message_id,))
                 db.commit()
@@ -118,6 +142,15 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enable
                 metadata = json.dumps({
                     'agent': 'delegate',
                     'steps': payload.get('steps', []),
+                    # Kept, not dropped: a turn that spent itself reasoning and
+                    # answered with nothing is otherwise an empty row with no
+                    # account of where the time went. It is never fed back to
+                    # the model — only shown, collapsed, under the trace.
+                    'thinking': thinking,
+                    # The one thing that explains a reply with no text in it:
+                    # a thinking turn can spend its whole `max_tokens` budget
+                    # inside <think> and stop before writing a word.
+                    'truncated': bool(payload.get('truncated')),
                     'sources': payload.get('sources', []),
                     'proposals': proposals,
                 })

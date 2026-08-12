@@ -18,9 +18,12 @@ That was true of Gemma 4 and stays true of Qwen3.6, which is why the swap needed
 no change here.
 """
 import json
+import logging
 import re
 
 from backend.ai.provider import get_llama_client, get_model, get_provider_config
+
+logger = logging.getLogger(__name__)
 
 
 class ToolCallingUnsupported(Exception):
@@ -218,7 +221,8 @@ _THINK_CLOSE = '</think>'
 
 
 def chat_stream_events(messages: list[dict]):
-    """Streaming completion as ('content' | 'thinking', delta) pairs.
+    """Streaming completion as ('content' | 'thinking', delta) pairs, plus one
+    final ('truncated', True) if the model hit its output ceiling.
 
     Reasoning reaches us two different ways depending on how llama-server was
     launched: as a separate `reasoning_content` field on the delta, or inline in
@@ -231,6 +235,11 @@ def chat_stream_events(messages: list[dict]):
     finished text: the tags arrive split across chunks, so there is no complete
     string to match against until the stream is over, by which point the answer
     should already be on screen.
+
+    The `truncated` signal exists because a thinking model can spend the entire
+    `max_tokens` budget inside one <think> block and stop before writing a word
+    of answer — which arrives here as a perfectly successful stream carrying no
+    content at all, indistinguishable from a model that had nothing to say.
     """
     c = get_provider_config()
     client = get_llama_client(c)
@@ -240,9 +249,11 @@ def chat_stream_events(messages: list[dict]):
     )
     buffer = ''
     thinking = False
+    finish_reason = None
     for chunk in stream:
         if not chunk.choices:
             continue
+        finish_reason = chunk.choices[0].finish_reason or finish_reason
         delta = chunk.choices[0].delta
 
         reasoning = getattr(delta, 'reasoning_content', None)
@@ -273,6 +284,10 @@ def chat_stream_events(messages: list[dict]):
 
     if buffer:
         yield ('thinking' if thinking else 'content', buffer)
+    if finish_reason == 'length':
+        logger.warning('Reply hit the output ceiling (%s tokens)',
+                       default_generation_opts()['max_tokens'])
+        yield ('truncated', True)
 
 
 def _partial_tag_len(buffer: str, marker: str) -> int:

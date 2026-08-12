@@ -582,6 +582,120 @@ describe('reply persistence', () => {
   });
 });
 
+describe('persisted reasoning', () => {
+  const conversationWith = (assistant: object) => ({
+    id: 'c1',
+    messages: [
+      {
+        id: 'm-user',
+        role: 'user',
+        content: 'what should I do about the scheduler?',
+        metadata: null,
+        status: 'done',
+        createdAt: '2026-01-01T08:00:00.000Z',
+      },
+      {
+        id: 'm-assistant',
+        role: 'assistant',
+        status: 'done',
+        createdAt: '2026-01-01T08:00:01.000Z',
+        ...assistant,
+      },
+    ],
+  });
+
+  it('renders the reasoning saved on the message, collapsed', async () => {
+    // Reasoning used to exist only on the live stream, so a reload showed the
+    // answer with no account of how it got there.
+    vi.mocked(api.chat.today).mockResolvedValue(
+      conversationWith({
+        content: 'Leave it as it is.',
+        metadata: JSON.stringify({
+          agent: 'delegate',
+          steps: [],
+          sources: [],
+          thinking: 'the loop already defers through priority.py',
+        }),
+      }) as never
+    );
+
+    renderChat();
+
+    const summary = await screen.findByText('Reasoning');
+    expect(summary.closest('details')?.open).toBe(false);
+    expect(
+      screen.getByText('the loop already defers through priority.py')
+    ).toBeTruthy();
+  });
+
+  it('replaces an empty reply bubble with "No reply" and its reasoning', async () => {
+    // The bar: a turn that thought and then said nothing used to render as an
+    // empty padded rectangle, indistinguishable from a broken message.
+    vi.mocked(api.chat.today).mockResolvedValue(
+      conversationWith({
+        content: '',
+        metadata: JSON.stringify({
+          agent: 'delegate',
+          steps: [],
+          sources: [],
+          thinking: 'went round in circles',
+        }),
+      }) as never
+    );
+
+    const { container } = renderChat();
+
+    expect(await screen.findByText('No reply')).toBeTruthy();
+    expect(screen.getByText('went round in circles')).toBeTruthy();
+    // No empty bubble left behind: nothing carries the assistant bubble's
+    // surface styling with no text in it.
+    const bubbles = Array.from(container.querySelectorAll('.content-text'));
+    expect(bubbles.every(b => (b.textContent ?? '').trim().length > 0)).toBe(
+      true
+    );
+  });
+
+  it('names the output limit when that is what ended the reply', async () => {
+    // The difference the user can act on: "it had nothing to say" is not a
+    // setting, and "it ran out of tokens mid-thought" is.
+    vi.mocked(api.chat.today).mockResolvedValue(
+      conversationWith({
+        content: '',
+        metadata: JSON.stringify({
+          agent: 'delegate',
+          steps: [],
+          sources: [],
+          thinking: 'still weighing it up',
+          truncated: true,
+        }),
+      }) as never
+    );
+
+    renderChat();
+
+    expect(await screen.findByText(/hit the output token limit/)).toBeTruthy();
+  });
+
+  it('says nothing extra about a reply that is still generating', async () => {
+    // A row that reads empty because the run hasn't produced a token yet is
+    // not a blank reply — the thinking label already speaks for it.
+    vi.mocked(api.chat.today).mockResolvedValue(
+      conversationWith({
+        content: '',
+        metadata: null,
+        status: 'streaming',
+      }) as never
+    );
+
+    renderChat();
+
+    // ThinkingLabel renders the word twice on purpose (an aria-hidden animated
+    // copy and a static one for screen readers), so this matches all of them.
+    expect((await screen.findAllByText('Thinking')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('No reply')).toBeNull();
+  });
+});
+
 describe('note to self', () => {
   const noteProposal = [
     { kind: 'note', data: { content: 'warm up before deadlifts' } },

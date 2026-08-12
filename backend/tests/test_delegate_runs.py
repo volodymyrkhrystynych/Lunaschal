@@ -284,3 +284,97 @@ def test_reset_stale_message_runs_marks_orphaned_rows_as_error(client):
     done_row = _row(db, 'm-done')
     assert done_row['status'] == 'done'
     assert done_row['error'] is None
+
+
+def test_run_persists_the_reply_reasoning(client, monkeypatch):
+    """Reasoning used to live only on the wire, so a reload showed an answer
+    with no account of how it got there — and a turn that spent itself thinking
+    and answered with nothing left an empty row and no explanation at all."""
+    db = get_db()
+    conv_id = _new_conversation(db)
+    msg_id = _new_streaming_message(db, conv_id)
+
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+        yield ('thinking', 'they probably mean ')
+        yield ('thinking', 'the scheduler')
+        yield ('content', 'FSRS.')
+        yield ('done', {'steps': [], 'sources': [], 'proposals': []})
+
+    monkeypatch.setattr(runs.delegate_chat, 'stream_reply', fake_stream_reply)
+    runs._run(msg_id, [{'role': 'user', 'content': 'hi'}], '', True, queue.Queue())
+
+    row = _row(db, msg_id)
+    assert row['content'] == 'FSRS.'
+    assert json.loads(row['metadata'])['thinking'] == (
+        'they probably mean the scheduler'
+    )
+
+
+def test_run_checkpoints_reasoning_mid_run(client, monkeypatch):
+    """A thinking model can spend a minute before the first token of reply, so
+    a tab that reopens in that window has nothing else to show."""
+    db = get_db()
+    conv_id = _new_conversation(db)
+    msg_id = _new_streaming_message(db, conv_id)
+
+    seen = {}
+
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+        yield ('thinking', 'mulling it over')
+        # A step forces a checkpoint; reasoning has to ride along with it.
+        yield ('step', {'tool': 'web_search', 'ok': True, 'arg': 'q'})
+        seen['metadata'] = json.loads(_row(db, msg_id)['metadata'])
+        yield ('done', {'steps': [{'tool': 'web_search', 'ok': True, 'arg': 'q'}],
+                        'sources': [], 'proposals': []})
+
+    monkeypatch.setattr(runs.delegate_chat, 'stream_reply', fake_stream_reply)
+    runs._run(msg_id, [{'role': 'user', 'content': 'hi'}], '', True, queue.Queue())
+
+    assert seen['metadata']['thinking'] == 'mulling it over'
+
+
+def test_run_caps_runaway_reasoning(client, monkeypatch):
+    """It rides in `metadata` on every message the transcript loads and
+    re-polls, so it is bounded — and says where it stopped rather than just
+    ending."""
+    db = get_db()
+    conv_id = _new_conversation(db)
+    msg_id = _new_streaming_message(db, conv_id)
+
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+        for _ in range(400):
+            yield ('thinking', 'x' * 100)
+        yield ('done', {'steps': [], 'sources': [], 'proposals': []})
+
+    monkeypatch.setattr(runs.delegate_chat, 'stream_reply', fake_stream_reply)
+    runs._run(msg_id, [{'role': 'user', 'content': 'hi'}], '', True, queue.Queue())
+
+    thinking = json.loads(_row(db, msg_id)['metadata'])['thinking']
+    assert len(thinking) == runs._MAX_THINKING + len(runs._THINKING_TRUNCATED)
+    assert thinking.endswith(runs._THINKING_TRUNCATED)
+    # The head is what's kept — the trace is read from the top.
+    assert thinking.startswith('x' * 100)
+
+
+def test_run_records_that_the_reply_was_cut_off(client, monkeypatch):
+    """Without this, a reply that spent its whole token budget reasoning is
+    stored as an empty row indistinguishable from a model with nothing to
+    say — the one case where the transcript owes the user an explanation."""
+    db = get_db()
+    conv_id = _new_conversation(db)
+    msg_id = _new_streaming_message(db, conv_id)
+
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+        yield ('thinking', 'round in circles')
+        yield ('done', {'steps': [], 'sources': [], 'proposals': [],
+                        'truncated': True})
+
+    monkeypatch.setattr(runs.delegate_chat, 'stream_reply', fake_stream_reply)
+    runs._run(msg_id, [{'role': 'user', 'content': 'hi'}], '', True, queue.Queue())
+
+    row = _row(db, msg_id)
+    assert row['content'] == ''
+    assert row['status'] == 'done'
+    metadata = json.loads(row['metadata'])
+    assert metadata['truncated'] is True
+    assert metadata['thinking'] == 'round in circles'

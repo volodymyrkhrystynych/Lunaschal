@@ -68,7 +68,8 @@ def test_an_ordinary_message_runs_no_tools_at_all(monkeypatch, answered):
     events = _drain()
 
     assert [k for k, _ in events] == ['content', 'done']
-    assert events[-1][1] == {'steps': [], 'sources': [], 'proposals': []}
+    assert events[-1][1] == {'steps': [], 'sources': [], 'proposals': [],
+                             'truncated': False}
 
 
 def test_a_proposal_tool_runs_on_this_turn_and_stages_a_card(monkeypatch, answered):
@@ -246,6 +247,23 @@ def test_thinking_and_content_stay_separate_channels(monkeypatch):
     )
     events = _drain()
     assert [k for k, _ in events] == ['thinking', 'content', 'done']
+
+
+def test_a_truncated_answer_is_reported_on_done_not_as_a_delta(monkeypatch):
+    """A turn that spent its whole output budget inside <think> answers with
+    nothing, and looks exactly like a model that had nothing to say. The flag
+    rides on `done` — it isn't known until the stream ends, and it is a fact
+    about the reply, which is what gets persisted."""
+    _no_tools(monkeypatch)
+    monkeypatch.setattr(
+        delegate_chat, 'chat_stream_events',
+        lambda messages: iter([('thinking', 'round in circles'),
+                               ('truncated', True)]),
+    )
+    events = _drain()
+
+    assert [k for k, _ in events] == ['thinking', 'done']
+    assert events[-1][1]['truncated'] is True
 
 
 def test_tools_disabled_skips_the_decision_turn(monkeypatch, answered):
