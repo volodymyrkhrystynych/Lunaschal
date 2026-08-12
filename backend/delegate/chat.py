@@ -114,7 +114,15 @@ ANSWER_INSTRUCTION = (
     'because they still have to confirm it. If you asked for clarification, put '
     'that question to them plainly and do not pretend you staged the thing it '
     'is about. If something could not be done, say so plainly rather than '
-    'glossing over it.'
+    'glossing over it.\n\n'
+    # The tools were on the previous turn and are gone from this one, so a call
+    # written here reaches nothing: llama-server only reconstructs `tool_calls`
+    # from a request that carried `tools=`, and without that the raw notation
+    # lands in `content` and renders as the reply. It has been observed doing
+    # exactly that — repeating every call it had already made, as the answer.
+    'You have no tools in this turn. Write the reply itself, in prose: anything '
+    'shaped like a tool call is discarded, and whatever you already staged is '
+    'staged.'
 )
 
 

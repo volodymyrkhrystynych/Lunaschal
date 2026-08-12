@@ -139,3 +139,65 @@ def test_a_reply_cut_off_at_the_ceiling_says_so(stream):
 def test_a_reply_that_finished_normally_is_not_flagged(stream):
     events = stream([_chunk('Hello'), _chunk(finish_reason='stop')])
     assert [k for k, _ in events] == ['content']
+
+
+def test_native_tool_call_notation_never_reaches_the_reply(stream):
+    """Observed in production: the answering turn carries no `tools=`, so
+    llama-server has no grammar to rebuild `tool_calls` with and the model's own
+    notation lands in `content`. A whole reply came through as
+    `<tool_call><function=remember>…`, rendered as the assistant's message,
+    while the calls it repeated had already been staged on the decision turn."""
+    events = stream([
+        _chunk('Logged that. '),
+        _chunk('<tool_call>\n<function=remember>\n<parameter=content>\n'),
+        _chunk('platzok\n</parameter>\n</function>\n</tool_call>'),
+        _chunk(' Anything else?'),
+    ])
+    assert _joined(events, 'content') == 'Logged that.  Anything else?'
+    assert '<tool_call>' not in _joined(events, 'content')
+
+
+def test_a_reply_that_is_nothing_but_a_tool_call_comes_back_empty(stream):
+    """Empty is the honest answer: nothing here can execute the call, and
+    printing a request the app silently ignored is worse than printing
+    nothing. ChatPanel renders the empty reply as "No reply"."""
+    events = stream([
+        _chunk('<tool_call>\n<function=propose_food_log>\n'),
+        _chunk('<parameter=dish>\nplatzok\n</parameter>\n</function>\n</tool_call>'),
+    ])
+    assert _joined(events, 'content') == ''
+
+
+def test_a_tool_call_tag_split_across_chunks_is_still_caught(stream):
+    """The same hazard the <think> handling exists for — and the two share a
+    '<t' prefix, so the hold-back has to cover the longer of them."""
+    events = stream([
+        _chunk('Done. <'), _chunk('tool'), _chunk('_call>'),
+        _chunk('<function=remember>x</function>'),
+        _chunk('</tool'), _chunk('_call>'), _chunk(' Bye.'),
+    ])
+    assert _joined(events, 'content') == 'Done.  Bye.'
+
+
+def test_an_unclosed_tool_call_takes_the_rest_of_the_reply(stream):
+    """Half a call is no more printable than a whole one — the same stance the
+    unclosed <think> block gets."""
+    events = stream([_chunk('Sure. <tool_call>\n<function=remember>')])
+    assert _joined(events, 'content') == 'Sure. '
+
+
+def test_ordinary_prose_with_a_lone_angle_bracket_still_survives(stream):
+    """Two markers now share the '<t' prefix; holding back for both must not
+    swallow text that turns out to be prose."""
+    events = stream([_chunk('5 <'), _chunk(' 6 and 7 <t'), _chunk('han 8')])
+    assert _joined(events, 'content') == '5 < 6 and 7 <than 8'
+
+
+def test_thinking_is_still_split_out_alongside_the_tool_call_handling(stream):
+    events = stream([
+        _chunk('<think>pondering</think>'),
+        _chunk('Answer.'),
+        _chunk('<tool_call>noise</tool_call>'),
+    ])
+    assert _joined(events, 'thinking') == 'pondering'
+    assert _joined(events, 'content') == 'Answer.'
