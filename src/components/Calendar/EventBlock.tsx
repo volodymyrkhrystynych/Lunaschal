@@ -3,20 +3,19 @@ import type { CalendarEvent } from '../../hooks/api';
 import { api } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import {
-  categoryRingBoxShadow,
+  categoryStripeBackground,
   parseCategoryTags,
 } from '@/lib/calendarCategories';
+import { EVENT_LINE_WIDTH_PX, RESIZE_CAP_PX } from '@/lib/calendarDayLayout';
 import { eventTimeLabel } from '@/lib/calendar';
-
-/** Touch target for the resize handle, matching the app-wide 44px minimum
- * (see HANDLE_PX in Paper/PaperImageLayer.tsx). */
-export const RESIZE_HANDLE_PX = 44;
 
 interface EventBlockProps {
   event: CalendarEvent;
   top: number;
-  height: number;
-  insetPx: number;
+  /** Length of the line — the event's duration in px, floored so the resize
+   * cap always fits (see eventLineLengthPx). */
+  length: number;
+  laneOffsetPx: number;
   zIndex: number;
   onBodyPointerDown: (e: React.PointerEvent) => void;
   onHandlePointerDown: (e: React.PointerEvent) => void;
@@ -26,11 +25,18 @@ interface EventBlockProps {
   onTranscribed: () => void;
 }
 
+/**
+ * One event on the day timeline, drawn as a thin vertical line with its label
+ * hanging off the bottom end — an L. The shape is the interaction: a
+ * full-width block covered the whole scroll surface, so a thumb reaching to
+ * scroll landed on an event and dragged it instead. Only the line, its label
+ * row and its end cap claim touch now; everything else in the row scrolls.
+ */
 export function EventBlock({
   event,
   top,
-  height,
-  insetPx,
+  length,
+  laneOffsetPx,
   zIndex,
   onBodyPointerDown,
   onHandlePointerDown,
@@ -60,28 +66,51 @@ export function EventBlock({
         ? '…'
         : '🎤';
 
+  // Drag-to-move and tap-to-open are the same gesture until the pointer
+  // travels, so the line and the label row share one set of handlers (the
+  // layer disambiguates on release).
+  const dragHandlers = {
+    onPointerDown: onBodyPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+  };
+
   return (
     <div
       data-testid="calendar-event-block"
-      className="absolute left-0 right-0 select-none touch-none"
-      style={{ top, height, zIndex, left: insetPx, right: insetPx }}
-      onPointerDown={onBodyPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerCancel}
+      className="absolute select-none"
+      style={{ top, height: length, left: laneOffsetPx, zIndex }}
     >
       <div
-        className="relative w-full h-full rounded-md bg-[var(--color-surface)] overflow-hidden flex flex-col justify-end"
+        data-testid="calendar-event-line"
+        className="absolute top-0 bottom-0 left-0 rounded-full touch-none"
         style={{
-          // One concentric ring per category tag (up to 3) — the same
-          // "stack borders, don't pick one" approach overlapping events use
-          // (see DayEventLayer's insetPx), rendered as a single box-shadow
-          // stack instead of nested elements. No categories yet (untagged or
-          // still awaiting classification) falls back to a plain outline.
-          boxShadow: categories.length
-            ? categoryRingBoxShadow(categories)
-            : `0 0 0 2px ${pending ? 'var(--color-text-muted)' : 'rgba(255,255,255,0.2)'}`,
+          width: EVENT_LINE_WIDTH_PX,
+          // One vertical stripe per category tag across a constant width —
+          // the day view's counterpart to the concentric rings the Journal
+          // feed's event groups use (see categoryStripeBackground). No
+          // categories yet (untagged, or still awaiting classification)
+          // falls back to a flat neutral fill.
+          backgroundImage: categories.length
+            ? categoryStripeBackground(categories)
+            : undefined,
+          backgroundColor: categories.length
+            ? undefined
+            : pending
+              ? 'var(--color-text-muted)'
+              : 'rgba(255,255,255,0.25)',
         }}
+        {...dragHandlers}
+      />
+
+      {/* The L's foot: mic + title + time, overflowing to the right of the
+          line. Truncated rather than wrapped so a long title can't push the
+          row taller than the label band it sits in. */}
+      <div
+        className="absolute bottom-0 flex items-center gap-1 min-w-0 max-w-[60vw] touch-none"
+        style={{ left: EVENT_LINE_WIDTH_PX + 4 }}
+        {...dragHandlers}
       >
         <button
           type="button"
@@ -93,12 +122,11 @@ export function EventBlock({
             if (recorder.status === 'idle') recorder.start();
             else if (recorder.status === 'recording') recorder.stop();
           }}
-          className="absolute top-1 right-1 w-7 h-7 flex items-center justify-center rounded-full bg-black/30 text-xs text-[var(--color-text)] hover:bg-black/50"
+          className="shrink-0 w-7 h-7 flex items-center justify-center rounded-full bg-black/30 text-xs text-[var(--color-text)] hover:bg-black/50"
         >
           {micLabel}
         </button>
-
-        <div className="px-2 pb-1 min-w-0">
+        <div className="min-w-0 leading-tight">
           <div className="text-xs font-medium text-[var(--color-text)] truncate">
             {event.title}
           </div>
@@ -108,15 +136,23 @@ export function EventBlock({
             </div>
           )}
         </div>
+      </div>
 
-        <div
-          data-testid="calendar-event-resize-handle"
-          onPointerDown={onHandlePointerDown}
-          className="absolute left-0 right-0 flex items-center justify-center touch-none cursor-ns-resize"
-          style={{ bottom: -RESIZE_HANDLE_PX / 2, height: RESIZE_HANDLE_PX }}
-        >
-          <div className="w-8 h-1 rounded-full bg-white/40" />
-        </div>
+      {/* Grab zone for the length, sitting inside the bottom of the line so it
+          never covers the next event's start. */}
+      <div
+        data-testid="calendar-event-resize-handle"
+        onPointerDown={onHandlePointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        className="absolute bottom-0 left-0 flex items-end justify-center touch-none cursor-ns-resize"
+        style={{
+          width: EVENT_LINE_WIDTH_PX,
+          height: Math.min(RESIZE_CAP_PX, length),
+        }}
+      >
+        <div className="mb-1 w-4 h-1 rounded-full bg-black/50" />
       </div>
     </div>
   );

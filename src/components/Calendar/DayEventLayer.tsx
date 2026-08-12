@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import type { CalendarEvent } from '../../hooks/api';
 import {
-  eventHeightPx,
+  eventLineLengthPx,
   eventTopPx,
+  laneOffsetPx,
   moveEventByMinutes,
   pxDeltaToMinutes,
   resizeEventEndByMinutes,
-  OVERLAP_INSET_PX,
   type EventTimeRange,
 } from '@/lib/calendarDayLayout';
 import { EventBlock } from './EventBlock';
@@ -48,11 +48,13 @@ interface DayEventLayerProps {
  * commit on pointerUp) rather than copied verbatim: Paper's images are
  * canvas-drawn, so a single transparent overlay on top does the hit-testing.
  * Calendar events are real DOM nodes with their own interactive children (the
- * transcribe mic button), so each EventBlock's own root receives the pointer
- * events directly — pointer capture still redirects every subsequent move/up
- * for that pointerId to the element that started the drag, so only one
- * block's handlers ever fire during a given drag regardless of where the
- * finger travels.
+ * transcribe mic button), so the parts of an EventBlock that are meant to be
+ * grabbed — the line, its label row, its end cap — receive the pointer events
+ * directly, and nothing else in the row does. That is what leaves the rest of
+ * the timeline free to scroll. Pointer capture then redirects every
+ * subsequent move/up for that pointerId to the element that started the drag,
+ * so only one block's handlers ever fire during a given drag regardless of
+ * where the finger travels.
  */
 export function DayEventLayer({
   events,
@@ -123,12 +125,12 @@ export function DayEventLayer({
             key={laid.event.id}
             event={laid.event}
             top={eventTopPx(range.startMinutes, pxPerMinute)}
-            height={eventHeightPx(
+            length={eventLineLengthPx(
               range.startMinutes,
               range.endMinutes,
               pxPerMinute
             )}
-            insetPx={laid.depth * OVERLAP_INSET_PX}
+            laneOffsetPx={laneOffsetPx(laid.depth)}
             zIndex={laid.depth + 1}
             onBodyPointerDown={e => startDrag(e, laid, 'move')}
             onHandlePointerDown={e => startDrag(e, laid, 'resize')}
