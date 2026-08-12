@@ -5,6 +5,7 @@ import type { FoodEntry } from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { useListSelection } from '../../shortcuts/useListSelection';
 import { ratingStars, foodTitle, mapLink } from '../../lib/food';
+import { groupByFoodDay } from '../../lib/foodDay';
 import { FoodCapture } from './FoodCapture';
 
 const splitTagInput = (input: string): string[] =>
@@ -335,15 +336,29 @@ export function FoodLog() {
         {isLoading && (
           <div className="text-[var(--color-text-muted)]">Loading...</div>
         )}
-        {entries?.map((entry, idx) => (
-          <div key={entry.id} ref={scrollSelectedIntoView(idx)}>
-            <FoodEntryCard
-              entry={entry}
-              selected={isSelected(idx)}
-              onZoom={setZoom}
-            />
-          </div>
-        ))}
+        {entries &&
+          (() => {
+            let idx = 0;
+            return groupByFoodDay(entries).map(group => (
+              <div key={group.dayKey} className="space-y-3">
+                <div className="text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wide">
+                  {group.label}
+                </div>
+                {group.items.map(entry => {
+                  const i = idx++;
+                  return (
+                    <div key={entry.id} ref={scrollSelectedIntoView(i)}>
+                      <FoodEntryCard
+                        entry={entry}
+                        selected={isSelected(i)}
+                        onZoom={setZoom}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ));
+          })()}
         {entries?.length === 0 && !isLoading && (
           <div className="text-center text-[var(--color-text-muted)] py-12">
             {selectedTag
