@@ -125,6 +125,7 @@ def init_db() -> None:
     _ensure_todo_priority(db)
     _ensure_task_event_columns(db)
     _ensure_calendar_recurrence(db)
+    _ensure_calendar_categories(db)
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
@@ -264,6 +265,31 @@ def _ensure_calendar_recurrence(db: sqlite3.Connection) -> None:
         # No REFERENCES here: SQLite can't add an FK constraint to an existing
         # table via ALTER, and the column is a breadcrumb, not an invariant.
         ('split_from', 'TEXT'),
+    ):
+        if col not in cols:
+            db.execute(f'ALTER TABLE calendar_events ADD COLUMN {col} {decl}')
+            added = True
+    if added:
+        db.commit()
+
+
+def _ensure_calendar_categories(db: sqlite3.Connection) -> None:
+    """AI-assigned category tags on calendar_events (leisure/work/exercise/
+    family/outside/indoors — see backend/ai/calendar.py), kept separate from
+    the existing free-text `tags` column so a user-typed pill can never
+    collide with a classifier result.
+
+    `classified_at IS NULL` is the "still pending" state, for both
+    never-transcribed events and previously-failed classifications — same
+    idiom as `emails.classified_at` (backend/ai/email.py), so a crash
+    mid-classification needs no separate in-progress flag to reset.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(calendar_events)')}
+    added = False
+    for col, decl in (
+        ('category_tags', 'TEXT'),
+        ('classified_at', 'INTEGER'),
+        ('classification_error', 'TEXT'),
     ):
         if col not in cols:
             db.execute(f'ALTER TABLE calendar_events ADD COLUMN {col} {decl}')
