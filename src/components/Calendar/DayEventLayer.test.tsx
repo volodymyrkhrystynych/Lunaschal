@@ -4,6 +4,11 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DayEventLayer, type LaidOutEvent } from './DayEventLayer';
 import type { CalendarEvent } from '../../hooks/api';
+import {
+  EVENT_LINE_WIDTH_PX,
+  MIN_LINE_LENGTH_PX,
+  RESIZE_CAP_PX,
+} from '@/lib/calendarDayLayout';
 
 const calendarEvent = (
   overrides: Partial<CalendarEvent> = {}
@@ -71,9 +76,9 @@ beforeEach(() => {
 describe('tap vs drag', () => {
   it('opens the event on a tap (pointer barely moves)', () => {
     const { onOpenEvent, onCommit } = renderLayer([laidOut()]);
-    const block = screen.getByTestId('calendar-event-block');
-    fireEvent.pointerDown(block, pointerAt(100));
-    fireEvent.pointerUp(block, pointerAt(102)); // 2px of jitter, under the slop
+    const line = screen.getByTestId('calendar-event-line');
+    fireEvent.pointerDown(line, pointerAt(100));
+    fireEvent.pointerUp(line, pointerAt(102)); // 2px of jitter, under the slop
     expect(onOpenEvent).toHaveBeenCalledTimes(1);
     expect(onOpenEvent.mock.calls[0][0]).toMatchObject({ id: 'ev-1' });
     expect(onCommit).not.toHaveBeenCalled();
@@ -81,24 +86,24 @@ describe('tap vs drag', () => {
 
   it('does not open the event once the pointer has moved past the tap threshold', () => {
     const { onOpenEvent, onCommit } = renderLayer([laidOut()]);
-    const block = screen.getByTestId('calendar-event-block');
-    fireEvent.pointerDown(block, pointerAt(100));
-    fireEvent.pointerMove(block, pointerAt(140));
-    fireEvent.pointerUp(block, pointerAt(140));
+    const line = screen.getByTestId('calendar-event-line');
+    fireEvent.pointerDown(line, pointerAt(100));
+    fireEvent.pointerMove(line, pointerAt(140));
+    fireEvent.pointerUp(line, pointerAt(140));
     expect(onOpenEvent).not.toHaveBeenCalled();
     expect(onCommit).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('dragging the body (move)', () => {
+describe('dragging the line (move)', () => {
   it('shifts both start and end by the same snapped delta and commits once on release', () => {
     const { onCommit } = renderLayer([laidOut()]);
-    const block = screen.getByTestId('calendar-event-block');
-    fireEvent.pointerDown(block, pointerAt(100));
-    fireEvent.pointerMove(block, pointerAt(140)); // +40px == +40min at pxPerMinute=1
+    const line = screen.getByTestId('calendar-event-line');
+    fireEvent.pointerDown(line, pointerAt(100));
+    fireEvent.pointerMove(line, pointerAt(140)); // +40px == +40min at pxPerMinute=1
     expect(onCommit).not.toHaveBeenCalled(); // nothing persists mid-drag
 
-    fireEvent.pointerUp(block, pointerAt(140));
+    fireEvent.pointerUp(line, pointerAt(140));
     expect(onCommit).toHaveBeenCalledTimes(1);
     const [id, range] = onCommit.mock.calls[0];
     expect(id).toBe('ev-1');
@@ -113,15 +118,89 @@ describe('dragging the body (move)', () => {
       }),
     ];
     const { onCommit } = renderLayer(events);
-    const block = screen.getByTestId('calendar-event-block');
-    fireEvent.pointerDown(block, pointerAt(0));
-    fireEvent.pointerMove(block, pointerAt(50));
-    fireEvent.pointerUp(block, pointerAt(50));
+    const line = screen.getByTestId('calendar-event-line');
+    fireEvent.pointerDown(line, pointerAt(0));
+    fireEvent.pointerMove(line, pointerAt(50));
+    fireEvent.pointerUp(line, pointerAt(50));
     expect(onCommit.mock.calls[0][0]).toBe('a');
+  });
+
+  it('moves and opens from the label row too', () => {
+    // The label is the L's foot, hanging off the line's bottom end; it is a
+    // grab target in its own right, since a 15-minute line is mostly cap.
+    const { onCommit, onOpenEvent } = renderLayer([laidOut()]);
+    const label = screen.getByText('Gym');
+    fireEvent.pointerDown(label, pointerAt(600));
+    fireEvent.pointerMove(label, pointerAt(660));
+    fireEvent.pointerUp(label, pointerAt(660));
+    expect(onCommit.mock.calls[0][1]).toEqual({
+      startMinutes: 600,
+      endMinutes: 660,
+    });
+
+    fireEvent.pointerDown(label, pointerAt(600));
+    fireEvent.pointerUp(label, pointerAt(601));
+    expect(onOpenEvent).toHaveBeenCalledTimes(1);
   });
 });
 
-describe('dragging the resize handle', () => {
+describe('the shape that makes the timeline scrollable', () => {
+  it('draws each event as a fixed-width line, not a block filling the row', () => {
+    const { container } = renderLayer([laidOut()]);
+    const line = screen.getByTestId('calendar-event-line');
+    expect(line.style.width).toBe(`${EVENT_LINE_WIDTH_PX}px`);
+    // Nothing in the block stretches to the right edge — a full-width block
+    // is what made a thumb-scroll drag an event by accident.
+    expect(container.querySelector('.right-0')).toBeNull();
+  });
+
+  it('claims touch only on the parts meant to be grabbed', () => {
+    // The block's own root must not be touch-none, or it would swallow the
+    // scroll gesture across the event's whole footprint again.
+    renderLayer([laidOut()]);
+    expect(screen.getByTestId('calendar-event-block').className).not.toContain(
+      'touch-none'
+    );
+    expect(screen.getByTestId('calendar-event-line').className).toContain(
+      'touch-none'
+    );
+  });
+
+  it('lays overlapping events out side by side', () => {
+    renderLayer([
+      laidOut({ event: calendarEvent({ id: 'a' }), depth: 0 }),
+      laidOut({ event: calendarEvent({ id: 'b', title: 'Call' }), depth: 1 }),
+    ]);
+    const [first, second] = screen.getAllByTestId('calendar-event-block');
+    expect(first.style.left).toBe('0px');
+    expect(parseInt(second.style.left, 10)).toBeGreaterThanOrEqual(
+      EVENT_LINE_WIDTH_PX
+    );
+  });
+});
+
+describe('dragging the end cap (length)', () => {
+  it('keeps the cap inside the line, so it cannot cover the next event', () => {
+    // Back-to-back events share a lane; a cap straddling the end of one would
+    // sit on top of the next one's start and steal its drags.
+    renderLayer([laidOut()]);
+    const handle = screen.getByTestId('calendar-event-resize-handle');
+    expect(handle.className).toContain('bottom-0');
+    expect(parseInt(handle.style.height, 10)).toBeLessThanOrEqual(
+      RESIZE_CAP_PX
+    );
+  });
+
+  it('leaves something to grab above the cap on the shortest event', () => {
+    renderLayer([
+      laidOut({ range: { startMinutes: 540, endMinutes: 555 } }), // 15 min
+    ]);
+    const block = screen.getByTestId('calendar-event-block');
+    const handle = screen.getByTestId('calendar-event-resize-handle');
+    expect(parseInt(block.style.height, 10)).toBe(MIN_LINE_LENGTH_PX);
+    expect(parseInt(handle.style.height, 10)).toBeLessThan(MIN_LINE_LENGTH_PX);
+  });
+
   it('extends the end without moving the start', () => {
     const { onCommit, onOpenEvent } = renderLayer([laidOut()]);
     const handle = screen.getByTestId('calendar-event-resize-handle');

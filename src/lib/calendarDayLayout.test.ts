@@ -1,13 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import {
   computeOverlapDepth,
-  eventHeightPx,
+  eventLineLengthPx,
   eventTopPx,
+  laneOffsetPx,
   minutesToTime,
   moveEventByMinutes,
+  EVENT_LINE_WIDTH_PX,
+  LANE_GUTTER_PX,
   MIN_DURATION_MINUTES,
+  MIN_LINE_LENGTH_PX,
   MINUTES_PER_DAY,
   pxDeltaToMinutes,
+  RESIZE_CAP_PX,
   resizeEventEndByMinutes,
   snapMinutes,
   timeToMinutes,
@@ -47,16 +52,37 @@ describe('snapMinutes', () => {
   });
 });
 
-describe('eventTopPx / eventHeightPx', () => {
+describe('eventTopPx / eventLineLengthPx', () => {
   it('positions and sizes proportionally to minutes', () => {
     expect(eventTopPx(90, 2)).toBe(180);
-    expect(eventHeightPx(90, 150, 2)).toBe(120);
+    expect(eventLineLengthPx(90, 150, 2)).toBe(120);
   });
 
-  it('floors height at MIN_DURATION_MINUTES', () => {
-    // A 5-minute event should still render at the readable floor, not
-    // shrink to an unusable sliver.
-    expect(eventHeightPx(100, 105, 1)).toBe(MIN_DURATION_MINUTES);
+  it('floors the line at a length that can still hold the resize cap', () => {
+    // A 15-minute event is 15px at 1px/minute — too short to grab by its end
+    // cap and still leave anything to drag it by, so it draws long.
+    expect(eventLineLengthPx(100, 115, 1)).toBe(MIN_LINE_LENGTH_PX);
+    expect(MIN_LINE_LENGTH_PX).toBeGreaterThan(RESIZE_CAP_PX);
+  });
+
+  it('still floors a sub-minimum duration before scaling it', () => {
+    // A 5-minute event is treated as MIN_DURATION_MINUTES, which at a
+    // stretched scale is already longer than the pixel floor.
+    expect(eventLineLengthPx(100, 105, 10)).toBe(MIN_DURATION_MINUTES * 10);
+  });
+});
+
+describe('laneOffsetPx', () => {
+  it('leaves the first lane flush against the timeline', () => {
+    expect(laneOffsetPx(0)).toBe(0);
+  });
+
+  it('steps each further lane one line-width plus a gutter to the right', () => {
+    // Side-by-side, not nested: two overlapping lines must never sit on top
+    // of each other.
+    expect(laneOffsetPx(1)).toBe(EVENT_LINE_WIDTH_PX + LANE_GUTTER_PX);
+    expect(laneOffsetPx(2)).toBe(2 * (EVENT_LINE_WIDTH_PX + LANE_GUTTER_PX));
+    expect(laneOffsetPx(1)).toBeGreaterThanOrEqual(EVENT_LINE_WIDTH_PX);
   });
 });
 
@@ -146,9 +172,9 @@ describe('computeOverlapDepth', () => {
     expect(depths.get('b')).toBe(0);
   });
 
-  it('nests a shorter overlapping event inside a longer one', () => {
-    // The 2-hour event should stay the outer frame; the 1-hour event nests
-    // inside it — matching the confirmed picture-in-picture mockup.
+  it('puts a shorter overlapping event in the lane beside a longer one', () => {
+    // The 2-hour event holds the leftmost lane; the 1-hour event overlapping
+    // it moves one lane right.
     const depths = computeOverlapDepth([
       { id: 'short', startMinutes: 30, endMinutes: 90 }, // 1h, inside the long one
       { id: 'long', startMinutes: 0, endMinutes: 120 }, // 2h
@@ -165,7 +191,7 @@ describe('computeOverlapDepth', () => {
     ]);
     const values = new Set([depths.get('a'), depths.get('b'), depths.get('c')]);
     expect(values.size).toBe(3);
-    // Longest stays outermost.
+    // Longest holds the leftmost lane.
     expect(depths.get('a')).toBe(0);
   });
 

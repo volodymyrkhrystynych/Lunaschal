@@ -72,3 +72,18 @@ export function categoryRingBoxShadow(
     .map((cat, i) => `0 0 0 ${startPx + i * stepPx}px ${CATEGORY_COLORS[cat]}`)
     .join(', ');
 }
+
+/** CSS `background-image` painting one hard-edged vertical stripe per
+ * category across an element's width — how the Calendar day view colors an
+ * event's line. Rings can't be used there: the line is a fixed 28px wide and
+ * every extra ring would widen it, whereas stripes divide a constant width.
+ * Empty input -> ''. */
+export function categoryStripeBackground(categories: EventCategory[]): string {
+  if (!categories.length) return '';
+  const step = 100 / categories.length;
+  const stops = categories.flatMap((cat, i) => {
+    const color = CATEGORY_COLORS[cat];
+    return [`${color} ${i * step}%`, `${color} ${(i + 1) * step}%`];
+  });
+  return `linear-gradient(to right, ${stops.join(', ')})`;
+}

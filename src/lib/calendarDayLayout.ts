@@ -43,16 +43,38 @@ export function snapMinutes(
   return Math.round(minutes / step) * step;
 }
 
+/** Width of an event's line. Deliberately the width of the mic button it
+ * carries (Tailwind `w-7`): an event is a thin vertical stroke down the
+ * timeline, not a block, so the rest of every row stays free for the thumb to
+ * scroll on. */
+export const EVENT_LINE_WIDTH_PX = 28;
+
+/** Horizontal space between two overlapping events' lines. */
+export const LANE_GUTTER_PX = 6;
+
+/** Length of the grab zone at the bottom end of a line, used to drag its
+ * length (== its duration). It lives entirely *inside* the line rather than
+ * straddling its end, so a back-to-back event's line can never be covered by
+ * the previous event's resize target. */
+export const RESIZE_CAP_PX = 32;
+
+/** No line is drawn shorter than this, whatever its duration — a line has to
+ * be long enough to hold the resize cap and still leave something to grab for
+ * a move. A 15-minute event therefore draws slightly long; the stored time
+ * range is untouched. */
+export const MIN_LINE_LENGTH_PX = RESIZE_CAP_PX + 12;
+
 export function eventTopPx(startMinutes: number, pxPerMinute: number): number {
   return startMinutes * pxPerMinute;
 }
 
-export function eventHeightPx(
+export function eventLineLengthPx(
   startMinutes: number,
   endMinutes: number,
   pxPerMinute: number
 ): number {
-  return (
+  return Math.max(
+    MIN_LINE_LENGTH_PX,
     Math.max(MIN_DURATION_MINUTES, endMinutes - startMinutes) * pxPerMinute
   );
 }
@@ -99,9 +121,13 @@ export function pxDeltaToMinutes(
   return snapMinutes(pxDelta / pxPerMinute, snap);
 }
 
-/** Horizontal inset (from each side) per nesting depth, and how many px of
- * z-stacking distinguishes each layer — depth 0 (outermost) gets no inset. */
-export const OVERLAP_INSET_PX = 10;
+/** Left offset of an overlapping event's line: each depth gets its own lane
+ * beside the previous one. Lines are thin, so overlaps sit side by side
+ * instead of nesting — a nested inset only made sense while an event was a
+ * full-width box. */
+export function laneOffsetPx(depth: number): number {
+  return depth * (EVENT_LINE_WIDTH_PX + LANE_GUTTER_PX);
+}
 
 export interface OverlapInput {
   id: string;
@@ -110,15 +136,14 @@ export interface OverlapInput {
 }
 
 /**
- * Assigns each mutually-overlapping event a nesting depth (0 = outermost),
- * so the day view can inset each subsequent overlapping block from its
- * siblings and keep every border visible (picture-in-picture, not
- * side-by-side columns).
+ * Assigns each mutually-overlapping event a lane (0 = leftmost), so the day
+ * view can place each overlapping line beside its siblings instead of on top
+ * of them.
  *
  * Standard interval-graph greedy coloring: process longest events first (so
- * a long event stays the outer frame around a short one nested inside it,
- * matching the confirmed mockup), and give each one the smallest depth not
- * already occupied by an overlapping event.
+ * the longest event holds the leftmost lane and short ones stack out to its
+ * right), and give each one the smallest lane not already occupied by an
+ * overlapping event.
  */
 export function computeOverlapDepth(
   events: OverlapInput[]
