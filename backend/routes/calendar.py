@@ -3,6 +3,7 @@ import json
 from datetime import date as dt, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from ulid import ULID
+from backend import sleep
 from backend.ai.background import run_bg
 from backend.calendar_query import events_in_range
 from backend.calendar_recurrence import VALID_FREQS, format_byweekday
@@ -140,6 +141,61 @@ def related_journals(date):
         (start, end),
     ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])
+
+
+def _sleep_payload(day_key: str) -> dict:
+    """A day's own wake/sleep, plus the two neighbouring ends the day view needs
+    to draw its bands: the night before ended at this day's wake, and the night
+    after ends at the next day's."""
+    prev = (dt.fromisoformat(day_key) - timedelta(days=1)).isoformat()
+    nxt = (dt.fromisoformat(day_key) + timedelta(days=1)).isoformat()
+    return {
+        **sleep.resolve_day(day_key),
+        'previousSleepAt': sleep.resolve_day(prev)['sleepAt'],
+        'nextWakeAt': sleep.resolve_day(nxt)['wakeAt'],
+    }
+
+
+@bp.get('/sleep/<date>')
+def get_sleep(date):
+    if not _valid_date(date):
+        return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
+    return jsonify(_sleep_payload(date))
+
+
+@bp.put('/sleep/<date>')
+def set_sleep(date):
+    """Set the day's manual wake/sleep. The body is the whole manual state for
+    that day, so omitting an end (or sending null) hands it back to the derived
+    value — the editor submits both fields together."""
+    if not _valid_date(date):
+        return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
+    body = request.get_json(silent=True) or {}
+    stamps = {}
+    for field in ('wake', 'sleep'):
+        value = body.get(field)
+        if value is None:
+            stamps[field] = None
+            continue
+        if not _valid_time(value):
+            return jsonify({'error': f'{field} must be HH:MM'}), 400
+        stamps[field] = sleep.time_to_timestamp(date, str(value))
+    if (
+        stamps['wake'] is not None
+        and stamps['sleep'] is not None
+        and stamps['sleep'] <= stamps['wake']
+    ):
+        return jsonify({'error': 'sleep must come after wake'}), 400
+    sleep.set_day(date, wake=stamps['wake'], sleep=stamps['sleep'])
+    return jsonify(_sleep_payload(date))
+
+
+@bp.delete('/sleep/<date>')
+def clear_sleep(date):
+    if not _valid_date(date):
+        return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
+    sleep.clear_day(date)
+    return jsonify(_sleep_payload(date))
 
 
 @bp.get('/<id>')

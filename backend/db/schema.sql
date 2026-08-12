@@ -102,6 +102,22 @@ CREATE TABLE IF NOT EXISTS calendar_journal_links (
     created_at INTEGER NOT NULL
 );
 
+-- Manually-set wake/sleep times for a day. A row exists ONLY for a day the user
+-- corrected by hand: the times are otherwise derived on read from when they were
+-- active (backend/sleep.py), so there is nothing to keep in sync. The two
+-- columns are independently nullable, so one end can be manual while the other
+-- stays derived. `date` is the 4am-anchored day key (backend/chat_day.py), not a
+-- calendar date -- a 01:30 bedtime belongs to the day that started the previous
+-- morning.
+CREATE TABLE IF NOT EXISTS sleep_logs (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL UNIQUE,
+    wake_at INTEGER,
+    sleep_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS mcp_servers (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
@@ -295,6 +311,9 @@ CREATE INDEX IF NOT EXISTS idx_journal_created ON journal_entries(created_at DES
 CREATE INDEX IF NOT EXISTS idx_calendar_date ON calendar_events(date);
 CREATE INDEX IF NOT EXISTS idx_calendar_exc_event ON calendar_event_exceptions(event_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id, created_at);
+-- backend/sleep.py scans messages by time across every conversation, which the
+-- composite index above can't serve (its leading column is the conversation).
+CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at);
 
 CREATE TABLE IF NOT EXISTS writing_projects (
     id TEXT PRIMARY KEY,

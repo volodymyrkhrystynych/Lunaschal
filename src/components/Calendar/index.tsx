@@ -13,6 +13,7 @@ import {
 } from '@/lib/calendar';
 import { EventDetails } from './EventDetails';
 import { DayView } from './DayView';
+import { SleepEditor } from './SleepEditor';
 
 type ViewMode = 'month' | 'week';
 // Which screen the mobile layout shows: 'day' is the default hour-grid
@@ -53,6 +54,7 @@ export function Calendar() {
   const todayISO = toLocalISO(new Date());
   const [mobileView, setMobileView] = useState<MobileView>('day');
   const [dayDate, setDayDate] = useState(todayISO);
+  const [editingSleep, setEditingSleep] = useState(false);
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -198,6 +200,16 @@ export function Calendar() {
               →
             </button>
           </div>
+          {/* The way in on a day with no bands drawn — no activity recorded and
+              nothing set by hand — where there would otherwise be nothing to
+              tap. */}
+          <button
+            onClick={() => setEditingSleep(true)}
+            aria-label="Edit sleep times"
+            className="p-2 min-h-[44px] min-w-[44px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          >
+            ☾
+          </button>
         </div>
       ) : (
         <div className="flex items-center justify-end mb-4">
@@ -216,7 +228,11 @@ export function Calendar() {
       )}
 
       {showingDayView ? (
-        <DayView date={dayDate} onOpenEvent={openEvent} />
+        <DayView
+          date={dayDate}
+          onOpenEvent={openEvent}
+          onEditSleep={() => setEditingSleep(true)}
+        />
       ) : (
         <div
           className={`flex-1 min-h-0 gap-4 ${isMobile ? 'flex flex-col overflow-y-auto' : 'flex overflow-hidden'}`}
@@ -683,6 +699,10 @@ export function Calendar() {
           occurrenceDate={selected.occurrenceDate}
           onClose={() => setSelected(null)}
         />
+      )}
+
+      {editingSleep && (
+        <SleepEditor date={dayDate} onClose={() => setEditingSleep(false)} />
       )}
     </div>
   );

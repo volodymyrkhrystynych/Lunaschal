@@ -79,7 +79,10 @@ export function EventBlock({
   return (
     <div
       data-testid="calendar-event-block"
-      className="absolute select-none"
+      // pointer-events-auto: the layer above the sleep bands is
+      // pointer-events-none so a band stays tappable, and each block turns
+      // hit-testing back on for its own footprint only.
+      className="absolute select-none pointer-events-auto"
       style={{ top, height: length, left: laneOffsetPx, zIndex }}
     >
       <div
