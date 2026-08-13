@@ -882,7 +882,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
 
       <div
         ref={feedScrollRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden space-y-4"
+        className="flex-1 overflow-y-auto overflow-x-hidden px-2 space-y-4"
       >
         {isLoading && (
           <div className="text-[var(--color-text-muted)]">Loading...</div>

@@ -69,13 +69,27 @@ def _get_oauth_settings(db) -> dict | None:
 
 def _insert_message(db, account_id: str, gmail_id: str, access_token: str) -> str | None:
     """Fetch + parse + insert one message if not already present. Returns the
-    new row's id, or None if it was already synced (safe to call twice)."""
+    new row's id, or None if it was already synced, or if it 404s (safe to
+    call twice).
+
+    A message that was listed (history.list or messages.list) can be gone by
+    the time this fetches it — Gmail auto-purges spam/trash, and a user can
+    delete between the list and the fetch. That's routine for a mailbox-wide
+    mirror, not a sync failure: letting it raise would abort the whole
+    backfill/incremental walk without advancing history_id, so every retry
+    hits the same already-gone message and the account never syncs again.
+    """
     existing = db.execute(
         'SELECT id FROM emails WHERE account_id=? AND gmail_id=?', (account_id, gmail_id)
     ).fetchone()
     if existing:
         return None
-    raw = gmail_client.get_message(access_token, gmail_id)
+    try:
+        raw = gmail_client.get_message(access_token, gmail_id)
+    except gmail_client.GmailApiError as e:
+        if e.status_code == 404:
+            return None
+        raise
     parsed = gmail_client.parse_message(raw)
     body_html, image_refs = sanitize_email_html(parsed.get('bodyHtml') or '')
     row_id = str(ULID())
