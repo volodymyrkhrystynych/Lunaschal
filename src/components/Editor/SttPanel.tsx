@@ -2,6 +2,8 @@ import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
+import { handleFinishedRecording } from '../../offline/recordingQueue';
+import { PendingRecordings } from './PendingRecordings';
 
 interface Props {
   onTranscribed: (text: string) => void;
@@ -23,6 +25,7 @@ interface CorrectResult {
 
 export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const recordModeRef = useRef<RecordMode>('normal');
   const queryClient = useQueryClient();
 
@@ -35,17 +38,22 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
       ),
   });
 
-  // Errors deliberately propagate out of here: the recorder surfaces them on
-  // the button's own error line, which is where the recording was started.
-  const saveRecordingEntry = async (blob: Blob) => {
-    await api.journal.createRecording(blob);
-    queryClient.invalidateQueries({ queryKey: ['journal'] });
-  };
-
-  const recorder = useRecorder(text => {
+  const deliverTranscript = (text: string) => {
     if (recordModeRef.current === 'journal') saveJournalFromVoice.mutate(text);
     else onTranscribed(text);
-  }, saveRecordingEntry);
+  };
+
+  // Errors deliberately propagate out of here: the recorder surfaces them on
+  // the button's own error line, which is where the recording was started. The
+  // audio is not at stake either way — handleFinishedRecording keeps it on the
+  // device until the server confirms it.
+  const recorder = useRecorder(deliverTranscript, undefined, {
+    onNotice: setNotice,
+    onRecording: rec =>
+      handleFinishedRecording(queryClient, rec, {
+        onTranscript: deliverTranscript,
+      }),
+  });
   const status = recorder.status;
 
   const [expanded, setExpanded] = useState(false);
@@ -84,20 +92,25 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
       ),
   });
 
+  // Only the two journal buttons record durably. The plain one dictates into
+  // whatever text field is open, where a lost take is retyped rather than lost.
   const startRecording = () => {
     setError('');
+    setNotice('');
     recordModeRef.current = 'normal';
     void recorder.start();
   };
   const startJournalRecording = () => {
     setError('');
+    setNotice('');
     recordModeRef.current = 'journal';
-    void recorder.start();
+    void recorder.start('transcribe', { durable: true });
   };
   const startAudioRecording = () => {
     setError('');
+    setNotice('');
     recordModeRef.current = 'audio';
-    void recorder.start('audio');
+    void recorder.start('audio', { durable: true });
   };
   const stopRecording = recorder.stop;
 
@@ -196,6 +209,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
 
   return (
     <div className="shrink-0 border-t border-white/10 bg-[var(--color-surface)]">
+      {/* Journal audio the server hasn't confirmed yet. Renders nothing at all
+          in the normal case. */}
+      <PendingRecordings />
       {expanded && (
         <div className="p-4 border-b border-white/10 flex flex-col gap-3">
           <div className="flex gap-3 items-start">
@@ -400,6 +416,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           <span className="text-xs text-red-400 truncate">
             {error || recorder.error}
           </span>
+        )}
+        {!error && !recorder.error && notice && (
+          <span className="text-xs text-amber-300 truncate">{notice}</span>
         )}
 
         <button

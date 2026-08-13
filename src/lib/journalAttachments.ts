@@ -43,9 +43,22 @@ export function isAttachableFile(file: File): boolean {
  */
 export function uploadFilenameFor(file: File): string {
   if (file.name) return file.name;
-  const subtype = (file.type || '').split('/')[1]?.split(';')[0];
-  const ext = subtype ? MIME_FALLBACK_EXT[subtype] || subtype : 'bin';
-  return `attachment.${ext}`;
+  return `attachment.${extForMime(file.type, 'bin')}`;
+}
+
+/**
+ * A filename for an in-app recording, named after what MediaRecorder actually
+ * produced. iOS Safari records `audio/mp4`, so the old hardcoded
+ * `recording.webm` was a lie — and the backend resolves an attachment's kind
+ * from the mime type and extension it is handed.
+ */
+export function recordingFilename(mimeType: string): string {
+  return `recording.${extForMime(mimeType, 'webm')}`;
+}
+
+function extForMime(mimeType: string, fallback: string): string {
+  const subtype = (mimeType || '').split('/')[1]?.split(';')[0];
+  return subtype ? MIME_FALLBACK_EXT[subtype] || subtype : fallback;
 }
 
 // Only the cases where the mime subtype is not itself a usable extension.

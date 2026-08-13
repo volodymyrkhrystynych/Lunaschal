@@ -269,7 +269,9 @@ describe('Reader commentary microphone', () => {
     vi.stubGlobal('navigator', {
       ...navigator,
       mediaDevices: {
-        getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [] }),
+        getUserMedia: vi
+          .fn()
+          .mockResolvedValue({ getTracks: () => [], getAudioTracks: () => [] }),
       },
     });
     vi.stubGlobal(

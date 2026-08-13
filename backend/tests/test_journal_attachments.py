@@ -12,6 +12,7 @@ import io
 
 import pytest
 from PIL import Image
+from ulid import ULID
 
 from backend.ai import audio_description as audio_ai
 from backend.ai import images as images_ai
@@ -529,10 +530,14 @@ def test_running_descriptions_are_reset_at_startup(client, entry_id, monkeypatch
 # is that a rejected file leaves no empty entry behind.
 
 def _record(client, *, filename='recording.webm', data=b'\x00' * 2048,
-            mime='audio/webm', name=None):
+            mime='audio/webm', name=None, id=None, attachment_id=None):
     form = {'file': (io.BytesIO(data), filename, mime)}
     if name is not None:
         form['name'] = name
+    if id is not None:
+        form['id'] = id
+    if attachment_id is not None:
+        form['attachmentId'] = attachment_id
     return client.post(
         '/api/journal/recordings', data=form, content_type='multipart/form-data'
     )
@@ -588,3 +593,91 @@ def test_an_empty_recording_leaves_no_entry_behind(client):
     r = _record(client, data=b'')
     assert r.status_code == 400
     assert len(client.get('/api/journal?limit=100').get_json()) == before
+
+
+# --- replaying a recording upload -------------------------------------------
+#
+# The phone keeps a recording in IndexedDB until the server confirms it landed,
+# and re-POSTs it on every reconnect until then. A response that never made it
+# back therefore produces a second identical request as a matter of course, so
+# "the same upload twice" is the normal path and has to be a no-op — otherwise
+# the fix for losing recordings would trade it for duplicating them.
+
+def _entry_count(client):
+    return len(client.get('/api/journal?limit=100').get_json())
+
+
+def test_a_replayed_recording_creates_nothing_new(client):
+    entry_id, attachment_id = str(ULID()), str(ULID())
+    before = _entry_count(client)
+
+    first = _record(client, id=entry_id, attachment_id=attachment_id)
+    second = _record(client, id=entry_id, attachment_id=attachment_id)
+
+    # The replay answers like a success so the phone can drop its local copy.
+    assert (first.status_code, second.status_code) == (201, 201)
+    assert first.get_json()['id'] == second.get_json()['id'] == entry_id
+    assert first.get_json()['attachment']['id'] == attachment_id
+    assert second.get_json()['attachment']['id'] == attachment_id
+
+    assert _entry_count(client) == before + 1
+    entry = client.get(f'/api/journal/{entry_id}').get_json()
+    assert len(entry['attachments']) == 1
+    # One directory on disk, holding one file.
+    assert len(list(storage.attachment_dir(attachment_id).iterdir())) == 1
+
+
+def test_a_replay_does_not_rewrite_the_stored_file(client):
+    """The check for an id we already hold comes before the file is read: a
+    replay must not stream a hundred megabytes to disk to discover it was
+    already there."""
+    entry_id, attachment_id = str(ULID()), str(ULID())
+    _record(client, id=entry_id, attachment_id=attachment_id, data=b'\x01' * 2048)
+
+    path = storage.attachment_dir(attachment_id) / 'attachment.webm'
+    before = path.stat()
+
+    # Different bytes, same ids. The stored file must be the original.
+    _record(client, id=entry_id, attachment_id=attachment_id, data=b'\x02' * 4096)
+
+    after = path.stat()
+    assert (after.st_size, after.st_mtime_ns) == (before.st_size, before.st_mtime_ns)
+    assert path.read_bytes() == b'\x01' * 2048
+
+
+def test_a_replay_finds_its_entry_without_being_told_it(client):
+    """Only the attachment id is needed to recognise a recording we hold."""
+    attachment_id = str(ULID())
+    first = _record(client, attachment_id=attachment_id)
+    entry_id = first.get_json()['id']
+
+    second = _record(client, attachment_id=attachment_id)
+    assert second.status_code == 201
+    assert second.get_json()['id'] == entry_id
+
+
+def test_a_rejected_upload_keeps_an_entry_it_did_not_create(client):
+    """The rollback deletes only an entry *this* request created. A retry that
+    reuses the entry id but carries a bad file must not take the good entry with
+    it."""
+    entry_id = str(ULID())
+    _record(client, id=entry_id, attachment_id=str(ULID()))
+
+    r = _record(client, id=entry_id, attachment_id=str(ULID()),
+                filename='notes.txt', mime='text/plain')
+    assert r.status_code == 400
+
+    entry = client.get(f'/api/journal/{entry_id}')
+    assert entry.status_code == 200
+    assert len(entry.get_json()['attachments']) == 1
+
+
+def test_a_malformed_client_id_is_refused(client):
+    """An attachment id becomes a directory name. Substituting a fresh one
+    instead would also break the replay the client is counting on, so this is a
+    400 rather than a silent fallback."""
+    before = _entry_count(client)
+    for field in ('id', 'attachment_id'):
+        r = _record(client, **{field: '../../etc/passwd'})
+        assert r.status_code == 400, field
+    assert _entry_count(client) == before
