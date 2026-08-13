@@ -121,12 +121,12 @@ def test_run_checkpoints_steps_as_they_happen_not_just_at_the_end(client, monkey
     assert final['sources'] == [{'url': 'https://ex.com', 'title': None}]
 
 
-def test_run_stamps_confirm_card_proposals_and_drops_note(client, monkeypatch):
+def test_run_stamps_confirm_card_proposals_and_drops_flashcard_draft(client, monkeypatch):
     """Only calendar/calorie/task/flashcards are real confirm cards — each
     gets a stable id and 'pending' status so a later accept/dismiss
-    (backend/routes/chat.py's resolve_proposal) can find it by id. `note`
-    drafts immediately client-side with no confirm step, so it never gets a
-    persisted id at all."""
+    (backend/routes/chat.py's resolve_proposal) can find it by id.
+    `flashcard_draft` drafts immediately client-side with no confirm step, so
+    it never gets a persisted id at all."""
     db = get_db()
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
@@ -137,7 +137,7 @@ def test_run_stamps_confirm_card_proposals_and_drops_note(client, monkeypatch):
             'sources': [],
             'proposals': [
                 {'kind': 'task', 'data': {'title': 'call the dentist'}},
-                {'kind': 'note', 'data': {'content': 'warm up before deadlifts'}},
+                {'kind': 'flashcard_draft', 'data': {'content': 'warm up before deadlifts'}},
             ],
         })
 

@@ -1,20 +1,26 @@
-"""The main chat model's toolbox: stage something, remember something, or ask.
+"""The main chat model's toolbox: stage something, write something immediately,
+or ask.
 
 **The `propose_*` tools only ever propose.** `propose_task`,
 `propose_calendar_event`, `propose_calorie_log`, `propose_food_log`,
-`propose_note_to_self` and `propose_flashcards` write nothing. They hand back a
+`draft_flashcard` and `propose_flashcards` write nothing. They hand back a
 staged payload the chat UI renders as a confirm card, and the row is inserted by
 `resolve_proposal` in backend/routes/chat.py when the user clicks. So this
 replaces the *classifier* — which guessed an intent after the reply and swallowed
 its own failures — without also quietly taking the confirm click away.
 
-**`remember` and `revise_memory` are the exception, and the exception is
-narrow.** They edit the standing document in backend/memory.py without a card,
-because the thing they exist for is the user correcting a misheard name
-mid-sentence and a confirmation click there costs more than it protects. What
-makes that safe is not the write being small but its being reversible: every
-change snapshots the previous document, and Settings shows the whole history.
-They are also the only tools here that touch the database at all.
+**`remember`, `revise_memory` and `create_note_to_self` are the exception, and
+the exception is narrow.** `remember`/`revise_memory` edit the standing
+document in backend/memory.py without a card, because the thing they exist for
+is the user correcting a misheard name mid-sentence and a confirmation click
+there costs more than it protects. What makes that safe is not the write being
+small but its being reversible: every change snapshots the previous document,
+and Settings shows the whole history. `create_note_to_self` writes a
+backend/notes.py row the same way — a note-to-self is meant to be jotted down
+without a click, and it stays correctable afterward (editing tracks a
+revision, backend/routes/notes.py) rather than needing to be gotten right the
+first time. These three are the only tools here that touch the database at
+all.
 
 **They run in the main chat, not in the delegate.** They used to live in the
 delegate's loop, which is handed one `task` string and cannot see the
@@ -49,6 +55,7 @@ logger = logging.getLogger(__name__)
 # click, where the user just sees a card that fails.
 MAX_CALORIES = 20000
 MAX_TITLE_CHARS = 200
+MAX_NOTE_CHARS = 4000
 
 TOOLS = [
     {
@@ -174,11 +181,14 @@ TOOLS = [
     {
         'type': 'function',
         'function': {
-            'name': 'propose_note_to_self',
+            'name': 'draft_flashcard',
             'description': (
-                'Stage a lesson worth remembering, to be drafted into a Learning '
-                'card the user can approve. Use when they say "note to self" or a '
-                'clear equivalent AND have said what the lesson actually is.'
+                'Draft a Learning flashcard from a lesson the user just stated, '
+                'for them to approve. Use when they ask for a specific fact or '
+                'lesson to become a flashcard right away — "flashcard this", '
+                '"turn that into a card" — AND have said what the lesson '
+                'actually is. For a broader request to be quizzed on a topic '
+                'rather than one stated fact, use propose_flashcards instead.'
             ),
             'parameters': {
                 'type': 'object',
@@ -335,6 +345,31 @@ TOOLS = [
                     },
                 },
                 'required': ['note'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'create_note_to_self',
+            'description': (
+                'Write a note to yourself immediately — no confirmation card. '
+                'Use when they say "note to self" or a clear equivalent AND '
+                'have said what the note actually is. This is for a stray '
+                'thought, plan, or reminder they want resurfaced for review '
+                'over the following days — not a fact to memorize (use '
+                'draft_flashcard for that) and not a dated to-do (use '
+                'propose_task).'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'content': {
+                        'type': 'string',
+                        'description': 'The note itself, not the phrase introducing it.',
+                    },
+                },
+                'required': ['content'],
             },
         },
     },
@@ -524,13 +559,13 @@ def _propose_calorie_log(args: dict) -> tuple[str, dict]:
                    f'{calories} cal for "{description}"')
 
 
-def _propose_note_to_self(args: dict) -> tuple[str, dict]:
+def _draft_flashcard(args: dict) -> tuple[str, dict]:
     content = _text(args.get('content'))
     if not content:
-        return _refused('propose_note_to_self',
+        return _refused('draft_flashcard',
                         'there is no lesson here yet — ask the user what it is')
-    return _staged('note', 'propose_note_to_self', {'content': content},
-                   'a note to self')
+    return _staged('flashcard_draft', 'draft_flashcard', {'content': content},
+                   'a flashcard draft')
 
 
 def _propose_flashcards(args: dict) -> tuple[str, dict]:
@@ -598,8 +633,9 @@ def _propose_recipe(args: dict) -> tuple[str, dict]:
 
 
 def _remember(args: dict) -> tuple[str, dict]:
-    """The one tool here that writes. Its event carries no `proposal`, the
-    `ask_user` shape, so nothing about it can reach the confirm-card path.
+    """One of the three tools here that write. Its event carries no
+    `proposal`, the `ask_user` shape, so nothing about it can reach the
+    confirm-card path.
 
     Writing without a card is a deliberate trade: a correction mid-sentence
     should not cost a click, and unlike a calendar event this is reversible from
@@ -622,6 +658,26 @@ def _remember(args: dict) -> tuple[str, dict]:
         'It is written already — acknowledge it in a few words at most, and do '
         'not ask them to confirm it.',
         {'tool': 'remember', 'ok': True, 'arg': note},
+    )
+
+
+def _create_note_to_self(args: dict) -> tuple[str, dict]:
+    """Writes a backend/notes.py row immediately, no confirm card — same
+    trade `remember` makes: jotting a note down shouldn't cost a click, and
+    it stays correctable afterward (the note view's edit tracks a revision)
+    rather than needing to be right the first time.
+    """
+    from backend.notes import create_note
+
+    content = _text(args.get('content'))[:MAX_NOTE_CHARS]
+    if not content:
+        return _refused('create_note_to_self', 'there is nothing to note yet — ask what it is')
+    create_note(content)
+    return (
+        f'Saved as a note to self: {content}\n'
+        'It is written already — acknowledge it briefly and do not ask them '
+        'to confirm it.',
+        {'tool': 'create_note_to_self', 'ok': True, 'arg': content},
     )
 
 
@@ -693,9 +749,10 @@ _HANDLERS = {
     'propose_calorie_log': _propose_calorie_log,
     'propose_food_log': _propose_food_log,
     'propose_recipe': _propose_recipe,
-    'propose_note_to_self': _propose_note_to_self,
+    'draft_flashcard': _draft_flashcard,
     'propose_flashcards': _propose_flashcards,
     'remember': _remember,
+    'create_note_to_self': _create_note_to_self,
     'revise_memory': _revise_memory,
     'ask_user': _ask_user,
 }

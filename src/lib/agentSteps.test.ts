@@ -86,8 +86,8 @@ describe('stepLabel', () => {
     expect(stepLabel({ tool: 'propose_calorie_log', ok: true })).toBe(
       'Staged a calorie entry'
     );
-    expect(stepLabel({ tool: 'propose_note_to_self', ok: true })).toBe(
-      'Staged a note to self'
+    expect(stepLabel({ tool: 'draft_flashcard', ok: true })).toBe(
+      'Staged a flashcard draft'
     );
     // Plural: the article lives in the label map precisely so this one
     // doesn't read as "a flashcards".
@@ -160,6 +160,26 @@ describe('stepLabel', () => {
     expect(
       stepLabel({ tool: 'revise_memory', arg: 'they switched gyms', ok: true })
     ).toBe("Updating what's remembered: they switched gyms");
+  });
+
+  it('says a note to self was written, not staged', () => {
+    const label = stepLabel({
+      tool: 'create_note_to_self',
+      arg: 'buy a birthday card',
+      ok: true,
+    });
+    expect(label).toBe('Noted: buy a birthday card');
+    expect(label).not.toMatch(/staged/i);
+  });
+
+  it('says when a note to self could not be saved, and why', () => {
+    expect(
+      stepLabel({
+        tool: 'create_note_to_self',
+        ok: false,
+        error: 'there is nothing to note yet',
+      })
+    ).toBe("Didn't save that note — there is nothing to note yet");
   });
 
   it('falls back to a generic label for an unknown tool', () => {

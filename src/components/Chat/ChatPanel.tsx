@@ -28,11 +28,12 @@ import {
 } from '@/lib/chatAttachments';
 import { currentPosition } from '@/lib/geo';
 
-/** One staged action from the delegate's `done` event. Only `note` is still
- * read from this live shape — the other kinds (calendar/calorie/task/
+/** One staged action from the delegate's `done` event. Only `flashcard_draft`
+ * is still read from this live shape — the other kinds (calendar/calorie/task/
  * flashcards) are durable confirm cards read from `message.metadata.proposals`
  * instead (parseDelegateProposals), so they survive a reload or a dropped
- * connection. `note` drafts immediately with no confirm step of its own. */
+ * connection. `flashcard_draft` drafts immediately with no confirm step of
+ * its own. */
 interface DelegateProposal {
   kind: string;
   data: Record<string, unknown>;
@@ -131,22 +132,22 @@ export function ChatPanel() {
     onSuccess: invalidateToday,
   });
 
-  /** `note` is the one proposal kind with no confirm card of its own — it
-   * drafts a lesson card immediately, and the draft *is* the review step —
-   * so it's still read straight off the live `done` event rather than from
-   * persisted metadata. The other four kinds are durable confirm cards
+  /** `flashcard_draft` is the one proposal kind with no confirm card of its
+   * own — it drafts a lesson card immediately, and the draft *is* the review
+   * step — so it's still read straight off the live `done` event rather than
+   * from persisted metadata. The other four kinds are durable confirm cards
    * rendered from `message.metadata.proposals` (DelegateProposals) instead. */
   const stageNoteProposals = (proposals: DelegateProposal[]) => {
     for (const { kind, data } of proposals) {
       const content =
         typeof data?.content === 'string' ? data.content.trim() : '';
-      if (kind === 'note' && content) {
+      if (kind === 'flashcard_draft' && content) {
         generateFromNote.mutate(content);
       }
     }
   };
 
-  /** "note to self" drafts a lesson card right away — the preview appears
+  /** "flashcard this" drafts a lesson card right away — the preview appears
    * inline below so it can be approved or steered without leaving chat. */
   const generateFromNote = useMutation({
     mutationFn: (content: string) => api.learning.generateFromNote(content),

@@ -159,10 +159,10 @@ def test_a_valid_calorie_log_stages():
                         'data': {'description': 'burger', 'calories': 650}}
 
 
-def test_an_empty_note_to_self_is_refused_with_the_reason():
-    """"note to self" with no lesson yet has to send the model back to ask,
-    not stage an empty card."""
-    text, _, proposal = _proposal('propose_note_to_self', {'content': ''})
+def test_an_empty_flashcard_draft_is_refused_with_the_reason():
+    """"flashcard this" with no lesson yet has to send the model back to
+    ask, not stage an empty card."""
+    text, _, proposal = _proposal('draft_flashcard', {'content': ''})
     assert proposal is None
     assert 'ask the user what it is' in text
 
