@@ -1,12 +1,18 @@
 """Lifestyle tab: workouts, activity heatmap, body weight, selfies, calories.
 
-See docs/lifestyle-tab.md. Chores are not here on purpose — they are todos with
-list='chores' and the Lifestyle tab reuses /api/tasks/todos for them, so a chore
-ticked off in Tasks and one ticked off here are the same row.
+See docs/lifestyle-tab.md. Tasks are not here on purpose — the tab renders daily
+tasks and to-dos through /api/tasks, so a to-do ticked off in the briefing and
+one ticked off here are the same row. (Chores were folded into the to-do list;
+`normalize_list` in backend/todo_recurrence.py still accepts the old name.)
+
+/trends is the exception to "lifestyle owns lifestyle data": it counts journal
+entries and sent job applications, which live in other features' tables. It sits
+here because the chart does — one endpoint for one card beats making the client
+stitch two feature APIs together to draw two lines on one axis.
 """
 import re
 import time
-from datetime import date as date_cls
+from datetime import date as date_cls, datetime, timedelta
 
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
@@ -17,6 +23,7 @@ from backend.db.connection import build_update, get_db, row_to_dict
 from backend.lifestyle import storage
 from backend.lifestyle.activity import is_activity_type, summarize_day
 from backend.lifestyle.exercises import canonicalize, display_name
+from backend.lifestyle.trends import week_start, weekly_series
 
 bp = Blueprint('lifestyle', __name__, url_prefix='/api/lifestyle')
 
@@ -380,6 +387,62 @@ def heatmap():
         {'date': day, **summarize_day(day_sessions)}
         for day, day_sessions in sorted(by_day.items())
     ])
+
+
+# --- Weekly trends -----------------------------------------------------------
+
+# Half a year of weeks: long enough for a trend, short enough that every point
+# still has room on a phone-width chart.
+DEFAULT_TREND_WEEKS = 26
+MAX_TREND_WEEKS = 104
+
+
+@bp.get('/trends')
+def trends():
+    """Weekly counts of journal entries written and job applications sent.
+
+    Two different measures of keeping at it, on one axis: both are "things I did
+    this week", so a shared scale is the comparison the chart exists for.
+
+    Applications come from the email classifier — `category='job_application'`
+    with `job_status='sent'`, i.e. an application that went out, not a rejection
+    or an interview reply coming back. Days are local, not UTC: an entry written
+    at 11pm belongs to that evening's week.
+    """
+    weeks = request.args.get('weeks', DEFAULT_TREND_WEEKS, type=int)
+    if weeks is None:
+        weeks = DEFAULT_TREND_WEEKS
+    weeks = max(1, min(weeks, MAX_TREND_WEEKS))
+
+    today = date_cls.today()
+    window_start = week_start(today) - timedelta(weeks=weeks - 1)
+    # Local midnight of the first day in the window; the columns are unix ints.
+    since = int(datetime.combine(window_start, datetime.min.time()).timestamp())
+
+    db = get_db()
+    day_counts: dict[str, dict[str, int]] = {}
+
+    def _collect(name: str, sql: str) -> None:
+        for row in db.execute(sql, (since,)).fetchall():
+            day_counts.setdefault(row['day'], {})[name] = row['count']
+
+    _collect('journalEntries', """
+        SELECT date(created_at, 'unixepoch', 'localtime') AS day, COUNT(*) AS count
+        FROM journal_entries WHERE created_at >= ? GROUP BY day
+    """)
+    _collect('applications', """
+        SELECT date(received_at, 'unixepoch', 'localtime') AS day, COUNT(*) AS count
+        FROM emails
+        WHERE category='job_application' AND job_status='sent' AND received_at >= ?
+        GROUP BY day
+    """)
+
+    # weekly_series only emits the series it saw, so name them here — a stretch
+    # with no applications at all must still draw a zero line, not vanish.
+    for key in ('applications', 'journalEntries'):
+        day_counts.setdefault(today.isoformat(), {}).setdefault(key, 0)
+
+    return jsonify({'weeks': weekly_series(day_counts, today, weeks)})
 
 
 # --- Exercises & progression -------------------------------------------------

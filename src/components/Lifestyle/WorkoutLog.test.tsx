@@ -50,6 +50,20 @@ const durationInput = () =>
 const logButton = () =>
   screen.getByRole('button', { name: /log workout/i }) as HTMLButtonElement;
 
+const session = {
+  id: 's1',
+  date: '2026-07-20',
+  locationType: 'outside' as const,
+  durationMinutes: 30,
+  intensityRating: 2,
+  rawText: 'squats 10 10 10 10',
+  notes: null,
+  parseStatus: 'done' as const,
+  exercises: [],
+  createdAt: '',
+  updatedAt: '',
+};
+
 describe('mid-workout draft persistence', () => {
   it('restores what was typed before a reload wiped the tab', async () => {
     // A phone reloading a backgrounded tab re-mounts the component from
@@ -250,23 +264,23 @@ describe('session history', () => {
     // Intensity reads out in words alongside the stars.
     expect(screen.getByText('Intensity 2/5 — Just a smidge')).toBeTruthy();
   });
+
+  it('asks for four sessions and scrolls them inside the card', async () => {
+    // The card sits beside the day's tasks now; a long history scrolling under
+    // the form used to push the rest of the tab off the page.
+    vi.mocked(api.lifestyle.workouts.list).mockResolvedValue([session]);
+    renderLog();
+
+    await waitFor(() =>
+      expect(api.lifestyle.workouts.list).toHaveBeenCalledWith({ limit: 4 })
+    );
+    const list = (await screen.findByText(/2026-07-20/)).closest('ul')!;
+    expect(list.className).toContain('overflow-y-auto');
+    expect(list.className).toContain('max-h-');
+  });
 });
 
 describe('delete protection', () => {
-  const session = {
-    id: 's1',
-    date: '2026-07-20',
-    locationType: 'outside' as const,
-    durationMinutes: 30,
-    intensityRating: 2,
-    rawText: 'squats 10 10 10 10',
-    notes: null,
-    parseStatus: 'done' as const,
-    exercises: [],
-    createdAt: '',
-    updatedAt: '',
-  };
-
   it('hides the delete button until "Show delete buttons" is toggled', async () => {
     vi.mocked(api.lifestyle.workouts.list).mockResolvedValue([session]);
     renderLog();

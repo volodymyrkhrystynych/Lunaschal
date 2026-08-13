@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ShortcutProvider } from '../../shortcuts/ShortcutProvider';
 import { api, DailyTask, TodoItem } from '../../hooks/api';
 import { dueInputToUnix } from '../../lib/todos';
-import { Tasks } from './index';
+import { TasksSection } from './index';
 
 vi.mock('../../hooks/api', () => ({
   api: {
@@ -38,17 +38,18 @@ const dailyTask = (id: string, title: string, position: number): DailyTask => ({
   updatedAt: '',
 });
 
+// `list` is a bare string so a fixture can carry the retired 'chores' value.
 const todo = (
   id: string,
   title: string,
-  list: TodoItem['list'],
+  list: string,
   extra: Partial<TodoItem> = {}
 ): TodoItem => ({
   id,
   title,
   done: false,
   completedAt: null,
-  list,
+  list: list as TodoItem['list'],
   notes: null,
   due: null,
   repeatInterval: null,
@@ -70,7 +71,7 @@ const fixtures = {
       repeatInterval: 2,
       repeatUnit: 'week',
     }),
-    todo('c1', 'Clean the sink', 'chores'),
+    todo('c1', 'Clean the sink', 'chores'), // retired list, migrated server-side
     todo('a1', 'Learn accordion', 'archive'),
   ],
 };
@@ -88,8 +89,8 @@ function renderTasks() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <ShortcutProvider currentView="tasks" onViewChange={() => {}}>
-        <Tasks />
+      <ShortcutProvider currentView="lifestyle" onViewChange={() => {}}>
+        <TasksSection />
       </ShortcutProvider>
     </QueryClientProvider>
   );
@@ -102,20 +103,26 @@ describe('list rendering and switching', () => {
     renderTasks();
     expect(await screen.findByText('Morning pages')).not.toBeNull();
     expect(await screen.findByText('Fix the bike')).not.toBeNull();
-    expect(screen.queryByText('Clean the sink')).toBeNull();
     expect(screen.queryByText('Learn accordion')).toBeNull();
+  });
+
+  it('shows a row from the retired chores list among the to-dos', async () => {
+    // The rows were folded into 'todo' by the migration, but one queued offline
+    // against the old build still arrives naming it — it must not go invisible.
+    renderTasks();
+    expect(await screen.findByText('Clean the sink')).not.toBeNull();
   });
 
   it('switches the visible list when a pill is clicked', async () => {
     renderTasks();
     await screen.findByText('Fix the bike');
 
-    fireEvent.click(screen.getByRole('button', { name: /Chores/ }));
-    expect(await screen.findByText('Clean the sink')).not.toBeNull();
-    expect(screen.queryByText('Fix the bike')).toBeNull();
-
     fireEvent.click(screen.getByRole('button', { name: /Archive/ }));
     expect(await screen.findByText('Learn accordion')).not.toBeNull();
+    expect(screen.queryByText('Fix the bike')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /To-Do/ }));
+    expect(await screen.findByText('Fix the bike')).not.toBeNull();
   });
 
   it('renders due, repeat, and truncated notes on rows', async () => {
@@ -143,22 +150,21 @@ describe('level-1 section selection', () => {
       'ring-1'
     );
 
-    key('KeyS'); // → Chores (also switches the visible list)
-    expect(screen.getByRole('button', { name: /Chores/ }).className).toContain(
+    key('KeyS'); // → Archive (also switches the visible list)
+    expect(screen.getByRole('button', { name: /Archive/ }).className).toContain(
       'ring-1'
     );
-    expect(await screen.findByText('Clean the sink')).not.toBeNull();
+    expect(await screen.findByText('Learn accordion')).not.toBeNull();
   });
 });
 
 describe('todo creation', () => {
-  it('drilling into Chores opens the form with the title focused and Ctrl+Enter creates', async () => {
+  it('drilling into To-Do opens the form with the title focused and Ctrl+Enter creates', async () => {
     renderTasks();
     await screen.findByText('Fix the bike');
 
     key('KeyD');
-    key('KeyS');
-    key('KeyS'); // Chores selected at level 1
+    key('KeyS'); // To-Do selected at level 1
     key('KeyD'); // drill in → create form
 
     const title = screen.getByPlaceholderText('Title…');
@@ -172,7 +178,7 @@ describe('todo creation', () => {
       // Client-generated ULID for idempotent offline replay.
       id: expect.any(String),
       title: 'Descale kettle',
-      list: 'chores',
+      list: 'todo',
       notes: undefined,
       due: null,
       repeatInterval: undefined,
@@ -282,7 +288,6 @@ describe('todo creation', () => {
 
     key('KeyD');
     key('KeyS');
-    key('KeyS');
     key('KeyS'); // Archive
     await screen.findByText('Learn accordion');
     key('KeyD');
@@ -311,7 +316,6 @@ describe('Q moves between To-Do and Archive', () => {
     );
 
     key('KeyA'); // back to level 1
-    key('KeyS');
     key('KeyS'); // Archive
     await screen.findByText('Learn accordion');
     key('KeyD');
@@ -321,18 +325,12 @@ describe('Q moves between To-Do and Archive', () => {
     );
   });
 
-  it('does nothing in the Chores list', async () => {
+  it('does nothing on a daily task', async () => {
     renderTasks();
-    await screen.findByText('Fix the bike');
+    await screen.findByText('Morning pages');
 
-    key('KeyD');
-    key('KeyS');
-    key('KeyS'); // Chores
-    await screen.findByText('Clean the sink');
-    key('KeyD'); // form
-    fireEvent.keyDown(screen.getByPlaceholderText('Title…'), {
-      key: 'Escape',
-    });
+    key('KeyD'); // Daily at level 1
+    key('KeyD'); // item nav
     key('KeyQ');
     expect(api.todos.update).not.toHaveBeenCalled();
   });

@@ -16,7 +16,6 @@ export const VIEWS = [
   'notebook',
   'writing',
   'ideas',
-  'tasks',
   'food',
   'lifestyle',
   'fanfic',
@@ -32,8 +31,16 @@ function isView(value: string | null): value is View {
   return VIEWS.includes(value as View);
 }
 
+// Views that no longer exist, and where their contents went. Without this a
+// retired name fails `isView` and the reload lands on the default 'chat' —
+// which, for someone whose last screen was Tasks, looks like the app forgot.
+const RETIRED_VIEWS: Record<string, View> = {
+  tasks: 'lifestyle', // daily tasks and to-dos live in Lifestyle now
+};
+
 export function getStoredView(): View | null {
   const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw && raw in RETIRED_VIEWS) return RETIRED_VIEWS[raw];
   return isView(raw) ? raw : null;
 }
 

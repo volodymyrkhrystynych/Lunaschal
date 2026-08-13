@@ -880,6 +880,8 @@ export type TaskEventKind =
   'todo_completed' | 'daily_completed' | 'task_deleted';
 
 // Which list the task came from: a todo list, or 'daily' for a daily task.
+// 'chores' is history — the list is retired, but events logged while it existed
+// still name it and the Journal feed still labels them.
 export type TaskListSource = 'todo' | 'chores' | 'archive' | 'daily';
 
 export interface TaskEvent {
@@ -892,7 +894,7 @@ export interface TaskEvent {
   createdAt: string;
 }
 
-export type TodoList = 'todo' | 'chores' | 'archive';
+export type TodoList = 'todo' | 'archive';
 export type RepeatUnit = 'day' | 'week' | 'month';
 
 export interface TodoItem {
@@ -1088,9 +1090,9 @@ export interface FoodJournalItem {
   media: FoodMedia[];
 }
 
-// --- Lifestyle (workouts, heatmap, body weight, selfies, calories) ---
-// Chores are deliberately absent: they're todos with list='chores', so the
-// Lifestyle tab uses api.tasks.todos for them rather than a parallel list.
+// --- Lifestyle (workouts, heatmap, trends, body weight, selfies, calories) ---
+// Tasks are deliberately absent: the Lifestyle tab renders daily tasks and
+// to-dos through api.tasks/api.todos rather than a parallel list of its own.
 
 // The four activity types, in the priority order the heatmap resolves ties by.
 // Kept structurally identical to ACTIVITY_TYPES in src/lib/lifestyle.ts.
@@ -1143,6 +1145,15 @@ export interface HeatmapDayResponse {
   /** The day's hardest session, 1-5 stars. */
   intensityRating: number | null;
   sessions: WorkoutSession[];
+}
+
+/** One Monday-start week of the momentum chart. Every week in the window is
+ *  sent, zeros included — a skipped quiet week would draw as a flat trend. */
+export interface TrendWeek {
+  weekStart: string;
+  /** Job-application emails classified as sent that week. */
+  applications: number;
+  journalEntries: number;
 }
 
 export interface ExerciseSummary {
@@ -2638,6 +2649,10 @@ export const api = {
       if (params?.end) qp.set('end', params.end);
       return get<HeatmapDayResponse[]>(`/api/lifestyle/heatmap?${qp}`);
     },
+    trends: (weeks?: number) =>
+      get<{ weeks: TrendWeek[] }>(
+        `/api/lifestyle/trends${weeks ? `?weeks=${weeks}` : ''}`
+      ),
     exercises: {
       list: () => get<ExerciseSummary[]>('/api/lifestyle/exercises'),
       progression: (name: string) =>

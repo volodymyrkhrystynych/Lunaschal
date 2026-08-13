@@ -13,7 +13,6 @@ export type ActionId =
   | 'action.annotate'
   | 'action.search'
   | 'tab.chat'
-  | 'tab.tasks'
   | 'tab.journal'
   | 'tab.writing'
   | 'tab.calendar'
@@ -53,7 +52,6 @@ export const DEFAULT_BINDINGS: Record<ActionId, string> = {
   // Tab digits are unbound by default — the number row belongs to Learning
   // review ratings. Rebindable in Settings ('' = unbound).
   'tab.chat': '',
-  'tab.tasks': '',
   'tab.journal': '',
   'tab.writing': '',
   'tab.calendar': '',
@@ -93,7 +91,6 @@ export const ACTION_LABELS: Record<ActionId, string> = {
     'Write commentary (reader) / steer regeneration (Learning queue)',
   'action.search': 'Focus search (Library)',
   'tab.chat': 'Go to Chat',
-  'tab.tasks': 'Go to Tasks',
   'tab.journal': 'Go to Journal',
   'tab.writing': 'Go to Writing',
   'tab.calendar': 'Go to Calendar',
@@ -119,8 +116,8 @@ export const ACTION_LABELS: Record<ActionId, string> = {
   'reader.fontDown': 'Decrease reading/chapter text size',
   'reader.toggleList':
     'Toggle list panel (Writing chapters / Library chapters)',
-  'tasks.move': 'Move to-do to/from Archive (Tasks)',
-  'tasks.toggleDone': 'Toggle selected item done (Tasks)',
+  'tasks.move': 'Move to-do to/from Archive (Lifestyle)',
+  'tasks.toggleDone': 'Toggle selected item done (Lifestyle)',
 };
 
 const MODIFIER_CODES = new Set([

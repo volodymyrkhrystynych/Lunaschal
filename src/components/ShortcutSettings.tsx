@@ -58,7 +58,7 @@ const GROUPS: { title: string; actions: ActionId[] }[] = [
     title: 'Tabs',
     actions: [
       'tab.chat',
-      'tab.tasks',
+      'tab.lifestyle',
       'tab.journal',
       'tab.writing',
       'tab.calendar',

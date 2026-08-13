@@ -703,9 +703,10 @@ CREATE INDEX IF NOT EXISTS idx_paper_page_images_page
     ON paper_page_images(page_id, position);
 
 -- --- Lifestyle tab: workouts, body weight, selfies, calories -----------------
--- See docs/lifestyle-tab.md. Chores are deliberately absent: they already exist
--- as todos with list='chores' (backend/todo_recurrence.py) and the Lifestyle tab
--- renders that same list rather than forking a second one.
+-- See docs/lifestyle-tab.md. Tasks are deliberately absent: the tab renders
+-- daily_tasks and todos directly rather than forking a second copy of either.
+-- (The `chores` list those todos used to be split across is retired — the rows
+-- were folded into 'todo' by _merge_chores_into_todos in backend/db/connection.py.)
 
 -- One logged training session. `raw_text` is the freeform text exactly as typed
 -- and is never overwritten — the AI-parsed exercises/sets below hang off it, so

@@ -22,6 +22,9 @@ import {
 
 const PLACEHOLDER = 'bicep curls 20,10 20,10\nsquats 60,8 60,8 65,6';
 
+/** How many past sessions the card lists. */
+const HISTORY_LIMIT = 4;
+
 function numberOrNull(value: string): number | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
@@ -174,9 +177,12 @@ export function WorkoutLog() {
     return () => clearTimeout(timer);
   }, [draft]);
 
+  // Four is the whole history this card shows. It sits beside the day's tasks
+  // now, and a fortnight of sessions scrolling under the form pushed everything
+  // below it off the page; the heatmap above is the long view.
   const { data: sessions = [] } = useQuery({
     queryKey: ['lifestyle', 'workouts'],
-    queryFn: () => api.lifestyle.workouts.list({ limit: 15 }),
+    queryFn: () => api.lifestyle.workouts.list({ limit: HISTORY_LIMIT }),
   });
 
   const create = useMutation({
@@ -308,7 +314,9 @@ export function WorkoutLog() {
       </button>
 
       {sessions.length > 0 && (
-        <ul className="mt-4 space-y-2">
+        // Scrolls inside the card: a session with a long exercise list is tall,
+        // and four of those would stretch the card past the screen again.
+        <ul className="mt-4 space-y-2 max-h-96 overflow-y-auto pr-1">
           {sessions.map(session => (
             <SessionCard
               key={session.id}

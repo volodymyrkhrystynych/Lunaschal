@@ -201,20 +201,25 @@ describe('isFarOffPeriodic', () => {
 });
 
 describe('groupTodosByList', () => {
-  it('buckets todos into the three lists', () => {
+  it('buckets todos into the two lists', () => {
     const buckets = groupTodosByList([
       { id: 'a', list: 'todo' },
-      { id: 'b', list: 'chores' },
       { id: 'c', list: 'archive' },
       { id: 'd', list: 'todo' },
     ]);
     expect(buckets.todo.map(t => t.id)).toEqual(['a', 'd']);
-    expect(buckets.chores.map(t => t.id)).toEqual(['b']);
     expect(buckets.archive.map(t => t.id)).toEqual(['c']);
   });
 
-  it('always returns all three buckets', () => {
-    expect(groupTodosByList([])).toEqual({ todo: [], chores: [], archive: [] });
+  it('always returns both buckets', () => {
+    expect(groupTodosByList([])).toEqual({ todo: [], archive: [] });
+  });
+
+  it('folds the retired chores list into todo', () => {
+    // The rows were migrated server-side; this catches one queued offline
+    // against the old build, which would otherwise render nowhere.
+    const buckets = groupTodosByList([{ id: 'b', list: 'chores' }]);
+    expect(buckets.todo.map(t => t.id)).toEqual(['b']);
   });
 
   it('sends unknown list values to todo', () => {

@@ -92,9 +92,9 @@ export function DailyTasks({
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-baseline justify-between gap-2 mb-3">
         <h2
-          className={`text-xl font-semibold text-[var(--color-text)] ${
+          className={`text-lg font-semibold text-[var(--color-text)] ${
             sectionFocused
               ? 'px-2 -mx-2 rounded ring-1 ring-[var(--color-primary)]'
               : ''
@@ -204,7 +204,7 @@ export function DailyTasks({
         ))}
 
         {tasks.length === 0 && !showAdd && !isLoading && (
-          <div className="text-center py-12 text-[var(--color-text-muted)] text-sm">
+          <div className="text-center py-6 text-[var(--color-text-muted)] text-sm">
             No tasks yet. Add up to 4, ordered by importance.
           </div>
         )}

@@ -102,7 +102,7 @@ def test_create_with_all_new_fields_round_trips(client):
     due = 1790000000
     r = client.post('/api/tasks/todos', json={
         'title': 'water plants',
-        'list': 'chores',
+        'list': 'archive',
         'notes': '  the ones on the balcony  ',
         'due': due,
         'repeatInterval': 2,
@@ -111,7 +111,7 @@ def test_create_with_all_new_fields_round_trips(client):
     assert r.status_code == 201
 
     todo = client.get('/api/tasks/todos').get_json()[0]
-    assert todo['list'] == 'chores'
+    assert todo['list'] == 'archive'
     assert todo['notes'] == 'the ones on the balcony'  # stripped
     assert todo['due'] == datetime.fromtimestamp(due, tz=timezone.utc).isoformat()
     assert todo['repeatInterval'] == 2
@@ -161,13 +161,32 @@ def test_priority_create_and_patch_round_trip(client):
 
 def test_list_filter_returns_only_that_list(client):
     client.post('/api/tasks/todos', json={'title': 'a'})
-    client.post('/api/tasks/todos', json={'title': 'b', 'list': 'chores'})
     client.post('/api/tasks/todos', json={'title': 'c', 'list': 'archive'})
 
-    chores = client.get('/api/tasks/todos?list=chores').get_json()
-    assert [t['title'] for t in chores] == ['b']
-    assert len(client.get('/api/tasks/todos').get_json()) == 3
+    archived = client.get('/api/tasks/todos?list=archive').get_json()
+    assert [t['title'] for t in archived] == ['c']
+    assert len(client.get('/api/tasks/todos').get_json()) == 2
     assert client.get('/api/tasks/todos?list=someday').status_code == 400
+
+
+def test_the_retired_chores_list_folds_into_todo(client):
+    """Chores stopped being their own list when the Lifestyle tab merged them
+    into the to-dos. A request naming it still lands — an offline mutation
+    queued before the merge, or a chat proposal staged against the old enum,
+    would otherwise 400 forever on replay."""
+    r = client.post('/api/tasks/todos', json={'title': 'sweep', 'list': 'chores'})
+    assert r.status_code == 201
+    todo_id = r.get_json()['id']
+    assert client.get('/api/tasks/todos').get_json()[0]['list'] == 'todo'
+
+    # The filter and the patch fold the same way, so an old client's GET or
+    # move doesn't come back empty.
+    assert [t['id'] for t in client.get('/api/tasks/todos?list=chores').get_json()] == [todo_id]
+    client.patch(f'/api/tasks/todos/{todo_id}', json={'list': 'archive'})
+    assert client.patch(
+        f'/api/tasks/todos/{todo_id}', json={'list': 'chores'}
+    ).status_code == 200
+    assert client.get('/api/tasks/todos').get_json()[0]['list'] == 'todo'
 
 
 def test_patch_moves_between_lists(client):

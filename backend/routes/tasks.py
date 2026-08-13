@@ -6,7 +6,7 @@ from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
 from backend.todo_recurrence import (
-    VALID_LISTS, next_due, parse_priority as _parse_priority,
+    next_due, normalize_list, parse_priority as _parse_priority,
     parse_repeat as _parse_repeat,
 )
 
@@ -202,8 +202,10 @@ def _parse_due(value):
 def list_todos():
     db = get_db()
     list_filter = request.args.get('list')
-    if list_filter is not None and list_filter not in VALID_LISTS:
-        return jsonify({'error': f'list must be one of {", ".join(VALID_LISTS)}'}), 400
+    if list_filter is not None:
+        list_filter, err = normalize_list(list_filter)
+        if err:
+            return jsonify({'error': err}), 400
     query = f'SELECT {_TODO_COLS} FROM todos'
     params = []
     if list_filter:
@@ -223,9 +225,9 @@ def create_todo():
     title = (body.get('title') or '').strip()
     if not title:
         return jsonify({'error': 'title required'}), 400
-    todo_list = body.get('list', 'todo')
-    if todo_list not in VALID_LISTS:
-        return jsonify({'error': f'list must be one of {", ".join(VALID_LISTS)}'}), 400
+    todo_list, err = normalize_list(body.get('list'))
+    if err:
+        return jsonify({'error': err}), 400
     notes = (body.get('notes') or '').strip() or None
     due, err = _parse_due(body.get('due'))
     if err:
@@ -325,9 +327,9 @@ def update_todo(todo_id):
         fields.append('title=?')
         values.append(title)
     if 'list' in body:
-        todo_list = body.get('list')
-        if todo_list not in VALID_LISTS:
-            return jsonify({'error': f'list must be one of {", ".join(VALID_LISTS)}'}), 400
+        todo_list, err = normalize_list(body.get('list'))
+        if err:
+            return jsonify({'error': err}), 400
         fields.append('list=?')
         values.append(todo_list)
     if 'notes' in body:
