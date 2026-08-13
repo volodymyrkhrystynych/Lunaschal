@@ -696,12 +696,12 @@ describe('persisted reasoning', () => {
   });
 });
 
-describe('note to self', () => {
+describe('flashcard draft', () => {
   const noteProposal = [
-    { kind: 'note', data: { content: 'warm up before deadlifts' } },
+    { kind: 'flashcard_draft', data: { content: 'warm up before deadlifts' } },
   ];
 
-  it('drafts and previews a lesson card when the delegate stages a note', async () => {
+  it('drafts and previews a lesson card when the delegate stages a flashcard draft', async () => {
     const stream = openStream();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
     vi.mocked(api.learning.generateFromNote).mockResolvedValue({
@@ -715,7 +715,7 @@ describe('note to self', () => {
 
     renderChat();
     await sendAndReply(
-      'note to self: warm up before deadlifts',
+      'flashcard this: warm up before deadlifts',
       stream,
       'Noted.',
       noteProposal
@@ -748,7 +748,7 @@ describe('note to self', () => {
 
     renderChat();
     await sendAndReply(
-      'note to self: warm up before deadlifts',
+      'flashcard this: warm up before deadlifts',
       stream,
       'Noted.',
       noteProposal
@@ -780,7 +780,7 @@ describe('note to self', () => {
 
     renderChat();
     await sendAndReply(
-      'note to self: warm up before deadlifts',
+      'flashcard this: warm up before deadlifts',
       stream,
       'Noted.',
       noteProposal
@@ -797,7 +797,7 @@ describe('note to self', () => {
     );
   });
 
-  it('keeps an earlier unactioned draft when a second note-to-self arrives', async () => {
+  it('keeps an earlier unactioned draft when a second flashcard draft arrives', async () => {
     const streamA = openStream();
     const streamB = openStream();
     vi.stubGlobal(
@@ -831,19 +831,22 @@ describe('note to self', () => {
 
     renderChat();
     await sendAndReply(
-      'note to self: warm up before deadlifts',
+      'flashcard this: warm up before deadlifts',
       streamA,
       'Noted.',
       noteProposal
     );
     await screen.findByText('Warm up before what?');
 
-    await sendAndReply('note to self: stretch after too', streamB, 'Got it.', [
-      { kind: 'note', data: { content: 'stretch after too' } },
-    ]);
+    await sendAndReply(
+      'flashcard this: stretch after too',
+      streamB,
+      'Got it.',
+      [{ kind: 'flashcard_draft', data: { content: 'stretch after too' } }]
+    );
     await screen.findByText('Stretch when?');
 
-    // The first draft is still there — a second note-to-self must not wipe
+    // The first draft is still there — a second flashcard draft must not wipe
     // out an earlier one the user hasn't approved or discarded yet.
     expect(screen.getByText('Warm up before what?')).toBeTruthy();
     expect(screen.getByText('Save these lessons to Learning?')).toBeTruthy();

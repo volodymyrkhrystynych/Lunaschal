@@ -944,9 +944,9 @@ def _accept_food(db, data: dict, ctx: dict) -> dict:
     return result
 
 
-# `note` is the one kind that never reaches here — it drafts flashcards
-# immediately with no accept/dismiss step, and backend/delegate/runs.py filters
-# it out before a proposal ever gets a persisted id.
+# `flashcard_draft` is the one kind that never reaches here — it drafts
+# flashcards immediately with no accept/dismiss step, and backend/delegate/
+# runs.py filters it out before a proposal ever gets a persisted id.
 _ACCEPT_HANDLERS = {
     'calendar': _accept_calendar,
     'calorie': _accept_calorie,

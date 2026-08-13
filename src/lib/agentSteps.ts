@@ -91,7 +91,7 @@ const PROPOSAL_LABELS: Record<string, string> = {
   propose_calendar_event: 'a calendar event',
   propose_calorie_log: 'a calorie entry',
   propose_food_log: 'a food entry',
-  propose_note_to_self: 'a note to self',
+  draft_flashcard: 'a flashcard draft',
   propose_flashcards: 'flashcards',
 };
 
@@ -129,7 +129,7 @@ export function stepLabel(step: AgentStep): string {
       return target
         ? `Asked for clarification about ${target}`
         : 'Asked for clarification';
-    // Also not proposals: these two write immediately, with no card. Saying
+    // Also not proposals: these three write immediately, with no card. Saying
     // "Staged" would be the same lie in the other direction — the user needs to
     // know something was written so they can go and unwrite it.
     case 'remember':
@@ -140,6 +140,10 @@ export function stepLabel(step: AgentStep): string {
       return step.ok
         ? `Updating what's remembered: ${target}`
         : `Couldn't update what's remembered${step.error ? ` — ${step.error}` : ''}`;
+    case 'create_note_to_self':
+      return step.ok
+        ? `Noted: ${target}`
+        : `Didn't save that note${step.error ? ` — ${step.error}` : ''}`;
     default: {
       const kind = step.tool ? PROPOSAL_LABELS[step.tool] : undefined;
       if (kind) {

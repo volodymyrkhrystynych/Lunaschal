@@ -11,6 +11,7 @@ import { Editor } from './components/Editor';
 import { Notebook } from './components/Notebook/Notebook';
 import { SttPanel } from './components/Editor/SttPanel';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { NoteReviewButton } from './components/NoteReview';
 import { Login } from './components/Login';
 import { Writing } from './components/Writing';
 import { Ideas } from './components/Ideas';
@@ -226,6 +227,7 @@ export default function App() {
             {renderView()}
           </main>
         </div>
+        <NoteReviewButton />
         <OfflineIndicator />
         <SttPanel
           onTranscribed={handleTranscribed}

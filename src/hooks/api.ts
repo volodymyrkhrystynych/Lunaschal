@@ -689,6 +689,22 @@ export interface NotebookReviewState {
   due: string | null;
 }
 
+export interface NoteToSelf {
+  id: string;
+  content: string;
+  intervalDays: number;
+  due: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoteToSelfRevision {
+  id: string;
+  noteId: string;
+  content: string;
+  createdAt: string;
+}
+
 export type IdeaStatus =
   | 'new'
   | 'researching'
@@ -2220,6 +2236,17 @@ export const api = {
     revisions: () => get<MemoryRevision[]>('/api/memory/revisions'),
     restore: (id: string) =>
       post<UserMemory>(`/api/memory/revisions/${id}/restore`, {}),
+  },
+
+  // Notes to self: created only from chat (backend/delegate/tools.py's
+  // create_note_to_self), no create route here — same shape as memory above.
+  notes: {
+    due: () => get<NoteToSelf[]>('/api/notes/due'),
+    dismiss: (id: string) => post<NoteToSelf>(`/api/notes/${id}/dismiss`, {}),
+    update: (id: string, content: string) =>
+      put<NoteToSelf>(`/api/notes/${id}`, { content }),
+    revisions: (id: string) =>
+      get<NoteToSelfRevision[]>(`/api/notes/${id}/revisions`),
   },
 
   files: {

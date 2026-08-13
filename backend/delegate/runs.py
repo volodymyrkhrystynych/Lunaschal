@@ -129,15 +129,15 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enable
                 last_flush = now
 
             if kind == 'done':
-                # `note` proposals stage nothing to accept/dismiss — they draft
-                # flashcards immediately client-side, and those drafts are
-                # already durable rows the instant they exist. Only the other
-                # kinds are real confirm cards, so only they get the stable id
-                # + 'pending' status a later accept/dismiss resolves by
-                # (backend/routes/chat.py's resolve_proposal).
+                # `flashcard_draft` proposals stage nothing to accept/dismiss —
+                # they draft flashcards immediately client-side, and those
+                # drafts are already durable rows the instant they exist. Only
+                # the other kinds are real confirm cards, so only they get the
+                # stable id + 'pending' status a later accept/dismiss resolves
+                # by (backend/routes/chat.py's resolve_proposal).
                 proposals = [
                     {'id': str(ULID()), 'status': 'pending', **p}
-                    for p in payload.get('proposals', []) if p.get('kind') != 'note'
+                    for p in payload.get('proposals', []) if p.get('kind') != 'flashcard_draft'
                 ]
                 metadata = json.dumps({
                     'agent': 'delegate',

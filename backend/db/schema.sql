@@ -647,6 +647,33 @@ CREATE TABLE IF NOT EXISTS notebook_review_state (
 
 CREATE INDEX IF NOT EXISTS idx_notebook_review_due ON notebook_review_state(enabled, due);
 
+-- Notes to self: freeform notes jotted from chat, resurfaced on a fixed
+-- 1/2/4/7/14-day ladder (backend/notes.py) rather than FSRS — there's no
+-- correctness signal to grade, just seen-or-not, so nothing for a
+-- memory-decay model to fit, and 14 days is a deliberate ceiling FSRS has no
+-- native knob for.
+CREATE TABLE IF NOT EXISTS notes_to_self (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    interval_days INTEGER NOT NULL DEFAULT 1,
+    due INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_notes_to_self_due ON notes_to_self(due);
+
+-- Copy-on-write edit history, the user_memory_revisions shape: `content` is
+-- what the note said *before* the edit that produced this row.
+CREATE TABLE IF NOT EXISTS note_to_self_revisions (
+    id TEXT PRIMARY KEY,
+    note_id TEXT NOT NULL REFERENCES notes_to_self(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_note_to_self_revisions_note ON note_to_self_revisions(note_id, created_at DESC);
+
 -- Paper: freeform handwriting/drawing documents (Apple Pencil on iPad). A
 -- "paper" is a document; its ordered "pages" each hold vector strokes (JSON,
 -- the source of truth for editing) plus a rendered PNG snapshot on disk (used
