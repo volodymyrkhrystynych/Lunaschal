@@ -121,8 +121,10 @@ export function ActivityHeatmap() {
     </button>
   );
 
+  // No card shell of its own: it shares one with the momentum chart, which is
+  // the same question asked two ways (what did I do, and is it trending).
   return (
-    <section className="p-4 rounded-lg bg-[var(--color-surface)] border border-white/10">
+    <div className="min-w-0">
       <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
         <h2 className="text-lg font-semibold text-[var(--color-text)]">
           Activity
@@ -284,6 +286,6 @@ export function ActivityHeatmap() {
       </div>
 
       {selectedDay && <DayDetail day={selectedDay} />}
-    </section>
+    </div>
   );
 }

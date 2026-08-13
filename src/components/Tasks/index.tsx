@@ -7,6 +7,7 @@ import {
   useShortcuts,
   useShortcutScope,
 } from '../../shortcuts/ShortcutProvider';
+import { CARD, CARD_DIVIDER } from '../Lifestyle/card';
 import { DailyTasks } from './DailyTasks';
 import { TodoSection } from './TodoSection';
 
@@ -35,6 +36,9 @@ export function TasksSection() {
   const [activeList, setActiveList] = useState<TodoList>('todo');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  // One toggle for the whole card: daily tasks and to-dos sit under one border,
+  // so two independent 🗑 buttons would read as one control that half-works.
+  const [showDelete, setShowDelete] = useState(false);
   const { level, setLevel } = useShortcuts();
 
   const { data: tasks = [], isLoading: tasksLoading } = useQuery({
@@ -187,24 +191,27 @@ export function TasksSection() {
     setActiveList(list);
   };
 
-  // Two Lifestyle cards: side by side on the desktop, stacked daily-then-to-dos
-  // on the Pocket 2 and the phone.
-  const card =
-    'p-4 rounded-lg bg-[var(--color-surface)] border border-white/10 flex flex-col min-w-0';
-
+  // One card, daily tasks above the to-dos. They were two side-by-side cards,
+  // which gave a list capped at four items half the width of the tab and a
+  // header of its own — the same "what am I doing today" question either way.
   return (
-    <div className="grid gap-4 lg:grid-cols-2">
-      <section className={card}>
-        <DailyTasks
-          tasks={sortedTasks}
-          isLoading={tasksLoading}
-          selectedId={section === 'daily' ? selectedId : null}
-          itemNavActive={level >= 2 && section === 'daily'}
-          sectionFocused={level === 1 && section === 'daily'}
-        />
-      </section>
-      <section className={card}>
+    <section className={CARD}>
+      <DailyTasks
+        tasks={sortedTasks}
+        isLoading={tasksLoading}
+        selectedId={section === 'daily' ? selectedId : null}
+        itemNavActive={level >= 2 && section === 'daily'}
+        sectionFocused={level === 1 && section === 'daily'}
+        showDelete={showDelete}
+        onToggleDelete={
+          sortedTasks.length + active.length > 0
+            ? () => setShowDelete(!showDelete)
+            : null
+        }
+      />
+      <div className={CARD_DIVIDER}>
         <TodoSection
+          showDelete={showDelete}
           activeList={activeList}
           section={section}
           level={level}
@@ -225,7 +232,7 @@ export function TasksSection() {
           onCancelCreate={cancelCreate}
           onUpdateTodo={(id, data) => updateTodo.mutate({ id, data })}
         />
-      </section>
-    </div>
+      </div>
+    </section>
   );
 }

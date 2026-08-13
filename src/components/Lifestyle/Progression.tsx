@@ -8,6 +8,7 @@ import {
   type SeriesPoint,
 } from '@/lib/lifestyle';
 import { Sparkline } from './Sparkline';
+import { CARD } from './card';
 
 /** Weight vs volume is still an open question in the doc, so both are plotted
  *  behind a toggle rather than one being picked blind. A bodyweight-only
@@ -189,7 +190,7 @@ function ExerciseChart() {
 /** Body-weight and per-exercise progression, side by side. */
 export function Progression() {
   return (
-    <section className="p-4 rounded-lg bg-[var(--color-surface)] border border-white/10">
+    <section className={CARD}>
       <h2 className="text-lg font-semibold text-[var(--color-text)] mb-3">
         Progression
       </h2>

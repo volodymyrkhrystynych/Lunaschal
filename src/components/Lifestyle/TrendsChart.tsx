@@ -72,8 +72,10 @@ export function TrendsChart() {
     return ((clientX - rect.left) / rect.width) * VIEW_WIDTH;
   };
 
+  // Shares the activity card (see Lifestyle.tsx) rather than carrying its own —
+  // the heatmap says what happened, this says which way it's going.
   return (
-    <section className="p-4 rounded-lg bg-[var(--color-surface)] border border-white/10 flex flex-col min-w-0">
+    <div className="flex flex-col min-w-0">
       <div className="flex items-baseline justify-between gap-2 mb-1">
         <h2 className="text-lg font-semibold text-[var(--color-text)]">
           Momentum
@@ -192,6 +194,6 @@ export function TrendsChart() {
           </div>
         </>
       )}
-    </section>
+    </div>
   );
 }

@@ -21,6 +21,8 @@ interface TodoSectionProps {
   isLoading: boolean;
   selectedId: string | null;
   creating: boolean;
+  /** Set by the card-level toggle in the DailyTasks header, above. */
+  showDelete: boolean;
   onSelectList: (list: TodoList) => void;
   onSelectTodo: (id: string) => void;
   onStartCreate: () => void;
@@ -37,6 +39,7 @@ export function TodoSection({
   isLoading,
   selectedId,
   creating,
+  showDelete,
   onSelectList,
   onSelectTodo,
   onStartCreate,
@@ -69,6 +72,7 @@ export function TodoSection({
       todo={todo}
       selected={selectedId === todo.id}
       ringed={level >= 2 && selectedId === todo.id}
+      showDelete={showDelete}
       onSelect={() => onSelectTodo(todo.id)}
       onUpdate={data => onUpdateTodo(todo.id, data)}
       onDelete={() => deleteTodo.mutate(todo.id)}
@@ -81,7 +85,7 @@ export function TodoSection({
         <h2 className="text-lg font-semibold text-[var(--color-text)]">
           To-Do
         </h2>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           {LISTS.map(({ id, label }) => (
             <button
               key={id}

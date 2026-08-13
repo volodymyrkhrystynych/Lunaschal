@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent, screen, waitFor } from '@testing-library/react';
+import {
+  render,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ShortcutProvider } from '../../shortcuts/ShortcutProvider';
 import { api, DailyTask, TodoItem } from '../../hooks/api';
@@ -333,6 +339,65 @@ describe('Q moves between To-Do and Archive', () => {
     key('KeyD'); // item nav
     key('KeyQ');
     expect(api.todos.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('delete protection', () => {
+  // Row queries are scoped, because "is the ✕ showing" has to be asked of each
+  // list separately — the point of the toggle is that it answers for both.
+  const rowDelete = (id: string) =>
+    within(document.getElementById(`todo-row-${id}`)!).queryByTitle('Delete');
+
+  it('hides the delete buttons on both lists until the toggle is pressed', async () => {
+    // Same contract as the workout log and the journal: an ✕ on every row sat
+    // one mis-tap from destroying an item, beside its own click targets.
+    renderTasks();
+    await screen.findByText('Fix the bike');
+    expect(rowDelete('t1')).toBeNull();
+    expect(rowDelete('d1')).toBeNull();
+
+    fireEvent.click(screen.getByTitle('Show delete buttons'));
+    expect(rowDelete('t1')).not.toBeNull();
+    expect(rowDelete('d1')).not.toBeNull();
+
+    fireEvent.click(screen.getByTitle('Hide delete buttons'));
+    expect(rowDelete('t1')).toBeNull();
+    expect(rowDelete('d1')).toBeNull();
+  });
+
+  it('has one toggle for the card, not one per list', async () => {
+    renderTasks();
+    await screen.findByText('Fix the bike');
+    expect(screen.getAllByTitle('Show delete buttons')).toHaveLength(1);
+  });
+
+  it('deletes only once shown, and never on its own', async () => {
+    renderTasks();
+    await screen.findByText('Fix the bike');
+    expect(api.todos.remove).not.toHaveBeenCalled();
+    expect(api.tasks.remove).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTitle('Show delete buttons'));
+    fireEvent.click(rowDelete('t1')!);
+    await waitFor(() => expect(api.todos.remove).toHaveBeenCalledWith('t1'));
+
+    fireEvent.click(rowDelete('d1')!);
+    await waitFor(() => expect(api.tasks.remove).toHaveBeenCalledWith('d1'));
+  });
+
+  it('offers no toggle when both lists are empty', async () => {
+    vi.mocked(api.todos.list).mockResolvedValue([]);
+    vi.mocked(api.tasks.list).mockResolvedValue([]);
+    renderTasks();
+    await screen.findByText('Nothing on the list.');
+    expect(screen.queryByTitle('Show delete buttons')).toBeNull();
+  });
+
+  it('still offers the toggle when only one list has rows', async () => {
+    vi.mocked(api.todos.list).mockResolvedValue([]);
+    renderTasks();
+    await screen.findByText('Morning pages');
+    expect(screen.getByTitle('Show delete buttons')).not.toBeNull();
   });
 });
 

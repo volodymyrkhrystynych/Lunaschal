@@ -8,6 +8,12 @@ interface DailyTasksProps {
   selectedId: string | null;
   itemNavActive: boolean;
   sectionFocused: boolean;
+  /** Owned by TasksSection and shared with the to-do list below — one toggle
+   *  for the whole card, not one per list. */
+  showDelete: boolean;
+  /** Null when there is nothing on either list to delete, which is when the
+   *  toggle would be a button that does nothing. */
+  onToggleDelete: (() => void) | null;
 }
 
 export function DailyTasks({
@@ -16,6 +22,8 @@ export function DailyTasks({
   selectedId,
   itemNavActive,
   sectionFocused,
+  showDelete,
+  onToggleDelete,
 }: DailyTasksProps) {
   const [newTitle, setNewTitle] = useState('');
   const [showAdd, setShowAdd] = useState(false);
@@ -102,14 +110,33 @@ export function DailyTasks({
         >
           Daily Tasks
         </h2>
-        {tasks.length < 4 && !showAdd && (
-          <button
-            onClick={() => setShowAdd(true)}
-            className="text-sm px-3 py-1.5 rounded border border-white/20 text-[var(--color-text)] hover:bg-white/10 transition-colors"
-          >
-            + Add task
-          </button>
-        )}
+        {/* This row is the card's top-right corner, so the delete toggle lives
+            here the way the workout log's does — it governs the whole card,
+            to-dos included, not just the four rows below it. */}
+        <div className="flex items-center gap-2">
+          {tasks.length < 4 && !showAdd && (
+            <button
+              onClick={() => setShowAdd(true)}
+              className="text-sm px-3 py-1.5 rounded border border-white/20 text-[var(--color-text)] hover:bg-white/10 transition-colors"
+            >
+              + Add task
+            </button>
+          )}
+          {onToggleDelete && (
+            <button
+              type="button"
+              onClick={onToggleDelete}
+              title={showDelete ? 'Hide delete buttons' : 'Show delete buttons'}
+              className={`px-2.5 py-1 text-sm border rounded-lg transition-colors ${
+                showDelete
+                  ? 'border-red-400/50 text-red-400 bg-red-500/10'
+                  : 'border-white/20 text-[var(--color-text-muted)] hover:bg-white/10'
+              }`}
+            >
+              🗑
+            </button>
+          )}
+        </div>
       </div>
 
       {isLoading && (
@@ -192,13 +219,15 @@ export function DailyTasks({
               >
                 ↓
               </button>
-              <button
-                onClick={() => deleteTask.mutate(task.id)}
-                className="p-1 rounded text-[var(--color-text-muted)] hover:text-red-400 hover:bg-white/10 transition-colors text-xs ml-1"
-                title="Delete"
-              >
-                ✕
-              </button>
+              {showDelete && (
+                <button
+                  onClick={() => deleteTask.mutate(task.id)}
+                  className="p-1 rounded text-[var(--color-text-muted)] hover:text-red-400 hover:bg-white/10 transition-colors text-xs ml-1"
+                  title="Delete"
+                >
+                  ✕
+                </button>
+              )}
             </div>
           </div>
         ))}

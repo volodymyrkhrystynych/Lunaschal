@@ -201,13 +201,21 @@ now sits directly under Journal in the sidebar rather than down by Food.
 - The `chores` list is gone. `_merge_chores_into_todos` (`backend/db/connection.py`) folded the
   rows into `'todo'`, and `normalize_list` still accepts the old name so an offline mutation or a
   stale chat proposal replays instead of 400ing. `task_events.task_list` keeps its history.
-- **DOM order is the phone's stacking order**, so the order below changed: heatmap first (did I do
-  anything today), tasks second, everything else after. The workout log's history is capped at 4
-  sessions in a scroll box — beside the day's tasks, a fortnight of sessions pushed the page down.
+- **DOM order is the phone's stacking order**, so the order below changed. It now runs by how
+  often a thing is touched rather than by topic: **activity + momentum, tasks, workout log,
+  calories | selfie, weight progression**. The workout log's history is capped at 4 sessions in a
+  scroll box — beside the day's tasks, a fortnight of sessions pushed the page down.
+- **Cards merged where two headers asked one question**: the heatmap and the momentum chart share
+  a card, and so do daily tasks and the to-do list (daily above, capped at four, so it no longer
+  claims half the tab for four rows). The shell lives once in `src/components/Lifestyle/card.ts`;
+  the halves render no border of their own.
 - A **weekly trends chart** took the chores card's slot: applications sent against journal
   entries, `GET /api/lifestyle/trends`. One shared y-axis (both are counts per week; a second
   scale can be made to show any relationship you like), zero weeks included, hues reused from the
   validated activity palette.
+- The tasks card got the workout log's **delete toggle** — 🗑 in the header reveals the per-row ✕,
+  rather than every row carrying a live delete beside its own click targets. One toggle covers
+  both lists in the card: two would read as one control that only half-works.
 
 ## Rough UI layout
 

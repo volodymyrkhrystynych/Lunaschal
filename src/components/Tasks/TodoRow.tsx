@@ -11,6 +11,10 @@ interface TodoRowProps {
   todo: TodoItem;
   selected: boolean;
   ringed: boolean;
+  /** Delete is behind a toggle in the section header, the way the workout log
+   *  and the journal hide theirs — an ✕ on every row, one tap from destroying
+   *  an item, sat directly beside the row's own click targets. */
+  showDelete: boolean;
   onSelect: () => void;
   onUpdate: (data: TodoPayload) => void;
   onDelete: () => void;
@@ -20,6 +24,7 @@ export function TodoRow({
   todo,
   selected,
   ringed,
+  showDelete,
   onSelect,
   onUpdate,
   onDelete,
@@ -136,16 +141,18 @@ export function TodoRow({
             {formatCompletedAt(todo.completedAt)}
           </span>
         )}
-        <button
-          onClick={e => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="p-1 rounded text-[var(--color-text-muted)] hover:text-red-400 hover:bg-white/10 transition-colors text-xs"
-          title="Delete"
-        >
-          ✕
-        </button>
+        {showDelete && (
+          <button
+            onClick={e => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            className="p-1 rounded text-[var(--color-text-muted)] hover:text-red-400 hover:bg-white/10 transition-colors text-xs"
+            title="Delete"
+          >
+            ✕
+          </button>
+        )}
       </div>
     </div>
   );

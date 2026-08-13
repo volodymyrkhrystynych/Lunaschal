@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import { parseCalorieEntry } from '@/lib/lifestyle';
+import { CARD } from './card';
 
 /**
  * A light manual calorie log — a description, a number, and today's running
@@ -55,7 +56,7 @@ export function CaloriesCard() {
   const entries = day?.entries ?? [];
 
   return (
-    <section className="p-4 rounded-lg bg-[var(--color-surface)] border border-white/10 flex flex-col min-w-0">
+    <section className={CARD}>
       <div className="flex items-baseline justify-between gap-2 mb-3">
         <h2 className="text-lg font-semibold text-[var(--color-text)]">
           Calories
