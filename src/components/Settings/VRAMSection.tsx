@@ -36,10 +36,12 @@ export function VRAMSection() {
   const [saved, setSaved] = useState(false);
   const [hfToken, setHfToken] = useState('');
   const [llmMaxTokensInput, setLlmMaxTokensInput] = useState('4096');
+  const [chatTimeoutInput, setChatTimeoutInput] = useState('900');
 
   useEffect(() => {
     if (settings) {
       setLlmMaxTokensInput(String(settings.llmMaxTokens ?? 4096));
+      setChatTimeoutInput(String(settings.chatTimeoutSeconds ?? 900));
     }
   }, [settings]);
 
@@ -60,6 +62,17 @@ export function VRAMSection() {
     setLlmMaxTokensInput(String(tokens));
     if (tokens !== (settings?.llmMaxTokens ?? 4096)) {
       updateAI.mutate({ llmMaxTokens: tokens });
+    }
+  };
+
+  const commitChatTimeout = () => {
+    const seconds = Math.min(
+      7200,
+      Math.max(30, parseInt(chatTimeoutInput, 10) || 900)
+    );
+    setChatTimeoutInput(String(seconds));
+    if (seconds !== (settings?.chatTimeoutSeconds ?? 900)) {
+      updateAI.mutate({ chatTimeoutSeconds: seconds });
     }
   };
 
@@ -373,6 +386,46 @@ export function VRAMSection() {
           />
           <p className="text-xs text-[var(--color-text-muted)] mt-1">
             Ceiling on each reply's length. Also caps runaway repetition loops.
+          </p>
+        </div>
+        <div>
+          <p className="text-sm font-medium text-[var(--color-text)] mb-2">
+            Reply time limit
+          </p>
+          <label className="flex items-center gap-3 cursor-pointer mb-2">
+            <div
+              onClick={() =>
+                updateAI.mutate({
+                  chatTimeoutEnabled: !(settings?.chatTimeoutEnabled ?? true),
+                })
+              }
+              className={`relative w-9 h-5 rounded-full transition-colors ${settings?.chatTimeoutEnabled ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
+            >
+              <span
+                className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${settings?.chatTimeoutEnabled ? 'translate-x-4' : 'translate-x-0'}`}
+              />
+            </div>
+            <span className="text-sm text-[var(--color-text)]">
+              Give up on a reply that runs too long
+            </span>
+          </label>
+          {settings?.chatTimeoutEnabled && (
+            <input
+              type="number"
+              min={30}
+              max={7200}
+              step={30}
+              value={chatTimeoutInput}
+              onChange={e => setChatTimeoutInput(e.target.value)}
+              onBlur={commitChatTimeout}
+              className="w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+            />
+          )}
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+            Seconds (30–7200) for a whole reply, research included. Whatever
+            streamed is kept and labelled — it is a real partial answer, not a
+            failure. This is also the outer bound the research limits in the
+            Ideas section are clamped to, so neither can outlive it.
           </p>
         </div>
         <div>

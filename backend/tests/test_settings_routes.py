@@ -290,3 +290,44 @@ def test_set_sleep_inhibitor_disable_sweeps_orphans_and_clears_handle(monkeypatc
 
     assert swept == [1]
     assert settings._sleep_inhibitor is None
+
+
+def test_get_settings_timeout_defaults(client):
+    """Defaults are on: the columns exist because unbounded was the bug, so a
+    settings row that never chose is not one that chose "off"."""
+    data = client.get('/api/settings').get_json()
+    assert data['chatTimeoutEnabled'] is True
+    assert data['chatTimeoutSeconds'] == 900
+    assert data['researchTimeoutEnabled'] is True
+    assert data['researchSearchTimeoutSeconds'] == 120
+    assert data['researchDeepTimeoutSeconds'] == 600
+
+
+def test_patch_settings_updates_the_timeouts(client):
+    resp = client.patch('/api/settings/ai', json={
+        'chatTimeoutEnabled': False, 'chatTimeoutSeconds': 60,
+        'researchTimeoutEnabled': False, 'researchSearchTimeoutSeconds': 45,
+        'researchDeepTimeoutSeconds': 1800,
+    })
+    assert resp.status_code == 200
+
+    data = client.get('/api/settings').get_json()
+    assert data['chatTimeoutEnabled'] is False
+    assert data['chatTimeoutSeconds'] == 60
+    assert data['researchTimeoutEnabled'] is False
+    assert data['researchSearchTimeoutSeconds'] == 45
+    assert data['researchDeepTimeoutSeconds'] == 1800
+
+
+def test_timeout_seconds_are_clamped(client):
+    """A fat-fingered 1 would time every reply out before the model has read
+    the prompt, which reads as the feature being broken rather than as a
+    setting."""
+    client.patch('/api/settings/ai', json={'chatTimeoutSeconds': 1})
+    assert client.get('/api/settings').get_json()['chatTimeoutSeconds'] == 30
+
+    client.patch('/api/settings/ai', json={'researchDeepTimeoutSeconds': 99999})
+    assert client.get('/api/settings').get_json()['researchDeepTimeoutSeconds'] == 7200
+
+    client.patch('/api/settings/ai', json={'researchSearchTimeoutSeconds': 'nope'})
+    assert client.get('/api/settings').get_json()['researchSearchTimeoutSeconds'] == 120

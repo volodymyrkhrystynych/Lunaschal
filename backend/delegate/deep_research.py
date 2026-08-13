@@ -20,9 +20,17 @@ the delegate's own checkpoint into this tool's dispatch entry for each run
 (via functools.partial), which is what lets the nested pass cooperate with the
 same "yield to the user" gate as everything else in the loop, without
 research/agent.py's `_loop` needing to know this tool is any different from
-the rest of the toolbox.
+the rest of the toolbox. `deadline` arrives the same way and for the same
+reason: the outer bound this pass must not outlive.
+
+**Running out of time produces an answer, not an error.** The synthesis turn
+already exists — turning a gathered transcript into prose is what this module
+does — so a pass that was cut short runs the same turn with a different
+instruction, and a partial answer that says which parts are unconfirmed beats
+half an hour of waiting followed by nothing.
 """
 from backend.ai.llm import chat_messages
+from backend.delegate import limits
 from backend.research import agent, web
 
 # An order of magnitude past the delegate's own budget (MAX_TOOL_TURNS=6,
@@ -55,6 +63,16 @@ ANSWER_INSTRUCTION = (
     'process.'
 )
 
+SALVAGE_INSTRUCTION = (
+    'The research ran out of time before it could finish, so what is above is '
+    'all there is. Write up the best answer it supports anyway: state '
+    'everything that was actually established — the facts, numbers, names and '
+    'dates, and which source each came from — and then say plainly which parts '
+    'of the question are still unanswered, rather than guessing at them or '
+    'leaving them out silently. A partial answer that is clear about its own '
+    'gaps is what is wanted here; do not describe the search itself.'
+)
+
 TOOLS = [
     {
         'type': 'function',
@@ -85,12 +103,15 @@ TOOLS = [
 ]
 
 
-def run_tool(name: str, args: dict, checkpoint=None) -> tuple[str, dict]:
+def run_tool(name: str, args: dict, checkpoint=None, deadline: float | None = None) -> tuple[str, dict]:
     """Run a nested deep-research pass. Returns (text for the model, event for the UI).
 
     Never raises: a failed or empty pass is information the delegate's own
     model can act on, matching the contract every other tool in the toolbox
     follows.
+
+    `deadline` is the *outer* budget (the chat reply's), not this pass's own —
+    `_own_deadline` clamps the two together.
     """
     query = (args.get('query') or '').strip() if isinstance(args, dict) else ''
     if not query:
@@ -103,22 +124,34 @@ def run_tool(name: str, args: dict, checkpoint=None) -> tuple[str, dict]:
         GATHER_SYSTEM_PROMPT, query,
         tools=web.TOOLS, dispatch={'web_search': web, 'web_fetch': web},
         checkpoint=checkpoint, max_turns=MAX_DEEP_TURNS, max_fetches=MAX_DEEP_FETCHES,
+        deadline=limits.deep_deadline(deadline),
     )
     sources = result.get('sources') or []
+    timed_out = bool(result.get('timed_out'))
 
+    # The synthesis turn runs either way; only the instruction differs. It is
+    # deliberately allowed to overrun the deadline — the budget bounds how long
+    # this pass *searches*, and stopping before it says what it found would
+    # throw away the very thing the budget was protecting.
     messages = result.get('messages') or []
-    report = (chat_messages(messages + [{'role': 'user', 'content': ANSWER_INSTRUCTION}])
+    instruction = SALVAGE_INSTRUCTION if timed_out else ANSWER_INSTRUCTION
+    report = (chat_messages(messages + [{'role': 'user', 'content': instruction}])
               or '').strip()
 
     if not report:
         return (
             'Deep research ran but produced no answer.',
             {'tool': 'deep_research', 'arg': query, 'ok': False,
-             'error': 'no answer was produced', 'sources': sources},
+             'error': 'no answer was produced', 'sources': sources,
+             'timedOut': timed_out},
         )
 
+    # `ok` stays True on the salvage path: a cut-short pass that still answered
+    # is a result, and marking it failed would have the delegate's own model
+    # discard an answer it was just handed.
     return (
         report,
         {'tool': 'deep_research', 'arg': query, 'ok': True,
-         'count': len(sources), 'turns': result.get('turns', 0), 'sources': sources},
+         'count': len(sources), 'turns': result.get('turns', 0), 'sources': sources,
+         'timedOut': timed_out},
     )

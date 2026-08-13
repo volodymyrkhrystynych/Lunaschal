@@ -171,8 +171,53 @@ describe('stepLabel', () => {
   });
 });
 
+describe('stepLabel for deep research', () => {
+  it('names the query and its source count on a completed pass', () => {
+    expect(
+      stepLabel({ tool: 'deep_research', arg: 'fsrs', ok: true, count: 6 })
+    ).toBe('Deep-researched "fsrs" — 6 sources');
+  });
+
+  it('singularizes a lone source', () => {
+    expect(
+      stepLabel({ tool: 'deep_research', arg: 'fsrs', ok: true, count: 1 })
+    ).toBe('Deep-researched "fsrs" — 1 source');
+  });
+
+  it('says a timed-out pass still answered, because it did', () => {
+    // `ok` stays true on the salvage path — the pass stopped searching and
+    // wrote up what it had, so this must not read as "no answer came back".
+    expect(
+      stepLabel({
+        tool: 'deep_research',
+        arg: 'fsrs',
+        ok: true,
+        count: 4,
+        timedOut: true,
+      })
+    ).toBe('Deep research timed out — answered from 4 sources so far');
+  });
+
+  it('still reports a genuine failure as a failure', () => {
+    expect(
+      stepLabel({
+        tool: 'deep_research',
+        arg: 'fsrs',
+        ok: false,
+        error: 'no answer was produced',
+      })
+    ).toBe('Deep research failed: no answer was produced');
+  });
+});
+
 describe('parseAgentMeta', () => {
-  const empty = { steps: [], sources: [], thinking: '', truncated: false };
+  const empty = {
+    steps: [],
+    sources: [],
+    thinking: '',
+    truncated: false,
+    timedOut: false,
+  };
 
   it('returns empty arrays for null/undefined metadata', () => {
     expect(parseAgentMeta(null)).toEqual(empty);
@@ -198,6 +243,7 @@ describe('parseAgentMeta', () => {
       sources: [{ url: 'https://ex.com', title: 'Example' }],
       thinking: '',
       truncated: false,
+      timedOut: false,
     });
   });
 

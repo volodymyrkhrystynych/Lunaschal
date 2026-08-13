@@ -453,3 +453,65 @@ def test_all_day_survives_a_this_and_future_split(client):
     assert resp.status_code == 200, resp.get_json()
     new_id = resp.get_json()['id']
     assert client.get(f'/api/calendar/{new_id}').get_json()['allDay'] == 1
+
+
+# --- Free-text tags -------------------------------------------------------
+#
+# The column and the _SPLIT_COLUMNS carry both predate any way for the user to
+# write one, so none of this had coverage: the write path used a raw json.dumps
+# and every other feature's tags went through backend/tags.py.
+
+
+def test_tags_are_normalized_on_create(client):
+    """"Work", "work " and "work" are one tag everywhere else in the app, and a
+    calendar event is not a good place for them to be three."""
+    id = create_ok(client, tags=['Work', 'work ', 'Deadline', 'work'])
+    assert json.loads(client.get(f'/api/calendar/{id}').get_json()['tags']) == [
+        'work', 'deadline',
+    ]
+
+
+def test_tags_are_normalized_on_update(client):
+    id = create_ok(client, tags=['work'])
+    resp = client.patch(f'/api/calendar/{id}', data=json.dumps({'tags': ['  Family ']}),
+                        content_type='application/json')
+    assert resp.status_code == 200
+    assert json.loads(client.get(f'/api/calendar/{id}').get_json()['tags']) == ['family']
+
+
+def test_clearing_the_tags_stores_null_not_an_empty_array(client):
+    """'[]' reads as "has tags" to anything checking the column for NULL, and
+    the tag-count endpoint would carry the row for nothing."""
+    id = create_ok(client, tags=['work'])
+    client.patch(f'/api/calendar/{id}', data=json.dumps({'tags': []}),
+                 content_type='application/json')
+    assert client.get(f'/api/calendar/{id}').get_json()['tags'] is None
+
+
+def test_a_non_list_tags_payload_is_dropped_rather_than_stored(client):
+    """It used to be serialized verbatim and then degrade to "no tags" on read,
+    which looks identical to the tags never having been sent."""
+    id = create_ok(client, tags='work')
+    assert client.get(f'/api/calendar/{id}').get_json()['tags'] is None
+
+
+def test_the_tags_endpoint_counts_across_every_event(client):
+    create_ok(client, date='2026-07-01', tags=['work', 'urgent'])
+    create_ok(client, date='2026-09-15', tags=['work'])
+    create_ok(client, date='2026-11-02')
+
+    tags = client.get('/api/calendar/tags').get_json()
+    # Count descending, then name — the shape the cookbook pill row reads.
+    assert tags == [{'name': 'work', 'count': 2}, {'name': 'urgent', 'count': 1}]
+
+
+def test_tags_survive_a_this_and_future_split(client):
+    """`tags` is in _SPLIT_COLUMNS; without that the new series comes back
+    untagged and silently drops out of its own filter."""
+    id = create_ok(client, date='2026-01-01', tags=['work'], repeatFreq='yearly')
+    resp = client.patch(f'/api/calendar/{id}/from/2028-01-01',
+                        data=json.dumps({'title': 'Renamed'}),
+                        content_type='application/json')
+    assert resp.status_code == 200, resp.get_json()
+    new_id = resp.get_json()['id']
+    assert json.loads(client.get(f'/api/calendar/{new_id}').get_json()['tags']) == ['work']

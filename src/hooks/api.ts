@@ -472,6 +472,10 @@ export interface Message {
   rawContent?: string | null;
   attachments?: ChatAttachment[];
   createdAt: string;
+  // When generation stopped, for an assistant message. Null on user messages
+  // and on rows written before the column existed — the bubble falls back to
+  // createdAt, which is what it always showed.
+  finishedAt?: string | null;
 }
 
 export interface ConversationWithMessages extends Conversation {
@@ -628,6 +632,14 @@ export interface AppSettings {
   researchSearchProvider: string;
   hasResearchSearchKey: boolean;
   researchSearxngUrl: string;
+  // Wall-clock budgets, in seconds. The chat one bounds a whole reply; the
+  // two research ones bound gathering, after which the run writes up what it
+  // already has rather than failing (backend/delegate/limits.py).
+  chatTimeoutEnabled: boolean;
+  chatTimeoutSeconds: number;
+  researchTimeoutEnabled: boolean;
+  researchSearchTimeoutSeconds: number;
+  researchDeepTimeoutSeconds: number;
   hasGoogleOauthClient: boolean;
   emailSyncEnabled: boolean;
   emailSyncIntervalMinutes: number;
@@ -1834,6 +1846,9 @@ export const api = {
       get<CalendarEvent[]>(`/api/calendar/date/${date}`),
     listByWeek: (date: string) =>
       get<CalendarEvent[]>(`/api/calendar/week/${date}`),
+    // The whole table's tag vocabulary, not just the month on screen — same
+    // {name, count} shape as the cookbook and food-log pill rows.
+    tags: () => get<RecipeTag[]>('/api/calendar/tags'),
     get: (id: string) => get<CalendarEvent>(`/api/calendar/${id}`),
     findRelatedJournals: (date: string) =>
       get<JournalEntry[]>(`/api/calendar/related-journals/${date}`),

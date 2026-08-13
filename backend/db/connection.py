@@ -15,6 +15,7 @@ TIMESTAMP_COLS = frozenset({
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
     'researched_at', 'last_practiced_at', 'last_recall_at',
     'received_at', 'classified_at', 'last_synced_at', 'token_expires_at',
+    'finished_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -99,6 +100,8 @@ def init_db() -> None:
     _ensure_nudge_settings(db)
     _ensure_briefing_settings(db)
     _ensure_research_settings(db)
+    _ensure_timeout_settings(db)
+    _ensure_message_finished_at(db)
     # After both column sets exist: it reads one and writes the other.
     _migrate_websearch_search_to_research(db)
     _ensure_idea_assessment_columns(db)
@@ -725,6 +728,48 @@ def _ensure_research_settings(db: sqlite3.Connection) -> None:
         # Off by default: the research loop makes outbound web requests, which
         # is not something to start doing without being asked.
         db.execute('ALTER TABLE settings ADD COLUMN research_enabled INTEGER DEFAULT 0')
+    db.commit()
+
+
+def _ensure_timeout_settings(db: sqlite3.Connection) -> None:
+    """Wall-clock budgets for a reply and for the research tools.
+
+    Everything bounding these paths before now was a *count* -- turns, fetches,
+    tokens -- so a run that took an hour was inside every limit it had. These
+    are the deadlines, and each has its own number because the three are not
+    the same kind of wait: a delegate web_search sits between Enter and the
+    first token, a deep pass is expected to take a while, and the chat budget
+    is the outer bound both of them are clamped to.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'chat_timeout_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN chat_timeout_enabled INTEGER DEFAULT 1')
+    if 'chat_timeout_seconds' not in cols:
+        # 15 minutes. Long enough that a slow but working reply is never cut
+        # off, short enough that a wedged one does not hang the tab all day.
+        db.execute('ALTER TABLE settings ADD COLUMN chat_timeout_seconds INTEGER DEFAULT 900')
+    if 'research_timeout_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN research_timeout_enabled INTEGER DEFAULT 1')
+    if 'research_search_timeout_seconds' not in cols:
+        db.execute(
+            'ALTER TABLE settings ADD COLUMN research_search_timeout_seconds INTEGER DEFAULT 120')
+    if 'research_deep_timeout_seconds' not in cols:
+        db.execute(
+            'ALTER TABLE settings ADD COLUMN research_deep_timeout_seconds INTEGER DEFAULT 600')
+    db.commit()
+
+
+def _ensure_message_finished_at(db: sqlite3.Connection) -> None:
+    """When a reply stopped generating, as opposed to when it was asked for.
+
+    Deliberately a new column rather than moving `created_at`: the ULID/
+    timestamp pair in backend/routes/chat.py's `_previous_user_message` and the
+    transcript queries' ORDER BY both depend on created_at meaning "when the
+    row was made".
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(messages)')}
+    if 'finished_at' not in cols:
+        db.execute('ALTER TABLE messages ADD COLUMN finished_at INTEGER')
     db.commit()
 
 

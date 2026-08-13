@@ -849,3 +849,62 @@ describe('note to self', () => {
     expect(screen.getByText('Save these lessons to Learning?')).toBeTruthy();
   });
 });
+
+// `created_at` is stamped when the run *starts*, which on a local model is
+// minutes before there is a reply — so a question and its answer both read
+// 7:56 PM and neither label said anything.
+describe('message times', () => {
+  const exchange = (finishedAt: string | null) => ({
+    id: 'c1',
+    messages: [
+      {
+        id: 'm-user',
+        role: 'user',
+        content: 'how long is a marathon',
+        metadata: null,
+        status: 'done',
+        createdAt: '2026-01-01T19:56:00.000Z',
+        finishedAt: null,
+      },
+      {
+        id: 'm-assistant',
+        role: 'assistant',
+        content: '42.195 km.',
+        metadata: null,
+        status: 'done',
+        createdAt: '2026-01-01T19:56:01.000Z',
+        finishedAt,
+      },
+    ],
+  });
+
+  it('times a reply by when it finished, not when it was asked for', async () => {
+    vi.mocked(api.chat.today).mockResolvedValue(
+      exchange('2026-01-01T19:58:30.000Z')
+    );
+    const { container } = renderChat();
+
+    await screen.findByText('42.195 km.');
+    const times = [...container.querySelectorAll('time')].map(t =>
+      t.getAttribute('dateTime')
+    );
+    expect(times).toEqual([
+      '2026-01-01T19:56:00.000Z',
+      '2026-01-01T19:58:30.000Z',
+    ]);
+  });
+
+  it('falls back to the send time on rows written before the column existed', async () => {
+    vi.mocked(api.chat.today).mockResolvedValue(exchange(null));
+    const { container } = renderChat();
+
+    await screen.findByText('42.195 km.');
+    const times = [...container.querySelectorAll('time')].map(t =>
+      t.getAttribute('dateTime')
+    );
+    expect(times).toEqual([
+      '2026-01-01T19:56:00.000Z',
+      '2026-01-01T19:56:01.000Z',
+    ]);
+  });
+});

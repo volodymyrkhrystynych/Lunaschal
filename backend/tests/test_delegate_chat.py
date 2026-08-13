@@ -69,7 +69,7 @@ def test_an_ordinary_message_runs_no_tools_at_all(monkeypatch, answered):
 
     assert [k for k, _ in events] == ['content', 'done']
     assert events[-1][1] == {'steps': [], 'sources': [], 'proposals': [],
-                             'truncated': False}
+                             'truncated': False, 'timedOut': False}
 
 
 def test_a_proposal_tool_runs_on_this_turn_and_stages_a_card(monkeypatch, answered):
@@ -393,6 +393,10 @@ def test_a_conversation_id_persists_the_reply_via_a_background_run(client, monke
     assert row['conversationId'] == conv_id
     metadata = json.loads(row['metadata'])
     assert metadata['steps'] == [{'tool': 'web_search', 'ok': True}]
+    # Stamped when generation stopped, not when the row was made. Without it a
+    # question and its answer both carry the moment the request started.
+    assert row['finishedAt'] is not None
+    assert row['finishedAt'] >= row['createdAt']
 
 
 def test_a_conversation_id_run_that_fails_leaves_an_error_row(client, monkeypatch):
@@ -417,6 +421,9 @@ def test_a_conversation_id_run_that_fails_leaves_an_error_row(client, monkeypatc
     assert row['status'] == 'error'
     assert row['error'] == 'llama-server died'
     assert row['content'] == 'partial'
+    # A run that died still stopped at a knowable moment, and the partial text
+    # it left is worth timestamping.
+    assert row['finishedAt'] is not None
 
 
 def test_no_conversation_id_keeps_the_inline_legacy_path(client, monkeypatch):
@@ -482,3 +489,64 @@ def test_an_attached_photos_reading_reaches_the_answering_prompt(client, monkeyp
     assert 'A plate of vareniki.' in user_turn['content']
     # Still stamped, so the two features compose rather than one clobbering the other.
     assert user_turn['content'].startswith('[')
+
+
+# --- The chat deadline ----------------------------------------------------
+#
+# Established here rather than by the caller, so every caller gets it: the
+# voice listener waiting on a spoken reply has more reason to want one than the
+# Chat tab does, not less.
+
+
+def test_a_reply_that_runs_past_its_budget_keeps_what_streamed(client, monkeypatch):
+    """No salvage rewrite, unlike the research tools: this text is already the
+    answer and the user has been reading it arrive. Regenerating it would
+    replace what they have with something they must re-read."""
+    _no_tools(monkeypatch)
+
+    def endless(messages):
+        yield ('content', 'The first part is fine. ')
+        yield ('content', 'and this arrived after the buzzer')
+        yield ('content', 'this never should')
+
+    monkeypatch.setattr(delegate_chat, 'chat_stream_events', endless)
+    monkeypatch.setattr(delegate_chat.limits, 'chat_deadline', lambda: 100)
+    clock = iter([50, 999, 999, 999])
+    monkeypatch.setattr(delegate_chat.time, 'monotonic', lambda: next(clock))
+
+    events = list(delegate_chat.stream_reply([{'role': 'user', 'content': 'hi'}]))
+
+    text = ''.join(p for k, p in events if k == 'content')
+    assert text == 'The first part is fine. and this arrived after the buzzer'
+    assert 'never should' not in text
+    assert events[-1][1]['timedOut'] is True
+
+
+def test_the_delegate_is_handed_the_replys_deadline(client, monkeypatch):
+    """The outer bound its own budget and its nested deep pass are both clamped
+    to — without it the chat timeout is decorative."""
+    seen = {}
+    _decides(monkeypatch, [_call('delegate', {'task': 'look it up'})])
+
+    def fake_run_events(task, **kwargs):
+        seen['deadline'] = kwargs.get('deadline')
+        yield ('result', {'steps': [], 'sources': [], 'summary': 'found it'})
+
+    monkeypatch.setattr(delegate_chat.agent, 'run_events', fake_run_events)
+    monkeypatch.setattr(delegate_chat, 'chat_stream_events',
+                        lambda messages: iter([('content', 'ok')]))
+    monkeypatch.setattr(delegate_chat.limits, 'chat_deadline', lambda: 12345.0)
+
+    list(delegate_chat.stream_reply([{'role': 'user', 'content': 'hi'}]))
+    assert seen['deadline'] == 12345.0
+
+
+def test_with_the_timeout_off_nothing_is_cut_short(client, monkeypatch):
+    _no_tools(monkeypatch)
+    monkeypatch.setattr(delegate_chat, 'chat_stream_events',
+                        lambda messages: iter([('content', 'a'), ('content', 'b')]))
+    monkeypatch.setattr(delegate_chat.limits, 'chat_deadline', lambda: None)
+
+    events = list(delegate_chat.stream_reply([{'role': 'user', 'content': 'hi'}]))
+    assert ''.join(p for k, p in events if k == 'content') == 'ab'
+    assert events[-1][1]['timedOut'] is False

@@ -12,6 +12,10 @@ export interface AgentStep {
   count?: number;
   title?: string;
   error?: string;
+  // The step ran out of wall-clock time (Settings → Research). On a
+  // deep_research step this rides alongside `ok: true` — a pass that was cut
+  // short still writes up what it found, and that answer is a result.
+  timedOut?: boolean;
   // Present only on the delegate's propose_* steps: what got staged for the
   // user to confirm. The card itself renders from `metadata.proposals`
   // (parseDelegateProposals below); this is what makes the step list mention
@@ -36,8 +40,15 @@ export function parseAgentMeta(metadata: string | null | undefined): {
   sources: AgentSource[];
   thinking: string;
   truncated: boolean;
+  timedOut: boolean;
 } {
-  const empty = { steps: [], sources: [], thinking: '', truncated: false };
+  const empty = {
+    steps: [],
+    sources: [],
+    thinking: '',
+    truncated: false,
+    timedOut: false,
+  };
   if (!metadata) return empty;
   try {
     const parsed = JSON.parse(metadata);
@@ -48,6 +59,9 @@ export function parseAgentMeta(metadata: string | null | undefined): {
       // The reply stopped at the output ceiling — which is how a turn ends up
       // with reasoning and no answer at all.
       truncated: parsed?.truncated === true,
+      // A different early stop from `truncated`: the wall clock ran out, not
+      // the token budget, so whatever text is there is real but unfinished.
+      timedOut: parsed?.timedOut === true,
     };
   } catch {
     return empty;
@@ -90,10 +104,17 @@ export function stepLabel(step: AgentStep): string {
         : `Web search unavailable${step.error ? `: ${step.error}` : ''}`;
     case 'web_fetch':
       return step.ok ? `Read ${target}` : `Could not read ${target}`;
-    case 'deep_research':
-      return step.ok
-        ? `Deep-researched "${target}" — ${step.count ?? 0} source${step.count === 1 ? '' : 's'}`
-        : `Deep research failed${step.error ? `: ${step.error}` : ''}`;
+    case 'deep_research': {
+      const sources = `${step.count ?? 0} source${step.count === 1 ? '' : 's'}`;
+      if (!step.ok)
+        return `Deep research failed${step.error ? `: ${step.error}` : ''}`;
+      // Timing out is not failing: the pass stopped searching and wrote up
+      // what it had, so the label says the answer is partial rather than
+      // implying no answer came back.
+      return step.timedOut
+        ? `Deep research timed out — answered from ${sources} so far`
+        : `Deep-researched "${target}" — ${sources}`;
+    }
     // Only the Ideas agent has these; the delegate's toolbox carries no wiki
     // tools. Labelling them here rather than in a second copy is the point.
     case 'wiki_list':

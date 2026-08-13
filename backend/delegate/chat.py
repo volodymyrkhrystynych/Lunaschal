@@ -33,6 +33,7 @@ date. What stays behind `delegate` is the work whose *output* is large — a
 """
 import json
 import logging
+import time
 
 from backend.ai.chat import (
     TIME_PREFIX_NOTE, build_chat_system_prompt, format_now_context, stamp_messages,
@@ -40,9 +41,13 @@ from backend.ai.chat import (
 from backend.ai.llm import chat_stream_events, chat_tool_turn
 from backend.ai.mcp_client import serialize_tool_calls
 from backend.chat.context import expand_attachments
-from backend.delegate import agent, tools as proposal_tools
+from backend.delegate import agent, limits, tools as proposal_tools
 
 logger = logging.getLogger(__name__)
+
+
+def _out_of_time(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
 
 # Raised from 160 when the propose_* tools moved onto this turn: a delegate call
 # is one string, but a calendar event with a description and tags is several
@@ -200,7 +205,14 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     morning check-in all speak their replies aloud, where a staged card is
     invisible and the decision turn is pure added latency before the user hears
     a word.
+
+    The chat deadline is established here rather than by the caller, so every
+    caller gets it — the voice listener waiting on a spoken reply has more
+    reason to want one than the Chat tab does, not less. It is the outer bound
+    the delegate's own budget and its nested deep pass are both clamped to.
     """
+    deadline = limits.chat_deadline()
+    timed_out = False
     system = _system_prompt(messages, system_prompt)
     # Photos become text before stamping, not after: stamp_messages flattens a
     # message to `[today 21:58] <content>`, so anything that must reach the model
@@ -220,7 +232,8 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
         if call.function.name == 'delegate':
             task = (_args_of(call).get('task') or '').strip()
             result: dict = {}
-            for kind, payload in agent.run_events(task, checkpoint=checkpoint):
+            for kind, payload in agent.run_events(task, checkpoint=checkpoint,
+                                                  deadline=deadline):
                 if kind == 'step':
                     steps.append(payload)
                     yield ('step', payload)
@@ -267,6 +280,15 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
             truncated = True
             continue
         yield (kind, delta)
+        if _out_of_time(deadline):
+            # Stop consuming the stream and keep what arrived. Deliberately no
+            # salvage rewrite here, unlike the research tools: this text is
+            # already the answer, and the user has been reading it as it
+            # arrived — regenerating it from the top would replace what they
+            # have with something they have to re-read.
+            timed_out = True
+            logger.info('Reply hit the chat deadline mid-stream; keeping what streamed')
+            break
 
     yield ('done', {'steps': steps, 'sources': sources, 'proposals': proposals,
-                    'truncated': truncated})
+                    'truncated': truncated, 'timedOut': timed_out})

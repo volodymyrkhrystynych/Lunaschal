@@ -10,6 +10,8 @@ import { api } from '../../hooks/api';
 export function ResearchSection() {
   const queryClient = useQueryClient();
   const [hourInput, setHourInput] = useState('3');
+  const [searchTimeout, setSearchTimeout] = useState('120');
+  const [deepTimeout, setDeepTimeout] = useState('600');
 
   const { data: settings } = useQuery({
     queryKey: ['settings'],
@@ -21,7 +23,10 @@ export function ResearchSection() {
   });
 
   useEffect(() => {
-    if (settings) setHourInput(String(settings.repoContextHour ?? 3));
+    if (!settings) return;
+    setHourInput(String(settings.repoContextHour ?? 3));
+    setSearchTimeout(String(settings.researchSearchTimeoutSeconds ?? 120));
+    setDeepTimeout(String(settings.researchDeepTimeoutSeconds ?? 600));
   }, [settings]);
 
   const invalidateSettings = () =>
@@ -45,9 +50,28 @@ export function ResearchSection() {
       researchSearchProvider?: string;
       researchSearchKey?: string;
       researchSearxngUrl?: string;
+      researchTimeoutEnabled?: boolean;
+      researchSearchTimeoutSeconds?: number;
+      researchDeepTimeoutSeconds?: number;
     }) => api.settings.updateAI(data),
     onSuccess: invalidateSettings,
   });
+
+  // The backend clamps to 30..7200 too; doing it here as well is what keeps
+  // the box from snapping back to a number the user never typed.
+  const commitTimeout = (
+    raw: string,
+    current: number,
+    key: 'researchSearchTimeoutSeconds' | 'researchDeepTimeoutSeconds',
+    setInput: (v: string) => void
+  ) => {
+    const seconds = Number(raw);
+    if (!Number.isInteger(seconds) || seconds < 30 || seconds > 7200) {
+      setInput(String(current));
+      return;
+    }
+    if (seconds !== current) saveResearch.mutate({ [key]: seconds });
+  };
 
   const refresh = useMutation({
     mutationFn: api.ideas.refreshRepoContext,
@@ -212,6 +236,85 @@ export function ResearchSection() {
             With no search provider the agent can still judge what's already
             built, but it won't research anything new.
           </p>
+        )}
+      </div>
+
+      {/* Everything bounding a research run before this was a count — turns,
+          fetches, tokens — so a run that took an hour was inside every limit
+          it had. */}
+      <div className="border-t border-white/10 pt-3 space-y-2">
+        <div>
+          <h3 className="text-sm font-medium text-[var(--color-text)]">
+            Research time limits
+          </h3>
+          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+            When a run hits its limit it stops searching and hands what it found
+            to a second pass, which writes up the best answer that material
+            supports and says which parts it couldn't confirm. Writing that
+            answer is allowed to run past the limit — cutting it off would throw
+            away the work the limit was protecting.
+          </p>
+        </div>
+
+        <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+          <input
+            type="checkbox"
+            checked={!!settings?.researchTimeoutEnabled}
+            onChange={e =>
+              saveResearch.mutate({ researchTimeoutEnabled: e.target.checked })
+            }
+          />
+          Time-box research
+        </label>
+
+        {settings?.researchTimeoutEnabled && (
+          <>
+            <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+              Web search
+              <input
+                type="number"
+                min={30}
+                max={7200}
+                value={searchTimeout}
+                onChange={e => setSearchTimeout(e.target.value)}
+                onBlur={() =>
+                  commitTimeout(
+                    searchTimeout,
+                    settings?.researchSearchTimeoutSeconds ?? 120,
+                    'researchSearchTimeoutSeconds',
+                    setSearchTimeout
+                  )
+                }
+                className="w-20 rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+              />
+              <span className="text-xs text-[var(--color-text-muted)]">
+                seconds — you are watching this one
+              </span>
+            </label>
+
+            <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+              Deep research
+              <input
+                type="number"
+                min={30}
+                max={7200}
+                value={deepTimeout}
+                onChange={e => setDeepTimeout(e.target.value)}
+                onBlur={() =>
+                  commitTimeout(
+                    deepTimeout,
+                    settings?.researchDeepTimeoutSeconds ?? 600,
+                    'researchDeepTimeoutSeconds',
+                    setDeepTimeout
+                  )
+                }
+                className="w-20 rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+              />
+              <span className="text-xs text-[var(--color-text-muted)]">
+                seconds — never longer than the reply limit
+              </span>
+            </label>
+          </>
         )}
       </div>
 
