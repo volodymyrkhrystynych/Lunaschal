@@ -10,6 +10,7 @@ vi.mock('../../hooks/api', () => ({
     calendar: {
       listByRange: vi.fn(),
       listByWeek: vi.fn(),
+      tags: vi.fn(),
       get: vi.fn(),
       findRelatedJournals: vi.fn(),
       create: vi.fn(),
@@ -63,6 +64,7 @@ beforeEach(() => {
   }));
   vi.mocked(api.calendar.listByRange).mockResolvedValue([]);
   vi.mocked(api.calendar.listByWeek).mockResolvedValue([]);
+  vi.mocked(api.calendar.tags).mockResolvedValue([]);
   vi.mocked(api.calendar.findRelatedJournals).mockResolvedValue([]);
   vi.mocked(api.calendar.create).mockResolvedValue({ id: 'new' });
   vi.mocked(api.calendar.skipOccurrence).mockResolvedValue({ success: true });
@@ -417,5 +419,67 @@ describe('creating a recurring event', () => {
         repeatByweekday: null,
       })
     );
+  });
+});
+
+// The `tags` column, `_SPLIT_COLUMNS` and the API type all shipped long before
+// anything could write one — the pills rendered on an event nobody could tag.
+describe('event tags', () => {
+  it('sends the typed tags as a normalized array when creating an event', async () => {
+    const { container } = renderCalendar();
+    const cells = await waitFor(() => {
+      const found = container.querySelectorAll('[data-testid="month-cell"]');
+      expect(found).toHaveLength(42);
+      return found;
+    });
+    fireEvent.click(cells[3]); // 2026-02-04
+    fireEvent.click(screen.getByText('+ Add'));
+    fireEvent.change(screen.getByPlaceholderText('Event title'), {
+      target: { value: 'Standup' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Tags (comma-separated)'), {
+      target: { value: 'work, , meetings ' },
+    });
+    fireEvent.click(screen.getByText('Save'));
+
+    await waitFor(() => expect(api.calendar.create).toHaveBeenCalled());
+    const [payload] = vi.mocked(api.calendar.create).mock.calls[0];
+    // Blanks dropped and whitespace trimmed here; lowercasing and deduping are
+    // the backend's, which re-normalizes every payload.
+    expect(payload.tags).toEqual(['work', 'meetings']);
+  });
+
+  it('filters the visible events down to a clicked tag', async () => {
+    vi.mocked(api.calendar.tags).mockResolvedValue([
+      { name: 'work', count: 1 },
+      { name: 'personal', count: 1 },
+    ]);
+    vi.mocked(api.calendar.listByRange).mockResolvedValue([
+      event({ id: 'e1', title: 'Standup', tags: '["work"]' }),
+      event({ id: 'e2', title: 'Dentist', tags: '["personal"]' }),
+    ]);
+
+    renderCalendar();
+    expect(await screen.findByText('work 1')).toBeTruthy();
+    // Both events are drawn in the grid before any filter is applied.
+    expect(screen.getAllByText(/Standup/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Dentist/).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByText('work 1'));
+
+    await waitFor(() => expect(screen.queryByText(/Dentist/)).toBeNull());
+    expect(screen.getAllByText(/Standup/).length).toBeGreaterThan(0);
+
+    // Clicking the same pill again is the way back out.
+    fireEvent.click(screen.getByText('work 1'));
+    await waitFor(() =>
+      expect(screen.getAllByText(/Dentist/).length).toBeGreaterThan(0)
+    );
+  });
+
+  it('draws no pill row at all when nothing is tagged', async () => {
+    renderCalendar();
+    await screen.findByTestId('month-grid');
+    expect(document.querySelector('.tag-row')).toBeNull();
   });
 });

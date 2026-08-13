@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { useSvgScaleX } from '@/hooks/useSvgScaleX';
 import {
   nearestPoint,
   plotSeries,
@@ -21,8 +22,9 @@ const VIEW_WIDTH = 320;
 /**
  * A single-series line chart, hand-rolled in SVG rather than pulling in a
  * charting library for two sparklines. Draws in a fixed viewBox and scales to
- * its container, so it reflows on the Pocket 2's narrow screen without a
- * resize observer.
+ * its container, so the *layout* reflows on the Pocket 2's narrow screen with
+ * no measurement at all; only the round markers need the observed width, and
+ * they degrade to their 320px geometry until they have it.
  *
  * Ships the hover layer by default: a crosshair plus a tooltip on the nearest
  * point, since a static line with no way to read a value is only half a chart.
@@ -37,6 +39,9 @@ export function Sparkline({
 }: SparklineProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hovered, setHovered] = useState<PlottedPoint | null>(null);
+  // The fixed viewBox reflows for free but scales x and y independently, so a
+  // marker radius in user units only reads as round at 320px wide.
+  const scaleX = useSvgScaleX(svgRef, VIEW_WIDTH);
 
   const { points, path, min, max } = plotSeries(series, VIEW_WIDTH, height, 8);
 
@@ -82,6 +87,7 @@ export function Sparkline({
             stroke="var(--color-text-muted)"
             strokeWidth={1}
             opacity={0.4}
+            vectorEffect="non-scaling-stroke"
           />
         )}
         <path
@@ -94,18 +100,28 @@ export function Sparkline({
           vectorEffect="non-scaling-stroke"
         />
         {/* Only the endpoints get a permanent marker; a dot on every point
-            turns a 90-day line into noise. */}
+            turns a 90-day line into noise. Ellipses with a scale-corrected
+            x-radius, because the two axes here do not scale together. */}
         {[points[0], points[points.length - 1]].map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r={3} fill={color} />
+          <ellipse
+            key={i}
+            cx={p.x}
+            cy={p.y}
+            rx={3 / scaleX}
+            ry={3}
+            fill={color}
+          />
         ))}
         {hovered && (
-          <circle
+          <ellipse
             cx={hovered.x}
             cy={hovered.y}
-            r={4.5}
+            rx={4.5 / scaleX}
+            ry={4.5}
             fill={color}
             stroke="var(--color-surface)"
             strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
           />
         )}
       </svg>

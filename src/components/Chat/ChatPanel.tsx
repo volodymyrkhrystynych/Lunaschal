@@ -583,9 +583,8 @@ export function ChatPanel() {
           const proposedTodos = parseProposedTodos(message.metadata);
           // Also covers replies saved by the retired web-search tab: they
           // carry the same {steps, sources} shape.
-          const { steps, sources, thinking, truncated } = parseAgentMeta(
-            message.metadata
-          );
+          const { steps, sources, thinking, truncated, timedOut } =
+            parseAgentMeta(message.metadata);
           // A reply can legitimately end up with no text at all — a turn that
           // spent itself reasoning, or one that dropped. The bubble used to
           // render regardless, leaving an empty padded rectangle that read as
@@ -604,7 +603,12 @@ export function ChatPanel() {
           // (backend/delegate/runs.py), and only removed from "pending" by an
           // explicit accept/dismiss (DelegateProposals).
           const delegateProposals = parseDelegateProposals(message.metadata);
-          const sentAt = formatMessageTime(message.createdAt);
+          // A reply is timed by when it *finished*, not when it was asked
+          // for: created_at is stamped as the run starts, so a question and
+          // its answer both read 7:56 PM and neither label says anything.
+          // User messages have no finishedAt and keep showing send time.
+          const stampedAt = message.finishedAt ?? message.createdAt;
+          const sentAt = formatMessageTime(stampedAt);
           return (
             <div
               key={message.id}
@@ -650,6 +654,15 @@ export function ChatPanel() {
                     {truncated
                       ? 'No reply — it hit the output token limit while reasoning (Settings → llama.cpp)'
                       : 'No reply'}
+                  </div>
+                )}
+                {/* A reply that did arrive but stopped early. Said out loud
+                    because the alternative is a sentence that trails off with
+                    no explanation, which reads as the model losing the thread
+                    rather than as a budget the user set. */}
+                {timedOut && hasBody && (
+                  <div className="mt-1 text-xs text-[var(--color-text-muted)] italic">
+                    Cut off at the reply time limit (Settings → llama.cpp)
                   </div>
                 )}
                 {/* What was actually dictated, kept whenever the correction pass
@@ -725,9 +738,7 @@ export function ChatPanel() {
                     className={`mt-1 flex items-center gap-2 text-xs text-[var(--color-text-muted)] ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
                   >
                     {hasSaved && <span>Saved to journal</span>}
-                    {sentAt && (
-                      <time dateTime={message.createdAt}>{sentAt}</time>
-                    )}
+                    {sentAt && <time dateTime={stampedAt}>{sentAt}</time>}
                   </div>
                 )}
               </div>

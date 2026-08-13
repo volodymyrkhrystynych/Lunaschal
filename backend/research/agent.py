@@ -20,9 +20,18 @@ the discussion endpoint stream the prose while the gathering stays blocking.
 `checkpoint` is called before every model call and every tool call. That single
 hook is where "yield to the user" and "stop when cancelled" both live, which
 makes both testable in one place.
+
+`deadline` is checked in the same two places, and is deliberately *not* part of
+`checkpoint`: a checkpoint raises, and running out of time is not a failure.
+Everything bounding this loop before it was a count -- turns, fetches, tokens --
+so a run that took an hour was inside every limit it had. Hitting the deadline
+stops gathering and reports `timed_out`; what to do with a half-gathered run is
+the caller's decision, and both callers answer the same way (see
+backend/delegate/deep_research.py's salvage synthesis).
 """
 import json
 import logging
+import time
 
 from backend.ai.llm import chat_tool_turn
 from backend.ai.mcp_client import serialize_tool_calls
@@ -75,6 +84,28 @@ def _noop(*args, **kwargs) -> None:
     return None
 
 
+def deadline_from(seconds, outer: float | None = None) -> float | None:
+    """A monotonic deadline `seconds` from now, never later than `outer`.
+
+    The one place "an inner budget cannot outlive the outer one" is written
+    down. A nested deep-research pass inside a chat reply must not still be
+    searching after the reply's own budget is spent, and clamping at each call
+    site is how one of them would end up not clamping.
+
+    A non-positive or unusable `seconds` means "no deadline of my own" and
+    returns `outer` unchanged, so disabling one budget cannot silently remove
+    the one wrapping it.
+    """
+    try:
+        seconds = float(seconds)
+    except (TypeError, ValueError):
+        return outer
+    if seconds <= 0:
+        return outer
+    own = time.monotonic() + seconds
+    return own if outer is None else min(own, outer)
+
+
 def gather_events(
     system: str,
     user: str,
@@ -85,6 +116,7 @@ def gather_events(
     checkpoint=None,
     max_turns: int = MAX_TOOL_TURNS,
     max_fetches: int = MAX_FETCHES,
+    deadline: float | None = None,
 ):
     """Generator form of the loop: yields ('step', event) as each tool call
     completes, then exactly one ('result', {...}) at the end.
@@ -96,10 +128,14 @@ def gather_events(
     `tools` and `dispatch` travel together — a tool the model can see but the
     dispatch can't run comes back as "Unknown tool", which reads to the model as
     a broken tool rather than as one it should not have called.
+
+    `deadline` is a `time.monotonic()` absolute (see `deadline_from`), or None
+    for the old unbounded behaviour.
     """
     yield from _loop(
         system, user, tools=tools, dispatch=dispatch, on_step=on_step,
         checkpoint=checkpoint, max_turns=max_turns, max_fetches=max_fetches,
+        deadline=deadline,
     )
 
 
@@ -113,16 +149,18 @@ def gather(
     checkpoint=None,
     max_turns: int = MAX_TOOL_TURNS,
     max_fetches: int = MAX_FETCHES,
+    deadline: float | None = None,
 ) -> dict:
     """Blocking form, for the background worker where nothing is watching.
 
-    Returns {messages, steps, sources, turns, truncated}. `messages` is the
-    full transcript, ready for the caller's answering turn.
+    Returns {messages, steps, sources, turns, truncated, timed_out}. `messages`
+    is the full transcript, ready for the caller's answering turn.
     """
     result: dict = {}
     for kind, payload in gather_events(
         system, user, tools=tools, dispatch=dispatch, on_step=on_step,
         checkpoint=checkpoint, max_turns=max_turns, max_fetches=max_fetches,
+        deadline=deadline,
     ):
         if kind == 'result':
             result = payload
@@ -139,6 +177,7 @@ def _loop(
     checkpoint=None,
     max_turns: int = MAX_TOOL_TURNS,
     max_fetches: int = MAX_FETCHES,
+    deadline: float | None = None,
 ):
     tools = tools if tools is not None else ALL_TOOLS
     dispatch = dispatch if dispatch is not None else _DISPATCH
@@ -154,8 +193,16 @@ def _loop(
     fetches = 0
     turns = 0
     truncated = True
+    timed_out = False
+
+    def out_of_time() -> bool:
+        return deadline is not None and time.monotonic() >= deadline
 
     for _ in range(max_turns):
+        if out_of_time():
+            timed_out = True
+            logger.info('Gathering hit its deadline after %d turn(s)', turns)
+            break
         checkpoint()
         turns += 1
         try:
@@ -183,25 +230,35 @@ def _loop(
         })
 
         for call in tool_calls:
-            checkpoint()
             name = call.function.name
             try:
                 args = json.loads(call.function.arguments or '{}')
             except json.JSONDecodeError:
                 args = {}
 
-            if name in ('web_fetch',) and fetches >= max_fetches:
-                text = 'Fetch budget for this run is exhausted. Work with what you have.'
-                event = {'tool': name, 'arg': args.get('url'), 'ok': False,
-                         'error': 'fetch budget exhausted'}
+            if out_of_time():
+                # Every call still gets a tool message, including the ones that
+                # will never run: an assistant turn whose tool_calls have no
+                # replies is a malformed exchange, and this transcript is
+                # exactly what the caller's salvage turn is handed.
+                timed_out = True
+                text = 'Out of time for this run. Work with what you already have.'
+                event = {'tool': name, 'arg': args.get('query') or args.get('url'),
+                         'ok': False, 'error': 'out of time'}
             else:
-                if name == 'web_fetch':
-                    fetches += 1
-                module = dispatch.get(name)
-                if module is None:
-                    text, event = f'Unknown tool: {name}', {'tool': name, 'ok': False}
+                checkpoint()
+                if name in ('web_fetch',) and fetches >= max_fetches:
+                    text = 'Fetch budget for this run is exhausted. Work with what you have.'
+                    event = {'tool': name, 'arg': args.get('url'), 'ok': False,
+                             'error': 'fetch budget exhausted'}
                 else:
-                    text, event = module.run_tool(name, args)
+                    if name == 'web_fetch':
+                        fetches += 1
+                    module = dispatch.get(name)
+                    if module is None:
+                        text, event = f'Unknown tool: {name}', {'tool': name, 'ok': False}
+                    else:
+                        text, event = module.run_tool(name, args)
 
             steps.append(event)
             on_step(event)
@@ -222,6 +279,9 @@ def _loop(
                 'content': text,
             })
 
+        if timed_out:
+            break
+
     yield ('result', {
         'messages': messages,
         'steps': steps,
@@ -230,6 +290,10 @@ def _loop(
         # True when the loop hit its turn budget rather than the model deciding
         # it had enough — the caller may want to say so.
         'truncated': truncated,
+        # A stricter case of truncated: the wall clock ran out, so what is in
+        # `messages` is everything this run will ever have. The caller is
+        # expected to salvage an answer from it rather than report a failure.
+        'timed_out': timed_out,
     })
 
 

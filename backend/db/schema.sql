@@ -236,7 +236,13 @@ CREATE TABLE IF NOT EXISTS messages (
     -- before the user edited it in the composer. NULL when the message was
     -- typed. Never overwritten -- the journal_entries raw_content contract.
     raw_content TEXT,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    -- When generation actually stopped. `created_at` is stamped when the run
+    -- *starts*, which for a local model is minutes before the reply exists --
+    -- so a question and its answer both read "7:56 PM" and the label says
+    -- nothing. NULL on user messages and on rows predating the column, which
+    -- is why the UI falls back to created_at rather than showing a blank.
+    finished_at INTEGER
 );
 
 -- Photos attached to a chat message. The chat model is text-only

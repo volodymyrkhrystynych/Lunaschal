@@ -151,16 +151,28 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enable
                     # a thinking turn can spend its whole `max_tokens` budget
                     # inside <think> and stop before writing a word.
                     'truncated': bool(payload.get('truncated')),
+                    # The other explanation for a reply that stops early, and
+                    # a different one: the wall-clock budget ran out (Settings
+                    # -> Chat timeout) rather than the token budget. The text
+                    # above it is real and was kept; it is just not finished.
+                    'timedOut': bool(payload.get('timedOut')),
                     'sources': payload.get('sources', []),
                     'proposals': proposals,
                 })
                 build_update(db, 'messages', {
                     'content': content, 'metadata': metadata, 'status': 'done',
+                    # Stamped here rather than at insert: `created_at` is taken
+                    # when the run starts, which on a local model is minutes
+                    # before there is a reply to show a time for.
+                    'finished_at': int(time.time()),
                 }, 'id=?', (message_id,))
                 db.commit()
     except Exception as e:
         build_update(db, 'messages', {
             'content': content, 'status': 'error', 'error': str(e),
+            # A run that died still stopped at a knowable moment, and the
+            # partial content it left is worth timestamping.
+            'finished_at': int(time.time()),
         }, 'id=?', (message_id,))
         db.commit()
         q.put(('error', str(e)))

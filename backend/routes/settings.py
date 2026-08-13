@@ -110,6 +110,14 @@ def get_settings():
         # Never the key itself, following hasHfToken.
         'hasResearchSearchKey': bool(s.get('research_search_key')),
         'researchSearxngUrl': s.get('research_searxng_url') or '',
+        # Wall-clock budgets. Defaults live in backend/delegate/limits.py and
+        # are repeated here the way briefingMaxTokens' is — the route answers
+        # for a settings row that predates the columns.
+        'chatTimeoutEnabled': bool(s.get('chat_timeout_enabled', 1)),
+        'chatTimeoutSeconds': s.get('chat_timeout_seconds') or 900,
+        'researchTimeoutEnabled': bool(s.get('research_timeout_enabled', 1)),
+        'researchSearchTimeoutSeconds': s.get('research_search_timeout_seconds') or 120,
+        'researchDeepTimeoutSeconds': s.get('research_deep_timeout_seconds') or 600,
         'hasGoogleOauthClient': bool(s.get('google_oauth_client_id')) and bool(s.get('google_oauth_client_secret')),
         'emailSyncEnabled': bool(s.get('email_sync_enabled', 1)),
         'emailSyncIntervalMinutes': s.get('email_sync_interval_minutes') or 15,
@@ -147,6 +155,11 @@ def update_ai():
         'researchSearchProvider': 'research_search_provider',
         'researchSearchKey': 'research_search_key',
         'researchSearxngUrl': 'research_searxng_url',
+        'chatTimeoutEnabled': 'chat_timeout_enabled',
+        'chatTimeoutSeconds': 'chat_timeout_seconds',
+        'researchTimeoutEnabled': 'research_timeout_enabled',
+        'researchSearchTimeoutSeconds': 'research_search_timeout_seconds',
+        'researchDeepTimeoutSeconds': 'research_deep_timeout_seconds',
         # No context-window field at all: llama-server allocates the KV cache when
         # it loads the model, so the window is a serving-config concern
         # (llama/presets.ini), not a per-request one.
@@ -163,7 +176,8 @@ def update_ai():
         if camel in body:
             value = body[camel]
             if camel in ('briefingThinking', 'llmThinking', 'repoContextEnabled',
-                         'researchEnabled', 'llamaChatVision'):
+                         'researchEnabled', 'llamaChatVision', 'chatTimeoutEnabled',
+                         'researchTimeoutEnabled'):
                 # Stored as 0/1 — Gemma 4's thinking channel is on or off, with no
                 # graded levels to validate against.
                 value = 1 if value else 0
@@ -172,6 +186,16 @@ def update_ai():
                 # would truncate every reply, or an absurd value.
                 try:
                     value = max(256, min(65536, int(value)))
+                except (TypeError, ValueError):
+                    continue
+            elif camel in ('chatTimeoutSeconds', 'researchSearchTimeoutSeconds',
+                           'researchDeepTimeoutSeconds'):
+                # Floor of 30s: anything less times out before a local model
+                # has finished loading the prompt, which would read as the
+                # feature being broken. Ceiling of two hours — past that the
+                # timeout is not doing anything the enable flag doesn't.
+                try:
+                    value = max(30, min(7200, int(value)))
                 except (TypeError, ValueError):
                     continue
             updates[snake] = value

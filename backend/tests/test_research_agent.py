@@ -5,6 +5,7 @@ behaviour — budgets, error handling, and the checkpoint that makes background
 work yield to the user.
 """
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -324,3 +325,78 @@ def test_tool_definitions_cover_web_and_wiki():
         'web_search', 'web_fetch', 'wiki_list', 'wiki_search', 'wiki_read'
     }
     assert set(agent._DISPATCH) == names
+
+
+# --- Wall-clock deadlines -------------------------------------------------
+#
+# Every budget above this point is a count: turns, fetches, tokens. A run that
+# took an hour was inside all of them, which is what these bound instead.
+
+
+def test_a_run_with_no_deadline_is_unbounded_as_before(monkeypatch):
+    _script(monkeypatch, [_msg(content='done')])
+    result = agent.gather('sys', 'q')
+    assert result['timed_out'] is False
+
+
+def test_the_loop_stops_before_a_turn_it_has_no_time_for(monkeypatch):
+    """The deadline is checked where `checkpoint` is, and for the same reason:
+    a turn is the granularity at which this loop can stop."""
+    calls = _script(monkeypatch, [
+        _msg(tool_calls=[_call('wiki_list')]),
+        _msg(content='done'),
+    ])
+    monkeypatch.setattr(agent.wiki, 'run_tool', lambda n, a: ('x', {'tool': n, 'ok': True}))
+
+    # Already past it: not one model call should be made.
+    result = agent.gather('sys', 'q', deadline=time.monotonic() - 1)
+
+    assert calls == [], 'a deadline already spent buys nothing by starting'
+    assert result['timed_out'] is True
+    assert result['turns'] == 0
+    # Out of time is a stricter case of truncated, never a clean finish.
+    assert result['truncated'] is True
+
+
+def test_running_out_mid_turn_still_answers_every_tool_call(monkeypatch):
+    """The transcript is what the caller's salvage turn is handed, and an
+    assistant turn whose tool_calls have no replies is a malformed exchange —
+    so a call that never runs still gets a tool message saying why."""
+    # First check is the top of the turn (still in time, so the model runs);
+    # the next is inside the tool loop, by which point the clock has passed it.
+    clock = iter([0, 999, 999, 999])
+    monkeypatch.setattr(agent.time, 'monotonic', lambda: next(clock))
+    _script(monkeypatch, [
+        _msg(tool_calls=[_call('wiki_list', call_id='c1')]),
+        _msg(content='never reached'),
+    ])
+    ran = []
+    monkeypatch.setattr(agent.wiki, 'run_tool',
+                        lambda n, a: (ran.append(n), ('x', {'tool': n, 'ok': True}))[1])
+
+    result = agent.gather('sys', 'q', deadline=100)
+
+    assert ran == [], 'the tool itself must not run once time is up'
+    assert result['timed_out'] is True
+    tool_messages = [m for m in result['messages'] if m['role'] == 'tool']
+    assert len(tool_messages) == 1
+    assert 'Out of time' in tool_messages[0]['content']
+    assert tool_messages[0]['tool_call_id'] == 'c1'
+    assert result['steps'] == [
+        {'tool': 'wiki_list', 'arg': None, 'ok': False, 'error': 'out of time'}
+    ]
+
+
+def test_deadline_from_clamps_an_inner_budget_to_the_outer_one():
+    """The one place "inner never outlives outer" is written down — clamping
+    at each call site is how one of them ends up not clamping."""
+    now = time.monotonic()
+    outer = now + 10
+
+    assert agent.deadline_from(600, outer) == pytest.approx(outer)
+    assert agent.deadline_from(5, outer) == pytest.approx(now + 5, abs=0.5)
+    # No inner budget of its own must not remove the one wrapping it.
+    assert agent.deadline_from(0, outer) == outer
+    assert agent.deadline_from(None, outer) == outer
+    assert agent.deadline_from(None, None) is None
+    assert agent.deadline_from(30) == pytest.approx(now + 30, abs=0.5)

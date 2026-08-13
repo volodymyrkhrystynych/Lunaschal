@@ -10,6 +10,7 @@ chat's own turn now (test_delegate_chat.py), because a delegate is handed one
 did not restate was lost before a to-do was ever staged.
 """
 import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -93,16 +94,79 @@ def test_steps_stream_before_the_result(monkeypatch):
 def test_a_truncated_run_does_not_pass_off_a_half_sentence_as_its_summary(monkeypatch):
     """A turn cut off at the token ceiling arrives with no tool calls, exactly
     like a finished one. Handing that fragment to the main model as the summary
-    is how the reply ends up describing work that never completed."""
+    is how the reply ends up describing work that never completed. What goes
+    over instead is a salvage turn written from the whole transcript."""
     _script(monkeypatch, [
         _msg(tool_calls=[_call('web_search', json.dumps({'query': 'FSRS'}))]),
         _msg(content='I read the page and then went on to'),
     ], finish_reasons=['tool_calls', 'length'])
+    monkeypatch.setattr(agent, 'chat_messages',
+                        lambda messages: 'FSRS is a spaced-repetition scheduler.')
     result = agent.run('look up FSRS')
 
     assert result['truncated'] is True
     assert 'went on to' not in result['summary']
-    assert 'never summarised' in result['summary']
+    assert result['summary'] == 'FSRS is a spaced-repetition scheduler.'
+
+
+def test_the_salvage_turn_reads_the_whole_transcript(monkeypatch):
+    """The steps happened and the pages were read — all that is missing is the
+    turn that would have written them up, and the material for it is sitting in
+    the transcript."""
+    seen = {}
+
+    def fake_chat_messages(messages):
+        seen['messages'] = messages
+        return 'Here is what I found.'
+
+    _script(monkeypatch, [
+        _msg(tool_calls=[_call('web_search', json.dumps({'query': 'FSRS'}))]),
+        _msg(content='cut off mid'),
+    ], finish_reasons=['tool_calls', 'length'])
+    monkeypatch.setattr(agent, 'chat_messages', fake_chat_messages)
+    agent.run('look up FSRS')
+
+    assert seen['messages'][-1] == {
+        'role': 'user', 'content': agent.SALVAGE_INSTRUCTION,
+    }
+    assert any(m['role'] == 'tool' for m in seen['messages']), 'the tool results go too'
+
+
+def test_a_failed_salvage_falls_back_to_the_honest_stand_in(monkeypatch):
+    """The one thing the main model must never be handed is a blank, which it
+    will paper over with something plausible."""
+    _script(monkeypatch, [
+        _msg(tool_calls=[_call('web_search', json.dumps({'query': 'FSRS'}))]),
+        _msg(content='cut off mid'),
+    ], finish_reasons=['tool_calls', 'length'])
+
+    def boom(messages):
+        raise RuntimeError('llama-server is down')
+
+    monkeypatch.setattr(agent, 'chat_messages', boom)
+    assert 'never summarised' in agent.run('look up FSRS')['summary']
+
+
+def test_a_blank_salvage_falls_back_too(monkeypatch):
+    _script(monkeypatch, [
+        _msg(tool_calls=[_call('web_search', json.dumps({'query': 'FSRS'}))]),
+        _msg(content='cut off mid'),
+    ], finish_reasons=['tool_calls', 'length'])
+    monkeypatch.setattr(agent, 'chat_messages', lambda messages: '   ')
+    assert 'never summarised' in agent.run('look up FSRS')['summary']
+
+
+def test_a_finished_run_never_pays_for_a_salvage_call(monkeypatch):
+    """The common path is one function with no side effects; the model call is
+    the recovery, not part of every run."""
+    calls = []
+    _script(monkeypatch, [_msg(content='FSRS is a scheduler.')])
+    monkeypatch.setattr(agent, 'chat_messages', lambda messages: calls.append(1))
+
+    result = agent.run('look up FSRS')
+    assert calls == []
+    assert result['summary'] == 'FSRS is a scheduler.'
+    assert result['timedOut'] is False
 
 
 def test_a_run_that_did_nothing_says_so(monkeypatch):
@@ -172,15 +236,18 @@ def test_the_model_is_also_offered_deep_research(monkeypatch):
     assert 'deep_research' in offered
 
 
-def test_deep_research_receives_the_delegates_own_checkpoint(monkeypatch):
+def test_deep_research_receives_the_delegates_own_checkpoint_and_deadline(monkeypatch):
     """A long deep_research call has to cooperate with the same yield-to-the-
     user gate as the rest of the loop, or it would compete with the very chat
-    message it is answering. The module-level DISPATCH entry gets no
-    checkpoint at all, so this only holds if run_events rebinds it per call."""
+    message it is answering. The module-level DISPATCH entry gets neither a
+    checkpoint nor a deadline, so this only holds if run_events rebinds it per
+    call — and the deadline matters for the same reason the checkpoint does: a
+    nested pass that outlives the reply it belongs to is unbounded again."""
     seen = {}
 
-    def fake_run_tool(name, args, checkpoint=None):
+    def fake_run_tool(name, args, checkpoint=None, deadline=None):
         seen['checkpoint'] = checkpoint
+        seen['deadline'] = deadline
         return ('a thorough answer', {'tool': 'deep_research', 'arg': args.get('query'), 'ok': True})
 
     monkeypatch.setattr(agent.deep_research, 'run_tool', fake_run_tool)
@@ -190,5 +257,7 @@ def test_deep_research_receives_the_delegates_own_checkpoint(monkeypatch):
     ])
 
     checkpoint = lambda: None
-    agent.run('research x thoroughly', checkpoint=checkpoint)
+    agent.run('research x thoroughly', checkpoint=checkpoint, deadline=time.monotonic() + 300)
     assert seen['checkpoint'] is checkpoint
+    # Its own search budget, clamped by the 300s outer one it was handed.
+    assert seen['deadline'] is not None

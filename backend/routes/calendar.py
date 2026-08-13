@@ -1,5 +1,4 @@
 import time
-import json
 from datetime import date as dt, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from ulid import ULID
@@ -8,6 +7,7 @@ from backend.ai.background import run_bg
 from backend.calendar_query import events_in_range
 from backend.calendar_recurrence import VALID_FREQS, format_byweekday
 from backend.db.connection import build_update, get_db, mapping_to_dict, row_to_dict
+from backend.tags import tag_counts, tags_json
 
 bp = Blueprint('calendar', __name__, url_prefix='/api/calendar')
 
@@ -107,6 +107,20 @@ def list_by_date(date):
     if not _valid_date(date):
         return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
     return jsonify([_to_json(e) for e in events_in_range(get_db(), date, date)])
+
+
+@bp.get('/tags')
+def list_tags():
+    """Every free-text tag in use, with counts — the pill row's vocabulary.
+
+    Deliberately the whole table rather than the month on screen: a filter that
+    only offers the tags of whatever you happen to be looking at cannot be used
+    to go and find the others. Same shape and same helper as the cookbook and
+    food-log pill endpoints.
+    """
+    rows = get_db().execute(
+        'SELECT tags FROM calendar_events WHERE tags IS NOT NULL').fetchall()
+    return jsonify(tag_counts(rows))
 
 
 @bp.get('/week/<date>')
@@ -290,7 +304,7 @@ def create_event():
         (id, body['title'], body.get('description'), body['date'],
          None if is_all_day else body.get('time'),
          None if is_all_day else body.get('endTime'),
-         is_all_day, json.dumps(tags) if tags is not None else None,
+         is_all_day, tags_json(tags),
          body.get('journalId'), now,
          repeat.get('repeat_freq'), repeat.get('repeat_interval'),
          repeat.get('repeat_byweekday'), repeat.get('repeat_until')),
@@ -319,7 +333,10 @@ def _event_updates(body: dict) -> tuple[dict, str | None]:
         if camel in body:
             updates[snake] = body[camel]
     if 'tags' in body:
-        updates['tags'] = json.dumps(body['tags'])
+        # tags_json, not a raw dumps: trimmed, lowercased and deduped, so
+        # "Work" and "work " are one tag here exactly as they are everywhere
+        # else. It also stores an emptied list as NULL rather than '[]'.
+        updates['tags'] = tags_json(body['tags'])
     repeat, err = _repeat_fields(body)
     if err:
         return {}, err

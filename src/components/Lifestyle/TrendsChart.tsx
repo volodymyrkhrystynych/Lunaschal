@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
+import { useSvgScaleX } from '@/hooks/useSvgScaleX';
 import {
   nearestIndex,
   parseISODate,
@@ -47,6 +48,9 @@ function weekLabel(iso: string): string {
 export function TrendsChart() {
   const svgRef = useRef<SVGSVGElement>(null);
   const [hovered, setHovered] = useState<number | null>(null);
+  // x and y scale independently here (see useSvgScaleX), so a marker radius in
+  // user units is only round at 320px wide.
+  const scaleX = useSvgScaleX(svgRef, VIEW_WIDTH);
 
   const { data, isLoading } = useQuery({
     queryKey: ['lifestyle', 'trends', WEEKS],
@@ -150,6 +154,7 @@ export function TrendsChart() {
                 stroke="var(--color-text-muted)"
                 strokeWidth={1}
                 opacity={0.4}
+                vectorEffect="non-scaling-stroke"
               />
             )}
 
@@ -167,19 +172,27 @@ export function TrendsChart() {
             ))}
 
             {/* The hovered week gets one marker per line, ringed in the surface
-                colour so overlapping points stay two marks, not one blob. */}
+                colour so overlapping points stay two marks, not one blob.
+
+                An ellipse rather than a circle, with the x-radius divided by
+                the horizontal scale: one radius applied to both axes is what
+                painted this as a 31px-wide smear on a full-width card. The
+                ring needs non-scaling-stroke for the same reason — a stretched
+                2px outline is exactly the blob it exists to prevent. */}
             {hovered !== null &&
               SERIES.map((s, i) => {
                 const p = plots[i].points[hovered];
                 return p ? (
-                  <circle
+                  <ellipse
                     key={s.key}
                     cx={p.x}
                     cy={p.y}
-                    r={4.5}
+                    rx={4.5 / scaleX}
+                    ry={4.5}
                     fill={s.color}
                     stroke="var(--color-surface)"
                     strokeWidth={2}
+                    vectorEffect="non-scaling-stroke"
                   />
                 ) : null;
               })}

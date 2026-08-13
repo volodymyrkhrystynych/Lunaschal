@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { eventTimeLabel, parseEventTags, repeatLabel } from '@/lib/calendar';
+import { parseTagsInput } from '@/lib/tags';
 
 export function EventDetails({
   eventId,
@@ -25,6 +26,9 @@ export function EventDetails({
     time: '',
     endTime: '',
     allDay: false,
+    // Comma-separated text while editing; the stored JSON array is parsed on
+    // the way in and split again on save.
+    tags: '',
   });
 
   const { data: event, isLoading } = useQuery({
@@ -109,6 +113,7 @@ export function EventDetails({
         time: draft.allDay ? null : draft.time || null,
         endTime: draft.allDay ? null : draft.endTime || null,
         allDay: draft.allDay,
+        tags: parseTagsInput(draft.tags),
       };
       // The two endpoints return different shapes; the caller only cares that
       // the write landed.
@@ -152,6 +157,7 @@ export function EventDetails({
       time: event.time ?? '',
       endTime: event.endTime ?? '',
       allDay: !!event.allDay,
+      tags: parseEventTags(event.tags).join(', '),
     });
     setMode('edit');
   };
@@ -247,6 +253,14 @@ export function EventDetails({
               rows={2}
               className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none"
             />
+            <input
+              type="text"
+              aria-label="Tags"
+              value={draft.tags}
+              onChange={e => setDraft({ ...draft, tags: e.target.value })}
+              placeholder="Tags (comma-separated)"
+              className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border-b border-white/10 pb-2 focus:outline-none"
+            />
           </div>
         ) : (
           event.description && (
@@ -257,7 +271,7 @@ export function EventDetails({
         )}
 
         {parseEventTags(event.tags).length > 0 && (
-          <div className="flex gap-1 mb-4">
+          <div className="tag-row flex gap-1 mb-4">
             {parseEventTags(event.tags).map(tag => (
               <span
                 key={tag}

@@ -36,7 +36,8 @@ import logging
 from types import SimpleNamespace
 
 from backend.ai.chat import format_now_context
-from backend.delegate import deep_research
+from backend.ai.llm import chat_messages
+from backend.delegate import deep_research, limits
 from backend.research import agent, web
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,15 @@ found, not a description of your search process ("found the release date: March 
 3, 2025", not "searched for the release date and found some results"). If you \
 could not find something, say so plainly rather than padding the summary."""
 
+SALVAGE_INSTRUCTION = (
+    'You are out of time and cannot look anything else up. Write the closing '
+    'summary now from what is above: state everything that was actually found '
+    '— the facts, numbers, names and dates — and then say plainly what you did '
+    'not get to, rather than guessing at it. This summary is all the assistant '
+    'will see, so a partial answer that is honest about its gaps is far better '
+    'than nothing.'
+)
+
 
 def _system_prompt() -> str:
     """The prompt with today's date on it.
@@ -91,29 +101,36 @@ def _system_prompt() -> str:
 
 
 def run_events(task: str, *, checkpoint=None, max_turns: int = MAX_TOOL_TURNS,
-               max_fetches: int = MAX_FETCHES):
+               max_fetches: int = MAX_FETCHES, deadline: float | None = None):
     """Yield ('step', event) per tool call, then one ('result', {...}).
 
     The result adds `summary` to what the shared loop returns: the model's own
     closing message, and the only part of a delegate run the main chat model is
     ever shown.
+
+    `deadline` is the outer budget — the whole reply's — which this run's own
+    is clamped to, and which is passed down again so the nested deep pass
+    cannot outlive either.
     """
+    deadline = limits.search_deadline(deadline)
+
     # deep_research runs its own nested pass, which needs the same checkpoint
-    # this loop got — not the module-level DISPATCH entry, which the shared
-    # loop calls with no checkpoint at all. Rebuilding this dict per call is
-    # what lets each run bind its own checkpoint without research/agent.py's
-    # `_loop` needing to know this tool is any different from the rest.
+    # and deadline this loop got — not the module-level DISPATCH entry, which
+    # the shared loop calls with neither. Rebuilding this dict per call is what
+    # lets each run bind its own without research/agent.py's `_loop` needing to
+    # know this tool is any different from the rest.
     dispatch = {
         **DISPATCH,
         'deep_research': SimpleNamespace(
-            run_tool=functools.partial(deep_research.run_tool, checkpoint=checkpoint)),
+            run_tool=functools.partial(deep_research.run_tool, checkpoint=checkpoint,
+                                       deadline=deadline)),
     }
 
     result: dict = {}
     for kind, payload in agent.gather_events(
         _system_prompt(), task,
         tools=ALL_TOOLS, dispatch=dispatch, checkpoint=checkpoint,
-        max_turns=max_turns, max_fetches=max_fetches,
+        max_turns=max_turns, max_fetches=max_fetches, deadline=deadline,
     ):
         if kind == 'result':
             result = payload
@@ -123,8 +140,9 @@ def run_events(task: str, *, checkpoint=None, max_turns: int = MAX_TOOL_TURNS,
     yield ('result', {
         'steps': result.get('steps', []),
         'sources': result.get('sources', []),
-        'summary': _summary(result),
+        'summary': _summary(result) or _salvage(result),
         'truncated': result.get('truncated', False),
+        'timedOut': bool(result.get('timed_out')),
     })
 
 
@@ -137,12 +155,13 @@ def run(task: str, **kwargs) -> dict:
     return result
 
 
-def _summary(result: dict) -> str:
-    """The delegate's closing message, or an honest stand-in for it.
+def _summary(result: dict) -> str | None:
+    """The delegate's own closing message, or None if it never wrote a usable one.
 
-    A loop that ends on its turn budget never writes one, and a run whose every
-    tool failed has nothing to say — in both cases the main model must be told
-    that rather than handed an empty string it will paper over.
+    A loop that ends on its turn budget or its deadline never gets that far,
+    and a run whose every tool failed has nothing to say. Kept free of model
+    calls so the common path stays one function with no side effects — the
+    recovery is `_salvage` below.
     """
     messages = result.get('messages') or []
     last = messages[-1] if messages else {}
@@ -150,8 +169,32 @@ def _summary(result: dict) -> str:
         text = (last.get('content') or '').strip()
         if text and not result.get('truncated'):
             return text
+    return None
 
+
+def _salvage(result: dict) -> str:
+    """One more model call over the transcript of a run that never concluded.
+
+    The steps happened, the pages were read — all that is missing is the turn
+    that would have written them up, and the transcript needed to write it is
+    sitting right there. Handing the main model "it never summarised what it
+    found" instead was throwing away work that had already been paid for.
+
+    Never raises and never returns empty: a failed salvage falls back to the
+    honest stand-in, because the one thing the main model must not receive is
+    a blank it will paper over with something plausible.
+    """
     steps = result.get('steps') or []
+    messages = result.get('messages') or []
+    if steps and messages:
+        try:
+            text = (chat_messages(
+                messages + [{'role': 'user', 'content': SALVAGE_INSTRUCTION}]) or '').strip()
+            if text:
+                return text
+        except Exception as e:
+            logger.warning('Delegate salvage summary failed: %s', e)
+
     if steps:
         return ('The delegate ran out of room before it could answer — '
                 f'{len(steps)} step(s) ran but it never summarised what it found.')

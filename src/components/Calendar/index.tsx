@@ -5,12 +5,16 @@ import { useIsMobile } from '@/hooks/useMediaQuery';
 import {
   buildMonthGrid,
   eventTimeLabel,
+  parseEventTags,
   repeatLabel,
   toLocalISO,
   WEEKDAY_INITIALS,
   WEEKDAY_LABELS,
   type RepeatFreq,
 } from '@/lib/calendar';
+// The shared splitter — Food's two views each grew a private copy of this and
+// a third would make the rule genuinely untraceable.
+import { parseTagsInput } from '@/lib/tags';
 import { EventDetails } from './EventDetails';
 import { DayView } from './DayView';
 import { SleepEditor } from './SleepEditor';
@@ -32,6 +36,9 @@ const EMPTY_NEW_EVENT = {
   time: '',
   endTime: '',
   allDay: false,
+  // Comma-separated while it is being typed; `parseTagsInput` splits it on
+  // submit and the backend owns normalization from there.
+  tags: '',
   repeatFreq: '' as '' | RepeatFreq,
   repeatInterval: 1,
   repeatByweekday: [] as number[],
@@ -47,6 +54,7 @@ export function Calendar() {
     occurrenceDate: string;
   } | null>(null);
   const [newEvent, setNewEvent] = useState(EMPTY_NEW_EVENT);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [showNewEvent, setShowNewEvent] = useState(false);
   const isMobile = useIsMobile();
   const queryClient = useQueryClient();
@@ -76,11 +84,23 @@ export function Calendar() {
     enabled: viewMode === 'week',
   });
 
-  const events = viewMode === 'month' ? monthEvents : weekEvents;
+  const { data: tagCounts } = useQuery({
+    queryKey: ['calendar', 'tags'],
+    queryFn: api.calendar.tags,
+  });
+
+  const fetched = viewMode === 'month' ? monthEvents : weekEvents;
+  // Filtering here rather than in the query: the month and week grids both
+  // read off `events`, so one filter covers every place an event is drawn.
+  const events = tagFilter
+    ? fetched?.filter(e => parseEventTags(e.tags).includes(tagFilter))
+    : fetched;
 
   const createEvent = useMutation({
     mutationFn: api.calendar.create,
     onSuccess: () => {
+      // The 'calendar' prefix covers the tags query too, so a tag typed on a
+      // brand-new event shows up in the pill row without a reload.
       queryClient.invalidateQueries({ queryKey: ['calendar'] });
       setNewEvent(EMPTY_NEW_EVENT);
       setShowNewEvent(false);
@@ -148,6 +168,7 @@ export function Calendar() {
       time: newEvent.allDay ? undefined : newEvent.time || undefined,
       endTime: newEvent.allDay ? undefined : newEvent.endTime || undefined,
       allDay: newEvent.allDay,
+      tags: parseTagsInput(newEvent.tags),
       repeatFreq: newEvent.repeatFreq || null,
       repeatInterval: newEvent.repeatFreq ? newEvent.repeatInterval : null,
       repeatByweekday:
@@ -259,6 +280,37 @@ export function Calendar() {
                 →
               </button>
             </div>
+
+            {/* Fed by the whole table, not the month on screen — a filter
+                offering only the tags of what you are already looking at
+                cannot be used to go and find the rest. */}
+            {!!tagCounts?.length && (
+              <div className="tag-row flex gap-1 mb-3 shrink-0">
+                {tagFilter && (
+                  <button
+                    onClick={() => setTagFilter(null)}
+                    className="px-2 py-0.5 text-xs rounded bg-white/10 text-[var(--color-text-muted)] hover:bg-white/15"
+                  >
+                    Clear
+                  </button>
+                )}
+                {tagCounts.map(tag => (
+                  <button
+                    key={tag.name}
+                    onClick={() =>
+                      setTagFilter(tagFilter === tag.name ? null : tag.name)
+                    }
+                    className={`px-2 py-0.5 text-xs rounded ${
+                      tagFilter === tag.name
+                        ? 'bg-[var(--color-primary)] text-white'
+                        : 'bg-white/10 text-[var(--color-text-muted)] hover:bg-white/15'
+                    }`}
+                  >
+                    {tag.name} {tag.count}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div className="hidden md:grid grid-cols-7 gap-1 mb-2 shrink-0">
               {WEEKDAY_LABELS.map(day => (
@@ -623,6 +675,14 @@ export function Calendar() {
                         placeholder="Description (optional)"
                         rows={2}
                         className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none"
+                      />
+                      <input
+                        value={newEvent.tags}
+                        onChange={e =>
+                          setNewEvent({ ...newEvent, tags: e.target.value })
+                        }
+                        placeholder="Tags (comma-separated)"
+                        className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
                       />
                       <div className="flex justify-end gap-2 mt-2">
                         <button
