@@ -16,7 +16,7 @@ from backend.ai.chat_title import generate_conversation_title
 from backend.delegate import chat as delegate_chat
 from backend.delegate import runs
 from backend.todo_recurrence import (
-    VALID_LISTS, parse_due_date, parse_priority, parse_repeat,
+    normalize_list, parse_due_date, parse_priority, parse_repeat,
 )
 
 bp = Blueprint('chat', __name__, url_prefix='/api/chat')
@@ -509,7 +509,6 @@ def _cross_off(db, item: dict, now: int) -> None:
 def _apply_briefing_decision(db, item: dict, decision: dict, now: int) -> bool:
     """Resolve one plan item in place. Returns True if a todo row was inserted."""
     from backend.routes.tasks import _parse_priority, _parse_due
-    from backend.todo_recurrence import VALID_LISTS
 
     action = decision.get('action')
     if action == 'reject':
@@ -544,8 +543,8 @@ def _apply_briefing_decision(db, item: dict, decision: dict, now: int) -> bool:
             due = item.get('due')
     else:
         due = item.get('due')
-    todo_list = decision.get('list', item.get('list')) or 'todo'
-    if todo_list not in VALID_LISTS:
+    todo_list, err = normalize_list(decision.get('list', item.get('list')))
+    if err:
         todo_list = 'todo'
 
     item.update({'title': title, 'priority': priority, 'due': due, 'list': todo_list})
@@ -672,9 +671,9 @@ def _accept_task(db, data: dict, ctx: dict) -> dict:
     title = (data.get('title') or '').strip()
     if not title:
         raise _AcceptRejected('title required')
-    todo_list = data.get('list') or 'todo'
-    if todo_list not in VALID_LISTS:
-        raise _AcceptRejected(f'list must be one of {", ".join(VALID_LISTS)}')
+    todo_list, err = normalize_list(data.get('list'))
+    if err:
+        raise _AcceptRejected(err)
 
     # These four used to be hard-coded null/null/null/3 here, so a to-do the
     # user had given a deadline and an urgency for landed in the list bare.

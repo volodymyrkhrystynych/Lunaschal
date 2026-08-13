@@ -335,8 +335,22 @@ export function plotSeries(
     return { points: [], path: '', min: 0, max: 0 };
   }
   const values = series.map(p => p.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
+  return project(series, width, height, pad, {
+    min: Math.min(...values),
+    max: Math.max(...values),
+  });
+}
+
+/** Project one series onto a *given* y-domain. Split out of `plotSeries` so
+ *  several series can share one — see `plotMultiSeries`. */
+function project(
+  series: SeriesPoint[],
+  width: number,
+  height: number,
+  pad: number,
+  domain: { min: number; max: number }
+): Plot {
+  const { min, max } = domain;
   const range = max - min;
   const innerWidth = Math.max(width - pad * 2, 0);
   const innerHeight = Math.max(height - pad * 2, 0);
@@ -364,10 +378,64 @@ export function nearestPoint(
   points: PlottedPoint[],
   x: number
 ): PlottedPoint | null {
-  if (points.length === 0) return null;
-  return points.reduce((best, p) =>
-    Math.abs(p.x - x) < Math.abs(best.x - x) ? p : best
-  );
+  const i = nearestIndex(points, x);
+  return i === -1 ? null : points[i];
+}
+
+/** Same hit test, by index — a multi-series crosshair reads one x position off
+ *  every line at once, so it needs the position, not one line's point. */
+export function nearestIndex(points: PlottedPoint[], x: number): number {
+  if (points.length === 0) return -1;
+  let best = 0;
+  points.forEach((p, i) => {
+    if (Math.abs(p.x - x) < Math.abs(points[best].x - x)) best = i;
+  });
+  return best;
+}
+
+export interface MultiPlot {
+  plots: Plot[];
+  min: number;
+  max: number;
+}
+
+/**
+ * Project several series onto **one shared y-domain**.
+ *
+ * A shared axis is the whole point: two lines on two scales is the dual-axis
+ * chart, which can be made to show any relationship you like by choosing the
+ * scales. These series are directly comparable (both are counts per week), so
+ * one axis is honest and the comparison is the thing being drawn.
+ *
+ * `domain` overrides either end — counts pass `min: 0`, because a line chart
+ * whose floor is the quietest week makes an ordinary week look like a collapse.
+ * Series must be equal-length (the same weeks), which is what lets one x index
+ * address all of them.
+ */
+export function plotMultiSeries(
+  seriesList: SeriesPoint[][],
+  width: number,
+  height: number,
+  pad = 4,
+  domain: { min?: number; max?: number } = {}
+): MultiPlot {
+  const values = seriesList.flat().map(p => p.value);
+  if (values.length === 0) {
+    return {
+      plots: seriesList.map(() => ({ points: [], path: '', min: 0, max: 0 })),
+      min: 0,
+      max: 0,
+    };
+  }
+  const min = domain.min ?? Math.min(...values);
+  const max = domain.max ?? Math.max(...values);
+  return {
+    plots: seriesList.map(series =>
+      project(series, width, height, pad, { min, max })
+    ),
+    min,
+    max,
+  };
 }
 
 // --- Exercise progression ----------------------------------------------------

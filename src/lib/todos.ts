@@ -70,17 +70,18 @@ export function partitionTodos<
 }
 
 // Bucket todos by their list; unknown/legacy values land in 'todo' so a bad
-// value can never make an item invisible.
+// value can never make an item invisible. That's what catches the retired
+// 'chores' list too — the rows were migrated server-side, but one queued offline
+// while the old build was open still arrives naming it.
 export function groupTodosByList<T extends { list: string }>(
   todos: T[]
-): Record<'todo' | 'chores' | 'archive', T[]> {
-  const buckets: Record<'todo' | 'chores' | 'archive', T[]> = {
+): Record<'todo' | 'archive', T[]> {
+  const buckets: Record<'todo' | 'archive', T[]> = {
     todo: [],
-    chores: [],
     archive: [],
   };
   for (const t of todos) {
-    if (t.list === 'chores' || t.list === 'archive') buckets[t.list].push(t);
+    if (t.list === 'archive') buckets.archive.push(t);
     else buckets.todo.push(t);
   }
   return buckets;

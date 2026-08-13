@@ -15,7 +15,8 @@ calorie tracking.
   (`backend/todo_recurrence.py`), so the Lifestyle section renders those same rows via
   `/api/tasks/todos` instead of the parallel `chores` / `chore_completions` tables sketched
   below. Ticking a chore off here and in Tasks is one action, and completions still reach the
-  Journal feed through `task_events`.
+  Journal feed through `task_events`. **Superseded — see "The tab absorbed Tasks" below:** the
+  chores list is retired entirely, and the rows are plain to-dos.
 - **Exercise canonicalization folds one way only.** An abbreviation folds onto a known fuller
   name ("curls" → "bicep curl"), but a _more specific_ new name starts its own series, because
   folding "hack squat machine" into "squat" would silently destroy a real distinction.
@@ -188,6 +189,26 @@ out to be preferable to a form, but that's a build-time call, not a blocker for 
 
 ---
 
+## The tab absorbed Tasks (later change)
+
+Reusing the todos rows was the right call and it kept going: the chores card was always a second
+window onto rows the Tasks tab also showed, and the two views were checked at the same moments of
+the day. So the Tasks tab was **removed** and its contents moved here, which is also why Lifestyle
+now sits directly under Journal in the sidebar rather than down by Food.
+
+- `src/components/Tasks/` survives as components, not a view — `TasksSection` mounts inside
+  `Lifestyle.tsx` and keeps shortcut scopes 1 and 2 (nothing else in the tree registers one).
+- The `chores` list is gone. `_merge_chores_into_todos` (`backend/db/connection.py`) folded the
+  rows into `'todo'`, and `normalize_list` still accepts the old name so an offline mutation or a
+  stale chat proposal replays instead of 400ing. `task_events.task_list` keeps its history.
+- **DOM order is the phone's stacking order**, so the order below changed: heatmap first (did I do
+  anything today), tasks second, everything else after. The workout log's history is capped at 4
+  sessions in a scroll box — beside the day's tasks, a fortnight of sessions pushed the page down.
+- A **weekly trends chart** took the chores card's slot: applications sent against journal
+  entries, `GET /api/lifestyle/trends`. One shared y-axis (both are counts per week; a second
+  scale can be made to show any relationship you like), zero weeks included, hues reused from the
+  validated activity palette.
+
 ## Rough UI layout
 
 Single scrollable column in the main content area (sidebar unchanged), top to bottom:
@@ -200,6 +221,9 @@ Single scrollable column in the main content area (sidebar unchanged), top to bo
    recent-entries list below. Chores: the Tasks view's own `TodoRow`/`TodoForm` — same rows, same
    chrome, and (the reason it's shared rather than copied) the same `isFarOffPeriodic` rule, so a
    monthly chore stays hidden until it's nearly due.
+   _As built, after the change above: **Daily tasks | To-Do** comes second (still the Tasks
+   components, still the same rows and the same `isFarOffPeriodic` rule), and the workout log
+   pairs with the trends chart in the third row._
 3. **Progression** — one card, two mini charts side by side: body weight sparkline (with an inline
    "log today's weight" field) and a per-exercise sparkline behind an exercise picker dropdown.
 4. **Daily selfie | Calories** — two cards side by side. Selfie: capture widget + a short strip of

@@ -4,9 +4,11 @@ import { TodoForm } from './TodoForm';
 import { TodoRow } from './TodoRow';
 import type { TaskSection } from './index';
 
+// Chores used to be a third list here. It was the same rows either way, and
+// once Lifestyle showed to-dos directly there was nothing left for the split to
+// mean — the rows were folded into 'todo' (backend/db/connection.py).
 const LISTS: { id: TodoList; label: string }[] = [
   { id: 'todo', label: 'To-Do' },
-  { id: 'chores', label: 'Chores' },
   { id: 'archive', label: 'Archive' },
 ];
 
@@ -74,9 +76,9 @@ export function TodoSection({
   );
 
   return (
-    <div className="mt-10">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold text-[var(--color-text)]">
+    <div>
+      <div className="flex items-baseline justify-between gap-2 mb-3">
+        <h2 className="text-lg font-semibold text-[var(--color-text)]">
           To-Do
         </h2>
         <div className="flex gap-2">
@@ -116,7 +118,7 @@ export function TodoSection({
         {active.map(renderTodo)}
 
         {active.length === 0 && !isLoading && (
-          <div className="text-center py-8 text-[var(--color-text-muted)] text-sm">
+          <div className="text-center py-6 text-[var(--color-text-muted)] text-sm">
             Nothing on the list.
           </div>
         )}

@@ -10,8 +10,32 @@ stage something the API will later accept.
 import calendar
 from datetime import datetime, timezone
 
-VALID_LISTS = ('todo', 'chores', 'archive')
+VALID_LISTS = ('todo', 'archive')
 VALID_UNITS = ('day', 'week', 'month')
+
+# Chores used to be their own list. They're ordinary todos now (the Lifestyle tab
+# shows one merged list), and the rows were migrated in backend/db/connection.py —
+# but a request can still arrive naming it: an offline mutation queued before the
+# merge, a chat proposal staged against the old enum. Folding beats rejecting;
+# `task_events.task_list` keeps the historical value, so old completions still
+# read as having come from Chores.
+_LIST_ALIASES = {'chores': 'todo'}
+
+
+def normalize_list(value):
+    """Fold a list name to a current one. Returns (list, error_or_None).
+
+    None/'' means "unspecified" and yields the default 'todo', so callers that
+    treat an absent field as the default don't need their own fallback.
+    """
+    if value is None or value == '':
+        return 'todo', None
+    if not isinstance(value, str):
+        return None, f'list must be one of {", ".join(VALID_LISTS)}'
+    folded = _LIST_ALIASES.get(value, value)
+    if folded not in VALID_LISTS:
+        return None, f'list must be one of {", ".join(VALID_LISTS)}'
+    return folded, None
 
 
 def parse_priority(value):

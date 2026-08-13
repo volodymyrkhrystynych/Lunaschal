@@ -12,7 +12,6 @@ type View =
   | 'notebook'
   | 'writing'
   | 'ideas'
-  | 'tasks'
   | 'food'
   | 'lifestyle'
   | 'fanfic'
@@ -36,15 +35,16 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'learning', label: 'Learning', icon: '🧠' },
   { view: 'practice', label: 'Practice', icon: '⌨️' },
   { view: 'chat', label: 'Chat', icon: '💬' },
-  { view: 'tasks', label: 'Tasks', icon: '✅' },
   { view: 'journal', label: 'Journal', icon: '📓' },
+  // Lifestyle sits this high because it absorbed the Tasks tab: daily tasks and
+  // the to-do list live inside it now, so it's a several-times-a-day view.
+  { view: 'lifestyle', label: 'Lifestyle', icon: '🏋️' },
   { view: 'notebook', label: 'Notebook', icon: '🗒️' },
   { view: 'meetings', label: 'Meetings', icon: '🎙️' },
   { view: 'writing', label: 'Writing', icon: '✍️' },
   { view: 'ideas', label: 'Ideas', icon: '💡' },
   { view: 'calendar', label: 'Calendar', icon: '📅' },
   { view: 'food', label: 'Food', icon: '🍽️' },
-  { view: 'lifestyle', label: 'Lifestyle', icon: '🏋️' },
   { view: 'fanfic', label: 'Library', icon: '📚' },
   { view: 'newspapers', label: 'Newspapers', icon: '📰' },
   { view: 'email', label: 'Email', icon: '📧' },

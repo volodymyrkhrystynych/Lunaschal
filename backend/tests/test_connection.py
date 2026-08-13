@@ -74,3 +74,26 @@ def test_drop_vector_tables_is_idempotent(client):
 def test_fresh_schema_creates_no_embedding_tables(client):
     names = {r[0] for r in get_db().execute('SELECT name FROM sqlite_master')}
     assert not {n for n in names if 'embedding' in n and not n.startswith('learning')}
+
+
+# --- retired chores list ---
+
+def test_merge_chores_into_todos_folds_the_retired_list(client):
+    """Chores were todos with list='chores'; the Lifestyle tab shows one merged
+    list now, so a DB carried over from before must not keep rows on it."""
+    from backend.db.connection import _merge_chores_into_todos
+    db = get_db()
+    db.execute(
+        "INSERT INTO todos(id, title, done, list, priority, created_at, updated_at)"
+        " VALUES ('c1', 'sweep', 0, 'chores', 3, 0, 0),"
+        "        ('a1', 'set aside', 0, 'archive', 3, 0, 0)",
+    )
+    db.commit()
+
+    _merge_chores_into_todos(db)
+
+    lists = {r['id']: r['list'] for r in db.execute('SELECT id, list FROM todos')}
+    assert lists == {'c1': 'todo', 'a1': 'archive'}  # archive is untouched
+
+    _merge_chores_into_todos(db)  # idempotent: nothing left to match
+    assert db.execute("SELECT COUNT(*) c FROM todos WHERE list='chores'").fetchone()['c'] == 0

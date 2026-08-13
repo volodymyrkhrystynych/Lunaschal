@@ -76,7 +76,7 @@ def test_gather_context_includes_and_excludes(client):
 
     _insert_todo('todo_open', 'Buy milk', done=0)
     _insert_todo('todo_done', 'Old thing', done=1)
-    _insert_todo('todo_chore', 'Sweep floor', done=0, todo_list='chores')
+    _insert_todo('todo_second', 'Sweep floor', done=0)
     _insert_todo('todo_archived', 'Set aside', done=0, todo_list='archive')
 
     _insert_event('e_today', 'Standup', TODAY)
@@ -91,7 +91,7 @@ def test_gather_context_includes_and_excludes(client):
 
     assert [e['content'] for e in ctx['journal']] == ['Working on the overnight agent.']
     assert [t['title'] for t in ctx['daily_tasks']] == ['Meditate']
-    # Open todos + chores are included; done and archived are excluded.
+    # Open todos are included; done and archived are excluded.
     assert sorted(t['title'] for t in ctx['todos']) == ['Buy milk', 'Sweep floor']
     assert [e['title'] for e in ctx['calendar']] == ['Standup']
     assert ctx['learning_due'] == 1
@@ -400,7 +400,7 @@ def test_fallback_plan_is_pure_and_ordered(client):
         'todos': [
             {'title': 'High, undated', 'priority': 5, 'list': 'todo', 'due': None},
             {'title': 'Middling', 'priority': 4, 'list': 'todo', 'due': NOW + 86400},
-            {'title': 'Low, due today', 'priority': 1, 'list': 'chores', 'due': NOW},
+            {'title': 'Low, due today', 'priority': 1, 'list': 'todo', 'due': NOW},
             {'title': 'Low, overdue', 'priority': 1, 'list': 'todo',
              'due': NOW - 86400},
             {'title': 'Low, undated', 'priority': 1, 'list': 'todo', 'due': None},
@@ -415,7 +415,7 @@ def test_fallback_plan_is_pure_and_ordered(client):
     # Shaped like the model's own output, so it validates and links the same way.
     assert plan[0] == {'title': 'Meditate', 'priority': 4, 'list': 'todo',
                        'due': None, 'linkedTitle': 'Meditate'}
-    assert plan[4] == {'title': 'Low, due today', 'priority': 1, 'list': 'chores',
+    assert plan[4] == {'title': 'Low, due today', 'priority': 1, 'list': 'todo',
                        'due': NOW, 'linkedTitle': 'Low, due today'}
 
 
@@ -541,14 +541,14 @@ def test_accepting_applies_inline_edits(client, monkeypatch):
 
     client.post(f'/api/chat/briefing/{msg_id}/todos', json={'decisions': [{
         'id': pid, 'action': 'accept', 'title': 'Draft the Q3 report',
-        'priority': 2, 'due': NOW + 86400, 'list': 'chores',
+        'priority': 2, 'due': NOW + 86400, 'list': 'archive',
     }]})
 
     row = connection.get_db().execute(
         'SELECT title, priority, due, list FROM todos WHERE id=?', (pid,)
     ).fetchone()
     assert (row['title'], row['priority'], row['due'], row['list']) == (
-        'Draft the Q3 report', 2, NOW + 86400, 'chores'
+        'Draft the Q3 report', 2, NOW + 86400, 'archive'
     )
     assert _proposals(msg_id)[0]['title'] == 'Draft the Q3 report'
 
@@ -813,7 +813,7 @@ def test_crossing_off_a_linked_repeating_todo_advances_it(client, monkeypatch):
     connection.get_db().execute(
         'INSERT INTO todos(id, title, done, list, priority, due, repeat_interval,'
         ' repeat_unit, created_at, updated_at) VALUES (?,?,0,?,?,?,?,?,?,?)',
-        ('water', 'Water the plants', 'chores', 3, NOW, 1, 'week', NOW, NOW),
+        ('water', 'Water the plants', 'todo', 3, NOW, 1, 'week', NOW, NOW),
     )
     connection.get_db().commit()
     result = _run(monkeypatch, {'briefing': 'hi', 'todos': [

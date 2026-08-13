@@ -21,6 +21,13 @@ describe('getStoredView', () => {
     expect(getStoredView()).toBe('fanfic');
   });
 
+  it('sends a retired view to where its contents went', () => {
+    // Tasks was folded into Lifestyle. Without the redirect this fails isView
+    // and the reload lands on the default, which reads as the app forgetting.
+    localStorage.setItem('lunaschal:currentView', 'tasks');
+    expect(getStoredView()).toBe('lifestyle');
+  });
+
   it('accepts every known view', () => {
     for (const view of VIEWS) {
       localStorage.setItem('lunaschal:currentView', view);

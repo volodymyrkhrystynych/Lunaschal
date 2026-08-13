@@ -14,7 +14,7 @@ interface Props {
 }
 
 const PRIORITIES = [1, 2, 3, 4, 5];
-const LISTS: TodoList[] = ['todo', 'chores', 'archive'];
+const LISTS: TodoList[] = ['todo', 'archive'];
 
 // Unix seconds -> local 'YYYY-MM-DD' for an <input type="date">.
 function dueUnixToInput(due: number | null): string {

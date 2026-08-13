@@ -5,6 +5,9 @@ Completing or deleting todos and daily tasks appends small notifications to the
 handlers against the real temporary SQLite DB via the Flask test client.
 """
 import sqlite3
+import time
+
+from ulid import ULID
 
 from backend.db import connection
 
@@ -31,9 +34,24 @@ def test_completing_a_todo_logs_one_event(client):
 
 def test_event_records_the_todos_list(client):
     todo_id = client.post(
-        '/api/tasks/todos', json={'title': 'sweep', 'list': 'chores'}
+        '/api/tasks/todos', json={'title': 'sweep', 'list': 'archive'}
     ).get_json()['id']
     client.patch(f'/api/tasks/todos/{todo_id}', json={'done': True})
+
+    assert _events(client)[0]['taskList'] == 'archive'
+
+
+def test_an_old_chores_event_still_reads_back(client):
+    """The chores list is retired, but `task_events.task_list` is history and was
+    deliberately left alone by the migration — those completions really did come
+    off a Chores list, and the Journal feed still labels them that way."""
+    now = int(time.time())
+    connection.get_db().execute(
+        'INSERT INTO task_events(id, kind, title, ref_id, task_list, created_at)'
+        " VALUES (?, 'todo_completed', 'sweep', ?, 'chores', ?)",
+        (str(ULID()), str(ULID()), now),
+    )
+    connection.get_db().commit()
 
     assert _events(client)[0]['taskList'] == 'chores'
 

@@ -6,6 +6,7 @@ import {
   metricCeiling,
   metricValue,
   monthLabels,
+  nearestIndex,
   nearestPoint,
   exerciseSeries,
   formatSets,
@@ -17,6 +18,7 @@ import {
   isTodayCaloriesLow,
   isTodaySelfieMissing,
   parseCalorieEntry,
+  plotMultiSeries,
   plotSeries,
   shadeLevel,
   shadeOpacity,
@@ -265,6 +267,67 @@ describe('nearestPoint', () => {
 
   it('returns null with nothing plotted', () => {
     expect(nearestPoint([], 10)).toBeNull();
+  });
+
+  it('reports the index, so a multi-series crosshair can read every line', () => {
+    expect(nearestIndex(points, 0)).toBe(0);
+    expect(nearestIndex(points, 48)).toBe(1);
+    expect(nearestIndex(points, 200)).toBe(2);
+    expect(nearestIndex([], 10)).toBe(-1);
+  });
+});
+
+describe('plotMultiSeries', () => {
+  const a = [
+    { label: 'w1', value: 0 },
+    { label: 'w2', value: 4 },
+  ];
+  const b = [
+    { label: 'w1', value: 2 },
+    { label: 'w2', value: 8 },
+  ];
+
+  it('projects every series onto one shared domain', () => {
+    // The shared axis is the point: 4 on the first line must sit at the same
+    // height as 4 on the second, which two per-series domains would break.
+    const { plots, min, max } = plotMultiSeries([a, b], 100, 50, 0);
+    expect([min, max]).toEqual([0, 8]);
+    expect(plots[0].points[1].y).toBe(25); // 4 of 8, halfway up
+    expect(plots[1].points[1].y).toBe(0); // 8 of 8, at the top
+    expect(plots[1].points[0].y).toBe(37.5);
+  });
+
+  it('honours a domain floor so a quiet week is not the baseline', () => {
+    const { min, plots } = plotMultiSeries(
+      [
+        [
+          { label: 'w1', value: 6 },
+          { label: 'w2', value: 8 },
+        ],
+      ],
+      100,
+      50,
+      0,
+      { min: 0 }
+    );
+    expect(min).toBe(0);
+    expect(plots[0].points[0].y).toBe(12.5); // 6 of 8, not the floor
+  });
+
+  it('centres a flat shared domain instead of dividing by zero', () => {
+    const flat = [
+      { label: 'w1', value: 0 },
+      { label: 'w2', value: 0 },
+    ];
+    const { plots } = plotMultiSeries([flat], 100, 50, 0, { min: 0 });
+    expect(plots[0].points.map(p => p.y)).toEqual([25, 25]);
+  });
+
+  it('returns one empty plot per series when there is no data', () => {
+    const { plots, min, max } = plotMultiSeries([[], []], 100, 50);
+    expect(plots).toHaveLength(2);
+    expect(plots.every(pl => pl.points.length === 0)).toBe(true);
+    expect([min, max]).toEqual([0, 0]);
   });
 });
 

@@ -33,7 +33,7 @@ from backend.ai.briefing import (
 )
 from backend.ai.llm import EmptyCompletion
 from backend.routes.tasks import _parse_priority, _parse_due
-from backend.todo_recurrence import VALID_LISTS
+from backend.todo_recurrence import normalize_list
 
 
 def find_or_create_day_conversation(db, day_key: str, now: int) -> str:
@@ -117,8 +117,8 @@ def _propose_todos(db, proposed: list, today: str) -> list[dict]:
         if not title or title.lower() in seen:
             continue
 
-        todo_list = item.get('list', 'todo')
-        if todo_list not in VALID_LISTS:
+        todo_list, err = normalize_list(item.get('list'))
+        if err:
             todo_list = 'todo'
         priority, err = _parse_priority(item.get('priority'))
         if err:

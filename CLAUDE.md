@@ -139,7 +139,7 @@ Single-user auth via JWT cookie (`lunaschal_token`, 30-day expiry). **Auth is on
 ### Frontend Structure (`src/`)
 
 - `App.tsx` — top-level view router; checks auth status on load, shows `Login` if unauthenticated in network mode, otherwise sidebar + main view + the persistent bottom `SttPanel`
-- `src/components/` — one file (or subdirectory) per view: `Chat/` (`ChatPanel` + the shared `AgentSteps` / `ReasoningBlock` / `ThinkingLabel`), `ChatNav`, `Tasks`, `Journal`, `Meetings`, `Writing/`, `Calendar`, `Learning/`, `Cookbook`, `Fanfic/` (library + folders + reader), `Newspapers`, `Editor/` (file editor + STT panel), `Settings` (+ `CuratedTagsSection`, `ShortcutSettings`)
+- `src/components/` — one file (or subdirectory) per view: `Chat/` (`ChatPanel` + the shared `AgentSteps` / `ReasoningBlock` / `ThinkingLabel`), `ChatNav`, `Tasks/` (no longer a view — `TasksSection` mounts inside Lifestyle), `Journal`, `Meetings`, `Writing/`, `Calendar`, `Learning/`, `Cookbook`, `Fanfic/` (library + folders + reader), `Newspapers`, `Editor/` (file editor + STT panel), `Settings` (+ `CuratedTagsSection`, `ShortcutSettings`)
 - `Chat/AgentSteps.tsx` is shared with the Ideas discussion, and `src/lib/agentSteps.ts` holds the one `stepLabel` both use — each had grown its own copy of the `<details>` block and the labeller. An agent trace renders **collapsed even while streaming**: a growing list of steps used to push the reply down the page as it was being read
 - `src/hooks/api.ts` — typed REST client (`api.*` namespaces) using plain `fetch`; no tRPC
 - `src/lib/` — pure logic extracted for node-environment tests (todo sorting, tag parsing, journal feed grouping, font-size steps, fanfic helpers, VRAM thresholds…)
@@ -171,9 +171,9 @@ Keyboard-first, single-key navigation (the Pocket 2 has no usable mouse): WASD-s
 
 Recipe collection. Paste text or a URL — the page is fetched and stripped, then `parse_recipe` extracts title/markdown-content/tags via LLM JSON mode. FTS search (`recipes_fts`), tag filtering.
 
-#### Tasks & todos (`backend/routes/tasks.py`, `src/components/Tasks.tsx`)
+#### Tasks & todos (`backend/routes/tasks.py`, `src/components/Tasks/`)
 
-Two lists in one view: **daily tasks** (max 4, per-day completions in `daily_task_completions`, reset each day) and one-off **todos**. The STT listener runs a **task-nudge loop**: on an interval (Settings → nudges, default 45 min, waking-hours window) it picks a pending daily task and starts a short spoken check-in conversation about it.
+Two lists: **daily tasks** (max 4, per-day completions in `daily_task_completions`, reset each day) and one-off **todos** (`todo` / `archive` — the third list, `chores`, was folded into `todo`). **There is no Tasks tab**: `TasksSection` renders inside the Lifestyle view, directly under the activity heatmap, and owns shortcut scopes 1 and 2 there. The STT listener runs a **task-nudge loop**: on an interval (Settings → nudges, default 45 min, waking-hours window) it picks a pending daily task and starts a short spoken check-in conversation about it.
 
 #### Lifestyle — see [`backend/lifestyle/CLAUDE.md`](backend/lifestyle/CLAUDE.md).
 

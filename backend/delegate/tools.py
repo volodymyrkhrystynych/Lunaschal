@@ -38,7 +38,8 @@ fine.
 import logging
 
 from backend.todo_recurrence import (
-    VALID_LISTS, VALID_UNITS, parse_due_date, parse_priority, parse_repeat,
+    VALID_LISTS, VALID_UNITS, normalize_list, parse_due_date, parse_priority,
+    parse_repeat,
 )
 
 logger = logging.getLogger(__name__)
@@ -435,8 +436,8 @@ def _propose_task(args: dict) -> tuple[str, dict]:
     title = _text(args.get('title'))[:MAX_TITLE_CHARS]
     if not title:
         return _refused('propose_task', 'a task needs a title')
-    todo_list = _text(args.get('list')) or 'todo'
-    if todo_list not in VALID_LISTS:
+    todo_list, err = normalize_list(_text(args.get('list')))
+    if err:
         todo_list = 'todo'
 
     # Validated here, against the same rules /api/tasks/todos enforces, so a bad

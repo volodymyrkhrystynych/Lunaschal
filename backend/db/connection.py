@@ -123,6 +123,7 @@ def init_db() -> None:
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
+    _merge_chores_into_todos(db)
     _ensure_task_event_columns(db)
     _ensure_calendar_recurrence(db)
     _ensure_calendar_categories(db)
@@ -244,6 +245,23 @@ def _ensure_todo_list_columns(db: sqlite3.Connection) -> None:
             db.execute(f'ALTER TABLE todos ADD COLUMN {col} {decl}')
             added = True
     if added:
+        db.commit()
+
+
+def _merge_chores_into_todos(db: sqlite3.Connection) -> None:
+    """Fold the retired 'chores' list into 'todo'.
+
+    Chores were never their own table — just todos with list='chores' — and the
+    Lifestyle tab now shows one merged list, so the discriminator has nothing
+    left to discriminate. Idempotent by construction: nothing can write 'chores'
+    any more (`normalize_list` folds it at the API boundary), so the second run
+    matches no rows.
+
+    `task_events.task_list` is deliberately left alone. Those completions really
+    did come off a Chores list, and the Journal feed still labels them that way.
+    """
+    changed = db.execute("UPDATE todos SET list='todo' WHERE list='chores'").rowcount
+    if changed:
         db.commit()
 
 

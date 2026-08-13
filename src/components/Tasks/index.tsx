@@ -10,12 +10,27 @@ import {
 import { DailyTasks } from './DailyTasks';
 import { TodoSection } from './TodoSection';
 
-// Keyboard sections in W/S order: the daily-task list, then the three todo
-// lists. Level 1 picks a section, level 2 navigates the items inside it.
-const SECTIONS = ['daily', 'todo', 'chores', 'archive'] as const;
+// Keyboard sections in W/S order: the daily-task list, then the two todo lists.
+// Level 1 picks a section, level 2 navigates the items inside it.
+const SECTIONS = ['daily', 'todo', 'archive'] as const;
 export type TaskSection = (typeof SECTIONS)[number];
 
-export function Tasks() {
+/**
+ * Daily tasks and to-dos, as a section of the Lifestyle tab rather than a tab of
+ * its own.
+ *
+ * It used to be the Tasks view, with Chores as a third list that the Lifestyle
+ * tab then rendered a second time in its own card. One screen now: the chores
+ * list was folded into the to-dos (`normalize_list` in
+ * backend/todo_recurrence.py still accepts the old name for offline replays),
+ * and the whole thing sits directly under the activity heatmap — the two things
+ * checked several times a day, first on the page on a phone.
+ *
+ * It keeps the shortcut scopes it always had (1 for sections, 2 for items);
+ * nothing else in the Lifestyle tree registers one, so there's still exactly one
+ * owner per scope number.
+ */
+export function TasksSection() {
   const [section, setSection] = useState<TaskSection>('daily');
   const [activeList, setActiveList] = useState<TodoList>('todo');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -45,7 +60,6 @@ export function Tasks() {
   const counts = useMemo(
     () => ({
       todo: buckets.todo.filter(t => !t.done).length,
-      chores: buckets.chores.filter(t => !t.done).length,
       archive: buckets.archive.filter(t => !t.done).length,
     }),
     [buckets]
@@ -106,7 +120,7 @@ export function Tasks() {
   };
 
   const startCreate = () => {
-    if (section !== 'todo' && section !== 'chores') return;
+    if (section !== 'todo') return;
     setCreating(true);
     setLevel(2);
   };
@@ -139,8 +153,8 @@ export function Tasks() {
     next: () => stepSection(1),
     prev: () => stepSection(-1),
     drillIn: () => {
-      // Todo/Chores drill straight into creation; Daily/Archive into item nav.
-      if (section === 'todo' || section === 'chores') setCreating(true);
+      // To-Do drills straight into creation; Daily/Archive into item nav.
+      if (section === 'todo') setCreating(true);
       else seedSelection();
       return false; // let the provider advance to level 2
     },
@@ -173,9 +187,14 @@ export function Tasks() {
     setActiveList(list);
   };
 
+  // Two Lifestyle cards: side by side on the desktop, stacked daily-then-to-dos
+  // on the Pocket 2 and the phone.
+  const card =
+    'p-4 rounded-lg bg-[var(--color-surface)] border border-white/10 flex flex-col min-w-0';
+
   return (
-    <div className="flex-1 overflow-y-auto p-6">
-      <div className="max-w-xl mx-auto">
+    <div className="grid gap-4 lg:grid-cols-2">
+      <section className={card}>
         <DailyTasks
           tasks={sortedTasks}
           isLoading={tasksLoading}
@@ -183,6 +202,8 @@ export function Tasks() {
           itemNavActive={level >= 2 && section === 'daily'}
           sectionFocused={level === 1 && section === 'daily'}
         />
+      </section>
+      <section className={card}>
         <TodoSection
           activeList={activeList}
           section={section}
@@ -204,7 +225,7 @@ export function Tasks() {
           onCancelCreate={cancelCreate}
           onUpdateTodo={(id, data) => updateTodo.mutate({ id, data })}
         />
-      </div>
+      </section>
     </div>
   );
 }
