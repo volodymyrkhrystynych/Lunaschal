@@ -13,6 +13,7 @@ import {
 import { shouldPersistQuery } from './offline/shouldPersistQuery';
 import { installBackendOnlineManager } from './offline/onlineManager';
 import { registerOfflineMutationDefaults } from './offline/mutationDefaults';
+import { resumeStoredRecordings } from './offline/recordingQueue';
 import './index.css';
 
 applyFontSize(getStoredFontSize());
@@ -67,6 +68,10 @@ createRoot(document.getElementById('root')!).render(
       onSuccess={() => {
         // Cache restored — replay any writes queued while offline last session.
         void queryClient.resumePausedMutations();
+        // …and pick up any audio still on the device. A recording killed
+        // mid-capture (screen lock, tab discarded) leaves no paused mutation
+        // behind, so it has to be found in the recording store instead.
+        void resumeStoredRecordings(queryClient);
       }}
     >
       <App />

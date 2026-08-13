@@ -1,9 +1,72 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  appendChunk,
+  beginRecording,
+  finalizeRecording,
+  type RecordingMode,
+  type StoredRecording,
+} from '../offline/recordingStore';
 
 export type RecorderStatus = 'idle' | 'recording' | 'transcribing' | 'saving';
 
 /** What happens to the audio once recording stops. */
 export type RecorderMode = 'transcribe' | 'audio';
+
+/**
+ * How often MediaRecorder hands us a chunk. Anything not yet flushed lives only
+ * inside the browser, so this is the width of the window in which a hard kill
+ * loses audio — five seconds of a sentence, rather than the whole recording.
+ */
+export const CHUNK_MS = 5000;
+
+/**
+ * Containers to ask MediaRecorder for, best first. iOS Safari supports none of
+ * the webm ones and produces audio/mp4; the point of asking is to *know* which
+ * we got, because the backend decides an attachment's kind from its mime type
+ * (`resolve_upload`) and the old code hardcoded 'audio/webm' regardless.
+ */
+const PREFERRED_TYPES = [
+  'audio/webm;codecs=opus',
+  'audio/webm',
+  'audio/mp4',
+  'audio/aac',
+];
+
+function pickMimeType(): string | undefined {
+  if (typeof MediaRecorder === 'undefined') return undefined;
+  if (typeof MediaRecorder.isTypeSupported !== 'function') return undefined;
+  return PREFERRED_TYPES.find(t => MediaRecorder.isTypeSupported(t));
+}
+
+interface WakeLockSentinelish {
+  release: () => Promise<void>;
+}
+type WakeLockish = {
+  request: (type: 'screen') => Promise<WakeLockSentinelish>;
+};
+
+function wakeLockApi(): WakeLockish | undefined {
+  return (navigator as Navigator & { wakeLock?: WakeLockish }).wakeLock;
+}
+
+export interface RecorderOptions {
+  /**
+   * Persist the audio to IndexedDB as it is recorded, and hand the finished
+   * recording's *id* to `onRecording` instead of a Blob. Opt-in: the journal
+   * buttons use it because losing one of those loses a journal entry; the
+   * throwaway dictation buttons elsewhere keep the old in-memory path.
+   */
+  durable?: boolean;
+  /**
+   * Called once the audio is safely stored. Whatever this does — upload,
+   * transcribe, queue for later — the recording stays on the device until it
+   * deletes it. See src/offline/recordingQueue.ts for the two policies.
+   */
+  onRecording?: (rec: StoredRecording) => void | Promise<void>;
+  /** Something the user should know that isn't an error (e.g. a screen lock
+   *  ended the recording early). */
+  onNotice?: (message: string) => void;
+}
 
 /**
  * Microphone → MediaRecorder → POST /api/transcribe → transcript callback.
@@ -14,20 +77,123 @@ export type RecorderMode = 'transcribe' | 'audio';
  * `onAudio` instead — the bottom bar's Record button keeps the recording as a
  * journal attachment, and sending it through speech-to-text first would cost a
  * CPU transcription nobody asked for.
+ *
+ * In `durable` mode (the journal buttons) the audio is written to IndexedDB
+ * every `CHUNK_MS` and the recorder never holds the only copy. That mode also
+ * handles the ways a phone ends a recording without being asked: a screen lock
+ * suspends the page and kills MediaRecorder, an incoming call revokes the mic,
+ * and a backgrounded tab can be discarded outright. Each of those used to be a
+ * silent, total loss.
  */
 export function useRecorder(
   onTranscript: (text: string) => void,
-  onAudio?: (blob: Blob) => void | Promise<void>
+  onAudio?: (blob: Blob) => void | Promise<void>,
+  options: RecorderOptions = {}
 ) {
   const [status, setStatus] = useState<RecorderStatus>('idle');
   const [error, setError] = useState('');
   const mediaRef = useRef<MediaRecorder | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const modeRef = useRef<RecorderMode>('transcribe');
+  const recordingRef = useRef<StoredRecording | null>(null);
+  const recoveredRef = useRef(false);
+  const wakeRef = useRef<WakeLockSentinelish | null>(null);
+  const mountedRef = useRef(true);
 
-  const start = async (mode: RecorderMode = 'transcribe') => {
+  // Callbacks are read through a ref so the lifecycle listeners below can be
+  // installed once and still see the current ones.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
+  const setStatusIfMounted = (s: RecorderStatus) => {
+    if (mountedRef.current) setStatus(s);
+  };
+  const setErrorIfMounted = (e: string) => {
+    if (mountedRef.current) setError(e);
+  };
+
+  const releaseWakeLock = () => {
+    const sentinel = wakeRef.current;
+    wakeRef.current = null;
+    void sentinel?.release().catch(() => undefined);
+  };
+
+  const acquireWakeLock = async () => {
+    // Keeping the screen on is the actual fix for "it stopped recording by
+    // itself": the auto-lock is what suspends the page in the first place.
+    // Feature-detected — Safari only got it in 16.4, and it is a nicety, not a
+    // requirement (everything below still recovers if it isn't there).
+    const api = wakeLockApi();
+    if (!api) return;
+    try {
+      wakeRef.current = await api.request('screen');
+    } catch {
+      // Denied or unsupported; recording continues without it.
+    }
+  };
+
+  /** Stop the hardware without going through MediaRecorder's stop(). */
+  const releaseStream = () => {
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+  };
+
+  const handleFinishedRecording = async (rec: StoredRecording) => {
+    setStatusIfMounted('saving');
+    try {
+      await optionsRef.current.onRecording?.(rec);
+    } catch (err) {
+      setErrorIfMounted(err instanceof Error ? err.message : 'Saving failed');
+    } finally {
+      setStatusIfMounted('idle');
+    }
+  };
+
+  const handleFinishedBlob = async (blob: Blob) => {
+    if (modeRef.current === 'audio' && onAudio) {
+      setStatusIfMounted('saving');
+      try {
+        await onAudio(blob);
+      } catch (err) {
+        setErrorIfMounted(err instanceof Error ? err.message : 'Saving failed');
+      } finally {
+        setStatusIfMounted('idle');
+      }
+      return;
+    }
+
+    setStatusIfMounted('transcribing');
+    try {
+      const fd = new FormData();
+      fd.append('audio', blob, 'recording.webm');
+      const r = await fetch('/api/transcribe', {
+        method: 'POST',
+        body: fd,
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Transcription failed');
+      if (data.text) onTranscript(data.text);
+    } catch (err) {
+      setErrorIfMounted(
+        err instanceof Error ? err.message : 'Transcription failed'
+      );
+    } finally {
+      setStatusIfMounted('idle');
+    }
+  };
+
+  const start = async (
+    mode: RecorderMode = 'transcribe',
+    opts: { durable?: boolean } = {}
+  ) => {
     setError('');
     modeRef.current = mode;
+    recoveredRef.current = false;
+    // Per-start, because SttPanel drives three buttons off one recorder and only
+    // the two journal ones are worth persisting; the third is dictation into a
+    // text field, where a lost take is retyped, not lost.
+    const durable = opts.durable ?? optionsRef.current.durable ?? false;
     if (!navigator.mediaDevices?.getUserMedia) {
       setError(
         'Microphone access requires HTTPS on this device — reload the page over the https:// URL.'
@@ -36,57 +202,183 @@ export function useRecorder(
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
       chunksRef.current = [];
-      const mr = new MediaRecorder(stream);
-      mr.ondataavailable = e => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      mr.onstop = async () => {
-        stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+      const preferred = pickMimeType();
+      const mr = new MediaRecorder(
+        stream,
+        preferred ? { mimeType: preferred } : undefined
+      );
+      const mimeType = mr.mimeType || preferred || 'audio/webm';
 
-        if (modeRef.current === 'audio' && onAudio) {
-          setStatus('saving');
-          try {
-            await onAudio(blob);
-          } catch (err) {
-            setError(err instanceof Error ? err.message : 'Saving failed');
-          } finally {
-            setStatus('idle');
-          }
+      let recording: StoredRecording | null = null;
+      if (durable) {
+        // Created before the first chunk so there is somewhere to put it.
+        const storedMode: RecordingMode =
+          mode === 'audio' ? 'audio' : 'transcribe';
+        recording = await beginRecording(storedMode, mimeType);
+      }
+      recordingRef.current = recording;
+
+      mr.ondataavailable = e => {
+        if (e.data.size === 0) return;
+        if (!recording) {
+          chunksRef.current.push(e.data);
+          return;
+        }
+        // Deliberately not awaited: ondataavailable must return promptly, and
+        // recordingStore serializes writes internally so order still holds.
+        void appendChunk(recording.id, e.data).catch(err => {
+          // Out of quota or IndexedDB refused the write. Stop rather than keep
+          // recording into nothing — what is already stored stays usable.
+          setErrorIfMounted(
+            err instanceof Error
+              ? `Storage failed, recording stopped: ${err.message}`
+              : 'Storage failed, recording stopped'
+          );
+          stop();
+        });
+      };
+
+      mr.onerror = () => {
+        setErrorIfMounted('The recording stopped unexpectedly.');
+        recoveredRef.current = true;
+        stop();
+      };
+
+      // An incoming call, or another app taking the mic, ends the track without
+      // ending the MediaRecorder.
+      stream.getAudioTracks().forEach(t => {
+        t.onended = () => {
+          if (mediaRef.current !== mr) return;
+          recoveredRef.current = true;
+          optionsRef.current.onNotice?.(
+            'The microphone was taken by something else — the recording so far is saved.'
+          );
+          stop();
+        };
+      });
+
+      mr.onstop = async () => {
+        releaseStream();
+        releaseWakeLock();
+        mediaRef.current = null;
+
+        if (recording) {
+          const finalized = await finalizeRecording(recording.id, {
+            recovered: recoveredRef.current,
+          });
+          recordingRef.current = null;
+          if (finalized) await handleFinishedRecording(finalized);
+          else setStatusIfMounted('idle');
           return;
         }
 
-        setStatus('transcribing');
-        try {
-          const fd = new FormData();
-          fd.append('audio', blob, 'recording.webm');
-          const r = await fetch('/api/transcribe', {
-            method: 'POST',
-            body: fd,
-          });
-          const data = await r.json();
-          if (!r.ok) throw new Error(data.error || 'Transcription failed');
-          if (data.text) onTranscript(data.text);
-        } catch (err) {
-          setError(err instanceof Error ? err.message : 'Transcription failed');
-        } finally {
-          setStatus('idle');
-        }
+        await handleFinishedBlob(
+          new Blob(chunksRef.current, { type: mimeType })
+        );
       };
-      mr.start();
+
+      // A timeslice is what makes any of this possible: without one,
+      // ondataavailable fires exactly once, at stop, and everything before that
+      // is unreachable inside the browser.
+      mr.start(CHUNK_MS);
       mediaRef.current = mr;
       setStatus('recording');
+      if (durable) void acquireWakeLock();
     } catch (err) {
+      releaseStream();
       setError(err instanceof Error ? err.message : 'Microphone access denied');
       setStatus('idle');
     }
   };
 
   const stop = () => {
-    mediaRef.current?.stop();
+    const mr = mediaRef.current;
+    if (!mr) return;
+    if (mr.state === 'inactive') {
+      // Already dead — the OS got there first. onstop won't fire, so finish by
+      // hand rather than leaving the recording open forever.
+      mediaRef.current = null;
+      releaseStream();
+      releaseWakeLock();
+      const recording = recordingRef.current;
+      recordingRef.current = null;
+      if (recording) {
+        void finalizeRecording(recording.id, { recovered: true }).then(
+          finalized => {
+            if (finalized) return handleFinishedRecording(finalized);
+            setStatusIfMounted('idle');
+          }
+        );
+      } else {
+        setStatusIfMounted('idle');
+      }
+      return;
+    }
+    mr.stop();
     mediaRef.current = null;
   };
+
+  // The lifecycle handlers. Each of these was previously a silent, total loss.
+  useEffect(() => {
+    mountedRef.current = true;
+
+    const onVisibility = () => {
+      const mr = mediaRef.current;
+      if (!mr) return;
+      if (document.visibilityState === 'hidden') {
+        // About to be suspended (screen lock, app switch). Flush now so at most
+        // a fraction of a second is still unwritten.
+        try {
+          if (mr.state === 'recording') mr.requestData();
+        } catch {
+          // Not supported / wrong state — the next timeslice covers it.
+        }
+        return;
+      }
+      // Back in the foreground. iOS routinely kills the recorder while the page
+      // is suspended, and the UI used to come back showing 'recording' as if
+      // nothing had happened.
+      if (mr.state === 'inactive') {
+        recoveredRef.current = true;
+        optionsRef.current.onNotice?.(
+          'The recording ended while the screen was off — everything up to that point is saved.'
+        );
+        stop();
+      } else if (recordingRef.current && !wakeRef.current) {
+        // Wake locks are released on hide; take it again.
+        void acquireWakeLock();
+      }
+    };
+
+    const onPageHide = () => {
+      const mr = mediaRef.current;
+      if (!mr || mr.state !== 'recording') return;
+      // The page is being discarded. Force out the last partial chunk and close
+      // the record so the startup sweep finds a complete recording.
+      try {
+        mr.requestData();
+      } catch {
+        // Best effort.
+      }
+      const recording = recordingRef.current;
+      if (recording) void finalizeRecording(recording.id, { recovered: true });
+    };
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+    return () => {
+      mountedRef.current = false;
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+      // Unmounting mid-recording used to leak the MediaRecorder and the mic
+      // stream, and onstop never ran — so the audio went nowhere.
+      stop();
+      releaseStream();
+      releaseWakeLock();
+    };
+  }, []);
 
   return { status, error, start, stop };
 }

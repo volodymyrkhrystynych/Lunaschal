@@ -11,6 +11,7 @@ import {
   useJournalCreate,
   useJournalUpdate,
 } from '../offline/mutationDefaults';
+import { handleFinishedRecording } from '../offline/recordingQueue';
 import { buildFeed, type FeedItem } from '../lib/journalFeed';
 import { computeEventGroupSpans } from '../lib/journalEventGroups';
 import { eventTimeLabel, toLocalISO } from '../lib/calendar';
@@ -75,8 +76,22 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   // time, so one recorder serves the whole list. The transcript is appended
   // rather than submitted (the BrainDump/IdeaCapture pattern) — it can be
   // corrected, or a second thought added, before Save.
-  const editRecorder = useRecorder(text =>
-    setEditContent(prev => (prev ? `${prev}\n${text}` : text))
+  // Durable: this is a journal entry being spoken, so the audio is held on the
+  // device until something confirms it landed. If transcription fails it is
+  // saved as an audio entry rather than dropped (see recordingQueue).
+  const [recorderNotice, setRecorderNotice] = useState('');
+  const editRecorder = useRecorder(
+    text => setEditContent(prev => (prev ? `${prev}\n${text}` : text)),
+    undefined,
+    {
+      durable: true,
+      onNotice: setRecorderNotice,
+      onRecording: rec =>
+        handleFinishedRecording(queryClient, rec, {
+          onTranscript: text =>
+            setEditContent(prev => (prev ? `${prev}\n${text}` : text)),
+        }),
+    }
   );
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
   const [polishError, setPolishError] = useState<{
@@ -556,6 +571,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
             )}
             {editRecorder.error && (
               <p className="mt-2 text-xs text-red-400">{editRecorder.error}</p>
+            )}
+            {!editRecorder.error && recorderNotice && (
+              <p className="mt-2 text-xs text-amber-300">{recorderNotice}</p>
             )}
             <div className="flex items-center gap-2 mt-2">
               <button

@@ -83,6 +83,10 @@ not. This is the right answer on any other platform and simply isn't available.
    and does work in iOS Safari. It changes the workflow rather than supporting
    it — recordings would have to be started inside Lunaschal — so it is a
    different feature, not a fix for this one. Worth it only if 2 fails.
+   (It exists, via the bottom bar's Record button, and as of
+   `fix/durable-journal-recordings` it keeps its audio through a screen lock —
+   see [durable-journal-recordings.md](durable-journal-recordings.md). It still
+   does not solve _this_ problem: getting an existing Voice Memos file in.)
 
 ## What does work today
 

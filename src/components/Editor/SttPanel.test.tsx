@@ -6,22 +6,40 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { SttPanel } from './SttPanel';
 
+const durableStarts: Array<{ mode?: string; durable?: boolean }> = [];
+
 vi.mock('../../hooks/useRecorder', () => ({
   useRecorder: (
     onTranscript: (text: string) => void,
-    onAudio?: (blob: Blob) => void | Promise<void>
+    _onAudio: unknown,
+    options?: {
+      onRecording?: (rec: { id: string; mode: string }) => void | Promise<void>;
+    }
   ) => ({
     status: 'idle',
     error: '',
-    // start('audio') is the no-transcription path: the blob goes straight to
-    // onAudio and nothing is ever handed to onTranscript.
-    start: vi.fn(async (mode?: string) => {
+    // start('audio') is the no-transcription path: the stored recording goes
+    // straight to onRecording and nothing is ever handed to onTranscript.
+    start: vi.fn(async (mode?: string, opts?: { durable?: boolean }) => {
+      durableStarts.push({ mode, durable: opts?.durable });
       if (mode === 'audio')
-        await onAudio?.(new Blob(['fake-audio'], { type: 'audio/webm' }));
+        await options?.onRecording?.({ id: 'rec-1', mode: 'audio' });
       else onTranscript('hello from the journal button');
     }),
     stop: vi.fn(),
   }),
+}));
+
+// The panel's job is to hand a finished recording to the queue; what the queue
+// then does with it (upload, retry, keep) is covered by recordingQueue.test.ts.
+const handleFinishedRecording = vi.fn().mockResolvedValue(undefined);
+vi.mock('../../offline/recordingQueue', () => ({
+  handleFinishedRecording: (...args: unknown[]) =>
+    handleFinishedRecording(...args),
+}));
+
+vi.mock('./PendingRecordings', () => ({
+  PendingRecordings: () => null,
 }));
 
 vi.mock('../../hooks/api', () => ({
@@ -58,6 +76,8 @@ describe('SttPanel', () => {
   beforeEach(() => {
     vi.mocked(api.journal.createFromVoice).mockClear();
     vi.mocked(api.journal.createRecording).mockClear();
+    handleFinishedRecording.mockClear();
+    durableStarts.length = 0;
   });
 
   it('routes the Journal button transcript to the journal API, not the editor callback', async () => {
@@ -92,7 +112,7 @@ describe('SttPanel', () => {
     expect(api.journal.createFromVoice).not.toHaveBeenCalled();
   });
 
-  it('the Record button saves the audio as a journal entry without transcribing it', async () => {
+  it('the Record button hands the stored recording to the queue, untranscribed', async () => {
     const onTranscribed = vi.fn();
     renderWithProviders(
       <SttPanel onTranscribed={onTranscribed} onMeetingUploaded={() => {}} />
@@ -101,12 +121,32 @@ describe('SttPanel', () => {
     fireEvent.click(await screen.findByText('Record'));
 
     await waitFor(() =>
-      expect(api.journal.createRecording).toHaveBeenCalledTimes(1)
+      expect(handleFinishedRecording).toHaveBeenCalledTimes(1)
     );
-    const [blob] = vi.mocked(api.journal.createRecording).mock.calls[0];
-    expect(blob).toBeInstanceOf(Blob);
+    expect(handleFinishedRecording.mock.calls[0][1]).toMatchObject({
+      id: 'rec-1',
+    });
     // The whole point: no speech-to-text, and nothing typed into the editor.
     expect(api.journal.createFromVoice).not.toHaveBeenCalled();
     expect(onTranscribed).not.toHaveBeenCalled();
+  });
+
+  it('records the journal buttons durably and the plain one not', async () => {
+    renderWithProviders(
+      <SttPanel onTranscribed={vi.fn()} onMeetingUploaded={() => {}} />
+    );
+
+    fireEvent.click(await screen.findByText('Record'));
+    fireEvent.click(await screen.findByText('Journal'));
+    fireEvent.click(await screen.findByText('Transcribe'));
+
+    // The two journal buttons persist their audio; the third dictates into
+    // whatever text field is open, where a lost take is retyped, not lost.
+    await waitFor(() => expect(durableStarts).toHaveLength(3));
+    expect(durableStarts).toEqual([
+      { mode: 'audio', durable: true },
+      { mode: 'transcribe', durable: true },
+      { mode: undefined, durable: undefined },
+    ]);
   });
 });

@@ -1,5 +1,6 @@
 import json
 import queue
+import re
 import threading
 import time
 from datetime import datetime
@@ -467,13 +468,20 @@ def list_attachments(id):
     return jsonify([_attachment_dict(r) for r in rows])
 
 
-def _store_attachment(entry_id: str, file, name: str | None):
+def _store_attachment(
+    entry_id: str, file, name: str | None, attachment_id: str | None = None
+):
     """Save one uploaded file as an attachment of `entry_id`.
 
     Returns `(attachment_dict, None)` on success and `(None, (error, status))`
     on a rejected upload. Split out of the upload route so the one-shot
     recording route below can reuse it — the two differ only in where the entry
     comes from, not in how a file becomes an attachment.
+
+    `attachment_id` lets a caller supply the id instead of minting one. Only the
+    recording route does: a phone holds its audio until the upload is confirmed,
+    so the same clip is re-POSTed until it lands, and a client-chosen id is what
+    lets the replay be recognized (see `create_recording_entry`).
     """
     # NOT `or not file.filename`: a voice memo dragged out of the iOS Voice Memos
     # app arrives as a File with an empty name, and rejecting it here turned a
@@ -490,7 +498,7 @@ def _store_attachment(entry_id: str, file, name: str | None):
     if not name:
         name = (file.filename or '').rsplit('/', 1)[-1] or _DEFAULT_NAMES[kind]
 
-    attachment_id = str(ULID())
+    attachment_id = attachment_id or str(ULID())
     path = storage.attachment_path(attachment_id, ext)
     if path is None:
         return None, (_UNSUPPORTED_TYPE, 400)
@@ -529,8 +537,12 @@ def _store_attachment(entry_id: str, file, name: str | None):
         (entry_id,),
     ).fetchone()['next']
     try:
-        db.execute(
-            'INSERT INTO journal_attachments'
+        # OR IGNORE, not plain INSERT: with a client-supplied id, two replays of
+        # the same recording can race past the caller's existence check. Losing
+        # that race must be a no-op — the `raise` below would rmtree the winner's
+        # file out from under a perfectly good row.
+        cur = db.execute(
+            'INSERT OR IGNORE INTO journal_attachments'
             '(id, entry_id, kind, name, path, mime, size, position,'
             ' transcript_status, description_status, latitude, longitude, created_at)'
             " VALUES (?,?,?,?,?,?,?,?,'idle',?,?,?,?)",
@@ -542,6 +554,8 @@ def _store_attachment(entry_id: str, file, name: str | None):
         # Don't leave a file on disk that no row points at.
         storage.delete_attachment_dir(attachment_id)
         raise
+    if cur.rowcount == 0:
+        return _attachment_dict(_load_attachment(attachment_id)), None
 
     _notify_subscribers(entry_id)
     if auto_describe:
@@ -568,6 +582,23 @@ def upload_attachment(id):
     return jsonify(attachment), 201
 
 
+_ULID_RE = re.compile(r'^[0-9A-HJKMNP-TV-Z]{26}$')
+
+
+def _client_id(value: str | None) -> str | None:
+    """A client-supplied ULID, or None if absent. Raises ValueError on a
+    malformed one rather than falling back to a fresh id — an attachment id
+    becomes a directory name, and silently substituting a different id would
+    also break the very replay the client is counting on.
+    """
+    value = (value or '').strip()
+    if not value:
+        return None
+    if not _ULID_RE.match(value):
+        raise ValueError('id must be a ULID')
+    return value
+
+
 @bp.post('/recordings')
 def create_recording_entry():
     """Save a recording as a journal entry *without* transcribing it.
@@ -582,33 +613,66 @@ def create_recording_entry():
     Entry and attachment are created in one request so a failed upload can't
     leave an empty entry behind — the entry row is removed if the file is
     rejected.
+
+    **Replaying this request must be a no-op.** The phone keeps a recording in
+    IndexedDB until the server confirms it landed, and re-POSTs it on every
+    reconnect until then — so a retry after a response that never made it back
+    is the normal case, not an edge case. `id` and `attachmentId` therefore come
+    from the client, and both halves are idempotent: `INSERT OR IGNORE` for the
+    entry (as in `create_entry`), and an early return on an attachment id we
+    already hold. The attachment check comes *first*, before the file is read,
+    so a replay doesn't stream a hundred megabytes to disk to discover it was
+    already there.
     """
+    try:
+        entry_id = _client_id(request.form.get('id'))
+        attachment_id = _client_id(request.form.get('attachmentId'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    db = get_db()
+
+    if attachment_id:
+        existing = _load_attachment(attachment_id)
+        if existing is not None:
+            # Already stored. Answer as if we'd just saved it so the client
+            # clears its local copy — the whole point of the retry loop.
+            return jsonify(
+                {'id': existing['entry_id'], 'attachment': _attachment_dict(existing)}
+            ), 201
+
     file = request.files.get('file')
     if file is None:
         return jsonify({'error': 'file is required'}), 400
 
     now = int(time.time())
-    entry_id = str(ULID())
-    db = get_db()
-    db.execute(
-        'INSERT INTO journal_entries(id, content, raw_content, title, tags,'
-        ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+    entry_id = entry_id or str(ULID())
+    cur = db.execute(
+        'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title,'
+        ' tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
         (entry_id, '', None, (request.form.get('title') or '').strip() or None,
          None, now, now),
     )
     db.commit()
+    # Only an entry this request created may be cleaned up below: a replay whose
+    # file is rejected must not delete the entry an earlier call got right.
+    created_entry = cur.rowcount > 0
+
+    def _rollback_entry():
+        if not created_entry:
+            return
+        db.execute('DELETE FROM journal_entries WHERE id=?', (entry_id,))
+        db.commit()
 
     try:
         attachment, failure = _store_attachment(
-            entry_id, file, request.form.get('name') or 'Recording'
+            entry_id, file, request.form.get('name') or 'Recording', attachment_id
         )
     except Exception:
-        db.execute('DELETE FROM journal_entries WHERE id=?', (entry_id,))
-        db.commit()
+        _rollback_entry()
         raise
     if failure is not None:
-        db.execute('DELETE FROM journal_entries WHERE id=?', (entry_id,))
-        db.commit()
+        _rollback_entry()
         message, status = failure
         return jsonify({'error': message}), status
 

@@ -1,6 +1,9 @@
 // Typed API client — replaces tRPC hooks
 
-import { uploadFilenameFor } from '../lib/journalAttachments';
+import {
+  recordingFilename,
+  uploadFilenameFor,
+} from '../lib/journalAttachments';
 // The shape is defined next to the geometry that consumes it, so the payload
 // and the band math can't drift apart.
 import type { SleepDay } from '../lib/sleep';
@@ -1317,6 +1320,27 @@ export interface PracticeStats {
 // is generous.
 const READ_TIMEOUT_MS = 20_000;
 const WRITE_TIMEOUT_MS = 60_000;
+// Uploads carry meeting audio and phone video over what may be a Tailscale
+// link, so the bound is generous — but it has to exist. `upload` was the one
+// helper with no timeout at all, and a half-open connection there hangs until
+// the OS gives up, which now also stalls every queued recording behind it.
+const UPLOAD_TIMEOUT_MS = 10 * 60_000;
+
+/**
+ * An error carrying the HTTP status, so a caller can tell "the server is
+ * unhappy with this request" (4xx — retrying changes nothing) from "the server
+ * or the network is having a moment" (5xx / no response — retry). The recording
+ * queue needs that distinction: it must keep the audio either way, but only one
+ * of the two is worth trying again.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
 
 async function fetchWithTimeout(
   url: string,
@@ -1374,14 +1398,14 @@ const put = <T>(url: string, body: unknown) => send<T>('PUT', url, body);
 const del = <T>(url: string) => send<T>('DELETE', url);
 
 async function upload<T>(url: string, form: FormData): Promise<T> {
-  const r = await fetch(url, {
-    method: 'POST',
-    credentials: 'include',
-    body: form,
-  });
+  const r = await fetchWithTimeout(
+    url,
+    { method: 'POST', credentials: 'include', body: form },
+    UPLOAD_TIMEOUT_MS
+  );
   if (!r.ok) {
     const b = await r.json().catch(() => ({}));
-    throw new Error(b.error || `HTTP ${r.status}`);
+    throw new ApiError(b.error || `HTTP ${r.status}`, r.status);
   }
   return r.json();
 }
@@ -1464,10 +1488,19 @@ export const api = {
     // The bottom bar's Record button: keep the recording itself as the entry,
     // no speech-to-text. One request so a rejected upload leaves no empty entry
     // behind; the clip lands as the entry's first attachment.
-    createRecording: (audio: Blob, name?: string) => {
+    // `id`/`attachmentId` are client-minted ULIDs. The phone holds its audio
+    // until the server confirms it landed and re-POSTs on every reconnect, so
+    // these are what let the server recognise a replay instead of creating a
+    // second entry and a second copy of the file.
+    createRecording: (
+      audio: Blob,
+      opts: { id?: string; attachmentId?: string; name?: string } = {}
+    ) => {
       const form = new FormData();
-      form.append('file', audio, 'recording.webm');
-      if (name?.trim()) form.append('name', name.trim());
+      form.append('file', audio, recordingFilename(audio.type));
+      if (opts.name?.trim()) form.append('name', opts.name.trim());
+      if (opts.id) form.append('id', opts.id);
+      if (opts.attachmentId) form.append('attachmentId', opts.attachmentId);
       return upload<{ id: string; attachment: JournalAttachment }>(
         '/api/journal/recordings',
         form
@@ -2242,6 +2275,11 @@ export const api = {
         tts_ready: boolean;
       }>('/api/stt/health'),
     whisperModels: () => get<WhisperModel[]>('/api/stt/whisper-models'),
+    transcribe: (audio: Blob) => {
+      const form = new FormData();
+      form.append('audio', audio, recordingFilename(audio.type));
+      return upload<{ text?: string }>('/api/transcribe', form);
+    },
     reload: () => post<{ success: boolean }>('/api/stt/reload'),
     listenerState: () =>
       get<{ recording: boolean; transcribing: boolean; mode: string | null }>(

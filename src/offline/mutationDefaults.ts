@@ -7,12 +7,20 @@ import {
 } from '@tanstack/react-query';
 import {
   api,
+  ApiError,
   type ClaimCoverage,
   type DailyTask,
+  type JournalAttachment,
   type JournalEntry,
   type TodoItem,
   type TodoPayload,
 } from '../hooks/api';
+import {
+  assembleBlob,
+  deleteRecording,
+  getRecording,
+  markAttempt,
+} from './recordingStore';
 
 /**
  * Offline write queue.
@@ -38,6 +46,7 @@ import {
 export const MUTATION_KEYS = {
   journalCreate: ['journal', 'create'] as const,
   journalUpdate: ['journal', 'update'] as const,
+  journalRecording: ['journal', 'recording'] as const,
   todoCreate: ['todos', 'create'] as const,
   todoUpdate: ['todos', 'update'] as const,
   dailyToggle: ['tasks', 'toggle'] as const,
@@ -62,6 +71,17 @@ export interface JournalUpdateVars {
   id: string;
   content: string;
   title: string;
+}
+/**
+ * Note what is *not* here: the audio. The persister structured-clones the whole
+ * query client on every write, so a Blob in the payload would be copied on every
+ * unrelated mutation — and a paused mutation restored after a reload has to be
+ * reconstructable from these vars alone. The id is enough: the blob is fetched
+ * from recordingStore inside the mutationFn.
+ */
+export interface JournalRecordingVars {
+  id: string;
+  name?: string;
 }
 export type TodoCreateVars = TodoPayload & { title: string; id: string };
 export interface TodoUpdateVars {
@@ -118,7 +138,12 @@ export interface NotebookWriteVars {
 // registered default share.
 type Cfg<TData, TVars> = Pick<
   UseMutationOptions<TData, Error, TVars>,
-  'networkMode' | 'mutationFn' | 'onMutate' | 'onSettled'
+  | 'networkMode'
+  | 'mutationFn'
+  | 'onMutate'
+  | 'onSettled'
+  | 'retry'
+  | 'retryDelay'
 >;
 
 const ONLINE = { networkMode: 'online' as const };
@@ -206,6 +231,71 @@ const journalUpdateCfg = (
           : e
       )
     );
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ['journal'] }),
+});
+
+/** A 4xx means the server has looked at this recording and will not take it.
+ *  Retrying changes nothing — but the audio is still kept, and offered for
+ *  download, because "the server refused it" is not a reason to destroy it. */
+function isTerminal(error: unknown): boolean {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500;
+}
+
+type RecordingResult = { id: string; attachment: JournalAttachment };
+
+const journalRecordingCfg = (
+  qc: QueryClient
+): Cfg<RecordingResult, JournalRecordingVars> => ({
+  ...ONLINE,
+  retry: (failureCount, error) => !isTerminal(error) && failureCount < 5,
+  retryDelay: attempt => Math.min(30_000, 1000 * 2 ** attempt),
+  mutationFn: async vars => {
+    const rec = await getRecording(vars.id);
+    if (!rec) throw new Error('That recording is no longer on this device.');
+    const blob = await assembleBlob(vars.id);
+    if (!blob || blob.size === 0) {
+      // Nothing was ever captured (permission revoked before the first chunk).
+      // There is no audio to protect, so clear it out rather than leaving an
+      // un-uploadable row in the pending list forever.
+      await deleteRecording(vars.id);
+      throw new Error('That recording was empty.');
+    }
+    try {
+      // The recording id is used for both the entry and the attachment, which
+      // is what makes a replay a no-op server-side.
+      const res = await api.journal.createRecording(blob, {
+        id: vars.id,
+        attachmentId: vars.id,
+        name: vars.name,
+      });
+      // Confirmed stored. This is the only place the audio may be let go of.
+      await deleteRecording(vars.id);
+      return res;
+    } catch (e) {
+      await markAttempt(
+        vars.id,
+        e instanceof Error ? e.message : 'Upload failed',
+        isTerminal(e)
+      );
+      throw e;
+    }
+  },
+  onMutate: vars => {
+    // The entry appears in the feed the moment recording stops, even offline —
+    // "I recorded it and the journal is empty" was half the reported bug.
+    const nowIso = new Date().toISOString();
+    const entry: JournalEntry = {
+      id: vars.id,
+      content: '',
+      rawContent: null,
+      title: vars.name ?? null,
+      tags: null,
+      curatedTags: [],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+    patchJournalLists(qc, list => [entry, ...list], { firstPageOnly: true });
   },
   onSettled: () => qc.invalidateQueries({ queryKey: ['journal'] }),
 });
@@ -368,6 +458,10 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
   const pairs: Array<[readonly unknown[], Cfg<unknown, never>]> = [
     [MUTATION_KEYS.journalCreate, journalCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.journalUpdate, journalUpdateCfg(qc) as Cfg<unknown, never>],
+    [
+      MUTATION_KEYS.journalRecording,
+      journalRecordingCfg(qc) as Cfg<unknown, never>,
+    ],
     [MUTATION_KEYS.todoCreate, todoCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.todoUpdate, todoUpdateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.dailyToggle, dailyToggleCfg(qc) as Cfg<unknown, never>],
@@ -400,9 +494,17 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
 // --- typed hooks: apply the shared config inline (works standalone) and let
 // the caller layer on UI-only callbacks. ---
 
+// Callers layer on UI-only concerns; everything behavioral belongs to the Cfg,
+// so that a mounted component and a headless replay behave identically.
 type CallerOptions<TData, TVars> = Omit<
   UseMutationOptions<TData, Error, TVars>,
-  'mutationFn' | 'mutationKey' | 'onMutate' | 'onSettled' | 'networkMode'
+  | 'mutationFn'
+  | 'mutationKey'
+  | 'onMutate'
+  | 'onSettled'
+  | 'networkMode'
+  | 'retry'
+  | 'retryDelay'
 >;
 
 function useOfflineMutation<TData, TVars>(
@@ -425,6 +527,10 @@ export const useJournalCreate = (
 export const useJournalUpdate = (
   o?: CallerOptions<{ success: boolean }, JournalUpdateVars>
 ) => useOfflineMutation(MUTATION_KEYS.journalUpdate, journalUpdateCfg, o);
+
+export const useJournalRecording = (
+  o?: CallerOptions<RecordingResult, JournalRecordingVars>
+) => useOfflineMutation(MUTATION_KEYS.journalRecording, journalRecordingCfg, o);
 
 export const useTodoCreate = (
   o?: CallerOptions<{ id: string }, TodoCreateVars>
