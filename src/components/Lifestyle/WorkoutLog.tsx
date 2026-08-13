@@ -10,7 +10,7 @@ import {
   isActivityType,
 } from '@/lib/lifestyle';
 import { IntensityPicker, IntensityStars } from './IntensityStars';
-import { CARD } from './card';
+import { CARD, CARD_DIVIDER } from './card';
 import {
   clearWorkoutDraft,
   DRAFT_SAVE_DELAY_MS,
@@ -175,7 +175,25 @@ export function WorkoutLog() {
       () => saveWorkoutDraft(draft),
       DRAFT_SAVE_DELAY_MS
     );
-    return () => clearTimeout(timer);
+
+    // The debounce is the hole in "nothing typed is ever lost": a phone that
+    // locks the screen or swaps to a music app mid-set can tear the page down
+    // before the timer fires, taking the last few characters with it. Both
+    // events flush the pending draft synchronously — `pagehide` is the one iOS
+    // Safari reliably delivers on a kill, `visibilitychange` covers the
+    // backgrounding that precedes it. Not `beforeunload`, which mobile
+    // browsers may skip entirely.
+    const flush = () => saveWorkoutDraft(draft);
+    const onHidden = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onHidden);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onHidden);
+    };
   }, [draft]);
 
   // Four is the whole history this card shows. It sits beside the day's tasks
@@ -242,90 +260,103 @@ export function WorkoutLog() {
         </div>
       </div>
 
-      <textarea
-        value={draft.rawText}
-        onChange={e => set('rawText', e.target.value)}
-        placeholder={PLACEHOLDER}
-        rows={5}
-        className="w-full px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] font-mono text-sm resize-y focus:outline-none focus:border-[var(--color-primary)]"
-      />
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        {ACTIVITY_TYPES.map(type => {
-          const active = draft.locationType === type;
-          return (
-            <button
-              key={type}
-              type="button"
-              onClick={() => set('locationType', active ? null : type)}
-              aria-pressed={active}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs border transition-colors min-h-[36px] ${
-                active
-                  ? 'border-[var(--color-primary)] text-[var(--color-text)] bg-white/5'
-                  : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-              }`}
-            >
-              <span
-                className="inline-block w-2.5 h-2.5 rounded-sm"
-                style={{ background: ACTIVITY_COLORS[type] }}
-                aria-hidden="true"
-              />
-              {ACTIVITY_LABELS[type]}
-            </button>
-          );
-        })}
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-2">
-        <label className="text-xs text-[var(--color-text-muted)]">
-          Duration (min)
-          <input
-            type="number"
-            inputMode="numeric"
-            min={0}
-            value={draft.durationMinutes}
-            onChange={e => set('durationMinutes', e.target.value)}
-            className="mt-1 w-full px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-          />
-        </label>
-        <IntensityPicker
-          value={draft.intensityRating}
-          onChange={v => set('intensityRating', v)}
+      {/* The form is one capped column, not a set of full-width controls: the
+          card can be as wide as the tab, and a number field or a Log button
+          stretched across it reads as a mistake. One gap value sets the rhythm
+          instead of a different mt-* on every child. */}
+      <div className="flex flex-col gap-3 w-full max-w-xl">
+        <textarea
+          value={draft.rawText}
+          onChange={e => set('rawText', e.target.value)}
+          placeholder={PLACEHOLDER}
+          rows={5}
+          className="w-full px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] font-mono text-sm resize-y focus:outline-none focus:border-[var(--color-primary)]"
         />
+
+        <div className="flex flex-wrap gap-2">
+          {ACTIVITY_TYPES.map(type => {
+            const active = draft.locationType === type;
+            return (
+              <button
+                key={type}
+                type="button"
+                onClick={() => set('locationType', active ? null : type)}
+                aria-pressed={active}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs border transition-colors min-h-[36px] ${
+                  active
+                    ? 'border-[var(--color-primary)] text-[var(--color-text)] bg-white/5'
+                    : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                }`}
+              >
+                <span
+                  className="inline-block w-2.5 h-2.5 rounded-sm"
+                  style={{ background: ACTIVITY_COLORS[type] }}
+                  aria-hidden="true"
+                />
+                {ACTIVITY_LABELS[type]}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Duration is three digits, so it gets three digits' worth of field
+            and sits next to the stars rather than in a half-card column. */}
+        <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
+          <label className="text-xs text-[var(--color-text-muted)]">
+            Duration (min)
+            <input
+              type="number"
+              inputMode="numeric"
+              min={0}
+              value={draft.durationMinutes}
+              onChange={e => set('durationMinutes', e.target.value)}
+              className="mt-1 block w-24 px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+            />
+          </label>
+          <IntensityPicker
+            value={draft.intensityRating}
+            onChange={v => set('intensityRating', v)}
+          />
+        </div>
+
+        <input
+          value={draft.notes}
+          onChange={e => set('notes', e.target.value)}
+          placeholder="Notes (optional)"
+          className="w-full px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] text-sm focus:outline-none focus:border-[var(--color-primary)]"
+        />
+
+        {error && (
+          <div className="text-xs text-[var(--color-accent)]">{error}</div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => create.mutate()}
+          disabled={create.isPending || isDraftEmpty(draft)}
+          className="self-start px-5 py-2 rounded bg-[var(--color-primary)] text-white font-medium disabled:opacity-40 min-h-[44px]"
+        >
+          {create.isPending ? 'Saving…' : 'Log workout'}
+        </button>
       </div>
-
-      <input
-        value={draft.notes}
-        onChange={e => set('notes', e.target.value)}
-        placeholder="Notes (optional)"
-        className="mt-2 w-full px-3 py-2 rounded bg-[var(--color-bg)] border border-white/10 text-[var(--color-text)] text-sm focus:outline-none focus:border-[var(--color-primary)]"
-      />
-
-      {error && (
-        <div className="mt-2 text-xs text-[var(--color-accent)]">{error}</div>
-      )}
-
-      <button
-        type="button"
-        onClick={() => create.mutate()}
-        disabled={create.isPending || isDraftEmpty(draft)}
-        className="mt-3 px-4 py-2 rounded bg-[var(--color-primary)] text-white font-medium disabled:opacity-40 min-h-[44px]"
-      >
-        {create.isPending ? 'Saving…' : 'Log workout'}
-      </button>
 
       {sessions.length > 0 && (
-        // Scrolls inside the card: a session with a long exercise list is tall,
-        // and four of those would stretch the card past the screen again.
-        <ul className="mt-4 space-y-2 max-h-96 overflow-y-auto pr-1">
-          {sessions.map(session => (
-            <SessionCard
-              key={session.id}
-              session={session}
-              showDelete={showDelete}
-            />
-          ))}
-        </ul>
+        <div className={CARD_DIVIDER}>
+          <h3 className="text-xs uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
+            Recent
+          </h3>
+          {/* Scrolls inside the card: a session with a long exercise list is
+              tall, and four of those would stretch the card past the screen. */}
+          <ul className="space-y-2 max-h-96 overflow-y-auto pr-1">
+            {sessions.map(session => (
+              <SessionCard
+                key={session.id}
+                session={session}
+                showDelete={showDelete}
+              />
+            ))}
+          </ul>
+        </div>
       )}
     </section>
   );

@@ -1094,10 +1094,15 @@ export interface FoodJournalItem {
 // Tasks are deliberately absent: the Lifestyle tab renders daily tasks and
 // to-dos through api.tasks/api.todos rather than a parallel list of its own.
 
-// The four activity types, in the priority order the heatmap resolves ties by.
-// Kept structurally identical to ACTIVITY_TYPES in src/lib/lifestyle.ts.
+// The activity types, in the priority order the heatmap resolves ties by.
+// Kept structurally identical to ACTIVITY_TYPES in src/lib/lifestyle.ts and
+// backend/lifestyle/activity.py.
 export type ActivityTypeId =
-  'goodlife_brother' | 'goodlife_alone' | 'building' | 'outside';
+  | 'goodlife_brother'
+  | 'goodlife_alone'
+  | 'building'
+  | 'lifting_home'
+  | 'outside';
 
 export interface WorkoutSet {
   id: string;

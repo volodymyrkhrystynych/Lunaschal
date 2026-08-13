@@ -209,6 +209,15 @@ now sits directly under Journal in the sidebar rather than down by Food.
   a card, and so do daily tasks and the to-do list (daily above, capped at four, so it no longer
   claims half the tab for four rows). The shell lives once in `src/components/Lifestyle/card.ts`;
   the halves render no border of their own.
+- **Cards cap their contents' width** rather than stretching a form across the tab, which is what
+  lets the tasks card and the workout log share a row on the desktop and stack on the phone.
+- **A fifth activity type, `lifting_home` ("Lifting at home")**, inserted between
+  `building` and `outside` — index is priority, so it only changes which colour a _mixed_ day's
+  box takes. Its hue (`#8a5bff`) came out of a search, not a picker: the four in use already sat
+  ΔE 8.5 apart at their closest, 3:1 contrast against a dark surface caps how dark a candidate can
+  be, and the categorical lightness band caps how light. The set of five passes every check on
+  both surfaces (worst pair ΔE 8.1 deutan, 16.5 normal-vision, all ≥3:1). **A sixth will not
+  fit** — the wheel is full at this lightness, and a sixth type needs a second channel.
 - A **weekly trends chart** took the chores card's slot: applications sent against journal
   entries, `GET /api/lifestyle/trends`. One shared y-axis (both are counts per week; a second
   scale can be made to show any relationship you like), zero weeks included, hues reused from the
