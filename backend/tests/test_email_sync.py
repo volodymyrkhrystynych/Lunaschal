@@ -375,3 +375,60 @@ def test_a_duplicate_gmail_id_does_not_abort_the_sync(client, monkeypatch, accou
     assert result['newCount'] == 1
     assert db.execute('SELECT COUNT(*) c FROM emails').fetchone()['c'] == 2
     assert db.execute("SELECT id FROM emails WHERE gmail_id='g1'").fetchone()['id'] == 'other-writer'
+
+
+def test_a_404_on_one_message_is_skipped_not_fatal(client, monkeypatch, account_row):
+    """Regression: a message listed by history/messages.list can be gone by
+    the time it's fetched (spam/trash auto-purge, user deletion) — routine
+    for a mailbox-wide mirror. Letting that 404 propagate used to abort the
+    whole walk before history_id/last_synced_at advanced, so the next tick
+    hit the same gone message and the account never synced again."""
+    def _get_message(token, gmail_id):
+        if gmail_id == 'g1':
+            raise gmail_client.GmailApiError(
+                '404 Not Found: Requested entity was not found.',
+                status_code=404, reason='NOT_FOUND',
+            )
+        return _gmail_message(gmail_id)
+
+    monkeypatch.setattr(gmail_client, 'get_profile', lambda t: {'historyId': 'h100'})
+    monkeypatch.setattr(
+        gmail_client, 'list_all_message_ids',
+        lambda t, p=None: {'messages': [{'id': 'g1'}, {'id': 'g2'}]},
+    )
+    monkeypatch.setattr(gmail_client, 'get_message', _get_message)
+
+    result = sync.sync_account(account_row)
+
+    assert result == {'status': 'ok', 'newCount': 1}
+    rows = get_db().execute('SELECT gmail_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchall()
+    assert {r['gmail_id'] for r in rows} == {'g2'}
+    updated = get_db().execute('SELECT * FROM email_accounts WHERE id=?', (account_row['id'],)).fetchone()
+    assert updated['history_id'] == 'h100'
+    assert updated['last_synced_at'] is not None
+    assert updated['last_sync_error'] is None
+
+
+def test_a_non_404_gmail_error_still_aborts_the_sync(client, monkeypatch, account_row):
+    """Only a 404 means 'this message is gone, move on' — anything else
+    (auth, rate limit, server error) is a real reason to stop and surface
+    last_sync_error rather than silently pushing history_id past it."""
+    def _get_message(token, gmail_id):
+        raise gmail_client.GmailApiError(
+            '403 PERMISSION_DENIED: insufficient scope', status_code=403, reason='PERMISSION_DENIED',
+        )
+
+    monkeypatch.setattr(gmail_client, 'get_profile', lambda t: {'historyId': 'h100'})
+    monkeypatch.setattr(
+        gmail_client, 'list_all_message_ids',
+        lambda t, p=None: {'messages': [{'id': 'g1'}]},
+    )
+    monkeypatch.setattr(gmail_client, 'get_message', _get_message)
+
+    result = sync.sync_account(account_row)
+
+    assert result['status'] == 'error'
+    assert '403' in result['error']
+    updated = get_db().execute('SELECT * FROM email_accounts WHERE id=?', (account_row['id'],)).fetchone()
+    assert updated['history_id'] is None
+    assert updated['last_synced_at'] is None
