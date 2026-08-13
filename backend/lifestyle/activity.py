@@ -1,8 +1,13 @@
-"""The four workout activity types, and how a day collapses to one heatmap box.
+"""The workout activity types, and how a day collapses to one heatmap box.
 
 Ordered most- to least-specific: when a single day holds more than one session,
 the box takes the colour of the highest-priority one and a corner mark records
 that something else happened too (docs/lifestyle-tab.md §1).
+
+The list is append-in-place, not append-only: `priority()` looks a row's type up
+by index, so inserting a type shifts the ones below it. That only changes which
+colour a *mixed* day shows, never what was logged, and unknown types already
+sort last so a row written by an older build can't break the heatmap.
 """
 
 # Index in this tuple *is* the priority — first wins.
@@ -10,6 +15,7 @@ ACTIVITY_TYPES = (
     'goodlife_brother',
     'goodlife_alone',
     'building',
+    'lifting_home',
     'outside',
 )
 
@@ -17,6 +23,7 @@ ACTIVITY_LABELS = {
     'goodlife_brother': 'Goodlife with brother',
     'goodlife_alone': 'Goodlife alone',
     'building': 'Building workout room',
+    'lifting_home': 'Lifting at home',
     'outside': 'Outside',
 }
 

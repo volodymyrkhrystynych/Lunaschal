@@ -7,6 +7,7 @@ export const ACTIVITY_TYPES = [
   'goodlife_brother',
   'goodlife_alone',
   'building',
+  'lifting_home',
   'outside',
 ] as const;
 
@@ -16,19 +17,28 @@ export const ACTIVITY_LABELS: Record<ActivityType, string> = {
   goodlife_brother: 'Goodlife with brother',
   goodlife_alone: 'Goodlife alone',
   building: 'Building workout room',
+  lifting_home: 'Lifting at home',
   outside: 'Outside',
 };
 
-// Four categorical hues, one per activity type, assigned in fixed order and
-// never cycled. Checked with the dataviz validator against both the page
-// background (#1e1e2e) and the card surface (#313244): all pairs clear the
-// OKLCH lightness band, the chroma floor, CVD separation (worst pair ΔE 8.5
-// deutan), and 3:1 contrast. Colour alone never carries identity here — the
-// legend and the per-day tooltip both name the activity.
+// One categorical hue per activity type, assigned in fixed order and never
+// cycled. Checked with the dataviz validator against both the page background
+// (#1e1e2e) and the card surface (#313244): all pairs clear the OKLCH lightness
+// band, the chroma floor, CVD separation (worst pair ΔE 8.1 deutan), the
+// normal-vision floor (worst ΔE 16.5), and 3:1 contrast. Colour alone never
+// carries identity here — the legend and the per-day tooltip both name the
+// activity.
+//
+// **Five is at the ceiling.** Fitting `lifting_home` in took a search: 3:1
+// contrast against a dark surface caps how dark a hue can be, the lightness
+// band caps how light, and the four already in use sit ΔE 8.5 apart at their
+// closest. A sixth type will not find a hue that passes — it needs a second
+// channel (texture, or a shape on the cell), not another colour picked by eye.
 export const ACTIVITY_COLORS: Record<ActivityType, string> = {
   goodlife_brother: '#c17501',
   goodlife_alone: '#27a164',
   building: '#2f8fd8',
+  lifting_home: '#8a5bff',
   outside: '#bc65a9',
 };
 

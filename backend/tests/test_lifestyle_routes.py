@@ -220,6 +220,14 @@ def test_heatmap_takes_the_highest_priority_activity_and_flags_a_secondary(clien
     assert len(day['sessions']) == 2
 
 
+def test_lifting_at_home_is_a_loggable_activity(client):
+    res = _create_workout(client, date='2026-07-21', locationType='lifting_home',
+                          rawText='bench 60,8 60,8')
+    assert res.status_code == 201
+    day = client.get('/api/lifestyle/heatmap').get_json()[0]
+    assert day['activityType'] == 'lifting_home'
+
+
 def test_heatmap_does_not_flag_a_secondary_for_two_sessions_of_one_type(client):
     _create_workout(client, date='2026-07-20', locationType='outside')
     _create_workout(client, date='2026-07-20', locationType='outside')

@@ -32,8 +32,13 @@ export function Lifestyle() {
           </div>
         </section>
 
-        <TasksSection />
-        <WorkoutLog />
+        {/* Both cards lay their contents out in one capped column, so on a wide
+            screen they sit side by side instead of each stretching a form
+            across the tab. Stacks tasks-then-workout on the phone. */}
+        <div className="grid gap-4 lg:grid-cols-2 items-start">
+          <TasksSection />
+          <WorkoutLog />
+        </div>
 
         <div className="grid gap-4 lg:grid-cols-2">
           <CaloriesCard />

@@ -194,44 +194,53 @@ export function TasksSection() {
   // One card, daily tasks above the to-dos. They were two side-by-side cards,
   // which gave a list capped at four items half the width of the tab and a
   // header of its own — the same "what am I doing today" question either way.
+  //
+  // The contents cap their width the way the workout log's form does, so the
+  // two cards can share a row on a wide screen without either one's rows
+  // stretching across the tab.
   return (
     <section className={CARD}>
-      <DailyTasks
-        tasks={sortedTasks}
-        isLoading={tasksLoading}
-        selectedId={section === 'daily' ? selectedId : null}
-        itemNavActive={level >= 2 && section === 'daily'}
-        sectionFocused={level === 1 && section === 'daily'}
-        showDelete={showDelete}
-        onToggleDelete={
-          sortedTasks.length + active.length > 0
-            ? () => setShowDelete(!showDelete)
-            : null
-        }
-      />
-      <div className={CARD_DIVIDER}>
-        <TodoSection
+      <div className="w-full max-w-xl">
+        <DailyTasks
+          tasks={sortedTasks}
+          isLoading={tasksLoading}
+          selectedId={section === 'daily' ? selectedId : null}
+          itemNavActive={level >= 2 && section === 'daily'}
+          sectionFocused={level === 1 && section === 'daily'}
           showDelete={showDelete}
-          activeList={activeList}
-          section={section}
-          level={level}
-          counts={counts}
-          active={active}
-          isLoading={todosLoading}
-          selectedId={section !== 'daily' ? selectedId : null}
-          creating={creating}
-          onSelectList={selectList}
-          onSelectTodo={id => {
-            setSection(activeList);
-            setSelectedId(id);
-          }}
-          onStartCreate={() => {
-            setCreating(true);
-            setLevel(2);
-          }}
-          onCancelCreate={cancelCreate}
-          onUpdateTodo={(id, data) => updateTodo.mutate({ id, data })}
+          onToggleDelete={
+            sortedTasks.length + active.length > 0
+              ? () => setShowDelete(!showDelete)
+              : null
+          }
         />
+      </div>
+      {/* The rule spans the card; the list under it keeps the same cap. */}
+      <div className={CARD_DIVIDER}>
+        <div className="w-full max-w-xl">
+          <TodoSection
+            showDelete={showDelete}
+            activeList={activeList}
+            section={section}
+            level={level}
+            counts={counts}
+            active={active}
+            isLoading={todosLoading}
+            selectedId={section !== 'daily' ? selectedId : null}
+            creating={creating}
+            onSelectList={selectList}
+            onSelectTodo={id => {
+              setSection(activeList);
+              setSelectedId(id);
+            }}
+            onStartCreate={() => {
+              setCreating(true);
+              setLevel(2);
+            }}
+            onCancelCreate={cancelCreate}
+            onUpdateTodo={(id, data) => updateTodo.mutate({ id, data })}
+          />
+        </div>
       </div>
     </section>
   );

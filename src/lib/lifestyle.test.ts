@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  ACTIVITY_COLORS,
+  ACTIVITY_LABELS,
+  ACTIVITY_TYPES,
   addDays,
   buildHeatmapGrid,
   isActivityType,
@@ -370,11 +373,36 @@ describe('parseCalorieEntry', () => {
 });
 
 describe('isActivityType', () => {
-  it('accepts the four types and nothing else', () => {
+  it('accepts the known types and nothing else', () => {
     expect(isActivityType('goodlife_brother')).toBe(true);
+    expect(isActivityType('lifting_home')).toBe(true);
     expect(isActivityType('outside')).toBe(true);
     expect(isActivityType('gym')).toBe(false);
     expect(isActivityType(null)).toBe(false);
+  });
+
+  it('gives every type exactly one label and one colour', () => {
+    // A type with no colour renders a transparent heatmap cell, which reads as
+    // a rest day; two types sharing one is a chart that lies.
+    expect(Object.keys(ACTIVITY_LABELS).sort()).toEqual(
+      [...ACTIVITY_TYPES].sort()
+    );
+    expect(Object.keys(ACTIVITY_COLORS).sort()).toEqual(
+      [...ACTIVITY_TYPES].sort()
+    );
+    const hues = ACTIVITY_TYPES.map(t => ACTIVITY_COLORS[t]);
+    expect(new Set(hues).size).toBe(ACTIVITY_TYPES.length);
+  });
+
+  it('orders lifting at home below the gym and above going outside', () => {
+    // Index is priority: it decides which colour a mixed day's box takes.
+    const order = [...ACTIVITY_TYPES];
+    expect(order.indexOf('building')).toBeLessThan(
+      order.indexOf('lifting_home')
+    );
+    expect(order.indexOf('lifting_home')).toBeLessThan(
+      order.indexOf('outside')
+    );
   });
 });
 

@@ -96,6 +96,38 @@ describe('mid-workout draft persistence', () => {
     );
   });
 
+  it('flushes the pending draft when the phone backgrounds the tab', async () => {
+    // The 300ms debounce is the hole: a screen lock can tear the page down
+    // before the timer fires. Both events save synchronously, so the last few
+    // characters typed between sets survive.
+    renderLog();
+    fireEvent.change(textarea(), { target: { value: 'squats 60,8' } });
+    expect(loadWorkoutDraft()).toBeNull(); // still inside the debounce
+
+    window.dispatchEvent(new Event('pagehide'));
+    expect(loadWorkoutDraft()?.rawText).toBe('squats 60,8');
+
+    localStorage.clear();
+    fireEvent.change(textarea(), { target: { value: 'squats 60,8 60,8' } });
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'hidden',
+      configurable: true,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(loadWorkoutDraft()?.rawText).toBe('squats 60,8 60,8');
+  });
+
+  it('does not save on a visibilitychange that only brings the tab back', () => {
+    renderLog();
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      configurable: true,
+    });
+    fireEvent.change(textarea(), { target: { value: 'squats 60,8' } });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(loadWorkoutDraft()).toBeNull();
+  });
+
   it('starts empty and shows no restore notice with nothing stored', () => {
     renderLog();
     expect(textarea().value).toBe('');
