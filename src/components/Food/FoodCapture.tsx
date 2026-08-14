@@ -42,10 +42,15 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
 
   const addFiles = (files: FileList | null) => {
     if (!files) return;
+    // Food capture only ever offers image/video pickers (no audio input), so
+    // mediaKind's wider result narrows back down safely here.
     const picked = Array.from(files).map(file => ({
       file,
       url: URL.createObjectURL(file),
-      kind: mediaKind(file.type),
+      kind:
+        mediaKind(file.type) === 'video'
+          ? ('video' as const)
+          : ('image' as const),
     }));
     setMedia(prev => [...prev, ...picked]);
   };

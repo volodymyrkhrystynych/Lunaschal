@@ -4,7 +4,7 @@ import time
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
-from backend.ai.recipes import parse_recipe
+from backend.ai.recipes import generate_recipe, parse_recipe
 from backend.cookbook import storage
 from backend.htmltext import strip_html
 from backend.db.connection import build_update, get_db, row_to_dict, search_recipes_fts
@@ -297,6 +297,23 @@ def import_recipe():
         return jsonify({'error': 'Could not extract a recipe from the provided content'}), 422
 
     id = _insert_recipe(parsed['title'], parsed['content'], parsed.get('tags'), url or None)
+    db = get_db()
+    row = db.execute('SELECT * FROM recipes WHERE id=?', (id,)).fetchone()
+    return jsonify({'id': id, 'recipe': _recipe_dict(db, row)}), 201
+
+
+@bp.post('/generate')
+def generate():
+    body = request.json or {}
+    prompt = (body.get('prompt') or '').strip()
+    if not prompt:
+        return jsonify({'error': 'prompt required'}), 400
+
+    generated = generate_recipe(prompt)
+    if not generated:
+        return jsonify({'error': 'Could not generate a recipe from that description'}), 422
+
+    id = _insert_recipe(generated['title'], generated['content'], generated.get('tags'))
     db = get_db()
     row = db.execute('SELECT * FROM recipes WHERE id=?', (id,)).fetchone()
     return jsonify({'id': id, 'recipe': _recipe_dict(db, row)}), 201

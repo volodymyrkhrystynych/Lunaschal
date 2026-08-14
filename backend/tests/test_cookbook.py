@@ -172,6 +172,32 @@ def test_import_rejects_non_http_url(client):
     assert client.post('/api/cookbook/import', json={'url': 'file:///etc/passwd'}).status_code == 400
 
 
+# --- Generate ---
+
+def test_generate_persists_invented_recipe(client, monkeypatch):
+    monkeypatch.setattr(cookbook, 'generate_recipe', lambda prompt: {
+        'title': 'Vegan Chocolate Cake', 'content': '## Ingredients\n- cocoa', 'tags': ['vegan'],
+    })
+    r = client.post('/api/cookbook/generate', json={'prompt': 'vegan chocolate cake'})
+    assert r.status_code == 201
+    data = r.get_json()
+    assert data['recipe']['title'] == 'Vegan Chocolate Cake'
+    assert data['recipe']['sourceUrl'] is None
+    assert client.get(f"/api/cookbook/{data['id']}").status_code == 200
+
+
+def test_generate_requires_prompt(client):
+    assert client.post('/api/cookbook/generate', json={}).status_code == 400
+    assert client.post('/api/cookbook/generate', json={'prompt': '  '}).status_code == 400
+
+
+def test_generate_unproducible_is_422_and_persists_nothing(client, monkeypatch):
+    monkeypatch.setattr(cookbook, 'generate_recipe', lambda prompt: None)
+    r = client.post('/api/cookbook/generate', json={'prompt': 'what is the capital of France'})
+    assert r.status_code == 422
+    assert client.get('/api/cookbook').get_json() == []
+
+
 # --- Media ---
 
 def test_create_with_media_saves_file_and_serves_it(client, recipe_root):
@@ -191,6 +217,32 @@ def test_create_with_media_saves_file_and_serves_it(client, recipe_root):
 def test_video_media_detected_as_video(client):
     r = _create_multipart(client, media=_file(name='clip.mov', content=b'MOVDATA'))
     assert r.get_json()['media'][0]['kind'] == 'video'
+
+
+def test_audio_media_detected_as_audio_and_served(client):
+    audio = (io.BytesIO(b'MP3BYTES'), 'note.mp3', 'audio/mpeg')
+    r = client.post(
+        '/api/cookbook',
+        data={'title': 'Borscht', 'content': 'Beets, beef, simmer.', 'media': audio},
+        content_type='multipart/form-data',
+    )
+    assert r.status_code == 201
+    m = r.get_json()['media'][0]
+    assert m['kind'] == 'audio'
+    served = client.get(m['url'])
+    assert served.status_code == 200
+    assert served.data == b'MP3BYTES'
+
+
+def test_video_and_audio_webm_do_not_collide(client):
+    """audio/webm must not be classified as the 'video' kind_for_ext('webm') path."""
+    audio = (io.BytesIO(b'WEBMAUDIO'), 'note.webm', 'audio/webm')
+    r = client.post(
+        '/api/cookbook',
+        data={'title': 'Borscht', 'content': 'Beets, beef, simmer.', 'media': audio},
+        content_type='multipart/form-data',
+    )
+    assert r.get_json()['media'][0]['kind'] == 'audio'
 
 
 def test_multipart_create_accepts_tags_as_json_array(client):

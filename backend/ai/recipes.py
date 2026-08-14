@@ -30,6 +30,42 @@ _RECIPE_SCHEMA = {
 }
 
 
+_GENERATE_SYSTEM = (
+    "You invent a complete, plausible recipe matching the user's description "
+    "(a dish, cuisine, ingredients on hand, dietary constraint, or similar request).\n"
+    "Return ONLY valid JSON with these fields:\n"
+    '- "title": a short recipe name\n'
+    '- "content": the full recipe as clean markdown — an "## Ingredients" bulleted list with '
+    'quantities and an "## Instructions" numbered list; include yield and prep/cook times\n'
+    '- "tags": an array of 1-5 lowercase tags describing the recipe (cuisine, meal type, '
+    'main ingredient), e.g. ["italian", "dinner", "chicken"]\n'
+    'If the request has nothing to do with food, return {"title": null}.'
+)
+
+
+def generate_recipe(prompt: str) -> dict | None:
+    """Invent {title, content, tags} for a recipe matching a free-form
+    description, or None if AI is unconfigured or the request wasn't food-related."""
+    if not prompt.strip():
+        return None
+    prompt = prompt[:_MAX_INPUT_CHARS]
+    try:
+        if not is_ai_configured():
+            return None
+        data = chat_json(prompt, system=_GENERATE_SYSTEM, schema=_RECIPE_SCHEMA)
+
+        title = (data.get('title') or '').strip() if isinstance(data.get('title'), str) else ''
+        content = (data.get('content') or '').strip() if isinstance(data.get('content'), str) else ''
+        if not title or not content:
+            return None
+        tags = normalize_tags(data.get('tags'))[:5]
+        return {'title': title, 'content': content, 'tags': tags}
+    except Exception as e:
+        print(f'Recipe generation failed: {e}')
+
+    return None
+
+
 def parse_recipe(text: str) -> dict | None:
     """Extract {title, content, tags} from raw text, or None if no recipe was found."""
     if not text.strip():

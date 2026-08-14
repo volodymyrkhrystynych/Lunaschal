@@ -1,11 +1,13 @@
 // Pure helpers for the Food view, extracted so they can be unit-tested in the
 // node environment (no jsdom).
 
-export type MediaKind = 'image' | 'video';
+export type MediaKind = 'image' | 'video' | 'audio';
 
 /** Classify an upload by its MIME type (falling back to 'image'). */
 export function mediaKind(mime: string): MediaKind {
-  return mime.startsWith('video/') ? 'video' : 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  return 'image';
 }
 
 /** Render a 1-5 rating as filled/empty stars, or '' when unrated. */

@@ -19,6 +19,7 @@ vi.mock('../../hooks/api', () => ({
       update: vi.fn(),
       delete: vi.fn(),
       importRecipe: vi.fn(),
+      generate: vi.fn(),
       addMedia: vi.fn(),
       deleteMedia: vi.fn(),
     },
@@ -113,6 +114,47 @@ describe('RecipeList view mode', () => {
     await waitFor(() => expect(container.querySelector('img')).toBeTruthy());
     expect(container.querySelector('img')?.getAttribute('src')).toBe(
       '/api/cookbook/media/m1'
+    );
+  });
+
+  it('renders an audio player for audio media', async () => {
+    vi.mocked(api.cookbook.list).mockResolvedValue([
+      recipe({
+        media: [
+          {
+            id: 'm2',
+            kind: 'audio',
+            position: 0,
+            url: '/api/cookbook/media/m2',
+          },
+        ],
+      }),
+    ]);
+    const { container } = renderIt();
+    fireEvent.click(await screen.findByText("Grandma's Borscht"));
+
+    await waitFor(() => expect(container.querySelector('audio')).toBeTruthy());
+    expect(container.querySelector('audio')?.getAttribute('src')).toBe(
+      '/api/cookbook/media/m2'
+    );
+  });
+});
+
+describe('RecipeList AI generation', () => {
+  it('generates a recipe from a free-form prompt and expands it', async () => {
+    vi.mocked(api.cookbook.generate).mockResolvedValue({
+      id: 'r2',
+      recipe: recipe({ id: 'r2', title: 'Vegan Chocolate Cake' }),
+    });
+    renderIt();
+    fireEvent.click(await screen.findByText('✨ Generate'));
+
+    const prompt = await screen.findByPlaceholderText(/Describe what you want/);
+    fireEvent.change(prompt, { target: { value: 'vegan chocolate cake' } });
+    fireEvent.click(screen.getByText('Generate'));
+
+    await waitFor(() =>
+      expect(api.cookbook.generate).toHaveBeenCalledWith('vegan chocolate cake')
     );
   });
 });
