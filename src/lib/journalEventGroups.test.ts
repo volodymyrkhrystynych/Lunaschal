@@ -96,6 +96,24 @@ describe('computeEventGroupSpans', () => {
     expect(spans).toHaveLength(1);
   });
 
+  it('extends an all-day event window to 4am the next morning', () => {
+    // An entry written at 1am is still within the previous day's 4am-anchored
+    // window, and one at 5am has already rolled into the next day.
+    const stillLastNight = entryItem('late', '2026-07-09T01:00:00');
+    const nextDay = entryItem('early', '2026-07-09T05:00:00');
+    const spans = computeEventGroupSpans(
+      [nextDay, stillLastNight],
+      [calendarEvent('ev1', { allDay: true, time: null, endTime: null })]
+    );
+    expect(spans).toEqual([
+      {
+        event: expect.objectContaining({ id: 'ev1' }),
+        startIndex: 1,
+        endIndex: 1,
+      },
+    ]);
+  });
+
   it('defaults a missing endTime to a 30-minute window', () => {
     const inWindow = entryItem('in', '2026-07-08T09:15:00');
     const outOfWindow = entryItem('out', '2026-07-08T09:45:00');

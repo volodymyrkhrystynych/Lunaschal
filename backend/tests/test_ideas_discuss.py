@@ -80,7 +80,7 @@ def test_idea_conversations_do_not_leak_into_the_chat_tab(client):
 
 
 def test_the_briefing_does_not_adopt_an_idea_conversation(client):
-    from backend.chat_day import day_key_for
+    from backend.day_boundary import day_key_for
     idea_id = _idea(client)
     conversation_id = client.post(
         f'/api/ideas/{idea_id}/conversations', json={}
@@ -97,7 +97,7 @@ def test_the_briefing_does_not_adopt_an_idea_conversation(client):
 
 
 def test_the_title_sweep_skips_idea_conversations(client):
-    from backend.chat_day import day_key_for
+    from backend.day_boundary import day_key_for
     from backend.chat_title_scheduler import run_title_sweep
 
     idea_id = _idea(client)

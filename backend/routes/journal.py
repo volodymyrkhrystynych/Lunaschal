@@ -3,10 +3,10 @@ import queue
 import re
 import threading
 import time
-from datetime import datetime
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
+from backend.day_boundary import day_bounds, day_key_for
 from backend.ai.journal import (
     PolishUnavailable,
     polish_journal_entry,
@@ -270,7 +270,7 @@ def delete_entry(id):
 # never silently drop text or other attachments the source entry was carrying.
 
 def _local_day(created_at: int) -> str:
-    return datetime.fromtimestamp(created_at).strftime('%Y-%m-%d')
+    return day_key_for(created_at)
 
 
 def _is_voice_only_entry(db, entry_id: str) -> bool:
@@ -297,10 +297,9 @@ def merge_candidates(id):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     day = _local_day(row['created_at'])
-    start = int(datetime.fromisoformat(f'{day}T00:00:00').timestamp())
-    end = int(datetime.fromisoformat(f'{day}T23:59:59').timestamp())
+    start, end = day_bounds(day)
     rows = db.execute(
-        'SELECT * FROM journal_entries WHERE created_at BETWEEN ? AND ? AND id != ?'
+        'SELECT * FROM journal_entries WHERE created_at >= ? AND created_at < ? AND id != ?'
         ' ORDER BY created_at DESC',
         (start, end, id),
     ).fetchall()

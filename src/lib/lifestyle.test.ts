@@ -42,7 +42,12 @@ describe('dates', () => {
   it('reads today from the local clock, not UTC', () => {
     // 2026-07-30 23:30 local: a UTC-based conversion could roll to the 31st.
     expect(todayISO(new Date(2026, 6, 30, 23, 30))).toBe('2026-07-30');
-    expect(todayISO(new Date(2026, 0, 5, 0, 15))).toBe('2026-01-05');
+  });
+
+  it('rolls the day over at 4am, not midnight', () => {
+    // 00:15 local is still "yesterday" until 4am ticks over.
+    expect(todayISO(new Date(2026, 0, 5, 0, 15))).toBe('2026-01-04');
+    expect(todayISO(new Date(2026, 0, 5, 4, 0))).toBe('2026-01-05');
   });
 
   it('advances and rewinds days across month and year ends', () => {

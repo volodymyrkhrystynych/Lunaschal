@@ -1,10 +1,10 @@
 import time
-from datetime import date
 
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
+from backend.day_boundary import day_bounds, day_key_for
 from backend.todo_recurrence import (
     next_due, normalize_list, parse_priority as _parse_priority,
     parse_repeat as _parse_repeat,
@@ -16,7 +16,7 @@ MAX_TASKS = 4
 
 
 def _today() -> str:
-    return date.today().isoformat()
+    return day_key_for()
 
 
 def _log_event(
@@ -175,7 +175,7 @@ def uncomplete_task(task_id):
     db.execute(
         "DELETE FROM task_events WHERE kind='daily_completed' AND ref_id=?"
         " AND created_at >= ?",
-        (task_id, int(time.mktime(date.today().timetuple()))),
+        (task_id, day_bounds(today)[0]),
     )
     db.commit()
     return jsonify({'success': True})

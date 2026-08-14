@@ -3,7 +3,7 @@ conversation, the journal-conversations feed, and AI title generation/sweep."""
 from datetime import datetime
 
 from backend.db import connection
-from backend.chat_day import day_key_for
+from backend.day_boundary import day_key_for
 
 NOW = int(datetime(2026, 7, 14, 18, 0).timestamp())
 

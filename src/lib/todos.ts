@@ -1,7 +1,18 @@
+import { localDayKey } from './dates';
+
 // Days-before-due threshold for a periodic todo: 10% of its interval, rounded
 // up, minimum 1 day. Month treated as ~30 days — this only declutters the list,
 // so an approximation is fine.
 const DAYS_PER_UNIT: Record<string, number> = { day: 1, week: 7, month: 30 };
+
+// Local midnight of `now`'s 4am-anchored logical day (src/lib/dates.ts) — the
+// due date itself is already a plain calendar-date label with no time
+// component, so only the "now" side of a day comparison needs the rollover
+// shift.
+const rolledToday = (now: Date): Date => {
+  const [y, m, d] = localDayKey(now).split('-').map(Number);
+  return new Date(y, m - 1, d);
+};
 
 // A repeating todo whose due date is still far off just clutters the active
 // list. Hide it until it comes within ~10% of its repeat interval of the due
@@ -27,7 +38,7 @@ export function isFarOffPeriodic(
   const startOfDay = (x: Date) =>
     new Date(x.getFullYear(), x.getMonth(), x.getDate());
   const daysUntil = Math.round(
-    (startOfDay(d).getTime() - startOfDay(now).getTime()) / 86_400_000
+    (startOfDay(d).getTime() - rolledToday(now).getTime()) / 86_400_000
   );
   return daysUntil > threshold;
 }
@@ -103,7 +114,7 @@ export function formatDue(
   });
   const dayKey = (x: Date) =>
     x.getFullYear() * 10000 + x.getMonth() * 100 + x.getDate();
-  return { label, overdue: dayKey(d) < dayKey(now) };
+  return { label, overdue: dayKey(d) < dayKey(rolledToday(now)) };
 }
 
 // Priority is 1 (very unimportant) … 5 (very important); 3 is neutral. The row

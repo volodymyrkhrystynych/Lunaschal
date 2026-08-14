@@ -7,7 +7,7 @@ from datetime import date, datetime
 import pytest
 
 from backend.db import connection
-from backend.chat_day import day_key_for
+from backend.day_boundary import day_key_for
 from backend.ai import briefing as briefing_mod
 from backend import briefing_job
 
@@ -799,9 +799,10 @@ def test_crossing_off_a_linked_daily_task_records_todays_completion(client, monk
         'SELECT task_id, date FROM daily_task_completions'
     ).fetchall()
     # Dated by when it was crossed off, not by when the briefing was written —
-    # a daily task completes for the day you actually did it.
+    # a daily task completes for the day you actually did it (the app's
+    # 4am-anchored day, not literal midnight).
     assert [(r['task_id'], r['date']) for r in rows] == [
-        ('dt_stretch', date.today().isoformat())
+        ('dt_stretch', day_key_for())
     ]
     assert [(e['title'], e['task_list']) for e in _events('daily_completed')] == [
         ('Stretch', 'daily')

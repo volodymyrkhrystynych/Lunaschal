@@ -1,10 +1,11 @@
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
 from backend.db.connection import build_update, get_db, row_to_dict
+from backend.day_boundary import day_bounds, day_key_for
 from backend.paper import storage
 
 bp = Blueprint('paper', __name__, url_prefix='/api/paper')
@@ -18,28 +19,15 @@ def page_image_url(page) -> str | None:
     return f"/api/paper/pages/{page['id']}/image?v={page['updated_at']}"
 
 
-# The "journal day" runs 4am->4am (local time). A paper flagged for the journal
-# stays in the explorer until the next 4am boundary passes, then moves — computed
-# lazily so no scheduler is needed and it survives restarts.
+# A paper flagged for the journal stays in the explorer until the next 4am
+# boundary passes, then moves — computed lazily off backend.day_boundary so
+# no scheduler is needed and it survives restarts.
 
 def _cutoff_4am(now_ts: int) -> int:
     """The most recent 4am (local) at or before now. A paper whose
     archive_requested_at is strictly before this has had a 4am tick over since it
     was flagged, so it now belongs in the journal."""
-    dt = datetime.fromtimestamp(now_ts)
-    boundary = dt.replace(hour=4, minute=0, second=0, microsecond=0)
-    if dt < boundary:
-        boundary -= timedelta(days=1)
-    return int(boundary.timestamp())
-
-
-def _journal_day(ts: int) -> str:
-    """The local calendar date (YYYY-MM-DD) of the journal day a timestamp falls
-    in — before 4am counts as the previous day's late-night session."""
-    dt = datetime.fromtimestamp(ts)
-    if dt.hour < 4:
-        dt -= timedelta(days=1)
-    return dt.strftime('%Y-%m-%d')
+    return day_bounds(day_key_for(now_ts))[0]
 
 
 def _iso(ts: int) -> str:
@@ -101,7 +89,7 @@ def journal_papers():
         result.append({
             'id': p['id'],
             'title': p['title'],
-            'journalDate': _journal_day(p['archive_requested_at']),
+            'journalDate': day_key_for(p['archive_requested_at']),
             'archivedAt': _iso(p['archive_requested_at']),
             'pages': [
                 {'id': pg['id'], 'imageUrl': page_image_url(pg)} for pg in pages

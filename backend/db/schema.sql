@@ -106,9 +106,9 @@ CREATE TABLE IF NOT EXISTS calendar_journal_links (
 -- corrected by hand: the times are otherwise derived on read from when they were
 -- active (backend/sleep.py), so there is nothing to keep in sync. The two
 -- columns are independently nullable, so one end can be manual while the other
--- stays derived. `date` is the 4am-anchored day key (backend/chat_day.py), not a
--- calendar date -- a 01:30 bedtime belongs to the day that started the previous
--- morning.
+-- stays derived. `date` is the 4am-anchored day key (backend/day_boundary.py),
+-- not a calendar date -- a 01:30 bedtime belongs to the day that started the
+-- previous morning.
 CREATE TABLE IF NOT EXISTS sleep_logs (
     id TEXT PRIMARY KEY,
     date TEXT NOT NULL UNIQUE,

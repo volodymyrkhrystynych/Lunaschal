@@ -1,8 +1,8 @@
 """Wake/sleep derivation and the manual override behind /api/calendar/sleep.
 
 The whole feature rests on one window — 04:00 -> 04:00 local, borrowed from
-backend/chat_day.py — so most of these tests are really about which side of a
-boundary a timestamp falls on.
+backend/day_boundary.py — so most of these tests are really about which side
+of a boundary a timestamp falls on.
 """
 import json
 import time
@@ -11,7 +11,7 @@ from datetime import datetime
 from ulid import ULID
 
 from backend import sleep
-from backend.chat_day import day_bounds, day_key_for
+from backend.day_boundary import day_bounds, day_key_for
 from backend.db.connection import get_db
 
 DAY = '2026-07-08'

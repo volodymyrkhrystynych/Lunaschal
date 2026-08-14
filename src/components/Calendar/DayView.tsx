@@ -10,7 +10,7 @@ import {
   timeToMinutes,
   type EventTimeRange,
 } from '@/lib/calendarDayLayout';
-import { toLocalISO } from '@/lib/calendar';
+import { localDayKey } from '@/lib/dates';
 import { sleepBands } from '@/lib/sleep';
 import { DayEventLayer, type LaidOutEvent } from './DayEventLayer';
 
@@ -85,7 +85,7 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
   useEffect(() => {
     if (scrolledRef.current || !scrollRef.current) return;
     const now = new Date();
-    const isToday = date === toLocalISO(now);
+    const isToday = date === localDayKey(now);
     const targetMinutes = isToday ? now.getHours() * 60 : 8 * 60;
     scrollRef.current.scrollTop = Math.max(
       0,

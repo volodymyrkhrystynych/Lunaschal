@@ -14,6 +14,10 @@ import {
   timeToMinutes,
 } from './calendarDayLayout';
 import { parseCategoryTags } from './calendarCategories';
+import { DAY_ROLLOVER_HOUR } from './dates';
+
+const ROLLOVER_TIME = `${String(DAY_ROLLOVER_HOUR).padStart(2, '0')}:00:00`;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface EventGroupSpan {
   event: CalendarEvent;
@@ -44,14 +48,14 @@ function feedItemTimeMs(item: FeedItem): number {
 /** [startMs, endMs] the event covers in local time, or null when it has no
  * defined window (untimed, non-all-day — nothing to group by). Recurring
  * events use occurrenceDate, the actual instance date, over the series'
- * anchor `date`. */
+ * anchor `date`. An all-day event's window is the app's 4am-anchored logical
+ * day (src/lib/dates.ts), not literal midnight-to-midnight, so a journal
+ * entry written at 1am the next morning still groups with the day before. */
 function eventWindowMs(event: CalendarEvent): [number, number] | null {
   const dateStr = event.occurrenceDate ?? event.date;
   if (event.allDay) {
-    return [
-      new Date(`${dateStr}T00:00:00`).getTime(),
-      new Date(`${dateStr}T23:59:59`).getTime(),
-    ];
+    const start = new Date(`${dateStr}T${ROLLOVER_TIME}`).getTime();
+    return [start, start + DAY_MS - 1000];
   }
   if (!event.time) return null;
   const start = new Date(`${dateStr}T${event.time}`).getTime();

@@ -12,6 +12,7 @@ import {
   WEEKDAY_LABELS,
   type RepeatFreq,
 } from '@/lib/calendar';
+import { localDayKey } from '@/lib/dates';
 // The shared splitter — Food's two views each grew a private copy of this and
 // a third would make the rule genuinely untraceable.
 import { parseTagsInput } from '@/lib/tags';
@@ -59,7 +60,7 @@ export function Calendar() {
   const isMobile = useIsMobile();
   const queryClient = useQueryClient();
 
-  const todayISO = toLocalISO(new Date());
+  const todayISO = localDayKey();
   const [mobileView, setMobileView] = useState<MobileView>('day');
   const [dayDate, setDayDate] = useState(todayISO);
   const [editingSleep, setEditingSleep] = useState(false);
