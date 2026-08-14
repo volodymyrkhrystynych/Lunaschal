@@ -39,7 +39,7 @@ export function Lifestyle() {
 
         <div className="grid gap-4 lg:grid-cols-2 items-start">
           <TasksSection />
-          <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4 min-w-0">
             <WorkoutLog />
             <CaloriesCard />
             <SelfieCard />
