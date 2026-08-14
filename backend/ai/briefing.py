@@ -9,6 +9,7 @@ from datetime import datetime, date, timedelta
 
 from backend.ai.chat import get_recent_journal_entries, format_journal_context
 from backend.ai.llm import chat_json
+from backend.day_boundary import day_key_for
 
 # How far ahead the calendar lookahead reaches, in days (today + this many).
 CALENDAR_LOOKAHEAD_DAYS = 3
@@ -73,8 +74,8 @@ def gather_briefing_context(now: int | None = None) -> dict:
     from backend.ai.provider import get_settings
     now = now if now is not None else int(time.time())
     db = get_db()
-    today = date.fromtimestamp(now).isoformat()
-    horizon = (date.fromtimestamp(now) + timedelta(days=CALENDAR_LOOKAHEAD_DAYS)).isoformat()
+    today = day_key_for(now)
+    horizon = (date.fromisoformat(today) + timedelta(days=CALENDAR_LOOKAHEAD_DAYS)).isoformat()
     s = get_settings()
     return {
         'now': now,

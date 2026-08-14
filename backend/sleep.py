@@ -2,8 +2,8 @@
 
 Both ends come out of one rule: a day runs 04:00 -> 04:00 local, so waking is
 the first thing the user did inside that window and going to sleep is the last.
-The window itself is not a new idea here -- `backend/chat_day.py` already
-anchors the chat day at 04:00, and this reuses its `day_key_for`/`day_bounds`
+The window itself is not a new idea here -- `backend/day_boundary.py` already
+anchors the app's day at 04:00, and this reuses its `day_key_for`/`day_bounds`
 rather than growing a second copy of the 4.
 
 Three things are load-bearing:
@@ -27,7 +27,7 @@ import time
 
 from ulid import ULID
 
-from backend.chat_day import DAY_ROLLOVER_HOUR, day_bounds
+from backend.day_boundary import DAY_ROLLOVER_HOUR, day_bounds
 from backend.db.connection import get_db
 
 # Tables whose rows mean "the user was awake and doing something", with the

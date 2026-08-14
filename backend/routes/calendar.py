@@ -6,6 +6,7 @@ from backend import sleep
 from backend.ai.background import run_bg
 from backend.calendar_query import events_in_range
 from backend.calendar_recurrence import VALID_FREQS, format_byweekday
+from backend.day_boundary import day_bounds
 from backend.db.connection import build_update, get_db, mapping_to_dict, row_to_dict
 from backend.tags import tag_counts, tags_json
 
@@ -146,12 +147,12 @@ def _to_json(event: dict) -> dict:
 def related_journals(date):
     if not _valid_date(date):
         return jsonify({'error': 'date must be YYYY-MM-DD'}), 400
-    # Journal timestamps are local unix seconds, so the day window has to be
-    # built in local time too — a UTC window is off by the local offset.
-    start = int(datetime.fromisoformat(f'{date}T00:00:00').timestamp())
-    end = int(datetime.fromisoformat(f'{date}T23:59:59').timestamp())
+    # Journal timestamps are local unix seconds, and "day" here is the app-wide
+    # 4am-anchored day, not literal midnight — matches backend/routes/journal.py's
+    # merge_candidates.
+    start, end = day_bounds(date)
     rows = get_db().execute(
-        'SELECT * FROM journal_entries WHERE created_at BETWEEN ? AND ? ORDER BY created_at DESC',
+        'SELECT * FROM journal_entries WHERE created_at >= ? AND created_at < ? ORDER BY created_at DESC',
         (start, end),
     ).fetchall()
     return jsonify([row_to_dict(r) for r in rows])

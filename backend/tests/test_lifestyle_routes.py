@@ -435,3 +435,36 @@ def test_delete_calorie_entry(client):
     ).get_json()
     assert client.delete(f'/api/lifestyle/calories/{entry["id"]}').status_code == 200
     assert client.delete(f'/api/lifestyle/calories/{entry["id"]}').status_code == 404
+
+
+# --- 4am day boundary ---
+#
+# Every date-defaulting endpoint routes through backend.day_boundary.day_key_for
+# rather than the literal calendar date, so a log made at e.g. 2am still files
+# under the day that started the previous morning.
+
+def test_workout_without_a_date_defaults_to_day_key_for(client, monkeypatch):
+    monkeypatch.setattr(lifestyle, 'day_key_for', lambda ts=None: '2026-07-24')
+    res = _create_workout(client)
+    assert res.get_json()['date'] == '2026-07-24'
+
+
+def test_weight_without_a_date_defaults_to_day_key_for(client, monkeypatch):
+    monkeypatch.setattr(lifestyle, 'day_key_for', lambda ts=None: '2026-07-24')
+    res = client.post('/api/lifestyle/weight', json={'weight': 80.0})
+    assert res.get_json()['date'] == '2026-07-24'
+
+
+def test_selfie_without_a_date_defaults_to_day_key_for(client, monkeypatch):
+    monkeypatch.setattr(lifestyle, 'day_key_for', lambda ts=None: '2026-07-24')
+    res = _upload_selfie(client)
+    assert res.get_json()['date'] == '2026-07-24'
+
+
+def test_calorie_entry_without_a_date_defaults_to_day_key_for(client, monkeypatch):
+    monkeypatch.setattr(lifestyle, 'day_key_for', lambda ts=None: '2026-07-24')
+    client.post(
+        '/api/lifestyle/calories', json={'description': 'rice', 'calories': 600}
+    )
+    day = client.get('/api/lifestyle/calories?date=2026-07-24').get_json()
+    assert [e['description'] for e in day['entries']] == ['rice']

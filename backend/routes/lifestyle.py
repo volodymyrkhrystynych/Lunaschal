@@ -12,7 +12,7 @@ stitch two feature APIs together to draw two lines on one axis.
 """
 import re
 import time
-from datetime import date as date_cls, datetime, timedelta
+from datetime import date as date_cls, timedelta
 
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
@@ -20,6 +20,7 @@ from ulid import ULID
 from backend.ai.background import run_bg
 from backend.ai.workouts import parse_workout
 from backend.db.connection import build_update, get_db, row_to_dict
+from backend.day_boundary import DAY_ROLLOVER_HOUR, day_bounds, day_key_for
 from backend.lifestyle import storage
 from backend.lifestyle.activity import is_activity_type, summarize_day
 from backend.lifestyle.exercises import canonicalize, display_name
@@ -42,7 +43,7 @@ INTENSITY_MAX = 5
 
 
 def _today() -> str:
-    return date_cls.today().isoformat()
+    return day_key_for()
 
 
 def _parse_date(value, default=None):
@@ -414,24 +415,27 @@ def trends():
         weeks = DEFAULT_TREND_WEEKS
     weeks = max(1, min(weeks, MAX_TREND_WEEKS))
 
-    today = date_cls.today()
+    today = date_cls.fromisoformat(day_key_for())
     window_start = week_start(today) - timedelta(weeks=weeks - 1)
-    # Local midnight of the first day in the window; the columns are unix ints.
-    since = int(datetime.combine(window_start, datetime.min.time()).timestamp())
+    # 4am local boundary of the first day in the window; the columns are unix ints.
+    since = day_bounds(window_start.isoformat())[0]
 
     db = get_db()
     day_counts: dict[str, dict[str, int]] = {}
+    _rollover_seconds = DAY_ROLLOVER_HOUR * 3600
 
     def _collect(name: str, sql: str) -> None:
         for row in db.execute(sql, (since,)).fetchall():
             day_counts.setdefault(row['day'], {})[name] = row['count']
 
-    _collect('journalEntries', """
-        SELECT date(created_at, 'unixepoch', 'localtime') AS day, COUNT(*) AS count
+    # Bucketing shifts the epoch back by the day-rollover hour first, so a row
+    # just after local midnight still lands in the previous 4am-day.
+    _collect('journalEntries', f"""
+        SELECT date(created_at - {_rollover_seconds}, 'unixepoch', 'localtime') AS day, COUNT(*) AS count
         FROM journal_entries WHERE created_at >= ? GROUP BY day
     """)
-    _collect('applications', """
-        SELECT date(received_at, 'unixepoch', 'localtime') AS day, COUNT(*) AS count
+    _collect('applications', f"""
+        SELECT date(received_at - {_rollover_seconds}, 'unixepoch', 'localtime') AS day, COUNT(*) AS count
         FROM emails
         WHERE category='job_application' AND job_status='sent' AND received_at >= ?
         GROUP BY day

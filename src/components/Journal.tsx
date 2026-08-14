@@ -14,7 +14,8 @@ import {
 import { handleFinishedRecording } from '../offline/recordingQueue';
 import { buildFeed, type FeedItem } from '../lib/journalFeed';
 import { computeEventGroupSpans } from '../lib/journalEventGroups';
-import { eventTimeLabel, toLocalISO } from '../lib/calendar';
+import { eventTimeLabel } from '../lib/calendar';
+import { localDayKey } from '../lib/dates';
 import {
   categoryRingBoxShadow,
   parseCategoryTags,
@@ -199,10 +200,10 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     new Date(e.createdAt).getTime()
   );
   const eventsRangeStart = loadedEntryTimes.length
-    ? toLocalISO(new Date(Math.min(...loadedEntryTimes)))
+    ? localDayKey(new Date(Math.min(...loadedEntryTimes)))
     : null;
   const eventsRangeEnd = loadedEntryTimes.length
-    ? toLocalISO(new Date(Math.max(...loadedEntryTimes)))
+    ? localDayKey(new Date(Math.max(...loadedEntryTimes)))
     : null;
   const { data: calendarEvents } = useQuery({
     queryKey: ['calendar', 'journal-range', eventsRangeStart, eventsRangeEnd],

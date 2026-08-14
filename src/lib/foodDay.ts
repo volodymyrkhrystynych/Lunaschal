@@ -1,19 +1,10 @@
-// The food log groups entries into 4am-anchored days, the same "logical day"
-// convention used for chat/sleep/paper elsewhere in the app (backend's
-// DAY_ROLLOVER_HOUR in backend/chat_day.py): a meal logged at 2am still
-// belongs to the day that started the previous morning, not the calendar day
-// that just ticked over at local midnight.
-const DAY_ROLLOVER_HOUR = 4;
+// The food log groups entries into 4am-anchored days, the app-wide "logical
+// day" convention (src/lib/dates.ts).
+import { localDayKey } from './dates';
 
 /** The YYYY-MM-DD key of the 4am-anchored local day containing this ISO timestamp. */
 export function foodDayKey(iso: string): string {
-  const shifted = new Date(
-    new Date(iso).getTime() - DAY_ROLLOVER_HOUR * 60 * 60 * 1000
-  );
-  const y = shifted.getFullYear();
-  const m = String(shifted.getMonth() + 1).padStart(2, '0');
-  const d = String(shifted.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+  return localDayKey(new Date(iso));
 }
 
 export function foodDayLabel(dayKey: string): string {

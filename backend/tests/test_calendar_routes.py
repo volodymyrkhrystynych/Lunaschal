@@ -131,6 +131,46 @@ def test_bad_date_paths_are_rejected(client):
     assert client.get('/api/calendar/related-journals/nope').status_code == 400
 
 
+# --- related journals: 4am day boundary ---
+
+def _journal_entry(client, content, created_at):
+    from backend.db import connection
+    r = client.post('/api/journal', json={'content': content})
+    assert r.status_code == 201, r.get_json()
+    entry_id = r.get_json()['id']
+    db = connection.get_db()
+    db.execute('UPDATE journal_entries SET created_at=? WHERE id=?', (created_at, entry_id))
+    db.commit()
+    return entry_id
+
+
+def test_related_journals_uses_the_4am_anchored_day(client, monkeypatch):
+    """A journal entry written at 1am still belongs to the calendar day
+    before, matching journal.py's merge-candidates window, not literal
+    midnight-to-midnight."""
+    from backend.routes import journal as journal_routes
+    for name in ('_polish_bg', '_generate_metadata_bg'):
+        monkeypatch.setattr(journal_routes, name, lambda *a, **k: None)
+    from datetime import datetime
+
+    evening = _journal_entry(
+        client, 'Evening reflections.',
+        int(datetime(2026, 7, 8, 22, 0, 0).timestamp()),
+    )
+    still_that_night = _journal_entry(
+        client, 'Still awake past midnight.',
+        int(datetime(2026, 7, 9, 1, 0, 0).timestamp()),
+    )
+    next_morning = _journal_entry(
+        client, 'A fresh new day.',
+        int(datetime(2026, 7, 9, 5, 0, 0).timestamp()),
+    )
+
+    ids = {e['id'] for e in client.get('/api/calendar/related-journals/2026-07-08').get_json()}
+    assert ids == {evening, still_that_night}
+    assert next_morning not in ids
+
+
 # --- update / delete ---
 
 def test_patch_updates_recurrence(client):

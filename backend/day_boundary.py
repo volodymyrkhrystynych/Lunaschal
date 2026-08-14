@@ -1,8 +1,7 @@
-"""Day-boundary helper for the daily-chat model.
-
-A "chat day" runs 04:00 -> 04:00 local time: a message sent at 02:00 still
-belongs to the day that started the previous morning. Mirrors the local-date
-convention used for daily tasks (backend/routes/tasks.py), just shifted by 4h.
+"""The app-wide day boundary: every "day" concept in Lunaschal runs 04:00 ->
+04:00 local time, except newspapers (an edition's date comes from the source
+site, not the user's day). A task completed, a workout logged, or a message
+sent at 02:00 still belongs to the day that started the previous morning.
 """
 import time
 from datetime import datetime, timedelta

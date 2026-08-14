@@ -74,6 +74,24 @@ def test_merge_candidates_404s_for_a_missing_entry(client):
     assert client.get('/api/journal/nope/merge-candidates').status_code == 404
 
 
+def test_merge_candidates_rolls_the_day_over_at_4am_not_midnight(client):
+    """The "same day" window is the app's 4am-anchored day, not literal
+    midnight: a recording made at 1am still belongs with the evening before,
+    while one made at 5am has already rolled into the next day."""
+    late_night_source = _recording(client)
+    _set_created_at(late_night_source, int(datetime(2026, 1, 16, 1, 0, 0).timestamp()))
+    evening_before = _entry(client, 'Written the evening before.')
+    _set_created_at(evening_before, DAY1_EVENING)
+    after_4am = _entry(client, 'Written after the 4am rollover.')
+    _set_created_at(after_4am, int(datetime(2026, 1, 16, 5, 0, 0).timestamp()))
+
+    ids = [
+        c['id']
+        for c in client.get(f'/api/journal/{late_night_source}/merge-candidates').get_json()
+    ]
+    assert ids == [evening_before]
+
+
 # --- merge ---------------------------------------------------------------------
 
 def test_merge_moves_the_attachment_and_deletes_the_source_entry(client):

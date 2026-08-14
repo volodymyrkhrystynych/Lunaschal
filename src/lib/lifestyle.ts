@@ -3,6 +3,8 @@
 // environment (no jsdom), the same way src/lib/journalFeed.ts and
 // src/lib/todos.ts are.
 
+import { localDayKey } from './dates';
+
 export const ACTIVITY_TYPES = [
   'goodlife_brother',
   'goodlife_alone',
@@ -50,12 +52,10 @@ export function isActivityType(value: unknown): value is ActivityType {
 // ISO day strings are parsed as UTC and only ever compared/advanced as UTC, so
 // gridding a calendar can't drift a day across a DST boundary. `todayISO` is the
 // one place that reads the *local* clock, because "today" for a workout log is
-// the user's day, not UTC's.
+// the user's day (4am-anchored, src/lib/dates.ts), not UTC's.
 
 export function todayISO(now: Date = new Date()): string {
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${now.getFullYear()}-${month}-${day}`;
+  return localDayKey(now);
 }
 
 export function parseISODate(iso: string): Date {

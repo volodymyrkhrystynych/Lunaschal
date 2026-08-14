@@ -21,7 +21,7 @@ import time
 from ulid import ULID
 
 from backend.db.connection import get_db
-from backend.chat_day import day_key_for
+from backend.day_boundary import day_key_for
 from backend.ai.provider import is_ai_configured
 from backend.ai.briefing import (
     _pending_daily_tasks,

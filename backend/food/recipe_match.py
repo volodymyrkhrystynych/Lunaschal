@@ -18,7 +18,7 @@ from ulid import ULID
 
 from backend.ai.food import classify_homemade_match
 from backend.briefing_job import find_or_create_day_conversation
-from backend.chat_day import day_key_for
+from backend.day_boundary import day_key_for
 from backend.db.connection import get_db, search_recipes_fts
 
 # Candidates handed to the model: an FTS match on the dish name first (most

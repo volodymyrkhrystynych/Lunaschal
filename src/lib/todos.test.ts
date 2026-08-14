@@ -186,6 +186,14 @@ describe('isFarOffPeriodic', () => {
     ); // overdue
   });
 
+  it('treats "now" before 4am as still the previous logical day', () => {
+    const justAfterMidnight = new Date(2026, 6, 9, 1, 0, 0); // Jul 9, 1am
+    // Due Jul 8 (yesterday by the clock) is still "today" until 4am ticks over.
+    expect(
+      isFarOffPeriodic(periodic(at(2026, 6, 8), 1, 'month'), justAfterMidnight)
+    ).toBe(false); // due today (per the 4am day), not far off
+  });
+
   it('removes hidden periodic todos from the active list', () => {
     const base = { done: false, completedAt: null };
     const { active } = partitionTodos(
@@ -258,6 +266,21 @@ describe('formatDue', () => {
     expect(formatDue(new Date(2026, 6, 9, 1).toISOString(), now)!.overdue).toBe(
       false
     );
+  });
+
+  it('rolls "now" over at 4am, not midnight, when checking overdue', () => {
+    const justAfterMidnight = new Date(2026, 6, 9, 1, 0, 0); // Jul 9, 1am
+    // Due Jul 8: by the wall clock "yesterday", but still today's due date
+    // until the 4am boundary passes.
+    expect(
+      formatDue(new Date(2026, 6, 8, 12).toISOString(), justAfterMidnight)!
+        .overdue
+    ).toBe(false);
+    // Due Jul 7 is overdue either way.
+    expect(
+      formatDue(new Date(2026, 6, 7, 12).toISOString(), justAfterMidnight)!
+        .overdue
+    ).toBe(true);
   });
 });
 

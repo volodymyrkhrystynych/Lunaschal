@@ -2,6 +2,7 @@ import time
 from datetime import date, datetime, timedelta
 
 from backend.ai.llm import chat_stream_deltas
+from backend.day_boundary import day_key_for
 
 SYSTEM_PROMPT = """You are Lunaschal, the user's seneschal — their second-in-command, running
 the day-to-day so nothing falls through the cracks.
@@ -64,7 +65,7 @@ def get_recent_journal_entries(now: int | None = None) -> list[dict]:
 
 def _format_entry_time(ts: int, now: int) -> str:
     dt = datetime.fromtimestamp(ts)
-    days = (datetime.fromtimestamp(now).date() - dt.date()).days
+    days = (date.fromisoformat(day_key_for(now)) - date.fromisoformat(day_key_for(ts))).days
     day = 'today' if days == 0 else 'yesterday' if days == 1 else dt.strftime('%b %d')
     return f"{day} {dt.strftime('%H:%M')}"
 
@@ -94,7 +95,7 @@ def get_upcoming_schedule(now: int | None = None) -> list[dict]:
     from backend.calendar_query import events_in_range
     from backend.db.connection import get_db
     now = now if now is not None else int(time.time())
-    today = datetime.fromtimestamp(now).date()
+    today = date.fromisoformat(day_key_for(now))
     horizon = today + timedelta(days=SCHEDULE_LOOKAHEAD_DAYS)
     events = events_in_range(get_db(), today.isoformat(), horizon.isoformat())
     return events[:SCHEDULE_MAX_EVENTS]
@@ -117,7 +118,7 @@ def format_schedule_context(events: list[dict], now: int | None = None) -> str:
     if not events:
         return ''
     now = now if now is not None else int(time.time())
-    today = datetime.fromtimestamp(now).date()
+    today = date.fromisoformat(day_key_for(now))
     lines = []
     for e in events:
         when = _format_event_day(e['date'], today)

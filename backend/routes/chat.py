@@ -1,12 +1,11 @@
 import time
 import json
 import logging
-from datetime import date
 from flask import Blueprint, jsonify, request, Response, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.chat import storage as chat_storage
-from backend.chat_day import day_key_for
+from backend.day_boundary import day_key_for
 from backend.geo import coord_pair
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.ai import priority
@@ -501,7 +500,7 @@ def _cross_off(db, item: dict, now: int) -> None:
     if linked_id and linked_type == 'todo':
         complete_todo_row(db, linked_id, now)
     elif linked_id and linked_type == 'daily':
-        complete_daily_task(db, linked_id, date.fromtimestamp(now).isoformat(), now)
+        complete_daily_task(db, linked_id, day_key_for(now), now)
     else:
         _log_event(db, 'todo_completed', item['title'], None, item.get('list'), None)
 
@@ -659,7 +658,7 @@ def _accept_calorie(db, data: dict, ctx: dict) -> dict:
 
     now = int(time.time())
     id = str(ULID())
-    day = data.get('date') or date.today().isoformat()
+    day = data.get('date') or day_key_for()
     db.execute(
         'INSERT INTO calorie_logs(id, date, description, calories, created_at) VALUES (?,?,?,?,?)',
         (id, day, description, calories, now),
@@ -931,9 +930,7 @@ def _accept_food(db, data: dict, ctx: dict) -> dict:
     if calories is not None:
         # A meal is a food entry; a calorie count is a Lifestyle row. Writing
         # both keeps the two views agreeing without merging the tables.
-        day = data.get('date') or date.fromtimestamp(
-            overrides.get('created_at', now)
-        ).isoformat()
+        day = data.get('date') or day_key_for(overrides.get('created_at', now))
         calorie_id = str(ULID())
         db.execute(
             'INSERT INTO calorie_logs(id, date, description, calories, created_at)'
