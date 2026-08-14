@@ -2,7 +2,7 @@
 // DOM — the same reason src/lib/calendarDayLayout.ts exists.
 //
 // The one thing worth understanding here: a night is not a day. The backend
-// keeps wake/sleep against a 4am-anchored day key (backend/chat_day.py), so a
+// keeps wake/sleep against a 4am-anchored day key (backend/day_boundary.py), so a
 // bedtime of 01:30 is stored on the day that started the previous morning and
 // lands on the *next* calendar date. The day view, meanwhile, draws a plain
 // calendar date from 00:00 to 24:00. Everything below is the intersection of
