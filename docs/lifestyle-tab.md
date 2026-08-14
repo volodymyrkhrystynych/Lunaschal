@@ -203,8 +203,14 @@ now sits directly under Journal in the sidebar rather than down by Food.
   stale chat proposal replays instead of 400ing. `task_events.task_list` keeps its history.
 - **DOM order is the phone's stacking order**, so the order below changed. It now runs by how
   often a thing is touched rather than by topic: **activity + momentum, tasks, workout log,
-  calories | selfie, weight progression**. The workout log's history is capped at 4 sessions in a
+  calories, selfie, weight progression**. The workout log's history is capped at 4 sessions in a
   scroll box — beside the day's tasks, a fortnight of sessions pushed the page down.
+  **Later still:** tasks/to-dos moved into their own column instead of sharing a row with the
+  workout log — that list is open-ended and routinely runs long, so pairing it with a fixed-height
+  card either cropped the card or stranded it next to empty space. Workout log, calories, selfie,
+  and progression now stack vertically in the other column instead (see "Rough UI layout" below);
+  progression's two charts stack too, since a `md:` side-by-side grid inside a half-width column
+  squeezed both rather than actually laying out side by side.
 - **Cards merged where two headers asked one question**: the heatmap and the momentum chart share
   a card, and so do daily tasks and the to-do list (daily above, capped at four, so it no longer
   claims half the tab for four rows). The shell lives once in `src/components/Lifestyle/card.ts`;
@@ -228,24 +234,27 @@ now sits directly under Journal in the sidebar rather than down by Food.
 
 ## Rough UI layout
 
-Single scrollable column in the main content area (sidebar unchanged), top to bottom:
+Main content area (sidebar unchanged), top to bottom:
 
 1. **Activity heatmap** — full width, own card at the top since it's the at-a-glance summary.
    Legend underneath (4 activity colors + secondary-activity mark); hovering/clicking a day shows
    that day's session(s).
-2. **Workout log | Chores** — two cards side by side (stacked on narrow/Pocket 2 widths). Workout
-   log: freeform textarea, location chip picker, duration field + intensity star picker,
-   recent-entries list below. Chores: the Tasks view's own `TodoRow`/`TodoForm` — same rows, same
-   chrome, and (the reason it's shared rather than copied) the same `isFarOffPeriodic` rule, so a
-   monthly chore stays hidden until it's nearly due.
-   _As built, after the change above: **Daily tasks | To-Do** comes second (still the Tasks
-   components, still the same rows and the same `isFarOffPeriodic` rule), and the workout log
-   pairs with the trends chart in the third row._
-3. **Progression** — one card, two mini charts side by side: body weight sparkline (with an inline
-   "log today's weight" field) and a per-exercise sparkline behind an exercise picker dropdown.
-4. **Daily selfie | Calories** — two cards side by side. Selfie: capture widget + a short strip of
-   recent-day thumbnails (so a missed day is visible at a glance). Calories: description + kcal
-   input row, today's entries, running total.
+2. **Two columns below that (desktop; stacks to one column on narrow/Pocket 2 widths):**
+   - **Left: Daily tasks | To-Do.** The Tasks view's own components — same rows, same chrome, and
+     the same `isFarOffPeriodic` rule so a monthly to-do stays hidden until it's nearly due. Its
+     own column because the list is open-ended and routinely runs long enough to outgrow whatever
+     it'd otherwise share a row with.
+   - **Right: workout log, calories, daily selfie, progression, stacked vertically in that order.**
+     Workout log: freeform textarea, location chip picker, duration field + intensity star picker,
+     recent-entries list below (capped at 4 sessions). Calories: description + kcal input row,
+     today's entries, running total. Selfie: capture widget + a short strip of recent-day
+     thumbnails. Progression: body weight sparkline (with an inline "log today's weight" field)
+     stacked above a per-exercise sparkline behind an exercise picker dropdown — stacked rather
+     than side by side, since this card no longer spans the full tab width.
+
+   _(Earlier layouts, superseded — see "The tab absorbed Tasks" above: workout log paired with
+   chores, then with the trends chart, in a row beside tasks; calories paired with selfie in their
+   own row; progression's two charts sat side by side.)_
 
 A rough interactive sketch of this layout (Catppuccin-Mocha-matched to the app's existing palette
 in `src/index.css`) was reviewed alongside this doc — not committed to source, since it's a

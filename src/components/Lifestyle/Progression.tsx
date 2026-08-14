@@ -187,14 +187,17 @@ function ExerciseChart() {
   );
 }
 
-/** Body-weight and per-exercise progression, side by side. */
+/** Body-weight and per-exercise progression, stacked — this card now shares
+ *  a column with the workout log and calories/selfie cards rather than
+ *  spanning the full tab width, so a side-by-side grid here would squeeze
+ *  both charts rather than actually laying out side by side. */
 export function Progression() {
   return (
     <section className={CARD}>
       <h2 className="text-lg font-semibold text-[var(--color-text)] mb-3">
         Progression
       </h2>
-      <div className="grid gap-6 md:grid-cols-2">
+      <div className="flex flex-col gap-6">
         <BodyWeightChart />
         <ExerciseChart />
       </div>

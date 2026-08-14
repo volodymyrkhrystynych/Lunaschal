@@ -20,6 +20,11 @@ import { CARD, CARD_DIVIDER } from './card';
  * (what happened, and which way it's going) and daily tasks + to-dos (both are
  * "what am I doing today"). Four small cards had four headers and four borders
  * asking to be read as four separate things.
+ *
+ * Below activity, tasks/to-dos get their own column rather than sharing a row
+ * with anything — that list is open-ended and routinely runs long, so pairing
+ * it with a fixed-height card would either crop the card or leave it stranded
+ * next to empty space. Everything else stacks vertically in the other column.
  */
 export function Lifestyle() {
   return (
@@ -32,20 +37,15 @@ export function Lifestyle() {
           </div>
         </section>
 
-        {/* Both cards lay their contents out in one capped column, so on a wide
-            screen they sit side by side instead of each stretching a form
-            across the tab. Stacks tasks-then-workout on the phone. */}
         <div className="grid gap-4 lg:grid-cols-2 items-start">
           <TasksSection />
-          <WorkoutLog />
+          <div className="flex flex-col gap-4">
+            <WorkoutLog />
+            <CaloriesCard />
+            <SelfieCard />
+            <Progression />
+          </div>
         </div>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <CaloriesCard />
-          <SelfieCard />
-        </div>
-
-        <Progression />
       </div>
     </div>
   );
