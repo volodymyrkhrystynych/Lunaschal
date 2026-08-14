@@ -17,7 +17,7 @@ const splitTagInput = (input: string): string[] =>
 interface PickedMedia {
   file: File;
   url: string;
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'audio';
 }
 
 /** Photo/video thumbnails — read-only gallery for the view state, matching
@@ -26,23 +26,31 @@ function MediaGallery({ media }: { media: RecipeMedia[] }) {
   if (media.length === 0) return null;
   return (
     <div className="flex gap-2 overflow-x-auto mb-3 pb-1">
-      {media.map(m =>
-        m.kind === 'video' ? (
-          <video
-            key={m.id}
-            src={m.url}
-            controls
-            className="h-32 rounded border border-white/10 shrink-0"
-          />
-        ) : (
+      {media.map(m => {
+        if (m.kind === 'video') {
+          return (
+            <video
+              key={m.id}
+              src={m.url}
+              controls
+              className="h-32 rounded border border-white/10 shrink-0"
+            />
+          );
+        }
+        if (m.kind === 'audio') {
+          return (
+            <audio key={m.id} src={m.url} controls className="h-10 shrink-0" />
+          );
+        }
+        return (
           <img
             key={m.id}
             src={m.url}
             alt=""
             className="h-32 rounded border border-white/10 shrink-0 object-cover"
           />
-        )
-      )}
+        );
+      })}
     </div>
   );
 }
@@ -60,23 +68,30 @@ function MediaPicker({
 }) {
   const photoRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
+  const audioRef = useRef<HTMLInputElement>(null);
   return (
     <div>
       {media.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
           {media.map(m => (
             <div key={m.url} className="relative w-20 h-20">
-              {m.kind === 'video' ? (
+              {m.kind === 'video' && (
                 <video
                   src={m.url}
                   className="w-20 h-20 object-cover rounded border border-white/10"
                 />
-              ) : (
+              )}
+              {m.kind === 'image' && (
                 <img
                   src={m.url}
                   alt=""
                   className="w-20 h-20 object-cover rounded border border-white/10"
                 />
+              )}
+              {m.kind === 'audio' && (
+                <div className="w-20 h-20 flex items-center justify-center text-2xl rounded border border-white/10 bg-white/5">
+                  🎧
+                </div>
               )}
               <button
                 onClick={() => onRemove(m.url)}
@@ -114,6 +129,17 @@ function MediaPicker({
           e.target.value = '';
         }}
       />
+      <input
+        ref={audioRef}
+        type="file"
+        accept="audio/*"
+        multiple
+        className="hidden"
+        onChange={e => {
+          onAdd(e.target.files);
+          e.target.value = '';
+        }}
+      />
       <div className="flex gap-2">
         <button
           type="button"
@@ -128,6 +154,13 @@ function MediaPicker({
           className="px-3 py-1.5 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors text-sm"
         >
           🎥 Video
+        </button>
+        <button
+          type="button"
+          onClick={() => audioRef.current?.click()}
+          className="px-3 py-1.5 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors text-sm"
+        >
+          🎧 Audio
         </button>
       </div>
     </div>
@@ -156,6 +189,9 @@ export function RecipeList() {
   const [importText, setImportText] = useState('');
   const [importUrl, setImportUrl] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
+  const [showGenerate, setShowGenerate] = useState(false);
+  const [generatePrompt, setGeneratePrompt] = useState('');
+  const [generateError, setGenerateError] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const {
@@ -275,6 +311,20 @@ export function RecipeList() {
     onError: (e: Error) => setImportError(e.message),
   });
 
+  const generateRecipe = useMutation({
+    mutationFn: (prompt: string) => api.cookbook.generate(prompt),
+    onSuccess: result => {
+      invalidate();
+      setGeneratePrompt('');
+      setGenerateError(null);
+      setShowGenerate(false);
+      setSearchQuery('');
+      setSelectedTag(null);
+      setExpandedId(result.id);
+    },
+    onError: (e: Error) => setGenerateError(e.message),
+  });
+
   const { selIndex, next, prev, isSelected, scrollSelectedIntoView } =
     useListSelection(recipes?.length, 1);
 
@@ -309,7 +359,18 @@ export function RecipeList() {
       <div className="flex items-center justify-end gap-2 mb-4">
         <button
           onClick={() => {
+            setShowGenerate(!showGenerate);
+            setShowImport(false);
+            setShowNewRecipe(false);
+          }}
+          className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors"
+        >
+          ✨ Generate
+        </button>
+        <button
+          onClick={() => {
             setShowImport(!showImport);
+            setShowGenerate(false);
             setShowNewRecipe(false);
           }}
           className="px-4 py-2 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors"
@@ -320,6 +381,7 @@ export function RecipeList() {
           onClick={() => {
             setShowNewRecipe(!showNewRecipe);
             setShowImport(false);
+            setShowGenerate(false);
           }}
           className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors"
         >
@@ -436,6 +498,48 @@ export function RecipeList() {
               className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
             >
               {createRecipe.isPending ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showGenerate && (
+        <div className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
+          <textarea
+            value={generatePrompt}
+            onChange={e => setGeneratePrompt(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Escape') setShowGenerate(false);
+            }}
+            placeholder="Describe what you want — e.g. 'quick weeknight chicken soup' or 'vegan chocolate cake'..."
+            rows={3}
+            autoFocus
+            className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none border border-white/10 rounded p-2 mb-2"
+          />
+          {generateError && (
+            <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
+              {generateError}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => {
+                setShowGenerate(false);
+                setGenerateError(null);
+              }}
+              className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                setGenerateError(null);
+                generateRecipe.mutate(generatePrompt.trim());
+              }}
+              disabled={!generatePrompt.trim() || generateRecipe.isPending}
+              className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+            >
+              {generateRecipe.isPending ? 'Generating…' : 'Generate'}
             </button>
           </div>
         </div>
@@ -584,17 +688,23 @@ export function RecipeList() {
                     <div className="flex flex-wrap gap-2 mb-2">
                       {recipe.media.map(m => (
                         <div key={m.id} className="relative w-20 h-20">
-                          {m.kind === 'video' ? (
+                          {m.kind === 'video' && (
                             <video
                               src={m.url}
                               className="w-20 h-20 object-cover rounded border border-white/10"
                             />
-                          ) : (
+                          )}
+                          {m.kind === 'image' && (
                             <img
                               src={m.url}
                               alt=""
                               className="w-20 h-20 object-cover rounded border border-white/10"
                             />
+                          )}
+                          {m.kind === 'audio' && (
+                            <div className="w-20 h-20 flex items-center justify-center text-2xl rounded border border-white/10 bg-white/5">
+                              🎧
+                            </div>
                           )}
                           <button
                             onClick={() => deleteMedia.mutate(m.id)}
@@ -694,6 +804,7 @@ function EditMediaAdder({
 }) {
   const photoRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
+  const audioRef = useRef<HTMLInputElement>(null);
   return (
     <div className="flex gap-2 mb-2">
       <input
@@ -718,6 +829,17 @@ function EditMediaAdder({
           e.target.value = '';
         }}
       />
+      <input
+        ref={audioRef}
+        type="file"
+        accept="audio/*"
+        multiple
+        className="hidden"
+        onChange={e => {
+          onPick(e.target.files);
+          e.target.value = '';
+        }}
+      />
       <button
         type="button"
         onClick={() => photoRef.current?.click()}
@@ -733,6 +855,14 @@ function EditMediaAdder({
         className="px-3 py-1.5 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
       >
         🎥 Add video
+      </button>
+      <button
+        type="button"
+        onClick={() => audioRef.current?.click()}
+        disabled={busy}
+        className="px-3 py-1.5 border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors text-sm disabled:opacity-50"
+      >
+        🎧 Add audio
       </button>
     </div>
   );

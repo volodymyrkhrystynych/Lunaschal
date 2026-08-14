@@ -211,7 +211,7 @@ export interface ActiveMeeting {
 
 export interface RecipeMedia {
   id: string;
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'audio';
   position: number;
   url: string;
 }
@@ -1690,6 +1690,10 @@ export const api = {
     delete: (id: string) => del<{ success: boolean }>(`/api/cookbook/${id}`),
     importRecipe: (data: { text?: string; url?: string }) =>
       post<{ id: string; recipe: Recipe }>('/api/cookbook/import', data),
+    generate: (prompt: string) =>
+      post<{ id: string; recipe: Recipe }>('/api/cookbook/generate', {
+        prompt,
+      }),
     addMedia: (id: string, media: File[]) => {
       const form = new FormData();
       for (const f of media) form.append('media', f);
