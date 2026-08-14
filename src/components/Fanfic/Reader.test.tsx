@@ -80,6 +80,11 @@ vi.mock('../../hooks/api', () => ({
       }),
       saveProgress: vi.fn().mockResolvedValue({ success: true }),
       setRead: vi.fn().mockResolvedValue({ success: true, readCount: 0 }),
+      bookmarks: {
+        list: vi.fn().mockResolvedValue([]),
+        create: vi.fn(),
+        delete: vi.fn(),
+      },
       folders: {
         list: vi.fn().mockResolvedValue([]),
       },
