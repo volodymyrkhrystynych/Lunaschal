@@ -590,6 +590,20 @@ CREATE TABLE IF NOT EXISTS fic_chapter_reads (
 
 CREATE INDEX IF NOT EXISTS idx_fcr_fic ON fic_chapter_reads(fic_id);
 
+CREATE TABLE IF NOT EXISTS fic_bookmarks (
+    id TEXT PRIMARY KEY,
+    fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    chapter_id TEXT NOT NULL REFERENCES fic_chapters(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK(type IN ('favorite', 'continue')),
+    scroll_position REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_fic_bookmarks_fic ON fic_bookmarks(fic_id, created_at);
+-- At most one continue bookmark per fic; creating a new one replaces the old.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_fic_bookmarks_continue
+    ON fic_bookmarks(fic_id) WHERE type = 'continue';
+
 CREATE TABLE IF NOT EXISTS newspaper_frontpages (
     id TEXT PRIMARY KEY,
     paper TEXT NOT NULL CHECK(paper IN ('toronto-star','nyt')),

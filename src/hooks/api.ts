@@ -89,6 +89,16 @@ export interface Fic {
   readCount?: number;
 }
 
+export interface FicBookmark {
+  id: string;
+  ficId: string;
+  chapterId: string;
+  chapterTitle: string;
+  type: 'favorite' | 'continue';
+  scrollPosition: number;
+  createdAt: string;
+}
+
 export interface FicFolder {
   id: string;
   name: string;
@@ -1837,6 +1847,20 @@ export const api = {
       post<{ success: boolean }>(`/api/fanfic/${ficId}/progress`, {
         chapterId,
       }),
+    bookmarks: {
+      list: (ficId: string) =>
+        get<FicBookmark[]>(`/api/fanfic/${ficId}/bookmarks`),
+      create: (
+        ficId: string,
+        data: {
+          chapterId: string;
+          type: 'favorite' | 'continue';
+          scrollPosition: number;
+        }
+      ) => post<FicBookmark>(`/api/fanfic/${ficId}/bookmarks`, data),
+      delete: (bookmarkId: string) =>
+        del<{ success: boolean }>(`/api/fanfic/bookmarks/${bookmarkId}`),
+    },
     linkJournal: (ficId: string, journalEntryId: string, chapterId?: string) =>
       post<{ id: string }>(`/api/fanfic/${ficId}/journal-link`, {
         journalEntryId,

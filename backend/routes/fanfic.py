@@ -734,6 +734,72 @@ def set_chapters_read(fic_id):
     return jsonify({'success': True, 'readCount': count['n']})
 
 
+_BOOKMARK_TYPES = {'favorite', 'continue'}
+
+
+@bp.get('/<fic_id>/bookmarks')
+def list_bookmarks(fic_id):
+    db = get_db()
+    rows = db.execute(
+        'SELECT b.id, b.fic_id, b.chapter_id, b.type, b.scroll_position, b.created_at,'
+        ' c.title AS chapter_title'
+        ' FROM fic_bookmarks b JOIN fic_chapters c ON c.id = b.chapter_id'
+        ' WHERE b.fic_id=? ORDER BY b.created_at DESC',
+        (fic_id,)).fetchall()
+    return jsonify([row_to_dict(r) for r in rows])
+
+
+@bp.post('/<fic_id>/bookmarks')
+def create_bookmark(fic_id):
+    body = request.json or {}
+    chapter_id = body.get('chapterId')
+    bookmark_type = body.get('type')
+    scroll_position = body.get('scrollPosition', 0)
+    if bookmark_type not in _BOOKMARK_TYPES:
+        return jsonify({'error': "type must be 'favorite' or 'continue'"}), 400
+    if not chapter_id:
+        return jsonify({'error': 'chapterId required'}), 400
+    if not isinstance(scroll_position, (int, float)):
+        return jsonify({'error': 'scrollPosition must be a number'}), 400
+    db = get_db()
+    ch = db.execute(
+        'SELECT id FROM fic_chapters WHERE id=? AND fic_id=?',
+        (chapter_id, fic_id)).fetchone()
+    if not ch:
+        return jsonify({'error': 'Chapter not found in this fic'}), 404
+    scroll_position = max(0.0, min(1.0, float(scroll_position)))
+    if bookmark_type == 'continue':
+        db.execute(
+            "DELETE FROM fic_bookmarks WHERE fic_id=? AND type='continue'",
+            (fic_id,))
+    bookmark_id = str(ULID())
+    now = int(time.time())
+    db.execute(
+        'INSERT INTO fic_bookmarks(id, fic_id, chapter_id, type, scroll_position, created_at)'
+        ' VALUES (?,?,?,?,?,?)',
+        (bookmark_id, fic_id, chapter_id, bookmark_type, scroll_position, now))
+    db.commit()
+    row = db.execute(
+        'SELECT b.id, b.fic_id, b.chapter_id, b.type, b.scroll_position, b.created_at,'
+        ' c.title AS chapter_title'
+        ' FROM fic_bookmarks b JOIN fic_chapters c ON c.id = b.chapter_id'
+        ' WHERE b.id=?',
+        (bookmark_id,)).fetchone()
+    return jsonify(row_to_dict(row))
+
+
+@bp.delete('/bookmarks/<bookmark_id>')
+def delete_bookmark(bookmark_id):
+    db = get_db()
+    row = db.execute(
+        'SELECT id FROM fic_bookmarks WHERE id=?', (bookmark_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    db.execute('DELETE FROM fic_bookmarks WHERE id=?', (bookmark_id,))
+    db.commit()
+    return jsonify({'success': True})
+
+
 @bp.patch('/<fic_id>/review')
 def save_review(fic_id):
     body = request.json or {}
