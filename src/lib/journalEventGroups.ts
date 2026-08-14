@@ -14,9 +14,8 @@ import {
   timeToMinutes,
 } from './calendarDayLayout';
 import { parseCategoryTags } from './calendarCategories';
-import { DAY_ROLLOVER_HOUR } from './dates';
+import { dayStartMs } from './dates';
 
-const ROLLOVER_TIME = `${String(DAY_ROLLOVER_HOUR).padStart(2, '0')}:00:00`;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface EventGroupSpan {
@@ -54,7 +53,7 @@ function feedItemTimeMs(item: FeedItem): number {
 function eventWindowMs(event: CalendarEvent): [number, number] | null {
   const dateStr = event.occurrenceDate ?? event.date;
   if (event.allDay) {
-    const start = new Date(`${dateStr}T${ROLLOVER_TIME}`).getTime();
+    const start = dayStartMs(dateStr);
     return [start, start + DAY_MS - 1000];
   }
   if (!event.time) return null;

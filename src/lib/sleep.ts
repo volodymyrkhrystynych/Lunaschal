@@ -1,13 +1,19 @@
 // Where the asleep bands sit on the day view's timeline. Pure geometry, no
 // DOM — the same reason src/lib/calendarDayLayout.ts exists.
 //
-// The one thing worth understanding here: a night is not a day. The backend
-// keeps wake/sleep against a 4am-anchored day key (backend/day_boundary.py), so a
-// bedtime of 01:30 is stored on the day that started the previous morning and
-// lands on the *next* calendar date. The day view, meanwhile, draws a plain
-// calendar date from 00:00 to 24:00. Everything below is the intersection of
-// those two: the night before this date ended at its wake time, the night after
-// began at its sleep time, and either can fall outside the date entirely.
+// The backend keeps wake/sleep against a 4am-anchored day key
+// (backend/day_boundary.py) and the day view now draws that same 4am-to-4am
+// window, so the two finally share one frame: a bedtime of 01:30 is stored on
+// the day that started the previous morning *and* is drawn near the bottom of
+// that day's timeline. Positions below are offset minutes from the window's
+// 4am start, matching src/lib/calendarDayLayout.ts.
+//
+// What still needs care is that the far end of either night lies outside the
+// window by construction — the previous bedtime is in yesterday's window and
+// the next wake is in tomorrow's — so both clamp to an edge rather than being
+// drawn where they fall.
+
+import { dayStartMs } from './dates';
 
 export const MINUTES_PER_DAY = 24 * 60;
 
@@ -35,16 +41,17 @@ export interface SleepBand {
   label: string;
 }
 
-/** Local midnight of a 'YYYY-MM-DD' date, in unix seconds. */
-export function midnightOf(date: string): number {
-  return new Date(`${date}T00:00:00`).getTime() / 1000;
+/** The 4am start of a day key's window, in unix seconds. */
+export function dayStartOf(date: string): number {
+  return dayStartMs(date) / 1000;
 }
 
-/** An instant as minutes from a date's midnight. Deliberately unclamped —
- * negative means "before this date began", over MINUTES_PER_DAY means "after it
- * ended", and both are how a band gets dropped rather than drawn wrong. */
-export function minutesFromMidnight(ts: number, date: string): number {
-  return (ts - midnightOf(date)) / 60;
+/** An instant as offset minutes from a day key's 4am start. Deliberately
+ * unclamped — negative means "before this day began", over MINUTES_PER_DAY
+ * means "after it ended", and both are how a band gets clamped to an edge or
+ * dropped rather than drawn wrong. */
+export function minutesFromDayStart(ts: number, date: string): number {
+  return (ts - dayStartOf(date)) / 60;
 }
 
 /** 'HH:MM' local wall clock, matching how an event's own time renders. */
@@ -58,22 +65,23 @@ function clamp(minutes: number): number {
 }
 
 /**
- * The asleep spans to shade on one calendar date, in that date's minute space.
+ * The asleep spans to shade on one day key's 4am-to-4am window, in that
+ * window's offset minutes.
  *
  * A band is only drawn from an end we actually know. An unknown *far* end falls
- * back to the edge of the day (midnight), because "asleep until 07:20" is true
- * whether or not we know when it started — but an unknown *near* end (no wake
- * time, no sleep time) draws nothing at all, since the band would be claiming a
- * boundary nobody recorded.
+ * back to the edge of the window, because "asleep until 07:20" is true whether
+ * or not we know when it started — but an unknown *near* end (no wake time, no
+ * sleep time) draws nothing at all, since the band would be claiming a boundary
+ * nobody recorded.
  */
 export function sleepBands(day: SleepDay, date: string): SleepBand[] {
   const bands: SleepBand[] = [];
 
   if (day.wakeAt !== null) {
-    const end = minutesFromMidnight(day.wakeAt, date);
+    const end = minutesFromDayStart(day.wakeAt, date);
     const start =
       day.previousSleepAt !== null
-        ? minutesFromMidnight(day.previousSleepAt, date)
+        ? minutesFromDayStart(day.previousSleepAt, date)
         : 0;
     if (end > 0 && end > start) {
       bands.push({
@@ -86,13 +94,13 @@ export function sleepBands(day: SleepDay, date: string): SleepBand[] {
   }
 
   if (day.sleepAt !== null) {
-    const start = minutesFromMidnight(day.sleepAt, date);
+    const start = minutesFromDayStart(day.sleepAt, date);
     const end =
       day.nextWakeAt !== null
-        ? minutesFromMidnight(day.nextWakeAt, date)
+        ? minutesFromDayStart(day.nextWakeAt, date)
         : MINUTES_PER_DAY;
-    // A bedtime past midnight sits on the next date, where it is that date's
-    // morning band instead. Nothing to draw here.
+    // A 01:30 bedtime is inside this window, near its bottom — it is the night
+    // this day ended with, not the next day's morning.
     if (start < MINUTES_PER_DAY && end > start) {
       bands.push({
         kind: 'evening',

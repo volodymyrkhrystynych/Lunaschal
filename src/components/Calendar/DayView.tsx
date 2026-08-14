@@ -2,21 +2,52 @@ import { useEffect, useMemo, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type CalendarEvent } from '../../hooks/api';
 import {
+  DAY_START_MINUTES,
   DEFAULT_EVENT_DURATION_MINUTES,
+  DISPLAY_HOURS,
   MIN_DURATION_MINUTES,
   MINUTES_PER_DAY,
   computeOverlapDepth,
   minutesToTime,
+  offsetFromWallMinutes,
+  offsetIsAfterMidnight,
   timeToMinutes,
+  wallMinutesFromOffset,
   type EventTimeRange,
 } from '@/lib/calendarDayLayout';
-import { localDayKey } from '@/lib/dates';
+import { addDays, localDayKey } from '@/lib/dates';
 import { sleepBands } from '@/lib/sleep';
 import { DayEventLayer, type LaidOutEvent } from './DayEventLayer';
 
 /** 60px-tall hour rows. */
 const PX_PER_MINUTE = 1;
-const HOURS = Array.from({ length: 24 }, (_, h) => h);
+
+/** Where the "+" button drops a new event on a day that isn't today, and where
+ * such a day is scrolled to: 8am, a plausible start to a day. */
+const DEFAULT_HOUR = 8;
+
+/** An event is drawn on the day whose 4am-to-4am window contains it, so the
+ * timeline spans two calendar dates: `date` from 4am, then the date after it
+ * up to 4am. This splits a fetched list into the part that belongs here. */
+function belongsToDay(event: CalendarEvent, isNextDate: boolean): boolean {
+  if (event.allDay || !event.time) return false;
+  const wall = timeToMinutes(event.time);
+  return isNextDate ? wall < DAY_START_MINUTES : wall >= DAY_START_MINUTES;
+}
+
+/** Poll only while something is transcribed but not yet classified, so the
+ * category border appears as soon as the background job finishes without
+ * needing a dedicated SSE stream for one small field. */
+function classificationPoll(list: CalendarEvent[] | undefined) {
+  return list?.some(e => e.description && !e.classifiedAt) ? 2000 : false;
+}
+
+interface TimelineEvent extends LaidOutEvent {
+  /** The calendar date the row is actually stored under — `date` for most of
+   * the timeline, the date after it below midnight. Needed to tell a drag that
+   * merely retimed an event from one that moved it across the date line. */
+  sourceDate: string;
+}
 
 interface DayViewProps {
   date: string;
@@ -29,16 +60,23 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrolledRef = useRef(false);
 
-  // Polls while something is transcribed but not yet classified, so the
-  // category border appears as soon as the background job finishes without
-  // needing a dedicated SSE stream for one small field.
+  const nextDate = addDays(date, 1);
+
   const { data: events } = useQuery({
     queryKey: ['calendar', 'date', date],
     queryFn: () => api.calendar.listByDate(date),
-    refetchInterval: query => {
-      const list = query.state.data as CalendarEvent[] | undefined;
-      return list?.some(e => e.description && !e.classifiedAt) ? 2000 : false;
-    },
+    refetchInterval: query =>
+      classificationPoll(query.state.data as CalendarEvent[] | undefined),
+  });
+
+  // The tail of the timeline lives on the next calendar date. Fetched
+  // separately rather than by range so both halves share the per-date cache
+  // key the rest of the Calendar already invalidates.
+  const { data: nextEvents } = useQuery({
+    queryKey: ['calendar', 'date', nextDate],
+    queryFn: () => api.calendar.listByDate(nextDate),
+    refetchInterval: query =>
+      classificationPoll(query.state.data as CalendarEvent[] | undefined),
   });
 
   const { data: sleep } = useQuery({
@@ -52,27 +90,41 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
   );
 
   const timed = useMemo(
-    () => (events || []).filter(e => !e.allDay && e.time),
-    [events]
+    () => [
+      ...(events || [])
+        .filter(e => belongsToDay(e, false))
+        .map(event => ({ event, sourceDate: date })),
+      ...(nextEvents || [])
+        .filter(e => belongsToDay(e, true))
+        .map(event => ({ event, sourceDate: nextDate })),
+    ],
+    [events, nextEvents, date, nextDate]
   );
+
+  // All-day chips come from this day key alone: an all-day event's window is
+  // already the 4am day of the date it carries (see src/lib/journalEventGroups).
   const allDay = useMemo(() => (events || []).filter(e => e.allDay), [events]);
 
-  const laidOut: LaidOutEvent[] = useMemo(() => {
-    const withRanges = timed.map(event => {
-      const startMinutes = timeToMinutes(event.time!);
-      const endMinutes = event.endTime
-        ? timeToMinutes(event.endTime)
-        : startMinutes + DEFAULT_EVENT_DURATION_MINUTES;
-      return { event, range: { startMinutes, endMinutes } };
+  const laidOut: TimelineEvent[] = useMemo(() => {
+    const withRanges = timed.map(({ event, sourceDate }) => {
+      const wallStart = timeToMinutes(event.time!);
+      const startMinutes = offsetFromWallMinutes(wallStart);
+      // Length is carried as a duration rather than a second offset: an event
+      // ending at 00:30 has an end offset smaller than its start, and only the
+      // duration survives the wrap intact.
+      const duration = event.endTime
+        ? timeToMinutes(event.endTime) - wallStart
+        : DEFAULT_EVENT_DURATION_MINUTES;
+      return {
+        event,
+        sourceDate,
+        range: { startMinutes, endMinutes: startMinutes + duration },
+      };
     });
     const depths = computeOverlapDepth(
       withRanges.map(w => ({ id: w.event.id, ...w.range }))
     );
-    return withRanges.map(w => ({
-      event: w.event,
-      range: w.range,
-      depth: depths.get(w.event.id) ?? 0,
-    }));
+    return withRanges.map(w => ({ ...w, depth: depths.get(w.event.id) ?? 0 }));
   }, [timed]);
 
   // Re-arm the auto-scroll-to-now on every date change, so paging to a new
@@ -86,24 +138,37 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
     if (scrolledRef.current || !scrollRef.current) return;
     const now = new Date();
     const isToday = date === localDayKey(now);
-    const targetMinutes = isToday ? now.getHours() * 60 : 8 * 60;
+    const targetOffset = offsetFromWallMinutes(
+      isToday ? now.getHours() * 60 : DEFAULT_HOUR * 60
+    );
     scrollRef.current.scrollTop = Math.max(
       0,
-      targetMinutes * PX_PER_MINUTE - 120
+      targetOffset * PX_PER_MINUTE - 120
     );
     scrolledRef.current = true;
   }, [date, events]);
 
+  /** The calendar date an offset on this timeline stores against. */
+  const dateAt = (offset: number) =>
+    offsetIsAfterMidnight(offset) ? nextDate : date;
+
   const commitEvent = useMutation({
     mutationFn: ({
       event,
+      sourceDate,
       range,
     }: {
       event: CalendarEvent;
+      sourceDate: string;
       range: EventTimeRange;
     }) => {
-      const time = minutesToTime(range.startMinutes);
-      const endTime = minutesToTime(range.endMinutes);
+      const time = minutesToTime(wallMinutesFromOffset(range.startMinutes));
+      const endTime = minutesToTime(wallMinutesFromOffset(range.endMinutes));
+      // Dragging past the midnight rule changes which calendar date the event
+      // is stored on, not just its clock time — sent only when it really moved,
+      // so an ordinary retime doesn't rewrite the date field.
+      const target = dateAt(range.startMinutes);
+      const moved = target !== sourceDate;
       // A recurring instance only reschedules that one occurrence; a one-off
       // event is edited directly — same scoping EventDetails already applies
       // to a manual edit.
@@ -111,9 +176,17 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
         ? api.calendar.moveOccurrence(
             event.id,
             event.occurrenceDate ?? event.date,
-            { newTime: time, newEndTime: endTime }
+            {
+              ...(moved ? { newDate: target } : {}),
+              newTime: time,
+              newEndTime: endTime,
+            }
           )
-        : api.calendar.update(event.id, { time, endTime });
+        : api.calendar.update(event.id, {
+            ...(moved ? { date: target } : {}),
+            time,
+            endTime,
+          });
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['calendar'] }),
   });
@@ -121,16 +194,23 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
   const createEvent = useMutation({
     mutationFn: () => {
       const now = new Date();
-      const nowMinutes = now.getHours() * 60 + now.getMinutes();
-      const startMinutes = Math.min(
+      // Placed at the current clock time wherever that falls on the timeline,
+      // which past midnight means the *next* calendar date. Snapping in offset
+      // minutes is the same as snapping the wall clock, since the 4am start is
+      // itself a multiple of the half-hour step.
+      const startOffset = Math.min(
         MINUTES_PER_DAY - DEFAULT_EVENT_DURATION_MINUTES,
-        Math.round(nowMinutes / 30) * 30
+        Math.round(
+          offsetFromWallMinutes(now.getHours() * 60 + now.getMinutes()) / 30
+        ) * 30
       );
       return api.calendar.create({
         title: 'New event',
-        date,
-        time: minutesToTime(startMinutes),
-        endTime: minutesToTime(startMinutes + DEFAULT_EVENT_DURATION_MINUTES),
+        date: dateAt(startOffset),
+        time: minutesToTime(wallMinutesFromOffset(startOffset)),
+        endTime: minutesToTime(
+          wallMinutesFromOffset(startOffset + DEFAULT_EVENT_DURATION_MINUTES)
+        ),
         allDay: false,
       });
     },
@@ -140,7 +220,12 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
   const handleCommit = (eventId: string, range: EventTimeRange) => {
     if (range.endMinutes - range.startMinutes < MIN_DURATION_MINUTES) return;
     const laid = laidOut.find(l => l.event.id === eventId);
-    if (laid) commitEvent.mutate({ event: laid.event, range });
+    if (laid)
+      commitEvent.mutate({
+        event: laid.event,
+        sourceDate: laid.sourceDate,
+        range,
+      });
   };
 
   return (
@@ -187,23 +272,31 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
             </button>
           ))}
 
-          {HOURS.map(h => (
+          {DISPLAY_HOURS.map((h, i) => (
             <div
               key={h}
               // Transparent to pointers: an hour row is a rule, not a target,
               // and its label strip would otherwise punch a hole in the sleep
-              // band behind it every 60px.
-              className="absolute left-0 right-0 border-t border-white/5 pointer-events-none"
-              style={{ top: h * 60 * PX_PER_MINUTE }}
+              // band behind it every 60px. Midnight gets a brighter rule: it is
+              // where the calendar date under the timeline changes, and on a
+              // 4am-to-4am grid it is no longer the obvious top edge.
+              className={`absolute left-0 right-0 border-t pointer-events-none ${
+                h === 0 ? 'border-white/20' : 'border-white/5'
+              }`}
+              style={{ top: i * 60 * PX_PER_MINUTE }}
             >
               <div className="w-12 shrink-0 -mt-2 text-[10px] text-[var(--color-text-muted)] text-right pr-1">
-                {h === 0
+                {/* The topmost rule sits on the scroll edge, where a label
+                    would be clipped in half. */}
+                {i === 0
                   ? ''
-                  : h < 12
-                    ? `${h}am`
-                    : h === 12
-                      ? '12pm'
-                      : `${h - 12}pm`}
+                  : h === 0
+                    ? '12am'
+                    : h < 12
+                      ? `${h}am`
+                      : h === 12
+                        ? '12pm'
+                        : `${h - 12}pm`}
               </div>
             </div>
           ))}

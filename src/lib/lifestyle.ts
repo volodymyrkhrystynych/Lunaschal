@@ -3,7 +3,7 @@
 // environment (no jsdom), the same way src/lib/journalFeed.ts and
 // src/lib/todos.ts are.
 
-import { localDayKey } from './dates';
+import { addDays, localDayKey, parseISODate, toISODate } from './dates';
 
 export const ACTIVITY_TYPES = [
   'goodlife_brother',
@@ -49,29 +49,18 @@ export function isActivityType(value: unknown): value is ActivityType {
 }
 
 // --- Dates -------------------------------------------------------------------
-// ISO day strings are parsed as UTC and only ever compared/advanced as UTC, so
-// gridding a calendar can't drift a day across a DST boundary. `todayISO` is the
-// one place that reads the *local* clock, because "today" for a workout log is
-// the user's day (4am-anchored, src/lib/dates.ts), not UTC's.
+// The ISO day arithmetic lives in src/lib/dates.ts, beside the day boundary
+// itself — the Calendar day view needs the same stepping, and a second copy of
+// it is how two views end up disagreeing about what tomorrow is. Re-exported
+// here because the heatmap grid and the selfie strip have always reached for it
+// through this module. `todayISO` is the one place that reads the *local*
+// clock, because "today" for a workout log is the user's 4am-anchored day.
 
 export function todayISO(now: Date = new Date()): string {
   return localDayKey(now);
 }
 
-export function parseISODate(iso: string): Date {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d));
-}
-
-export function toISODate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-export function addDays(iso: string, days: number): string {
-  const date = parseISODate(iso);
-  date.setUTCDate(date.getUTCDate() + days);
-  return toISODate(date);
-}
+export { addDays, parseISODate, toISODate };
 
 // Used to flag the sidebar when today has no selfie yet. Takes the fetched
 // rows rather than re-deriving "today" itself, so the caller controls the

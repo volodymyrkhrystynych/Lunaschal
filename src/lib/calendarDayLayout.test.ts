@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
+  DAY_START_MINUTES,
+  DISPLAY_HOURS,
   computeOverlapDepth,
+  offsetFromWallMinutes,
+  offsetIsAfterMidnight,
+  wallMinutesFromOffset,
   eventLineLengthPx,
   eventTopPx,
   laneOffsetPx,
@@ -206,5 +211,54 @@ describe('computeOverlapDepth', () => {
     expect(depths.get('a')).toBe(0);
     expect(depths.get('b')).toBe(1);
     expect(depths.get('c')).toBe(0);
+  });
+});
+
+describe('the 4am-anchored timeline', () => {
+  it('puts 4am at the top and runs the labels round to 3am', () => {
+    expect(DAY_START_MINUTES).toBe(4 * 60);
+    expect(DISPLAY_HOURS[0]).toBe(4);
+    expect(DISPLAY_HOURS[19]).toBe(23);
+    expect(DISPLAY_HOURS[20]).toBe(0);
+    expect(DISPLAY_HOURS.at(-1)).toBe(3);
+    expect(new Set(DISPLAY_HOURS).size).toBe(24);
+  });
+
+  it('measures a morning time down from 4am', () => {
+    expect(offsetFromWallMinutes(timeToMinutes('04:00'))).toBe(0);
+    expect(offsetFromWallMinutes(timeToMinutes('09:30'))).toBe(5 * 60 + 30);
+  });
+
+  it('puts the small hours at the bottom rather than the top', () => {
+    // The behaviour the whole change exists for: 01:30 is late in the day it
+    // belongs to, 21.5 hours down the timeline.
+    expect(offsetFromWallMinutes(timeToMinutes('00:00'))).toBe(20 * 60);
+    expect(offsetFromWallMinutes(timeToMinutes('01:30'))).toBe(21 * 60 + 30);
+    expect(offsetFromWallMinutes(timeToMinutes('03:59'))).toBe(
+      MINUTES_PER_DAY - 1
+    );
+  });
+
+  it('round-trips an offset back to its wall clock', () => {
+    for (const wall of [0, 90, 240, 600, 1439]) {
+      expect(wallMinutesFromOffset(offsetFromWallMinutes(wall))).toBe(wall);
+    }
+  });
+
+  it('reads the very bottom of the timeline as 4am again', () => {
+    // An event dragged flush to the end stores 04:00, not 03:59 — the window
+    // is half-open at the bottom exactly like backend day_bounds.
+    expect(minutesToTime(wallMinutesFromOffset(MINUTES_PER_DAY))).toBe('04:00');
+  });
+
+  it('knows which offsets have crossed onto the next calendar date', () => {
+    expect(offsetIsAfterMidnight(offsetFromWallMinutes(0) - 1)).toBe(false);
+    expect(offsetIsAfterMidnight(offsetFromWallMinutes(0))).toBe(true);
+    expect(
+      offsetIsAfterMidnight(offsetFromWallMinutes(timeToMinutes('01:30')))
+    ).toBe(true);
+    expect(
+      offsetIsAfterMidnight(offsetFromWallMinutes(timeToMinutes('23:59')))
+    ).toBe(false);
   });
 });

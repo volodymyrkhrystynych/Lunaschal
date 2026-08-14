@@ -1,10 +1,50 @@
 // Pure geometry for the mobile Calendar day view's hour-grid timeline — no
 // DOM, unit-testable in the node environment, the same reason
-// src/lib/paperImages.ts exists. Time is tracked as minutes-since-midnight
-// throughout; conversion to/from the 'HH:MM' strings the API speaks happens
-// only at the edges (timeToMinutes/minutesToTime).
+// src/lib/paperImages.ts exists.
+//
+// Two minute-spaces meet here and must not be confused:
+//
+//   *wall minutes*   minutes since midnight, 0..1439. What an event's 'HH:MM'
+//                    time means and the only thing the API ever speaks.
+//   *offset minutes* minutes down the timeline from its top, 0..1440. The top
+//                    is 4am, because the day view draws the app's 4am-anchored
+//                    logical day (src/lib/dates.ts) rather than a calendar
+//                    date — a 01:30 event belongs at the *bottom* of the night
+//                    it was part of, not the top of the next morning.
+//
+// Everything below the conversion helpers works in offset minutes; conversion
+// happens only at the edges, where an event is read from or written to the API.
+
+import { DAY_ROLLOVER_HOUR } from './dates';
 
 export const MINUTES_PER_DAY = 24 * 60;
+
+/** Wall minutes at which the timeline starts (and therefore ends). */
+export const DAY_START_MINUTES = DAY_ROLLOVER_HOUR * 60;
+
+/** The hours labelling the grid, top to bottom: 4am … 11pm, then 12am … 3am. */
+export const DISPLAY_HOURS = Array.from(
+  { length: 24 },
+  (_, i) => (DAY_ROLLOVER_HOUR + i) % 24
+);
+
+/** Where a wall-clock time sits on the timeline. */
+export function offsetFromWallMinutes(wallMinutes: number): number {
+  return (wallMinutes - DAY_START_MINUTES + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+}
+
+/** The wall-clock time at a point on the timeline. The very bottom (1440) is
+ * 4am again, which is what an event dragged flush to the end should store. */
+export function wallMinutesFromOffset(offset: number): number {
+  return (offset + DAY_START_MINUTES) % MINUTES_PER_DAY;
+}
+
+/** Whether an offset has passed midnight, i.e. lands on the calendar date
+ * *after* the day key the timeline is drawn for. Everything from the 00:00 row
+ * down does, since those wall times are earlier than the 4am start. */
+export function offsetIsAfterMidnight(offset: number): boolean {
+  return offset >= MINUTES_PER_DAY - DAY_START_MINUTES;
+}
 
 /** Nothing may be resized shorter than this. A zero-duration event is
  * unselectable and effectively unrecoverable — same reasoning as
@@ -84,8 +124,9 @@ export interface EventTimeRange {
   endMinutes: number;
 }
 
-/** Shift a whole event by a delta, clamped to the day's bounds. Duration is
- * preserved — dragging the body of a block moves it, not its length. */
+/** Shift a whole event by a delta, clamped to the ends of the timeline (4am
+ * and 4am). Duration is preserved — dragging the body of a block moves it, not
+ * its length. */
 export function moveEventByMinutes(
   range: EventTimeRange,
   deltaMinutes: number
@@ -99,7 +140,7 @@ export function moveEventByMinutes(
 }
 
 /** Extend or shrink an event from its end, floored at MIN_DURATION_MINUTES
- * and capped at midnight — dragging the bottom-edge handle. */
+ * and capped at the bottom of the timeline — dragging the bottom-edge handle. */
 export function resizeEventEndByMinutes(
   range: EventTimeRange,
   deltaMinutes: number

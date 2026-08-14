@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   clockValue,
+  dayStartOf,
   formatClock,
-  midnightOf,
-  minutesFromMidnight,
+  minutesFromDayStart,
   MINUTES_PER_DAY,
   sleepBands,
   type SleepDay,
@@ -27,18 +27,26 @@ const day = (overrides: Partial<SleepDay> = {}): SleepDay => ({
   ...overrides,
 });
 
-describe('minutesFromMidnight', () => {
-  it('measures against the date it is given, not the timestamp', () => {
-    expect(minutesFromMidnight(at(DATE, '07:20'), DATE)).toBe(7 * 60 + 20);
-    expect(midnightOf(DATE)).toBe(at(DATE, '00:00'));
+describe('minutesFromDayStart', () => {
+  it('measures from 4am on the day key it is given, not from midnight', () => {
+    expect(dayStartOf(DATE)).toBe(at(DATE, '04:00'));
+    expect(minutesFromDayStart(at(DATE, '07:20'), DATE)).toBe(3 * 60 + 20);
   });
 
-  it('runs negative before the date and past the day after it', () => {
+  it('places a past-midnight instant near the end of the window, not the start', () => {
+    // The whole point of the 4am anchor: 01:30 is 21.5 hours into this day,
+    // not 90 minutes into the next one.
+    expect(minutesFromDayStart(at('2026-07-09', '01:30'), DATE)).toBe(
+      21 * 60 + 30
+    );
+  });
+
+  it('runs negative before the window and past its end after it', () => {
     // Unclamped on purpose: this is what tells sleepBands a value belongs to a
-    // neighbouring date rather than this one.
-    expect(minutesFromMidnight(at('2026-07-07', '23:00'), DATE)).toBe(-60);
-    expect(minutesFromMidnight(at('2026-07-09', '01:30'), DATE)).toBe(
-      MINUTES_PER_DAY + 90
+    // neighbouring day rather than this one.
+    expect(minutesFromDayStart(at(DATE, '01:30'), DATE)).toBe(-150);
+    expect(minutesFromDayStart(at('2026-07-09', '05:00'), DATE)).toBe(
+      MINUTES_PER_DAY + 60
     );
   });
 });
@@ -56,66 +64,77 @@ describe('sleepBands', () => {
     expect(sleepBands(day(), DATE)).toEqual([]);
   });
 
-  it('shades midnight to the wake time when the night before is unknown', () => {
+  it('shades the top of the window down to the wake time', () => {
     const [band] = sleepBands(day({ wakeAt: at(DATE, '07:20') }), DATE);
     expect(band).toMatchObject({
       kind: 'morning',
       startMinutes: 0,
-      endMinutes: 440,
+      endMinutes: 3 * 60 + 20,
       label: 'asleep · woke 07:20',
     });
   });
 
-  it('starts the morning band at last night bedtime when it fell after midnight', () => {
-    // Went to bed at 01:30, up at 07:20: the first 90 minutes of the date were
-    // awake and must not be shaded.
-    const [band] = sleepBands(
-      day({
-        wakeAt: at(DATE, '07:20'),
-        previousSleepAt: at(DATE, '01:30'),
-      }),
-      DATE
-    );
-    expect(band.startMinutes).toBe(90);
-    expect(band.endMinutes).toBe(440);
+  it('clamps last night bedtime to the top however late it ran', () => {
+    // Both of these are before this window opened — 01:30 belongs to the
+    // previous day key now, not to this one's small hours — so each shades the
+    // whole 04:00-to-07:20 stretch the user did sleep through.
+    for (const previousSleepAt of [
+      at(DATE, '01:30'),
+      at('2026-07-07', '23:10'),
+    ]) {
+      const [band] = sleepBands(
+        day({ wakeAt: at(DATE, '07:20'), previousSleepAt }),
+        DATE
+      );
+      expect(band.startMinutes).toBe(0);
+      expect(band.endMinutes).toBe(3 * 60 + 20);
+    }
   });
 
-  it('clamps a bedtime from the previous evening to midnight', () => {
-    const [band] = sleepBands(
-      day({
-        wakeAt: at(DATE, '07:20'),
-        previousSleepAt: at('2026-07-07', '23:10'),
-      }),
-      DATE
-    );
-    expect(band.startMinutes).toBe(0);
-  });
-
-  it('shades the evening from the bedtime to midnight', () => {
+  it('shades the evening from the bedtime to the end of the window', () => {
     const [band] = sleepBands(day({ sleepAt: at(DATE, '23:40') }), DATE);
     expect(band).toMatchObject({
       kind: 'evening',
-      startMinutes: 23 * 60 + 40,
+      startMinutes: 19 * 60 + 40,
       endMinutes: MINUTES_PER_DAY,
       label: 'asleep from 23:40',
     });
   });
 
-  it('drops the evening band entirely when the bedtime is past midnight', () => {
-    // 01:30 belongs to the *next* calendar date, where it is that date's
-    // morning band. Drawing it here would shade an evening the user spent awake.
-    const bands = sleepBands(day({ sleepAt: at('2026-07-09', '01:30') }), DATE);
-    expect(bands).toEqual([]);
+  it('keeps a past-midnight bedtime in this window, near its bottom', () => {
+    // The night this day ended with. Under the old midnight-anchored view this
+    // band was dropped here and redrawn as the next date's morning.
+    const [band] = sleepBands(
+      day({ sleepAt: at('2026-07-09', '01:30') }),
+      DATE
+    );
+    expect(band).toMatchObject({
+      kind: 'evening',
+      startMinutes: 21 * 60 + 30,
+      endMinutes: MINUTES_PER_DAY,
+      label: 'asleep from 01:30',
+    });
   });
 
-  it('ends the evening band at a wake time that lands on the same date', () => {
+  it('clamps a wake time in the next window to the bottom', () => {
+    const [band] = sleepBands(
+      day({
+        sleepAt: at('2026-07-09', '01:30'),
+        nextWakeAt: at('2026-07-09', '09:00'),
+      }),
+      DATE
+    );
+    expect(band.endMinutes).toBe(MINUTES_PER_DAY);
+  });
+
+  it('ends the evening band at a wake time inside the window', () => {
     // A nap-shaped day: asleep 14:00, up again 16:00.
     const [band] = sleepBands(
       day({ sleepAt: at(DATE, '14:00'), nextWakeAt: at(DATE, '16:00') }),
       DATE
     );
-    expect(band.startMinutes).toBe(14 * 60);
-    expect(band.endMinutes).toBe(16 * 60);
+    expect(band.startMinutes).toBe(10 * 60);
+    expect(band.endMinutes).toBe(12 * 60);
   });
 
   it('returns both bands for a fully-known day, morning first', () => {
