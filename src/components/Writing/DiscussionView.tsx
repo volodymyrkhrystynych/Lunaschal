@@ -4,6 +4,7 @@ import { api, type WritingProject, type WritingNote } from '../../hooks/api';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { readSSE } from '../../lib/sse';
 import { DOC_TYPE_LABELS, type DocType } from './WritingNav';
+import { AgentSteps } from '@/components/Chat/AgentSteps';
 
 interface Props {
   project: WritingProject;
@@ -18,6 +19,7 @@ export function DiscussionView({
 }: Props) {
   const [input, setInput] = useState('');
   const [streamingContent, setStreamingContent] = useState('');
+  const [streamingReasoning, setStreamingReasoning] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(
     new Set()
@@ -79,7 +81,7 @@ export function DiscussionView({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView?.({ behavior: 'smooth' });
-  }, [conversation?.messages, streamingContent]);
+  }, [conversation?.messages, streamingContent, streamingReasoning]);
 
   const toggleNote = (noteId: string) => {
     setSelectedNoteIds(prev => {
@@ -126,6 +128,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
 
     setIsStreaming(true);
     setStreamingContent('');
+    setStreamingReasoning('');
 
     try {
       const checkedNotes = await Promise.all(
@@ -152,6 +155,9 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
 
       let fullContent = '';
       for await (const parsed of readSSE(reader)) {
+        if (parsed.thinking) {
+          setStreamingReasoning(reasoning => reasoning + parsed.thinking);
+        }
         if (parsed.content) {
           fullContent += parsed.content;
           setStreamingContent(fullContent);
@@ -167,6 +173,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
     } finally {
       setIsStreaming(false);
       setStreamingContent('');
+      setStreamingReasoning('');
     }
   };
 
@@ -177,6 +184,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
   };
 
   const aiConfigured = !!settings?.llamaUrl;
+  const thinkingConfigured = !!settings?.llmThinking;
   const messages = (conversation?.messages || []).filter(
     m => m.role !== 'system'
   );
@@ -209,17 +217,24 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
             {conversation?.title || 'Untitled discussion'}
           </button>
         )}
-        <button
-          onClick={() => {
-            setSavedNote(null);
-            summarize.mutate();
-          }}
-          disabled={summarize.isPending || messages.length === 0}
-          className="text-sm px-3 py-1 rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/30 disabled:opacity-50 transition-colors shrink-0"
-          title="Distill this discussion into a note"
-        >
-          {summarize.isPending ? 'Summarizingâ€¦' : 'Summarize'}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {thinkingConfigured && (
+            <span className="text-xs text-[var(--color-text-muted)] hidden sm:inline">
+              Reasoning
+            </span>
+          )}
+          <button
+            onClick={() => {
+              setSavedNote(null);
+              summarize.mutate();
+            }}
+            disabled={summarize.isPending || messages.length === 0}
+            className="text-sm px-3 py-1 rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/30 disabled:opacity-50 transition-colors shrink-0"
+            title="Distill this discussion into a note"
+          >
+            {summarize.isPending ? 'Summarizingâ€¦' : 'Summarize'}
+          </button>
+        </div>
       </div>
 
       {/* Summarize result / error banner */}
@@ -284,9 +299,18 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
         ))}
         {isStreaming && streamingContent && (
           <div className="flex justify-start">
-            <div className="max-w-[70%] rounded-lg px-3 py-2 text-sm leading-relaxed bg-white/5 text-[var(--color-text)]">
-              <MessageMarkdown content={streamingContent} />
-              <span className="inline-block w-1 h-3 bg-[var(--color-primary)] animate-pulse ml-0.5" />
+            <div className="max-w-[70%]">
+              <div className="rounded-lg px-3 py-2 text-sm leading-relaxed bg-white/5 text-[var(--color-text)]">
+                <MessageMarkdown content={streamingContent} />
+              </div>
+              <AgentSteps steps={[]} thinking={streamingReasoning} live />
+            </div>
+          </div>
+        )}
+        {isStreaming && !streamingContent && thinkingConfigured && (
+          <div className="flex justify-start">
+            <div className="max-w-[70%] rounded-lg px-3 py-2 text-sm leading-relaxed bg-white/5 text-[var(--color-text-muted)]">
+              Thinkingâ€¦
             </div>
           </div>
         )}
