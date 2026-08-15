@@ -655,6 +655,35 @@ def test_fetch_retries_transient_403(client, monkeypatch):
     assert calls['n'] == 1
 
 
+def test_cf_proxied_403_without_challenge_page_is_not_bot_blocked(client, monkeypatch):
+    """cf-ray (and friends) are stamped onto every response Cloudflare
+    proxies — a pass, a real bot challenge, and an ordinary app-level 403
+    alike — so a bare cf- header used to be enough to call it a bot block
+    even when the page wasn't a challenge at all (e.g. SpaceBattles'
+    content-rating gate on Mature/NC-17 boards, a genuine permission
+    error). That produced the same misleading 'blocked by bot protection'
+    hint for a completely different, non-cookie problem. Without challenge
+    markup in the body, it must fall through to raise_for_status and
+    surface the real HTTP error instead."""
+    import sys
+    from types import SimpleNamespace
+
+    def raise_for_status():
+        raise ValueError('403 Client Error: Forbidden for url: ...')
+
+    def perm_get(url, timeout=None, headers=None, cookies=None):
+        return SimpleNamespace(
+            status_code=403, headers={'CF-RAY': 'x'},
+            text='<h1>You do not have permission to view this thread.</h1>',
+            url=url, raise_for_status=raise_for_status)
+
+    monkeypatch.setitem(sys.modules, 'requests', SimpleNamespace(get=perm_get))
+    monkeypatch.setattr(download, 'time', SimpleNamespace(sleep=lambda s: None))
+
+    with pytest.raises(ValueError, match='403 Client Error'):
+        download._fetch('https://forums.spacebattles.com/threads/x.1/')
+
+
 def test_cookie_input_normalization(client, fake_net):
     """Pasting a Firefox 'Copy Request Headers' dump or a cURL command stores
     just the Cookie value."""

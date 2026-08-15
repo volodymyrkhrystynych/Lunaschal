@@ -160,14 +160,15 @@ export function FanficCookiesSection() {
         Needed for login-gated fics (e.g. Questionable Questing NSFW sections)
         and for sites Cloudflare challenges (e.g. SpaceBattles). Log in to the
         site in your browser, open DevTools (<code>F12</code>) →{' '}
-        <strong>Network</strong> tab, reload the page, then right-click the
-        first request → <strong>Copy Value → Copy Request Headers</strong> and
-        paste the whole thing below — the <code>Cookie</code> line is extracted
-        automatically, and so is the <code>User-Agent</code> line, since
-        Cloudflare only honors <code>cf_clearance</code> when it's replayed with
-        the same User-Agent that solved the challenge. The Cookies tab's{' '}
-        <strong>Copy All</strong> JSON, a "Copy as cURL" command, or a bare
-        cookie string still work too, but won't carry a User-Agent.
+        <strong>Network</strong> tab, reload the page, click the first request
+        in the list, then right-click it →{' '}
+        <strong>Copy → Copy Request Headers</strong> and paste the whole thing
+        below — the <code>Cookie</code> line is extracted automatically, and so
+        is the <code>User-Agent</code> line, since Cloudflare only honors{' '}
+        <code>cf_clearance</code> when it's replayed with the same User-Agent
+        that solved the challenge. The Cookies tab's <strong>Copy All</strong>{' '}
+        JSON, a "Copy as cURL" command, or a bare cookie string still work too,
+        but won't carry a User-Agent.
       </p>
       <div className="space-y-4">
         {cookies?.map(c => (

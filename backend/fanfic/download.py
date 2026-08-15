@@ -142,13 +142,24 @@ def _headers(url: str) -> dict:
     return {'User-Agent': user_agent}
 
 
+# Cloudflare stamps cf-ray (and friends) onto every response it proxies —
+# a pass, a real challenge, and an ordinary app-level 403 alike — so a bare
+# cf- header is not evidence of a *bot* block on its own. Only the
+# challenge page's own markup is: these are the strings Cloudflare's
+# "Just a moment..." interstitial actually renders.
+_CF_CHALLENGE_MARKERS = (
+    'Just a moment',
+    'Verifying you are human',
+    'Checking your browser before accessing',
+    'cf-turnstile',
+)
+
+
 def _looks_blocked(resp) -> bool:
     if resp.status_code not in (403, 503):
         return False
-    if any(h.lower().startswith('cf-') for h in resp.headers):
-        return True
     body = resp.text[:4000]
-    return 'Just a moment' in body or 'Verifying you are human' in body
+    return any(marker in body for marker in _CF_CHALLENGE_MARKERS)
 
 
 RETRY_BACKOFF = (5, 15, 30)
@@ -159,7 +170,10 @@ def _fetch(url: str):
     # QQ rate-limits bursts with transient 403s that can outlast a short
     # pause, so back off progressively before giving up. Cloudflare
     # challenges are recognized and not retried — they need cookies, not
-    # patience.
+    # patience. A 403/503 that *isn't* a challenge page (e.g. an ordinary
+    # XenForo permission wall) falls through to the retry loop and, if it
+    # never clears, resp.raise_for_status() below reports its real status
+    # instead of the Cloudflare-specific hint.
     for attempt, backoff in enumerate((*RETRY_BACKOFF, None)):
         resp = requests.get(url, timeout=20, headers=_headers(url), cookies=_cookies_for(url))
         if _looks_blocked(resp):
