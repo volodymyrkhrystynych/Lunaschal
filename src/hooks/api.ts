@@ -621,7 +621,7 @@ export interface AppSettings {
   briefingGoals: string;
   briefingThinking: boolean;
   briefingMaxTokens: number;
-  /** '' | 'brave' | 'tavily' | 'searxng' — empty means the web-search chat tab
+  /** '' | 'brave' | 'searxng' — empty means the web-search chat tab
    * degrades to an explanatory failure instead of searching. */
   websearchSearchProvider: string;
   hasWebsearchSearchKey: boolean;

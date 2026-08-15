@@ -23,6 +23,15 @@ if ! curl -sf http://127.0.0.1:8080/health > /dev/null 2>&1; then
   echo "  Or, without the unit installed:  ./llama/start-llama.sh"
 fi
 
+# SearXNG (self-hosted, Docker) is optional — the
+# Ideas research agent and chat delegate degrade to "search unavailable"
+# without it, so this is a warning, not a blocker.
+if ! curl -sf http://127.0.0.1:8888 > /dev/null 2>&1; then
+  echo "NOTE: SearXNG is not responding on :8888 — web search will be unavailable."
+  echo "  Start it with:  systemctl --user start lunaschal-searxng"
+  echo "  Or, without the unit installed:  ./searxng/start-searxng.sh"
+fi
+
 # Start Flask + Vite dev servers
 npm run dev &
 DEV_PID=$!

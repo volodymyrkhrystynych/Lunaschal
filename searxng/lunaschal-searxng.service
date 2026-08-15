@@ -1,0 +1,35 @@
+# systemd --user unit for the self-hosted SearXNG stack, mirroring
+# llama/lunaschal-llama.service so both auto-start the same way.
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   ln -sf ~/workspace/Lunaschal/searxng/lunaschal-searxng.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now lunaschal-searxng
+#
+# Type=oneshot + RemainAfterExit=yes rather than exec'ing into a foreground
+# process: `docker compose up -d` detaches immediately and Docker's own
+# `restart: unless-stopped` policy supervises the containers from there, so
+# systemd's job here is only "make sure this ran once at login/boot," not
+# "keep a process alive" — the standard shape for a Compose-managed unit.
+#
+# No After=/Requires=docker.service: that's a *system* unit, invisible to the
+# --user manager (they're separate systemd instances, one per PID 1's system
+# scope and one per login session — a user unit can't order against a system
+# one by name). docker.service is enabled system-wide and boot generally
+# reaches it well before any user logs in, so plain network-online.target
+# ordering plus the ConditionPathExists guard below is enough in practice.
+[Unit]
+Description=SearXNG for Lunaschal
+After=network-online.target
+ConditionPathExists=/var/run/docker.sock
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/workspace/Lunaschal/searxng
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+
+[Install]
+WantedBy=default.target

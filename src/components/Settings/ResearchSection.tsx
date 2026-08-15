@@ -187,13 +187,11 @@ export function ResearchSection() {
           >
             <option value="">None</option>
             <option value="brave">Brave</option>
-            <option value="tavily">Tavily</option>
             <option value="searxng">SearXNG (self-hosted)</option>
           </select>
         </label>
 
-        {(settings?.researchSearchProvider === 'brave' ||
-          settings?.researchSearchProvider === 'tavily') && (
+        {settings?.researchSearchProvider === 'brave' && (
           <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
             API key
             <input
