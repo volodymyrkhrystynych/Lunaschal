@@ -84,13 +84,22 @@ def _cancelled(fic_id: str) -> bool:
 
 # --- fetching ---
 
-def _cookie_for(host: str) -> str | None:
+def _site_cookie_row(host: str):
     host = host.lower()
     bare = host[4:] if host.startswith('www.') else host
-    row = get_db().execute(
-        'SELECT cookie FROM site_cookies WHERE domain IN (?, ?)', (host, bare)
+    return get_db().execute(
+        'SELECT cookie, user_agent FROM site_cookies WHERE domain IN (?, ?)', (host, bare)
     ).fetchone()
+
+
+def _cookie_for(host: str) -> str | None:
+    row = _site_cookie_row(host)
     return row['cookie'] if row else None
+
+
+def _user_agent_for(host: str) -> str | None:
+    row = _site_cookie_row(host)
+    return row['user_agent'] if row else None
 
 
 def _cookies_for(url: str) -> dict | None:
@@ -123,7 +132,14 @@ def _cookies_for(url: str) -> dict | None:
 
 
 def _headers(url: str) -> dict:
-    return {'User-Agent': USER_AGENT}
+    # cf_clearance is bound by Cloudflare to the User-Agent that solved the
+    # challenge — replaying it under this module's fixed UA gets
+    # re-challenged even with an otherwise-valid cookie, so prefer whatever
+    # UA came paired with the site's stored cookie (see _extract_user_agent
+    # in routes/fanfic.py) and fall back to the generic one when there
+    # isn't a stored cookie yet, or it predates UA capture.
+    user_agent = _user_agent_for(urlparse(url).netloc) or USER_AGENT
+    return {'User-Agent': user_agent}
 
 
 def _looks_blocked(resp) -> bool:

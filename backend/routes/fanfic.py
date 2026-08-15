@@ -145,7 +145,7 @@ def search():
 @bp.get('/cookies')
 def list_cookies():
     db = get_db()
-    rows = db.execute('SELECT domain, updated_at FROM site_cookies').fetchall()
+    rows = db.execute('SELECT domain, updated_at, user_agent FROM site_cookies').fetchall()
     stored = {r['domain']: r for r in rows}
     scan_rows = {
         r['domain']: r for r in db.execute(
@@ -158,6 +158,7 @@ def list_cookies():
             'domain': domain,
             'hasCookie': domain in stored,
             'updatedAt': row_to_dict(stored[domain])['updatedAt'] if domain in stored else None,
+            'hasUserAgent': bool(stored[domain]['user_agent']) if domain in stored else False,
         }
         progress = download.get_watched_scan_progress(domain)
         if progress:
@@ -248,24 +249,51 @@ def _normalize_cookie_input(text: str) -> str:
     return _reject_non_ascii(text)
 
 
+def _extract_user_agent(text: str) -> str | None:
+    """Pull the User-Agent line out of the same paste the cookie came from,
+    when it's a full header dump or curl command. Cloudflare validates
+    cf_clearance against the User-Agent that solved the challenge, so
+    replaying it under the scraper's own hardcoded UA gets re-challenged
+    even with an otherwise-valid cookie — using the browser's own UA for
+    that domain avoids the mismatch. Best-effort: returns None (fall back
+    to the default UA) rather than raising, since a missing or slightly
+    mangled UA is no worse than today's fixed one."""
+    import re
+    text = text.strip()
+    m = re.search(r'(?:^|\n)\s*User-Agent:\s*(.+)', text, re.IGNORECASE)
+    if not m:
+        m = re.search(r'''-H\s+(['"])User-Agent:\s*(.*?)\1''', text, re.IGNORECASE)
+        if not m:
+            return None
+        value = m.group(2)
+    else:
+        value = m.group(1)
+    value = ''.join(c for c in value.strip().strip('\'"') if ord(c) < 128).strip()
+    return value or None
+
+
 @bp.put('/cookies')
 def put_cookie():
     body = request.json or {}
     domain = (body.get('domain') or '').strip().lower()
     if domain.startswith('www.'):
         domain = domain[4:]
+    raw = body.get('cookie') or ''
     try:
-        cookie = _normalize_cookie_input(body.get('cookie') or '')
+        cookie = _normalize_cookie_input(raw)
     except CookieInputError as e:
         return jsonify({'error': str(e)}), 400
     if domain not in KNOWN_SITES:
         return jsonify({'error': f'unknown domain: {domain}'}), 400
+    user_agent = _extract_user_agent(raw)
     db = get_db()
     if cookie:
         db.execute(
-            'INSERT INTO site_cookies(domain, cookie, updated_at) VALUES (?,?,?)'
-            ' ON CONFLICT(domain) DO UPDATE SET cookie=excluded.cookie, updated_at=excluded.updated_at',
-            (domain, cookie, int(time.time())),
+            'INSERT INTO site_cookies(domain, cookie, user_agent, updated_at) VALUES (?,?,?,?)'
+            ' ON CONFLICT(domain) DO UPDATE SET cookie=excluded.cookie,'
+            ' user_agent=COALESCE(excluded.user_agent, site_cookies.user_agent),'
+            ' updated_at=excluded.updated_at',
+            (domain, cookie, user_agent, int(time.time())),
         )
     else:
         db.execute('DELETE FROM site_cookies WHERE domain=?', (domain,))

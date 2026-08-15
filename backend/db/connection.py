@@ -134,6 +134,7 @@ def init_db() -> None:
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
     _ensure_fic_deep_scan_columns(db)
+    _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
     _ensure_food_location(db)
@@ -368,6 +369,18 @@ def _ensure_fic_deep_scan_columns(db: sqlite3.Connection) -> None:
     if 'edited_at' not in chapter_cols:
         db.execute('ALTER TABLE fic_chapters ADD COLUMN edited_at INTEGER')
     db.commit()
+
+
+def _ensure_site_cookie_user_agent(db: sqlite3.Connection) -> None:
+    """cf_clearance is validated by Cloudflare against the User-Agent that
+    solved the challenge — a hardcoded scraper UA that doesn't match the
+    browser session the cookie came from gets the request re-challenged
+    even with an otherwise-valid cookie. Store the UA alongside each site's
+    cookie so requests can be made with the browser's own value instead."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(site_cookies)')}
+    if 'user_agent' not in cols:
+        db.execute('ALTER TABLE site_cookies ADD COLUMN user_agent TEXT')
+        db.commit()
 
 
 def _repair_escaped_image_fallbacks(db: sqlite3.Connection) -> None:

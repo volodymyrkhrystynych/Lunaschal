@@ -698,6 +698,39 @@ def test_cookie_input_normalization(client, fake_net):
     assert jar == {'xf_user': 'u123', 'xf_session': 's456', 'cf_clearance': 'cf789'}
 
 
+def test_cookie_save_captures_and_uses_user_agent(client, fake_net):
+    """Cloudflare only honors cf_clearance when replayed with the same
+    User-Agent that solved the challenge. A full header-dump paste carries
+    that UA — it must be captured and used for that domain's requests
+    instead of the module's fixed default, and preserved across a later
+    re-save that pastes only a bare cookie (no headers to extract a UA
+    from)."""
+    header_dump = (
+        'GET /threads/x.1/ HTTP/2\n'
+        'Host: forums.spacebattles.com\n'
+        'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0\n'
+        'Cookie: xf_user=u123; cf_clearance=cf789\n'
+    )
+    client.put('/api/fanfic/cookies', json={
+        'domain': 'forums.spacebattles.com', 'cookie': header_dump})
+    listing = client.get('/api/fanfic/cookies').get_json()
+    sb = next(c for c in listing if c['domain'] == 'forums.spacebattles.com')
+    assert sb['hasUserAgent'] is True
+
+    headers = download._headers('https://forums.spacebattles.com/threads/x.1/')
+    assert headers['User-Agent'] == 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0'
+    # A site with no stored cookie at all still gets the generic fallback
+    assert download._headers('https://forums.sufficientvelocity.com/x')['User-Agent'] == \
+        download.USER_AGENT
+
+    # Re-saving with just a bare cookie (e.g. only the Cookie value was
+    # re-copied) must not blow away the UA captured earlier.
+    client.put('/api/fanfic/cookies', json={
+        'domain': 'forums.spacebattles.com', 'cookie': 'xf_user=u123; cf_clearance=cf999'})
+    headers = download._headers('https://forums.spacebattles.com/threads/x.1/')
+    assert headers['User-Agent'] == 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0'
+
+
 def test_cookie_input_rejects_truncation_ellipsis(client, fake_net):
     """A devtools copy that truncates a long value (cf_clearance routinely
     exceeds what a panel renders) leaves a literal '…' in the pasted text.

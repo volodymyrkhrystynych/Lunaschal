@@ -29,11 +29,13 @@ function FanficCookieRow({
   domain,
   hasCookie,
   updatedAt,
+  hasUserAgent,
   watchedScan,
 }: {
   domain: string;
   hasCookie: boolean;
   updatedAt: string | null;
+  hasUserAgent: boolean;
   watchedScan?: WatchedScanProgress;
 }) {
   const [value, setValue] = useState('');
@@ -64,6 +66,15 @@ function FanficCookieRow({
             cookie set
             {updatedAt &&
               ` · ${new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(updatedAt))}`}
+            {!hasUserAgent && (
+              <span
+                className="text-[var(--color-text-muted)]"
+                title="No browser User-Agent was captured from this paste — Cloudflare may reject cf_clearance if it was solved by a different User-Agent than the one making requests. Paste 'Copy Request Headers' (not just the cookie) to capture it."
+              >
+                {' '}
+                · default UA
+              </span>
+            )}
           </span>
         ) : (
           <span className="text-xs text-[var(--color-text-muted)]">
@@ -146,13 +157,17 @@ export function FanficCookiesSection() {
         Fanfic Site Cookies
       </h2>
       <p className="text-sm text-[var(--color-text-muted)] mb-4">
-        Needed for login-gated fics (e.g. Questionable Questing NSFW sections).
-        Log in to the site in your browser, open DevTools (<code>F12</code>) →{' '}
+        Needed for login-gated fics (e.g. Questionable Questing NSFW sections)
+        and for sites Cloudflare challenges (e.g. SpaceBattles). Log in to the
+        site in your browser, open DevTools (<code>F12</code>) →{' '}
         <strong>Network</strong> tab, reload the page, then right-click the
         first request → <strong>Copy Value → Copy Request Headers</strong> and
         paste the whole thing below — the <code>Cookie</code> line is extracted
-        automatically. The Cookies tab's <strong>Copy All</strong> JSON, a "Copy
-        as cURL" command, or a bare cookie string all work too.
+        automatically, and so is the <code>User-Agent</code> line, since
+        Cloudflare only honors <code>cf_clearance</code> when it's replayed with
+        the same User-Agent that solved the challenge. The Cookies tab's{' '}
+        <strong>Copy All</strong> JSON, a "Copy as cURL" command, or a bare
+        cookie string still work too, but won't carry a User-Agent.
       </p>
       <div className="space-y-4">
         {cookies?.map(c => (
@@ -161,6 +176,7 @@ export function FanficCookiesSection() {
             domain={c.domain}
             hasCookie={c.hasCookie}
             updatedAt={c.updatedAt}
+            hasUserAgent={c.hasUserAgent}
             watchedScan={c.watchedScan}
           />
         ))}

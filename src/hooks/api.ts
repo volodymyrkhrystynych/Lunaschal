@@ -153,6 +153,7 @@ export interface SiteCookieInfo {
   domain: string;
   hasCookie: boolean;
   updatedAt: string | null;
+  hasUserAgent: boolean;
   watchedScan?: WatchedScanProgress;
 }
 
