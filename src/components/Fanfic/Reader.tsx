@@ -183,6 +183,55 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
 
   const [showBookmarkMenu, setShowBookmarkMenu] = useState(false);
 
+  // Calculate bookmark indicator positions so they stay in the text as it scrolls.
+  const [bookmarkIndicators, setBookmarkIndicators] = useState<
+    Array<{ id: string; type: 'favorite' | 'continue'; top: number }>
+  >([]);
+
+  useLayoutEffect(() => {
+    const el = contentRef.current;
+    if (!chapter || !el || !bookmarks?.length) {
+      setBookmarkIndicators([]);
+      return;
+    }
+    const range = el.scrollHeight - el.clientHeight;
+    if (range <= 0) {
+      setBookmarkIndicators([]);
+      return;
+    }
+    const indicators = bookmarks
+      .filter(bm => bm.chapterId === chapterId)
+      .map(bm => ({
+        id: bm.id,
+        type: bm.type,
+        top: bm.scrollPosition * range,
+      }));
+    setBookmarkIndicators(indicators);
+  }, [chapter, bookmarks, chapterId, fontSize]);
+
+  // Recalculate when the window resizes so lines stay at the correct positions.
+  useEffect(() => {
+    const onResize = () => {
+      const el = contentRef.current;
+      if (!chapter || !el || !bookmarks?.length) return;
+      const range = el.scrollHeight - el.clientHeight;
+      if (range <= 0) {
+        setBookmarkIndicators([]);
+        return;
+      }
+      const indicators = bookmarks
+        .filter(bm => bm.chapterId === chapterId)
+        .map(bm => ({
+          id: bm.id,
+          type: bm.type,
+          top: bm.scrollPosition * range,
+        }));
+      setBookmarkIndicators(indicators);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [chapter, bookmarks, chapterId]);
+
   const pickBookmark = (type: 'favorite' | 'continue') => {
     const el = contentRef.current;
     if (!el) return;
@@ -527,8 +576,21 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
               <div
                 ref={contentRef}
                 className={`flex-1 overflow-y-auto ${level >= 2 ? 'ring-1 ring-inset ring-[var(--color-primary)]' : ''}`}
+                style={{ position: 'relative' }}
               >
-                <div className="max-w-3xl mx-auto px-6 py-6">
+                <div className="max-w-3xl mx-auto px-6 py-6 relative">
+                  {bookmarkIndicators.map(ind => (
+                    <div
+                      key={ind.id}
+                      className="absolute left-0 right-0 h-0.5 pointer-events-none"
+                      style={{
+                        top: `${ind.top}px`,
+                        backgroundColor:
+                          ind.type === 'favorite' ? '#ef4444' : '#22c55e',
+                        opacity: 0.7,
+                      }}
+                    />
+                  ))}
                   {chapterNav('top')}
                   {chapters && chapters.length === 0 ? (
                     <div className="text-[var(--color-text-muted)] py-12 text-center">
