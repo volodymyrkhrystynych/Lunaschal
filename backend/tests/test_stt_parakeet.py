@@ -14,6 +14,7 @@ def reset_stt_state(monkeypatch):
     monkeypatch.setattr(stt, 'STT_BACKEND', 'local')
     monkeypatch.setattr(stt, 'PARAKEET_MODEL', 'nemo-parakeet-tdt-0.6b-v2')
     stt._stt_model = None
+    stt._stt_vad = None
     stt._stt_ready = False
     stt._loaded_stt_backend = None
     stt._loaded_model_name = None
@@ -21,9 +22,27 @@ def reset_stt_state(monkeypatch):
     yield
 
 
+class _FakeVadAdapter:
+    """VAD-chunked adapter that exposes segments as a list."""
+    def __init__(self, text_result):
+        self._text = text_result
+
+    def recognize(self, waveform, sample_rate, **kwargs):
+        # Return an iterator of fake segment results
+        class _Segment:
+            def __init__(self, text):
+                self.text = text
+                self.start = 0.0
+                self.end = len(waveform) / sample_rate
+        return iter([_Segment(self._text)])
+
+
 class _FakeParakeetModel:
     def __init__(self):
         self.calls = []
+
+    def with_vad(self, vad):
+        return _FakeVadAdapter('  hello world  ')
 
     def recognize(self, waveform, sample_rate):
         self.calls.append((len(waveform), sample_rate))
@@ -33,10 +52,19 @@ class _FakeParakeetModel:
 class _FakeOnnxAsrModule:
     def __init__(self, load_calls):
         self._load_calls = load_calls
+        self._vad_calls = []
 
     def load_model(self, name):
         self._load_calls.append(name)
         return _FakeParakeetModel()
+
+    def load_vad(self, name):
+        self._vad_calls.append(name)
+        return object()  # VAD is just a marker
+
+    @property
+    def vad_calls(self):
+        return self._vad_calls
 
 
 # --- settings + health --------------------------------------------------------
@@ -74,13 +102,14 @@ def test_health_parakeet_not_ready_when_other_backend_loaded(client):
 # --- loading ------------------------------------------------------------------
 
 def test_load_stt_loads_parakeet_via_onnx_asr(client, monkeypatch):
-    load_calls = []
-    monkeypatch.setitem(sys.modules, 'onnx_asr', _FakeOnnxAsrModule(load_calls))
+    fake_module = _FakeOnnxAsrModule([])
+    monkeypatch.setitem(sys.modules, 'onnx_asr', fake_module)
 
     client.patch('/api/settings/ai', json={'sttBackend': 'parakeet'})
     stt._load_stt(backend='parakeet')
 
-    assert load_calls == ['nemo-parakeet-tdt-0.6b-v2']
+    assert fake_module._load_calls == ['nemo-parakeet-tdt-0.6b-v2']
+    assert fake_module._vad_calls == ['silero']
     assert stt._loaded_stt_backend == 'parakeet'
     assert stt._loaded_device == 'cpu'
     assert stt._loaded_model_name == 'nemo-parakeet-tdt-0.6b-v2'
@@ -88,18 +117,19 @@ def test_load_stt_loads_parakeet_via_onnx_asr(client, monkeypatch):
 
 
 def test_load_stt_parakeet_hits_fast_path_second_time(client, monkeypatch):
-    load_calls = []
-    monkeypatch.setitem(sys.modules, 'onnx_asr', _FakeOnnxAsrModule(load_calls))
+    fake_module = _FakeOnnxAsrModule([])
+    monkeypatch.setitem(sys.modules, 'onnx_asr', fake_module)
 
     stt._load_stt(backend='parakeet')
     stt._load_stt(backend='parakeet')
 
-    assert load_calls == ['nemo-parakeet-tdt-0.6b-v2']  # loaded once, cached
+    assert fake_module._load_calls == ['nemo-parakeet-tdt-0.6b-v2']  # model loaded once
+    assert fake_module._vad_calls == ['silero']  # vad loaded once
 
 
 def test_load_stt_reloads_when_switching_away_from_parakeet(client, monkeypatch):
-    load_calls = []
-    monkeypatch.setitem(sys.modules, 'onnx_asr', _FakeOnnxAsrModule(load_calls))
+    fake_onnx = _FakeOnnxAsrModule([])
+    monkeypatch.setitem(sys.modules, 'onnx_asr', fake_onnx)
 
     whisper_calls = []
 
@@ -113,7 +143,8 @@ def test_load_stt_reloads_when_switching_away_from_parakeet(client, monkeypatch)
     stt._load_stt(backend='parakeet')
     stt._load_stt(model_name='turbo', backend='local')
 
-    assert load_calls == ['nemo-parakeet-tdt-0.6b-v2']
+    assert fake_onnx._load_calls == ['nemo-parakeet-tdt-0.6b-v2']
+    assert fake_onnx._vad_calls == ['silero']
     assert whisper_calls == [('turbo', 'cuda')]
     assert stt._loaded_stt_backend == 'local'
 
@@ -126,13 +157,13 @@ def test_do_transcribe_parakeet_decodes_and_recognizes(client, monkeypatch):
 
     model = _FakeParakeetModel()
     stt._stt_model = model
+    stt._stt_vad = object()  # VAD is needed for with_vad
     stt._loaded_stt_backend = 'parakeet'
     stt._loaded_device = 'cpu'
 
     result = stt._do_transcribe(b'\x00' * 2000, 'rec.webm', None)
 
     assert result == {'text': 'hello world', 'language': 'en'}
-    assert model.calls == [(16000, 16000)]
 
 
 def test_do_transcribe_parakeet_resets_model_on_error(client, monkeypatch):
@@ -140,10 +171,14 @@ def test_do_transcribe_parakeet_resets_model_on_error(client, monkeypatch):
         stt, '_decode_to_16k_mono', lambda path: np.zeros(10, dtype=np.float32))
 
     class _BoomModel:
-        def recognize(self, waveform, sample_rate):
-            raise RuntimeError('boom')
+        def with_vad(self, vad):
+            class _BoomAdapter:
+                def recognize(self, waveform, sample_rate, **kwargs):
+                    raise RuntimeError('boom')
+            return _BoomAdapter()
 
     stt._stt_model = _BoomModel()
+    stt._stt_vad = object()
     stt._stt_ready = True
     stt._loaded_stt_backend = 'parakeet'
     stt._loaded_device = 'cpu'
@@ -153,5 +188,6 @@ def test_do_transcribe_parakeet_resets_model_on_error(client, monkeypatch):
 
     # model was reset so the next request reloads fresh
     assert stt._stt_model is None
+    assert stt._stt_vad is None
     assert stt._stt_ready is False
     assert stt._loaded_stt_backend is None

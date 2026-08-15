@@ -13,6 +13,7 @@ def reset_stt_state(monkeypatch):
     monkeypatch.setattr(stt, 'MODEL_NAME', 'turbo')
     monkeypatch.setattr(stt, 'STT_BACKEND', 'local')
     stt._stt_model = None
+    stt._stt_vad = None
     stt._stt_ready = False
     stt._loaded_stt_backend = None
     stt._loaded_model_name = None

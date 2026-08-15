@@ -56,10 +56,11 @@ _KOKORO_VOICES = 'voices-v1.0.bin'
 _KOKORO_BASE   = 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0'
 
 _stt_lock           = threading.Lock()
-_transcribe_lock    = threading.Lock()   # serialises Whisper inference — model is not thread-safe
+_transcribe_lock    = threading.Lock()   # serialises Whisper/Parakeet inference — models are not thread-safe
 _tts_lock           = threading.Lock()
 _openai_lock        = threading.Lock()
 _stt_model          = None
+_stt_vad            = None   # silero VAD for long-audio chunking (onnx-asr)
 _tts_kokoro         = None
 _openai_client      = None
 _stt_ready          = False
@@ -129,7 +130,7 @@ def _ensure_openai():
 
 
 def _load_stt(model_name: str | None = None, backend: str | None = None):
-    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
+    global _stt_model, _stt_vad, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
     backend = backend or _get_active_stt_backend()
     model_name = model_name or _get_active_whisper_model()
     device = _get_active_stt_device()
@@ -138,17 +139,27 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
     # model/device knobs, so a backend match alone is enough for the fast path.
     config_free = backend in ('openai', 'parakeet')
 
-    # Fast path — already loaded with the right config
+    # Parakeet also needs its VAD loaded (silero) — if it's missing, fall through.
+    vad_needed = backend == 'parakeet' and _stt_vad is None
+
+    # Fast path — already loaded with the right config.
+    # For config-free backends (openai, parakeet) we check backend match + VAD readiness.
+    # For local (Whisper) we still need model + device to match.
     if _stt_ready and _loaded_stt_backend == backend:
-        if config_free or (_loaded_model_name == model_name and _loaded_device == device):
+        if config_free and not vad_needed or (
+            not config_free and _loaded_model_name == model_name and _loaded_device == device
+        ):
             return
 
     with _stt_lock:
         if _stt_ready and _loaded_stt_backend == backend:
-            if config_free or (_loaded_model_name == model_name and _loaded_device == device):
+            if config_free and not vad_needed or (
+                not config_free and _loaded_model_name == model_name and _loaded_device == device
+            ):
                 return
         # Unload whatever is currently in memory
         _stt_model = None
+        _stt_vad = None
         _stt_ready = False
 
         if backend == 'openai':
@@ -160,6 +171,10 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
             import onnx_asr
             logger.info("Loading Parakeet '%s' on CPU (onnx-asr)…", PARAKEET_MODEL)
             _stt_model = onnx_asr.load_model(PARAKEET_MODEL)
+            # Load Silero VAD for long-audio chunking. Parakeet's transformer
+            # self-attention crashes on sequences > ~15 min; VAD splits audio
+            # into 20-second speech windows before transcription.
+            _stt_vad = onnx_asr.load_vad('silero')
             _loaded_stt_backend = 'parakeet'
             _loaded_model_name = PARAKEET_MODEL
             _loaded_device = 'cpu'
@@ -265,10 +280,11 @@ def stt_health():
 
 
 def _reset_stt_model() -> None:
-    """Unload the Whisper model so it is reloaded fresh on the next request."""
-    global _stt_model, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
+    """Unload the STT model so it is reloaded fresh on the next request."""
+    global _stt_model, _stt_vad, _stt_ready, _loaded_stt_backend, _loaded_model_name, _loaded_device
     with _stt_lock:
         _stt_model = None
+        _stt_vad = None
         _stt_ready = False
         _loaded_stt_backend = None
         _loaded_model_name = None
@@ -313,12 +329,17 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
                 )
             return {'text': result.text.strip(), 'language': result.language or language or 'en'}
         elif _loaded_stt_backend == 'parakeet':
-            # onnx-asr is not thread-safe; serialise like Whisper. Parakeet TDT
-            # v2 is English-only and does no language detection.
+            # onnx-asr is not thread-safe; serialise like Whisper.
+            # Parakeet TDT v2/v3 is English-only and does no language detection.
+            # Long audio (> ~15 min) crashes the transformer's self-attention,
+            # so we use VAD chunking (20-second speech windows) via with_vad().
             waveform = _decode_to_16k_mono(tmp_path)
+            vad_model = _stt_model.with_vad(_stt_vad)
             with _transcribe_lock:
                 try:
-                    text = _stt_model.recognize(waveform, sample_rate=16000)
+                    segments = list(vad_model.recognize(waveform, sample_rate=16000,
+                                                         max_speech_duration_s=20))
+                    text = ' '.join(seg.text for seg in segments if seg.text.strip())
                 except Exception:
                     _reset_stt_model()
                     raise
