@@ -75,7 +75,10 @@ function FanficCookieRow({
         <input
           type="text"
           value={value}
-          onChange={e => setValue(e.target.value)}
+          onChange={e => {
+            setValue(e.target.value);
+            if (save.isError) save.reset();
+          }}
           spellCheck={false}
           autoComplete="off"
           placeholder={
@@ -102,6 +105,9 @@ function FanficCookieRow({
           </button>
         )}
       </div>
+      {save.isError && (
+        <p className="text-xs text-red-400 mt-2">{save.error.message}</p>
+      )}
       <div className="mt-3 flex items-center justify-between">
         <button
           onClick={() => scanWatched.mutate()}
