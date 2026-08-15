@@ -7,6 +7,7 @@ import { BriefingTodos } from '../BriefingTodos';
 import { AgentSteps } from './AgentSteps';
 import { DelegateProposals } from './DelegateProposals';
 import { ThinkingLabel } from './ThinkingLabel';
+import { NoteReviewButton } from '../NoteReview';
 import {
   contextMessages,
   isBreak,
@@ -525,7 +526,8 @@ export function ChatPanel() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex items-center justify-end border-b border-white/10 px-4 py-2">
+      <div className="flex items-center justify-end gap-2 border-b border-white/10 px-4 py-2">
+        <NoteReviewButton />
         <button
           onClick={startNewChat}
           disabled={!hasChat || isStreaming}

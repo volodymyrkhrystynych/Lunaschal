@@ -23,7 +23,7 @@ export function NoteReviewButton() {
         type="button"
         onClick={() => setOpen(true)}
         disabled={dueCount === 0}
-        className="fixed top-2 right-3 z-40 text-xs px-2 py-1 rounded bg-[var(--color-surface)] border border-white/10 text-[var(--color-text-muted)] hover:border-[var(--color-primary)] hover:text-[var(--color-text)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-white/10 transition-colors"
+        className="text-xs px-2 py-1 rounded bg-[var(--color-surface)] border border-white/10 text-[var(--color-text-muted)] hover:border-[var(--color-primary)] hover:text-[var(--color-text)] disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-white/10 transition-colors"
       >
         Review{dueCount > 0 ? ` (${dueCount} due)` : ''}
       </button>
