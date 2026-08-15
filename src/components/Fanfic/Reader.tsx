@@ -47,6 +47,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   );
   const [commentary, setCommentary] = useState('');
   const [commentarySaved, setCommentarySaved] = useState(false);
+  const [showCommentary, setShowCommentary] = useState(false);
   const [navVisible, setNavVisible] = useState(true);
   const [fontSize, setFontSize] = useState(getStoredReadingFontSize);
   const { isMobile, showList, showDetail, openDetail, openList } =
@@ -271,7 +272,8 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
     chapterId && chapters ? adjacentChapter(chapters, chapterId, 1) : null;
 
   const annotate = () => {
-    commentaryRef.current?.focus();
+    setShowCommentary(true);
+    setTimeout(() => commentaryRef.current?.focus(), 0);
   };
 
   const adjustFontSize = (delta: number) => {
@@ -581,85 +583,90 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
             {/* Commentary panel */}
             <div className="border-t border-white/10 bg-[var(--color-surface)]">
               <div className="flex items-center justify-between px-4 py-2">
-                <span className="text-sm text-[var(--color-text-muted)]">
-                  Commentary
+                <button
+                  onClick={() => setShowCommentary(!showCommentary)}
+                  className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] flex items-center gap-1"
+                >
+                  {showCommentary ? '▾' : '▸'} Commentary
                   {commentarySaved && (
-                    <span className="ml-2 text-green-400">
-                      saved to journal ✓
-                    </span>
+                    <span className="text-green-400">saved to journal ✓</span>
                   )}
-                </span>
+                </button>
                 <button
                   onClick={() => setShowBookmarkMenu(true)}
                   className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                 >
-                  Write commentary
+                  Bookmark
                 </button>
               </div>
-              <div className="px-4 pb-3">
-                <textarea
-                  ref={commentaryRef}
-                  value={commentary}
-                  onChange={e => setCommentary(e.target.value)}
-                  rows={3}
-                  onKeyDown={e => {
-                    if (e.key === 'Escape') {
-                      e.currentTarget.blur();
-                      return;
-                    }
-                    // Enter submits; Shift+Enter inserts a newline
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      if (commentary.trim() && !saveCommentary.isPending) {
-                        saveCommentary.mutate(commentary.trim());
+              {showCommentary && (
+                <div className="px-4 pb-3">
+                  <textarea
+                    ref={commentaryRef}
+                    value={commentary}
+                    onChange={e => setCommentary(e.target.value)}
+                    rows={3}
+                    onKeyDown={e => {
+                      if (e.key === 'Escape') {
                         e.currentTarget.blur();
+                        return;
                       }
+                      // Enter submits; Shift+Enter inserts a newline
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (commentary.trim() && !saveCommentary.isPending) {
+                          saveCommentary.mutate(commentary.trim());
+                          e.currentTarget.blur();
+                        }
+                      }
+                    }}
+                    placeholder={
+                      isPdf
+                        ? `Your thoughts on ${fic?.title ?? 'this fic'}… (saved as a journal entry linked to the fic)`
+                        : `Your thoughts on ${chapter?.title ?? 'this chapter'}… (saved as a journal entry linked to this chapter)`
                     }
-                  }}
-                  placeholder={
-                    isPdf
-                      ? `Your thoughts on ${fic?.title ?? 'this fic'}… (saved as a journal entry linked to the fic)`
-                      : `Your thoughts on ${chapter?.title ?? 'this chapter'}… (saved as a journal entry linked to this chapter)`
-                  }
-                  className="w-full bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none border border-white/10 rounded p-2 mb-2"
-                />
-                {saveCommentary.isError && (
-                  <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
-                    {(saveCommentary.error as Error).message}
+                    className="w-full bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none border border-white/10 rounded p-2 mb-2"
+                  />
+                  {saveCommentary.isError && (
+                    <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
+                      {(saveCommentary.error as Error).message}
+                    </div>
+                  )}
+                  {recorder.error && (
+                    <p className="mb-2 text-xs text-red-400">
+                      {recorder.error}
+                    </p>
+                  )}
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() =>
+                        recorder.status === 'recording'
+                          ? recorder.stop()
+                          : recorder.start()
+                      }
+                      disabled={recorder.status === 'transcribing'}
+                      className={`px-3 py-1 rounded disabled:opacity-50 ${
+                        recorder.status === 'recording'
+                          ? 'bg-red-600 hover:bg-red-700 text-white'
+                          : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
+                      }`}
+                    >
+                      {recorder.status === 'recording'
+                        ? '■ Stop'
+                        : recorder.status === 'transcribing'
+                          ? 'Transcribing…'
+                          : '🎤'}
+                    </button>
+                    <button
+                      onClick={() => saveCommentary.mutate(commentary.trim())}
+                      disabled={!commentary.trim() || saveCommentary.isPending}
+                      className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+                    >
+                      {saveCommentary.isPending ? 'Saving…' : 'Save to journal'}
+                    </button>
                   </div>
-                )}
-                {recorder.error && (
-                  <p className="mb-2 text-xs text-red-400">{recorder.error}</p>
-                )}
-                <div className="flex justify-end gap-2">
-                  <button
-                    onClick={() =>
-                      recorder.status === 'recording'
-                        ? recorder.stop()
-                        : recorder.start()
-                    }
-                    disabled={recorder.status === 'transcribing'}
-                    className={`px-3 py-1 rounded disabled:opacity-50 ${
-                      recorder.status === 'recording'
-                        ? 'bg-red-600 hover:bg-red-700 text-white'
-                        : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
-                    }`}
-                  >
-                    {recorder.status === 'recording'
-                      ? '■ Stop'
-                      : recorder.status === 'transcribing'
-                        ? 'Transcribing…'
-                        : '🎤'}
-                  </button>
-                  <button
-                    onClick={() => saveCommentary.mutate(commentary.trim())}
-                    disabled={!commentary.trim() || saveCommentary.isPending}
-                    className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-                  >
-                    {saveCommentary.isPending ? 'Saving…' : 'Save to journal'}
-                  </button>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         )}

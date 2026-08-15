@@ -288,7 +288,7 @@ describe('Reader commentary microphone', () => {
     );
 
     renderReader();
-    fireEvent.click(await screen.findByText(/Write commentary/));
+    fireEvent.click(await screen.findByText(/Commentary/));
     fireEvent.click(screen.getByRole('button', { name: '🎤' }));
 
     const stop = await screen.findByRole('button', { name: '■ Stop' });
