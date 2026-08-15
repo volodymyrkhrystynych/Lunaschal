@@ -6,8 +6,8 @@ is not optional. The app binds 0.0.0.0 in network mode and llama-server sits on
 localhost:8080, which is exactly the kind of neighbour an unguarded fetcher
 hands to a prompt injection.
 
-Search is pluggable because there is no good local option: Brave and Tavily
-need an API key, a self-hosted SearXNG needs none. With no provider configured
+Search is pluggable because there is no good local option: Brave needs an API
+key, a self-hosted SearXNG needs none. With no provider configured
 the tools return an explanatory *result* rather than raising, so the agent
 degrades to "answer from the wiki and repo context, and say search was
 unavailable" instead of dying mid-loop — the same trust-first stance
@@ -121,7 +121,7 @@ def search_provider() -> str:
 def is_search_configured() -> bool:
     settings = _settings()
     provider = _search_setting(settings, 'search_provider')
-    if provider in ('brave', 'tavily'):
+    if provider == 'brave':
         return bool(_search_setting(settings, 'search_key'))
     if provider == 'searxng':
         return bool(_search_setting(settings, 'searxng_url'))
@@ -143,10 +143,6 @@ def web_search(query: str, limit: int = DEFAULT_RESULTS) -> list[dict]:
             if not key:
                 raise SearchUnavailable('Brave search needs an API key')
             return _search_brave(query, key, limit)
-        if provider == 'tavily':
-            if not key:
-                raise SearchUnavailable('Tavily search needs an API key')
-            return _search_tavily(query, key, limit)
         if provider == 'searxng':
             url = _search_setting(settings, 'searxng_url')
             if not url:
@@ -176,24 +172,6 @@ def _search_brave(query: str, key: str, limit: int) -> list[dict]:
             'snippet': (r.get('description') or '')[:400],
         }
         for r in results[:limit]
-        if r.get('url')
-    ]
-
-
-def _search_tavily(query: str, key: str, limit: int) -> list[dict]:
-    resp = requests.post(
-        'https://api.tavily.com/search',
-        json={'api_key': key, 'query': query, 'max_results': limit},
-        timeout=SEARCH_TIMEOUT,
-    )
-    resp.raise_for_status()
-    return [
-        {
-            'title': r.get('title') or '',
-            'url': r.get('url') or '',
-            'snippet': (r.get('content') or '')[:400],
-        }
-        for r in (resp.json().get('results') or [])[:limit]
         if r.get('url')
     ]
 

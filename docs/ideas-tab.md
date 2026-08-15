@@ -117,7 +117,7 @@ any host resolving to a private, loopback, link-local, reserved or multicast add
 > preserving SNI — not worth it for a single-user app on localhost, but read this before reusing
 > `web.py` anywhere exposed.
 
-Search is pluggable (Brave / Tavily key, or keyless self-hosted SearXNG). With none configured the
+Search is pluggable (Brave key, or keyless self-hosted SearXNG). With none configured the
 tools return an explanatory _result_ rather than raising, so the loop degrades instead of dying —
 the same trust-first stance `backend/ai/learning_verification.py` takes about evidence.
 

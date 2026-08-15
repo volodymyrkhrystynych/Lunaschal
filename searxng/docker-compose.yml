@@ -1,0 +1,16 @@
+# Self-hosted SearXNG for the research web-search provider (backend/research/web.py's
+# `_search_searxng`). No VPN hop: shared/commercial VPN exit IPs get blocked or
+# CAPTCHA'd hard by the underlying engines (Brave, Startpage, DuckDuckGo all
+# rejected requests within minutes of testing behind Proton), which defeated
+# the whole point. The privacy win over Tavily doesn't depend on hiding the
+# egress IP anyway — it's that there's no third-party account/API key
+# correlating your whole query history the way Tavily's did; self-hosting an
+# open-source metasearch engine already gets you that.
+services:
+  searxng:
+    image: searxng/searxng
+    ports:
+      - '8888:8080'
+    volumes:
+      - ./settings.yml:/etc/searxng/settings.yml:ro
+    restart: unless-stopped

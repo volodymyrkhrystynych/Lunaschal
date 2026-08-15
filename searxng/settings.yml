@@ -1,0 +1,18 @@
+# Minimal SearXNG config for a single-user, non-public instance.
+use_default_settings: true
+
+general:
+  instance_name: 'lunaschal-searxng'
+
+search:
+  # json is off by default upstream to deter scraping of public instances; this
+  # one isn't exposed beyond localhost, and backend/research/web.py's
+  # _search_searxng requests format=json.
+  formats:
+    - html
+    - json
+
+server:
+  # Generate your own: python3 -c "import secrets; print(secrets.token_hex(16))"
+  secret_key: 'b38eb8af2c4b6d1f614a1d9e6bced71e'
+  limiter: false

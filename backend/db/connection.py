@@ -717,7 +717,7 @@ def _ensure_research_settings(db: sqlite3.Connection) -> None:
         # neither for the two llama slots.
         db.execute('ALTER TABLE settings ADD COLUMN repo_context_hour INTEGER DEFAULT 3')
     if 'research_search_provider' not in cols:
-        # '' | 'brave' | 'tavily' | 'searxng'. Empty means the research agent
+        # '' | 'brave' | 'searxng'. Empty means the research agent
         # has no web access and says so, rather than guessing.
         db.execute("ALTER TABLE settings ADD COLUMN research_search_provider TEXT DEFAULT ''")
     if 'research_search_key' not in cols:

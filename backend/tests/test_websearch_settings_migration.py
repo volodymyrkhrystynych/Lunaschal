@@ -48,12 +48,12 @@ def test_a_searxng_url_comes_across_too(client):
 def test_a_deliberate_research_config_is_never_overwritten(client):
     """Someone who configured both chose the research one on purpose."""
     db = get_db()
-    _set(db, research_search_provider='tavily', research_search_key='keep-me',
+    _set(db, research_search_provider='searxng', research_search_key='keep-me',
          websearch_search_provider='brave', websearch_search_key='sk-other')
 
     _migrate_websearch_search_to_research(db)
 
-    assert _research(db)['research_search_provider'] == 'tavily'
+    assert _research(db)['research_search_provider'] == 'searxng'
     assert _research(db)['research_search_key'] == 'keep-me'
 
 

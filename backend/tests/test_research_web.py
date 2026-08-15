@@ -253,18 +253,6 @@ def test_brave_results_are_mapped(client, monkeypatch):
     assert results == [{'title': 'FSRS', 'url': 'https://ex.com/a', 'snippet': 'sched'}]
 
 
-def test_tavily_results_are_mapped(client, monkeypatch):
-    _configure('tavily', key='k')
-
-    class R:
-        def raise_for_status(self): pass
-        def json(self):
-            return {'results': [{'title': 'T', 'url': 'https://ex.com/t', 'content': 'body'}]}
-
-    monkeypatch.setattr(web.requests, 'post', lambda *a, **k: R())
-    assert web.web_search('fsrs')[0]['url'] == 'https://ex.com/t'
-
-
 def test_searxng_needs_only_a_url(client, monkeypatch):
     _configure('searxng', url='http://localhost:8888')
     assert web.is_search_configured() is True

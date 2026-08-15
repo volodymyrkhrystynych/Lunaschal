@@ -102,7 +102,7 @@ flowchart LR
         FORUMS["XenForo forums<br/>(SB / SV / QQ)"]
         FRONTPAGES["frontpages.com"]
         MCPSRV["MCP evidence servers"]
-        WEB["Web — search provider<br/>(Brave · Tavily · SearXNG)<br/>+ arbitrary pages"]
+        WEB["Web — search provider<br/>(Brave · SearXNG)<br/>+ arbitrary pages"]
         AUDIO["ffmpeg + PipeWire"]
     end
 
