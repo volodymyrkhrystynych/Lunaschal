@@ -97,10 +97,23 @@ def _cookies_for(url: str) -> dict | None:
     """Cookies as a dict for requests' jar. Passing them as a raw Cookie
     header would silently log us out on any redirect — requests strips
     manually-set Cookie headers when following redirects (XenForo post URLs
-    always 301 to their thread page)."""
+    always 301 to their thread page).
+
+    /api/fanfic/cookies rejects non-ASCII input outright, but a cookie saved
+    before that check existed can still be sitting in the DB — without this,
+    it reaches requests' header encoder and comes back as a raw
+    'latin-1' codec can't encode character ... UnicodeEncodeError instead of
+    a message that says what to do about it."""
     cookie = _cookie_for(urlparse(url).netloc)
     if not cookie:
         return None
+    bad = next((c for c in cookie if ord(c) > 127), None)
+    if bad is not None:
+        domain = urlparse(url).netloc
+        raise FetchBlockedError(
+            f'{domain}: stored cookie contains a non-ASCII character ({bad!r}) left over '
+            "from a truncated copy-paste (commonly cf_clearance cut short by a '…'). "
+            'Paste a fresh Cookie header in Settings → Fanfic site cookies.')
     jar: dict[str, str] = {}
     for part in cookie.split(';'):
         if '=' in part:

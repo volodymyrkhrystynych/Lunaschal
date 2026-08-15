@@ -179,12 +179,44 @@ def list_cookies():
     return jsonify(result)
 
 
+class CookieInputError(ValueError):
+    pass
+
+
+def _reject_non_ascii(cookie: str) -> str:
+    """Cookie values are restricted to a visible-ASCII subset by RFC 6265, so
+    any non-ASCII character means the copy-paste got mangled before it
+    reached us — most often a long value (cf_clearance routinely runs past
+    what a devtools panel renders) that got truncated to a '…' by whatever
+    copied it. Silently dropping that character used to be tried, but it
+    just splices the two surviving fragments into a token that never existed
+    and fails in a *different*, more confusing place (a rejected login)
+    instead of here. Reject loudly instead, so the fix is a re-copy, not a
+    guess."""
+    bad = [c for c in cookie if ord(c) > 127]
+    if not bad:
+        return cookie
+    if '…' in bad:
+        raise CookieInputError(
+            "Cookie contains a '…' truncation artifact — the copy method cut off a long "
+            'value (commonly cf_clearance). In Firefox, use the Storage/Cookies panel or '
+            "right-click the request → Copy Value on the raw Cookie header, not a "
+            'display that elides long text.')
+    raise CookieInputError(
+        f'Cookie contains a non-ASCII character ({bad[0]!r}) — the copy-paste likely '
+        'picked up formatting from the source (smart quotes, browser UI chrome). '
+        'Re-copy the raw Cookie header value.')
+
+
 def _normalize_cookie_input(text: str) -> str:
     """Accept a bare cookie string, a full request-headers dump (Firefox's
     'Copy Request Headers'), a 'Copy as cURL' command, or the JSON that
     Firefox's Cookies tab produces via 'Copy All'
     ({"Request Cookies": {name: value, ...}}), and extract just the Cookie
-    header value."""
+    header value.
+
+    Raises CookieInputError if the extracted value contains non-ASCII
+    characters — see _reject_non_ascii."""
     import json
     import re
     text = text.strip()
@@ -201,19 +233,19 @@ def _normalize_cookie_input(text: str) -> str:
                     break
             pairs = {k: v for k, v in data.items() if isinstance(v, str)}
             if pairs:
-                return '; '.join(f'{k}={v}' for k, v in pairs.items())
+                return _reject_non_ascii('; '.join(f'{k}={v}' for k, v in pairs.items()))
     # A "Cookie: ..." line inside a header dump or a curl -H argument
     m = re.search(r'(?:^|\n)\s*[Cc]ookie:\s*(.+)', text)
     if m:
-        return m.group(1).strip().strip('\'"')
+        return _reject_non_ascii(m.group(1).strip().strip('\'"'))
     m = re.search(r'''-H\s+(['"])[Cc]ookie:\s*(.*?)\1''', text)
     if m:
-        return m.group(2).strip()
+        return _reject_non_ascii(m.group(2).strip())
     # curl's -b / --cookie flag
     m = re.search(r'''(?:--cookie|-b)\s+(['"])(.*?)\1''', text)
     if m:
-        return m.group(2).strip()
-    return text
+        return _reject_non_ascii(m.group(2).strip())
+    return _reject_non_ascii(text)
 
 
 @bp.put('/cookies')
@@ -222,7 +254,10 @@ def put_cookie():
     domain = (body.get('domain') or '').strip().lower()
     if domain.startswith('www.'):
         domain = domain[4:]
-    cookie = _normalize_cookie_input(body.get('cookie') or '')
+    try:
+        cookie = _normalize_cookie_input(body.get('cookie') or '')
+    except CookieInputError as e:
+        return jsonify({'error': str(e)}), 400
     if domain not in KNOWN_SITES:
         return jsonify({'error': f'unknown domain: {domain}'}), 400
     db = get_db()

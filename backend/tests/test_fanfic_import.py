@@ -698,6 +698,45 @@ def test_cookie_input_normalization(client, fake_net):
     assert jar == {'xf_user': 'u123', 'xf_session': 's456', 'cf_clearance': 'cf789'}
 
 
+def test_cookie_input_rejects_truncation_ellipsis(client, fake_net):
+    """A devtools copy that truncates a long value (cf_clearance routinely
+    exceeds what a panel renders) leaves a literal '…' in the pasted text.
+    Splicing the two surviving fragments together used to be silently
+    accepted, producing a token that never existed and that only failed
+    later, deep inside requests, as a raw UnicodeEncodeError. Reject it at
+    save time instead, with a message that says what to do."""
+    from backend.routes.fanfic import _normalize_cookie_input, CookieInputError
+
+    with pytest.raises(CookieInputError, match='…'):
+        _normalize_cookie_input('xf_user=u123; cf_clearance=abc…def')
+
+    resp = client.put('/api/fanfic/cookies', json={
+        'domain': 'forums.spacebattles.com',
+        'cookie': 'xf_user=u123; cf_clearance=abc…def',
+    })
+    assert resp.status_code == 400
+    assert '…' in resp.get_json()['error']
+    # Rejected input is never stored
+    listing = client.get('/api/fanfic/cookies').get_json()
+    sb = next(c for c in listing if c['domain'] == 'forums.spacebattles.com')
+    assert sb['hasCookie'] is False
+
+
+def test_legacy_non_ascii_cookie_fails_clearly_at_fetch(client, fake_net):
+    """A cookie saved before the save-time check existed can still be
+    sitting in the DB with a raw non-ASCII character in it. Using it must
+    surface an actionable FetchBlockedError, not requests' raw
+    UnicodeEncodeError from trying to latin-1-encode the Cookie header."""
+    from backend.db.connection import get_db
+    get_db().execute(
+        "INSERT INTO site_cookies(domain, cookie, updated_at) VALUES "
+        "('forums.spacebattles.com', 'xf_user=u123; cf_clearance=abc…def', 0)")
+    get_db().commit()
+
+    with pytest.raises(download.FetchBlockedError, match='non-ASCII'):
+        download._cookies_for('https://forums.spacebattles.com/threads/x.1/')
+
+
 def test_stale_downloading_status_reset_on_startup(client):
     """A fic left 'downloading' by a killed/replaced process (e.g. the dev
     server's autoreloader restarting mid-download) has no thread left to
