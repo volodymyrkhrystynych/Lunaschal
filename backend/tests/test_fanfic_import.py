@@ -620,20 +620,19 @@ def test_cookie_unknown_domain_rejected(client, fake_net):
 def test_fetch_retries_transient_403(client, monkeypatch):
     """A burst-rate-limit 403 is retried with backoff; a Cloudflare
     challenge is not."""
-    import sys
     from types import SimpleNamespace
 
     calls = {'n': 0}
     sleeps: list[float] = []
 
-    def fake_get(url, timeout=None, headers=None, cookies=None):
+    def fake_get(url, headers=None, cookies=None, timeout=None, stream=False):
         calls['n'] += 1
         status = 403 if calls['n'] < 3 else 200
         return SimpleNamespace(
             status_code=status, headers={}, text='ok', url=url,
             raise_for_status=lambda: None)
 
-    monkeypatch.setitem(sys.modules, 'requests', SimpleNamespace(get=fake_get))
+    monkeypatch.setattr(download, '_http_get', fake_get)
     monkeypatch.setattr(download, 'time', SimpleNamespace(sleep=lambda s: sleeps.append(s)))
 
     resp = download._fetch('https://forum.questionablequesting.com/threads/x.1/')
@@ -644,12 +643,12 @@ def test_fetch_retries_transient_403(client, monkeypatch):
     # Cloudflare challenge: immediate FetchBlockedError, no retries
     calls['n'] = 0
 
-    def cf_get(url, timeout=None, headers=None, cookies=None):
+    def cf_get(url, headers=None, cookies=None, timeout=None, stream=False):
         calls['n'] += 1
         return SimpleNamespace(status_code=403, headers={'CF-RAY': 'x'},
                                text='Just a moment', url=url)
 
-    monkeypatch.setitem(sys.modules, 'requests', SimpleNamespace(get=cf_get))
+    monkeypatch.setattr(download, '_http_get', cf_get)
     with pytest.raises(download.FetchBlockedError):
         download._fetch('https://forums.spacebattles.com/threads/x.1/')
     assert calls['n'] == 1
@@ -665,23 +664,52 @@ def test_cf_proxied_403_without_challenge_page_is_not_bot_blocked(client, monkey
     hint for a completely different, non-cookie problem. Without challenge
     markup in the body, it must fall through to raise_for_status and
     surface the real HTTP error instead."""
-    import sys
     from types import SimpleNamespace
 
     def raise_for_status():
         raise ValueError('403 Client Error: Forbidden for url: ...')
 
-    def perm_get(url, timeout=None, headers=None, cookies=None):
+    def perm_get(url, headers=None, cookies=None, timeout=None, stream=False):
         return SimpleNamespace(
             status_code=403, headers={'CF-RAY': 'x'},
             text='<h1>You do not have permission to view this thread.</h1>',
             url=url, raise_for_status=raise_for_status)
 
-    monkeypatch.setitem(sys.modules, 'requests', SimpleNamespace(get=perm_get))
+    monkeypatch.setattr(download, '_http_get', perm_get)
     monkeypatch.setattr(download, 'time', SimpleNamespace(sleep=lambda s: None))
 
     with pytest.raises(ValueError, match='403 Client Error'):
         download._fetch('https://forums.spacebattles.com/threads/x.1/')
+
+
+def test_fetch_sends_a_same_origin_referer(client, monkeypatch):
+    """SpaceBattles' Cloudflare rule challenges /threads/* whenever the
+    request carries no Referer or one from another origin, while leaving
+    /account/alerts and /watched/threads alone — which is why alert
+    refreshes kept working and every fic fetch came back 'Just a moment'.
+    The value isn't inspected past its origin, so the site root is enough,
+    but it must match the host being fetched: a Referer pointing at another
+    forum is treated exactly like none at all."""
+    from types import SimpleNamespace
+
+    seen = []
+
+    def fake_get(url, headers=None, cookies=None, timeout=None, stream=False):
+        seen.append(headers)
+        return SimpleNamespace(status_code=200, headers={}, text='ok', url=url,
+                               raise_for_status=lambda: None)
+
+    monkeypatch.setattr(download, '_http_get', fake_get)
+    monkeypatch.setattr(download, 'time', SimpleNamespace(sleep=lambda s: None))
+
+    download._fetch('https://forums.spacebattles.com/threads/x.1/reader/page-2')
+    download._fetch('https://forum.questionablequesting.com/threads/y.2/')
+
+    assert seen[0]['Referer'] == 'https://forums.spacebattles.com/'
+    assert seen[1]['Referer'] == 'https://forum.questionablequesting.com/'
+    # No cookie stored for either domain here, so both fall back to the
+    # module default rather than a captured browser UA.
+    assert seen[0]['User-Agent'] == download.USER_AGENT
 
 
 def test_cookie_input_normalization(client, fake_net):

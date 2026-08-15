@@ -16,9 +16,11 @@ from backend.db.connection import get_db
 from backend.fanfic import storage, xenforo
 from backend.fanfic.sanitize import count_words, html_to_text, sanitize_chapter_html
 
-# A plain browser UA: these forums sit behind Cloudflare, which challenges
-# obvious bot UAs outright, and cf_clearance cookies are validated against
-# the UA that solved the challenge (a browser).
+# Fallback UA for a domain with no stored cookie yet (or one saved before UA
+# capture existed — see _extract_user_agent in routes/fanfic.py). Once a
+# cookie is saved via a full header-dump paste, _headers() below prefers the
+# UA that came with it, since Cloudflare validates cf_clearance against the
+# UA that solved the challenge.
 USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0'
 REQUEST_DELAY = 2.0
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
@@ -138,8 +140,16 @@ def _headers(url: str) -> dict:
     # UA came paired with the site's stored cookie (see _extract_user_agent
     # in routes/fanfic.py) and fall back to the generic one when there
     # isn't a stored cookie yet, or it predates UA capture.
-    user_agent = _user_agent_for(urlparse(url).netloc) or USER_AGENT
-    return {'User-Agent': user_agent}
+    host = urlparse(url).netloc
+    user_agent = _user_agent_for(host) or USER_AGENT
+    # SpaceBattles' Cloudflare rule challenges /threads/* when the request
+    # carries no Referer, or one from another origin — a bare UA is enough
+    # for /account/alerts and /watched/threads, which is why alert refreshes
+    # kept working while every fic fetch 403'd behind 'Just a moment'. The
+    # value is not checked beyond its origin (a same-origin path that doesn't
+    # exist passes too), so the site root is both honest and sufficient: it
+    # says these fetches come from within the forum, which they do.
+    return {'User-Agent': user_agent, 'Referer': f'https://{host}/'}
 
 
 # Cloudflare stamps cf-ray (and friends) onto every response it proxies —
@@ -154,19 +164,37 @@ _CF_CHALLENGE_MARKERS = (
     'cf-turnstile',
 )
 
+# These forums are behind Cloudflare, but none of what it checks here is
+# below the HTTP layer: a plain urllib3 connection carrying the right
+# headers passes every URL the scraper touches. TLS/HTTP2 impersonation
+# (curl_cffi) was tried and made no difference either way — the challenge
+# was the missing Referer in _headers(), and a fingerprint-shaped fix for a
+# header-shaped problem is a compiled dependency bought for nothing. The one
+# indirection kept is this seam, so tests can stub the network in one place.
+def _http_get(url: str, *, headers: dict, cookies: dict | None, timeout: float, stream: bool = False):
+    import requests
+    return requests.get(url, headers=headers, cookies=cookies, timeout=timeout, stream=stream)
 
-def _looks_blocked(resp) -> bool:
+
+def _blocked_marker(resp) -> str | None:
+    """The specific challenge string matched, or None if this response
+    isn't a Cloudflare interstitial at all. Surfaced in the error because
+    which marker fired, and on which URL, is what localizes the cause:
+    SB's rule fires only on /threads/* and only over the Referer, so a
+    challenge on /account/alerts is a different problem (stale session)
+    than one on a reader page, and neither is a cookie problem by
+    default — the hint below asks for cookies because that's the fix the
+    user can apply, not because cookies are the usual culprit."""
     if resp.status_code not in (403, 503):
-        return False
+        return None
     body = resp.text[:4000]
-    return any(marker in body for marker in _CF_CHALLENGE_MARKERS)
+    return next((m for m in _CF_CHALLENGE_MARKERS if m in body), None)
 
 
 RETRY_BACKOFF = (5, 15, 30)
 
 
 def _fetch(url: str):
-    import requests
     # QQ rate-limits bursts with transient 403s that can outlast a short
     # pause, so back off progressively before giving up. Cloudflare
     # challenges are recognized and not retried — they need cookies, not
@@ -175,9 +203,14 @@ def _fetch(url: str):
     # never clears, resp.raise_for_status() below reports its real status
     # instead of the Cloudflare-specific hint.
     for attempt, backoff in enumerate((*RETRY_BACKOFF, None)):
-        resp = requests.get(url, timeout=20, headers=_headers(url), cookies=_cookies_for(url))
-        if _looks_blocked(resp):
-            raise FetchBlockedError(f'{urlparse(url).netloc} {_BLOCKED_HINT}')
+        resp = _http_get(url, headers=_headers(url), cookies=_cookies_for(url), timeout=20)
+        marker = _blocked_marker(resp)
+        if marker is not None:
+            domain = urlparse(url).netloc
+            ua_source = 'a saved browser UA' if _user_agent_for(domain) else 'the default UA'
+            raise FetchBlockedError(
+                f'{domain} {_BLOCKED_HINT} (HTTP {resp.status_code}, matched '
+                f'{marker!r}, request used {ua_source})')
         if resp.status_code in (403, 429, 503) and backoff is not None:
             print(f'Fanfic fetch got {resp.status_code} for {url}, retrying in {backoff}s')
             time.sleep(backoff)
@@ -188,8 +221,8 @@ def _fetch(url: str):
 
 
 def _fetch_binary(url: str) -> tuple[bytes, str]:
-    import requests
-    with requests.get(url, timeout=30, headers=_headers(url), cookies=_cookies_for(url), stream=True) as resp:
+    resp = _http_get(url, headers=_headers(url), cookies=_cookies_for(url), timeout=30, stream=True)
+    try:
         resp.raise_for_status()
         chunks, size = [], 0
         for chunk in resp.iter_content(65536):
@@ -198,6 +231,8 @@ def _fetch_binary(url: str) -> tuple[bytes, str]:
                 raise ValueError(f'image exceeds {MAX_IMAGE_BYTES} bytes: {url}')
             chunks.append(chunk)
         return b''.join(chunks), resp.headers.get('Content-Type', '')
+    finally:
+        resp.close()
 
 
 def fetch_alerts(domain: str) -> list[xenforo.AlertItem]:

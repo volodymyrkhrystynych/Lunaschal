@@ -108,3 +108,33 @@ it('flags a stored cookie with no captured User-Agent', async () => {
   await screen.findByText('forum.questionablequesting.com');
   expect(screen.queryByText(/default UA/)).toBeTruthy();
 });
+
+it('sends a multi-line request-headers paste to the backend with its newlines intact', async () => {
+  // A single-line <input> silently strips newlines from pasted text (HTML's
+  // value sanitization algorithm) — that glued every header of a "Copy
+  // Request Headers" paste into one string the backend couldn't tell
+  // Cookie: and User-Agent: apart in, which is why the field is a
+  // <textarea>. This pins that down at the component level.
+  vi.mocked(api.fanfic.cookies.put).mockResolvedValue({ success: true });
+  renderSection();
+
+  const row = (await screen.findByText('forums.spacebattles.com')).closest(
+    'div'
+  )!.parentElement as HTMLElement;
+  const scoped = within(row);
+  const field = scoped.getByRole('textbox');
+  expect(field.tagName).toBe('TEXTAREA');
+
+  const dump =
+    'GET / HTTP/2\nHost: forums.spacebattles.com\n' +
+    'User-Agent: Mozilla/5.0 Firefox/153.0\nCookie: cf_clearance=AAA; xf_user=BBB\n';
+  fireEvent.change(field, { target: { value: dump } });
+  fireEvent.click(scoped.getByRole('button', { name: 'Save' }));
+
+  await waitFor(() =>
+    expect(api.fanfic.cookies.put).toHaveBeenCalledWith(
+      'forums.spacebattles.com',
+      dump.trim()
+    )
+  );
+});

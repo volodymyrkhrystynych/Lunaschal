@@ -82,23 +82,28 @@ function FanficCookieRow({
           </span>
         )}
       </div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={value}
-          onChange={e => {
-            setValue(e.target.value);
-            if (save.isError) save.reset();
-          }}
-          spellCheck={false}
-          autoComplete="off"
-          placeholder={
-            hasCookie
-              ? 'paste a new cookie to replace the stored one'
-              : 'xf_user=...; xf_session=...; cf_clearance=...'
-          }
-          className="flex-1 bg-transparent font-mono text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
-        />
+      {/* Must be a textarea, not an <input>: a single-line text input
+          silently strips newlines from pasted text (HTML's value
+          sanitization algorithm), which glues every line of a "Copy
+          Request Headers" paste into one string the backend can no
+          longer tell Cookie: and User-Agent: apart in. */}
+      <textarea
+        value={value}
+        onChange={e => {
+          setValue(e.target.value);
+          if (save.isError) save.reset();
+        }}
+        spellCheck={false}
+        autoComplete="off"
+        rows={3}
+        placeholder={
+          hasCookie
+            ? 'paste a new cookie (or full request headers) to replace the stored one'
+            : 'xf_user=...; xf_session=...; cf_clearance=... — or paste full request headers'
+        }
+        className="w-full bg-transparent font-mono text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)] resize-y"
+      />
+      <div className="flex gap-2 mt-2">
         <button
           onClick={() => save.mutate(value.trim())}
           disabled={!value.trim() || save.isPending}
