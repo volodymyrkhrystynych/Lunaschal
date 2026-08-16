@@ -165,7 +165,7 @@ Keyboard-first, single-key navigation (the Pocket 2 has no usable mouse): WASD-s
 
 #### Ideas — see [`backend/research/CLAUDE.md`](backend/research/CLAUDE.md) for the repo-context agent, the research agent, evidence-backed assessment, and discussion/plans.
 
-#### Jobs — see [`backend/jobs/CLAUDE.md`](backend/jobs/CLAUDE.md) for the profile, the anti-fabrication tailoring bounds, the Answer Kit, ATS-aware email linkage, and resume retention.
+#### Jobs — see [`backend/jobs/CLAUDE.md`](backend/jobs/CLAUDE.md) for the profile, the anti-fabrication tailoring bounds, the Answer Kit, ATS-aware email linkage, and resume retention. Design record: [docs/jobs-tab.md](docs/jobs-tab.md)
 
 #### Fanfic library — see [`backend/fanfic/CLAUDE.md`](backend/fanfic/CLAUDE.md).
 

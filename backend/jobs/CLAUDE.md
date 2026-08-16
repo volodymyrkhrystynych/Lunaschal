@@ -2,7 +2,10 @@
 
 Profile → tailored resume → application → email trail → deletion. The Jobs tab
 (`src/components/Jobs/`) is the UI; `backend/routes/jobs.py` is thin and every
-judgement call lives in a pure module here.
+judgement call lives in a pure module here. Design record, the decisions the
+build settled, and what is deliberately _not_ built — including the two later
+phases and the thresholds that are still guesses:
+[docs/jobs-tab.md](../../docs/jobs-tab.md).
 
 ## The three guarantees
 
