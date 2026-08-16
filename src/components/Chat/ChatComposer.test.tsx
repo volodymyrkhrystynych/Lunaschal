@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
 /**
- * The chat composer: photos, dictation, and the correction pass between them.
+ * The chat composer: photos and dictation.
  *
  * The behaviour worth pinning down is that dictation no longer sends. It used to
  * POST the transcript straight through as the message — the only view in the app
  * that did — which meant a misheard name became a permanent record with no
- * moment in which to fix it, and left nowhere for a correction pass to run.
+ * moment in which to fix it. There used to be an automated correction pass here
+ * too; it moved to Journal's Polish instead, so dictation now just lands in the
+ * box like every other view's (BrainDump, IdeaCapture, Journal, FoodCapture).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, screen, waitFor } from '@testing-library/react';
@@ -23,7 +25,6 @@ vi.mock('../../hooks/api', () => ({
       uploadAttachments: vi.fn(),
       getAttachment: vi.fn(),
       deleteAttachment: vi.fn(),
-      polishTranscript: vi.fn(),
     },
     settings: { get: vi.fn() },
     learning: {
@@ -32,6 +33,7 @@ vi.mock('../../hooks/api', () => ({
       regenerate: vi.fn(),
       deny: vi.fn(),
     },
+    notes: { due: vi.fn().mockResolvedValue([]) },
   },
 }));
 
@@ -97,10 +99,6 @@ beforeEach(() => {
     attachment() as never,
   ]);
   vi.mocked(api.chat.deleteAttachment).mockResolvedValue({ success: true });
-  vi.mocked(api.chat.polishTranscript).mockResolvedValue({
-    raw: 'had vary nikki at motivate',
-    corrected: 'had vareniki at Movati',
-  });
 });
 
 afterEach(() => {
@@ -125,37 +123,55 @@ const attachViaPaste = async () => {
 };
 
 describe('dictation', () => {
-  it('puts the transcript in the box instead of sending it', async () => {
+  it('puts the raw transcript in the box instead of sending it', async () => {
     renderChat();
     const input = await ready();
     dictate('had vary nikki at motivate');
 
     await waitFor(() =>
       expect((input as HTMLTextAreaElement).value).toBe(
-        'had vareniki at Movati'
+        'had vary nikki at motivate'
       )
     );
     expect(api.chat.addMessage).not.toHaveBeenCalled();
   });
 
-  it('keeps the verbatim transcript visible before sending', async () => {
-    renderChat();
-    await ready();
-    dictate('had vary nikki at motivate');
-    // The whole reason not to auto-send: the user can see what was heard and
-    // fix it, rather than finding out afterwards.
-    expect(await screen.findByText('had vary nikki at motivate')).toBeTruthy();
-  });
-
-  it('sends the verbatim transcript as rawContent alongside the corrected text', async () => {
+  it('sends with no rawContent when the dictated text goes through unedited', async () => {
     renderChat();
     const input = await ready();
     dictate('had vary nikki at motivate');
     await waitFor(() =>
       expect((input as HTMLTextAreaElement).value).toBe(
-        'had vareniki at Movati'
+        'had vary nikki at motivate'
       )
     );
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // content already *is* the verbatim transcript here, so there's nothing
+    // separate left to preserve as rawContent — same as a typed message.
+    await waitFor(() =>
+      expect(api.chat.addMessage).toHaveBeenCalledWith('c1', {
+        role: 'user',
+        content: 'had vary nikki at motivate',
+        metadata: undefined,
+        rawContent: undefined,
+        attachmentIds: [],
+      })
+    );
+  });
+
+  it('sends the verbatim transcript as rawContent once the box is hand-edited', async () => {
+    renderChat();
+    const input = await ready();
+    dictate('had vary nikki at motivate');
+    await waitFor(() =>
+      expect((input as HTMLTextAreaElement).value).toBe(
+        'had vary nikki at motivate'
+      )
+    );
+    // The user catches the mishearing themselves — no correction pass does
+    // this automatically anymore (moved to Journal's Polish).
+    fireEvent.change(input, { target: { value: 'had vareniki at Movati' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() =>
@@ -183,22 +199,7 @@ describe('dictation', () => {
     );
   });
 
-  it('keeps the raw transcript when the correction pass fails', async () => {
-    vi.mocked(api.chat.polishTranscript).mockRejectedValue(
-      new Error('llama-server is down')
-    );
-    renderChat();
-    const input = await ready();
-    dictate('had vary nikki at motivate');
-
-    await waitFor(() =>
-      expect((input as HTMLTextAreaElement).value).toBe(
-        'had vary nikki at motivate'
-      )
-    );
-  });
-
-  it('only rewrites the dictated part, leaving typed text alone', async () => {
+  it('appends dictation after typed text, leaving the typed part alone', async () => {
     renderChat();
     const input = await ready();
     fireEvent.change(input, { target: { value: 'note:' } });
@@ -206,7 +207,7 @@ describe('dictation', () => {
 
     await waitFor(() =>
       expect((input as HTMLTextAreaElement).value).toBe(
-        'note: had vareniki at Movati'
+        'note: had vary nikki at motivate'
       )
     );
   });
@@ -318,17 +319,6 @@ describe('photos', () => {
 
     expect(screen.queryByText(/Reading the photo/i)).toBeNull();
     expect(screen.queryByText(/nothing is set up to read them/i)).toBeNull();
-  });
-
-  it('feeds the staged photo ids to the correction pass', async () => {
-    renderChat();
-    await attachViaPaste();
-    dictate('had vary nikki');
-    await waitFor(() =>
-      expect(api.chat.polishTranscript).toHaveBeenCalledWith('had vary nikki', [
-        'a1',
-      ])
-    );
   });
 });
 

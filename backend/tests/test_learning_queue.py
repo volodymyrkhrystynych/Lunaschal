@@ -12,8 +12,8 @@ def fake_generate(monkeypatch):
     """Stub the generation module with canned cards; records call args."""
     calls = {}
 
-    def _generate(text, direction=None):
-        calls['generate'] = {'text': text, 'direction': direction}
+    def _generate(text, direction=None, memory='', **kwargs):
+        calls['generate'] = {'text': text, 'direction': direction, 'memory': memory}
         return [
             {'question': 'What is X?', 'answer': 'X is a thing.'},
             {'question': 'What is Y?', 'answer': 'Y is another thing.'},
@@ -49,6 +49,14 @@ def test_generate_lands_in_queue(client, fake_generate):
 
 def test_generate_requires_text(client, fake_generate):
     assert client.post('/api/learning/generate', json={}).status_code == 400
+
+
+def test_generate_passes_the_memory_document_to_generation(client, fake_generate):
+    from backend.memory import set_memory
+
+    set_memory('The framework is called Lunaschal.', source='user')
+    client.post('/api/learning/generate', json={'text': 'brain dump about X and Y'})
+    assert fake_generate['generate']['memory'] == 'The framework is called Lunaschal.'
 
 
 def test_approve_activates_card(client, fake_generate):
@@ -175,3 +183,31 @@ def test_generation_prompt_parses_and_enforces_shape(monkeypatch):
     assert cards == [{'question': 'Q1?', 'answer': 'A1'}]
     assert 'ONE atomic concept' in captured['system']
     assert 'keep it atomic' in captured['prompt']
+
+
+def test_generation_prompt_carries_the_memory_document_as_context(monkeypatch):
+    captured = {}
+
+    def fake_chat_json(prompt, system=None, **kwargs):
+        captured['prompt'] = prompt
+        return {'cards': []}
+
+    monkeypatch.setattr(learning_generation, 'chat_json', fake_chat_json)
+
+    learning_generation.generate_cards(
+        'some text', memory='The framework is called Lunaschal.'
+    )
+    assert 'The framework is called Lunaschal.' in captured['prompt']
+
+
+def test_generation_prompt_carries_no_context_block_without_memory(monkeypatch):
+    captured = {}
+
+    def fake_chat_json(prompt, system=None, **kwargs):
+        captured['prompt'] = prompt
+        return {'cards': []}
+
+    monkeypatch.setattr(learning_generation, 'chat_json', fake_chat_json)
+
+    learning_generation.generate_cards('some text')
+    assert 'Context:' not in captured['prompt']

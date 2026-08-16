@@ -1,11 +1,22 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, fireEvent, screen } from '@testing-library/react';
+import { render, fireEvent, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ShortcutProvider } from '../../shortcuts/ShortcutProvider';
 import { api, type WritingProject } from '../../hooks/api';
 import { DiscussionView } from './DiscussionView';
+
+// Only the transcript matters here — the microphone plumbing has its own
+// test (useRecorder.test.tsx), same split as ChatComposer.test.tsx.
+let dictate: (text: string) => void = () => {};
+const recorderStart = vi.fn();
+vi.mock('../../hooks/useRecorder', () => ({
+  useRecorder: (onTranscript: (text: string) => void) => {
+    dictate = onTranscript;
+    return { status: 'idle', error: '', start: recorderStart, stop: vi.fn() };
+  },
+}));
 
 vi.mock('../../hooks/api', () => ({
   api: {
@@ -69,6 +80,29 @@ function renderWithProviders(children: ReactNode) {
       </ShortcutProvider>
     </QueryClientProvider>
   );
+}
+
+/** A /api/chat/stream response whose body stays open until the test closes
+ * it, so reasoning can be inspected mid-stream before the reply is
+ * persisted. Same shape as Chat.test.tsx's helper of the same name. */
+function openStream() {
+  let push!: (event: object) => void;
+  let close!: (done?: object) => void;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encode = new TextEncoder();
+      push = event =>
+        controller.enqueue(encode.encode(`data: ${JSON.stringify(event)}\n\n`));
+      close = done => {
+        controller.enqueue(
+          encode.encode(`data: ${JSON.stringify({ done: true, ...done })}\n\n`)
+        );
+        controller.enqueue(encode.encode('data: [DONE]\n\n'));
+        controller.close();
+      };
+    },
+  });
+  return { response: { ok: true, body } as unknown as Response, push, close };
 }
 
 describe('assistant markdown rendering', () => {
@@ -163,5 +197,111 @@ describe('discussion summarize', () => {
 
     const button = await screen.findByText('Summarize');
     expect((button as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('speech to text', () => {
+  it('lands the transcript in the box instead of sending it', async () => {
+    renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
+    await screen.findByText('What if?');
+
+    dictate('a masked stranger arrives at the gate');
+
+    const input = screen.getByPlaceholderText(
+      'Discuss your story… (Enter to send)'
+    );
+    await waitFor(() =>
+      expect((input as HTMLTextAreaElement).value).toBe(
+        'a masked stranger arrives at the gate'
+      )
+    );
+    expect(api.chat.addMessage).not.toHaveBeenCalled();
+  });
+
+  it('starts recording from the mic button', async () => {
+    vi.mocked(api.settings.get).mockResolvedValueOnce({
+      llamaUrl: 'http://localhost:8080',
+    } as never);
+    renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
+    await screen.findByText('What if?');
+
+    fireEvent.click(screen.getByTitle('Speak to add to the box'));
+    expect(recorderStart).toHaveBeenCalled();
+  });
+});
+
+describe('reasoning', () => {
+  it('shows reasoning saved on an earlier reply, collapsed', async () => {
+    vi.mocked(api.chat.getConversation).mockResolvedValueOnce({
+      id: 'd4',
+      title: 'Reasoning talk',
+      messages: [
+        {
+          id: 'm1',
+          conversationId: 'd4',
+          role: 'user',
+          content: 'why does the villain betray the hero',
+          metadata: null,
+          createdAt: '',
+        },
+        {
+          id: 'm2',
+          conversationId: 'd4',
+          role: 'assistant',
+          content: 'Because it raises the stakes.',
+          metadata: JSON.stringify({
+            thinking: 'Betrayal works best from a trusted ally.',
+          }),
+          createdAt: '',
+        },
+      ],
+      createdAt: '',
+      updatedAt: '',
+    });
+    renderWithProviders(<DiscussionView project={project} discussionId="d4" />);
+
+    await screen.findByText('Because it raises the stakes.');
+    const summary = await screen.findByText('Reasoning');
+    expect(summary.closest('details')).toHaveProperty('open', false);
+
+    fireEvent.click(summary);
+    expect(
+      await screen.findByText('Betrayal works best from a trusted ally.')
+    ).not.toBeNull();
+  });
+
+  it('persists the reasoning trace onto the saved assistant message', async () => {
+    vi.mocked(api.settings.get).mockResolvedValueOnce({
+      llamaUrl: 'http://localhost:8080',
+    } as never);
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
+    const input = await screen.findByPlaceholderText(
+      'Discuss your story… (Enter to send)'
+    );
+    fireEvent.change(input, { target: { value: 'why does she leave' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalledTimes(1));
+
+    stream.push({ thinking: 'A clean exit keeps the mystery alive.' });
+    stream.push({ content: 'She leaves to protect her sister.' });
+    stream.close({ truncated: false, timedOut: false });
+
+    await waitFor(() =>
+      expect(api.chat.addMessage).toHaveBeenCalledWith('d1', {
+        role: 'assistant',
+        content: 'She leaves to protect her sister.',
+        metadata: JSON.stringify({
+          thinking: 'A clean exit keeps the mystery alive.',
+          truncated: false,
+          timedOut: false,
+        }),
+      })
+    );
+
+    vi.unstubAllGlobals();
   });
 });

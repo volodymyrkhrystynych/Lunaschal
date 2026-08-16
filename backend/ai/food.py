@@ -26,7 +26,14 @@ _FOOD_SYSTEM = (
     '"## Instructions", "tags": [str]}; otherwise null\n'
     "dish/place/rating/tags/recipe are extra metadata pulled out ON TOP of the "
     "full notes — they never replace content in notes. Never invent a recipe "
-    "they did not describe."
+    "they did not describe.\n"
+    "\n"
+    "The note may be followed by a line of dashes (---) and a 'Context:' "
+    "section — things already known about the user. Use it only to fix a word "
+    "in the note that is clearly a mishearing, such as a mangled dish or place "
+    "name; never use it to add, remove, or infer anything the note doesn't "
+    "already say. Do not repeat the context section or the dashes in your "
+    "reply."
 )
 
 # Everything but `notes` is nullable — the prompt explicitly asks for null when a
@@ -58,18 +65,26 @@ _FOOD_SCHEMA = {
 }
 
 
-def parse_food_entry(text: str) -> dict | None:
+def parse_food_entry(text: str, *, memory: str = '') -> dict | None:
     """Structure a raw food note into {dish, place, rating, notes, tags, recipe}.
 
     Returns None when AI is unconfigured or nothing usable could be parsed, so
     the caller can fall back to the raw text. `recipe` is a nested
     {title, content, tags} dict or None.
+
+    `memory` — the standing memory document (backend/memory.py) — is optional
+    and appended as reference material the same way Journal's Polish and
+    Ideas' capture use it, so a misheard dish or place name in "notes" gets
+    fixed against a name already known about the user.
     """
     if not text.strip() or not is_ai_configured():
         return None
     text = text[:_MAX_INPUT_CHARS]
+    prompt = text
+    if memory and memory.strip():
+        prompt = f'{text}\n\n---\nContext:\n{memory.strip()}'
     try:
-        data = chat_json(text, system=_FOOD_SYSTEM, schema=_FOOD_SCHEMA)
+        data = chat_json(prompt, system=_FOOD_SYSTEM, schema=_FOOD_SCHEMA)
     except Exception as e:
         print(f'Food entry parsing failed: {e}')
         return None

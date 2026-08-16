@@ -89,18 +89,6 @@ def descriptions_for(attachment_ids: list[str]) -> list[str]:
     return [_block(row) for row in _rows_for(attachment_ids)]
 
 
-def photo_notes_for(attachment_ids: list[str]) -> list[str]:
-    """Just the readings, unwrapped — for the transcript corrector, which wants
-    the facts from the photo as reference material rather than a block addressed
-    to the chat model. Empty when nothing has been read, which is the normal
-    case when the chat model reads photos itself."""
-    return [
-        (row['description'] or '').strip()
-        for row in _rows_for(attachment_ids)
-        if (row['description'] or '').strip()
-    ]
-
-
 def image_parts_for(attachment_ids: list[str]) -> tuple[list[dict], list[str]]:
     """`image_url` content parts for these attachments, plus notes about any that
     could not be turned into one.

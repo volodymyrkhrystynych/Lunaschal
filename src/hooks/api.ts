@@ -2457,14 +2457,6 @@ export const api = {
       get<ChatAttachment>(`/api/chat/attachments/${id}`),
     deleteAttachment: (id: string) =>
       del<{ success: boolean }>(`/api/chat/attachments/${id}`),
-    // Fixes what speech-to-text misheard, against the memory document and
-    // whatever the vision model read out of the attached photos. Returns the
-    // raw text too — that is what gets stored as the message's rawContent.
-    polishTranscript: (text: string, attachmentIds: string[] = []) =>
-      post<{ raw: string; corrected: string }>('/api/chat/polish-transcript', {
-        text,
-        attachmentIds,
-      }),
     runBriefing: () =>
       post<{
         conversationId: string;

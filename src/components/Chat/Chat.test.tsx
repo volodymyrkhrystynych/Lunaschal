@@ -15,6 +15,7 @@ vi.mock('../../hooks/api', () => ({
     },
     settings: { get: vi.fn() },
     learning: { generateFromNote: vi.fn() },
+    notes: { due: vi.fn().mockResolvedValue([]) },
   },
 }));
 

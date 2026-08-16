@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import { addDays, todayISO } from '@/lib/lifestyle';
@@ -6,6 +6,52 @@ import { CARD } from './card';
 
 /** Days of history in the thumbnail strip — enough that a gap is obvious. */
 const STRIP_DAYS = 14;
+
+/** How many times a broken image load retries (with backoff) before giving up
+ * and showing a static "failed" glyph instead. A transient network blip —
+ * nothing to do with the file itself, which is still fine on disk — otherwise
+ * leaves a thumbnail permanently broken until the whole card remounts. */
+const MAX_IMAGE_RETRIES = 3;
+
+/** An `<img>` that retries itself on a load error instead of sitting broken.
+ * `key={attempt}` forces React to mount a fresh `<img>`, and the cache-busting
+ * query param on retries guarantees a real network request rather than
+ * whatever the browser cached for the failed attempt. */
+function RetryingImage({
+  src,
+  alt,
+  className,
+}: {
+  src: string;
+  alt: string;
+  className: string;
+}) {
+  const [attempt, setAttempt] = useState(0);
+
+  if (attempt > MAX_IMAGE_RETRIES) {
+    return (
+      <div
+        className={`${className} flex items-center justify-center text-[var(--color-text-muted)]`}
+        title="Failed to load"
+      >
+        ⚠
+      </div>
+    );
+  }
+
+  return (
+    <img
+      key={attempt}
+      src={attempt === 0 ? src : `${src}?retry=${attempt}`}
+      alt={alt}
+      className={className}
+      onError={() => {
+        const delay = 300 * 2 ** attempt;
+        setTimeout(() => setAttempt(a => a + 1), delay);
+      }}
+    />
+  );
+}
 
 /**
  * The daily selfie: capture, plus a strip of recent days so a missed one is
@@ -27,6 +73,7 @@ export function SelfieCard() {
   const queryClient = useQueryClient();
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -34,6 +81,14 @@ export function SelfieCard() {
     queryKey: ['lifestyle', 'selfies'],
     queryFn: () => api.lifestyle.selfies.list(120),
   });
+
+  // The strip is oldest-to-newest, so the fixed 14-day layout is scrolled to
+  // its right edge on mount — today's slot (filled or still a dashed gap) is
+  // what answers "did I log one today", not day 14 back.
+  useLayoutEffect(() => {
+    const el = stripRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, []);
 
   const upload = useMutation({
     mutationFn: (image: Blob) => api.lifestyle.selfies.upload(image),
@@ -122,7 +177,7 @@ export function SelfieCard() {
 
       {previewSelfie && (
         <div className="mt-3">
-          <img
+          <RetryingImage
             src={previewSelfie.url}
             alt={`Selfie from ${previewSelfie.date}`}
             className="w-full max-h-64 rounded object-contain bg-black/20"
@@ -140,7 +195,7 @@ export function SelfieCard() {
         </div>
       )}
 
-      <div className="mt-3 flex gap-1 overflow-x-auto pb-1">
+      <div ref={stripRef} className="mt-3 flex gap-1 overflow-x-auto pb-1">
         {strip.map(({ date, selfie }) => (
           <div key={date} className="shrink-0 text-center">
             {selfie ? (
@@ -155,7 +210,7 @@ export function SelfieCard() {
                     : 'border-white/10'
                 }`}
               >
-                <img
+                <RetryingImage
                   src={selfie.url}
                   alt={`Selfie from ${date}`}
                   className="w-full h-full object-cover"

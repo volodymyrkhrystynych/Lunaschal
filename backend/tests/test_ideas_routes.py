@@ -1,6 +1,8 @@
 """Ideas CRUD, voice capture, and Paper-page sketches.
 
-No AI is involved at this phase — every route here is plain SQLite work.
+Every route here is plain SQLite work except `/voice`, which also queues a
+background polish pass (test_idea_polish.py) — AI is unconfigured in this
+test environment, so that pass no-ops and `content` stays empty here.
 """
 import time
 

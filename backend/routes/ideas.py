@@ -12,6 +12,7 @@ import time
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from ulid import ULID
 
+from backend.ai.background import run_bg
 from backend.ai.provider import is_ai_configured
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.routes.paper import page_image_url
@@ -149,6 +150,28 @@ def delete_idea(idea_id):
     return jsonify({'success': True})
 
 
+def _polish_idea_bg(idea_id: str, raw_content: str) -> None:
+    """Background counterpart to journal.py's `_polish_bg`: fills in `content`
+    from `raw_content` once, using the standing memory document to fix a name
+    speech-to-text mangled. Silently does nothing on failure or a no-op
+    result — there is no button to report a failure to, and the detail pane
+    already falls back to `raw_content` while `content` is unset."""
+    from backend.ai.idea_polish import polish_idea
+    from backend.memory import get_memory
+
+    def _run():
+        polished = polish_idea(raw_content, memory=get_memory())
+        if not polished or polished == raw_content:
+            return
+        db = get_db()
+        db.execute(
+            'UPDATE ideas SET content=?, updated_at=? WHERE id=?',
+            (polished, int(time.time()), idea_id),
+        )
+        db.commit()
+    run_bg(_run)
+
+
 @bp.post('/voice')
 def create_from_voice():
     """Save a transcript as a new idea, mirroring the journal's voice path: the
@@ -166,6 +189,7 @@ def create_from_voice():
         (id, '', raw_content, '', 'new', now, now),
     )
     db.commit()
+    _polish_idea_bg(id, raw_content)
     return jsonify({'id': id}), 201
 
 

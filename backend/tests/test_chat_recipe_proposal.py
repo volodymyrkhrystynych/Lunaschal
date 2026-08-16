@@ -27,7 +27,7 @@ def sync_bg(monkeypatch):
     monkeypatch.setattr(food_routes, 'run_bg', lambda fn: fn())
     # No AI configured in tests; keep the incidental background work quiet and
     # deterministic rather than letting it hit a real (refused) connection.
-    monkeypatch.setattr(food_routes, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food_routes, 'parse_food_entry', lambda text, **kwargs: None)
     monkeypatch.setattr(recipe_match, 'classify_homemade_match', lambda *a, **k: None)
 
 

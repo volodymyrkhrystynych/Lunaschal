@@ -16,7 +16,7 @@ def _vec(*floats) -> bytes:
 def fake_generate(monkeypatch):
     monkeypatch.setattr(
         learning_generation, 'generate_cards',
-        lambda text, direction=None: [{'question': 'Q?', 'answer': 'A.'}],
+        lambda text, direction=None, **kwargs: [{'question': 'Q?', 'answer': 'A.'}],
     )
 
 

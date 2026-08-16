@@ -357,11 +357,12 @@ def chat_card(id):
 @bp.post('/generate')
 def generate():
     from backend.ai.learning_generation import generate_cards
+    from backend.memory import get_memory
     body = request.json or {}
     text = (body.get('text') or '').strip()
     if not text:
         return jsonify({'error': 'text required'}), 400
-    cards = generate_cards(text, direction=body.get('direction'))
+    cards = generate_cards(text, direction=body.get('direction'), memory=get_memory())
     if not cards:
         return jsonify({'error': 'No cards could be generated'}), 502
     ids = _insert_cards(

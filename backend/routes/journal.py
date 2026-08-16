@@ -210,6 +210,24 @@ def _attachment_polish_context(entry_id: str) -> str | None:
     return '\n'.join(f"{r['name']}: {r['description']}" for r in rows)
 
 
+def _polish_context(entry_id: str) -> str | None:
+    """Everything the polish model can check a misheard word against: the
+    standing memory document (names already known about the user) plus the
+    entry's own audio/video attachment descriptions. The same two references
+    Chat dictation's now-removed correction pass used, folded into Journal's
+    polish instead — one place to fix a misheard word, not two."""
+    from backend.memory import get_memory
+
+    parts = []
+    memory = get_memory()
+    if memory and memory.strip():
+        parts.append(f'Things already known about the user:\n{memory.strip()}')
+    attachments = _attachment_polish_context(entry_id)
+    if attachments:
+        parts.append(f"This entry's audio/video attachments:\n{attachments}")
+    return '\n\n'.join(parts) if parts else None
+
+
 @bp.post('/<id>/polish')
 def polish_entry(id):
     row = get_db().execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
@@ -219,7 +237,7 @@ def polish_entry(id):
     if not source.strip():
         return jsonify({'error': 'No original transcription to polish'}), 400
     try:
-        polished = polish_journal_entry(source, context=_attachment_polish_context(id))
+        polished = polish_journal_entry(source, context=_polish_context(id))
     except PolishUnavailable as e:
         # Leave `content` exactly as it is. Writing the raw transcript back here
         # is what used to make an offline llama-server look like a broken button.
@@ -360,7 +378,7 @@ def _polish_bg(journal_id: str, raw_content: str) -> None:
     def _run():
         try:
             polished = polish_journal_entry(
-                raw_content, context=_attachment_polish_context(journal_id)
+                raw_content, context=_polish_context(journal_id)
             )
             if polished == raw_content:
                 return

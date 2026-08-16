@@ -295,7 +295,12 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
 
   const saveCommentary = useMutation({
     mutationFn: async (text: string) => {
-      const entry = await api.journal.create({ content: text });
+      // createFromVoice, not create: commentary is dictated as often as
+      // typed (the mic button above appends into the same box either way),
+      // and sending it as raw_content is what queues Journal's background
+      // polish — a misheard character name gets fixed the same way any
+      // other journal entry's does, instead of the commentary skipping it.
+      const entry = await api.journal.createFromVoice(text);
       await api.fanfic.linkJournal(
         ficId,
         entry.id,

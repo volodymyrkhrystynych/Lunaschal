@@ -20,6 +20,7 @@ vi.mock('../../hooks/api', () => ({
       regenerate: vi.fn(),
       deny: vi.fn(),
     },
+    notes: { due: vi.fn().mockResolvedValue([]) },
   },
 }));
 
