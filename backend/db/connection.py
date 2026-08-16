@@ -16,6 +16,11 @@ TIMESTAMP_COLS = frozenset({
     'researched_at', 'last_practiced_at', 'last_recall_at',
     'received_at', 'classified_at', 'last_synced_at', 'token_expires_at',
     'finished_at',
+    # Job applications. 'fetched_at' also exists on email_images, which never
+    # goes through row_to_dict today — and ISO is the right shape there too if
+    # it ever does, so this is a widening rather than a special case.
+    'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
+    'scanned_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -109,6 +114,7 @@ def init_db() -> None:
     _reset_stale_idea_research(db)
     _ensure_email_settings(db)
     _ensure_email_body_html(db)
+    _ensure_job_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -845,6 +851,34 @@ def _ensure_email_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_id TEXT')
     if 'google_oauth_client_secret' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_secret TEXT')
+    db.commit()
+
+
+def _ensure_job_settings(db: sqlite3.Connection) -> None:
+    """Retention policy for tailored resumes, plus the singleton profile row.
+
+    Defaults encode the two triggers the feature was asked for: purge six
+    months after applying, and purge sooner once a rejection lands (after a
+    grace period, so a resume is never yanked out from under a reply that is
+    still being read).
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'job_retention_days' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN job_retention_days INTEGER DEFAULT 180')
+    if 'job_purge_on_rejection' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN job_purge_on_rejection INTEGER DEFAULT 1')
+    if 'job_rejection_grace_days' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN job_rejection_grace_days INTEGER DEFAULT 30')
+    db.commit()
+
+    # The profile is read on every tailoring call and edited field by field, so
+    # it is far simpler for it to always exist than for every caller to handle
+    # its absence. INSERT OR IGNORE keeps that idempotent.
+    now = int(time.time())
+    db.execute(
+        'INSERT OR IGNORE INTO job_profile (id, created_at, updated_at) VALUES (1, ?, ?)',
+        (now, now),
+    )
     db.commit()
 
 

@@ -18,7 +18,8 @@ type View =
   | 'newspapers'
   | 'paper'
   | 'email'
-  | 'practice';
+  | 'practice'
+  | 'jobs';
 
 interface SidebarProps {
   currentView: View;
@@ -48,6 +49,9 @@ export const navItems: { view: View; label: string; icon: string }[] = [
   { view: 'fanfic', label: 'Library', icon: '📚' },
   { view: 'newspapers', label: 'Newspapers', icon: '📰' },
   { view: 'email', label: 'Email', icon: '📧' },
+  // Next to Email on purpose: the two halves of a job search are the
+  // applications you sent and the replies they get back.
+  { view: 'jobs', label: 'Jobs', icon: '💼' },
   { view: 'paper', label: 'Paper', icon: '🖊️' },
   { view: 'files', label: 'Files', icon: '📁' },
   { view: 'settings', label: 'Settings', icon: '⚙️' },

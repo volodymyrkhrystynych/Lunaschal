@@ -81,7 +81,8 @@ export type AppView =
   | 'newspapers'
   | 'paper'
   | 'email'
-  | 'practice';
+  | 'practice'
+  | 'jobs';
 
 // Must stay in the same order as the sidebar's navItems (src/components/Sidebar
 // .tsx), since nav.up/down walks this list — a mismatch means the shortcut cycle
@@ -101,6 +102,7 @@ export const VIEW_ORDER: AppView[] = [
   'fanfic',
   'newspapers',
   'email',
+  'jobs',
   'paper',
   'files',
   'settings',

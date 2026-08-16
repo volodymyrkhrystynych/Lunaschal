@@ -92,6 +92,7 @@ Feature-logic packages (kept out of the route files so they can be unit-tested):
 - `backend/food/` — food-photo storage and EXIF capture-date/GPS extraction (`exif.py`)
 - `backend/paper/` — file storage for handwritten page snapshots (`storage.py`)
 - `backend/research/` — the Ideas agent: deterministic repo extraction (`repo_facts.py`), SSRF-guarded web tools (`web.py`), the copy-on-write wiki, the sync tool loop, the research worker and the evidence-backed assessment. Design record: [docs/ideas-tab.md](docs/ideas-tab.md)
+- `backend/jobs/` — job applications: the master profile, bounded-schema resume tailoring, the Answer Kit, email linkage over the existing `job_application` classifier, and resume retention
 - `backend/delegate/` — the Chat tab's delegate: the proposal toolbox (`tools.py`), the loop that drives it (`agent.py`), and the decide-delegate-answer glue behind `/api/chat/stream` (`chat.py`). See Chat delegate below
 - `backend/chat/` — file storage for chat photo attachments (`storage.py`) and the helper that turns their readings into text the chat model can see (`context.py`)
 - `backend/memory.py` — the one standing document the assistant keeps about the user; read into every chat system prompt, copy-on-write
@@ -105,14 +106,14 @@ The chat blueprint exposes a streaming SSE endpoint at `POST /api/chat/stream` u
 
 Long-running work (fic downloads, curated-tag scans, meeting transcription, Ideas research) runs in daemon threads with an in-memory progress registry; anything that must survive a restart is checkpointed to the DB, and `connection.py` resets orphaned in-flight states (`downloading` fics, `recording`/`transcribing` meetings, `running` idea research) at startup.
 
-There is no cron and no general scheduler: four hand-rolled daemon loops start from `create_app()` (all skipped when `LUNASCHAL_NO_SCHEDULERS` is set, which the test suite does). `chat_title_scheduler` owns 02:00–03:00, `research/repo_scheduler` 03:00–05:00, `briefing_scheduler` 05:00–07:00 — staggered so they never contend for the two llama slots — and `research/research_scheduler` runs in **no window at all**, deferring moment to moment through `backend/ai/priority.py` instead.
+There is no cron and no general scheduler: hand-rolled daemon loops start from `create_app()` (all skipped when `LUNASCHAL_NO_SCHEDULERS` is set, which the test suite does). The model-using ones are staggered so they never contend for the two llama slots: `chat_title_scheduler` owns 02:00–03:00, `research/repo_scheduler` 03:00–05:00, `briefing_scheduler` 05:00–07:00, while `research/research_scheduler` runs in **no window at all**, deferring moment to moment through `backend/ai/priority.py` instead. `email_scheduler` and `email/images`' fetcher poll on their own intervals. `jobs/scheduler` needs no slot — its linkage sweep is pure string matching — so it sweeps every tick and only its daily file purge keeps to a window (07:00–08:00, after the other four).
 
 ### Database Layer (`backend/db/`)
 
 - `schema.sql` — raw SQL `CREATE TABLE IF NOT EXISTS` statements; all IDs are ULIDs; timestamps are unix ints (converted to ISO strings by `row_to_dict`, which also camelCases column names — see `TIMESTAMP_COLS`)
 - `connection.py` — opens a single WAL-mode SQLite connection (`get_db()`), runs `schema.sql` on startup, then a long list of `_ensure_*` helpers: **migrations are idempotent ALTER TABLEs guarded by `PRAGMA table_info` checks** — follow that pattern for new columns
 - Four FTS5 virtual tables maintained by SQL triggers: `journal_fts`, `recipes_fts`, `fic_chapters_fts`, `wiki_fts`
-- Binary/media files live next to the DB under `./data/`: `fanfic/<fic_id>/` (images, PDFs), `meetings/<id>/` (WAV tracks), `newspapers/`, `journal/<attachment_id>/` (entry audio + photos), `lifestyle/<id>/` (daily selfies), `food/<id>/` (meal photos), `chat/<conversation_id>/` (chat photos), `paper/<page_id>/` (page snapshots + pasted pictures), plus `shortcuts.json` (in-app key bindings). Roots overridable via `FANFIC_ROOT` / `MEETINGS_ROOT` / `NEWSPAPERS_ROOT` / `JOURNAL_ROOT` / `LIFESTYLE_ROOT` / `FOOD_ROOT` / `CHAT_ROOT` / `PAPER_ROOT` / `SHORTCUTS_PATH`.
+- Binary/media files live next to the DB under `./data/`: `fanfic/<fic_id>/` (images, PDFs), `meetings/<id>/` (WAV tracks), `newspapers/`, `journal/<attachment_id>/` (entry audio + photos), `lifestyle/<id>/` (daily selfies), `food/<id>/` (meal photos), `chat/<conversation_id>/` (chat photos), `paper/<page_id>/` (page snapshots + pasted pictures), `jobs/<application_id>/` (rendered resumes, deleted on the retention sweep), plus `shortcuts.json` (in-app key bindings). Roots overridable via `FANFIC_ROOT` / `MEETINGS_ROOT` / `NEWSPAPERS_ROOT` / `JOURNAL_ROOT` / `LIFESTYLE_ROOT` / `FOOD_ROOT` / `CHAT_ROOT` / `PAPER_ROOT` / `JOBS_ROOT` / `SHORTCUTS_PATH`.
 
 ### AI Layer (`backend/ai/`)
 
@@ -139,7 +140,8 @@ Single-user auth via JWT cookie (`lunaschal_token`, 30-day expiry). **Auth is on
 ### Frontend Structure (`src/`)
 
 - `App.tsx` — top-level view router; checks auth status on load, shows `Login` if unauthenticated in network mode, otherwise sidebar + main view + the persistent bottom `SttPanel`
-- `src/components/` — one file (or subdirectory) per view: `Chat/` (`ChatPanel` + the shared `AgentSteps` / `ReasoningBlock` / `ThinkingLabel`), `ChatNav`, `Tasks/` (no longer a view — `TasksSection` mounts inside Lifestyle), `Journal`, `Meetings`, `Writing/`, `Calendar`, `Learning/`, `Cookbook`, `Fanfic/` (library + folders + reader), `Newspapers`, `Editor/` (file editor + STT panel), `Settings` (+ `CuratedTagsSection`, `ShortcutSettings`)
+- `src/components/` — one file (or subdirectory) per view: `Chat/` (`ChatPanel` + the shared `AgentSteps` / `ReasoningBlock` / `ThinkingLabel`), `ChatNav`, `Tasks/` (no longer a view — `TasksSection` mounts inside Lifestyle), `Journal`, `Meetings`, `Writing/`, `Calendar`, `Learning/`, `Cookbook`, `Fanfic/` (library + folders + reader), `Newspapers`, `Jobs/` (pipeline + profile + Answer Kit), `Editor/` (file editor + STT panel), `Settings` (+ `CuratedTagsSection`, `ShortcutSettings`)
+- **Adding a top-level view takes four edits that must agree**: `VIEWS` in `src/lib/viewPersistence.ts`, the `switch` in `App.tsx`, `View` + `navItems` in `Sidebar.tsx`, and `AppView` + `VIEW_ORDER` in `src/shortcuts/ShortcutProvider.tsx` (that order must match `navItems`, since nav.up/down walks it)
 - `Chat/AgentSteps.tsx` is shared with the Ideas discussion, and `src/lib/agentSteps.ts` holds the one `stepLabel` both use — each had grown its own copy of the `<details>` block and the labeller. An agent trace renders **collapsed even while streaming**: a growing list of steps used to push the reply down the page as it was being read
 - `src/hooks/api.ts` — typed REST client (`api.*` namespaces) using plain `fetch`; no tRPC
 - `src/lib/` — pure logic extracted for node-environment tests (todo sorting, tag parsing, journal feed grouping, font-size steps, fanfic helpers, VRAM thresholds…)
@@ -162,6 +164,8 @@ Keyboard-first, single-key navigation (the Pocket 2 has no usable mouse): WASD-s
 #### Writing — see [`src/components/Writing/CLAUDE.md`](src/components/Writing/CLAUDE.md).
 
 #### Ideas — see [`backend/research/CLAUDE.md`](backend/research/CLAUDE.md) for the repo-context agent, the research agent, evidence-backed assessment, and discussion/plans.
+
+#### Jobs — see [`backend/jobs/CLAUDE.md`](backend/jobs/CLAUDE.md) for the profile, the anti-fabrication tailoring bounds, the Answer Kit, ATS-aware email linkage, and resume retention.
 
 #### Fanfic library — see [`backend/fanfic/CLAUDE.md`](backend/fanfic/CLAUDE.md).
 

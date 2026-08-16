@@ -73,7 +73,7 @@ export function Email() {
 
       <div className="flex-1 flex gap-4 overflow-hidden">
         {tab === 'dashboard' ? (
-          <JobDashboard onSelect={setSelected} />
+          <JobDashboard />
         ) : (
           <EmailList onSelect={setSelected} selectedId={selected?.id ?? null} />
         )}

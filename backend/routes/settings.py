@@ -121,6 +121,14 @@ def get_settings():
         'hasGoogleOauthClient': bool(s.get('google_oauth_client_id')) and bool(s.get('google_oauth_client_secret')),
         'emailSyncEnabled': bool(s.get('email_sync_enabled', 1)),
         'emailSyncIntervalMinutes': s.get('email_sync_interval_minutes') or 15,
+        # Tailored-resume retention. Defaults repeated from
+        # backend/jobs/retention.py for a settings row predating the columns.
+        'jobRetentionDays': s.get('job_retention_days') or 180,
+        'jobPurgeOnRejection': bool(s.get('job_purge_on_rejection', 1)),
+        'jobRejectionGraceDays': (
+            s.get('job_rejection_grace_days')
+            if s.get('job_rejection_grace_days') is not None else 30
+        ),
     })
 
 
@@ -170,6 +178,9 @@ def update_ai():
         'googleOauthClientSecret': 'google_oauth_client_secret',
         'emailSyncEnabled': 'email_sync_enabled',
         'emailSyncIntervalMinutes': 'email_sync_interval_minutes',
+        'jobRetentionDays': 'job_retention_days',
+        'jobPurgeOnRejection': 'job_purge_on_rejection',
+        'jobRejectionGraceDays': 'job_rejection_grace_days',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():

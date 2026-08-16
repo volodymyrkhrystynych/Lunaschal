@@ -1010,6 +1010,245 @@ export interface EmailMessage {
   classificationError: string | null;
 }
 
+// --- Job applications ------------------------------------------------------
+// `JobApplicationStatus` above is the *email* sub-status set by the classifier
+// (backend/ai/email.py). `ApplicationStatus` below is where the application
+// itself has got to. They are deliberately different vocabularies —
+// backend/jobs/linkage.py's EMAIL_STATUS_MAP is the one place they meet.
+
+export type ApplicationStatus =
+  | 'draft'
+  | 'ready'
+  | 'submitted'
+  | 'acknowledged'
+  | 'interview'
+  | 'offer'
+  | 'rejected'
+  | 'withdrawn'
+  | 'ghosted';
+
+export type ProfileSection =
+  'roles' | 'bullets' | 'skills' | 'education' | 'answers';
+
+export interface ProfileLink {
+  label: string;
+  url: string;
+}
+
+export interface JobProfileContact {
+  id?: number;
+  fullName: string;
+  email: string;
+  phone: string;
+  location: string;
+  links: ProfileLink[];
+  headline: string;
+  summary: string;
+}
+
+export interface ProfileBullet {
+  id: string;
+  roleId: string;
+  text: string;
+  ord: number;
+  tags: string[];
+}
+
+export interface ProfileRole {
+  id: string;
+  company: string;
+  title: string;
+  location: string;
+  startLabel: string;
+  endLabel: string;
+  ord: number;
+  bullets: ProfileBullet[];
+}
+
+export interface ProfileSkill {
+  id: string;
+  name: string;
+  category: string;
+  years: number | null;
+  ord: number;
+}
+
+export interface ProfileEducation {
+  id: string;
+  institution: string;
+  credential: string;
+  field: string;
+  startLabel: string;
+  endLabel: string;
+  notes: string;
+  ord: number;
+}
+
+export interface ProfileAnswer {
+  id: string;
+  slug: string | null;
+  question: string;
+  answer: string;
+  ord: number;
+  tags: string[];
+}
+
+export interface JobProfileBundle {
+  profile: JobProfileContact;
+  roles: ProfileRole[];
+  skills: ProfileSkill[];
+  education: ProfileEducation[];
+  answers: ProfileAnswer[];
+}
+
+export interface JobPosting {
+  id: string;
+  source: 'manual' | 'adzuna' | 'greenhouse' | 'lever' | 'ashby';
+  url: string;
+  company: string;
+  title: string;
+  location: string;
+  remote: boolean;
+  salaryMin: number | null;
+  salaryMax: number | null;
+  salaryCurrency: string;
+  description: string;
+  /** Null means "not scored yet", which is not a score of zero. */
+  matchScore: number | null;
+  dismissed: boolean;
+  postedAt: string | null;
+  createdAt: string;
+  applicationId?: string | null;
+  applicationStatus?: ApplicationStatus | null;
+}
+
+export interface JobApplication {
+  id: string;
+  jobId: string;
+  status: ApplicationStatus;
+  steer: string;
+  coverLetter: string;
+  notes: string;
+  appliedEmail: string;
+  appliedAt: string | null;
+  closedAt: string | null;
+  purgeAfter: string | null;
+  purgedAt: string | null;
+  company: string;
+  title: string;
+  jobUrl: string;
+  location: string;
+}
+
+export interface KeywordReport {
+  matched: string[];
+  /** Ordered by how often the posting mentions the term. */
+  missing: string[];
+  coverage: number;
+}
+
+export interface TailoredBullet {
+  bulletId: string;
+  roleId: string;
+  index: number;
+  company: string;
+  roleTitle: string;
+  /** Kept alongside `text` so the UI can show what the model changed — the
+   *  index bound stops invented experience, not an inflated rewrite. */
+  original: string;
+  text: string;
+  rewritten: boolean;
+}
+
+export interface TailoredContent {
+  summary: string;
+  selectedBullets: TailoredBullet[];
+  emphasis: string[];
+  keywords: KeywordReport;
+}
+
+export interface ResumeVersion {
+  id: string;
+  applicationId: string;
+  label: string;
+  content: TailoredContent;
+  html: string;
+  pdfPath: string | null;
+  docxPath: string | null;
+  purgedAt: string | null;
+  createdAt: string;
+}
+
+export interface TailorResult {
+  id: string;
+  content: TailoredContent;
+  html: string;
+  pdfAvailable: boolean;
+  docxAvailable: boolean;
+  renderers: { pdf: boolean; docx: boolean };
+}
+
+export interface LinkedEmail {
+  id: string;
+  subject: string | null;
+  sender: string | null;
+  senderEmail: string | null;
+  receivedAt: string;
+  jobStatus: JobApplicationStatus | null;
+  linkKind: 'auto' | 'manual';
+  confidence: number;
+}
+
+export interface JobApplicationDetail extends JobApplication {
+  description: string;
+  resumes: ResumeVersion[];
+  emails: LinkedEmail[];
+}
+
+export interface LinkSuggestion {
+  applicationId: string;
+  company: string;
+  title: string;
+  score: number;
+  reasons: string[];
+}
+
+export interface UnlinkedJobEmail extends EmailMessage {
+  suggestions: LinkSuggestion[];
+}
+
+export type QuestionType =
+  'text' | 'textarea' | 'select' | 'boolean' | 'number';
+
+export interface FormQuestion {
+  label: string;
+  type?: QuestionType;
+  options?: string[];
+}
+
+export interface FilledAnswer {
+  label: string;
+  type: QuestionType;
+  options: string[];
+  answer: string;
+  /** Where it came from: 'profile' and 'bank' cost no model call at all. */
+  source: 'profile' | 'bank' | 'generated' | 'unanswered';
+}
+
+export interface JobStats {
+  counts: Record<ApplicationStatus, number>;
+  total: number;
+  active: {
+    id: string;
+    status: ApplicationStatus;
+    appliedAt: string | null;
+    company: string;
+    title: string;
+  }[];
+  unlinkedEmails: number;
+  purgingSoon: number;
+}
+
 export interface EmailStats {
   sentCount: number;
   rejectionCount: number;
@@ -2792,5 +3031,99 @@ export const api = {
       form.set('text', text);
       return uploadForBlob('/api/tts', form);
     },
+  },
+
+  jobs: {
+    profile: {
+      get: () => get<JobProfileBundle>('/api/jobs/profile'),
+      update: (data: Partial<JobProfileContact>) =>
+        patch<JobProfileBundle>('/api/jobs/profile', data),
+      create: (kind: ProfileSection, data: Record<string, unknown>) =>
+        post<{ id: string }>(`/api/jobs/profile/${kind}`, data),
+      update_: (
+        kind: ProfileSection,
+        id: string,
+        data: Record<string, unknown>
+      ) => patch<{ success: boolean }>(`/api/jobs/profile/${kind}/${id}`, data),
+      remove: (kind: ProfileSection, id: string) =>
+        del<{ success: boolean }>(`/api/jobs/profile/${kind}/${id}`),
+    },
+
+    list: (includeDismissed = false) =>
+      get<JobPosting[]>(`/api/jobs${includeDismissed ? '?dismissed=1' : ''}`),
+    get: (id: string) => get<JobPosting>(`/api/jobs/${id}`),
+    // `url` fetches and extracts server-side; `text` extracts from a paste.
+    create: (data: {
+      url?: string;
+      text?: string;
+      title?: string;
+      company?: string;
+      location?: string;
+      description?: string;
+    }) => post<JobPosting>('/api/jobs', data),
+    update: (id: string, data: Partial<JobPosting>) =>
+      patch<{ success: boolean }>(`/api/jobs/${id}`, data),
+    remove: (id: string) => del<{ success: boolean }>(`/api/jobs/${id}`),
+
+    applications: {
+      list: (status?: ApplicationStatus) =>
+        get<JobApplication[]>(
+          `/api/jobs/applications${status ? `?status=${status}` : ''}`
+        ),
+      get: (id: string) =>
+        get<JobApplicationDetail>(`/api/jobs/applications/${id}`),
+      create: (jobId: string) =>
+        post<{ id: string; existing?: boolean }>('/api/jobs/applications', {
+          jobId,
+        }),
+      update: (
+        id: string,
+        data: {
+          status?: ApplicationStatus;
+          steer?: string;
+          notes?: string;
+          coverLetter?: string;
+          appliedEmail?: string;
+        }
+      ) => patch<{ success: boolean }>(`/api/jobs/applications/${id}`, data),
+      submit: (id: string, appliedEmail?: string) =>
+        post<{
+          success: boolean;
+          linkage: { scanned: number; linked: number };
+        }>(`/api/jobs/applications/${id}/submit`, { appliedEmail }),
+      remove: (id: string) =>
+        del<{ success: boolean }>(`/api/jobs/applications/${id}`),
+      tailor: (id: string, steer?: string) =>
+        post<TailorResult>(`/api/jobs/applications/${id}/tailor`, { steer }),
+      answers: (id: string, questions: FormQuestion[], steer?: string) =>
+        post<{ answers: FilledAnswer[] }>(
+          `/api/jobs/applications/${id}/answers`,
+          { questions, steer }
+        ),
+    },
+
+    resumes: {
+      get: (id: string) => get<ResumeVersion>(`/api/jobs/resumes/${id}`),
+      downloadUrl: (id: string, ext: 'pdf' | 'docx') =>
+        `/api/jobs/resumes/${id}/download.${ext}`,
+    },
+
+    linkage: {
+      sweep: () =>
+        post<{ scanned: number; linked: number }>('/api/jobs/linkage/sweep'),
+      unlinked: () => get<UnlinkedJobEmail[]>('/api/jobs/linkage/unlinked'),
+      link: (applicationId: string, emailId: string) =>
+        post<{ success: boolean; statusChange: string | null }>(
+          '/api/jobs/linkage/link',
+          { applicationId, emailId }
+        ),
+      unlink: (applicationId: string, emailId: string) =>
+        send<{ success: boolean }>('DELETE', '/api/jobs/linkage/link', {
+          applicationId,
+          emailId,
+        }),
+    },
+
+    stats: () => get<JobStats>('/api/jobs/stats'),
   },
 };

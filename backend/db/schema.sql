@@ -1113,3 +1113,216 @@ CREATE TABLE IF NOT EXISTS email_images (
 
 CREATE INDEX IF NOT EXISTS idx_email_images_status ON email_images(status, attempt_count);
 CREATE INDEX IF NOT EXISTS idx_email_images_content ON email_images(content_hash) WHERE content_hash IS NOT NULL;
+
+-- ---------------------------------------------------------------------------
+-- Job applications
+--
+-- The profile is stored relationally rather than as one JSON document because
+-- resume tailoring hands the model a *numbered list of real bullets* and a
+-- JSON schema whose indexes are bounded to that list (backend/jobs/tailor.py,
+-- the backend/ai/idea_assessment.py trick). llama-server compiles the bound
+-- into a GBNF grammar, so a bullet that does not exist cannot be emitted
+-- during decoding. That guarantee needs bullets to be addressable rows; a
+-- prose blob would put fabrication back on the honour system.
+-- ---------------------------------------------------------------------------
+
+-- Singleton, same shape as `settings`: the contact block at the top of a resume.
+CREATE TABLE IF NOT EXISTS job_profile (
+    id INTEGER PRIMARY KEY DEFAULT 1,
+    full_name TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    -- JSON array of {label, url}: GitHub, LinkedIn, portfolio.
+    links TEXT,
+    headline TEXT NOT NULL DEFAULT '',
+    -- The default professional summary. Tailoring rewrites it per application
+    -- and stores the rewrite on resume_versions; this row is never overwritten.
+    summary TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS profile_roles (
+    id TEXT PRIMARY KEY,
+    company TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    -- Free text ("2021", "Mar 2021") rather than a date: resumes say "2021 —
+    -- Present" and forcing a real date would invent a precision the user does
+    -- not have. Ordering is `ord`, never these.
+    start_label TEXT NOT NULL DEFAULT '',
+    end_label TEXT NOT NULL DEFAULT '',
+    ord INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_profile_roles_ord ON profile_roles(ord);
+
+-- The atomic evidence units. One accomplishment each; tailoring selects and
+-- rephrases them but may never add one.
+CREATE TABLE IF NOT EXISTS profile_bullets (
+    id TEXT PRIMARY KEY,
+    role_id TEXT NOT NULL REFERENCES profile_roles(id) ON DELETE CASCADE,
+    text TEXT NOT NULL DEFAULT '',
+    ord INTEGER NOT NULL DEFAULT 0,
+    tags TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_profile_bullets_role ON profile_bullets(role_id, ord);
+
+CREATE TABLE IF NOT EXISTS profile_skills (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT '',
+    years REAL,
+    ord INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_profile_skills_ord ON profile_skills(ord);
+
+CREATE TABLE IF NOT EXISTS profile_education (
+    id TEXT PRIMARY KEY,
+    institution TEXT NOT NULL DEFAULT '',
+    credential TEXT NOT NULL DEFAULT '',
+    field TEXT NOT NULL DEFAULT '',
+    start_label TEXT NOT NULL DEFAULT '',
+    end_label TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    ord INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_profile_education_ord ON profile_education(ord);
+
+-- The reusable answer bank. `slug` names the standard questions every portal
+-- asks (work authorization, notice period, salary) so autofill can answer them
+-- verbatim with no model call at all; a NULL slug is a free-form saved answer.
+CREATE TABLE IF NOT EXISTS profile_answers (
+    id TEXT PRIMARY KEY,
+    slug TEXT,
+    question TEXT NOT NULL DEFAULT '',
+    answer TEXT NOT NULL DEFAULT '',
+    tags TEXT,
+    ord INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profile_answers_slug
+    ON profile_answers(slug) WHERE slug IS NOT NULL;
+
+-- A posting. `source_id` is the id within that source; for a hand-added job it
+-- is the row's own ULID, which keeps the uniqueness constraint total instead of
+-- carving out a nullable exception.
+CREATE TABLE IF NOT EXISTS jobs (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'manual'
+        CHECK(source IN ('manual','adzuna','greenhouse','lever','ashby')),
+    source_id TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
+    company TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    location TEXT NOT NULL DEFAULT '',
+    remote INTEGER NOT NULL DEFAULT 0,
+    salary_min REAL,
+    salary_max REAL,
+    salary_currency TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    -- Whatever the source adapter received, verbatim, so a parsing bug can be
+    -- fixed and replayed without re-fetching.
+    raw TEXT,
+    -- Set by the phase-2 matcher; NULL means "not scored yet", which is not the
+    -- same as a score of zero.
+    match_score REAL,
+    match_reasons TEXT,
+    dismissed INTEGER NOT NULL DEFAULT 0,
+    posted_at INTEGER,
+    fetched_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(source, source_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_jobs_created ON jobs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_score ON jobs(match_score DESC) WHERE dismissed = 0;
+
+-- `closed_at` is stamped when the application reaches a terminal state, and is
+-- what the rejection-triggered purge measures its grace period from. updated_at
+-- cannot serve: editing a note months later would restart the clock.
+CREATE TABLE IF NOT EXISTS applications (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK(status IN ('draft','ready','submitted','acknowledged','interview',
+                         'offer','rejected','withdrawn','ghosted')),
+    -- The dictated instructions ("emphasise the payments work, keep it short").
+    -- Persisted so the second tap can fill again without re-recording.
+    steer TEXT NOT NULL DEFAULT '',
+    cover_letter TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    -- Which address you applied from; the strongest linkage signal there is,
+    -- because replies come back to it.
+    applied_email TEXT NOT NULL DEFAULT '',
+    applied_at INTEGER,
+    closed_at INTEGER,
+    purge_after INTEGER,
+    purged_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- One application per posting. create_application already returns the existing
+-- row rather than making a second, and list_jobs LEFT JOINs on this — a
+-- duplicate would silently show the posting twice. Reapplying later is a new
+-- posting, which is also the honest model of it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_job_unique ON applications(job_id);
+CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
+CREATE INDEX IF NOT EXISTS idx_applications_purge
+    ON applications(purge_after) WHERE purged_at IS NULL;
+
+-- `content` is the structured tailoring result and is kept forever — it is a
+-- few kilobytes and it is the answer to "what exactly did I send them?". Only
+-- the rendered binaries are purged, so history survives retention.
+CREATE TABLE IF NOT EXISTS resume_versions (
+    id TEXT PRIMARY KEY,
+    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    label TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL DEFAULT '{}',
+    keywords TEXT,
+    html TEXT NOT NULL DEFAULT '',
+    pdf_path TEXT,
+    docx_path TEXT,
+    purged_at INTEGER,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_versions_app
+    ON resume_versions(application_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS job_email_links (
+    id TEXT PRIMARY KEY,
+    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    email_id TEXT NOT NULL REFERENCES emails(id) ON DELETE CASCADE,
+    link_kind TEXT NOT NULL DEFAULT 'auto' CHECK(link_kind IN ('auto','manual')),
+    confidence REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    UNIQUE(application_id, email_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_email_links_email ON job_email_links(email_id);
+
+-- Linkage bookkeeping lives here rather than as a column on `emails` so this
+-- module owns all of its own state and the email feature stays untouched.
+-- A row means "considered"; `matched` records whether it found anything.
+CREATE TABLE IF NOT EXISTS job_email_scans (
+    email_id TEXT PRIMARY KEY REFERENCES emails(id) ON DELETE CASCADE,
+    scanned_at INTEGER NOT NULL,
+    matched INTEGER NOT NULL DEFAULT 0
+);

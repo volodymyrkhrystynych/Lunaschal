@@ -24,4 +24,12 @@ fsrs>=6.0
 mcp>=1.28
 nh3>=0.2
 mammoth>=1.6
+# Tailored-resume rendering (backend/jobs/render.py). WeasyPrint turns the same
+# HTML the UI previews into a PDF, so preview and artifact can't drift; it binds
+# system pango/cairo via ctypes rather than bundling a renderer. python-docx is
+# pure Python and emits the .docx that many ATS parse more reliably than PDF.
+# Both are imported lazily — a missing one degrades that single output format
+# instead of breaking the module (see render.py's availability helpers).
+weasyprint>=62
+python-docx>=1.1
 # Speaker diarization for meetings is optional: pip install -r requirements-diarization.txt

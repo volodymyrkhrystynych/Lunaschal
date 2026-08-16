@@ -27,6 +27,7 @@ flowchart LR
             V_LIFE["Lifestyle/"]
             V_FIC["Fanfic/ (Library + Reader)"]
             V_NEWS["Newspapers"]
+            V_JOBS["Jobs/ (pipeline · profile · answer kit)"]
             V_PAPER["Paper/"]
             V_FILES["Editor/ (Files + SttPanel)"]
             V_SET["Settings/"]
@@ -75,19 +76,21 @@ flowchart LR
             P_FOOD["food/<br/>exif · storage"]
             P_PAPER["paper/ · journal/<br/>storage"]
             P_RESEARCH["research/<br/>repo_facts · web (SSRF-guarded)<br/>wiki · agent · worker · assess"]
+            P_JOBS["jobs/<br/>linkage · keywords · retention (pure)<br/>tailor (bounded schema) · answers · render"]
         end
         subgraph SCHED["Daemon loops (no cron — threads from create_app)"]
             S_TITLE["chat_title_scheduler<br/>02:00–03:00"]
             S_REPO["research/repo_scheduler<br/>03:00–05:00"]
             S_BRIEF["briefing_scheduler<br/>05:00–07:00"]
             S_RESEARCH["research/research_scheduler<br/>no window — yields via priority"]
+            S_JOBS["jobs/scheduler<br/>linkage every tick (no model)<br/>purge 07:00–08:00"]
         end
         DBLAYER["db/ — schema.sql + connection.py<br/>WAL SQLite · FTS5 ×4<br/>_ensure_* migrations"]
     end
 
     subgraph STORE["./data/"]
         DB[("lunaschal.db")]
-        FILES_STORE["fanfic/ · meetings/ · newspapers/<br/>journal/ · lifestyle/ · food/ · paper/<br/>shortcuts.json"]
+        FILES_STORE["fanfic/ · meetings/ · newspapers/<br/>journal/ · lifestyle/ · food/ · paper/<br/>jobs/ (purged on retention)<br/>shortcuts.json"]
     end
 
     subgraph VOICE["OS-level voice — stt/"]
