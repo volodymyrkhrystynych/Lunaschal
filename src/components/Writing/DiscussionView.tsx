@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type WritingProject, type WritingNote } from '../../hooks/api';
+import { useRecorder } from '../../hooks/useRecorder';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { readSSE } from '../../lib/sse';
 import { DOC_TYPE_LABELS, type DocType } from './WritingNav';
 import { AgentSteps } from '@/components/Chat/AgentSteps';
+import { ThinkingLabel } from '@/components/Chat/ThinkingLabel';
+import { parseAgentMeta } from '@/lib/agentSteps';
 
 interface Props {
   project: WritingProject;
@@ -48,8 +51,15 @@ export function DiscussionView({
   });
 
   const addMessage = useMutation({
-    mutationFn: ({ role, content }: { role: string; content: string }) =>
-      api.chat.addMessage(discussionId, { role, content }),
+    mutationFn: ({
+      role,
+      content,
+      metadata,
+    }: {
+      role: string;
+      content: string;
+      metadata?: string;
+    }) => api.chat.addMessage(discussionId, { role, content, metadata }),
     onSuccess: () =>
       queryClient.invalidateQueries({
         queryKey: ['chat', 'conversation', discussionId],
@@ -154,18 +164,38 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
       if (!reader) throw new Error('No response body');
 
       let fullContent = '';
+      let fullReasoning = '';
+      let truncated = false;
+      let timedOut = false;
       for await (const parsed of readSSE(reader)) {
         if (parsed.thinking) {
-          setStreamingReasoning(reasoning => reasoning + parsed.thinking);
+          fullReasoning += parsed.thinking;
+          setStreamingReasoning(fullReasoning);
         }
         if (parsed.content) {
           fullContent += parsed.content;
           setStreamingContent(fullContent);
         }
+        if (parsed.done) {
+          truncated = parsed.truncated === true;
+          timedOut = parsed.timedOut === true;
+        }
         if (parsed.error) throw new Error(parsed.error);
       }
 
-      await addMessage.mutateAsync({ role: 'assistant', content: fullContent });
+      // Persisted in the same shape the Chat tab's messages carry
+      // (parseAgentMeta) so reopening this discussion shows the same
+      // reasoning trace instead of losing it the moment the stream ends.
+      const metadata =
+        fullReasoning || truncated || timedOut
+          ? JSON.stringify({ thinking: fullReasoning, truncated, timedOut })
+          : undefined;
+
+      await addMessage.mutateAsync({
+        role: 'assistant',
+        content: fullContent,
+        metadata,
+      });
     } catch (error) {
       setStreamingContent(
         `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`
@@ -182,6 +212,23 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
     setEditingTitle(false);
     if (trimmed && trimmed !== conversation?.title) updateTitle.mutate(trimmed);
   };
+
+  // Dictation lands in the box, it doesn't send â€” same reasoning as the Chat
+  // tab (a misheard proper noun needs a moment to be caught before it becomes
+  // part of the discussion). No correction pass here, unlike Chat: that pass
+  // corrects against the memory document and attached photos, neither of
+  // which a writing discussion has.
+  const handleTranscript = (text: string) => {
+    const raw = text.trim();
+    if (!raw) return;
+    setInput(prev => (prev.trim() ? `${prev.trim()} ${raw}` : raw));
+  };
+
+  const recorder = useRecorder(handleTranscript);
+  const isRecording = recorder.status === 'recording';
+  const isTranscribing = recorder.status === 'transcribing';
+  const toggleRecording = () =>
+    isRecording ? recorder.stop() : recorder.start();
 
   const aiConfigured = !!settings?.llamaUrl;
   const thinkingConfigured = !!settings?.llmThinking;
@@ -277,26 +324,40 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
             the takeaways as a note
           </div>
         )}
-        {messages.map(msg => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
+        {messages.map(msg => {
+          // Also covers the "No reasoning saved" case: parseAgentMeta fails
+          // open, so a message written before this shipped just renders no
+          // trace below it rather than throwing.
+          const { thinking } = parseAgentMeta(msg.metadata);
+          return (
             <div
-              className={`max-w-[70%] rounded-lg px-3 py-2 text-sm leading-relaxed ${
-                msg.role === 'user'
-                  ? 'bg-[var(--color-primary)]/20 text-[var(--color-text)] whitespace-pre-wrap'
-                  : 'bg-white/5 text-[var(--color-text)]'
-              }`}
+              key={msg.id}
+              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              {msg.role === 'user' ? (
-                msg.content
-              ) : (
-                <MessageMarkdown content={msg.content} />
-              )}
+              <div className="max-w-[70%]">
+                <div
+                  className={`rounded-lg px-3 py-2 text-sm leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-[var(--color-primary)]/20 text-[var(--color-text)] whitespace-pre-wrap'
+                      : 'bg-white/5 text-[var(--color-text)]'
+                  }`}
+                >
+                  {msg.role === 'user' ? (
+                    msg.content
+                  ) : (
+                    <MessageMarkdown content={msg.content} />
+                  )}
+                </div>
+                {/* live is false here (not local isStreaming) so a reload
+                    shows the same collapsed trace a tab that never left
+                    would, same as the Chat tab. */}
+                {msg.role === 'assistant' && (
+                  <AgentSteps steps={[]} thinking={thinking} />
+                )}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
         {isStreaming && streamingContent && (
           <div className="flex justify-start">
             <div className="max-w-[70%]">
@@ -310,7 +371,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
         {isStreaming && !streamingContent && thinkingConfigured && (
           <div className="flex justify-start">
             <div className="max-w-[70%] rounded-lg px-3 py-2 text-sm leading-relaxed bg-white/5 text-[var(--color-text-muted)]">
-              Thinkingâ€¦
+              <ThinkingLabel />
             </div>
           </div>
         )}
@@ -370,6 +431,9 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
             Configure AI provider in Settings to chat
           </div>
         )}
+        {recorder.error && (
+          <div className="text-xs text-red-400 mb-2">{recorder.error}</div>
+        )}
         <div className="flex gap-2">
           <textarea
             data-discussion-input
@@ -386,6 +450,49 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
             rows={2}
             className="flex-1 resize-none rounded bg-white/5 border border-white/20 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-50"
           />
+          <button
+            onClick={toggleRecording}
+            disabled={isStreaming || !aiConfigured || isTranscribing}
+            title={isRecording ? 'Stop recording' : 'Speak to add to the box'}
+            className={`px-3 rounded self-end py-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              isRecording
+                ? 'bg-red-500 text-white animate-pulse hover:bg-red-500'
+                : 'bg-white/5 border border-white/20 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/30'
+            }`}
+          >
+            {isTranscribing ? (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="animate-spin"
+              >
+                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+              </svg>
+            ) : (
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="22" />
+              </svg>
+            )}
+          </button>
           <button
             onClick={sendMessage}
             disabled={!input.trim() || isStreaming || !aiConfigured}
