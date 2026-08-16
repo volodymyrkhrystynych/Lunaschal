@@ -288,23 +288,134 @@ Both renderers are imported lazily. A missing WeasyPrint costs the PDF and nothi
 retention. Chosen first because none of it can break from a third-party redesign, and everything
 else bolts onto it.
 
-**Phase 2 — discovery.** `backend/jobs/sources/` with one adapter per source behind a common
-`fetch(search) -> list[JobPosting]`: Adzuna (free tier, Canadian coverage, aggregates broadly) plus
-Greenhouse / Lever / Ashby company boards (public JSON, no auth, exact data). A `job_searches` table
-drives a nightly sync, then LLM match-scoring against the profile — deferred through
-`backend/ai/priority.py` like `research_scheduler`, so it never competes for the two llama slots.
+**Phase 2 — discovery and the triage feed (built).** `backend/jobs/sources/` with one adapter per
+source behind a common `fetch(params) -> SourceResult`: Adzuna (free tier, Canadian coverage,
+aggregates broadly) plus Greenhouse / Lever / Ashby company boards (public JSON, no auth, exact
+data). A `job_searches` table drives the sync, the feed is the phone's triage screen, and
+`queue.py` builds the resumes in the background.
 
 Deliberately **not** attempted: bulk-scraping Indeed and LinkedIn. Cloudflare, no public API, no
 headless browser in this stack, and against both sites' terms. Adzuna covers much of the same
 inventory legally. The `jobs.source` enum has no `linkedin` or `indeed` value for that reason.
 
-**Phase 3 — the proxy tab.** `backend/routes/browse.py`: same-origin reverse proxy, per-domain
-cookie jar reusing the `site_cookies` shape the fanfic module already uses, desktop UA,
-`X-Frame-Options`/`frame-ancestors` stripped, URL rewriting, app-banner and `linkedin://` deep-link
-removal, and an injected overlay with the 🎤 steer and ⚡ fill buttons posting detected fields to
-the existing `/api/jobs/applications/<id>/answers`. Scoped to an ATS-domain allowlist at first.
-`assert_public_url` on every hop is mandatory, not optional — it is a user-driven fetcher pointed at
-arbitrary URLs.
+### Why the score is not the model's
+
+The plan had been LLM match-scoring deferred through `backend/ai/priority.py`. Building it made the
+cost obvious: two hundred postings is two hundred model calls, tens of seconds each, and the feed
+stays unsorted for hours after a sync. Worse, the sort order would then change between refreshes.
+
+`keywords.keyword_report` already computed exactly the needed number — how much of what the posting
+asks for the profile can evidence — deterministically, in string time. So **`match_score` is that
+coverage, always**, and `ai/job_match.py` writes one advisory paragraph on demand when a posting is
+opened, handed the keyword report as fact. It never moves the sort. The feed is usable the instant
+a sync finishes, the ordering is explainable, and the GPU is spent only on postings actually read.
+
+The honest caveat: Adzuna returns a **truncated snippet** rather than the posting body, so its
+coverage is computed against a summary and understates the match. Those rows carry `partial: true`
+and the card marks the number provisional rather than pretending it is the same measurement the
+company boards produce.
+
+### Company directories, and why the resolver replaced the slug field
+
+Adzuna's results turned out to be poor in practice, and the better workflow is
+browsing a directory of local companies — [jobfairr.com/companies/toronto](https://www.jobfairr.com/companies/toronto)
+was the specific example — then following each to its own careers page.
+
+**JobFairr itself is not scraped, and should not be.** Every HTML path returns
+403 to a non-browser client while `robots.txt` passes, which is the same
+Cloudflare wall that ruled out Indeed. Worth separating the two reasons: the
+robots.txt actually _invites_ crawling and points at a sitemap, so the policy
+is permissive — it is the edge protection that blocks us. That distinction
+matters because it means the failure is technical and permanent-ish rather than
+something to negotiate.
+
+It costs nothing, because a directory's output is _company names_, and choosing
+which companies are worth applying to is a judgement step that belongs to the
+user anyway. The automatable part starts one click later.
+
+That click is where the real gap was. Almost every careers page is a wrapper
+around a hosted ATS board, and syncing one needs the board's **slug** — which
+cannot be guessed:
+
+| company      | careers page resolves to         | slug           |
+| ------------ | -------------------------------- | -------------- |
+| Cohere       | `jobs.ashbyhq.com/cohere`        | `cohere`       |
+| Wealthsimple | `jobs.ashbyhq.com/wealthsimple`  | `wealthsimple` |
+| Ada          | `job-boards.greenhouse.io/ada18` | `ada18`        |
+
+`ada18` is the argument against a slug field. `resolve.py` reads the slug off
+the page instead and verifies it against the live board before offering to add
+it — see backend/jobs/CLAUDE.md for why verification is the load-bearing half.
+
+**Checking those three against real boards also caught two things wrong in code
+already called done.** Greenhouse returns `company_name` as a plain string, not
+a `company` object, so every Ada posting would have been labelled "ada18"; and
+posting dates now come from `first_published` rather than `updated_at`, which
+moves on every typo fix and would keep re-floating old postings to the top of a
+feed sorted by recency. The claim that Ashby "reliably returns a pay range" was
+also simply false — all seven Cohere postings carried an empty `compensation`.
+
+### The profile had no way in, which made everything else inert
+
+Walking through the finished feature surfaced something the plan had missed
+entirely: there was no import route, so the only way to create a
+`profile_bullets` row was to type it into a field. That is not a convenience
+gap. `tailor.py` selects from bullets that did not exist, and
+`keyword_report` matched against an empty vocabulary — so **every posting
+scored NULL and the feed could not sort**. Two phases of work sat behind an
+afternoon of data entry on a phone-sized form.
+
+`resume_import.py` reads a `.docx` or pasted text instead. `.docx` goes through
+**mammoth**, already a dependency for the fanfic importer, because it maps
+Word's list paragraphs onto `<li>` — the one piece of structure worth having,
+since it separates accomplishments from section headings without guessing.
+No new package; `.pdf` was declined for that reason and because PDF extraction
+loses list structure and mangles multi-column layouts.
+
+**The same index bound as tailoring, for a stronger reason.** The document
+becomes numbered lines and the schema's `bulletIndexes` is bounded to them, so
+the model says _which_ lines are accomplishments and has no field in which to
+say what they contain; the text is reconstructed verbatim. A tailored bullet is
+reviewed once and sent, but an imported one becomes the stored evidence every
+future resume is generated from — a quiet rewording at import would be baked in
+permanently and never questioned again.
+
+Preview and commit are separate, the commit appends rather than replacing, and
+it fills only blank contact fields so a hand-corrected phone number survives a
+re-import. The review screen also lists the lines the parser did not place, so
+a dropped accomplishment is visible rather than merely absent.
+
+### The two-device split
+
+The phone is where judgement happens; the desktop is where mechanical work happens. Scroll the
+feed, read what you are missing, Queue or Dismiss — then at a keyboard, review the generated
+resume and send it. Queueing writes one row and returns, because tapping Queue on a bus is a
+decision, not a request to wait on a model.
+
+Backing out at the desktop is expected and costs nothing: by then you are looking at the generated
+resume, which did not exist when you queued it. That is a second, better-informed judgement rather
+than the same one made twice.
+
+**Phase 3 — the browser extension.** Originally planned as a reverse-proxy tab; replaced by a
+Chrome/Firefox extension, which is strictly better and much less code. A content script runs inside
+the real page with the real logged-in session, so every reason the proxy was fragile — CSP,
+`SameSite` cookies, service workers, URL rewriting, an unfamiliar egress IP — simply does not
+apply. The interaction is a right-click on any text box (`chrome.contextMenus` with
+`contexts: ['editable']`) rather than a bulk ⚡-fill: per-field on demand degrades gracefully where
+field detection fails, while bulk fill fails as a unit and, worse, silently into the wrong boxes.
+
+Answers are captured **on submit, not on generate** — reading back every field's final value when
+the form is submitted, so it does not matter whether the text was typed, dictated with the OS STT
+listener, pasted, or generated.
+
+The catch: **Chrome on Android has no extension support and never has.** Firefox for Android does,
+from the same WebExtension source; Safari on iOS requires an Xcode build and a paid Apple account,
+which is closed from Arch. So on iOS the Answer Kit remains the path, which is why it shipped first.
+
+Three small pieces belong with that work: an `application_answers` table for the captured Q&A, an
+edit-and-re-render route for a tailored resume, and the download filename (currently
+`resume.pdf`; it should be the profile's full name, and deliberately **not** the company — a file
+called "… Google Resume.pdf" arriving at Meta is a fatal and entirely avoidable error).
 
 ## What we do not know yet
 
@@ -330,6 +441,23 @@ Phase 1 is tested but has never met a real job search. The parts that are genuin
 - **No cover-letter generation.** The column exists and is hand-edited.
 - **No reordering in the profile editor.** `ord` exists on every child table; nothing sets it but
   append order.
+- **`splitFeed`'s 40% promising threshold is a guess**, as is the 70/40 banding on the coverage
+  bar. They are presentational only — nothing is hidden by them — but they decide what the phone
+  shows first.
+- **Greenhouse and Ashby have now been checked against live boards** (Ada, Cohere) and their field
+  names match. **Lever and Adzuna have not** — their adapters are still written from the docs, so a
+  differently-named field will surface on first contact. None of the four paginates: the three
+  company boards return everything in one response, and Adzuna is capped at `results_per_page = 50`
+  and takes only the first page.
+- **`resolve.py`'s ATS list will rot**, exactly as `ATS_DOMAINS` does. A company on an ATS not in
+  either list reports "no board found" rather than naming it.
+- **Detection reads server-rendered HTML only.** A careers page that injects its board link with
+  JavaScript resolves to nothing, and the fallback is pasting the board URL itself.
+- **Nothing prunes dismissed postings.** They stay in `jobs` forever so a re-sync cannot resurrect
+  them, which is correct, but the table only grows.
+- **Re-ranking fires on every profile mutation**, including each keystroke-level field save, and
+  rescores every undismissed posting each time. Pure string work, so it is fast at a few hundred
+  postings; at a few thousand it will want debouncing.
 
 ## Build order
 

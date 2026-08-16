@@ -20,7 +20,7 @@ TIMESTAMP_COLS = frozenset({
     # goes through row_to_dict today — and ISO is the right shape there too if
     # it ever does, so this is a widening rather than a special case.
     'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
-    'scanned_at',
+    'scanned_at', 'queued_at', 'last_run_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -869,6 +869,19 @@ def _ensure_job_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN job_purge_on_rejection INTEGER DEFAULT 1')
     if 'job_rejection_grace_days' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN job_rejection_grace_days INTEGER DEFAULT 30')
+    # Adzuna is the only source that needs credentials; the company boards are
+    # public. Absent keys leave the adapter inert rather than failing.
+    if 'adzuna_app_id' not in cols:
+        db.execute("ALTER TABLE settings ADD COLUMN adzuna_app_id TEXT DEFAULT ''")
+    if 'adzuna_app_key' not in cols:
+        db.execute("ALTER TABLE settings ADD COLUMN adzuna_app_key TEXT DEFAULT ''")
+    db.commit()
+
+    app_cols = {r[1] for r in db.execute('PRAGMA table_info(applications)')}
+    if 'queued_at' not in app_cols:
+        db.execute('ALTER TABLE applications ADD COLUMN queued_at INTEGER')
+    if 'queue_error' not in app_cols:
+        db.execute('ALTER TABLE applications ADD COLUMN queue_error TEXT')
     db.commit()
 
     # The profile is read on every tailoring call and edited field by field, so

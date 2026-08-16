@@ -654,6 +654,12 @@ export interface AppSettings {
   hasGoogleOauthClient: boolean;
   emailSyncEnabled: boolean;
   emailSyncIntervalMinutes: number;
+  // Tailored-resume retention: whichever of the two clocks runs out first.
+  jobRetentionDays: number;
+  jobPurgeOnRejection: boolean;
+  jobRejectionGraceDays: number;
+  /** The key itself never leaves the server, so only its presence is exposed. */
+  hasAdzunaCredentials: boolean;
 }
 
 export interface WhisperModel {
@@ -1122,6 +1128,124 @@ export interface JobPosting {
   applicationStatus?: ApplicationStatus | null;
 }
 
+/** What `keywords.py` worked out, plus the model's optional paragraph.
+ *
+ * `matched`/`missing`/`coverage` are computed deterministically at sync and
+ * are what the feed sorts on. `assessment` is advisory — generated on demand
+ * when a posting is opened, and it never moves the sort order. */
+export interface MatchReasons {
+  matched: string[];
+  missing: string[];
+  coverage: number;
+  /** Adzuna scores against a truncated snippet rather than the posting body,
+   * so its coverage number is provisional. */
+  partial?: boolean;
+  assessment?: JobAssessment;
+  assessedAt?: number;
+}
+
+export interface JobAssessment {
+  verdict: 'strong' | 'possible' | 'weak';
+  rationale: string;
+  angle: string;
+}
+
+/** A posting on the triage feed: undismissed, and with no application yet. */
+export interface FeedJob extends JobPosting {
+  matchReasons: MatchReasons | null;
+}
+
+/** A resume read into profile shape, before anything is written.
+ *
+ * `bullets[].text` is reconstructed verbatim from the source document — the
+ * model returns line numbers and has no field in which to return prose. */
+export interface ResumeImportPreview {
+  contact: {
+    fullName: string;
+    email: string;
+    phone: string;
+    location: string;
+    headline: string;
+  };
+  roles: {
+    company: string;
+    title: string;
+    location: string;
+    startLabel: string;
+    endLabel: string;
+    bullets: { index: number; text: string }[];
+  }[];
+  skills: string[];
+  education: {
+    institution: string;
+    credential: string;
+    field: string;
+    startLabel: string;
+    endLabel: string;
+  }[];
+  lineCount: number;
+  /** Lines the parser did not place anywhere, so a dropped accomplishment is
+   * visible rather than just missing. */
+  unusedLines: { index: number; text: string }[];
+}
+
+export type JobSourceKind = 'adzuna' | 'greenhouse' | 'lever' | 'ashby';
+
+/** What a company's careers page turned out to be.
+ *
+ * `kind` set means it is syncable and `jobCount` came back from the live
+ * board. `detected` without `kind` is a recognised ATS this app cannot read —
+ * an answer, not a failure. */
+export interface CompanyResolution {
+  url: string;
+  kind: JobSourceKind | null;
+  slug: string;
+  company: string;
+  jobCount: number;
+  /** Name of a recognised but unsyncable ATS, e.g. "Workday". */
+  detected: string;
+  error: string;
+  candidates: { kind: JobSourceKind; slug: string }[];
+}
+
+export interface JobSearch {
+  id: string;
+  kind: JobSourceKind;
+  label: string;
+  /** Adzuna takes {what, where, distanceKm, maxDaysOld, remoteOnly}; the
+   * company boards take {slug}. */
+  params: Record<string, unknown>;
+  enabled: boolean;
+  intervalHours: number;
+  lastRunAt: string | null;
+  lastCount: number | null;
+  lastError: string | null;
+}
+
+/** Named for the module because `SyncResult` is already the newspapers one. */
+export interface JobSyncResult {
+  searchId: string;
+  kind?: JobSourceKind;
+  added: number;
+  updated: number;
+  error: string | null;
+  message: string;
+}
+
+export interface QueueStatus {
+  running: boolean;
+  current: { applicationId: string; startedAt: number } | null;
+  last: {
+    applicationId: string;
+    error: string | null;
+    seconds: number;
+    finishedAt: number;
+  } | null;
+  /** Waiting for a resume. Excludes failures — those need a re-queue. */
+  pending: number;
+  failed: number;
+}
+
 export interface JobApplication {
   id: string;
   jobId: string;
@@ -1134,6 +1258,12 @@ export interface JobApplication {
   closedAt: string | null;
   purgeAfter: string | null;
   purgedAt: string | null;
+  /** Set when queued from the feed. A queued application stays 'draft' until
+   * the worker has actually produced a resume, so this is not the status. */
+  queuedAt: string | null;
+  /** Why the queue worker gave up. Non-null means it will not be retried
+   * without an explicit re-queue. */
+  queueError: string | null;
   company: string;
   title: string;
   jobUrl: string;
@@ -1736,6 +1866,10 @@ export const api = {
           websearchSearchKey?: string;
           googleOauthClientId?: string;
           googleOauthClientSecret?: string;
+          // Write-only, like the OAuth pair above: the GET returns
+          // hasAdzunaCredentials rather than the key.
+          adzunaAppId?: string;
+          adzunaAppKey?: string;
         }
       >
     ) => patch<{ success: boolean }>('/api/settings/ai', data),
@@ -3039,6 +3173,26 @@ export const api = {
       ) => patch<{ success: boolean }>(`/api/jobs/profile/${kind}/${id}`, data),
       remove: (kind: ProfileSection, id: string) =>
         del<{ success: boolean }>(`/api/jobs/profile/${kind}/${id}`),
+
+      /** Read a resume into profile shape. Writes nothing — review first. */
+      importFile: (file: File) => {
+        const form = new FormData();
+        form.append('file', file);
+        return upload<ResumeImportPreview>('/api/jobs/profile/import', form);
+      },
+      importText: (text: string) =>
+        post<ResumeImportPreview>('/api/jobs/profile/import', { text }),
+      /** Write the reviewed import. Appends; never replaces. No model call. */
+      commitImport: (preview: Partial<ResumeImportPreview>) =>
+        post<{
+          created: {
+            roles: number;
+            bullets: number;
+            skills: number;
+            education: number;
+          };
+          profile: JobProfileBundle;
+        }>('/api/jobs/profile/import/commit', preview),
     },
 
     list: (includeDismissed = false) =>
@@ -3115,6 +3269,54 @@ export const api = {
           emailId,
         }),
     },
+
+    searches: {
+      list: () => get<JobSearch[]>('/api/jobs/searches'),
+      create: (data: {
+        kind: JobSourceKind;
+        label?: string;
+        params: Record<string, unknown>;
+        intervalHours?: number;
+      }) => post<JobSearch>('/api/jobs/searches', data),
+      update: (
+        id: string,
+        data: {
+          label?: string;
+          enabled?: boolean;
+          intervalHours?: number;
+          params?: Record<string, unknown>;
+        }
+      ) => patch<JobSearch>(`/api/jobs/searches/${id}`, data),
+      remove: (id: string) => del<{ ok: boolean }>(`/api/jobs/searches/${id}`),
+      run: (id: string) => post<JobSyncResult>(`/api/jobs/searches/${id}/run`),
+      /** Careers page URL → the board behind it, verified. Creates nothing. */
+      resolve: (url: string) =>
+        post<CompanyResolution>('/api/jobs/searches/resolve', { url }),
+    },
+
+    sync: () =>
+      post<{ searches: number; added: number; updated: number }>(
+        '/api/jobs/sync'
+      ),
+    /** Re-rank the feed against the current profile. No model call. */
+    rescore: () => post<{ rescored: number }>('/api/jobs/rescore'),
+
+    feed: (limit = 100) => get<FeedJob[]>(`/api/jobs/feed?limit=${limit}`),
+
+    /** Returns as soon as the row is written — the resume is built in the
+     * background by backend/jobs/queue.py. */
+    queue: (jobId: string, steer?: string) =>
+      post<JobApplication>(`/api/jobs/${jobId}/queue`, { steer }),
+    dismiss: (jobId: string, dismissed = true) =>
+      post<JobPosting>(`/api/jobs/${jobId}/dismiss`, { dismissed }),
+    rationale: (jobId: string) =>
+      post<JobAssessment>(`/api/jobs/${jobId}/rationale`),
+
+    queueStatus: () => get<QueueStatus>('/api/jobs/queue/status'),
+    drainQueue: () =>
+      post<{ submitted: string | null; reason: string }>(
+        '/api/jobs/queue/drain'
+      ),
 
     stats: () => get<JobStats>('/api/jobs/stats'),
   },

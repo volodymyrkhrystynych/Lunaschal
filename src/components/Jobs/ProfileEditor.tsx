@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import type { ProfileSection } from '@/hooks/api';
+import { ProfileImport } from './ProfileImport';
 
 function Field({
   label,
@@ -82,8 +83,18 @@ export function ProfileEditor() {
     queryFn: api.jobs.profile.get,
   });
 
-  const invalidate = () =>
+  // Every profile mutation funnels through here, so this is also where the
+  // feed gets re-ranked: the match score is computed against the profile, and
+  // a score from last week's skills list is worse than no score. Fire and
+  // forget — it is pure string work server-side, and a failure costs a stale
+  // ordering rather than the edit the user just made.
+  const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['jobs', 'profile'] });
+    api.jobs
+      .rescore()
+      .then(() => queryClient.invalidateQueries({ queryKey: ['jobs', 'feed'] }))
+      .catch(() => {});
+  };
 
   const patchContact = useMutation({
     mutationFn: (patch: Record<string, unknown>) =>
@@ -133,6 +144,11 @@ export function ProfileEditor() {
 
   return (
     <div className="flex-1 overflow-y-auto min-w-0 space-y-6 pb-8">
+      {/* First, because on an empty profile it is the only thing worth doing:
+          nothing else in the tab works until there are bullets to tailor from
+          and skills to score postings against. */}
+      <ProfileImport onImported={invalidate} />
+
       <section className="space-y-3">
         <h3 className="text-sm font-semibold text-[var(--color-text)]">
           Contact

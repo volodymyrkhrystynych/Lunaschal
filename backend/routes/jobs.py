@@ -12,8 +12,12 @@ import time
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
+from backend.ai import job_match, priority
 from backend.db.connection import build_update, get_db, row_to_dict
-from backend.jobs import ingest, linker, profile as profile_mod, render, retention, storage, tailor
+from backend.jobs import (
+    build, ingest, linker, profile as profile_mod, queue as queue_mod, render,
+    resolve, resume_import, retention, sources, storage, sync, tailor,
+)
 
 bp = Blueprint('jobs', __name__, url_prefix='/api/jobs')
 
@@ -65,6 +69,155 @@ def update_profile():
     build_update(db, 'job_profile', updates, 'id=1')
     db.commit()
     return jsonify(profile_mod.load_profile(db))
+
+
+@bp.post('/profile/import')
+def import_profile():
+    """Read an existing resume into a structured preview. Writes nothing.
+
+    Preview-then-commit for the same reason the company resolver works that
+    way: this feeds `profile_bullets`, the one table the anti-fabrication
+    guarantee treats as fact, so it has to be inspectable before it is
+    believed.
+    """
+    upload = request.files.get('file')
+    try:
+        if upload is not None:
+            data = upload.read()
+            if not data:
+                return jsonify({'error': 'That file is empty.'}), 400
+            lines = resume_import.extract_lines(
+                data=data, filename=upload.filename or ''
+            )
+        else:
+            text = (_body().get('text') or '').strip()
+            if not text:
+                return jsonify({'error': 'Paste your resume text, or pick a .docx.'}), 400
+            lines = resume_import.extract_lines(text=text)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    if not lines:
+        return jsonify({'error': 'Nothing readable in that document.'}), 400
+
+    # The user is watching this one, so it takes a mark rather than deferring.
+    token = priority.begin('resume-import')
+    try:
+        preview = resume_import.import_resume(lines)
+    finally:
+        priority.end(token)
+
+    if preview is None:
+        return jsonify({
+            'error': 'The local model is unavailable, so the resume was not read.'
+        }), 503
+    return jsonify(preview)
+
+
+@bp.post('/profile/import/commit')
+def commit_profile_import():
+    """Write a reviewed import into the profile. Appends; never replaces.
+
+    Makes no model call — it stores exactly what the user approved, so what
+    was on screen is what lands.
+    """
+    body = _body()
+    db = get_db()
+    now = _now()
+    created = {'roles': 0, 'bullets': 0, 'skills': 0, 'education': 0}
+
+    contact = body.get('contact') or {}
+    if isinstance(contact, dict) and any(contact.values()):
+        # Only fills blanks: an import must not overwrite a phone number the
+        # user has already corrected by hand.
+        current = db.execute('SELECT * FROM job_profile WHERE id=1').fetchone()
+        updates = {'updated_at': now}
+        for camel, snake in (('fullName', 'full_name'), ('email', 'email'),
+                             ('phone', 'phone'), ('location', 'location'),
+                             ('headline', 'headline')):
+            value = (contact.get(camel) or '').strip()
+            if value and not (current[snake] if current else ''):
+                updates[snake] = value
+        if len(updates) > 1:
+            build_update(db, 'job_profile', updates, 'id=1')
+
+    role_ord = db.execute(
+        'SELECT COALESCE(MAX(ord), -1) AS m FROM profile_roles'
+    ).fetchone()['m']
+    for role in (body.get('roles') or []):
+        if not isinstance(role, dict):
+            continue
+        company = (role.get('company') or '').strip()
+        title = (role.get('title') or '').strip()
+        if not company and not title:
+            continue
+        role_ord += 1
+        role_id = str(ULID())
+        db.execute(
+            'INSERT INTO profile_roles (id, company, title, location, start_label,'
+            ' end_label, ord, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (role_id, company, title, (role.get('location') or '').strip(),
+             (role.get('startLabel') or '').strip(),
+             (role.get('endLabel') or '').strip(), role_ord, now, now),
+        )
+        created['roles'] += 1
+
+        for bullet_ord, bullet in enumerate(role.get('bullets') or []):
+            text = (bullet.get('text') if isinstance(bullet, dict) else bullet) or ''
+            text = text.strip()
+            if not text:
+                continue
+            db.execute(
+                'INSERT INTO profile_bullets (id, role_id, text, ord, created_at,'
+                ' updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+                (str(ULID()), role_id, text, bullet_ord, now, now),
+            )
+            created['bullets'] += 1
+
+    skill_ord = db.execute(
+        'SELECT COALESCE(MAX(ord), -1) AS m FROM profile_skills'
+    ).fetchone()['m']
+    existing_skills = {
+        r['name'].casefold()
+        for r in db.execute('SELECT name FROM profile_skills').fetchall()
+    }
+    for raw in (body.get('skills') or []):
+        name = (raw.get('name') if isinstance(raw, dict) else raw) or ''
+        name = name.strip()
+        if not name or name.casefold() in existing_skills:
+            continue
+        existing_skills.add(name.casefold())
+        skill_ord += 1
+        db.execute(
+            'INSERT INTO profile_skills (id, name, category, ord, created_at,'
+            " updated_at) VALUES (?, ?, '', ?, ?, ?)",
+            (str(ULID()), name, skill_ord, now, now),
+        )
+        created['skills'] += 1
+
+    edu_ord = db.execute(
+        'SELECT COALESCE(MAX(ord), -1) AS m FROM profile_education'
+    ).fetchone()['m']
+    for entry in (body.get('education') or []):
+        if not isinstance(entry, dict):
+            continue
+        institution = (entry.get('institution') or '').strip()
+        credential = (entry.get('credential') or '').strip()
+        if not institution and not credential:
+            continue
+        edu_ord += 1
+        db.execute(
+            'INSERT INTO profile_education (id, institution, credential, field,'
+            ' start_label, end_label, ord, created_at, updated_at)'
+            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (str(ULID()), institution, credential, (entry.get('field') or '').strip(),
+             (entry.get('startLabel') or '').strip(),
+             (entry.get('endLabel') or '').strip(), edu_ord, now, now),
+        )
+        created['education'] += 1
+
+    db.commit()
+    return jsonify({'created': created, 'profile': profile_mod.load_profile(db)}), 201
 
 
 # Each child table is CRUD over the same tiny shape, so one factory produces
@@ -464,72 +617,23 @@ def tailor_application(application_id):
 
     Synchronous. One `chat_json` call against a local model is seconds, and the
     user is looking at the result — a background job would need a progress
-    registry, a poll endpoint and a stale-state sweep to buy nothing.
+    registry, a poll endpoint and a stale-state sweep to buy nothing. The
+    queued path in `backend/jobs/queue.py` is the one that needs all three, and
+    it shares this body through `build_resume_version`.
     """
     db = get_db()
-    row = _application_row(db, application_id)
-    if row is None:
+    if _application_row(db, application_id) is None:
         return jsonify({'error': 'Not found'}), 404
 
-    body = _body()
-    steer = body.get('steer')
-    if steer is not None:
-        db.execute(
-            'UPDATE applications SET steer=?, updated_at=? WHERE id=?',
-            (steer, _now(), application_id),
-        )
-        db.commit()
-    else:
-        steer = row['steer'] or ''
-
-    loaded = profile_mod.load_profile(db)
-    if profile_mod.is_empty(loaded):
-        return jsonify({
-            'error': 'Your profile is empty — add some experience before tailoring.'
-        }), 400
-
-    job = {
-        'title': row['title'], 'company': row['company'],
-        'location': row['location'], 'description': row['description'],
-    }
-
-    # Nothing is held open across this call: everything above committed.
-    content = tailor.tailor_resume(loaded, job, steer)
-    if content is None:
-        return jsonify({
-            'error': 'The local model is unavailable, so the resume was not tailored.'
-        }), 503
-
-    now = _now()
-    version_id = str(ULID())
-    html = render.render_html(loaded, content, job)
-
-    pdf_path = storage.resume_path(application_id, version_id, 'pdf')
-    docx_path = storage.resume_path(application_id, version_id, 'docx')
-    wrote_pdf = bool(pdf_path) and render.render_pdf(html, pdf_path)
-    wrote_docx = bool(docx_path) and render.render_docx(loaded, content, docx_path)
-
-    db.execute(
-        'INSERT INTO resume_versions (id, application_id, label, content, keywords,'
-        ' html, pdf_path, docx_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (version_id, application_id, (row['title'] or 'Resume')[:80],
-         json.dumps(content), json.dumps(content.get('keywords') or {}), html,
-         str(pdf_path) if wrote_pdf else None,
-         str(docx_path) if wrote_docx else None, now),
-    )
-    if row['status'] == 'draft':
-        db.execute(
-            "UPDATE applications SET status='ready', updated_at=? WHERE id=?",
-            (now, application_id),
-        )
-    db.commit()
+    try:
+        version = build.build_resume_version(db, application_id, _body().get('steer'))
+    except build.ProfileEmpty as e:
+        return jsonify({'error': str(e)}), 400
+    except build.TailoringUnavailable as e:
+        return jsonify({'error': str(e)}), 503
 
     return jsonify({
-        'id': version_id,
-        'content': content,
-        'html': html,
-        'pdfAvailable': wrote_pdf,
-        'docxAvailable': wrote_docx,
+        **version,
         'renderers': {
             'pdf': render.is_pdf_available(),
             'docx': render.is_docx_available(),
@@ -745,3 +849,318 @@ def stats():
 @bp.post('/retention/sweep')
 def run_retention():
     return jsonify(retention.run_purge_sweep())
+
+
+# --------------------------------------------------------------------------
+# Discovery: saved searches, the feed, and the queue
+# --------------------------------------------------------------------------
+
+_SEARCH_KINDS = ('adzuna', 'greenhouse', 'lever', 'ashby')
+
+
+def _search_row(db, search_id):
+    return db.execute('SELECT * FROM job_searches WHERE id=?', (search_id,)).fetchone()
+
+
+def _search_dict(row) -> dict:
+    result = row_to_dict(row)
+    try:
+        result['params'] = json.loads(row['params']) if row['params'] else {}
+    except ValueError:
+        result['params'] = {}
+    return result
+
+
+@bp.get('/searches')
+def list_searches():
+    rows = get_db().execute(
+        'SELECT * FROM job_searches ORDER BY kind, label, created_at'
+    ).fetchall()
+    return jsonify([_search_dict(r) for r in rows])
+
+
+@bp.post('/searches')
+def create_search():
+    body = _body()
+    kind = (body.get('kind') or '').strip()
+    if kind not in _SEARCH_KINDS:
+        return jsonify({'error': f'Unknown source {kind!r}.'}), 400
+
+    params = body.get('params') or {}
+    if not isinstance(params, dict):
+        return jsonify({'error': 'params must be an object.'}), 400
+
+    # Validate the slug now rather than at the first sweep — an invalid source
+    # that fails silently at 3am is worse than a rejected form.
+    if kind != 'adzuna':
+        try:
+            sources.clean_slug(params.get('slug'))
+        except sources.SourceError as e:
+            return jsonify({'error': str(e)}), 400
+
+    now = _now()
+    search_id = str(ULID())
+    db = get_db()
+    db.execute(
+        'INSERT INTO job_searches (id, kind, label, params, enabled, interval_hours,'
+        ' created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        (search_id, kind, (body.get('label') or '').strip(), json.dumps(params),
+         0 if body.get('enabled') is False else 1,
+         int(body.get('intervalHours') or sync.DEFAULT_INTERVAL_HOURS), now, now),
+    )
+    db.commit()
+    return jsonify(_search_dict(_search_row(db, search_id))), 201
+
+
+@bp.patch('/searches/<search_id>')
+def update_search(search_id):
+    db = get_db()
+    if _search_row(db, search_id) is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    body = _body()
+    updates = {'updated_at': _now()}
+    if 'label' in body:
+        updates['label'] = (body.get('label') or '').strip()
+    if 'enabled' in body:
+        updates['enabled'] = 1 if body['enabled'] else 0
+    if 'intervalHours' in body:
+        updates['interval_hours'] = int(body['intervalHours'] or sync.DEFAULT_INTERVAL_HOURS)
+    if 'params' in body:
+        params = body['params'] or {}
+        if not isinstance(params, dict):
+            return jsonify({'error': 'params must be an object.'}), 400
+        updates['params'] = json.dumps(params)
+
+    assignments = ', '.join(f'{col}=?' for col in updates)
+    db.execute(f'UPDATE job_searches SET {assignments} WHERE id=?',
+               (*updates.values(), search_id))
+    db.commit()
+    return jsonify(_search_dict(_search_row(db, search_id)))
+
+
+@bp.delete('/searches/<search_id>')
+def delete_search(search_id):
+    db = get_db()
+    db.execute('DELETE FROM job_searches WHERE id=?', (search_id,))
+    db.commit()
+    return jsonify({'ok': True})
+
+
+@bp.post('/searches/resolve')
+def resolve_company():
+    """A company careers URL → the board behind it, verified.
+
+    Synchronous, and deliberately does not create anything: the user sees what
+    was found and how many postings it has before deciding. Slugs cannot be
+    guessed (Ada's Greenhouse board is `ada18`), which is why this exists
+    instead of a text field.
+    """
+    url = (_body().get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'Need a careers page URL.'}), 400
+    if not url.startswith(('http://', 'https://')):
+        url = f'https://{url}'
+
+    return jsonify(resolve.resolve_careers_page(url).to_dict())
+
+
+@bp.post('/searches/<search_id>/run')
+def run_search(search_id):
+    """Sync one search now. Synchronous: one board call is a second or two and
+    the user is watching for the result."""
+    db = get_db()
+    row = _search_row(db, search_id)
+    if row is None:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(sync.sync_search(db, _search_dict(row)))
+
+
+@bp.post('/sync')
+def run_sync():
+    return jsonify(sync.run_sync_sweep())
+
+
+@bp.post('/rescore')
+def rescore():
+    """Recompute every undismissed posting's score against the current profile.
+
+    Called after a profile edit. The profile changes far more often than
+    postings arrive, so without this the feed keeps ranking against whatever
+    the skills list said last week. Pure string work, no model, so it is fast
+    enough to run inline.
+    """
+    return jsonify({'rescored': sync.rescore_all(get_db())})
+
+
+@bp.get('/feed')
+def job_feed():
+    """The triage feed: undismissed postings with no application yet.
+
+    Ordered by score, unscored last. Postings that already have an application
+    are excluded because they have left triage — they live in the pipeline now,
+    and showing them here would offer Queue on something already queued.
+    """
+    db = get_db()
+    limit = min(int(request.args.get('limit') or 100), 500)
+    rows = db.execute(
+        """
+        SELECT j.* FROM jobs j
+        LEFT JOIN applications a ON a.job_id = j.id
+        WHERE j.dismissed = 0 AND a.id IS NULL
+        ORDER BY j.match_score IS NULL, j.match_score DESC, j.posted_at DESC,
+                 j.created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+
+    feed = []
+    for row in rows:
+        item = row_to_dict(row)
+        try:
+            item['matchReasons'] = json.loads(row['match_reasons']) if row['match_reasons'] else None
+        except ValueError:
+            item['matchReasons'] = None
+        # The description is the largest column by far and the card shows only
+        # a few lines of it; sending all of it for 100 postings is megabytes.
+        item['description'] = (row['description'] or '')[:600]
+        feed.append(item)
+    return jsonify(feed)
+
+
+@bp.post('/<job_id>/dismiss')
+def dismiss_job(job_id):
+    db = get_db()
+    body = _body()
+    dismissed = 0 if body.get('dismissed') is False else 1
+    db.execute('UPDATE jobs SET dismissed=?, updated_at=? WHERE id=?',
+               (dismissed, _now(), job_id))
+    db.commit()
+    row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+    if row is None:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(row_to_dict(row))
+
+
+@bp.post('/<job_id>/queue')
+def queue_job(job_id):
+    """Queue a posting for resume generation. Returns immediately.
+
+    The whole point of the phone half of this feature: tapping Queue is a
+    judgement, not a request to wait on a model. The worker in
+    `backend/jobs/queue.py` does the slow part when the machine is quiet.
+    """
+    db = get_db()
+    if db.execute('SELECT 1 FROM jobs WHERE id=?', (job_id,)).fetchone() is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    now = _now()
+    steer = (_body().get('steer') or '').strip()
+    existing = db.execute(
+        'SELECT * FROM applications WHERE job_id=?', (job_id,)
+    ).fetchone()
+
+    if existing is None:
+        application_id = str(ULID())
+        db.execute(
+            'INSERT INTO applications (id, job_id, status, steer, queued_at,'
+            ' created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            (application_id, job_id, 'draft', steer, now, now, now),
+        )
+    else:
+        application_id = existing['id']
+        # Re-queueing is how you retry a failure, so the error is cleared here
+        # rather than left to confuse the next look at the card.
+        db.execute(
+            'UPDATE applications SET queued_at=?, queue_error=NULL, '
+            'steer=COALESCE(NULLIF(?, \'\'), steer), updated_at=? WHERE id=?',
+            (now, steer, now, application_id),
+        )
+    db.commit()
+
+    row = db.execute('SELECT * FROM applications WHERE id=?', (application_id,)).fetchone()
+    return jsonify(row_to_dict(row)), 201
+
+
+@bp.get('/queue/status')
+def queue_status():
+    db = get_db()
+    # Failed ones are counted separately, not as pending — they will not be
+    # picked up again without an explicit re-queue, so calling them "waiting"
+    # would promise something the worker is not going to do.
+    pending = db.execute(
+        """SELECT COUNT(*) AS c FROM applications a
+           WHERE a.queued_at IS NOT NULL AND a.status='draft'
+             AND a.queue_error IS NULL
+             AND NOT EXISTS (SELECT 1 FROM resume_versions rv
+                             WHERE rv.application_id = a.id)"""
+    ).fetchone()
+    failed = db.execute(
+        'SELECT COUNT(*) AS c FROM applications WHERE queue_error IS NOT NULL'
+    ).fetchone()
+    return jsonify({
+        **queue_mod.status(),
+        'pending': pending['c'] if pending else 0,
+        'failed': failed['c'] if failed else 0,
+    })
+
+
+@bp.post('/queue/drain')
+def drain_queue():
+    """Kick the queue by hand, ignoring the idle gate.
+
+    The scheduler's drain waits for the machine to be quiet. This one does not:
+    asking for it explicitly *is* the signal that now is a good time.
+    """
+    db = get_db()
+    pending = queue_mod.next_queued(db)
+    if pending is None:
+        return jsonify({'submitted': None, 'reason': 'nothing queued'})
+    submitted = queue_mod.submit(pending['id'])
+    return jsonify({
+        'submitted': pending['id'] if submitted else None,
+        'reason': '' if submitted else 'already running',
+    })
+
+
+@bp.post('/<job_id>/rationale')
+def job_rationale(job_id):
+    """The on-demand advisory paragraph. Never changes `match_score`."""
+    db = get_db()
+    row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+    if row is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    loaded = profile_mod.load_profile(db)
+    if profile_mod.is_empty(loaded):
+        return jsonify({'error': 'Your profile is empty — nothing to compare against.'}), 400
+
+    try:
+        reasons = json.loads(row['match_reasons']) if row['match_reasons'] else {}
+    except ValueError:
+        reasons = {}
+
+    job = {'title': row['title'], 'company': row['company'],
+           'location': row['location'], 'description': row['description']}
+
+    # The user is waiting on this one, so it takes an interactive mark rather
+    # than deferring to it.
+    token = priority.begin('job-rationale')
+    try:
+        assessment = job_match.assess_match(
+            job, profile_mod.profile_text(loaded)[:4000], reasons
+        )
+    finally:
+        priority.end(token)
+
+    if assessment is None:
+        return jsonify({'error': 'The local model is unavailable.'}), 503
+
+    # Stored alongside the deterministic report, never replacing it — the score
+    # and the sort stay computed.
+    merged = {**reasons, 'assessment': assessment, 'assessedAt': _now()}
+    db.execute('UPDATE jobs SET match_reasons=?, updated_at=? WHERE id=?',
+               (json.dumps(merged), _now(), job_id))
+    db.commit()
+    return jsonify(assessment)

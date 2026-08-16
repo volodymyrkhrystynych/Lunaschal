@@ -265,3 +265,49 @@ def test_tick_purges_once_a_day_inside_the_window(client, jobs_root):
 
     results, _ = scheduler.tick(now=datetime(2026, 8, 15, 7, 45), last_purge_date=last)
     assert results['purge'] is None
+
+
+def test_tick_runs_the_sync_sweep_every_pass(client, jobs_root, monkeypatch):
+    """Sync makes no model call, so like linkage it needs no hour window."""
+    from datetime import datetime
+
+    from backend.jobs import sync
+    from backend.jobs.sources.base import SourceResult
+
+    db = get_db()
+    db.execute(
+        'INSERT INTO job_searches (id, kind, label, params, enabled, interval_hours,'
+        ' created_at, updated_at) VALUES (?, ?, ?, ?, 1, 24, ?, ?)',
+        ('s1', 'greenhouse', 'Acme', '{"slug": "acme"}', NOW, NOW),
+    )
+    db.commit()
+    monkeypatch.setattr(sync, 'fetch_source', lambda kind, params, creds=None: SourceResult(
+        jobs=[{'sourceId': 'gh-1', 'title': 'Dev', 'company': 'Acme',
+               'description': 'Python.', 'raw': {}}]
+    ))
+
+    results, _ = scheduler.tick(now=datetime(2026, 8, 15, 14, 0), last_purge_date=None)
+
+    assert results['sync']['added'] == 1
+
+
+def test_a_failing_sweep_does_not_cost_the_linkage_result(client, jobs_root, monkeypatch):
+    """Each sweep is wrapped separately — a board that is down must not take
+    the rest of the tick with it."""
+    from datetime import datetime
+
+    from backend.jobs import sync
+
+    def boom():
+        raise RuntimeError('everything is on fire')
+
+    monkeypatch.setattr(sync, 'run_sync_sweep', boom)
+    db = get_db()
+    account_id = make_account(db)
+    make_application(db)
+    make_email(db, account_id, subject='Acme', sender_email='no-reply@greenhouse.io')
+
+    results, _ = scheduler.tick(now=datetime(2026, 8, 15, 14, 0), last_purge_date=None)
+
+    assert results['linkage'] == {'scanned': 1, 'linked': 1}
+    assert results['sync'] is None

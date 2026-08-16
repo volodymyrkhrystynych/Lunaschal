@@ -12,6 +12,7 @@ import { VRAMSection } from './VRAMSection';
 import { NetworkSection } from './NetworkSection';
 import { FanficCookiesSection } from './FanficCookiesSection';
 import { EmailSection } from './EmailSection';
+import { JobsSection } from './JobsSection';
 import { DisplaySection } from './DisplaySection';
 import { LlamaConfigSection } from './LlamaConfigSection';
 import { MemorySection } from './MemorySection';
@@ -85,6 +86,8 @@ export function Settings() {
           <FanficCookiesSection />
 
           <EmailSection />
+
+          <JobsSection />
 
           {settings?.networkMode && <NetworkSection />}
 

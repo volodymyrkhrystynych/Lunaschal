@@ -1274,6 +1274,15 @@ CREATE TABLE IF NOT EXISTS applications (
     closed_at INTEGER,
     purge_after INTEGER,
     purged_at INTEGER,
+    -- Stamped when the posting is queued from the feed, which is a different
+    -- thing from `status`: a queued application is still a 'draft' until the
+    -- worker has actually produced a resume for it. It is a column rather than
+    -- a tenth status because `status`'s CHECK cannot be ALTERed in SQLite, and
+    -- rebuilding the table to add one word is a bad trade.
+    queued_at INTEGER,
+    -- Why the queue worker gave up on this one. Without it a failed tailoring
+    -- leaves an application sitting in 'draft' forever with no explanation.
+    queue_error TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -1326,3 +1335,29 @@ CREATE TABLE IF NOT EXISTS job_email_scans (
     scanned_at INTEGER NOT NULL,
     matched INTEGER NOT NULL DEFAULT 0
 );
+
+-- One saved query per row, whatever the source. `params` is per-kind rather
+-- than a wide table of mostly-NULL columns: an Adzuna search is a query plus a
+-- radius, a company board is a slug, and they have nothing else in common.
+--
+-- `last_error` is stored rather than only logged because a search that has
+-- been quietly failing for a week looks exactly like a search with no new
+-- postings, and the feed gives no hint which it is.
+CREATE TABLE IF NOT EXISTS job_searches (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL CHECK(kind IN ('adzuna','greenhouse','lever','ashby')),
+    label TEXT NOT NULL DEFAULT '',
+    -- adzuna: {what, where, distanceKm, maxDaysOld, remoteOnly}
+    -- greenhouse/lever/ashby: {slug}
+    params TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    interval_hours INTEGER NOT NULL DEFAULT 24,
+    last_run_at INTEGER,
+    last_count INTEGER,
+    last_error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_searches_due
+    ON job_searches(last_run_at) WHERE enabled = 1;

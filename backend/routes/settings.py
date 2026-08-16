@@ -129,6 +129,9 @@ def get_settings():
             s.get('job_rejection_grace_days')
             if s.get('job_rejection_grace_days') is not None else 30
         ),
+        # The key itself never leaves the server, same as the Google secret
+        # above — the UI only needs to know whether Adzuna is configured.
+        'hasAdzunaCredentials': bool(s.get('adzuna_app_id')) and bool(s.get('adzuna_app_key')),
     })
 
 
@@ -181,6 +184,8 @@ def update_ai():
         'jobRetentionDays': 'job_retention_days',
         'jobPurgeOnRejection': 'job_purge_on_rejection',
         'jobRejectionGraceDays': 'job_rejection_grace_days',
+        'adzunaAppId': 'adzuna_app_id',
+        'adzunaAppKey': 'adzuna_app_key',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():

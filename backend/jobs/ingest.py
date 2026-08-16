@@ -69,7 +69,23 @@ class FetchFailed(RuntimeError):
 
 
 def fetch_posting(url: str) -> tuple[str, str | None]:
-    """Fetch a posting and return (plain text, page title).
+    """Fetch a posting and return (plain text, page title)."""
+    html, _ = fetch_html(url)
+    text, title = strip_html_with_title(html, MAX_PAGE_CHARS)
+    if not text.strip():
+        raise FetchFailed(
+            'That page has no readable text — it may need JavaScript. '
+            'Paste the posting text instead.'
+        )
+    return text, title
+
+
+def fetch_html(url: str) -> tuple[str, str]:
+    """Fetch a page and return (raw HTML, the URL it finally resolved to).
+
+    Raw rather than stripped because `resolve.py` reads `href`s, which is
+    exactly what stripping throws away — and the final URL is itself an answer
+    there, since a careers page often just redirects to the ATS board.
 
     Redirects are followed by hand so each hop can be re-validated; `requests`
     following them internally would check only the URL we started with.
@@ -123,13 +139,7 @@ def fetch_posting(url: str) -> tuple[str, str | None]:
         resp.close()
 
         html = b''.join(chunks).decode(resp.encoding or 'utf-8', errors='replace')
-        text, title = strip_html_with_title(html, MAX_PAGE_CHARS)
-        if not text.strip():
-            raise FetchFailed(
-                'That page has no readable text — it may need JavaScript. '
-                'Paste the posting text instead.'
-            )
-        return text, title
+        return html, current
 
     raise FetchFailed('Too many redirects.')
 
