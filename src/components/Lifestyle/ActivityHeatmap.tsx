@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import type { WorkoutSession } from '@/hooks/api';
@@ -92,6 +92,7 @@ function DayDetail({
 export function ActivityHeatmap() {
   const [metric, setMetric] = useState<ShadeMetric>('duration');
   const [selected, setSelected] = useState<string | null>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
 
   const end = todayISO();
   const start = addDays(end, -(WEEKS * 7));
@@ -100,6 +101,14 @@ export function ActivityHeatmap() {
     queryKey: ['lifestyle', 'heatmap', start, end],
     queryFn: () => api.lifestyle.heatmap({ start, end }),
   });
+
+  // The grid is oldest-to-newest, and only mounts once loading finishes, so
+  // the scroll-to-right has to key off that flip rather than run once on
+  // mount — today's column is the point of the view, not 53 weeks back.
+  useLayoutEffect(() => {
+    const el = gridRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [isLoading]);
 
   const weeks = useMemo(() => buildHeatmapGrid(days, end, WEEKS), [days, end]);
   const ceiling = useMemo(() => metricCeiling(days, metric), [days, metric]);
@@ -143,7 +152,7 @@ export function ActivityHeatmap() {
       ) : (
         // The full year is wider than a Pocket 2 screen, so the grid scrolls
         // inside its own container rather than the page scrolling sideways.
-        <div className="overflow-x-auto pb-1">
+        <div ref={gridRef} className="overflow-x-auto pb-1">
           <div
             className="inline-flex flex-col gap-1"
             style={{ minWidth: 'min-content' }}

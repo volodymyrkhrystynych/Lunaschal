@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import { addDays, todayISO } from '@/lib/lifestyle';
@@ -73,6 +73,7 @@ export function SelfieCard() {
   const queryClient = useQueryClient();
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
 
@@ -80,6 +81,14 @@ export function SelfieCard() {
     queryKey: ['lifestyle', 'selfies'],
     queryFn: () => api.lifestyle.selfies.list(120),
   });
+
+  // The strip is oldest-to-newest, so the fixed 14-day layout is scrolled to
+  // its right edge on mount — today's slot (filled or still a dashed gap) is
+  // what answers "did I log one today", not day 14 back.
+  useLayoutEffect(() => {
+    const el = stripRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, []);
 
   const upload = useMutation({
     mutationFn: (image: Blob) => api.lifestyle.selfies.upload(image),
@@ -186,7 +195,7 @@ export function SelfieCard() {
         </div>
       )}
 
-      <div className="mt-3 flex gap-1 overflow-x-auto pb-1">
+      <div ref={stripRef} className="mt-3 flex gap-1 overflow-x-auto pb-1">
         {strip.map(({ date, selfie }) => (
           <div key={date} className="shrink-0 text-center">
             {selfie ? (
