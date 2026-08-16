@@ -13,6 +13,8 @@ stitch two feature APIs together to draw two lines on one axis.
 import re
 import time
 from datetime import date as date_cls, timedelta
+from io import BytesIO
+from types import SimpleNamespace
 
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
@@ -21,6 +23,7 @@ from backend.ai.background import run_bg
 from backend.ai.workouts import parse_workout
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.day_boundary import DAY_ROLLOVER_HOUR, day_bounds, day_key_for
+from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.lifestyle import storage
 from backend.lifestyle.activity import is_activity_type, summarize_day
 from backend.lifestyle.exercises import canonicalize, display_name
@@ -643,12 +646,24 @@ def upload_selfie():
     if len(data) > MAX_SELFIE_BYTES:
         return jsonify({'error': 'image is too large'}), 413
 
+    # HEIC/HEIF (what an iPhone camera actually produces) is transcoded to JPEG
+    # so it renders in an <img> everywhere it's used — the selfie strip thumbnail
+    # and the full preview alike — same as food/chat/cookbook uploads.
+    is_heic = ext in HEIC_EXTS
+    mime = file.mimetype
+    if is_heic:
+        ext, mime = 'jpg', 'image/jpeg'
+
     selfie_id = str(ULID())
     path = storage.selfie_path(selfie_id, ext)
     if path is None:
         return jsonify({'error': 'unsupported image type'}), 400
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(data)
+    if is_heic:
+        if not transcode_to_jpeg(SimpleNamespace(stream=BytesIO(data)), path):
+            return jsonify({'error': 'unsupported image type'}), 400
+    else:
+        path.write_bytes(data)
 
     db = get_db()
     previous = db.execute(
@@ -658,7 +673,7 @@ def upload_selfie():
         db.execute('DELETE FROM lifestyle_selfies WHERE id=?', (previous['id'],))
     db.execute(
         'INSERT INTO lifestyle_selfies(id, date, path, mime, created_at) VALUES (?,?,?,?,?)',
-        (selfie_id, day, str(path), file.mimetype or None, int(time.time())),
+        (selfie_id, day, str(path), mime or None, int(time.time())),
     )
     db.commit()
     # Only after the row is committed — losing the new photo to a failed insert
