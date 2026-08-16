@@ -17,6 +17,12 @@ Rules — follow all of them:
    itself treats as asides.
 5. Generate as many cards as the content genuinely supports — no padding.
 
+The source material may be followed by a line of dashes (---) and a 'Context:'
+section — things already known about the author. Use it only to fix a word in
+the source that is clearly a speech-to-text mishearing, such as a mangled
+name; never use it to add a fact the source doesn't already contain, and never
+repeat the context section in a card.
+
 Respond with valid JSON: {"cards": [{"question": "...", "answer": "..."}, ...]}"""
 
 REGENERATE_SYSTEM = GENERATE_SYSTEM + """
@@ -58,8 +64,17 @@ def _parse_cards(result: dict) -> list[dict]:
     ]
 
 
-def generate_cards(text: str, direction: str | None = None) -> list[dict]:
+def generate_cards(
+    text: str, direction: str | None = None, *, memory: str = ''
+) -> list[dict]:
+    """`memory` — the standing memory document (backend/memory.py) — is
+    optional reference material for fixing a misheard name in `text`, the
+    same convention Journal's Polish, Ideas' capture and Food's structuring
+    use. It never adds facts; a brain-dump with nothing to correct against
+    generates exactly as it did before this existed."""
     prompt = f'Source material:\n\n{text}'
+    if memory and memory.strip():
+        prompt += f'\n\n---\nContext:\n{memory.strip()}'
     if direction:
         prompt += f'\n\nAdditional instructions from the user: {direction}'
     return _parse_cards(chat_json(prompt, system=GENERATE_SYSTEM, schema=CARDS_SCHEMA))

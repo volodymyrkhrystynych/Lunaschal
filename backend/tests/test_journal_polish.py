@@ -120,7 +120,7 @@ def test_route_400s_without_a_transcript_to_polish(client, monkeypatch):
     assert r.status_code == 400
 
 
-# --- attachment context passed to the polish -----------------------------------
+# --- context passed to the polish (attachments + memory) -----------------------
 
 def test_polish_route_passes_attachment_descriptions_as_context(client, monkeypatch):
     entry_id = _entry_with_raw(client, monkeypatch, raw='raw dictation here')
@@ -145,7 +145,11 @@ def test_polish_route_passes_attachment_descriptions_as_context(client, monkeypa
 
     r = client.post(f'/api/journal/{entry_id}/polish')
     assert r.status_code == 200
-    assert captured['context'] == 'memo.m4a: A dog barks twice in the background.'
+    # No memory set in this test, so context is attachments only.
+    assert captured['context'] == (
+        "This entry's audio/video attachments:\nmemo.m4a: A dog barks twice in "
+        "the background."
+    )
 
 
 def test_attachment_polish_context_ignores_undescribed_and_image_attachments(client, monkeypatch):
@@ -158,3 +162,50 @@ def test_attachment_polish_context_ignores_undescribed_and_image_attachments(cli
              data=b'\x89PNG' + b'\x00' * 60)
 
     assert journal_routes._attachment_polish_context(entry_id) is None
+
+
+def test_polish_route_passes_the_memory_document_as_context(client, monkeypatch):
+    from backend.memory import set_memory
+
+    set_memory('The dog is named Fenwick.', source='user')
+    entry_id = _entry_with_raw(client, monkeypatch, raw='raw dictation here')
+
+    captured = {}
+
+    def _fake_polish(_text, context=None):
+        captured['context'] = context
+        return 'Raw dictation here.'
+    monkeypatch.setattr(journal_routes, 'polish_journal_entry', _fake_polish)
+
+    r = client.post(f'/api/journal/{entry_id}/polish')
+    assert r.status_code == 200
+    # No attachments in this test, so context is the memory document only —
+    # the same reference Chat dictation's now-removed correction pass used.
+    assert captured['context'] == (
+        'Things already known about the user:\nThe dog is named Fenwick.'
+    )
+
+
+def test_polish_context_combines_memory_and_attachments(client, monkeypatch):
+    from backend.memory import set_memory
+
+    set_memory('The dog is named Fenwick.', source='user')
+    entry_id = _entry_with_raw(client, monkeypatch, raw='raw dictation here')
+    a = _upload(client, entry_id, filename='memo.m4a', mime='audio/mp4').get_json()
+    get_db().execute(
+        "UPDATE journal_attachments SET description_status='done',"
+        " description='A dog barks twice in the background.' WHERE id=?",
+        (a['id'],),
+    )
+    get_db().commit()
+
+    assert journal_routes._polish_context(entry_id) == (
+        'Things already known about the user:\nThe dog is named Fenwick.'
+        "\n\nThis entry's audio/video attachments:\n"
+        'memo.m4a: A dog barks twice in the background.'
+    )
+
+
+def test_polish_context_is_none_with_neither_memory_nor_attachments(client, monkeypatch):
+    entry_id = _entry_with_raw(client, monkeypatch)
+    assert journal_routes._polish_context(entry_id) is None

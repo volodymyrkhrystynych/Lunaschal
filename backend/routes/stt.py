@@ -445,7 +445,9 @@ def transcribe():
 
 @bp.post('/api/transcribe/correct')
 def transcribe_correct():
-    """Transcribe an audio file then use the LLM to fix errors against a ground-truth document."""
+    """Transcribe an audio file then use the LLM to fix errors against
+    reference material: the standing memory document (backend/memory.py,
+    always consulted) plus an optional pasted-in ground-truth document."""
     if 'audio' not in request.files:
         return jsonify({'error': 'Missing audio file'}), 400
     audio_file = request.files['audio']
@@ -471,19 +473,29 @@ def transcribe_correct():
 
     raw_text = stt_result['text']
 
-    if not ground_truth or not is_ai_configured():
+    from backend.memory import get_memory
+    memory = get_memory().strip()
+    reference = '\n\n'.join(
+        part for part in (
+            f'Things known about the speaker:\n{memory}' if memory else '',
+            f'Ground truth reference document:\n{ground_truth}' if ground_truth else '',
+        ) if part
+    )
+
+    if not reference or not is_ai_configured():
         return jsonify({'raw': raw_text, 'corrected': raw_text, 'language': stt_result['language']})
 
     system_prompt = (
         'You are a transcription corrector. '
-        'You will be given a raw speech-to-text transcription and a ground truth reference document. '
+        'You will be given a raw speech-to-text transcription and reference material. '
         'Correct any errors in the transcription — wrong words, misheared proper nouns, domain-specific terms — '
         'so that it matches terminology in the reference. '
+        'Only change a word when the reference gives you a specific reason to. '
         'Return only the corrected transcription text, preserving the original meaning and structure. '
         'Do not add commentary or explanations.'
     )
     user_message = (
-        f'Ground truth reference document:\n---\n{ground_truth}\n---\n\n'
+        f'Reference material:\n---\n{reference}\n---\n\n'
         f'Raw transcription:\n{raw_text}\n\nCorrected transcription:'
     )
 

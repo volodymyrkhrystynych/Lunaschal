@@ -31,7 +31,7 @@ Shortcuts:
 - **Right Alt** (`STT_VOICE_KEY`) — record → transcribe → AI chat (Lunaschal `/api/chat/stream`) → TTS reply spoken aloud
 - (`STT_JOURNAL_KEY`) — record → transcribe → save as journal entry
 
-All three shortcuts are rebindable in Settings → Voice Shortcuts (stored in the `settings` table; env vars are fallbacks). The listener also runs the task-nudge loop (see Tasks & todos in the root CLAUDE.md). Every transcription is logged to the `transcriptions` table; `POST /api/transcribe/correct` re-runs a transcript through the LLM for cleanup.
+All three shortcuts are rebindable in Settings → Voice Shortcuts (stored in the `settings` table; env vars are fallbacks). The listener also runs the task-nudge loop (see Tasks & todos in the root CLAUDE.md). Every transcription is logged to the `transcriptions` table; `POST /api/transcribe/correct` re-runs a transcript through the LLM for cleanup — it always consults `backend/memory.py`'s standing document as reference material now, on top of whatever `ground_truth` text is optionally pasted in via the Editor's STT panel. None of the three shortcuts above call this route themselves (`stt/listener.py` and `stt/morning_checkin.py` both use plain `/api/transcribe`) — it's a manual, on-demand pass, not something dictation runs through automatically.
 
 The Flask backend handles `POST /api/transcribe` and `POST /api/tts` directly (no separate port 8765 service). The Whisper model loads lazily on the first transcription request. `stt/service.py` still exists as a standalone FastAPI server but is no longer used by default.
 

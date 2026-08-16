@@ -388,43 +388,6 @@ def upload_attachments(id):
     return jsonify(saved), 201
 
 
-@bp.post('/polish-transcript')
-def polish_transcript():
-    """Correct a dictated message against the memory and any attached photos.
-
-    Returns both texts. The composer shows `corrected` and keeps `raw` — which
-    then rides to the server on the message as `rawContent`, so what was actually
-    said survives even after the correction and the user's own edits.
-    """
-    body = request.json or {}
-    text = (body.get('text') or '').strip()
-    if not text:
-        return jsonify({'error': 'text required'}), 400
-
-    from backend.ai.transcript import correct_transcript
-    from backend.chat.context import image_parts_for, photo_notes_for
-    from backend.memory import get_memory
-
-    ids = body.get('attachmentIds') or []
-    # With chat vision on nothing has pre-read the photo, so the corrector is
-    # handed the picture itself — which is the better reference anyway: a menu
-    # spells the dish name that was misheard, and a paragraph about the menu
-    # might not have quoted it.
-    if chat_vision_enabled():
-        image_parts, _ = image_parts_for(ids)
-        notes: list[str] = []
-    else:
-        image_parts, notes = [], photo_notes_for(ids)
-
-    corrected = correct_transcript(
-        text,
-        memory=get_memory(),
-        photo_notes=notes,
-        image_parts=image_parts,
-    )
-    return jsonify({'raw': text, 'corrected': corrected})
-
-
 @bp.get('/attachments/<attachment_id>')
 def get_attachment(attachment_id):
     """One attachment row — polled by the composer while its photo is being read."""

@@ -171,10 +171,8 @@ def read_chat_photo(path: Path, hint: str | None = None) -> str:
 
     Not the journal caption. The chat model never sees the picture, so this text
     *is* the picture as far as the conversation is concerned — and its most
-    valuable job is transcribing legible text. A photographed menu, label or
-    receipt routinely spells the exact proper noun speech-to-text just mangled,
-    which is what makes the transcript correction in `POST /api/chat/
-    polish-transcript` able to fix a dish or place name instead of guessing.
+    valuable job is transcribing legible text: a photographed menu, label or
+    receipt routinely spells the exact proper noun speech-to-text just mangled.
     """
     prompt = 'Describe this photo.'
     if hint and hint.strip():

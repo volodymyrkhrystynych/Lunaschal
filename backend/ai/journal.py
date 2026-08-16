@@ -37,7 +37,8 @@ _SYSTEM = (
     "line between two thoughts never counts as altering what the speaker said.\n"
     "\n"
     "The transcript may be followed by a line of dashes (---) and a 'Context:' "
-    "section — descriptions of audio attached to this entry, heard by a "
+    "section — background material such as things already known about the "
+    "speaker, or descriptions of audio attached to this entry heard by a "
     "different listener. Use it only to fix a word in the transcript that is "
     "clearly a mishearing, such as a mangled name; never use it to add, remove, "
     "or infer anything the transcript doesn't already say. Do not repeat the "
@@ -184,11 +185,14 @@ def polish_journal_entry(raw_text: str, context: str | None = None) -> str:
     transcript and report success. Callers decide what a failure means for them
     — the background path leaves the entry alone, the route reports 503.
 
-    `context` — descriptions of the entry's attached audio/video (see
-    backend/routes/journal.py's `_attachment_polish_context`) — is optional and
-    off by default; when given, it's appended after the transcript exactly as
-    the system prompt tells the model to expect, so a name the speech-to-text
-    mangled can be corrected using what a different listener heard.
+    `context` — the standing memory document plus descriptions of the entry's
+    attached audio/video (see backend/routes/journal.py's `_polish_context`) —
+    is optional; when given, it's appended after the transcript exactly as the
+    system prompt tells the model to expect, so a name the speech-to-text
+    mangled can be corrected against what's already known about the speaker or
+    what a different listener heard. `backend/ai/idea_polish.py`'s lighter,
+    short-form counterpart and `backend/routes/stt.py`'s manual correction pass
+    read the same memory document for the same reason.
     """
     if not raw_text.strip():
         return raw_text

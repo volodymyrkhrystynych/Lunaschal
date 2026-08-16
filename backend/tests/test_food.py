@@ -54,7 +54,7 @@ def _png(name='photo.jpg', content=b'\xff\xd8\xffFAKEJPEG'):
 
 
 def test_create_plain_text_entry(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     r = _create(client, text='had a great sandwich')
     assert r.status_code == 201
     body = r.get_json()
@@ -67,12 +67,12 @@ def test_create_plain_text_entry(client, monkeypatch):
 
 
 def test_create_requires_some_content(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     assert _create(client, text='').status_code == 400
 
 
 def test_ai_structuring_fills_fields_and_links_recipe(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: {
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: {
         'dish': 'Tonkotsu ramen',
         'place': 'Kinton',
         'rating': 5,
@@ -103,7 +103,7 @@ def test_ai_structuring_fills_fields_and_links_recipe(client, monkeypatch):
 
 
 def test_manual_fields_win_over_ai(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: {
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: {
         'dish': 'AI dish', 'place': 'AI place', 'rating': 2,
         'notes': 'ai notes', 'tags': ['ai'], 'recipe': None,
     })
@@ -114,8 +114,23 @@ def test_manual_fields_win_over_ai(client, monkeypatch):
     assert body['place'] == 'AI place'    # AI filled the empty one
 
 
+def test_structuring_passes_the_memory_document_to_the_parser(client, monkeypatch):
+    from backend.memory import set_memory
+
+    set_memory('Their favourite ramen spot is Kinton.', source='user')
+    seen = {}
+
+    def _fake(text, **kwargs):
+        seen['memory'] = kwargs.get('memory')
+        return None
+    monkeypatch.setattr(food, 'parse_food_entry', _fake)
+
+    _create(client, text='ramen at kin tin')
+    assert seen['memory'] == 'Their favourite ramen spot is Kinton.'
+
+
 def test_create_with_media_saves_file_and_serves_it(client, food_root, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     r = _create(client, text='lunch', media=_png(content=b'JPEGBYTES'))
     body = r.get_json()
     assert len(body['media']) == 1
@@ -131,13 +146,13 @@ def test_create_with_media_saves_file_and_serves_it(client, food_root, monkeypat
 
 
 def test_video_media_detected_as_video(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     r = _create(client, text='dinner', media=_png(name='clip.mov', content=b'MOVDATA'))
     assert r.get_json()['media'][0]['kind'] == 'video'
 
 
 def test_delete_entry_removes_media_and_dir(client, food_root, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     body = _create(client, text='snack', media=_png()).get_json()
     entry_id = body['id']
     media_id = body['media'][0]['id']
@@ -150,7 +165,7 @@ def test_delete_entry_removes_media_and_dir(client, food_root, monkeypatch):
 
 
 def test_delete_single_media(client, food_root, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     body = _create(client, text='snack', media=_png()).get_json()
     media_id = body['media'][0]['id']
     r = client.delete(f'/api/food/media/{media_id}')
@@ -160,7 +175,7 @@ def test_delete_single_media(client, food_root, monkeypatch):
 
 
 def test_patch_updates_fields(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     body = _create(client, text='meh').get_json()
     r = client.patch(f"/api/food/{body['id']}", json={'dish': 'Pho', 'rating': 3, 'tags': ['vietnamese']})
     assert r.status_code == 200
@@ -169,7 +184,7 @@ def test_patch_updates_fields(client, monkeypatch):
 
 
 def test_add_media_to_existing_entry(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     body = _create(client, text='brunch').get_json()
     r = client.post(
         f"/api/food/{body['id']}/media",
@@ -181,7 +196,7 @@ def test_add_media_to_existing_entry(client, monkeypatch):
 
 
 def test_tag_filter_and_tag_counts(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     a = _create(client, text='a', tags='sushi,dinner').get_json()
     _create(client, text='b', tags='dinner').get_json()
 
@@ -193,7 +208,7 @@ def test_tag_filter_and_tag_counts(client, monkeypatch):
 
 
 def test_gps_coordinates_round_trip(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     r = client.post(
         '/api/food',
         json={'text': 'bagel', 'latitude': 43.6532, 'longitude': -79.3832},
@@ -208,7 +223,7 @@ def test_gps_coordinates_round_trip(client, monkeypatch):
 
 
 def test_invalid_coordinates_dropped(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     r = client.post(
         '/api/food',
         json={'text': 'bagel', 'latitude': 'not-a-number', 'longitude': 999},
@@ -219,7 +234,7 @@ def test_invalid_coordinates_dropped(client, monkeypatch):
 
 
 def test_photo_exif_sets_date_and_location(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     # Client also sends a "current" device GPS — the photo's EXIF must win.
     r = _create(
         client,
@@ -238,7 +253,7 @@ def test_photo_exif_sets_date_and_location(client, monkeypatch):
 
 
 def test_photo_without_gps_falls_back_to_device_location(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     r = _create(
         client,
         text='lunch',
@@ -253,7 +268,7 @@ def test_photo_without_gps_falls_back_to_device_location(client, monkeypatch):
 
 def test_heic_upload_is_transcoded_and_keeps_exif(client, monkeypatch):
     pytest.importorskip('pillow_heif')
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     heic = _exif_image(fmt='HEIF', dt='2025:12:25 18:05:00',
                        gps=('N', (48.0, 51.0, 30.0), 'E', (2.0, 17.0, 40.0)))
     body = _create(client, text='paris dinner',
@@ -274,7 +289,7 @@ def test_heic_upload_is_transcoded_and_keeps_exif(client, monkeypatch):
 
 
 def test_voiceonly_log_is_not_backdated(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     before = datetime.now().timestamp()
     body = _create(client, text='just a voice note').get_json()
     assert datetime.fromisoformat(body['createdAt']).timestamp() >= before - 2
@@ -288,7 +303,7 @@ def test_missing_entry_and_media_404(client):
 
 
 def test_rejects_unsupported_media_type(client, monkeypatch):
-    monkeypatch.setattr(food, 'parse_food_entry', lambda text: None)
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
     # An .exe upload is dropped; the entry still saves via its text.
     body = _create(client, text='note', media=_png(name='evil.exe', content=b'MZ')).get_json()
     assert body['media'] == []

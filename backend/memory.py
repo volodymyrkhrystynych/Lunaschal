@@ -6,8 +6,10 @@ one conversation survives into the next. This is the store behind the part of
 the system prompt that always claimed otherwise.
 
 Its most concrete job is speech-to-text. Dictation mangles proper nouns, and a
-name written down once here is a name the transcript-correction pass can fix
-every time afterwards.
+name written down once here is a name every feature's own correction pass can
+fix afterwards: Journal's Polish (`backend/ai/journal.py`), Ideas' background
+cleanup on voice capture (`backend/ai/idea_polish.py`), and the OS-level voice
+listener's manual correction route (`backend/routes/stt.py`).
 
 Three things are load-bearing:
 

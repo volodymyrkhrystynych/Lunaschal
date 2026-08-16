@@ -121,10 +121,10 @@ There is no cron and no general scheduler: four hand-rolled daemon loops start f
 - `chat.py` — system-prompt assembly (journal + schedule context, time stamping) and `chat_stream`, still used by the STT transcript-cleanup route
 - `chat_title.py` — nightly conversation titling
 - `embeddings.py` — text embeddings for Learning answer-dedup, via the `embed` router alias. Still **nomic-embed-text-v1.5** on purpose: the float32 vectors already stored on `learning_cards` are compared by cosine similarity, so a different embedding model would silently invalidate every stored vector
-- `journal.py` — entry polish/metadata (tags constrained to the closed `JOURNAL_TAGS` vocabulary by schema enum); `classify_entry_for_tag(content, tag_name) -> bool` for the curated-tag background scan
+- `journal.py` — entry polish/metadata (tags constrained to the closed `JOURNAL_TAGS` vocabulary by schema enum); `polish_journal_entry`'s `context` also carries the standing memory document alongside attachment descriptions, so a misheard name gets fixed against both — this is where Chat dictation's now-removed correction pass moved; `classify_entry_for_tag(content, tag_name) -> bool` for the curated-tag background scan
+- `idea_polish.py` — `polish_idea`, the same memory-document correction as Journal's but lighter (no paragraph reformatting — ideas stay one short block); fires once, in the background, right after `POST /api/ideas/voice` (see backend/research/CLAUDE.md)
 - `images.py` — `describe_image(path, *, system, prompt)` is the **only** call in the app that sends an image anywhere; `caption_image` (journal prose) and `read_chat_photo` (chat, quotes legible text verbatim) are its two callers
 - `memory.py` — background rewrite of the standing memory document to an instruction; returns None rather than a fallback, because a failed revision must leave the document alone
-- `transcript.py` — `correct_transcript(text, *, memory, photo_notes)`; fixes misheard words against a reference and returns the input unchanged when there is no reference to check against
 - `learning_generation.py` / `learning_grading.py` / `learning_verification.py` — flashcard generation, claim-coverage grading, MCP-grounded verification (see Learning below)
 - `mcp_client.py` — asyncio bridge to the `mcp` SDK (per-request sessions, stdio/http transports), MCP→OpenAI tool mapping
 - `writing.py` — `summarize_discussion` for the Writing module
@@ -153,7 +153,7 @@ Keyboard-first, single-key navigation (the Pocket 2 has no usable mouse): WASD-s
 
 ### Feature modules
 
-#### Chat delegate — see [`backend/delegate/CLAUDE.md`](backend/delegate/CLAUDE.md) for the delegate/proposal toolbox, chat photos, Memory, and transcript correction.
+#### Chat delegate — see [`backend/delegate/CLAUDE.md`](backend/delegate/CLAUDE.md) for the delegate/proposal toolbox, chat photos, Memory, and dictation.
 
 #### Learning — see [`backend/learning/CLAUDE.md`](backend/learning/CLAUDE.md).
 

@@ -147,7 +147,9 @@ def structure_food_entry(entry_id: str, text: str) -> None:
     Always finishes by checking for a homemade/existing-recipe match — even
     when parsing found nothing new to fill in, since that's independent of
     whether this text described a *new* recipe."""
-    parsed = parse_food_entry(text)
+    from backend.memory import get_memory
+
+    parsed = parse_food_entry(text, memory=get_memory())
     db = get_db()
     row = db.execute('SELECT * FROM food_entries WHERE id=?', (entry_id,)).fetchone()
     if not row:

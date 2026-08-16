@@ -65,9 +65,8 @@ export function ChatPanel() {
   const [isUploading, setIsUploading] = useState(false);
   // The verbatim transcript behind whatever is in the box, when it was dictated.
   // Kept so it can be shown, and so it rides to the server as the message's
-  // `rawContent` — corrected or not, what was said must survive.
+  // `rawContent` whenever a later hand-edit makes it differ from what was said.
   const [dictated, setDictated] = useState<string | null>(null);
-  const [isPolishing, setIsPolishing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -398,39 +397,19 @@ export function ChatPanel() {
    * This used to POST the transcript straight through as the message, which is
    * the one place in the app that did — every other view appends to a textarea
    * (BrainDump, IdeaCapture, Journal, FoodCapture) precisely so a mangled proper
-   * noun can be fixed before it becomes a record. It also made the correction
-   * pass below impossible: there was no moment between transcribing and sending.
+   * noun can be fixed before it becomes a record.
+   *
+   * There used to be an automated correction pass here too (`polishTranscript`,
+   * checking the transcript against the memory document and any attached
+   * photos) — moved to Journal's Polish instead, which already exists to turn
+   * a raw transcript into clean text and now takes the same memory-document
+   * reference. One place to fix a misheard word beats two.
    */
-  const handleTranscript = async (text: string) => {
+  const handleTranscript = (text: string) => {
     const raw = text.trim();
     if (!raw) return;
     setInput(prev => (prev.trim() ? `${prev.trim()} ${raw}` : raw));
     setDictated(prev => (prev ? `${prev} ${raw}` : raw));
-
-    // Correct it against the memory document and whatever the vision model read
-    // out of the attached photos. Best-effort: the transcript is already in the
-    // box, so a failure here costs the user nothing.
-    setIsPolishing(true);
-    try {
-      const { corrected } = await api.chat.polishTranscript(
-        raw,
-        staged.map(a => a.id)
-      );
-      if (corrected && corrected !== raw) {
-        setInput(prev => {
-          // Only rewrite the part we just added; anything typed alongside it is
-          // the user's and must not be touched.
-          const trimmed = prev.trimEnd();
-          return trimmed.endsWith(raw)
-            ? trimmed.slice(0, trimmed.length - raw.length) + corrected
-            : prev;
-        });
-      }
-    } catch {
-      // Nothing to do — the raw transcript stands.
-    } finally {
-      setIsPolishing(false);
-    }
   };
 
   const recorder = useRecorder(handleTranscript);
@@ -930,10 +909,10 @@ export function ChatPanel() {
           <div className="mb-2 space-y-1 text-xs text-[var(--color-text-muted)]">
             {attachError && <div className="text-red-400">{attachError}</div>}
             {photoStatus && <div>{photoStatus}</div>}
-            {isPolishing && <div>Checking the transcript…</div>}
-            {/* Shown before sending, not just after: the point of no longer
-                auto-submitting is that a mangled name can be caught here. */}
-            {dictated && !isPolishing && dictated !== input.trim() && (
+            {/* Shown before sending, not just after: only once the box has
+                been hand-edited since dictating is there a "raw" left to
+                show — otherwise the box already reads exactly what was said. */}
+            {dictated && dictated !== input.trim() && (
               <details>
                 <summary className="cursor-pointer select-none">
                   As dictated

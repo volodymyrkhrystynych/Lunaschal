@@ -185,67 +185,6 @@ def test_a_plain_string_message_is_stamped_exactly_as_before(client):
     assert msg['content'].endswith('hello')
 
 
-# --- Transcript correction ---
-
-
-def test_with_vision_on_the_corrector_gets_the_picture(client, monkeypatch):
-    from backend.ai import transcript as ai_transcript
-
-    _enable_vision(client)
-    _, att = _attach(client)
-
-    seen = {}
-
-    def _fake(messages, *, schema=None, max_tokens=None, thinking=False):
-        seen['messages'] = messages
-        return {'corrected': 'had vareniki'}
-
-    monkeypatch.setattr(ai_transcript, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr('backend.ai.llm.chat_json_messages', _fake)
-
-    r = client.post('/api/chat/polish-transcript',
-                    json={'text': 'had vary nikki', 'attachmentIds': [att['id']]})
-    assert r.get_json()['corrected'] == 'had vareniki'
-
-    parts = seen['messages'][-1]['content']
-    assert any(p['type'] == 'image_url' for p in parts)
-
-
-def test_with_vision_off_the_corrector_gets_the_description(client, monkeypatch):
-    from backend.ai import transcript as ai_transcript
-
-    _, att = _attach(client)
-    seen = {}
-
-    def _fake(prompt, system=None, schema=None, thinking=None, max_tokens=None):
-        seen['prompt'] = prompt
-        return {'corrected': 'had vareniki'}
-
-    monkeypatch.setattr(ai_transcript, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr(ai_transcript, 'chat_json', _fake)
-
-    client.post('/api/chat/polish-transcript',
-                json={'text': 'had vary nikki', 'attachmentIds': [att['id']]})
-    assert 'A plate of vareniki.' in seen['prompt']
-
-
-def test_a_failed_image_correction_still_returns_the_transcript(client, monkeypatch):
-    from backend.ai import transcript as ai_transcript
-
-    _enable_vision(client)
-    _, att = _attach(client)
-
-    def _boom(*a, **kw):
-        raise RuntimeError('llama-server is down')
-
-    monkeypatch.setattr(ai_transcript, 'is_ai_configured', lambda: True)
-    monkeypatch.setattr('backend.ai.llm.chat_json_messages', _boom)
-
-    r = client.post('/api/chat/polish-transcript',
-                    json={'text': 'had vary nikki', 'attachmentIds': [att['id']]})
-    assert r.get_json()['corrected'] == 'had vary nikki'
-
-
 # --- Location ---
 
 
