@@ -899,10 +899,10 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
             return (
               <div
                 key={`event-group:${span.event.id}`}
-                className="rounded-lg p-2"
+                className="rounded-lg p-1.5"
                 style={{ boxShadow: categoryRingBoxShadow(categories) }}
               >
-                <div className="px-1 mb-2 flex items-baseline justify-between gap-2 text-xs text-[var(--color-text-muted)]">
+                <div className="px-1 mb-1 flex items-baseline justify-between gap-2 text-xs text-[var(--color-text-muted)]">
                   <span className="font-medium text-[var(--color-text)]">
                     {span.event.title}
                   </span>
@@ -911,11 +911,11 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                   )}
                 </div>
                 {span.event.description && (
-                  <div className="px-1 pb-2 text-sm text-[var(--color-text)] whitespace-pre-wrap">
+                  <div className="px-1 pb-1.5 text-sm text-[var(--color-text)] whitespace-pre-wrap">
                     {span.event.description}
                   </div>
                 )}
-                <div className="space-y-4">
+                <div className="space-y-2">
                   {feedItems
                     .slice(span.startIndex, span.endIndex + 1)
                     .map(renderFeedItem)}
