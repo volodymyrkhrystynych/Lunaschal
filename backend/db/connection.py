@@ -15,7 +15,7 @@ TIMESTAMP_COLS = frozenset({
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
     'researched_at', 'last_practiced_at', 'last_recall_at',
     'received_at', 'classified_at', 'last_synced_at', 'token_expires_at',
-    'finished_at',
+    'finished_at', 'hour_ts',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -140,6 +140,7 @@ def init_db() -> None:
     _ensure_food_location(db)
     _ensure_food_recipe_match_status(db)
     _ensure_hf_token(db)
+    _ensure_weather_settings(db)
     _ensure_meeting_speaker_names(db)
     _ensure_meeting_echo_cancel(db)
     _ensure_meeting_source(db)
@@ -594,6 +595,20 @@ def _ensure_hf_token(db: sqlite3.Connection) -> None:
     if 'hf_token' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN hf_token TEXT')
         db.commit()
+
+
+def _ensure_weather_settings(db: sqlite3.Connection) -> None:
+    """Fallback location for the weather card, used when no geolocation fix
+    has ever been logged. Raw lat/lon rather than a geocoded place name — no
+    geocoding dependency, matching the food-entry location columns."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'weather_default_lat' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN weather_default_lat REAL')
+    if 'weather_default_lon' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN weather_default_lon REAL')
+    if 'weather_default_label' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN weather_default_label TEXT')
+    db.commit()
 
 
 def _ensure_meeting_echo_cancel(db: sqlite3.Connection) -> None:

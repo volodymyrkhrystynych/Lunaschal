@@ -4,6 +4,7 @@ import { CaloriesCard } from './CaloriesCard';
 import { Progression } from './Progression';
 import { SelfieCard } from './SelfieCard';
 import { TrendsChart } from './TrendsChart';
+import { WeatherCard } from './WeatherCard';
 import { WorkoutLog } from './WorkoutLog';
 import { CARD, CARD_DIVIDER } from './card';
 
@@ -42,6 +43,7 @@ export function Lifestyle() {
           <div className="flex flex-col gap-4 min-w-0">
             <WorkoutLog />
             <CaloriesCard />
+            <WeatherCard />
             <SelfieCard />
             <Progression />
           </div>

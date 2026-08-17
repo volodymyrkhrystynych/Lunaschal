@@ -8,6 +8,7 @@ import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
 from backend.db.connection import build_update, get_db
+from backend.geo import parse_coord
 
 _sleep_inhibitor: subprocess.Popen | None = None
 _INHIBIT_WHO = 'Lunaschal'
@@ -121,6 +122,9 @@ def get_settings():
         'hasGoogleOauthClient': bool(s.get('google_oauth_client_id')) and bool(s.get('google_oauth_client_secret')),
         'emailSyncEnabled': bool(s.get('email_sync_enabled', 1)),
         'emailSyncIntervalMinutes': s.get('email_sync_interval_minutes') or 15,
+        'weatherDefaultLat': s.get('weather_default_lat'),
+        'weatherDefaultLon': s.get('weather_default_lon'),
+        'weatherDefaultLabel': s.get('weather_default_label') or '',
     })
 
 
@@ -170,6 +174,9 @@ def update_ai():
         'googleOauthClientSecret': 'google_oauth_client_secret',
         'emailSyncEnabled': 'email_sync_enabled',
         'emailSyncIntervalMinutes': 'email_sync_interval_minutes',
+        'weatherDefaultLat': 'weather_default_lat',
+        'weatherDefaultLon': 'weather_default_lon',
+        'weatherDefaultLabel': 'weather_default_label',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
@@ -197,6 +204,10 @@ def update_ai():
                 try:
                     value = max(30, min(7200, int(value)))
                 except (TypeError, ValueError):
+                    continue
+            elif camel in ('weatherDefaultLat', 'weatherDefaultLon'):
+                value = parse_coord(value)
+                if value is None:
                     continue
             updates[snake] = value
     db = get_db()

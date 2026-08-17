@@ -830,6 +830,47 @@ CREATE TABLE IF NOT EXISTS calorie_logs (
 
 CREATE INDEX IF NOT EXISTS idx_calorie_logs_date ON calorie_logs(date);
 
+-- Hourly weather, one row per (day_key, hour_ts). day_key is the 4am-anchored
+-- day from backend/day_boundary.py, not the raw calendar date Open-Meteo
+-- returns — see backend/weather/sync.py. Rows are upserted in place as the day
+-- progresses: is_actual flips from 0 to 1 once hour_ts has passed, and every
+-- resync (a fresh geolocation fix, or the day's first tab visit) overwrites
+-- forecast values with fresher ones for the location known at sync time.
+CREATE TABLE IF NOT EXISTS lifestyle_weather_hours (
+    id TEXT PRIMARY KEY,
+    day_key TEXT NOT NULL,
+    hour_ts INTEGER NOT NULL,
+    weather_code INTEGER NOT NULL,
+    temperature_c REAL NOT NULL,
+    wet_bulb_c REAL,
+    humidity_pct REAL,
+    is_actual INTEGER NOT NULL DEFAULT 0,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    location_source TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(day_key, hour_ts)
+);
+
+CREATE INDEX IF NOT EXISTS idx_weather_hours_day ON lifestyle_weather_hours(day_key);
+
+-- Append-only log of the location used at each weather sync — kept separate
+-- from lifestyle_weather_hours because a resync overwrites that table's rows
+-- for the whole day (there's no continuous GPS trail to preserve per-hour
+-- location history), so this is the only record of "where the app thought
+-- the user was" at a given moment.
+CREATE TABLE IF NOT EXISTS lifestyle_weather_locations (
+    id TEXT PRIMARY KEY,
+    day_key TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    source TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_weather_locations_day ON lifestyle_weather_locations(day_key, created_at);
+
 -- Ideas: the app's own feature backlog, developed with the research agent.
 -- raw_content is what was spoken/typed and is never overwritten; content is the
 -- AI-cleaned prose, following the journal_entries split.

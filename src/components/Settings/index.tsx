@@ -6,6 +6,7 @@ import { ShortcutSettings } from '../ShortcutSettings';
 import { STTStatusSection } from './STTStatusSection';
 import { ShortcutsSection } from './ShortcutsSection';
 import { NudgeSection } from './NudgeSection';
+import { WeatherSection } from './WeatherSection';
 import { BriefingSection } from './BriefingSection';
 import { ResearchSection } from './ResearchSection';
 import { VRAMSection } from './VRAMSection';
@@ -77,6 +78,8 @@ export function Settings() {
           <ShortcutsSection />
 
           <NudgeSection />
+
+          <WeatherSection />
 
           <BriefingSection />
 

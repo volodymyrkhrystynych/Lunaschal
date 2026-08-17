@@ -652,6 +652,11 @@ export interface AppSettings {
   researchSearchTimeoutSeconds: number;
   researchDeepTimeoutSeconds: number;
   hasGoogleOauthClient: boolean;
+  /** Fallback location for the weather card when no geolocation fix has ever
+   * been logged. Null lat/lon means it's unset. */
+  weatherDefaultLat: number | null;
+  weatherDefaultLon: number | null;
+  weatherDefaultLabel: string;
   emailSyncEnabled: boolean;
   emailSyncIntervalMinutes: number;
 }
@@ -1251,6 +1256,35 @@ export interface CalorieDay {
   date: string;
   entries: CalorieLog[];
   total: number;
+}
+
+export interface WeatherHour {
+  id: string;
+  dayKey: string;
+  hourTs: string;
+  weatherCode: number;
+  temperatureC: number;
+  wetBulbC: number | null;
+  humidityPct: number | null;
+  /** Whether this hour has already passed — its values are Open-Meteo's
+   * observed conditions rather than a forecast. */
+  isActual: boolean;
+  latitude: number;
+  longitude: number;
+  locationSource: 'geolocation' | 'default';
+}
+
+export interface WeatherLocation {
+  latitude: number;
+  longitude: number;
+  source: 'geolocation' | 'default';
+}
+
+export interface WeatherToday {
+  hours: WeatherHour[];
+  /** null when no geolocation fix has ever been logged and no default
+   * location is configured in Settings. */
+  location: WeatherLocation | null;
 }
 
 export interface PracticeSnippetProgress {
@@ -2773,6 +2807,14 @@ export const api = {
       }) => post<CalorieLog>('/api/lifestyle/calories', data),
       delete: (id: string) =>
         del<{ success: boolean }>(`/api/lifestyle/calories/${id}`),
+    },
+    weather: {
+      today: () => get<WeatherToday>('/api/lifestyle/weather/today'),
+      updateLocation: (latitude: number, longitude: number) =>
+        post<WeatherToday>('/api/lifestyle/weather/location', {
+          latitude,
+          longitude,
+        }),
     },
   },
 
