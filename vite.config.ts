@@ -27,7 +27,11 @@ export default defineConfig({
     // 'node' is enough for pure logic. Switch to 'jsdom' (and add the
     // jsdom + @testing-library/react deps) when adding component tests.
     environment: 'node',
-    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    // extension/ has no build step — it is loaded unpacked — so its pure
+    // modules are plain .js and are imported here directly. Field-label
+    // derivation is the riskiest logic in the extension and the part that
+    // most needs to stay covered.
+    include: ['src/**/*.{test,spec}.{ts,tsx}', 'extension/**/*.{test,spec}.js'],
     setupFiles: ['src/test/setup.ts'],
   },
   server: {

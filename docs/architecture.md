@@ -98,7 +98,14 @@ flowchart LR
         CHECKIN["morning_checkin.py"]
     end
 
+    subgraph BROWSER["Browser extension — extension/ (MV3, unpacked)"]
+        EXT_BG["background.js<br/>service worker — the only caller<br/>(content scripts are CORS-blocked)"]
+        EXT_CS["content.js<br/>injected on gesture (activeTab)<br/>read · fill · attach"]
+        EXT_UI["popup · options<br/>pick application · dictate"]
+    end
+
     subgraph EXT["External"]
+        ATS["ATS forms<br/>Greenhouse · Lever · Ashby · Workday<br/>(the user's own logged-in session)"]
         LLMS["llama-server (router :8080)<br/>qwen36 · gemma4-12b-omni · embed"]
         WHISPER["Whisper + Kokoro TTS<br/>(local or OpenAI API)"]
         PYANNOTE["pyannote (HF token)"]
@@ -118,6 +125,11 @@ flowchart LR
     VIEWS -.-> LIB
     API_TS -->|"REST /api + SSE"| APPFACTORY
     APPFACTORY --> AUTH & ROUTES
+
+    EXT_CS -.->|"chrome.runtime.sendMessage"| EXT_BG
+    EXT_UI -.-> EXT_BG
+    EXT_BG -->|"for-url · answers · recorded-answers<br/>resume download · transcribe"| APPFACTORY
+    EXT_CS -->|"fill · attach — never submits"| ATS
 
     R_CHAT --> AI_CHAT
     R_JOURNAL --> AI_MISC

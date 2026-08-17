@@ -17,9 +17,35 @@ keep working, and `is_pdf_available()` lets the UI say so plainly.
 """
 import html as html_mod
 import logging
+import re
+import unicodedata
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Anything that would either break out of a filename or break the header it
+# travels in. Path separators are the obvious half; the control characters
+# matter because the name lands in a Content-Disposition header, and a bare
+# CR/LF there is header injection. Werkzeug quotes the value, but a sanitizer
+# that depends on the framework's escaping is one refactor from being wrong.
+_FILENAME_STRIP = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
+_FILENAME_SPACE = re.compile(r'\s+')
+_MAX_STEM = 80
+
+
+def download_filename(full_name: str, ext: str) -> str:
+    """The name the employer sees on the file: "Ada Lovelace Resume.pdf".
+
+    Recruiters receive hundreds of these, and a mailbox of `resume.pdf` is
+    exactly as useless as it sounds. Falls back to a bare "Resume" when the
+    profile has no name, which is better than an empty stem.
+    """
+    # NFC first, so an accented name composed of combining characters comes out
+    # as one character per glyph rather than surviving as a decomposed pair.
+    cleaned = _FILENAME_STRIP.sub(' ', unicodedata.normalize('NFC', full_name or ''))
+    cleaned = _FILENAME_SPACE.sub(' ', cleaned).strip(' .')[:_MAX_STEM].strip()
+    stem = f'{cleaned} Resume' if cleaned else 'Resume'
+    return f'{stem}.{ext}'
 
 
 def is_pdf_available() -> bool:

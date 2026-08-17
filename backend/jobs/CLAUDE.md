@@ -165,6 +165,44 @@ verdict is only true relative to the applications that existed at the time, so
 `rescan_since` clears the misses whenever an application is submitted — the
 confirmation email usually arrives _before_ the user records that they applied.
 
+## Applying: the browser extension
+
+The last mile is a real ATS form in a logged-in session, which the backend
+cannot reach. `extension/` is an unpacked MV3 extension that fills it — see
+[extension/README.md](../../extension/README.md) for how it is put together.
+Three things here exist for it:
+
+**`GET /applications/for-url`** answers "which application is this tab?" using
+`urlmatch.py`. That module is strict on purpose: exact-after-normalization or
+same-host-same-path, and **ambiguity resolves to None**, never a best guess.
+The extension records answers against whatever comes back, so a confident wrong
+match files an interview answer under the wrong employer — the same reasoning
+that makes `linkage.best_match` refuse a close runner-up. Tracking parameters
+are stripped; `gh_jid` is emphatically _kept_, because on an embedded board it
+is the only thing separating two postings.
+
+**`application_answers`** is what was actually typed into one employer's form,
+as distinct from `profile_answers`, which is the reusable bank the Answer Kit
+draws on. A bank entry is a template; a row here is testimony. Recording
+**upserts on the question text** rather than replacing the set — a Workday
+application spans several pages, and replace-all would drop page one the moment
+page two was recorded. It also makes the extension's record-as-you-fill safe to
+repeat: correcting a field and re-recording updates the row instead of leaving
+two contradictory answers to one question. Capture is as-you-fill rather than
+on submit because SPA forms frequently never fire a real `submit`.
+
+**`PATCH /resumes/<id>`** applies hand corrections and re-renders in place.
+`tailor.apply_edits` is the merge, and the important thing about it is what it
+_does not_ do: **it never clamps the user's wording against the profile.**
+`clamp` exists to stop the model inventing experience; this is the person whose
+name is on the document, and re-applying that bound would silently delete their
+own edit. What is protected instead is structure — `bulletId`, `roleId`,
+`company`, `roleTitle` and `original` all come from the stored row, so an edit
+can reword an accomplishment but never re-attribute it to a company the user
+never worked at, and the diff keeps a truthful "before". Editing **409s once
+`applied_at` is set**, which is what keeps the version a record of what was
+sent.
+
 ## Retention
 
 Two clocks, whichever comes first: `applied_at + job_retention_days` (180), and
@@ -174,7 +212,9 @@ because `updated_at` would restart the clock every time a note was edited.
 **Only the rendered files are deleted.** `resume_versions.content` and `html`
 are kept forever — a few kilobytes each, and they are the answer to "what did I
 actually send these people?", which is the question that gets asked a year
-later, usually right before a recruiter calls back.
+later, usually right before a recruiter calls back. `application_answers` is
+the same category of evidence and is likewise never purged; `purge_application`
+touches only `resume_versions` and `applications`, and a test pins that.
 
 ## Layout
 
@@ -195,6 +235,7 @@ later, usually right before a recruiter calls back.
 | `sync.py`          | saved searches → `jobs` rows, scored inline                   |
 | `queue.py`         | the single-slot resume worker behind the phone's Queue button |
 | `linker.py`        | applies `linkage.py` to the database                          |
+| `urlmatch.py`      | pure: is this browser tab that posting? Declines on ambiguity |
 | `scheduler.py`     | linkage + sync + drain every tick, purge daily in 07:00–08:00 |
 | `storage.py`       | `IdScopedStorage('JOBS_ROOT', './data/jobs')`                 |
 
@@ -222,13 +263,16 @@ later, usually right before a recruiter calls back.
 
 **No LinkedIn or Indeed scraping.** Cloudflare, no public API, and it is the
 unambiguous part of their terms. Adzuna carries much of the same inventory
-through a documented API, which is why it is the aggregator here.
+through a documented API, which is why it is the aggregator here. The extension
+will happily _fill a form_ on whatever page you open, including those two —
+that is your own logged-in session, doing what you would do by hand — but
+nothing crawls them.
 
-The **Chrome extension** is the remaining piece: a content script that fills
-forms on the real ATS pages with the real logged-in session, replacing the
-reverse-proxy tab that was originally planned (the proxy needed a cookie jar,
-URL rewriting and CSP stripping, and would still have broken on logged-in
-LinkedIn). It is desktop-only — Chrome on Android has no extensions — so the
-Answer Kit stays the path that works on iOS. Three small things belong with it:
-per-application Q&A persistence, an edit-and-re-render route for a tailored
-resume, and the resume download filename.
+**Nothing auto-submits.** The extension fills; the human presses the button. An
+agent that sends applications on its own is a different and much riskier
+product, and the review step is the only thing standing between a model's
+wording and an employer.
+
+**No Firefox build**, though MV3 keeps it close. **No iOS**: Chrome on Android
+and iOS have no extensions, which is exactly why the phone's job is triage and
+the desktop's is applying, and why the Answer Kit stays.

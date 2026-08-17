@@ -1333,6 +1333,33 @@ export interface JobApplicationDetail extends JobApplication {
   description: string;
   resumes: ResumeVersion[];
   emails: LinkedEmail[];
+  recordedAnswers: RecordedAnswer[];
+}
+
+/**
+ * What was actually typed into one employer's form.
+ *
+ * Distinct from `ProfileAnswer`, which is the reusable bank: this is the
+ * record of what was said, and it outlives the rendered resume on purpose.
+ */
+export interface RecordedAnswer {
+  id: string;
+  applicationId: string;
+  question: string;
+  answer: string;
+  source: FilledAnswer['source'] | 'edited';
+  /** Which page of a multi-step portal asked it. */
+  pageUrl: string;
+  ord: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One bullet's new wording. Structure (company, role, the original text) is
+ * not editable — the server takes those from the stored version. */
+export interface ResumeBulletEdit {
+  bulletId: string;
+  text: string;
 }
 
 export interface LinkSuggestion {
@@ -3246,12 +3273,56 @@ export const api = {
           `/api/jobs/applications/${id}/answers`,
           { questions, steer }
         ),
+
+      /** Which application, if any, is the posting at `url`. Answers with
+       * null rather than a guess when nothing or several match. */
+      forUrl: (url: string) =>
+        get<{
+          application: {
+            id: string;
+            status: ApplicationStatus;
+            title: string;
+            company: string;
+          } | null;
+        }>(`/api/jobs/applications/for-url?url=${encodeURIComponent(url)}`),
+
+      recordedAnswers: {
+        list: (id: string) =>
+          get<{ answers: RecordedAnswer[] }>(
+            `/api/jobs/applications/${id}/recorded-answers`
+          ),
+        /** Upserts on question text, so recording twice corrects rather than
+         * duplicating and a second form page appends. */
+        record: (
+          id: string,
+          answers: {
+            question: string;
+            answer: string;
+            source?: RecordedAnswer['source'];
+            pageUrl?: string;
+          }[]
+        ) =>
+          post<{ written: number; answers: RecordedAnswer[] }>(
+            `/api/jobs/applications/${id}/recorded-answers`,
+            { answers }
+          ),
+        remove: (id: string, answerId: string) =>
+          del<{ ok: boolean }>(
+            `/api/jobs/applications/${id}/recorded-answers/${answerId}`
+          ),
+      },
     },
 
     resumes: {
       get: (id: string) => get<ResumeVersion>(`/api/jobs/resumes/${id}`),
       downloadUrl: (id: string, ext: 'pdf' | 'docx') =>
         `/api/jobs/resumes/${id}/download.${ext}`,
+      /** Apply hand corrections and re-render in place. 409 once the
+       * application has been sent — the version is then a record. */
+      edit: (
+        id: string,
+        patch: { summary?: string; bullets: ResumeBulletEdit[] }
+      ) => send<TailorResult>('PATCH', `/api/jobs/resumes/${id}`, patch),
     },
 
     linkage: {

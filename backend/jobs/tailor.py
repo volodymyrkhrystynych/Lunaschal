@@ -204,6 +204,62 @@ def clamp(result: dict, bullets: list[dict], report: kw.KeywordReport) -> dict:
     }
 
 
+MAX_BULLET_CHARS = 600
+
+
+def apply_edits(content: dict, patch: dict) -> dict:
+    """Merge a user's corrections into a stored tailoring result.
+
+    **The user's wording is not clamped against the profile.** `clamp` above
+    exists to stop *the model* inventing experience; this is the person whose
+    name is on the document, and re-applying that bound here would silently
+    delete their own edit. What is protected instead is *structure*: the patch
+    can reword, reorder and remove bullets, but `bulletId`, `roleId`,
+    `company`, `roleTitle` and `original` come from the stored row, so an edit
+    cannot re-attribute an accomplishment to a company the user never worked
+    at, and the diff the UI shows keeps a truthful "before".
+
+    A bullet absent from `patch['bullets']` is dropped — that is how one is
+    removed — and the list order becomes the new order.
+    """
+    stored = {
+        b['bulletId']: b
+        for b in (content.get('selectedBullets') or [])
+        if isinstance(b, dict) and b.get('bulletId')
+    }
+
+    bullets = []
+    seen = set()
+    for item in (patch.get('bullets') or []):
+        if not isinstance(item, dict):
+            continue
+        bullet_id = item.get('bulletId')
+        base = stored.get(bullet_id)
+        if base is None or bullet_id in seen:
+            continue
+        seen.add(bullet_id)
+
+        text = ' '.join(str(item.get('text') or '').split())[:MAX_BULLET_CHARS]
+        if not text:
+            text = base['original']
+        merged = dict(base)
+        merged['text'] = text
+        merged['rewritten'] = text != base.get('original')
+        bullets.append(merged)
+
+    result = dict(content)
+    result['selectedBullets'] = bullets
+
+    if 'summary' in patch:
+        words = ' '.join(str(patch.get('summary') or '').split()).split()
+        if len(words) > MAX_SUMMARY_WORDS:
+            result['summary'] = ' '.join(words[:MAX_SUMMARY_WORDS]).rstrip(',;:') + '…'
+        else:
+            result['summary'] = ' '.join(words)
+
+    return result
+
+
 def tailor_resume(loaded: dict, job: dict, steer: str = '') -> dict | None:
     """Tailor the loaded profile to `job`. None when the model is unavailable.
 

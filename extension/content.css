@@ -1,0 +1,10 @@
+/*
+ * Almost everything the overlay needs lives in its shadow root (see the
+ * `panel()` template in content.js), where the page's stylesheet cannot reach
+ * it. This file styles only the host element itself, which does live in the
+ * page's tree and would otherwise inherit whatever the site does to bare divs.
+ */
+#lunaschal-apply-root {
+  all: initial;
+  position: static;
+}

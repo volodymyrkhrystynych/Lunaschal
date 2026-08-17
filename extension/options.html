@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lunaschal Apply — Settings</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        max-width: 32rem;
+        margin: 2rem auto;
+        padding: 0 1rem;
+        font:
+          14px/1.55 system-ui,
+          sans-serif;
+        background: #18181b;
+        color: #f4f4f5;
+      }
+      label {
+        display: block;
+        margin: 1rem 0 0.25rem;
+        font-weight: 600;
+      }
+      input {
+        width: 100%;
+        padding: 8px;
+        border-radius: 6px;
+        border: 1px solid #3f3f46;
+        background: #27272a;
+        color: #f4f4f5;
+        font: inherit;
+      }
+      p.hint {
+        color: #a1a1aa;
+        margin: 0.25rem 0 0;
+        font-size: 12px;
+      }
+      button {
+        margin-top: 1.25rem;
+        padding: 8px 14px;
+        border-radius: 6px;
+        border: 1px solid #3f3f46;
+        background: #27272a;
+        color: #f4f4f5;
+        font: inherit;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #3f3f46;
+      }
+      #saved {
+        color: #4ade80;
+        margin-left: 0.75rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Lunaschal Apply</h1>
+
+    <label for="baseUrl">Lunaschal address</label>
+    <input id="baseUrl" type="url" placeholder="http://localhost:5000" />
+    <p class="hint">
+      The production server runs on port 5000; the dev server is 5001. A
+      localhost address needs no password — Lunaschal only enforces auth for
+      non-local requests.
+    </p>
+
+    <label for="password">Password (only for a remote server)</label>
+    <input id="password" type="password" autocomplete="off" />
+    <p class="hint">
+      Sent as <code>X-Lunaschal-Password</code>. Required only when reaching
+      Lunaschal over Tailscale or the LAN in network mode.
+    </p>
+
+    <button id="save">Save</button><span id="saved" hidden>Saved</span>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

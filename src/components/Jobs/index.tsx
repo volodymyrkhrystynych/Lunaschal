@@ -32,18 +32,35 @@ function Pipeline({ onOpen }: { onOpen: (applicationId: string) => void }) {
             Ready to submit ({ready.length})
           </h3>
           {ready.map(application => (
-            <button
+            <div
               key={application.id}
-              onClick={() => onOpen(application.id)}
-              className="w-full text-left p-3 min-h-[44px] rounded-lg border border-white/10 bg-[var(--color-surface)] hover:border-white/20"
+              className="flex items-stretch gap-2 rounded-lg border border-white/10 bg-[var(--color-surface)] hover:border-white/20"
             >
-              <p className="text-sm font-medium text-[var(--color-text)] truncate">
-                {application.title}
-              </p>
-              <p className="text-xs text-[var(--color-text-muted)] truncate">
-                {application.company} · resume ready
-              </p>
-            </button>
+              <button
+                onClick={() => onOpen(application.id)}
+                className="flex-1 min-w-0 text-left p-3 min-h-[44px]"
+              >
+                <p className="text-sm font-medium text-[var(--color-text)] truncate">
+                  {application.title}
+                </p>
+                <p className="text-xs text-[var(--color-text-muted)] truncate">
+                  {application.company} · resume ready
+                </p>
+              </button>
+              {/* Opening the posting is a plain link — the extension picks the
+                  tab up by matching its URL, so nothing has to launch it. */}
+              {application.jobUrl && (
+                <a
+                  href={application.jobUrl}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  title="Open the posting to apply"
+                  className="shrink-0 flex items-center px-3 text-xs text-[var(--color-primary)] hover:underline"
+                >
+                  Apply ↗
+                </a>
+              )}
+            </div>
           ))}
           {building.length > 0 && (
             <p className="text-xs text-[var(--color-text-muted)]">

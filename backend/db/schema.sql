@@ -1315,6 +1315,36 @@ CREATE TABLE IF NOT EXISTS resume_versions (
 CREATE INDEX IF NOT EXISTS idx_resume_versions_app
     ON resume_versions(application_id, created_at DESC);
 
+-- What was actually typed into one employer's form.
+--
+-- Distinct from `profile_answers`, which is the reusable bank the Answer Kit
+-- draws on: this is the per-application record, and the two must not be merged
+-- because a bank entry is a template while a row here is testimony. Kept
+-- forever for `resume_versions.content`'s reason — "what did I tell these
+-- people?" is the question that gets asked a year later, right before an
+-- interview — so the retention sweep deletes rendered files and leaves this
+-- table alone.
+--
+-- `source` mirrors backend/jobs/answers.py's resolution order, plus 'edited'
+-- for an answer the user changed by hand before it was recorded.
+CREATE TABLE IF NOT EXISTS application_answers (
+    id TEXT PRIMARY KEY,
+    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    question TEXT NOT NULL DEFAULT '',
+    answer TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'generated',
+    -- Which portal page asked it. Multi-step forms (Workday) spread one
+    -- application over several URLs, and knowing which is which is the
+    -- difference between a readable record and a pile of strings.
+    page_url TEXT NOT NULL DEFAULT '',
+    ord INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_answers_app
+    ON application_answers(application_id, ord, created_at);
+
 CREATE TABLE IF NOT EXISTS job_email_links (
     id TEXT PRIMARY KEY,
     application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,

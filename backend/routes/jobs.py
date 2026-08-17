@@ -16,7 +16,7 @@ from backend.ai import job_match, priority
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.jobs import (
     build, ingest, linker, profile as profile_mod, queue as queue_mod, render,
-    resolve, resume_import, retention, sources, storage, sync, tailor,
+    resolve, resume_import, retention, sources, storage, sync, tailor, urlmatch,
 )
 
 bp = Blueprint('jobs', __name__, url_prefix='/api/jobs')
@@ -497,6 +497,31 @@ def create_application():
     return jsonify({'id': application_id}), 201
 
 
+@bp.get('/applications/for-url')
+def application_for_url():
+    """Which application, if any, is the posting at `url`?
+
+    The extension calls this when a tab opens so the user does not have to
+    pick an application by hand. It answers with `null` rather than a guess
+    when nothing matches or several do — the popup is the manual override, and
+    a wrong auto-match would file answers against the wrong employer.
+    """
+    target = request.args.get('url') or ''
+    db = get_db()
+    rows = db.execute(
+        'SELECT a.id, a.status, j.url, j.title, j.company FROM applications a'
+        ' JOIN jobs j ON j.id = a.job_id'
+    ).fetchall()
+
+    match = urlmatch.best_match(target, [dict(r) for r in rows])
+    if match is None:
+        return jsonify({'application': None})
+    return jsonify({'application': {
+        'id': match['id'], 'status': match['status'],
+        'title': match['title'], 'company': match['company'],
+    }})
+
+
 @bp.get('/applications/<application_id>')
 def get_application(application_id):
     db = get_db()
@@ -523,6 +548,7 @@ def get_application(application_id):
             (application_id,),
         ).fetchall()
     ]
+    result['recordedAnswers'] = _recorded_answers(db, application_id)
     return jsonify(result)
 
 
@@ -656,6 +682,74 @@ def get_resume(version_id):
     return jsonify(result)
 
 
+@bp.patch('/resumes/<version_id>')
+def edit_resume(version_id):
+    """Apply the user's corrections and re-render, in place.
+
+    In place rather than a new version per save: a version per keystroke buries
+    the one that matters. What protects the record instead is the 409 below —
+    once the application has been sent, `resume_versions` is evidence of what
+    the employer received and stops being editable.
+
+    No model call, so no `priority` gate: this renders exactly what it is
+    given, which is the whole point of an edit route existing beside `tailor`.
+    """
+    db = get_db()
+    row = db.execute(
+        'SELECT rv.*, a.applied_at FROM resume_versions rv'
+        ' JOIN applications a ON a.id = rv.application_id WHERE rv.id=?',
+        (version_id,),
+    ).fetchone()
+    if row is None:
+        return jsonify({'error': 'Not found'}), 404
+    if row['purged_at']:
+        return jsonify({'error': 'This resume was deleted under the retention policy.'}), 410
+    if row['applied_at']:
+        return jsonify({
+            'error': 'This application has been sent, so its resume is now a record '
+                     'of what the employer received. Tailor a new version instead.',
+        }), 409
+
+    try:
+        stored = json.loads(row['content'] or '{}')
+    except ValueError:
+        stored = {}
+
+    content = tailor.apply_edits(stored, _body())
+
+    application_id = row['application_id']
+    job = db.execute(
+        'SELECT j.title, j.company, j.location, j.description FROM applications a'
+        ' JOIN jobs j ON j.id = a.job_id WHERE a.id=?',
+        (application_id,),
+    ).fetchone()
+    loaded = profile_mod.load_profile(db)
+    html = render.render_html(loaded, content, dict(job) if job else None)
+
+    # Same paths as the original render, so the download URLs keep working and
+    # a stale PDF can never outlive the HTML it was made from.
+    pdf_path = storage.resume_path(application_id, version_id, 'pdf')
+    docx_path = storage.resume_path(application_id, version_id, 'docx')
+    wrote_pdf = bool(pdf_path) and render.render_pdf(html, pdf_path)
+    wrote_docx = bool(docx_path) and render.render_docx(loaded, content, docx_path)
+
+    db.execute(
+        'UPDATE resume_versions SET content=?, html=?, pdf_path=?, docx_path=? WHERE id=?',
+        (json.dumps(content), html,
+         str(pdf_path) if wrote_pdf else None,
+         str(docx_path) if wrote_docx else None, version_id),
+    )
+    db.commit()
+
+    return jsonify({
+        'id': version_id,
+        'content': content,
+        'html': html,
+        'pdfAvailable': wrote_pdf,
+        'docxAvailable': wrote_docx,
+    })
+
+
 @bp.get('/resumes/<version_id>/download.<ext>')
 def download_resume(version_id, ext):
     """Serve a rendered resume.
@@ -667,7 +761,8 @@ def download_resume(version_id, ext):
     if ext not in ('pdf', 'docx'):
         return jsonify({'error': 'Not found'}), 404
 
-    row = get_db().execute(
+    db = get_db()
+    row = db.execute(
         'SELECT application_id, purged_at FROM resume_versions WHERE id=?', (version_id,)
     ).fetchone()
     if row is None:
@@ -679,10 +774,17 @@ def download_resume(version_id, ext):
     if path is None or not path.is_file():
         return jsonify({'error': 'Not found'}), 404
 
+    # The name on the file is what an employer files away, so it carries the
+    # user's name rather than the id this route was reached by.
+    name_row = db.execute('SELECT full_name FROM job_profile WHERE id=1').fetchone()
+    download_name = render.download_filename(
+        name_row['full_name'] if name_row else '', ext
+    )
+
     mimetype = ('application/pdf' if ext == 'pdf'
                 else 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
     return send_file(path, mimetype=mimetype, as_attachment=True,
-                     download_name=f'resume.{ext}', conditional=True)
+                     download_name=download_name, conditional=True)
 
 
 # --------------------------------------------------------------------------
@@ -741,6 +843,121 @@ def answer_kit(application_id):
     return jsonify({
         'answers': answers_mod.answer_questions(cleaned, loaded, job, steer),
     })
+
+
+# --------------------------------------------------------------------------
+# Recorded answers — what was actually put in one employer's form
+# --------------------------------------------------------------------------
+#
+# Deliberately a different noun from the route above. `POST .../answers`
+# *generates* answers and persists nothing; these store what the user really
+# submitted, which is a record rather than a suggestion.
+
+# A form field's label, and the answer typed into it. Both are bounded because
+# they arrive from a content script running in a page we do not control.
+_MAX_ANSWER_QUESTION = 500
+_MAX_ANSWER_TEXT = 10_000
+_MAX_ANSWER_BATCH = 200
+_ANSWER_SOURCES = ('profile', 'bank', 'generated', 'unanswered', 'edited')
+
+
+def _recorded_answers(db, application_id: str) -> list[dict]:
+    return [
+        row_to_dict(r) for r in db.execute(
+            'SELECT * FROM application_answers WHERE application_id=?'
+            ' ORDER BY ord, created_at',
+            (application_id,),
+        ).fetchall()
+    ]
+
+
+@bp.get('/applications/<application_id>/recorded-answers')
+def list_recorded_answers(application_id):
+    db = get_db()
+    if _application_row(db, application_id) is None:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'answers': _recorded_answers(db, application_id)})
+
+
+@bp.post('/applications/<application_id>/recorded-answers')
+def record_answers(application_id):
+    """Store a batch of answers, upserting on the question text.
+
+    Upsert rather than replace-all because a Workday application spans several
+    pages: a replace would drop page one the moment page two was recorded. It
+    also makes the extension's record-as-you-fill safe to call repeatedly —
+    correcting a field and re-recording updates the row instead of leaving two
+    contradictory answers to the same question.
+    """
+    db = get_db()
+    if _application_row(db, application_id) is None:
+        return jsonify({'error': 'Not found'}), 404
+
+    incoming = _body().get('answers')
+    if not isinstance(incoming, list):
+        return jsonify({'error': 'answers required'}), 400
+
+    existing = {
+        r['question']: r['id'] for r in db.execute(
+            'SELECT id, question FROM application_answers WHERE application_id=?',
+            (application_id,),
+        ).fetchall()
+    }
+    next_ord = db.execute(
+        'SELECT COALESCE(MAX(ord), -1) + 1 AS n FROM application_answers'
+        ' WHERE application_id=?',
+        (application_id,),
+    ).fetchone()['n']
+
+    now = _now()
+    written = 0
+    for item in incoming[:_MAX_ANSWER_BATCH]:
+        if not isinstance(item, dict):
+            continue
+        question = str(item.get('question') or '').strip()[:_MAX_ANSWER_QUESTION]
+        if not question:
+            continue
+        answer = str(item.get('answer') or '')[:_MAX_ANSWER_TEXT]
+        source = item.get('source')
+        if source not in _ANSWER_SOURCES:
+            source = 'generated'
+        page_url = str(item.get('pageUrl') or '')[:2000]
+
+        found = existing.get(question)
+        if found:
+            db.execute(
+                'UPDATE application_answers SET answer=?, source=?, page_url=?,'
+                ' updated_at=? WHERE id=?',
+                (answer, source, page_url, now, found),
+            )
+        else:
+            answer_id = str(ULID())
+            db.execute(
+                'INSERT INTO application_answers (id, application_id, question,'
+                ' answer, source, page_url, ord, created_at, updated_at)'
+                ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                (answer_id, application_id, question, answer, source, page_url,
+                 next_ord, now, now),
+            )
+            existing[question] = answer_id
+            next_ord += 1
+        written += 1
+
+    db.commit()
+    return jsonify({'written': written, 'answers': _recorded_answers(db, application_id)})
+
+
+@bp.delete('/applications/<application_id>/recorded-answers/<answer_id>')
+def delete_recorded_answer(application_id, answer_id):
+    db = get_db()
+    cur = db.execute(
+        'DELETE FROM application_answers WHERE id=? AND application_id=?',
+        (answer_id, application_id),
+    )
+    db.commit()
+    if cur.rowcount == 0:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'ok': True})
 
 
 # --------------------------------------------------------------------------

@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Lunaschal Apply",
+  "version": "0.1.0",
+  "description": "Fill job application forms from your Lunaschal profile, and keep what you answered.",
+  "permissions": ["activeTab", "contextMenus", "scripting", "storage"],
+  "host_permissions": ["http://localhost:5000/*", "http://127.0.0.1:5000/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Lunaschal Apply"
+  },
+  "options_page": "options.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/fields.js", "lib/filename.js"],
+      "matches": ["http://*/*", "https://*/*"],
+      "use_dynamic_url": true
+    }
+  ]
+}

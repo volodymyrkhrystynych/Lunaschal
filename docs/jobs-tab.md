@@ -396,26 +396,51 @@ Backing out at the desktop is expected and costs nothing: by then you are lookin
 resume, which did not exist when you queued it. That is a second, better-informed judgement rather
 than the same one made twice.
 
-**Phase 3 — the browser extension.** Originally planned as a reverse-proxy tab; replaced by a
-Chrome/Firefox extension, which is strictly better and much less code. A content script runs inside
-the real page with the real logged-in session, so every reason the proxy was fragile — CSP,
-`SameSite` cookies, service workers, URL rewriting, an unfamiliar egress IP — simply does not
-apply. The interaction is a right-click on any text box (`chrome.contextMenus` with
-`contexts: ['editable']`) rather than a bulk ⚡-fill: per-field on demand degrades gracefully where
-field detection fails, while bulk fill fails as a unit and, worse, silently into the wrong boxes.
+**Phase 3 — the browser extension.** _Built; `extension/`._ Originally planned as a reverse-proxy
+tab; replaced by a Chrome/Firefox extension, which is strictly better and much less code. A content
+script runs inside the real page with the real logged-in session, so every reason the proxy was
+fragile — CSP, `SameSite` cookies, service workers, URL rewriting, an unfamiliar egress IP — simply
+does not apply.
 
-Answers are captured **on submit, not on generate** — reading back every field's final value when
-the form is submitted, so it does not matter whether the text was typed, dictated with the OS STT
-listener, pasted, or generated.
+Both interactions shipped, not one: a right-click on any text box (`chrome.contextMenus` with
+`contexts: ['editable']`) **and** a bulk fill. The original argument for per-field only — that bulk
+fill fails as a unit and silently into the wrong boxes — was half right, and the half it got wrong
+is the one that mattered. Bulk fill answers N questions in a _single_ model call, where N
+right-clicks are N calls on a machine with two llama slots. What actually addresses the silent-wrong
+-box risk is that bulk fill is not silent: the overlay lists every question, its answer and where
+that answer came from, and a field whose label could not be derived is skipped rather than guessed
+at. Per-field remains for where detection fails.
 
-The catch: **Chrome on Android has no extension support and never has.** Firefox for Android does,
-from the same WebExtension source; Safari on iOS requires an Xcode build and a paid Apple account,
-which is closed from Arch. So on iOS the Answer Kit remains the path, which is why it shipped first.
+Two decisions were reversed by building it:
 
-Three small pieces belong with that work: an `application_answers` table for the captured Q&A, an
-edit-and-re-render route for a tailored resume, and the download filename (currently
-`resume.pdf`; it should be the profile's full name, and deliberately **not** the company — a file
-called "… Google Resume.pdf" arriving at Meta is a fatal and entirely avoidable error).
+- **Answers are recorded as they are filled, not on submit.** Reading every field back on submit is
+  the better idea and does not survive contact with a real ATS: SPA forms frequently never fire a
+  `submit` event at all, so the capture that matters most — the one on the page where you finally
+  press Apply — is exactly the one most likely to be missed. Recording each fill immediately, with
+  an explicit "Save answers" button that re-reads the DOM for anything corrected by hand, gets the
+  same data through a mechanism that cannot silently not-fire. `POST .../recorded-answers` upserts
+  on question text so repeats correct rather than duplicate.
+- **Dictation happens in the popup, not the page.** `getUserMedia` from a content script runs under
+  the _page's_ Permissions-Policy and origin, so a careers page that disallows the microphone kills
+  it and every new domain re-prompts. An extension page has one stable origin, so permission is
+  granted once. It transcribes through Lunaschal's own `/api/transcribe` — the Web Speech API would
+  ship audio to Google from an otherwise entirely local product.
+
+The permission model is worth recording because it is better than what was sketched: the extension
+holds **no host permission for job sites at all**. `content.js` is injected with
+`chrome.scripting.executeScript` after a click, which `activeTab` covers. That is both least
+privilege and strictly more capable than a match-pattern list — it works on a Greenhouse board
+embedded in a company's own domain, which no fixed list could enumerate.
+
+The catch remains: **Chrome on Android has no extension support and never has.** Firefox for Android
+does, from the same WebExtension source; Safari on iOS requires an Xcode build and a paid Apple
+account, which is closed from Arch. So on iOS the Answer Kit remains the path, which is why it
+shipped first.
+
+The three pieces that belonged with it are done: `application_answers` for the captured Q&A, an
+edit-and-re-render route (`PATCH /resumes/<id>`, which refuses once the application has been sent),
+and the download filename — the profile's full name, and deliberately **not** the company, since a
+file called "… Google Resume.pdf" arriving at Meta is a fatal and entirely avoidable error.
 
 ## What we do not know yet
 

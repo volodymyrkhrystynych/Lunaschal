@@ -92,7 +92,7 @@ Feature-logic packages (kept out of the route files so they can be unit-tested):
 - `backend/food/` — food-photo storage and EXIF capture-date/GPS extraction (`exif.py`)
 - `backend/paper/` — file storage for handwritten page snapshots (`storage.py`)
 - `backend/research/` — the Ideas agent: deterministic repo extraction (`repo_facts.py`), SSRF-guarded web tools (`web.py`), the copy-on-write wiki, the sync tool loop, the research worker and the evidence-backed assessment. Design record: [docs/ideas-tab.md](docs/ideas-tab.md)
-- `backend/jobs/` — job applications: the master profile, bounded-schema resume tailoring, the Answer Kit, email linkage over the existing `job_application` classifier, resume retention, and discovery (`sources/` board adapters → `sync.py` → the phone's triage feed → `queue.py`'s background resume worker)
+- `backend/jobs/` — job applications: the master profile, bounded-schema resume tailoring, the Answer Kit, email linkage over the existing `job_application` classifier, resume retention, discovery (`sources/` board adapters → `sync.py` → the phone's triage feed → `queue.py`'s background resume worker), and the routes the browser extension applies through
 - `backend/delegate/` — the Chat tab's delegate: the proposal toolbox (`tools.py`), the loop that drives it (`agent.py`), and the decide-delegate-answer glue behind `/api/chat/stream` (`chat.py`). See Chat delegate below
 - `backend/chat/` — file storage for chat photo attachments (`storage.py`) and the helper that turns their readings into text the chat model can see (`context.py`)
 - `backend/memory.py` — the one standing document the assistant keeps about the user; read into every chat system prompt, copy-on-write
@@ -165,7 +165,9 @@ Keyboard-first, single-key navigation (the Pocket 2 has no usable mouse): WASD-s
 
 #### Ideas — see [`backend/research/CLAUDE.md`](backend/research/CLAUDE.md) for the repo-context agent, the research agent, evidence-backed assessment, and discussion/plans.
 
-#### Jobs — see [`backend/jobs/CLAUDE.md`](backend/jobs/CLAUDE.md) for the profile, the anti-fabrication tailoring bounds, the Answer Kit, ATS-aware email linkage, and resume retention. Design record: [docs/jobs-tab.md](docs/jobs-tab.md)
+#### Jobs — see [`backend/jobs/CLAUDE.md`](backend/jobs/CLAUDE.md) for the profile, the anti-fabrication tailoring bounds, the Answer Kit, ATS-aware email linkage, resume retention, and the browser extension's routes. Design record: [docs/jobs-tab.md](docs/jobs-tab.md)
+
+#### Browser extension (`extension/`) — the desktop half of applying: an unpacked MV3 extension that fills real ATS forms from the profile, attaches the tailored resume and records what was answered. **No build step** — it is loaded unpacked, so the source is the extension, and its pure modules (`lib/fields.js`, `lib/filename.js`) are plain `.js` that Vitest imports directly (`vite.config.ts`'s `include` covers `extension/**/*.test.js`). See [`extension/README.md`](extension/README.md); the three constraints that shaped it are that content scripts cannot call the backend (CORS — everything goes through the service worker), that it holds **no host permission for job sites** (injected on a gesture via `activeTab`, which is also what makes embedded boards work), and that React forms ignore a plain `el.value =`.
 
 #### Fanfic library — see [`backend/fanfic/CLAUDE.md`](backend/fanfic/CLAUDE.md).
 
