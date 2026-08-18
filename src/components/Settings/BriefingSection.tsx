@@ -99,163 +99,157 @@ export function BriefingSection() {
   };
 
   return (
-    <section className="mb-8">
-      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">
-        Overnight Briefing
-      </h2>
-      <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 space-y-4">
-        <p className="text-sm text-[var(--color-text-muted)]">
-          While the machine is on overnight, an agent reads your recent journal,
-          tasks, calendar and reviews, then leaves a morning briefing as the
-          first message of the day's chat and adds any suggested to-dos.
-        </p>
-        <label className="flex items-center gap-3 cursor-pointer select-none">
-          <div
-            onClick={() => toggleEnabled.mutate(!briefingEnabled)}
-            className={`relative w-9 h-5 rounded-full transition-colors ${briefingEnabled ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
-          >
-            <span
-              className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${briefingEnabled ? 'translate-x-4' : 'translate-x-0'}`}
-            />
-          </div>
-          <span className="text-sm text-[var(--color-text)]">
-            Enable overnight briefing
-          </span>
-        </label>
-        {briefingEnabled && (
-          <>
-            <div>
-              <label className="text-sm text-[var(--color-text-muted)]">
-                Briefing hour (local, 4–23)
-              </label>
-              <input
-                type="number"
-                min={4}
-                max={23}
-                value={hourInput}
-                onChange={e => setHourInput(e.target.value)}
-                onBlur={commitHour}
-                className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
-              />
-              <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Fires once in the hour window after this time; must be ≥ 4am so
-                it lands in the new day's chat.
-              </p>
-            </div>
-            <div>
-              <label className="text-sm text-[var(--color-text-muted)]">
-                Briefing model
-              </label>
-              <select
-                value={settings?.briefingModel ?? ''}
-                onChange={e => saveModel.mutate(e.target.value)}
-                className="mt-1 w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
-              >
-                <option value="">Same as chat model (default)</option>
-                {llamaModels && llamaModels.length > 0 && (
-                  <optgroup label="Router presets">
-                    {llamaModels.map(m => (
-                      <option key={m.name} value={m.name}>
-                        {m.name} — {m.status}
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-              <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Runs overnight, so a slower preset is fine here. There is only
-                one chat preset now — <code>qwen36</code> — so leave this on the
-                default unless you add another to <code>llama/presets.ini</code>
-                .
-              </p>
-            </div>
-            <div>
-              <label className="text-sm text-[var(--color-text-muted)]">
-                Thinking
-              </label>
-              <label className="mt-1 flex items-center gap-3 cursor-pointer">
-                <div
-                  onClick={() => saveThinking.mutate(!briefingThinking)}
-                  className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${briefingThinking ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
-                >
-                  <span
-                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${briefingThinking ? 'translate-x-4' : 'translate-x-0'}`}
-                  />
-                </div>
-                <span className="text-sm text-[var(--color-text)]">
-                  Think before writing
-                </span>
-              </label>
-              <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Worth turning on here even though chat leaves it off: the
-                briefing runs while you're asleep, so the extra tokens cost you
-                nothing. Give it plenty of output tokens below if you do —
-                thinking and the answer share the same budget.
-              </p>
-            </div>
-            <div>
-              <label className="text-sm text-[var(--color-text-muted)]">
-                Output token limit (256–65536)
-              </label>
-              <input
-                type="number"
-                min={256}
-                max={65536}
-                step={256}
-                value={maxTokensInput}
-                onChange={e => setMaxTokensInput(e.target.value)}
-                onBlur={commitMaxTokens}
-                className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
-              />
-              <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Ceiling on the briefing's length. Generous by default since it
-                runs overnight; raise it if long briefings get cut off.
-              </p>
-            </div>
-            <p className="text-xs text-[var(--color-text-muted)]">
-              The context window isn't an app setting: llama-server allocates
-              the KV cache when it loads the model, so it's fixed per preset in{' '}
-              <code>llama/presets.ini</code>. Raise <code>ctx-size</code> there
-              and restart llama-server if a briefing ever needs a bigger one.
-            </p>
-            <div>
-              <label className="text-sm text-[var(--color-text-muted)]">
-                Goals &amp; current focus
-              </label>
-              <textarea
-                value={goalsInput}
-                onChange={e => setGoalsInput(e.target.value)}
-                onBlur={() => {
-                  if (goalsInput !== (settings?.briefingGoals ?? '')) {
-                    saveGoals.mutate(goalsInput);
-                  }
-                }}
-                rows={5}
-                placeholder="What you're working towards, current projects, what's on your mind…"
-                className="mt-1 w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm resize-y focus:outline-none focus:border-[var(--color-primary)]"
-              />
-              <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Standing context the secretary reads every night. Saved when you
-                click away.
-              </p>
-            </div>
-          </>
-        )}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={() => generateNow.mutate()}
-            disabled={generateNow.isPending}
-            className="px-3 py-1.5 text-sm rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] border border-[var(--color-primary)]/40 hover:bg-[var(--color-primary)]/30 disabled:opacity-50"
-          >
-            {generateNow.isPending ? 'Generating…' : 'Generate now'}
-          </button>
-          {status && (
-            <span className="text-xs text-[var(--color-text-muted)]">
-              {status}
-            </span>
-          )}
+    <>
+      <p className="text-sm text-[var(--color-text-muted)]">
+        While the machine is on overnight, an agent reads your recent journal,
+        tasks, calendar and reviews, then leaves a morning briefing as the first
+        message of the day's chat and adds any suggested to-dos.
+      </p>
+      <label className="flex items-center gap-3 cursor-pointer select-none">
+        <div
+          onClick={() => toggleEnabled.mutate(!briefingEnabled)}
+          className={`relative w-9 h-5 rounded-full transition-colors ${briefingEnabled ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${briefingEnabled ? 'translate-x-4' : 'translate-x-0'}`}
+          />
         </div>
+        <span className="text-sm text-[var(--color-text)]">
+          Enable overnight briefing
+        </span>
+      </label>
+      {briefingEnabled && (
+        <>
+          <div>
+            <label className="text-sm text-[var(--color-text-muted)]">
+              Briefing hour (local, 4–23)
+            </label>
+            <input
+              type="number"
+              min={4}
+              max={23}
+              value={hourInput}
+              onChange={e => setHourInput(e.target.value)}
+              onBlur={commitHour}
+              className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+            />
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              Fires once in the hour window after this time; must be ≥ 4am so it
+              lands in the new day's chat.
+            </p>
+          </div>
+          <div>
+            <label className="text-sm text-[var(--color-text-muted)]">
+              Briefing model
+            </label>
+            <select
+              value={settings?.briefingModel ?? ''}
+              onChange={e => saveModel.mutate(e.target.value)}
+              className="mt-1 w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+            >
+              <option value="">Same as chat model (default)</option>
+              {llamaModels && llamaModels.length > 0 && (
+                <optgroup label="Router presets">
+                  {llamaModels.map(m => (
+                    <option key={m.name} value={m.name}>
+                      {m.name} — {m.status}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              Runs overnight, so a slower preset is fine here. There is only one
+              chat preset now — <code>qwen36</code> — so leave this on the
+              default unless you add another to <code>llama/presets.ini</code>.
+            </p>
+          </div>
+          <div>
+            <label className="text-sm text-[var(--color-text-muted)]">
+              Thinking
+            </label>
+            <label className="mt-1 flex items-center gap-3 cursor-pointer">
+              <div
+                onClick={() => saveThinking.mutate(!briefingThinking)}
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${briefingThinking ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${briefingThinking ? 'translate-x-4' : 'translate-x-0'}`}
+                />
+              </div>
+              <span className="text-sm text-[var(--color-text)]">
+                Think before writing
+              </span>
+            </label>
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              Worth turning on here even though chat leaves it off: the briefing
+              runs while you're asleep, so the extra tokens cost you nothing.
+              Give it plenty of output tokens below if you do — thinking and the
+              answer share the same budget.
+            </p>
+          </div>
+          <div>
+            <label className="text-sm text-[var(--color-text-muted)]">
+              Output token limit (256–65536)
+            </label>
+            <input
+              type="number"
+              min={256}
+              max={65536}
+              step={256}
+              value={maxTokensInput}
+              onChange={e => setMaxTokensInput(e.target.value)}
+              onBlur={commitMaxTokens}
+              className="mt-1 w-32 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+            />
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              Ceiling on the briefing's length. Generous by default since it
+              runs overnight; raise it if long briefings get cut off.
+            </p>
+          </div>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            The context window isn't an app setting: llama-server allocates the
+            KV cache when it loads the model, so it's fixed per preset in{' '}
+            <code>llama/presets.ini</code>. Raise <code>ctx-size</code> there
+            and restart llama-server if a briefing ever needs a bigger one.
+          </p>
+          <div>
+            <label className="text-sm text-[var(--color-text-muted)]">
+              Goals &amp; current focus
+            </label>
+            <textarea
+              value={goalsInput}
+              onChange={e => setGoalsInput(e.target.value)}
+              onBlur={() => {
+                if (goalsInput !== (settings?.briefingGoals ?? '')) {
+                  saveGoals.mutate(goalsInput);
+                }
+              }}
+              rows={5}
+              placeholder="What you're working towards, current projects, what's on your mind…"
+              className="mt-1 w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 text-sm resize-y focus:outline-none focus:border-[var(--color-primary)]"
+            />
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              Standing context the secretary reads every night. Saved when you
+              click away.
+            </p>
+          </div>
+        </>
+      )}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => generateNow.mutate()}
+          disabled={generateNow.isPending}
+          className="px-3 py-1.5 text-sm rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] border border-[var(--color-primary)]/40 hover:bg-[var(--color-primary)]/30 disabled:opacity-50"
+        >
+          {generateNow.isPending ? 'Generating…' : 'Generate now'}
+        </button>
+        {status && (
+          <span className="text-xs text-[var(--color-text-muted)]">
+            {status}
+          </span>
+        )}
       </div>
-    </section>
+    </>
   );
 }

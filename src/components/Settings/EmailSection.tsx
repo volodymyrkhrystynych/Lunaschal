@@ -43,11 +43,8 @@ export function EmailSection() {
   };
 
   return (
-    <section className="mb-8">
-      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">
-        Email (Gmail)
-      </h2>
-      <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 space-y-4">
+    <>
+      <div className="space-y-4">
         <p className="text-sm text-[var(--color-text-muted)]">
           Mirrors your Gmail inbox locally and classifies it (job applications,
           rejections, interview next steps). Requires a Google Cloud OAuth
@@ -174,6 +171,6 @@ export function EmailSection() {
           </div>
         )}
       </div>
-    </section>
+    </>
   );
 }

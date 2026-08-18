@@ -30,11 +30,8 @@ export function NetworkSection() {
   const origin = window.location.origin;
 
   return (
-    <section className="mb-8">
-      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">
-        Network Access
-      </h2>
-      <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 space-y-4">
+    <>
+      <div className="space-y-4">
         <div>
           <p className="text-sm text-[var(--color-text-muted)] mb-1">
             Connect from your laptop at:
@@ -91,6 +88,6 @@ export function NetworkSection() {
           </button>
         </div>
       </div>
-    </section>
+    </>
   );
 }

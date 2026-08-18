@@ -157,10 +157,7 @@ export function FanficCookiesSection() {
   }, [cookies, refetch]);
 
   return (
-    <section className="mb-8">
-      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">
-        Fanfic Site Cookies
-      </h2>
+    <>
       <p className="text-sm text-[var(--color-text-muted)] mb-4">
         Needed for login-gated fics (e.g. Questionable Questing NSFW sections)
         and for sites Cloudflare challenges (e.g. SpaceBattles). Log in to the
@@ -187,6 +184,6 @@ export function FanficCookiesSection() {
           />
         ))}
       </div>
-    </section>
+    </>
   );
 }

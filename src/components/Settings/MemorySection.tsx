@@ -76,9 +76,8 @@ export function MemorySection() {
   const overCap = draft.length > maxChars;
 
   return (
-    <section className="space-y-3">
+    <div className="space-y-3">
       <div>
-        <h3 className="text-sm font-medium text-[var(--color-text)]">Memory</h3>
         <p className="text-xs text-[var(--color-text-muted)] mt-1">
           One page of standing facts the assistant carries between conversations
           — names and their spellings, people, places, standing preferences. It
@@ -122,7 +121,7 @@ export function MemorySection() {
       </div>
 
       {showHistory && (
-        <div className="space-y-2">
+        <div className="space-y-2 pt-3 border-t border-white/10">
           {revisions?.length ? (
             revisions.map(revision => (
               <div
@@ -158,6 +157,6 @@ export function MemorySection() {
           )}
         </div>
       )}
-    </section>
+    </div>
   );
 }
