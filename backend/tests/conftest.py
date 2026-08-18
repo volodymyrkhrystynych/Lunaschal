@@ -89,20 +89,24 @@ def client(tmp_path):
         with app.test_client() as c:
             yield c
     finally:
-        # Three things run jobs on background threads against this same
+        # Four things run jobs on background threads against this same
         # module-global connection — the research worker, run_bg's queue
-        # (journal polish, metadata, transcription, workout parsing…), and a
-        # chat reply generating via backend/delegate/runs.py. A test that
-        # triggers any of them can outlive its own teardown, and closing the
-        # connection underneath a thread mid-query segfaults the interpreter
-        # rather than raising. Stop the work before taking its database away.
+        # (journal polish, metadata, transcription, workout parsing…), a chat
+        # reply generating via backend/delegate/runs.py, and the voice-draft
+        # pipeline's own executor (backend/journal/voice_drafts.py). A test
+        # that triggers any of them can outlive its own teardown, and closing
+        # the connection underneath a thread mid-query segfaults the
+        # interpreter rather than raising. Stop the work before taking its
+        # database away.
         from backend.ai import background
         from backend.delegate import runs
         from backend.research import worker
+        from backend.journal import voice_drafts
         worker.cancel()
         worker.wait_idle(timeout=15.0)
         background.wait_idle(timeout=15.0)
         runs.wait_idle(timeout=15.0)
+        voice_drafts.wait_idle(timeout=15.0)
         if connection._conn is not None:
             connection._conn.close()
         connection._DB_PATH, connection._conn = prev_path, prev_conn

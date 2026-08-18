@@ -37,6 +37,7 @@ import type {
   DatedConversation,
   JournalEntry,
   JournalPaper,
+  JournalVoiceDraft,
   FoodJournalItem,
   TaskEvent,
 } from '../hooks/api';
@@ -108,6 +109,16 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   const { data: curatedTags } = useQuery({
     queryKey: ['curatedTags'],
     queryFn: api.curatedTags.list,
+  });
+
+  // Clips from the STT listener's Journal hotkey, mid multi-model
+  // transcription or stuck in error — a 'done' draft has already become a
+  // normal entry in the feed below and drops out of this list server-side.
+  // Refetched by the journal SSE stream's invalidation (queryKey starts with
+  // 'journal', so the existing ['journal'] invalidation already covers it).
+  const { data: voiceDrafts } = useQuery({
+    queryKey: ['journal', 'voiceDrafts'],
+    queryFn: api.journal.voiceDrafts.list,
   });
 
   const isSearching = !!searchQuery;
@@ -772,6 +783,10 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
         </div>
       )}
 
+      {voiceDrafts && voiceDrafts.length > 0 && (
+        <VoiceDraftsPanel drafts={voiceDrafts} />
+      )}
+
       {showNewEntry && (
         <div
           className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10"
@@ -1031,6 +1046,77 @@ function MergeIntoPicker({
         </div>
       )}
     </div>
+  );
+}
+
+// Clips from the STT listener's Journal hotkey that haven't resolved into an
+// entry yet — still being cross-checked by several local STT models, or
+// stuck in error. Open by default: this is meant to be noticed, not dug for.
+function VoiceDraftsPanel({ drafts }: { drafts: JournalVoiceDraft[] }) {
+  const queryClient = useQueryClient();
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ['journal', 'voiceDrafts'] });
+
+  const retryDraft = useMutation({
+    mutationFn: (id: string) => api.journal.voiceDrafts.retry(id),
+    onSuccess: invalidate,
+  });
+  const deleteDraft = useMutation({
+    mutationFn: (id: string) => api.journal.voiceDrafts.delete(id),
+    onSuccess: invalidate,
+  });
+
+  const processingCount = drafts.filter(d => d.status === 'processing').length;
+  const errorCount = drafts.filter(d => d.status === 'error').length;
+
+  return (
+    <details
+      open
+      className="mb-4 p-3 bg-[var(--color-surface)] rounded-lg border border-white/10"
+    >
+      <summary className="text-sm text-[var(--color-text-muted)] cursor-pointer select-none hover:text-[var(--color-text)] transition-colors">
+        🎙 Voice drafts
+        {processingCount > 0 && ` · ${processingCount} processing`}
+        {errorCount > 0 && ` · ${errorCount} failed`}
+      </summary>
+      <div className="mt-2 flex flex-col gap-2">
+        {drafts.map(d => (
+          <div key={d.id} className="flex items-center gap-2">
+            {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+            <audio src={d.url} controls className="h-8 flex-1 min-w-0" />
+            {d.status === 'processing' && (
+              <span className="text-xs text-[var(--color-text-muted)] whitespace-nowrap">
+                Processing…
+              </span>
+            )}
+            {d.status === 'error' && (
+              <>
+                <span
+                  className="text-xs text-red-400 truncate max-w-[16rem]"
+                  title={d.error ?? undefined}
+                >
+                  {d.error || 'Failed'}
+                </span>
+                <button
+                  onClick={() => retryDraft.mutate(d.id)}
+                  disabled={retryDraft.isPending}
+                  className="px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/40 transition-colors disabled:opacity-50"
+                >
+                  Retry
+                </button>
+                <button
+                  onClick={() => deleteDraft.mutate(d.id)}
+                  disabled={deleteDraft.isPending}
+                  className="px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] hover:text-red-400 hover:border-red-400/40 transition-colors disabled:opacity-50"
+                >
+                  Discard
+                </button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 

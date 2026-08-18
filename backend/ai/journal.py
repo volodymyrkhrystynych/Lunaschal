@@ -176,6 +176,99 @@ class PolishUnavailable(Exception):
     successful polish that happened to need no edits."""
 
 
+# Built on _SYSTEM's formatting rules, with one instruction block spliced in
+# ahead of them: cross-check the candidates against each other before doing
+# the usual paragraph/punctuation/spelling cleanup. Word-preservation now
+# means "preserve what the candidates agree was said," not "preserve every
+# word of a single transcript" — a candidate that garbled a name should lose
+# to the others, not be treated as gospel the way _SYSTEM's single-input rule
+# demands.
+_MERGE_SYSTEM = (
+    "You clean up spoken-word journal transcripts. You will be given several "
+    "independent speech-to-text transcriptions of the SAME recording, produced "
+    "by different models — they may disagree in places because one of them "
+    "misheard a word. First, cross-check the transcripts against each other "
+    "and decide what was most likely actually said, preferring the reading "
+    "most of them agree on; where they all disagree, use your best judgement. "
+    "Then produce ONE clean transcript of that, and clean it up exactly as "
+    "below. The speaker's words (as you've reconciled them) are fixed; their "
+    "formatting is what you are here to fix.\n"
+    "\n"
+    "Do all of this:\n"
+    "1. Break the text into paragraphs separated by a blank line, at each shift in "
+    "thought or topic. Dictation arrives as one unbroken block, so returning one "
+    "unbroken block means you have not done the job — anything longer than a few "
+    "sentences becomes two or more paragraphs.\n"
+    "2. Add punctuation where it is clearly missing (periods, commas, question marks).\n"
+    "3. Capitalise the first word of each sentence.\n"
+    "4. Fix spelling mistakes and obvious transcription errors (wrong words, "
+    "misheard sounds) beyond what the cross-check above already resolved.\n"
+    "\n"
+    "Never do any of this:\n"
+    "- Remove, add, reorder, or rephrase a word beyond reconciling the "
+    "transcripts against each other. Every word you keep must appear in at "
+    "least one candidate, in the order it was said.\n"
+    "- Improve the vocabulary, or make the text sound more formal or polished.\n"
+    "\n"
+    "Those restrictions cover WORDS ONLY. Line breaks, blank lines, punctuation and "
+    "capitalisation are exactly what you are being asked to change; adding a blank "
+    "line between two thoughts never counts as altering what the speaker said.\n"
+    "\n"
+    "The transcripts may be followed by a line of dashes (---) and a 'Context:' "
+    "section — background material such as things already known about the "
+    "speaker. Use it only to fix a word that is clearly a mishearing, such as a "
+    "mangled name; never use it to add, remove, or infer anything none of the "
+    "transcripts already say. Do not repeat the transcripts, labels, context "
+    "section, or the dashes in your reply — reply with the single reconciled, "
+    "cleaned transcript only.\n"
+    "\n"
+    "Return only that text. The first character of your reply must be the "
+    "first character of the entry — no preamble, no commentary, nothing like "
+    "'Here is the corrected text:'. Do not wrap the output, or any paragraph of it, "
+    "in quotation marks; use them only where the speaker was quoting someone."
+)
+
+
+def _format_candidates(candidates: list[dict]) -> str:
+    labels = 'ABCDEFGH'
+    blocks = []
+    for i, c in enumerate(candidates):
+        label = labels[i] if i < len(labels) else str(i + 1)
+        blocks.append(f"Transcript {label} ({c['backend']}):\n{c['text']}")
+    return '\n\n'.join(blocks)
+
+
+def merge_voice_draft(candidates: list[dict], context: str | None = None) -> str:
+    """Cross-check 1-3 independent STT transcriptions of the same recording
+    and return one clean, polished entry — the multi-model counterpart of
+    `polish_journal_entry`, for backend/journal/voice_drafts.py's draft
+    pipeline. Raises PolishUnavailable under the same conditions.
+
+    `candidates` — a list of {'backend': str, 'text': str} for whichever
+    backends produced a transcript (backends that failed are simply omitted by
+    the caller). `context` is the standing memory document only: unlike
+    `polish_journal_entry`, there's no entry yet at merge time, so there's no
+    sibling attachment description to fold in.
+    """
+    candidates = [c for c in candidates if (c.get('text') or '').strip()]
+    if not candidates:
+        raise PolishUnavailable('no candidate transcript to merge')
+    if not is_ai_configured():
+        raise PolishUnavailable('AI is not configured')
+    prompt = _format_candidates(candidates)
+    if context:
+        prompt = f'{prompt}\n\n---\nContext:\n{context}'
+    try:
+        result = chat_text(prompt, system=_MERGE_SYSTEM)
+    except Exception as e:
+        logger.error('Voice draft merge failed: %s', e)
+        raise PolishUnavailable(str(e)) from e
+    cleaned = _clean_polish_output(result)
+    if not cleaned:
+        raise PolishUnavailable('model returned an empty merge')
+    return cleaned
+
+
 def polish_journal_entry(raw_text: str, context: str | None = None) -> str:
     """Return the cleaned-up text, or raise PolishUnavailable.
 

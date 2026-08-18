@@ -157,6 +157,7 @@ def init_db() -> None:
     _reset_stale_attachment_transcripts(db)
     _reset_stale_chat_attachment_descriptions(db)
     _reset_stale_message_runs(db)
+    _reset_stale_voice_drafts(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -573,6 +574,21 @@ def _reset_stale_attachment_transcripts(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE journal_attachments SET description_status='idle'"
         " WHERE description_status='running'"
+    )
+    db.commit()
+
+
+def _reset_stale_voice_drafts(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_fic_downloads: the multi-model STT +
+    merge job (backend/journal/voice_drafts.py) runs on a daemon thread whose
+    state dies with the process, so a row still 'processing' at startup has no
+    thread left behind it. Reset to 'error' rather than 'idle' — there is no
+    button that re-arms it on its own, the drafts dropdown's Retry is what
+    starts it again."""
+    db.execute(
+        "UPDATE journal_voice_drafts SET status='error',"
+        " error='Interrupted by an app restart.'"
+        " WHERE status='processing'"
     )
     db.commit()
 

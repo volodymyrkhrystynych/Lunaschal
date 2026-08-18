@@ -48,6 +48,37 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
 CREATE INDEX IF NOT EXISTS idx_journal_attachments_entry
     ON journal_attachments(entry_id, position);
 
+-- A voice clip recorded via the STT listener's Journal hotkey, before it
+-- becomes an entry. The files live under ./data/journal_drafts/<draft_id>/
+-- (backend/journal/voice_drafts.py) — a separate root from journal_attachments
+-- above, since a draft has no entry_id yet. Several local STT backends
+-- transcribe the same clip in the background; their outputs are cross-checked
+-- and polished into one entry by backend/ai/journal.py's merge_voice_draft.
+CREATE TABLE IF NOT EXISTS journal_voice_drafts (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    mime TEXT,
+    size INTEGER,
+    -- 'processing' | 'done' | 'error'. Reset to 'error' at startup for any row
+    -- left 'processing' by a crash (backend/db/connection.py) — unlike an idle
+    -- attachment transcript, there is no button to re-arm; the user retries
+    -- explicitly from the drafts dropdown.
+    status TEXT NOT NULL DEFAULT 'processing',
+    error TEXT,
+    -- JSON array of {backend, text} | {backend, error} — one entry per STT
+    -- backend that ran, kept for the drafts dropdown even after promotion to
+    -- an entry. Not surfaced as journal_entries.raw_content, which stays a
+    -- single plain transcript so the existing manual Polish button keeps
+    -- working unmodified.
+    candidates TEXT,
+    entry_id TEXT REFERENCES journal_entries(id),
+    created_at INTEGER NOT NULL,
+    completed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_voice_drafts_status
+    ON journal_voice_drafts(status, created_at);
+
 CREATE TABLE IF NOT EXISTS calendar_events (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,

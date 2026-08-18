@@ -38,6 +38,7 @@ import numpy as np
 import requests
 import scipy.io.wavfile as wavfile
 import sounddevice as sd
+from ulid import ULID
 import soundfile as sf
 
 logging.basicConfig(
@@ -301,7 +302,10 @@ def _paste_text(text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Journal mode — transcribe → POST /api/journal
+# Journal mode — save the clip as a voice draft; the server transcribes it
+# with several local STT models and reconciles them into an entry in the
+# background (backend/journal/voice_drafts.py). No local transcription
+# happens here anymore — that's the point of moving it server-side.
 # ---------------------------------------------------------------------------
 
 def _transcribe_and_journal() -> None:
@@ -314,29 +318,30 @@ def _transcribe_and_journal() -> None:
         if audio is None:
             return
 
+        audio_i16 = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
+        buf = io.BytesIO()
+        wavfile.write(buf, SAMPLE_RATE, audio_i16)
+        buf.seek(0)
+
         duration = len(audio) / SAMPLE_RATE
-        _status(f"⏳ Transcribing {duration:.1f}s…")
-
-        text = _transcribe(audio)
-        if not text:
-            return
-
-        preview = text[:65] + ("…" if len(text) > 65 else "")
-        _status(f"📝 {preview}")
-        logger.info('Journal text: "%s"', text)
+        # Scales with recording length for the same reason _transcribe's
+        # timeout does — the upload itself is quick, but a slow connection
+        # shouldn't abort on a long clip.
+        timeout = max(30, duration * 2 + 30)
 
         _journal_released.wait(timeout=KEY_RELEASE_TIMEOUT)
-        _status("📝 Saving entry…")
+        _status("📝 Saving voice draft…")
         try:
             resp = _SESSION.post(
-                f"{LUNASCHAL_URL}/api/journal",
-                json={"raw_content": text},
-                timeout=30,
+                f"{LUNASCHAL_URL}/api/journal/voice-drafts",
+                data={"id": str(ULID())},
+                files={"audio": ("recording.wav", buf, "audio/wav")},
+                timeout=timeout,
             )
             if resp.ok:
-                _status("✓ Journal entry saved (polishing in background…)")
+                _status("✓ Saved as voice draft (processing…)")
             else:
-                _status(f"✗ Journal save failed ({resp.status_code})")
+                _status(f"✗ Voice draft save failed ({resp.status_code})")
         except Exception as exc:
             _status(f"✗ {exc}")
     finally:
