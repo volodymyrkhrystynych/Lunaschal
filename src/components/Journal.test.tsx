@@ -56,6 +56,11 @@ vi.mock('../hooks/api', () => ({
         delete: vi.fn(),
         transcribe: vi.fn(),
       },
+      voiceDrafts: {
+        list: vi.fn().mockResolvedValue([]),
+        retry: vi.fn(),
+        delete: vi.fn(),
+      },
     },
     curatedTags: { list: vi.fn().mockResolvedValue([]) },
     transcriptions: { list: vi.fn().mockResolvedValue([]), delete: vi.fn() },
@@ -516,5 +521,113 @@ describe('Journal merge picker', () => {
     await waitFor(() =>
       expect(mergeMock).toHaveBeenCalledWith('e-voice', 'e-same-day')
     );
+  });
+});
+
+describe('Journal voice drafts panel', () => {
+  const listVoiceDraftsMock = api.journal.voiceDrafts.list as ReturnType<
+    typeof vi.fn
+  >;
+  const retryVoiceDraftMock = api.journal.voiceDrafts.retry as ReturnType<
+    typeof vi.fn
+  >;
+  const deleteVoiceDraftMock = api.journal.voiceDrafts.delete as ReturnType<
+    typeof vi.fn
+  >;
+
+  beforeEach(() => {
+    vi.stubGlobal('EventSource', FakeEventSource);
+    Element.prototype.scrollIntoView = vi.fn();
+    listVoiceDraftsMock.mockReset();
+    retryVoiceDraftMock.mockReset();
+    deleteVoiceDraftMock.mockReset();
+  });
+
+  afterEach(() => listVoiceDraftsMock.mockResolvedValue([]));
+
+  it('stays out of the way when there are no drafts', async () => {
+    listVoiceDraftsMock.mockResolvedValue([]);
+    renderJournal();
+    await screen.findByText('First entry');
+
+    expect(screen.queryByText(/Voice drafts/)).toBeNull();
+  });
+
+  it('shows a processing draft with no retry/discard controls', async () => {
+    listVoiceDraftsMock.mockResolvedValue([
+      {
+        id: 'd1',
+        url: '/api/journal/voice-drafts/d1/file',
+        mime: 'audio/wav',
+        size: 2048,
+        status: 'processing',
+        error: null,
+        candidates: [],
+        entryId: null,
+        createdAt: '2026-07-02T10:00:00Z',
+        completedAt: null,
+      },
+    ]);
+    renderJournal();
+
+    expect(await screen.findByText(/Voice drafts · 1 processing/)).toBeTruthy();
+    expect(screen.queryByText('Retry')).toBeNull();
+    expect(screen.queryByText('Discard')).toBeNull();
+  });
+
+  it('offers retry and discard for an errored draft, and retrying refetches the list', async () => {
+    listVoiceDraftsMock.mockResolvedValueOnce([
+      {
+        id: 'd2',
+        url: '/api/journal/voice-drafts/d2/file',
+        mime: 'audio/wav',
+        size: 2048,
+        status: 'error',
+        error: 'All STT backends failed',
+        candidates: [],
+        entryId: null,
+        createdAt: '2026-07-02T10:00:00Z',
+        completedAt: null,
+      },
+    ]);
+    retryVoiceDraftMock.mockResolvedValue({ success: true });
+    renderJournal();
+
+    await screen.findByText(/Voice drafts · 1 failed/);
+    expect(screen.getByText('All STT backends failed')).toBeTruthy();
+
+    listVoiceDraftsMock.mockResolvedValueOnce([]);
+    fireEvent.click(screen.getByText('Retry'));
+
+    await waitFor(() => expect(retryVoiceDraftMock).toHaveBeenCalledWith('d2'));
+    await waitFor(() => expect(screen.queryByText(/Voice drafts/)).toBeNull());
+  });
+
+  it('discarding a draft removes it from the panel', async () => {
+    listVoiceDraftsMock.mockResolvedValueOnce([
+      {
+        id: 'd3',
+        url: '/api/journal/voice-drafts/d3/file',
+        mime: 'audio/wav',
+        size: 2048,
+        status: 'error',
+        error: 'boom',
+        candidates: [],
+        entryId: null,
+        createdAt: '2026-07-02T10:00:00Z',
+        completedAt: null,
+      },
+    ]);
+    deleteVoiceDraftMock.mockResolvedValue({ success: true });
+    renderJournal();
+    await screen.findByText(/Voice drafts · 1 failed/);
+
+    listVoiceDraftsMock.mockResolvedValueOnce([]);
+    fireEvent.click(screen.getByText('Discard'));
+
+    await waitFor(() =>
+      expect(deleteVoiceDraftMock).toHaveBeenCalledWith('d3')
+    );
+    await waitFor(() => expect(screen.queryByText(/Voice drafts/)).toBeNull());
   });
 });

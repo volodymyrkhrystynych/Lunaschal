@@ -54,6 +54,31 @@ export interface FicRef {
   chapterTitle: string | null;
 }
 
+/** One STT backend's output for a voice draft, kept for the dropdown even
+ * after promotion — {text} on success, {error} on failure. */
+export interface JournalVoiceDraftCandidate {
+  backend: string;
+  text?: string;
+  error?: string;
+}
+
+/** A clip recorded via the STT listener's Journal hotkey, before it resolves
+ * into an entry. Several local STT backends transcribe it in the background
+ * and the LLM reconciles their outputs — see backend/journal/voice_drafts.py.
+ * A 'done' draft has already become a normal JournalEntry. */
+export interface JournalVoiceDraft {
+  id: string;
+  url: string;
+  mime: string | null;
+  size: number | null;
+  status: 'processing' | 'done' | 'error';
+  error: string | null;
+  candidates: JournalVoiceDraftCandidate[];
+  entryId: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
 export interface FicDownloadProgress {
   phase: 'index' | 'chapters' | 'updating' | 'done' | 'error';
   chaptersDone: number;
@@ -1642,6 +1667,18 @@ export const api = {
         post<JournalAttachment>(
           `/api/journal/attachments/${attachmentId}/describe-audio`
         ),
+    },
+
+    // Voice drafts (backend/journal/voice_drafts.py): clips from the STT
+    // listener's Journal hotkey, saved for slow multi-model transcription
+    // instead of being turned into text on the spot. Creation happens on the
+    // listener's Python side, not here — these cover the dropdown's needs.
+    voiceDrafts: {
+      list: () => get<JournalVoiceDraft[]>('/api/journal/voice-drafts'),
+      delete: (id: string) =>
+        del<{ success: boolean }>(`/api/journal/voice-drafts/${id}`),
+      retry: (id: string) =>
+        post<{ success: boolean }>(`/api/journal/voice-drafts/${id}/retry`),
     },
   },
 

@@ -103,6 +103,85 @@ def test_metadata_empty_when_ai_unconfigured(monkeypatch):
     assert journal.generate_journal_metadata('some content') == {}
 
 
+class TestMergeVoiceDraft:
+    """merge_voice_draft is polish_journal_entry's multi-candidate counterpart
+    — backend/journal/voice_drafts.py's draft pipeline calls it with 1-3 STT
+    outputs of the same clip instead of one."""
+
+    def test_labels_each_candidate_and_passes_merge_system_prompt(self, monkeypatch):
+        captured = {}
+
+        def fake_chat_text(prompt, system=None):
+            captured['prompt'] = prompt
+            captured['system'] = system
+            return 'Merged text.'
+
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+        monkeypatch.setattr(journal, 'chat_text', fake_chat_text)
+
+        result = journal.merge_voice_draft([
+            {'backend': 'parakeet', 'text': 'hello world'},
+            {'backend': 'local', 'text': 'hallo world'},
+        ])
+
+        assert result == 'Merged text.'
+        assert captured['system'] == journal._MERGE_SYSTEM
+        assert 'Transcript A (parakeet):\nhello world' in captured['prompt']
+        assert 'Transcript B (local):\nhallo world' in captured['prompt']
+
+    def test_appends_context_block_when_given(self, monkeypatch):
+        captured = {}
+
+        def fake_chat_text(prompt, system=None):
+            captured['prompt'] = prompt
+            return 'Merged text.'
+
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+        monkeypatch.setattr(journal, 'chat_text', fake_chat_text)
+
+        journal.merge_voice_draft(
+            [{'backend': 'parakeet', 'text': 'hello world'}],
+            context='Things already known about the user:\nTheir dog is named Wren.',
+        )
+
+        assert captured['prompt'].endswith(
+            '\n\n---\nContext:\nThings already known about the user:\nTheir dog is named Wren.'
+        )
+
+    def test_works_with_a_single_candidate(self, monkeypatch):
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+        monkeypatch.setattr(journal, 'chat_text', lambda prompt, system=None: 'Merged text.')
+
+        result = journal.merge_voice_draft([{'backend': 'parakeet', 'text': 'hello world'}])
+        assert result == 'Merged text.'
+
+    def test_raises_when_no_candidates_have_text(self, monkeypatch):
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+        with pytest.raises(journal.PolishUnavailable, match='no candidate'):
+            journal.merge_voice_draft([{'backend': 'parakeet', 'text': ''}, {'backend': 'local', 'error': 'boom'}])
+
+    def test_raises_when_ai_unconfigured(self, monkeypatch):
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: False)
+        with pytest.raises(journal.PolishUnavailable):
+            journal.merge_voice_draft([{'backend': 'parakeet', 'text': 'hello world'}])
+
+    def test_raises_when_ai_unreachable(self, monkeypatch):
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+        def _boom(*a, **k):
+            raise RuntimeError('Connection error.')
+        monkeypatch.setattr(journal, 'chat_text', _boom)
+
+        with pytest.raises(journal.PolishUnavailable, match='Connection error'):
+            journal.merge_voice_draft([{'backend': 'parakeet', 'text': 'hello world'}])
+
+    def test_raises_on_empty_completion(self, monkeypatch):
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+        monkeypatch.setattr(journal, 'chat_text', lambda prompt, system=None: '   ')
+
+        with pytest.raises(journal.PolishUnavailable, match='empty'):
+            journal.merge_voice_draft([{'backend': 'parakeet', 'text': 'hello world'}])
+
+
 class TestCleanPolishOutput:
     """Unit tests for the preamble-stripping / quote-unwrapping heuristics
     applied to raw LLM output before it's saved as a journal entry."""
