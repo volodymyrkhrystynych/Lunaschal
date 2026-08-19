@@ -3,35 +3,74 @@ import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { Decoration, MatchDecorator, ViewPlugin } from '@codemirror/view';
+import type { DecorationSet, ViewUpdate } from '@codemirror/view';
 import { Vim, vim } from '@replit/codemirror-vim';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useNotebookWrite } from '../../offline/mutationDefaults';
+import {
+  diaryPathFor,
+  wikiLinkTargetAt,
+  resolveWikiLinkPath,
+  toggleCheckboxLine,
+} from '../../lib/notebookVim';
 
 interface Props {
   filePath: string;
   onExit: () => void;
+  /** Switches the open file without returning to the tree — used by the
+   * diary-jump and wiki-link-follow vim customizations below. */
+  onOpenPath: (path: string) => void;
+  /** Pops one hop off the caller's drill-down history — <BS> below. */
+  onGoBack: () => void;
 }
 
 const SAVE_DEBOUNCE_MS = 1500;
 
-// Vim.defineEx registers into a process-global Ex-command table (shared by
+// Highlights [[Link]]/[[Link|Label]] spans so they read as distinct from
+// plain text, the same job CodeMirror's markdown mode does for real markdown
+// links — but this syntax is vimwiki's own, so nothing highlights it for free.
+const wikiLinkMatcher = new MatchDecorator({
+  regexp: /\[\[[^\]]+\]\]/g,
+  decoration: () => Decoration.mark({ class: 'cm-wikilink' }),
+});
+const wikiLinkHighlighter = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+    constructor(view: EditorView) {
+      this.decorations = wikiLinkMatcher.createDeco(view);
+    }
+    update(update: ViewUpdate) {
+      this.decorations = wikiLinkMatcher.updateDeco(update, this.decorations);
+    }
+  },
+  { decorations: v => v.decorations }
+);
+
+// Vim.defineEx/defineAction register into process-global tables (shared by
 // every vim() extension instance on the page, not scoped to one EditorView),
-// so :w/:q/:wq handlers are registered once at module scope and look up the
-// save/exit callbacks for whichever EditorView they were invoked on via this
-// map, populated by each NotebookEditorPane instance on mount/unmount.
-// cm.cm6 (confirmed via @replit/codemirror-vim's own type defs: the CodeMirror
-// adapter class has a `cm6: EditorView` property) gives the real CM6 view the
-// ex command fired in.
+// so all of :w/:q/:wq/:diary and the <CR>/<C-Space> action overrides are
+// registered once at module scope and look up the per-view callbacks for
+// whichever EditorView they were invoked on via this map, populated by each
+// NotebookEditorPane instance on mount/unmount. cm.cm6 (confirmed via
+// @replit/codemirror-vim's own type defs: the CodeMirror adapter class has a
+// `cm6: EditorView` property) gives the real CM6 view the command fired in.
 const editorCallbacks = new Map<
   EditorView,
-  { save: () => void; exit: () => void }
+  {
+    save: () => void;
+    exit: () => void;
+    diary: () => void;
+    openLink: (target: string) => void;
+    goBack: () => void;
+  }
 >();
 
-let exCommandsRegistered = false;
-function registerVimExCommandsOnce() {
-  if (exCommandsRegistered) return;
-  exCommandsRegistered = true;
+let vimCustomizationsRegistered = false;
+function registerVimCustomizationsOnce() {
+  if (vimCustomizationsRegistered) return;
+  vimCustomizationsRegistered = true;
   Vim.defineEx('write', 'w', cm => {
     editorCallbacks.get(cm.cm6)?.save();
   });
@@ -46,10 +85,84 @@ function registerVimExCommandsOnce() {
     cm.cm6.contentDOM.blur();
     cb?.exit();
   });
-}
-registerVimExCommandsOnce();
+  // vimwiki's <Leader>w<Leader>w with the (common) mapleader set to <Space>:
+  // jump to (creating if needed) today's diary note. codemirror-vim resolves
+  // a full match on the first key of an ambiguous sequence rather than
+  // waiting to see if a longer mapping applies (unlike real Vim), so the
+  // stock <Space> -> l (move right) binding would fire before the second key
+  // ever arrives — unmap it first, same as a real vimwiki setup that uses
+  // <Space> as its leader.
+  Vim.defineEx('diary', undefined, cm => {
+    editorCallbacks.get(cm.cm6)?.diary();
+  });
+  // The upstream .d.ts marks `ctx` required, but the default <Space> entry
+  // has no context set — passing '' wouldn't match its undefined context.
+  Vim.unmap('<Space>', undefined as unknown as string);
+  Vim.map('<Space>w<Space>w', ':diary<CR>', 'normal');
 
-export function NotebookEditorPane({ filePath, onExit }: Props) {
+  // vimwiki's <CR> follows a [[Link]] under the cursor; otherwise it falls
+  // through to a plain "move to the next line" (the closest approximation of
+  // default normal-mode <CR> worth reproducing here — counts/folds are out
+  // of scope).
+  Vim.defineAction('notebookFollowLink', (cm: { cm6: EditorView }) => {
+    const view = cm.cm6;
+    const pos = view.state.selection.main.head;
+    const line = view.state.doc.lineAt(pos);
+    const col = pos - line.from;
+    const target = wikiLinkTargetAt(line.text, col);
+    if (target) {
+      editorCallbacks.get(view)?.openLink(target);
+      return;
+    }
+    const nextLineNo = Math.min(line.number + 1, view.state.doc.lines);
+    const nextLine = view.state.doc.line(nextLineNo);
+    const firstNonBlank = nextLine.text.search(/\S/);
+    const to = nextLine.from + (firstNonBlank === -1 ? 0 : firstNonBlank);
+    view.dispatch({ selection: { anchor: to } });
+  });
+  Vim.mapCommand(
+    '<CR>',
+    'action',
+    'notebookFollowLink',
+    {},
+    { context: 'normal' }
+  );
+
+  // vimwiki's <C-Space> toggles the "- [ ]"/"- [x]" checkbox on the current
+  // line, or turns a plain list item into an unchecked checkbox item.
+  Vim.defineAction('notebookToggleCheckbox', (cm: { cm6: EditorView }) => {
+    const view = cm.cm6;
+    const line = view.state.doc.lineAt(view.state.selection.main.head);
+    const next = toggleCheckboxLine(line.text);
+    if (next === line.text) return;
+    view.dispatch({ changes: { from: line.from, to: line.to, insert: next } });
+  });
+  Vim.mapCommand(
+    '<C-Space>',
+    'action',
+    'notebookToggleCheckbox',
+    {},
+    { context: 'normal' }
+  );
+
+  // vimwiki's <BS> steps back through the pages a <CR>/diary jump drilled
+  // into — no backlink index needed, just an unwind of however deep the
+  // drilling went. <BS> is single-key, same as <C-Space>/<CR> above, so (unlike
+  // <Space>) it doesn't hit the prefix-ambiguity problem and needs no unmap:
+  // a newly mapCommand'd action already wins over the stock <BS> -> h motion.
+  Vim.defineAction('notebookGoBack', (cm: { cm6: EditorView }) => {
+    editorCallbacks.get(cm.cm6)?.goBack();
+  });
+  Vim.mapCommand('<BS>', 'action', 'notebookGoBack', {}, { context: 'normal' });
+}
+registerVimCustomizationsOnce();
+
+export function NotebookEditorPane({
+  filePath,
+  onExit,
+  onOpenPath,
+  onGoBack,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -98,6 +211,22 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
     });
   };
 
+  // Opens `path` (switching away from the current file), creating it as an
+  // empty note first if it doesn't exist yet — shared by the diary-jump and
+  // wiki-link-follow vim customizations.
+  const ensureAndOpen = async (path: string) => {
+    if (path === filePath) return;
+    try {
+      await api.notebook.files.read(path);
+    } catch {
+      await api.notebook.files.write(path, '');
+      queryClient.invalidateQueries({
+        queryKey: ['notebook', 'files', 'list'],
+      });
+    }
+    onOpenPath(path);
+  };
+
   // Build the editor once the file's content has loaded, and rebuild only when
   // the *file* changes — NOT when `data.content` changes. Each auto-save's
   // write mutation invalidates ['notebook'], refetching this file; that brings
@@ -120,6 +249,7 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
           basicSetup,
           oneDark,
           markdown(),
+          wikiLinkHighlighter,
           EditorView.lineWrapping,
           EditorView.updateListener.of(update => {
             if (!update.docChanged) return;
@@ -136,6 +266,10 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
           EditorView.theme({
             '&': { height: '100%', fontSize: '13px' },
             '.cm-scroller': { overflow: 'auto' },
+            '.cm-wikilink': {
+              color: 'var(--color-primary)',
+              textDecoration: 'underline',
+            },
           }),
         ],
       }),
@@ -143,7 +277,13 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
     });
 
     viewRef.current = view;
-    editorCallbacks.set(view, { save: saveNow, exit: onExit });
+    editorCallbacks.set(view, {
+      save: saveNow,
+      exit: onExit,
+      diary: () => ensureAndOpen(diaryPathFor()),
+      openLink: target => ensureAndOpen(resolveWikiLinkPath(target, filePath)),
+      goBack: onGoBack,
+    });
     setSaveStatus('saved');
     view.focus();
 
@@ -156,12 +296,19 @@ export function NotebookEditorPane({ filePath, onExit }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filePath, dataReady]);
 
-  // Keep the exit callback fresh without rebuilding the editor.
+  // Keep the callbacks fresh (identity + closed-over filePath) without
+  // rebuilding the editor.
   useEffect(() => {
     if (!viewRef.current) return;
     const cb = editorCallbacks.get(viewRef.current);
-    if (cb) cb.exit = onExit;
-  }, [onExit]);
+    if (!cb) return;
+    cb.exit = onExit;
+    cb.diary = () => ensureAndOpen(diaryPathFor());
+    cb.openLink = target =>
+      ensureAndOpen(resolveWikiLinkPath(target, filePath));
+    cb.goBack = onGoBack;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onExit, onOpenPath, onGoBack, filePath]);
 
   if (!filePath) return null;
 

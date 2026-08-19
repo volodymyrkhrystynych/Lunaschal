@@ -692,6 +692,15 @@ CREATE TABLE IF NOT EXISTS notebook_review_state (
 
 CREATE INDEX IF NOT EXISTS idx_notebook_review_due ON notebook_review_state(enabled, due);
 
+-- Tracks which diary/YYYY-MM-DD.md notes have already been promoted into a
+-- Journal entry (backend/notebook_diary_scheduler.py), so a catch-up scan
+-- after the app was closed overnight never double-promotes one.
+CREATE TABLE IF NOT EXISTS notebook_diary_promotions (
+    date TEXT PRIMARY KEY,
+    journal_entry_id TEXT NOT NULL,
+    promoted_at INTEGER NOT NULL
+);
+
 -- Notes to self: freeform notes jotted from chat, resurfaced on a fixed
 -- 1/2/4/7/14-day ladder (backend/notes.py) rather than FSRS — there's no
 -- correctness signal to grade, just seen-or-not, so nothing for a

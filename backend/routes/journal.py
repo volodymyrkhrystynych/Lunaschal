@@ -156,6 +156,38 @@ def get_entry(id):
     return jsonify(_enrich_with_attachments(db, [row_to_dict(row)])[0])
 
 
+def create_journal_entry(
+    content: str,
+    raw_content: str | None,
+    created_at: int,
+    *,
+    title: str | None = None,
+    tags=None,
+    entry_id: str | None = None,
+    polish: bool = False,
+) -> str | None:
+    """Inserts a journal entry and kicks off background metadata generation
+    (and, if `polish` and `raw_content` is set, background polish — the STT
+    dictation path). `entry_id` lets a caller supply its own id for an
+    idempotent replay (e.g. an offline-queued create, or a scheduler's
+    catch-up promotion); a collision is a no-op and returns None.
+    """
+    id = entry_id or str(ULID())
+    cur = get_db().execute(
+        'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+        (id, content, raw_content, title, tags_json(tags), created_at, created_at),
+    )
+    get_db().commit()
+    if cur.rowcount == 0:
+        return None
+    _notify_subscribers(id)
+    if polish and raw_content:
+        _polish_bg(id, raw_content)
+    if not title or not tags:
+        _generate_metadata_bg(id, content)
+    return id
+
+
 @bp.post('')
 def create_entry():
     body = request.json or {}
@@ -175,21 +207,13 @@ def create_entry():
 
     now = int(time.time())
     # Accept a client-supplied ULID so an offline-queued create replays
-    # idempotently: INSERT OR IGNORE makes a duplicate a no-op, and rowcount==0
-    # means we've already saved this entry — skip the background work.
+    # idempotently: create_journal_entry's INSERT OR IGNORE makes a duplicate
+    # a no-op, and a None return means we've already saved this entry.
     id = body.get('id') or str(ULID())
-    cur = get_db().execute(
-        'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-        (id, content, raw_content, title, tags_json(tags), now, now),
+    create_journal_entry(
+        content, raw_content, now,
+        title=title, tags=tags, entry_id=id, polish=True,
     )
-    get_db().commit()
-    if cur.rowcount == 0:
-        return jsonify({'id': id}), 201
-    _notify_subscribers(id)
-    if raw_content:
-        _polish_bg(id, raw_content)
-    if not title or not tags:
-        _generate_metadata_bg(id, content)
     return jsonify({'id': id}), 201
 
 

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
+import type { ComponentProps } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { render, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotebookEditorPane } from './NotebookEditorPane';
 
@@ -22,13 +23,21 @@ vi.mock('../../hooks/api', () => ({
   },
 }));
 
-function renderPane() {
+function renderPane(
+  props: Partial<ComponentProps<typeof NotebookEditorPane>> = {}
+) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const utils = render(
     <QueryClientProvider client={queryClient}>
-      <NotebookEditorPane filePath="note.md" onExit={() => {}} />
+      <NotebookEditorPane
+        filePath="note.md"
+        onExit={() => {}}
+        onOpenPath={() => {}}
+        onGoBack={() => {}}
+        {...props}
+      />
     </QueryClientProvider>
   );
   return { queryClient, ...utils };
@@ -81,7 +90,12 @@ describe('NotebookEditorPane', () => {
     });
     const { container, rerender } = render(
       <QueryClientProvider client={queryClient}>
-        <NotebookEditorPane filePath="a.md" onExit={() => {}} />
+        <NotebookEditorPane
+          filePath="a.md"
+          onExit={() => {}}
+          onOpenPath={() => {}}
+          onGoBack={() => {}}
+        />
       </QueryClientProvider>
     );
     await waitFor(() =>
@@ -93,7 +107,12 @@ describe('NotebookEditorPane', () => {
     mocks.read.mockResolvedValue({ content: 'file B body' });
     rerender(
       <QueryClientProvider client={queryClient}>
-        <NotebookEditorPane filePath="b.md" onExit={() => {}} />
+        <NotebookEditorPane
+          filePath="b.md"
+          onExit={() => {}}
+          onOpenPath={() => {}}
+          onGoBack={() => {}}
+        />
       </QueryClientProvider>
     );
 
@@ -102,5 +121,101 @@ describe('NotebookEditorPane', () => {
         'file B body'
       )
     );
+  });
+
+  it('toggles a checkbox on Ctrl+Space, cycling plain item -> unchecked -> checked', async () => {
+    mocks.read.mockResolvedValue({ content: '- todo' });
+    const { container } = renderPane();
+
+    const content = await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      expect(el?.textContent).toContain('- todo');
+      return el as Element;
+    });
+
+    fireEvent.keyDown(content, { key: ' ', code: 'Space', ctrlKey: true });
+    await waitFor(() => expect(content.textContent).toContain('- [ ] todo'));
+
+    fireEvent.keyDown(content, { key: ' ', code: 'Space', ctrlKey: true });
+    await waitFor(() => expect(content.textContent).toContain('- [x] todo'));
+  });
+
+  it('follows a [[Link]] under the cursor on Enter, creating the target note', async () => {
+    mocks.read.mockImplementation((path: string) =>
+      path === 'note.md'
+        ? Promise.resolve({ content: '[[Target Page]]' })
+        : Promise.reject(new Error('Not found'))
+    );
+    const onOpenPath = vi.fn();
+    const { container } = renderPane({ onOpenPath });
+
+    const content = await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      expect(el?.textContent).toContain('Target Page');
+      return el as Element;
+    });
+
+    fireEvent.keyDown(content, { key: 'Enter', code: 'Enter' });
+
+    await waitFor(() =>
+      expect(mocks.write).toHaveBeenCalledWith('Target Page.md', '')
+    );
+    await waitFor(() =>
+      expect(onOpenPath).toHaveBeenCalledWith('Target Page.md')
+    );
+  });
+
+  it("jumps to (and creates) today's diary note on <Space>w<Space>w", async () => {
+    mocks.read.mockImplementation((path: string) =>
+      path === 'note.md'
+        ? Promise.resolve({ content: '' })
+        : Promise.reject(new Error('Not found'))
+    );
+    const onOpenPath = vi.fn();
+    const { container } = renderPane({ onOpenPath });
+
+    const content = await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      expect(el).toBeTruthy();
+      return el as Element;
+    });
+
+    fireEvent.keyDown(content, { key: ' ', code: 'Space' });
+    fireEvent.keyDown(content, { key: 'w', code: 'KeyW' });
+    fireEvent.keyDown(content, { key: ' ', code: 'Space' });
+    fireEvent.keyDown(content, { key: 'w', code: 'KeyW' });
+
+    await waitFor(() => expect(onOpenPath).toHaveBeenCalled());
+    const [openedPath] = onOpenPath.mock.calls[0];
+    expect(openedPath).toMatch(/^diary\/\d{4}-\d{2}-\d{2}\.md$/);
+    expect(mocks.write).toHaveBeenCalledWith(openedPath, '');
+  });
+
+  it('calls onGoBack on Backspace instead of moving the cursor', async () => {
+    mocks.read.mockResolvedValue({ content: 'some text' });
+    const onGoBack = vi.fn();
+    const { container } = renderPane({ onGoBack });
+
+    const content = await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      expect(el?.textContent).toContain('some text');
+      return el as Element;
+    });
+
+    fireEvent.keyDown(content, { key: 'Backspace', code: 'Backspace' });
+    await waitFor(() => expect(onGoBack).toHaveBeenCalledTimes(1));
+  });
+
+  it('highlights a [[Link]] span distinctly from surrounding text', async () => {
+    mocks.read.mockResolvedValue({ content: 'see [[Some Page]] for more' });
+    const { container } = renderPane();
+
+    await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      expect(el?.textContent).toContain('Some Page');
+    });
+
+    const link = container.querySelector('.cm-wikilink');
+    expect(link?.textContent).toBe('[[Some Page]]');
   });
 });

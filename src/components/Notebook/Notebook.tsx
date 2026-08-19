@@ -12,6 +12,11 @@ export function Notebook() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [focusedEntry, setFocusedEntry] = useState<FileEntry | null>(null);
   const [reviewing, setReviewing] = useState(false);
+  // Vim's <BS> "go back" needs no backlink index — as long as this history
+  // unwinds as many hops as the diary-jump/link-follow drilling made, it's
+  // fine that nothing tracks who links to what. Reset whenever the drill-down
+  // chain itself ends: picking a fresh file from the tree, or leaving to it.
+  const [history, setHistory] = useState<string[]>([]);
   const { isMobile, showList, showDetail, openDetail, openList } =
     useMasterDetail();
 
@@ -49,6 +54,7 @@ export function Notebook() {
           <NotebookTree
             selectedPath={selectedPath}
             onSelectFile={path => {
+              setHistory([]);
               setSelectedPath(path);
               openDetail();
             }}
@@ -72,8 +78,22 @@ export function Notebook() {
             <NotebookEditorPane
               filePath={selectedPath}
               onExit={() => {
+                setHistory([]);
                 setSelectedPath(null);
                 openList();
+              }}
+              onOpenPath={path => {
+                setHistory(h => [...h, selectedPath]);
+                setSelectedPath(path);
+                openDetail();
+              }}
+              onGoBack={() => {
+                setHistory(h => {
+                  if (h.length === 0) return h;
+                  setSelectedPath(h[h.length - 1]);
+                  openDetail();
+                  return h.slice(0, -1);
+                });
               }}
             />
           ) : (
