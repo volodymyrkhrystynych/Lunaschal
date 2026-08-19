@@ -13,6 +13,7 @@ from ulid import ULID
 
 from backend.ai.chat import chat_stream
 from backend.ai.provider import is_ai_configured
+from backend.ai.transcribe_polish import polish_transcript
 
 import soundfile as sf
 from flask import Blueprint, Response, jsonify, request
@@ -112,6 +113,18 @@ def _get_active_stt_device() -> str:
     except Exception:
         pass
     return DEVICE
+
+
+def _get_transcribe_polish_enabled() -> bool:
+    try:
+        s = get_db().execute(
+            'SELECT transcribe_polish_enabled FROM settings LIMIT 1'
+        ).fetchone()
+        if s and s['transcribe_polish_enabled'] is not None:
+            return bool(s['transcribe_polish_enabled'])
+    except Exception:
+        pass
+    return True
 
 
 def _ensure_openai():
@@ -501,6 +514,8 @@ def transcribe():
 
     try:
         result = _do_transcribe(content, audio_file.filename or '', language)
+        if _get_transcribe_polish_enabled():
+            result['text'] = polish_transcript(result['text'])
         _log_transcription(result, request.form)
         return jsonify({**result, 'language_probability': 1.0})
     except ValueError as e:
