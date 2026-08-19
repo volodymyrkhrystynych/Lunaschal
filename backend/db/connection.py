@@ -199,6 +199,8 @@ def _ensure_stt_model_settings(db: sqlite3.Connection) -> None:
             db.execute(f'ALTER TABLE settings ADD COLUMN {col} TEXT')
     if 'voice_pipeline_enabled' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN voice_pipeline_enabled INTEGER DEFAULT 1')
+    if 'transcribe_polish_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN transcribe_polish_enabled INTEGER DEFAULT 1')
     db.commit()
 
 

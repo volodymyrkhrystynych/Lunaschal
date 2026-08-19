@@ -4,6 +4,7 @@ import time
 
 import pytest
 
+from backend.ai import transcribe_polish
 from backend.db.connection import get_db
 from backend.routes import stt
 from ulid import ULID
@@ -60,6 +61,35 @@ def test_other_sources_are_not_logged(client, mock_stt, source):
     resp = _post_audio(client, source=source)
     assert resp.status_code == 200
     assert _rows(client) == []
+
+
+def test_transcribe_polishes_text_before_returning_and_logging(client, mock_stt, monkeypatch):
+    monkeypatch.setattr(transcribe_polish, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(
+        transcribe_polish, 'chat_text', lambda prompt, system=None: 'Hello, world.'
+    )
+    resp = _post_audio(client, source='paste')
+    assert resp.status_code == 200
+    assert resp.get_json()['text'] == 'Hello, world.'
+    assert _rows(client)[0]['text'] == 'Hello, world.'
+
+
+def test_transcribe_falls_back_to_raw_text_when_ai_not_configured(client, mock_stt, monkeypatch):
+    monkeypatch.setattr(transcribe_polish, 'is_ai_configured', lambda: False)
+    resp = _post_audio(client, source='paste')
+    assert resp.get_json()['text'] == 'hello world'
+
+
+def test_transcribe_polish_can_be_disabled_via_setting(client, mock_stt, monkeypatch):
+    monkeypatch.setattr(transcribe_polish, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(
+        transcribe_polish, 'chat_text', lambda prompt, system=None: 'Hello, world.'
+    )
+    get_db().execute('UPDATE settings SET transcribe_polish_enabled = 0')
+    get_db().commit()
+    resp = _post_audio(client, source='paste')
+    assert resp.get_json()['text'] == 'hello world'
+    assert _rows(client)[0]['text'] == 'hello world'
 
 
 def test_empty_transcription_is_not_logged(client, monkeypatch):

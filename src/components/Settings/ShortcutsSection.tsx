@@ -42,7 +42,14 @@ export function ShortcutsSection() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
   });
 
+  const togglePolish = useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.settings.updateAI({ transcribePolishEnabled: enabled }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['settings'] }),
+  });
+
   const pipelineEnabled = settings?.voicePipelineEnabled ?? true;
+  const polishEnabled = settings?.transcribePolishEnabled ?? true;
 
   return (
     <>
@@ -108,6 +115,23 @@ export function ShortcutsSection() {
             (voice shortcut pastes instead)
           </span>
         )}
+      </label>
+
+      <label className="flex items-center gap-3 cursor-pointer select-none pt-1">
+        <div
+          onClick={() => togglePolish.mutate(!polishEnabled)}
+          className={`relative w-9 h-5 rounded-full transition-colors ${polishEnabled ? 'bg-[var(--color-primary)]' : 'bg-white/20'}`}
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${polishEnabled ? 'translate-x-4' : 'translate-x-0'}`}
+          />
+        </div>
+        <span className="text-sm text-[var(--color-text)]">
+          Polish transcriptions with AI
+        </span>
+        <span className="text-xs text-[var(--color-text-muted)]">
+          (fixes punctuation, capitalisation, obvious mishearings)
+        </span>
       </label>
 
       <div className="flex items-center gap-3 pt-1">

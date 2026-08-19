@@ -647,6 +647,9 @@ export interface AppSettings {
   whisperModel: string | null;
   sttDevice: string | null;
   voicePipelineEnabled: boolean;
+  /** Whether /api/transcribe runs its quick LLM cleanup pass (punctuation,
+   * capitalisation, obvious mishearings) before returning text. */
+  transcribePolishEnabled: boolean;
   preventSleep: boolean;
   meetingEchoCancel: boolean;
   nudgeEnabled: boolean;
