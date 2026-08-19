@@ -25,6 +25,7 @@ Development happens on two machines: a desktop (comfortable, full mouse/keyboard
 - Vitest defaults to the `node` environment for pure-logic tests; component tests (`.test.tsx`) opt into jsdom per-file with a `// @vitest-environment jsdom` pragma and use `@testing-library/react` (auto-cleanup is registered in `src/test/setup.ts`). Extractable logic lives in `src/lib/` precisely so it can be tested without jsdom.
 - Favor fast, isolated tests: unit-test AI parsing/classification (`backend/ai/`), route handlers, the FSRS scheduling adapter, pure parsers (`backend/fanfic/xenforo.py`, `backend/meetings/merge.py`), and the DB layer against a temporary SQLite file. Mock external AI providers and network fetches rather than calling them.
 - **Every backend test gets an isolated database, whether it asks for one or not** — `conftest.py`'s autouse `isolated_db` copies a session-built schema template per test. `get_db()` opens the configured path lazily and never runs the schema, so before that fixture a test with no `client` opened the developer's real `./data/lunaschal.db` and silently depended on whatever was in it. The template is built once (`init_db()` is ~150 ms; 1,500 times is four minutes).
+- That per-test DB copy (~1MB) lives in `tmp_path`, and pytest's default retention keeps every test's `tmp_path` alive for the whole session — across ~1,800 tests that's enough on its own to fill a quota-limited tmp partition. `pytest.ini` sets `tmp_path_retention_policy = failed` so a passing test's `tmp_path` is freed the moment that test ends (pytest still keeps failing tests' dirs around to debug), and `scripts/test-backend.sh` (what `npm run test:backend` runs) additionally splits the suite into batches, wiping pytest's tmp root before each one — so a full run's peak tmp usage stays bounded even when a batch has real failures.
 - After making changes, run the relevant tests and report the actual results. Treat a green test suite — not a manual walkthrough — as the default bar for "done."
 - No ESLint; **Prettier** runs on staged files via a pre-commit hook (`simple-git-hooks` + `lint-staged`). `npm run format` / `format:check` run it manually.
 
@@ -59,7 +60,8 @@ systemctl --user status lunaschal-llama   # see llama/lunaschal-llama.service to
 npm run stt              # or ./stt-start.sh
 
 # Tests
-npm run test:backend     # pytest (backend/tests)
+npm run test:backend     # scripts/test-backend.sh: runs backend/tests in batches
+                         # (pytest directly for a single file: .venv/bin/pytest backend/tests/test_foo.py)
 npm run test             # vitest run (src/**/*.{test,spec}.{ts,tsx})
 npm run test:all         # both suites
 npm run test:watch       # vitest in watch mode
