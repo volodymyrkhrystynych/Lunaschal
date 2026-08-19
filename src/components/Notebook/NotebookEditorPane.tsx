@@ -10,6 +10,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useNotebookWrite } from '../../offline/mutationDefaults';
 import {
+  INDEX_PATH,
   diaryPathFor,
   wikiLinkTargetAt,
   resolveWikiLinkPath,
@@ -18,9 +19,8 @@ import {
 
 interface Props {
   filePath: string;
-  onExit: () => void;
-  /** Switches the open file without returning to the tree — used by the
-   * diary-jump and wiki-link-follow vim customizations below. */
+  /** Switches the open file — used by the diary-jump, wiki-link-follow, and
+   * :q-goes-home vim customizations below. */
   onOpenPath: (path: string) => void;
   /** Pops one hop off the caller's drill-down history — <BS> below. */
   onGoBack: () => void;
@@ -60,7 +60,7 @@ const editorCallbacks = new Map<
   EditorView,
   {
     save: () => void;
-    exit: () => void;
+    goHome: () => void;
     diary: () => void;
     openLink: (target: string) => void;
     goBack: () => void;
@@ -74,16 +74,16 @@ function registerVimCustomizationsOnce() {
   Vim.defineEx('write', 'w', cm => {
     editorCallbacks.get(cm.cm6)?.save();
   });
+  // Without a file tree to fall back to, "quit" means "back to the index" —
+  // the same ensureAndOpen path diary/link-follow already use, so it stays
+  // mounted and focused rather than blurring out to nowhere.
   Vim.defineEx('quit', 'q', cm => {
-    const cb = editorCallbacks.get(cm.cm6);
-    cm.cm6.contentDOM.blur();
-    cb?.exit();
+    editorCallbacks.get(cm.cm6)?.goHome();
   });
   Vim.defineEx('wq', undefined, cm => {
     const cb = editorCallbacks.get(cm.cm6);
     cb?.save();
-    cm.cm6.contentDOM.blur();
-    cb?.exit();
+    cb?.goHome();
   });
   // vimwiki's <Leader>w<Leader>w with the (common) mapleader set to <Space>:
   // jump to (creating if needed) today's diary note. codemirror-vim resolves
@@ -157,12 +157,7 @@ function registerVimCustomizationsOnce() {
 }
 registerVimCustomizationsOnce();
 
-export function NotebookEditorPane({
-  filePath,
-  onExit,
-  onOpenPath,
-  onGoBack,
-}: Props) {
+export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -212,18 +207,11 @@ export function NotebookEditorPane({
   };
 
   // Opens `path` (switching away from the current file), creating it as an
-  // empty note first if it doesn't exist yet — shared by the diary-jump and
-  // wiki-link-follow vim customizations.
+  // empty note first if it doesn't exist yet — shared by the diary-jump,
+  // wiki-link-follow, and :q-goes-home vim customizations.
   const ensureAndOpen = async (path: string) => {
     if (path === filePath) return;
-    try {
-      await api.notebook.files.read(path);
-    } catch {
-      await api.notebook.files.write(path, '');
-      queryClient.invalidateQueries({
-        queryKey: ['notebook', 'files', 'list'],
-      });
-    }
+    await api.notebook.files.ensure(path);
     onOpenPath(path);
   };
 
@@ -279,7 +267,7 @@ export function NotebookEditorPane({
     viewRef.current = view;
     editorCallbacks.set(view, {
       save: saveNow,
-      exit: onExit,
+      goHome: () => ensureAndOpen(INDEX_PATH),
       diary: () => ensureAndOpen(diaryPathFor()),
       openLink: target => ensureAndOpen(resolveWikiLinkPath(target, filePath)),
       goBack: onGoBack,
@@ -302,13 +290,13 @@ export function NotebookEditorPane({
     if (!viewRef.current) return;
     const cb = editorCallbacks.get(viewRef.current);
     if (!cb) return;
-    cb.exit = onExit;
+    cb.goHome = () => ensureAndOpen(INDEX_PATH);
     cb.diary = () => ensureAndOpen(diaryPathFor());
     cb.openLink = target =>
       ensureAndOpen(resolveWikiLinkPath(target, filePath));
     cb.goBack = onGoBack;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onExit, onOpenPath, onGoBack, filePath]);
+  }, [onOpenPath, onGoBack, filePath]);
 
   if (!filePath) return null;
 

@@ -2,6 +2,10 @@
 // jump, wiki-link resolution, checkbox toggling) — extracted so it's
 // testable without spinning up CodeMirror/jsdom.
 
+// The vimwiki-style root page — the sole entry point into the notebook now
+// that there's no file-tree sidebar. Auto-created empty on first visit.
+export const INDEX_PATH = 'index.md';
+
 const DIARY_DIR = 'diary';
 
 // Mirrors backend/day_boundary.py's app-wide 4am day boundary: a diary note
@@ -38,13 +42,16 @@ export function wikiLinkTargetAt(line: string, col: number): string | null {
 
 /** Resolves a wiki-link target to a notebook file path, relative to the
  * directory of the file the link appears in — a leading "/" is root-relative,
- * matching vimwiki's default single-wiki link resolution. Appends .md when
- * the target has no extension of its own. */
+ * matching vimwiki's default single-wiki link resolution. A leading "./" is
+ * an explicit-but-equivalent alias for no prefix at all (also relative to the
+ * current directory) — stripped before resolution. Appends .md when the
+ * target has no extension of its own. */
 export function resolveWikiLinkPath(
   target: string,
   currentFilePath: string
 ): string {
   let name = target.trim();
+  if (name.startsWith('./')) name = name.slice(2);
   if (!/\.[a-zA-Z0-9]+$/.test(name)) name += '.md';
   if (name.startsWith('/')) return name.slice(1);
   const dir = currentFilePath.includes('/')
