@@ -68,159 +68,149 @@ export function LlamaConfigSection() {
           {message.text}
         </div>
       )}
-      <section className="mb-8">
-        <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">
-          llama.cpp Configuration
-        </h2>
-        <div className="space-y-4">
-          <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
-            <h3 className="font-medium text-[var(--color-text)] mb-2">
-              llama-server
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label className="text-sm text-[var(--color-text-muted)]">
-                  Server URL
-                </label>
+      <div className="space-y-4">
+        <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
+          <h3 className="font-medium text-[var(--color-text)] mb-2">
+            llama-server
+          </h3>
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm text-[var(--color-text-muted)]">
+                Server URL
+              </label>
+              <input
+                type="text"
+                value={llamaUrl}
+                onChange={e => setLlamaUrl(e.target.value)}
+                placeholder={DEFAULT_URL}
+                className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
+              />
+            </div>
+            <div>
+              <label className="text-sm text-[var(--color-text-muted)]">
+                Model
+              </label>
+              {models && models.length > 0 ? (
+                <select
+                  value={llamaModel}
+                  onChange={e => setLlamaModel(e.target.value)}
+                  className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
+                >
+                  {models.map(m => (
+                    <option key={m.name} value={m.name}>
+                      {m.name}
+                      {m.status === 'loaded' ? ' — loaded' : ` — ${m.status}`}
+                    </option>
+                  ))}
+                </select>
+              ) : (
                 <input
                   type="text"
-                  value={llamaUrl}
-                  onChange={e => setLlamaUrl(e.target.value)}
-                  placeholder={DEFAULT_URL}
+                  value={llamaModel}
+                  onChange={e => setLlamaModel(e.target.value)}
+                  placeholder={DEFAULT_MODEL}
                   className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
                 />
-              </div>
-              <div>
-                <label className="text-sm text-[var(--color-text-muted)]">
-                  Model
-                </label>
-                {models && models.length > 0 ? (
-                  <select
-                    value={llamaModel}
-                    onChange={e => setLlamaModel(e.target.value)}
-                    className="w-full bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
-                  >
-                    {models.map(m => (
-                      <option key={m.name} value={m.name}>
-                        {m.name}
-                        {m.status === 'loaded' ? ' — loaded' : ` — ${m.status}`}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    value={llamaModel}
-                    onChange={e => setLlamaModel(e.target.value)}
-                    placeholder={DEFAULT_MODEL}
-                    className="w-full bg-transparent text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
-                  />
-                )}
-                <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                  A router alias — a section name in{' '}
-                  <code className="text-[var(--color-text)]">
-                    llama/presets.ini
-                  </code>
-                  , not a file name. Switching to a model that isn't loaded
-                  costs a load (tens of seconds for the 35B).
-                  {models && models.length === 0 && (
-                    <>
-                      {' '}
-                      Can't reach llama-server, so this is a free-text field.
-                    </>
-                  )}
-                </p>
-              </div>
-              {loaded?.contextLength != null && (
-                <p className="text-xs text-[var(--color-text-muted)]">
-                  Context window:{' '}
-                  <span className="text-[var(--color-text)]">
-                    {loaded.contextLength.toLocaleString()} tokens
-                  </span>{' '}
-                  — fixed when the model loads. Change it via{' '}
-                  <code className="text-[var(--color-text)]">ctx-size</code> in{' '}
-                  <code className="text-[var(--color-text)]">
-                    llama/presets.ini
-                  </code>
-                  , then restart llama-server.
-                </p>
               )}
-              <div>
-                <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
-                  <input
-                    type="checkbox"
-                    checked={!!llamaVisionModel || !!llamaAudioModel}
-                    onChange={e => {
-                      const alias = e.target.checked ? OMNI_MODEL_ALIAS : '';
-                      setLlamaVisionModel(alias);
-                      setLlamaAudioModel(alias);
-                    }}
-                  />
-                  Multimodal input (audio + images)
-                </label>
-                <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                  Captions journal photo attachments, and describes non-speech
-                  audio in audio/video ones — the latter separate from speech
-                  transcription, which Parakeet/Whisper still handles. Both go
-                  through the{' '}
-                  <code className="text-[var(--color-text)]">
-                    [gemma4-12b-omni]
-                  </code>{' '}
-                  preset: one any-to-any model, CPU-only, so it never competes
-                  with the chat model for the card. Needs a separate ~7.4 GB
-                  download — see the comments in{' '}
-                  <code className="text-[var(--color-text)]">
-                    llama/presets.ini
-                  </code>
-                  .
-                </p>
-              </div>
-              <div>
-                <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
-                  <input
-                    type="checkbox"
-                    checked={llamaChatVision}
-                    onChange={e => setLlamaChatVision(e.target.checked)}
-                  />
-                  Chat model reads photos
-                </label>
-                <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                  Sends photos attached in Chat to the chat model itself instead
-                  of having the CPU-only omni model describe them first — it
-                  then looks at the picture with your question in hand, and can
-                  answer follow-ups about it. Qwen3.6 is a vision-language
-                  model, but{' '}
-                  <code className="text-[var(--color-text)]">[qwen36]</code>{' '}
-                  ships with no projector: download an{' '}
-                  <code className="text-[var(--color-text)]">mmproj</code>, add
-                  it to{' '}
-                  <code className="text-[var(--color-text)]">
-                    llama/presets.ini
-                  </code>{' '}
-                  and confirm the preset still loads <em>before</em> ticking
-                  this. Leave it off and photos keep going through the omni
-                  model.
-                </p>
-              </div>
-              <button
-                onClick={() =>
-                  updateAI.mutate({
-                    llamaUrl,
-                    llamaModel,
-                    llamaVisionModel,
-                    llamaAudioModel,
-                    llamaChatVision,
-                  })
-                }
-                disabled={updateAI.isPending}
-                className="px-4 py-2 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-              >
-                Save llama.cpp Settings
-              </button>
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                A router alias — a section name in{' '}
+                <code className="text-[var(--color-text)]">
+                  llama/presets.ini
+                </code>
+                , not a file name. Switching to a model that isn't loaded costs
+                a load (tens of seconds for the 35B).
+                {models && models.length === 0 && (
+                  <> Can't reach llama-server, so this is a free-text field.</>
+                )}
+              </p>
             </div>
+            {loaded?.contextLength != null && (
+              <p className="text-xs text-[var(--color-text-muted)]">
+                Context window:{' '}
+                <span className="text-[var(--color-text)]">
+                  {loaded.contextLength.toLocaleString()} tokens
+                </span>{' '}
+                — fixed when the model loads. Change it via{' '}
+                <code className="text-[var(--color-text)]">ctx-size</code> in{' '}
+                <code className="text-[var(--color-text)]">
+                  llama/presets.ini
+                </code>
+                , then restart llama-server.
+              </p>
+            )}
+            <div>
+              <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+                <input
+                  type="checkbox"
+                  checked={!!llamaVisionModel || !!llamaAudioModel}
+                  onChange={e => {
+                    const alias = e.target.checked ? OMNI_MODEL_ALIAS : '';
+                    setLlamaVisionModel(alias);
+                    setLlamaAudioModel(alias);
+                  }}
+                />
+                Multimodal input (audio + images)
+              </label>
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                Captions journal photo attachments, and describes non-speech
+                audio in audio/video ones — the latter separate from speech
+                transcription, which Parakeet/Whisper still handles. Both go
+                through the{' '}
+                <code className="text-[var(--color-text)]">
+                  [gemma4-12b-omni]
+                </code>{' '}
+                preset: one any-to-any model, CPU-only, so it never competes
+                with the chat model for the card. Needs a separate ~7.4 GB
+                download — see the comments in{' '}
+                <code className="text-[var(--color-text)]">
+                  llama/presets.ini
+                </code>
+                .
+              </p>
+            </div>
+            <div>
+              <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+                <input
+                  type="checkbox"
+                  checked={llamaChatVision}
+                  onChange={e => setLlamaChatVision(e.target.checked)}
+                />
+                Chat model reads photos
+              </label>
+              <p className="text-xs text-[var(--color-text-muted)] mt-1">
+                Sends photos attached in Chat to the chat model itself instead
+                of having the CPU-only omni model describe them first — it then
+                looks at the picture with your question in hand, and can answer
+                follow-ups about it. Qwen3.6 is a vision-language model, but{' '}
+                <code className="text-[var(--color-text)]">[qwen36]</code> ships
+                with no projector: download an{' '}
+                <code className="text-[var(--color-text)]">mmproj</code>, add it
+                to{' '}
+                <code className="text-[var(--color-text)]">
+                  llama/presets.ini
+                </code>{' '}
+                and confirm the preset still loads <em>before</em> ticking this.
+                Leave it off and photos keep going through the omni model.
+              </p>
+            </div>
+            <button
+              onClick={() =>
+                updateAI.mutate({
+                  llamaUrl,
+                  llamaModel,
+                  llamaVisionModel,
+                  llamaAudioModel,
+                  llamaChatVision,
+                })
+              }
+              disabled={updateAI.isPending}
+              className="px-4 py-2 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+            >
+              Save llama.cpp Settings
+            </button>
           </div>
         </div>
-      </section>
+      </div>
     </>
   );
 }
