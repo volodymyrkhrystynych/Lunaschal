@@ -51,8 +51,8 @@ def isolated_db(tmp_path, _schema_template):
     existed there; it stopped working the moment one didn't, and it was always
     one stray write away from being worse than a broken test.
 
-    `client` layers its own throwaway database on top of this; the point here is
-    that the ambient default is already safe.
+    `client` reuses this same database rather than building its own; the point
+    here is that the ambient default is already safe.
     """
     path = tmp_path / 'ambient.db'
     shutil.copyfile(_schema_template, path)
@@ -70,17 +70,18 @@ def isolated_db(tmp_path, _schema_template):
 
 
 @pytest.fixture
-def client(tmp_path):
-    prev_path, prev_conn = connection._DB_PATH, connection._conn
-    if prev_conn is not None:
+def client(isolated_db):
+    """Reuses `isolated_db`'s already-copied schema DB rather than pointing at
+    a second fresh path — this used to write a full extra ~1MB copy of the
+    template per test (`init_db()` in `create_app()` doesn't know one already
+    exists here), and across ~2,000 tests that alone was enough to fill a
+    tmpfs-backed /tmp."""
+    if connection._conn is not None:
         try:
-            prev_conn.close()
+            connection._conn.close()
         except Exception:
             pass
-
-    # Fresh, isolated DB for this test; `init_db()` runs the schema + migrations.
-    connection._DB_PATH = str(tmp_path / 'test.db')
-    connection._conn = None
+        connection._conn = None
 
     from backend.app import create_app
     app = create_app()
@@ -109,4 +110,4 @@ def client(tmp_path):
         voice_drafts.wait_idle(timeout=15.0)
         if connection._conn is not None:
             connection._conn.close()
-        connection._DB_PATH, connection._conn = prev_path, prev_conn
+            connection._conn = None
