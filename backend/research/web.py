@@ -16,6 +16,8 @@ backend/ai/learning_verification.py takes about evidence.
 import ipaddress
 import logging
 import socket
+import threading
+import time
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -32,6 +34,15 @@ SEARCH_TIMEOUT = 15
 FETCH_TIMEOUT = (5, 15)
 DEFAULT_RESULTS = 5
 
+# Pacing/retry/circuit-breaker for the search provider (SearXNG in particular
+# fans a query out to several upstream engines, any of which can rate-limit or
+# soft-ban us). See backend/research/CLAUDE.md.
+SEARCH_STAGGER_SECONDS = 3.0
+SEARCH_RETRY_BACKOFF = (5, 15, 30)  # same shape as backend/fanfic/download.py's RETRY_BACKOFF
+SEARCH_BREAKER_THRESHOLD = 2  # consecutive exhausted web_search() calls before short-circuiting
+SEARCH_BREAKER_COOLDOWN = 300  # seconds a tripped breaker stays open
+_SOFT_BLOCK_MARKERS = ('captcha', 'blocked', 'too many request', 'rate limit', 'forbidden', 'access denied')
+
 _ALLOWED_SCHEMES = ('http', 'https')
 # Hostnames that never resolve to something we want to talk to, checked before
 # DNS so a resolver that helpfully returns a public IP can't launder them.
@@ -45,6 +56,18 @@ class UnsafeUrl(ValueError):
 
 class SearchUnavailable(RuntimeError):
     """No search provider is configured, or the provider failed."""
+
+
+class SearchCircuitOpen(SearchUnavailable):
+    """Search failed repeatedly and is being short-circuited without a network call."""
+
+
+class SearchSoftBlocked(RuntimeError):
+    """SearXNG returned no results and its unresponsive_engines looks like a CAPTCHA/ban.
+
+    Raised only inside _search_searxng; _dispatch folds it into the same
+    retry/backoff/breaker handling as an HTTP 429 and it never escapes past that.
+    """
 
 
 def _is_public(ip_text: str) -> bool:
@@ -128,6 +151,71 @@ def is_search_configured() -> bool:
     return False
 
 
+_search_lock = threading.Lock()
+_search_state = {'last_request': 0.0, 'consecutive_failures': 0, 'breaker_until': 0.0}
+
+
+def _monotonic() -> float:
+    return time.monotonic()
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
+
+
+def _dispatch(provider: str, do_request) -> list[dict]:
+    """Run one search request, serialized and paced against every other caller.
+
+    Holds _search_lock for the whole call, including backoff sleeps, so a
+    concurrent caller (the Ideas agent and the chat delegate's deep-research
+    mode both go through here) is staggered rather than racing SearXNG. A
+    tripped breaker short-circuits before any network call is made.
+    """
+    with _search_lock:
+        now = _monotonic()
+        if _search_state['breaker_until'] > now:
+            remaining = round(_search_state['breaker_until'] - now)
+            raise SearchCircuitOpen(
+                f'{provider} search failed repeatedly and will not be retried for '
+                f'about {remaining}s'
+            )
+
+        wait = SEARCH_STAGGER_SECONDS - (now - _search_state['last_request'])
+        if wait > 0:
+            _sleep(wait)
+
+        last_exc: Exception | None = None
+        for backoff in (*SEARCH_RETRY_BACKOFF, None):
+            _search_state['last_request'] = _monotonic()
+            try:
+                results = do_request()
+            except (requests.HTTPError, SearchSoftBlocked) as e:
+                status = getattr(getattr(e, 'response', None), 'status_code', None)
+                retryable = isinstance(e, SearchSoftBlocked) or status in (429, 503)
+                if retryable and backoff is not None:
+                    logger.info('%s search rate-limited, retrying in %ss', provider, backoff)
+                    _sleep(backoff)
+                    last_exc = e
+                    continue
+                last_exc = e
+                break
+            except requests.RequestException as e:
+                # Connection errors, timeouts, non-retryable 4xxs: not rate-limit
+                # shaped, so retrying on a delay wouldn't help.
+                last_exc = e
+                break
+            else:
+                _search_state['consecutive_failures'] = 0
+                _search_state['breaker_until'] = 0.0
+                return results
+
+        _search_state['consecutive_failures'] += 1
+        if _search_state['consecutive_failures'] >= SEARCH_BREAKER_THRESHOLD:
+            _search_state['breaker_until'] = _monotonic() + SEARCH_BREAKER_COOLDOWN
+            _search_state['consecutive_failures'] = 0
+        raise SearchUnavailable(f'Search request failed: {last_exc}') from last_exc
+
+
 def web_search(query: str, limit: int = DEFAULT_RESULTS) -> list[dict]:
     """[{title, url, snippet}] from the configured provider."""
     query = (query or '').strip()
@@ -138,20 +226,15 @@ def web_search(query: str, limit: int = DEFAULT_RESULTS) -> list[dict]:
     key = _search_setting(settings, 'search_key')
     limit = max(1, min(limit, 10))
 
-    try:
-        if provider == 'brave':
-            if not key:
-                raise SearchUnavailable('Brave search needs an API key')
-            return _search_brave(query, key, limit)
-        if provider == 'searxng':
-            url = _search_setting(settings, 'searxng_url')
-            if not url:
-                raise SearchUnavailable('SearXNG needs a base URL')
-            return _search_searxng(query, url, limit)
-    except SearchUnavailable:
-        raise
-    except requests.RequestException as e:
-        raise SearchUnavailable(f'Search request failed: {e}') from e
+    if provider == 'brave':
+        if not key:
+            raise SearchUnavailable('Brave search needs an API key')
+        return _dispatch('brave', lambda: _search_brave(query, key, limit))
+    if provider == 'searxng':
+        url = _search_setting(settings, 'searxng_url')
+        if not url:
+            raise SearchUnavailable('SearXNG needs a base URL')
+        return _dispatch('searxng', lambda: _search_searxng(query, url, limit))
 
     raise SearchUnavailable('No web-search provider is configured')
 
@@ -189,15 +272,30 @@ def _search_searxng(query: str, base_url: str, limit: int) -> list[dict]:
         timeout=SEARCH_TIMEOUT,
     )
     resp.raise_for_status()
-    return [
+    payload = resp.json()
+    results = [
         {
             'title': r.get('title') or '',
             'url': r.get('url') or '',
             'snippet': (r.get('content') or '')[:400],
         }
-        for r in (resp.json().get('results') or [])[:limit]
+        for r in (payload.get('results') or [])[:limit]
         if r.get('url')
     ]
+    if not results:
+        unresponsive = payload.get('unresponsive_engines') or []
+        if unresponsive:
+            reasons = '; '.join(f'{entry}' for entry in unresponsive)
+            if any(
+                marker in str(entry).lower()
+                for entry in unresponsive
+                for marker in _SOFT_BLOCK_MARKERS
+            ):
+                raise SearchSoftBlocked(
+                    f'SearXNG engines appear rate-limited or blocked: {reasons}'
+                )
+            logger.info('SearXNG returned no results; unresponsive engines: %s', reasons)
+    return results
 
 
 def web_fetch(url: str) -> dict:
@@ -302,6 +400,16 @@ def run_tool(name: str, args: dict) -> tuple[str, dict]:
         query = (args.get('query') or '').strip()
         try:
             results = web_search(query)
+        except SearchCircuitOpen as e:
+            return (
+                f'Web search is currently rate-limited/blocked upstream ({e}). '
+                'Do not call web_search again — answer from the wiki and repo '
+                'context for the rest of this turn.',
+                {
+                    'tool': 'web_search', 'arg': query, 'ok': False, 'error': str(e),
+                    'circuit_open': True,
+                },
+            )
         except SearchUnavailable as e:
             return (
                 f'Web search is unavailable ({e}). Answer from the wiki and repo '
