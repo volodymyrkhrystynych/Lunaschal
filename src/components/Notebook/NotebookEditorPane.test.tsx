@@ -17,7 +17,17 @@ const { mocks } = vi.hoisted(() => ({
 vi.mock('../../hooks/api', () => ({
   api: {
     notebook: {
-      files: { read: mocks.read, write: mocks.write },
+      files: {
+        read: mocks.read,
+        write: mocks.write,
+        ensure: async (path: string) => {
+          try {
+            await mocks.read(path);
+          } catch {
+            await mocks.write(path, '');
+          }
+        },
+      },
       review: { getState: mocks.getState, toggle: mocks.toggle },
     },
   },
@@ -33,7 +43,6 @@ function renderPane(
     <QueryClientProvider client={queryClient}>
       <NotebookEditorPane
         filePath="note.md"
-        onExit={() => {}}
         onOpenPath={() => {}}
         onGoBack={() => {}}
         {...props}
@@ -92,7 +101,6 @@ describe('NotebookEditorPane', () => {
       <QueryClientProvider client={queryClient}>
         <NotebookEditorPane
           filePath="a.md"
-          onExit={() => {}}
           onOpenPath={() => {}}
           onGoBack={() => {}}
         />
@@ -109,7 +117,6 @@ describe('NotebookEditorPane', () => {
       <QueryClientProvider client={queryClient}>
         <NotebookEditorPane
           filePath="b.md"
-          onExit={() => {}}
           onOpenPath={() => {}}
           onGoBack={() => {}}
         />
@@ -189,6 +196,67 @@ describe('NotebookEditorPane', () => {
     const [openedPath] = onOpenPath.mock.calls[0];
     expect(openedPath).toMatch(/^diary\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(mocks.write).toHaveBeenCalledWith(openedPath, '');
+  });
+
+  it('navigates to the index page on :q, creating it if missing', async () => {
+    mocks.read.mockImplementation((path: string) =>
+      path === 'note.md'
+        ? Promise.resolve({ content: 'some text' })
+        : Promise.reject(new Error('Not found'))
+    );
+    const onOpenPath = vi.fn();
+    const { container } = renderPane({ onOpenPath });
+
+    const content = await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      expect(el?.textContent).toContain('some text');
+      return el as Element;
+    });
+
+    fireEvent.keyDown(content, { key: ':', code: 'Semicolon' });
+    const exInput = await waitFor(() => {
+      const el = container.querySelector('.cm-vim-panel input');
+      expect(el).toBeTruthy();
+      return el as HTMLInputElement;
+    });
+    // jsdom keydown events don't drive native text-input editing, so type the
+    // command by setting the input's value directly, then submit with Enter
+    // — codemirror-vim's ex-mode dialog reads e.keyCode (legacy CM5 style),
+    // which RTL's fireEvent doesn't infer from `key` alone.
+    fireEvent.change(exInput, { target: { value: 'q' } });
+    fireEvent.keyDown(exInput, { key: 'Enter', code: 'Enter', keyCode: 13 });
+
+    await waitFor(() => expect(onOpenPath).toHaveBeenCalledWith('index.md'));
+    expect(mocks.write).toHaveBeenCalledWith('index.md', '');
+  });
+
+  it('does nothing on :q when already on the index page', async () => {
+    mocks.read.mockResolvedValue({ content: 'home' });
+    const onOpenPath = vi.fn();
+    const { container } = renderPane({ filePath: 'index.md', onOpenPath });
+
+    const content = await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      expect(el?.textContent).toContain('home');
+      return el as Element;
+    });
+
+    fireEvent.keyDown(content, { key: ':', code: 'Semicolon' });
+    const exInput = await waitFor(() => {
+      const el = container.querySelector('.cm-vim-panel input');
+      expect(el).toBeTruthy();
+      return el as HTMLInputElement;
+    });
+    // jsdom keydown events don't drive native text-input editing, so type the
+    // command by setting the input's value directly, then submit with Enter
+    // — codemirror-vim's ex-mode dialog reads e.keyCode (legacy CM5 style),
+    // which RTL's fireEvent doesn't infer from `key` alone.
+    fireEvent.change(exInput, { target: { value: 'q' } });
+    fireEvent.keyDown(exInput, { key: 'Enter', code: 'Enter', keyCode: 13 });
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(onOpenPath).not.toHaveBeenCalled();
+    expect(mocks.write).not.toHaveBeenCalled();
   });
 
   it('calls onGoBack on Backspace instead of moving the cursor', async () => {

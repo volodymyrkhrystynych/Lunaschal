@@ -96,6 +96,22 @@ describe('resolveWikiLinkPath', () => {
       'diary/projects/Notes.md'
     );
   });
+
+  it('treats a leading "./" as equivalent to no prefix', () => {
+    expect(resolveWikiLinkPath('./foo', 'index.md')).toBe('foo.md');
+  });
+
+  it('resolves "./" relative to the current directory, same as a bare link', () => {
+    expect(resolveWikiLinkPath('./foo', 'diary/2026-08-19.md')).toBe(
+      'diary/foo.md'
+    );
+  });
+
+  it('preserves an existing extension after stripping "./"', () => {
+    expect(resolveWikiLinkPath('./existing.md', 'index.md')).toBe(
+      'existing.md'
+    );
+  });
 });
 
 describe('toggleCheckboxLine', () => {

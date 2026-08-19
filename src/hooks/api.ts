@@ -2378,6 +2378,21 @@ export const api = {
           path,
           content,
         }),
+      /** Reads `path`, silently creating it as an empty note first if it
+       * doesn't exist yet — shared by Notebook's auto-open-index-on-mount,
+       * diary-jump, link-follow, and :q-goes-home flows. */
+      ensure: async (path: string): Promise<void> => {
+        try {
+          await get<{ content: string }>(
+            `/api/notebook/files/read?path=${encodeURIComponent(path)}`
+          );
+        } catch {
+          await post<{ success: boolean }>('/api/notebook/files/write', {
+            path,
+            content: '',
+          });
+        }
+      },
       rename: (from: string, to: string) =>
         post<{ success: boolean }>('/api/notebook/files/rename', {
           from,
