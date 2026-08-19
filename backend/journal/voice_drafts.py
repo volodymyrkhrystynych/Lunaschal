@@ -41,7 +41,21 @@ MAX_DRAFT_BYTES = 100 * 1024 * 1024
 # Local backends run per draft, in order. The first of these that matches the
 # user's configured default STT backend becomes the "primary" candidate (see
 # _pick_primary) — the one whose raw text becomes journal_entries.raw_content.
-DRAFT_BACKENDS = ('parakeet', 'local', 'moonshine')
+#
+# Deliberately two, not three, for now. NVIDIA Canary 180M Flash was tried as
+# a third opinion (onnx-asr, same VAD-chunked path as Parakeet) and reverted:
+# its onnx-asr decoder (NemoConformerAED._decoding) is pure greedy argmax with
+# no repetition penalty, generating up to a fixed 1024-token cap per chunk
+# regardless of how much audio that chunk actually contains. On a real ~3.4
+# minute draft it produced 1270 words against Parakeet/Whisper's ~190 for the
+# same clip, and took 695s to do it (RTF 3.4 — slower than the recording
+# itself) — a runaway-decode failure, not a slow-but-correct one. The next
+# candidate worth trying is a Wav2Vec2 CTC model: CTC output length is capped
+# by input frame count, so it's structurally immune to this specific failure
+# mode, unlike any attention-decoder model (Canary, Whisper-style AED). No
+# single canonical pre-converted onnx-asr checkpoint with a solid current WER
+# number was settled on yet, which is why it isn't here either.
+DRAFT_BACKENDS = ('parakeet', 'local')
 
 _storage = IdScopedStorage('JOURNAL_DRAFTS_ROOT', './data/journal_drafts')
 resolve_stored_path = _storage.resolve_stored_path

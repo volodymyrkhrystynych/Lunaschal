@@ -53,7 +53,7 @@ def _candidates_ok(*backends):
 def test_create_stores_the_clip_and_starts_processing(client, monkeypatch):
     monkeypatch.setattr(
         stt_routes, 'run_multi_backend_transcribe',
-        lambda *a, **k: _candidates_ok('parakeet', 'local', 'moonshine'),
+        lambda *a, **k: _candidates_ok('parakeet', 'local'),
     )
     monkeypatch.setattr(
         'backend.journal.voice_drafts.merge_voice_draft', lambda candidates, context=None: 'Merged entry text.'
@@ -113,7 +113,6 @@ def test_all_backends_failing_leaves_the_draft_errored_with_no_entry(client, mon
         lambda *a, **k: [
             {'backend': 'parakeet', 'error': 'boom'},
             {'backend': 'local', 'error': 'boom'},
-            {'backend': 'moonshine', 'error': 'boom'},
         ],
     )
     r = _post_draft(client)
@@ -131,7 +130,6 @@ def test_a_partial_failure_still_produces_an_entry(client, monkeypatch):
         lambda *a, **k: [
             {'backend': 'parakeet', 'text': 'good transcript'},
             {'backend': 'local', 'error': 'boom'},
-            {'backend': 'moonshine', 'error': 'boom'},
         ],
     )
     captured = {}
@@ -173,7 +171,7 @@ def test_primary_prefers_the_configured_default_backend(client, monkeypatch):
     client.patch('/api/settings/ai', json={'sttBackend': 'local'})
     monkeypatch.setattr(
         stt_routes, 'run_multi_backend_transcribe',
-        lambda *a, **k: _candidates_ok('parakeet', 'local', 'moonshine'),
+        lambda *a, **k: _candidates_ok('parakeet', 'local'),
     )
     monkeypatch.setattr('backend.journal.voice_drafts.merge_voice_draft', lambda c, context=None: 'Merged.')
 
@@ -186,7 +184,7 @@ def test_primary_falls_back_to_parakeet_when_configured_backend_did_not_succeed(
     client.patch('/api/settings/ai', json={'sttBackend': 'openai'})  # not in DRAFT_BACKENDS
     monkeypatch.setattr(
         stt_routes, 'run_multi_backend_transcribe',
-        lambda *a, **k: _candidates_ok('local', 'moonshine'),  # parakeet itself also failed here
+        lambda *a, **k: _candidates_ok('local'),  # parakeet itself also failed here
     )
     monkeypatch.setattr('backend.journal.voice_drafts.merge_voice_draft', lambda c, context=None: 'Merged.')
 

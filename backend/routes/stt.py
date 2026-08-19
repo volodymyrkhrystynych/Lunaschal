@@ -36,16 +36,6 @@ MODEL_NAME       = os.environ.get('WHISPER_MODEL', 'turbo')
 DEVICE           = os.environ.get('WHISPER_DEVICE', 'cpu')
 # Parakeet TDT runs on CPU via onnx-asr (onnxruntime). English-only, no VRAM.
 PARAKEET_MODEL   = os.environ.get('PARAKEET_MODEL', 'nemo-parakeet-tdt-0.6b-v2')
-# Third opinion for journal voice drafts (backend/journal/voice_drafts.py) — a
-# small, fast, English ASR model architecturally distinct from both NeMo
-# Parakeet and Whisper, loaded the same way as Parakeet (onnx-asr + Silero
-# VAD). Not exposed as a regular Settings STT_BACKEND choice; only the draft
-# pipeline asks for it. The exact onnx-asr model id here hasn't been verified
-# against the installed onnx-asr[hub] package (not present in this dev
-# checkout) — confirm it once installed, and fall back to the faster-whisper
-# package already listed in stt/requirements-local.txt if 'moonshine-base'
-# turns out not to be the right identifier.
-MOONSHINE_MODEL  = os.environ.get('MOONSHINE_MODEL', 'moonshine-base')
 TTS_VOICE        = os.environ.get('TTS_VOICE', 'af_heart')
 OPENAI_STT_MODEL = os.environ.get('OPENAI_STT_MODEL', 'whisper-1')
 OPENAI_TTS_MODEL = os.environ.get('OPENAI_TTS_MODEL', 'tts-1')
@@ -159,9 +149,9 @@ def _build_stt_backend(backend: str, model_name: str | None = None, device: str 
     if backend == 'openai':
         _ensure_openai()
         return {'backend': 'openai', 'model': None, 'vad': None, 'model_name': None, 'device': None}
-    elif backend in ('parakeet', 'moonshine'):
+    elif backend == 'parakeet':
         import onnx_asr
-        model_id = PARAKEET_MODEL if backend == 'parakeet' else MOONSHINE_MODEL
+        model_id = PARAKEET_MODEL
         logger.info("Loading %s '%s' on CPU (onnx-asr)…", backend, model_id)
         model = onnx_asr.load_model(model_id)
         # Load Silero VAD for long-audio chunking. The transformer
@@ -364,11 +354,10 @@ def _transcribe_with_handle(handle: dict, content: bytes, filename: str, languag
                     response_format='verbose_json',
                 )
             return {'text': result.text.strip(), 'language': result.language or language or 'en'}
-        elif backend in ('parakeet', 'moonshine'):
-            # Parakeet/Moonshine TDT-style models are English-only and do no
-            # language detection. Long audio (> ~15 min) crashes the
-            # transformer's self-attention, so we use VAD chunking
-            # (20-second speech windows) via with_vad().
+        elif backend == 'parakeet':
+            # Parakeet is English-only and does no language detection. Long
+            # audio (> ~15 min) crashes the transformer's self-attention, so
+            # we use VAD chunking (20-second speech windows) via with_vad().
             waveform = _decode_to_16k_mono(tmp_path)
             vad_model = handle['model'].with_vad(handle['vad'])
             segments = list(vad_model.recognize(waveform, sample_rate=16000,
@@ -397,7 +386,7 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
     """Transcribe audio bytes using whichever backend is currently loaded into
     the shared singleton (`_load_stt`); returns {'text': str, 'language': str}.
 
-    Locks around parakeet/local/moonshine — those model objects are shared
+    Locks around parakeet/local — those model objects are shared
     across every interactive request and aren't thread-safe — and resets the
     singleton on failure so the next request reloads fresh (except on a
     too-short-audio ValueError, which isn't a model problem). openai isn't
