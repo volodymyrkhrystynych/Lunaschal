@@ -555,3 +555,58 @@ def test_tags_survive_a_this_and_future_split(client):
     assert resp.status_code == 200, resp.get_json()
     new_id = resp.get_json()['id']
     assert json.loads(client.get(f'/api/calendar/{new_id}').get_json()['tags']) == ['work']
+
+
+# --- manual category tags ---
+
+def test_category_tags_can_be_set_on_create(client):
+    id = create_ok(client, categoryTags=['work', 'indoors'])
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert json.loads(event['categoryTags']) == ['work', 'indoors']
+    assert event['classifiedAt'] is not None
+    assert event['classificationError'] is None
+
+
+def test_category_tags_can_be_set_manually_on_update(client):
+    """The whole point: setting these by hand is what makes the Journal feed
+    draw the event's grouping border around entries in its time window,
+    without waiting on a transcribed description and the AI classifier."""
+    id = create_ok(client)
+    resp = client.patch(f'/api/calendar/{id}', data=json.dumps({'categoryTags': ['family', 'outside']}),
+                        content_type='application/json')
+    assert resp.status_code == 200, resp.get_json()
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert json.loads(event['categoryTags']) == ['family', 'outside']
+    assert event['classifiedAt'] is not None
+
+
+def test_setting_category_tags_manually_clears_a_prior_classification_error(client):
+    id = create_ok(client)
+    client.patch(f'/api/calendar/{id}', data=json.dumps({'categoryTags': ['leisure']}),
+                 content_type='application/json')
+    # Simulate a later failed re-classification, then a manual override.
+    from backend.db.connection import get_db
+    get_db().execute("UPDATE calendar_events SET classification_error='boom' WHERE id=?", (id,))
+    get_db().commit()
+    client.patch(f'/api/calendar/{id}', data=json.dumps({'categoryTags': ['work']}),
+                 content_type='application/json')
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert event['classificationError'] is None
+
+
+def test_category_tags_reject_values_outside_the_closed_vocabulary(client):
+    resp = create(client, categoryTags=['work', 'made-up'])
+    assert resp.status_code == 400
+
+
+def test_category_tags_are_deduped_and_capped_at_three(client):
+    id = create_ok(client, categoryTags=['work', 'work', 'leisure', 'family', 'outside'])
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert json.loads(event['categoryTags']) == ['work', 'leisure', 'family']
+
+
+def test_clearing_category_tags_stores_null_not_an_empty_array(client):
+    id = create_ok(client, categoryTags=['work'])
+    client.patch(f'/api/calendar/{id}', data=json.dumps({'categoryTags': []}),
+                 content_type='application/json')
+    assert client.get(f'/api/calendar/{id}').get_json()['categoryTags'] is None

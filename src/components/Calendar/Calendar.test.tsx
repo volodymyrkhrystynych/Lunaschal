@@ -483,3 +483,59 @@ describe('event tags', () => {
     expect(document.querySelector('.tag-row')).toBeNull();
   });
 });
+
+describe('manual category tags', () => {
+  it('sends checked categories on save, so the Journal feed can group by them without waiting on the AI classifier', async () => {
+    vi.mocked(api.calendar.listByRange).mockResolvedValue([
+      event({ title: 'Dentist', date: '2026-02-04' }),
+    ]);
+    vi.mocked(api.calendar.get).mockResolvedValue(event({ title: 'Dentist' }));
+    renderCalendar();
+    fireEvent.click(await screen.findByText(/Dentist/));
+    fireEvent.click(await screen.findByText('Edit'));
+    fireEvent.click(screen.getByLabelText('Work'));
+    fireEvent.click(screen.getByLabelText('Family'));
+    fireEvent.click(screen.getByText('Save'));
+
+    await waitFor(() =>
+      expect(api.calendar.update).toHaveBeenCalledWith(
+        'e1',
+        expect.objectContaining({ categoryTags: ['work', 'family'] })
+      )
+    );
+  });
+
+  it('pre-checks whatever categories the event already carries', async () => {
+    vi.mocked(api.calendar.listByRange).mockResolvedValue([
+      event({ title: 'Dentist', date: '2026-02-04' }),
+    ]);
+    vi.mocked(api.calendar.get).mockResolvedValue(
+      event({ title: 'Dentist', categoryTags: '["outside","exercise"]' })
+    );
+    renderCalendar();
+    fireEvent.click(await screen.findByText(/Dentist/));
+    fireEvent.click(await screen.findByText('Edit'));
+
+    expect((screen.getByLabelText('Outside') as HTMLInputElement).checked).toBe(
+      true
+    );
+    expect(
+      (screen.getByLabelText('Exercise') as HTMLInputElement).checked
+    ).toBe(true);
+    expect((screen.getByLabelText('Work') as HTMLInputElement).checked).toBe(
+      false
+    );
+  });
+
+  it('shows the categories as pills once saved, in view mode', async () => {
+    vi.mocked(api.calendar.listByRange).mockResolvedValue([
+      event({ title: 'Dentist', date: '2026-02-04' }),
+    ]);
+    vi.mocked(api.calendar.get).mockResolvedValue(
+      event({ title: 'Dentist', categoryTags: '["leisure"]' })
+    );
+    renderCalendar();
+    fireEvent.click(await screen.findByText(/Dentist/));
+    expect(await screen.findByText('Leisure')).toBeTruthy();
+  });
+});

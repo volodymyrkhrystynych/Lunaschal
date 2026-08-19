@@ -1,9 +1,11 @@
+import json
 import time
 from datetime import date as dt, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 from backend import sleep
 from backend.ai.background import run_bg
+from backend.ai.calendar import EVENT_CATEGORIES
 from backend.calendar_query import events_in_range
 from backend.calendar_recurrence import VALID_FREQS, format_byweekday
 from backend.day_boundary import day_bounds
@@ -44,6 +46,28 @@ def _all_day_field(body: dict) -> tuple[dict, str | None]:
     if body.get('time') or body.get('endTime'):
         return {}, 'an all-day event cannot have a time'
     return {'all_day': 1, 'time': None, 'end_time': None}, None
+
+
+def _category_tags_field(body: dict) -> tuple[dict, str | None]:
+    """Validate a manually-set `categoryTags` list against the same closed
+    vocabulary the AI classifier uses (backend/ai/calendar.py), so a manual
+    edit can't put the column in a state the classifier itself never
+    would. Setting it by hand also stamps `classified_at` and clears any
+    `classification_error` — it supersedes whatever the classifier did or
+    failed to do, the same way a fresh transcription resets both."""
+    if 'categoryTags' not in body:
+        return {}, None
+    raw = body['categoryTags']
+    if raw is None:
+        return {'category_tags': None, 'classified_at': int(time.time()), 'classification_error': None}, None
+    if not isinstance(raw, list) or any(c not in EVENT_CATEGORIES for c in raw):
+        return {}, f'categoryTags must be a list from {", ".join(EVENT_CATEGORIES)}'
+    categories = list(dict.fromkeys(raw))[:3]
+    return {
+        'category_tags': json.dumps(categories) if categories else None,
+        'classified_at': int(time.time()),
+        'classification_error': None,
+    }, None
 
 
 def _repeat_fields(body: dict) -> tuple[dict, str | None]:
@@ -291,6 +315,9 @@ def create_event():
     all_day, err = _all_day_field(body)
     if err:
         return jsonify({'error': err}), 400
+    category_tags, err = _category_tags_field(body)
+    if err:
+        return jsonify({'error': err}), 400
 
     now = int(time.time())
     id = str(ULID())
@@ -300,15 +327,18 @@ def create_event():
         '''INSERT INTO calendar_events(
                id, title, description, date, time, end_time, all_day, tags,
                journal_id, created_at,
-               repeat_freq, repeat_interval, repeat_byweekday, repeat_until)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+               repeat_freq, repeat_interval, repeat_byweekday, repeat_until,
+               category_tags, classified_at, classification_error)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (id, body['title'], body.get('description'), body['date'],
          None if is_all_day else body.get('time'),
          None if is_all_day else body.get('endTime'),
          is_all_day, tags_json(tags),
          body.get('journalId'), now,
          repeat.get('repeat_freq'), repeat.get('repeat_interval'),
-         repeat.get('repeat_byweekday'), repeat.get('repeat_until')),
+         repeat.get('repeat_byweekday'), repeat.get('repeat_until'),
+         category_tags.get('category_tags'), category_tags.get('classified_at'),
+         category_tags.get('classification_error')),
     )
     get_db().commit()
     return jsonify({'id': id}), 201
@@ -338,6 +368,10 @@ def _event_updates(body: dict) -> tuple[dict, str | None]:
         # "Work" and "work " are one tag here exactly as they are everywhere
         # else. It also stores an emptied list as NULL rather than '[]'.
         updates['tags'] = tags_json(body['tags'])
+    category_tags, err = _category_tags_field(body)
+    if err:
+        return {}, err
+    updates.update(category_tags)
     repeat, err = _repeat_fields(body)
     if err:
         return {}, err

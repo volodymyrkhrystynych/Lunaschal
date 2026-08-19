@@ -3,6 +3,13 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { eventTimeLabel, parseEventTags, repeatLabel } from '@/lib/calendar';
 import { parseTagsInput } from '@/lib/tags';
+import {
+  CATEGORY_LABELS,
+  CATEGORY_COLORS,
+  EVENT_CATEGORIES,
+  parseCategoryTags,
+  type EventCategory,
+} from '@/lib/calendarCategories';
 
 export function EventDetails({
   eventId,
@@ -29,6 +36,11 @@ export function EventDetails({
     // Comma-separated text while editing; the stored JSON array is parsed on
     // the way in and split again on save.
     tags: '',
+    // The grouping categories (leisure/work/exercise/family/outside/indoors)
+    // that make the Journal feed draw this event's border around entries in
+    // its time window — normally AI-assigned from a transcribed description,
+    // editable here so grouping doesn't have to wait on that.
+    categoryTags: [] as EventCategory[],
   });
 
   const { data: event, isLoading } = useQuery({
@@ -114,6 +126,7 @@ export function EventDetails({
         endTime: draft.allDay ? null : draft.endTime || null,
         allDay: draft.allDay,
         tags: parseTagsInput(draft.tags),
+        categoryTags: draft.categoryTags,
       };
       // The two endpoints return different shapes; the caller only cares that
       // the write landed.
@@ -158,6 +171,7 @@ export function EventDetails({
       endTime: event.endTime ?? '',
       allDay: !!event.allDay,
       tags: parseEventTags(event.tags).join(', '),
+      categoryTags: parseCategoryTags(event.categoryTags),
     });
     setMode('edit');
   };
@@ -261,6 +275,41 @@ export function EventDetails({
               placeholder="Tags (comma-separated)"
               className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border-b border-white/10 pb-2 focus:outline-none"
             />
+            <div>
+              <div className="text-xs text-[var(--color-text-muted)] mb-1">
+                Groups journal entries in the Journal feed
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {EVENT_CATEGORIES.map(category => {
+                  const checked = draft.categoryTags.includes(category);
+                  return (
+                    <label
+                      key={category}
+                      className="flex items-center gap-1 text-xs px-2 py-1 rounded"
+                      style={{
+                        color: checked ? CATEGORY_COLORS[category] : undefined,
+                        border: `1px solid ${checked ? CATEGORY_COLORS[category] : 'rgba(255,255,255,0.1)'}`,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={e =>
+                          setDraft({
+                            ...draft,
+                            categoryTags: e.target.checked
+                              ? [...draft.categoryTags, category]
+                              : draft.categoryTags.filter(c => c !== category),
+                          })
+                        }
+                        className="w-3 h-3"
+                      />
+                      {CATEGORY_LABELS[category]}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         ) : (
           event.description && (
@@ -271,7 +320,7 @@ export function EventDetails({
         )}
 
         {parseEventTags(event.tags).length > 0 && (
-          <div className="tag-row flex gap-1 mb-4">
+          <div className="tag-row flex gap-1 mb-2">
             {parseEventTags(event.tags).map(tag => (
               <span
                 key={tag}
@@ -282,6 +331,24 @@ export function EventDetails({
             ))}
           </div>
         )}
+
+        {mode === 'view' &&
+          parseCategoryTags(event.categoryTags).length > 0 && (
+            <div className="tag-row flex gap-1 mb-4">
+              {parseCategoryTags(event.categoryTags).map(category => (
+                <span
+                  key={category}
+                  className="px-2 py-0.5 text-xs rounded"
+                  style={{
+                    color: CATEGORY_COLORS[category],
+                    border: `1px solid ${CATEGORY_COLORS[category]}`,
+                  }}
+                >
+                  {CATEGORY_LABELS[category]}
+                </span>
+              ))}
+            </div>
+          )}
 
         {event.linkedJournals && event.linkedJournals.length > 0 && (
           <div className="mb-4">
