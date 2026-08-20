@@ -153,6 +153,33 @@ def main():
     _start_window(url)
 
 
+def _patch_pywebview_qt_permission_policy():
+    """pywebview's Qt backend calls setFeaturePermission(url, feature, 2) with
+    a raw int rather than the QWebEnginePage.PermissionPolicy enum member —
+    still true as of its current main branch, not just the pinned version
+    here. Older PyQt6/sip coerced the int silently; PyQt6 6.11 doesn't, and
+    the very first feature-permission request (anything outside mic/camera —
+    e.g. notifications) crashes the whole process with a TypeError. Patch the
+    method in place with the correctly-typed call before any window exists.
+    """
+    from webview.platforms.qt import BrowserView, QWebPage
+
+    def onFeaturePermissionRequested(self, url, feature):
+        granted = feature in (
+            QWebPage.Feature.MediaAudioCapture,
+            QWebPage.Feature.MediaVideoCapture,
+            QWebPage.Feature.MediaAudioVideoCapture,
+        )
+        policy = (
+            QWebPage.PermissionPolicy.PermissionGrantedByUser
+            if granted
+            else QWebPage.PermissionPolicy.PermissionDeniedByUser
+        )
+        self.setFeaturePermission(url, feature, policy)
+
+    BrowserView.WebPage.onFeaturePermissionRequested = onFeaturePermissionRequested
+
+
 def _start_window(url: str):
     # QtWebEngine must be imported before *any* QCoreApplication exists — Qt needs
     # to set AA_ShareOpenGLContexts while there is still no app instance. We create
@@ -170,6 +197,7 @@ def _start_window(url: str):
         '--disable-gpu --disable-gpu-compositing --disable-vulkan '
         '--disable-background-networking --disable-sync',
     )
+    _patch_pywebview_qt_permission_policy()
 
     # Give the Qt app a stable identity so the window manager can match the
     # .desktop entry (and set the window icon from the PNG generated from SVG).
