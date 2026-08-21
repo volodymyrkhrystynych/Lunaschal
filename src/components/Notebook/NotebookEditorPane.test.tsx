@@ -9,6 +9,7 @@ const { mocks } = vi.hoisted(() => ({
   mocks: {
     read: vi.fn(),
     write: vi.fn(),
+    tree: vi.fn(),
     getState: vi.fn(),
     toggle: vi.fn(),
   },
@@ -20,6 +21,7 @@ vi.mock('../../hooks/api', () => ({
       files: {
         read: mocks.read,
         write: mocks.write,
+        tree: mocks.tree,
         ensure: async (path: string) => {
           try {
             await mocks.read(path);
@@ -56,6 +58,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.getState.mockResolvedValue({ enabled: false });
   mocks.write.mockResolvedValue({ success: true });
+  mocks.tree.mockResolvedValue({ entries: [], truncated: false });
 });
 
 describe('NotebookEditorPane', () => {
@@ -285,5 +288,169 @@ describe('NotebookEditorPane', () => {
 
     const link = container.querySelector('.cm-wikilink');
     expect(link?.textContent).toBe('[[Some Page]]');
+  });
+
+  // `:find` — the filename search that vanished with the file-tree sidebar.
+  describe(':find', () => {
+    const NOTES = {
+      entries: [
+        { path: 'diary', isDir: true },
+        { path: 'diary/2026-08-20.md', isDir: false },
+        { path: 'diary/2026-08-19.md', isDir: false },
+        { path: 'scratch.md', isDir: false },
+      ],
+      truncated: false,
+    };
+
+    /** Types `:<command><CR>` into codemirror-vim's ex dialog. */
+    async function runEx(container: HTMLElement, command: string) {
+      const content = await waitFor(() => {
+        const el = container.querySelector('.cm-content');
+        expect(el).toBeTruthy();
+        return el as Element;
+      });
+      fireEvent.keyDown(content, { key: ':', code: 'Semicolon' });
+      const exInput = await waitFor(() => {
+        const el = container.querySelector('.cm-vim-panel input');
+        expect(el).toBeTruthy();
+        return el as HTMLInputElement;
+      });
+      fireEvent.change(exInput, { target: { value: command } });
+      fireEvent.keyDown(exInput, { key: 'Enter', code: 'Enter', keyCode: 13 });
+    }
+
+    const findInput = (container: HTMLElement) =>
+      container.querySelector(
+        'input[placeholder="Find a note…"]'
+      ) as HTMLInputElement | null;
+
+    beforeEach(() => {
+      mocks.read.mockResolvedValue({ content: 'body' });
+      mocks.tree.mockResolvedValue(NOTES);
+    });
+
+    it('opens an unambiguous match directly, without a picker', async () => {
+      const onOpenPath = vi.fn();
+      const { container } = renderPane({ onOpenPath });
+
+      await runEx(container, 'find scratch');
+
+      await waitFor(() =>
+        expect(onOpenPath).toHaveBeenCalledWith('scratch.md')
+      );
+      expect(findInput(container)).toBeNull();
+    });
+
+    it('shows a picker when several notes match, and opens the chosen one', async () => {
+      const onOpenPath = vi.fn();
+      const { container } = renderPane({ onOpenPath });
+
+      await runEx(container, 'find diary');
+
+      const input = await waitFor(() => {
+        const el = findInput(container);
+        expect(el).toBeTruthy();
+        return el as HTMLInputElement;
+      });
+      expect(container.textContent).toContain('diary/2026-08-20.md');
+      expect(container.textContent).toContain('diary/2026-08-19.md');
+      // Directories are not openable notes, so they stay out of the results.
+      expect(
+        container.querySelectorAll('input[placeholder="Find a note…"] ~ ul li')
+      ).toHaveLength(2);
+
+      fireEvent.keyDown(input, { key: 'ArrowDown' });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      await waitFor(() =>
+        expect(onOpenPath).toHaveBeenCalledWith('diary/2026-08-19.md')
+      );
+      expect(findInput(container)).toBeNull();
+    });
+
+    it('moves the selection with Ctrl-n/Ctrl-p as well as the arrows', async () => {
+      const onOpenPath = vi.fn();
+      const { container } = renderPane({ onOpenPath });
+
+      await runEx(container, 'find diary');
+      const input = await waitFor(() => {
+        const el = findInput(container);
+        expect(el).toBeTruthy();
+        return el as HTMLInputElement;
+      });
+
+      fireEvent.keyDown(input, { key: 'n', ctrlKey: true });
+      fireEvent.keyDown(input, { key: 'p', ctrlKey: true });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      await waitFor(() =>
+        expect(onOpenPath).toHaveBeenCalledWith('diary/2026-08-20.md')
+      );
+    });
+
+    it('re-filters live as the query is edited', async () => {
+      const { container } = renderPane();
+
+      await runEx(container, 'find diary');
+      const input = await waitFor(() => {
+        const el = findInput(container);
+        expect(el).toBeTruthy();
+        return el as HTMLInputElement;
+      });
+
+      fireEvent.change(input, { target: { value: '08-19' } });
+      await waitFor(() => {
+        expect(container.textContent).toContain('diary/2026-08-19.md');
+        expect(container.textContent).not.toContain('diary/2026-08-20.md');
+      });
+    });
+
+    it('lists every note when :find is given no query', async () => {
+      const { container } = renderPane();
+
+      await runEx(container, 'find');
+
+      await waitFor(() => expect(findInput(container)).toBeTruthy());
+      expect(container.textContent).toContain('scratch.md');
+      expect(container.textContent).toContain('diary/2026-08-20.md');
+    });
+
+    it('says so rather than showing an empty list when nothing matches', async () => {
+      const { container } = renderPane();
+
+      await runEx(container, 'find nonexistent');
+
+      await waitFor(() =>
+        expect(container.textContent).toContain('No notes match.')
+      );
+    });
+
+    it('accepts the :fin abbreviation, as real vim does', async () => {
+      const onOpenPath = vi.fn();
+      const { container } = renderPane({ onOpenPath });
+
+      await runEx(container, 'fin scratch');
+
+      await waitFor(() =>
+        expect(onOpenPath).toHaveBeenCalledWith('scratch.md')
+      );
+    });
+
+    it('closes on Escape without opening anything', async () => {
+      const onOpenPath = vi.fn();
+      const { container } = renderPane({ onOpenPath });
+
+      await runEx(container, 'find diary');
+      const input = await waitFor(() => {
+        const el = findInput(container);
+        expect(el).toBeTruthy();
+        return el as HTMLInputElement;
+      });
+
+      fireEvent.keyDown(input, { key: 'Escape' });
+
+      await waitFor(() => expect(findInput(container)).toBeNull());
+      expect(onOpenPath).not.toHaveBeenCalled();
+    });
   });
 });

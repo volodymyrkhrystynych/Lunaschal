@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { NotebookEditorPane } from './NotebookEditorPane';
 import { NotebookReviewSession } from './NotebookReviewSession';
 import { INDEX_PATH } from '../../lib/notebookVim';
+import { buildIndexContent, treeEntriesFor } from '../../lib/notebookIndex';
 
 export function Notebook() {
   const [selectedPath, setSelectedPath] = useState<string>(INDEX_PATH);
@@ -13,15 +14,78 @@ export function Notebook() {
   // fine that nothing tracks who links to what. Every hop after the initial
   // index page happens via a link/diary jump/`:q`, so the chain is sound.
   const [history, setHistory] = useState<string[]>([]);
+  const queryClient = useQueryClient();
 
-  // Guarantees index.md exists before the editor pane's own read query runs
-  // for it — the sole entry point into a fresh notebook with no files yet.
+  // Creates index.md if it's missing, then refreshes the generated file-tree
+  // block inside it. Everything the user wrote outside that block survives —
+  // see src/lib/notebookIndex.ts.
+  //
+  // This has to finish *before* the editor pane reads the file, or CodeMirror
+  // seeds from the pre-refresh text and shows a tree missing whatever note was
+  // just created. Two things enforce that ordering: the initial render is gated
+  // on the query below, and every later return to the index awaits `syncIndex`
+  // before switching `selectedPath`. Priming the read cache with the exact
+  // content we wrote also matters, because the pane seeds the editor once per
+  // file and would otherwise take a stale cache entry over what's on disk.
+  const syncIndex = async () => {
+    await api.notebook.files.ensure(INDEX_PATH);
+    const [tree, current] = await Promise.all([
+      api.notebook.files.tree(),
+      api.notebook.files.read(INDEX_PATH),
+    ]);
+    const next = buildIndexContent(
+      current.content,
+      treeEntriesFor(tree.entries, INDEX_PATH)
+    );
+    if (next !== current.content) {
+      await api.notebook.files.write(INDEX_PATH, next);
+    }
+    queryClient.setQueryData(['notebook', 'files', 'read', INDEX_PATH], {
+      content: next,
+    });
+    return true;
+  };
+
+  // Guarantees index.md exists and is up to date before the editor pane's own
+  // read query runs for it — the sole entry point into a fresh notebook.
+  //
+  // Deliberately keyed outside the ['notebook'] namespace: every auto-save
+  // invalidates that whole prefix, which would re-run a full recursive tree
+  // walk on each 1.5s save tick while you type. Re-syncing is driven
+  // explicitly by navigateTo instead, which is the only moment the tree can
+  // actually be out of date.
   const ensureIndex = useQuery({
-    queryKey: ['notebook', 'files', 'ensure', INDEX_PATH],
-    // React Query rejects an `undefined` resolution, so map ensure()'s void
-    // return to a real value.
-    queryFn: () => api.notebook.files.ensure(INDEX_PATH).then(() => true),
+    queryKey: ['notebook-index-sync'],
+    // React Query rejects an `undefined` resolution, hence syncIndex's `true`.
+    queryFn: syncIndex,
   });
+
+  const openPath = (path: string) => {
+    setHistory(h => [...h, selectedPath]);
+    void navigateTo(path);
+  };
+
+  // Deliberately not folded into the setHistory updater: navigateTo writes to
+  // disk, and StrictMode invokes a state updater twice.
+  const goBack = () => {
+    if (history.length === 0) return;
+    setHistory(h => h.slice(0, -1));
+    void navigateTo(history[history.length - 1]);
+  };
+
+  // Returning to the index is the moment its tree can be out of date: the hop
+  // that led away from it is exactly the one that creates new notes.
+  const navigateTo = async (path: string) => {
+    if (path === INDEX_PATH) {
+      try {
+        await syncIndex();
+      } catch {
+        // A failed refresh must not strand the user on the page they were
+        // leaving — the index still opens, just showing its previous tree.
+      }
+    }
+    setSelectedPath(path);
+  };
 
   const { data: due } = useQuery({
     queryKey: ['notebook', 'review', 'due'],
@@ -62,17 +126,8 @@ export function Notebook() {
       {ensureIndex.isSuccess ? (
         <NotebookEditorPane
           filePath={selectedPath}
-          onOpenPath={path => {
-            setHistory(h => [...h, selectedPath]);
-            setSelectedPath(path);
-          }}
-          onGoBack={() => {
-            setHistory(h => {
-              if (h.length === 0) return h;
-              setSelectedPath(h[h.length - 1]);
-              return h.slice(0, -1);
-            });
-          }}
+          onOpenPath={openPath}
+          onGoBack={goBack}
         />
       ) : (
         <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
