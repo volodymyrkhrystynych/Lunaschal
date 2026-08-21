@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
+// Aliased so it doesn't shadow the DOM's own KeyboardEvent.
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
@@ -16,6 +18,7 @@ import {
   resolveWikiLinkPath,
   toggleCheckboxLine,
 } from '../../lib/notebookVim';
+import { matchesQuery } from '../../lib/notebookSearch';
 
 interface Props {
   filePath: string;
@@ -64,6 +67,7 @@ const editorCallbacks = new Map<
     diary: () => void;
     openLink: (target: string) => void;
     goBack: () => void;
+    find: (query: string) => void;
   }
 >();
 
@@ -99,6 +103,15 @@ function registerVimCustomizationsOnce() {
   // has no context set — passing '' wouldn't match its undefined context.
   Vim.unmap('<Space>', undefined as unknown as string);
   Vim.map('<Space>w<Space>w', ':diary<CR>', 'normal');
+
+  // vimwiki has no :find, but the notebook needs *some* way to reach a note
+  // whose name you remember and whose link you don't — the filename search that
+  // used to live in the file-tree sidebar went away with the sidebar. Bound as
+  // an ex-command rather than on `/` so vim's in-buffer text search keeps that
+  // key, and abbreviated to :fin because that's what real vim's :fin[d] takes.
+  Vim.defineEx('find', 'fin', (cm, params) => {
+    editorCallbacks.get(cm.cm6)?.find((params.argString || '').trim());
+  });
 
   // vimwiki's <CR> follows a [[Link]] under the cursor; otherwise it falls
   // through to a plain "move to the next line" (the closest approximation of
@@ -165,6 +178,14 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
     'saved'
   );
   const queryClient = useQueryClient();
+  // Open `:find` picker: the candidate paths and the live filter over them.
+  // Null when the picker is closed.
+  const [finding, setFinding] = useState<{
+    paths: string[];
+    query: string;
+    selected: number;
+  } | null>(null);
+  const findInputRef = useRef<HTMLInputElement | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['notebook', 'files', 'read', filePath],
@@ -214,6 +235,76 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
     await api.notebook.files.ensure(path);
     onOpenPath(path);
   };
+
+  // `:find <query>` — jump to a note by name. The tree is re-fetched per
+  // invocation rather than cached, because the note you are looking for is
+  // often one you created moments ago.
+  const runFind = async (query: string) => {
+    const { entries } = await api.notebook.files.tree();
+    const paths = entries.filter(e => !e.isDir).map(e => e.path);
+    const hits = paths.filter(path => matchesQuery(path, query));
+    // An unambiguous query shouldn't make you confirm the only answer.
+    if (hits.length === 1) {
+      void ensureAndOpen(hits[0]);
+      return;
+    }
+    setFinding({ paths, query, selected: 0 });
+  };
+
+  const closeFind = () => {
+    setFinding(null);
+    // Vim is modal: leaving the picker anywhere but back in the buffer would
+    // strand the next keystroke.
+    viewRef.current?.focus();
+  };
+
+  // Matching on the full path, not just the filename, so "diary/2026-08" is a
+  // usable query — matchesQuery is a plain substring test either way.
+  const findMatches = finding
+    ? finding.paths.filter(path => matchesQuery(path, finding.query))
+    : [];
+  const findSelected = Math.min(
+    finding?.selected ?? 0,
+    Math.max(0, findMatches.length - 1)
+  );
+
+  const onFindKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    const move = (delta: number) => {
+      e.preventDefault();
+      setFinding(f =>
+        f === null
+          ? f
+          : {
+              ...f,
+              selected: Math.min(
+                Math.max(0, findSelected + delta),
+                Math.max(0, findMatches.length - 1)
+              ),
+            }
+      );
+    };
+    // Ctrl-n/Ctrl-p alongside the arrows: the Pocket 2's arrow keys are an
+    // awkward reach, and this is the pair vim users already have in muscle
+    // memory from wildmenu completion.
+    if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) return move(1);
+    if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) return move(-1);
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const path = findMatches[findSelected];
+      if (!path) return;
+      setFinding(null);
+      void ensureAndOpen(path);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeFind();
+    }
+  };
+
+  useEffect(() => {
+    if (finding) findInputRef.current?.focus();
+  }, [finding !== null]);
 
   // Build the editor once the file's content has loaded, and rebuild only when
   // the *file* changes — NOT when `data.content` changes. Each auto-save's
@@ -271,6 +362,7 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
       diary: () => ensureAndOpen(diaryPathFor()),
       openLink: target => ensureAndOpen(resolveWikiLinkPath(target, filePath)),
       goBack: onGoBack,
+      find: query => void runFind(query),
     });
     setSaveStatus('saved');
     view.focus();
@@ -295,6 +387,7 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
     cb.openLink = target =>
       ensureAndOpen(resolveWikiLinkPath(target, filePath));
     cb.goBack = onGoBack;
+    cb.find = query => void runFind(query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onOpenPath, onGoBack, filePath]);
 
@@ -314,7 +407,7 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
         : 'text-[var(--color-text-muted)]';
 
   return (
-    <div className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden relative">
       <div className="flex items-center justify-between px-3 py-1 border-b border-white/10 bg-[var(--color-surface)] shrink-0">
         <span className="text-sm text-[var(--color-text-muted)] truncate">
           {filePath}
@@ -341,6 +434,56 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
           data-vim-editor
           className="flex-1 overflow-hidden"
         />
+      )}
+      {finding && (
+        <div
+          className="absolute inset-0 z-10 flex items-start justify-center pt-16 bg-black/50"
+          onMouseDown={e => {
+            if (e.target === e.currentTarget) closeFind();
+          }}
+        >
+          <div className="w-[min(32rem,90%)] rounded border border-white/10 bg-[var(--color-surface)] shadow-lg overflow-hidden">
+            <input
+              ref={findInputRef}
+              value={finding.query}
+              onChange={e =>
+                setFinding(f =>
+                  f === null ? f : { ...f, query: e.target.value, selected: 0 }
+                )
+              }
+              onKeyDown={onFindKeyDown}
+              placeholder="Find a note…"
+              className="w-full px-3 py-2 bg-transparent text-sm text-[var(--color-text)] border-b border-white/10 outline-none"
+            />
+            <ul className="max-h-72 overflow-y-auto">
+              {findMatches.length === 0 ? (
+                <li className="px-3 py-2 text-xs text-[var(--color-text-muted)]">
+                  No notes match.
+                </li>
+              ) : (
+                findMatches.map((path, i) => (
+                  <li key={path}>
+                    <button
+                      type="button"
+                      onMouseDown={e => {
+                        e.preventDefault();
+                        setFinding(null);
+                        void ensureAndOpen(path);
+                      }}
+                      className={`w-full text-left px-3 py-1.5 text-sm truncate ${
+                        i === findSelected
+                          ? 'bg-[var(--color-primary)]/25 text-[var(--color-text)]'
+                          : 'text-[var(--color-text-muted)]'
+                      }`}
+                    >
+                      {path}
+                    </button>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+        </div>
       )}
     </div>
   );

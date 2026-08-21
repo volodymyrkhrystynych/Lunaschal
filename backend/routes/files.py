@@ -6,6 +6,10 @@ from typing import Callable
 
 from flask import Blueprint, jsonify, request
 
+# Ceilings for the recursive /tree walk below.
+MAX_TREE_DEPTH = 12
+MAX_TREE_ENTRIES = 5000
+
 
 def make_files_blueprint(
     name: str,
@@ -57,6 +61,56 @@ def make_files_blueprint(
                 'modified': int(item.stat().st_mtime),
             })
         return jsonify(entries)
+
+    # A whole-tree walk, which the single-level list_dir above can't answer
+    # without one request per directory. Notebook's index page regenerates a
+    # link tree of every note from this on open, so it is a hot path on a
+    # directory the user keeps adding to — hence the two ceilings below rather
+    # than an unbounded os.walk. They are generous enough that a real notebook
+    # never meets them and low enough that a stray symlink loop or an
+    # accidentally-nested checkout can't hang the request.
+    @bp.get('/tree')
+    def list_tree():
+        root = _root()
+        root.mkdir(parents=True, exist_ok=True)
+        entries: list[dict] = []
+        truncated = False
+
+        def walk(directory: Path, depth: int) -> None:
+            nonlocal truncated
+            if depth > MAX_TREE_DEPTH or truncated:
+                return
+            try:
+                items = sorted(
+                    directory.iterdir(), key=lambda x: (x.is_file(), x.name.lower())
+                )
+            except OSError:
+                return
+            for item in items:
+                # Dotfiles are hidden here for the same reason list_dir hides
+                # them, and it is what keeps the .trash/ that delete_file writes
+                # out of the tree — a deleted note must not come back as a link.
+                if item.name.startswith('.'):
+                    continue
+                if len(entries) >= MAX_TREE_ENTRIES:
+                    truncated = True
+                    return
+                is_dir = item.is_dir()
+                entries.append({
+                    'name': item.name,
+                    'path': str(item.relative_to(root)),
+                    'isDir': is_dir,
+                    'size': None if is_dir else item.stat().st_size,
+                    'modified': int(item.stat().st_mtime),
+                })
+                # is_dir() follows symlinks; not recursing into a linked
+                # directory is what makes the depth cap a backstop rather than
+                # the only thing standing between us and a symlink cycle.
+                if is_dir and not item.is_symlink():
+                    walk(item, depth + 1)
+
+        walk(root, 0)
+        return jsonify({'entries': entries, 'truncated': truncated})
 
     @bp.get('/read')
     def read_file():

@@ -2369,6 +2369,13 @@ export const api = {
         get<FileEntry[]>(
           `/api/notebook/files?${path ? `path=${encodeURIComponent(path)}` : ''}`
         ),
+      /** Every note in the notebook, walked recursively — what the index page's
+       * generated tree and `:find` are both built from. `list` only sees one
+       * directory, so both would otherwise need a request per folder. */
+      tree: () =>
+        get<{ entries: FileEntry[]; truncated: boolean }>(
+          '/api/notebook/files/tree'
+        ),
       read: (path: string) =>
         get<{ content: string }>(
           `/api/notebook/files/read?path=${encodeURIComponent(path)}`
