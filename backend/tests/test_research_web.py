@@ -478,6 +478,89 @@ def test_searxng_soft_block_triggers_a_retry_that_recovers(client, monkeypatch):
     assert sleeps == [web.SEARCH_RETRY_BACKOFF[0]]
 
 
+def test_a_suspended_engine_is_not_retried_and_opens_the_breaker(client, monkeypatch):
+    """SearXNG's real answer when Brave/Startpage bench us — see searxng/settings.yml.
+
+    While an engine is suspended SearXNG makes no request to it, so the three
+    backoff sleeps would buy 50 seconds of the same empty payload.
+    """
+    _configure('searxng', url='http://localhost:8888')
+    calls = {'n': 0}
+
+    def fake_get(*a, **k):
+        calls['n'] += 1
+        return _SearxResponse(
+            results=[],
+            unresponsive=[
+                ['brave', 'Suspended: too many requests'],
+                ['startpage', 'Suspended: CAPTCHA'],
+            ],
+        )
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    with pytest.raises(web.SearchUnavailable):
+        web.web_search('q')
+
+    assert calls['n'] == 1, 'a suspension must not be retried'
+    assert sleeps == []
+    assert web._search_state['breaker_until'] > 0.0, 'one suspension is enough to open it'
+
+    with pytest.raises(web.SearchCircuitOpen):
+        web.web_search('q')
+    assert calls['n'] == 1, 'the breaker short-circuits without a network call'
+
+
+def test_a_fresh_captcha_alongside_a_suspension_still_retries(client, monkeypatch):
+    """DuckDuckGo's CAPTCHA carries suspended_time=0, so the engine is still asked."""
+    _configure('searxng', url='http://localhost:8888')
+    responses = [
+        _SearxResponse(
+            results=[],
+            unresponsive=[['brave', 'Suspended: too many requests'], ['duckduckgo', 'CAPTCHA']],
+        ),
+        _SearxResponse(results=_OK_RESULT),
+    ]
+    seen = {'n': 0}
+
+    def fake_get(*a, **k):
+        r = responses[seen['n']]
+        seen['n'] += 1
+        return r
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    assert web.web_search('q')[0]['title'] == 'S'
+    assert sleeps == [web.SEARCH_RETRY_BACKOFF[0]]
+
+
+def test_a_suspension_beside_a_timeout_still_retries(client, monkeypatch):
+    """The timeout might not repeat, so the retry has something to win."""
+    _configure('searxng', url='http://localhost:8888')
+    responses = [
+        _SearxResponse(
+            results=[],
+            unresponsive=[['startpage', 'Suspended: CAPTCHA'], ['bing', 'timeout']],
+        ),
+        _SearxResponse(results=_OK_RESULT),
+    ]
+    seen = {'n': 0}
+
+    def fake_get(*a, **k):
+        r = responses[seen['n']]
+        seen['n'] += 1
+        return r
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    monkeypatch.setattr(web, '_sleep', lambda s: None)
+
+    assert web.web_search('q')[0]['title'] == 'S'
+
+
 def test_benign_unresponsive_engines_still_return_empty_without_retry(client, monkeypatch, caplog):
     _configure('searxng', url='http://localhost:8888')
     monkeypatch.setattr(
