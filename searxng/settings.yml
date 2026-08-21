@@ -16,3 +16,65 @@ server:
   # Generate your own: python3 -c "import secrets; print(secrets.token_hex(16))"
   secret_key: 'b38eb8af2c4b6d1f614a1d9e6bced71e'
   limiter: false
+
+outgoing:
+  # Upstream default is 3s, which loses engines that are merely slow rather than
+  # blocking us. Nothing here is user-facing — the research agent is already
+  # waiting on a 25 tok/s model — so buying a few more responding engines with a
+  # few more seconds is the right trade.
+  request_timeout: 6.0
+  max_request_timeout: 12.0
+
+# Which engines this instance actually asks.
+#
+# `use_default_settings: true` merges these by name into the upstream defaults,
+# so everything not named here keeps its stock setting and the other categories
+# (images, science, IT…) still work in the web UI at :8888.
+#
+# The four engines SearXNG enables by default for `general` are exactly the four
+# that refuse this box — measured 2026-08-20 from the residential egress IP, one
+# engine per query (see docs/learnings/searxng-engine-blocking.md):
+#
+#   google      0 results, no error — serves the /httpservice/retry/enablejs
+#               JS interstitial, which the xpath parser reads as "no results",
+#               so it doesn't even appear in unresponsive_engines
+#   duckduckgo  CAPTCHA (suspended_time=0, so it retries and re-fails forever)
+#   brave       "Too many request" (suspended_time=3600)
+#   startpage   redirected to /sp/captcha (suspended_time=86400)
+#
+# This is engine-side fingerprinting of SearXNG's httpx client, not a bad exit
+# IP: the host and the container both egress from the same plain residential
+# address, and no VPN is in the path (see the note in docker-compose.yml about
+# why there deliberately isn't one). Nothing configurable here makes those four
+# answer, and leaving them on costs a request that sours the IP further, a
+# timeout's worth of latency, and a soft-block signal that used to send
+# backend/research/web.py into 50s of pointless backoff.
+engines:
+  # Off: blocked, and no amount of config fixes that. Recheck occasionally —
+  # `curl 'localhost:8888/search?q=test&format=json&engines=google'` is the
+  # whole test — and flip one back the day it answers again.
+  - name: google
+    disabled: true
+  - name: duckduckgo
+    disabled: true
+  - name: brave
+    disabled: true
+  - name: startpage
+    disabled: true
+
+  # On: verified to return results from here. Four independent indexes — Bing's
+  # (bing, yahoo), Yandex's, and Seznam's — so no single block takes the agent's
+  # search down again. wikipedia/wikidata are on by default and stay on.
+  - name: bing
+    disabled: false
+  - name: yahoo
+    disabled: false
+  - name: yandex
+    disabled: false
+  - name: seznam
+    disabled: false
+
+  # Also verified working, deliberately left off: `encyclosearch` and
+  # `searchmysite` answer readily but index the indie/encyclopedia web, which
+  # buries a general query in low-relevance hits. Turn one on if the agent
+  # starts coming back empty rather than as a matter of course.

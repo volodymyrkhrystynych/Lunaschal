@@ -42,6 +42,11 @@ SEARCH_RETRY_BACKOFF = (5, 15, 30)  # same shape as backend/fanfic/download.py's
 SEARCH_BREAKER_THRESHOLD = 2  # consecutive exhausted web_search() calls before short-circuiting
 SEARCH_BREAKER_COOLDOWN = 300  # seconds a tripped breaker stays open
 _SOFT_BLOCK_MARKERS = ('captcha', 'blocked', 'too many request', 'rate limit', 'forbidden', 'access denied')
+# SearXNG prefixes a reason with "Suspended:" once it has benched an engine —
+# for up to a day (`suspended_time=86400` for a Startpage CAPTCHA). While it is
+# suspended SearXNG doesn't contact the engine at all, so a retry inside our
+# backoff window is a request that was never going to be sent.
+_SUSPENDED_MARKER = 'suspend'
 
 _ALLOWED_SCHEMES = ('http', 'https')
 # Hostnames that never resolve to something we want to talk to, checked before
@@ -67,7 +72,15 @@ class SearchSoftBlocked(RuntimeError):
 
     Raised only inside _search_searxng; _dispatch folds it into the same
     retry/backoff/breaker handling as an HTTP 429 and it never escapes past that.
+
+    `retryable` is False when every engine that failed is already *suspended*:
+    waiting 5, 15 and 30 seconds cannot change an answer SearXNG will give
+    without making a request. That case trips the breaker immediately instead.
     """
+
+    def __init__(self, message: str, *, retryable: bool = True):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 def _is_public(ip_text: str) -> bool:
@@ -185,13 +198,21 @@ def _dispatch(provider: str, do_request) -> list[dict]:
             _sleep(wait)
 
         last_exc: Exception | None = None
+        give_up_now = False
         for backoff in (*SEARCH_RETRY_BACKOFF, None):
             _search_state['last_request'] = _monotonic()
             try:
                 results = do_request()
             except (requests.HTTPError, SearchSoftBlocked) as e:
                 status = getattr(getattr(e, 'response', None), 'status_code', None)
-                retryable = isinstance(e, SearchSoftBlocked) or status in (429, 503)
+                if isinstance(e, SearchSoftBlocked):
+                    retryable = e.retryable
+                    # Every engine benched upstream: nothing to wait for, and
+                    # the suspension outlives our cooldown, so open the breaker
+                    # rather than spending the retries first.
+                    give_up_now = not retryable
+                else:
+                    retryable = status in (429, 503)
                 if retryable and backoff is not None:
                     logger.info('%s search rate-limited, retrying in %ss', provider, backoff)
                     _sleep(backoff)
@@ -210,7 +231,7 @@ def _dispatch(provider: str, do_request) -> list[dict]:
                 return results
 
         _search_state['consecutive_failures'] += 1
-        if _search_state['consecutive_failures'] >= SEARCH_BREAKER_THRESHOLD:
+        if give_up_now or _search_state['consecutive_failures'] >= SEARCH_BREAKER_THRESHOLD:
             _search_state['breaker_until'] = _monotonic() + SEARCH_BREAKER_COOLDOWN
             _search_state['consecutive_failures'] = 0
         raise SearchUnavailable(f'Search request failed: {last_exc}') from last_exc
@@ -286,13 +307,22 @@ def _search_searxng(query: str, base_url: str, limit: int) -> list[dict]:
         unresponsive = payload.get('unresponsive_engines') or []
         if unresponsive:
             reasons = '; '.join(f'{entry}' for entry in unresponsive)
-            if any(
-                marker in str(entry).lower()
-                for entry in unresponsive
-                for marker in _SOFT_BLOCK_MARKERS
-            ):
+            entries = [str(entry).lower() for entry in unresponsive]
+            blocked = [
+                entry for entry in entries
+                if any(marker in entry for marker in _SOFT_BLOCK_MARKERS)
+            ]
+            if blocked:
+                # A retry is only worth its backoff if something might answer
+                # differently next time: an engine that failed for another
+                # reason (a timeout, a 5xx) or a block SearXNG hasn't suspended
+                # the engine over yet.
+                retryable = len(blocked) < len(entries) or any(
+                    _SUSPENDED_MARKER not in entry for entry in blocked
+                )
                 raise SearchSoftBlocked(
-                    f'SearXNG engines appear rate-limited or blocked: {reasons}'
+                    f'SearXNG engines appear rate-limited or blocked: {reasons}',
+                    retryable=retryable,
                 )
             logger.info('SearXNG returned no results; unresponsive engines: %s', reasons)
     return results

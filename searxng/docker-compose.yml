@@ -6,6 +6,10 @@
 # egress IP anyway — it's that there's no third-party account/API key
 # correlating your whole query history the way Tavily's did; self-hosting an
 # open-source metasearch engine already gets you that.
+#
+# Which engines this instance may ask is not a detail — the stock general-category
+# four all refuse us. See settings.yml and
+# ../docs/learnings/searxng-engine-blocking.md.
 services:
   searxng:
     image: searxng/searxng
