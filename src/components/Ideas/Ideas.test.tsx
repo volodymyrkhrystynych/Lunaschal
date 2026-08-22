@@ -42,7 +42,7 @@ const recorderState = {
 vi.mock('../../hooks/useRecorder', () => ({
   useRecorder: (onTranscript: (t: string) => void) => {
     recorderState.start = vi.fn(() => onTranscript('a spoken idea'));
-    return { ...recorderState, error: '' };
+    return { ...recorderState, error: '', canTranscribe: true };
   },
 }));
 
@@ -181,10 +181,14 @@ describe('IdeaCapture', () => {
     fireEvent.change(box, { target: { value: 'a new thought' } });
     fireEvent.click(screen.getByRole('button', { name: /Save idea/ }));
 
-    await waitFor(() =>
-      expect(api.ideas.createFromVoice).toHaveBeenCalledWith('a new thought')
-    );
-    await waitFor(() => expect(api.ideas.get).toHaveBeenCalledWith('i2'));
+    // The id is minted here, not waited for: the capture is queued (it may be
+    // sitting in the offline queue right now) and the idea still opens.
+    await waitFor(() => expect(api.ideas.createFromVoice).toHaveBeenCalled());
+    const [rawContent, clientId] = vi.mocked(api.ideas.createFromVoice).mock
+      .calls[0] as [string, string];
+    expect(rawContent).toBe('a new thought');
+    expect(clientId).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+    await waitFor(() => expect(api.ideas.get).toHaveBeenCalledWith(clientId));
   });
 
   it('will not save an empty or whitespace-only idea', async () => {

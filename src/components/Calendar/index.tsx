@@ -12,6 +12,8 @@ import {
   WEEKDAY_LABELS,
   type RepeatFreq,
 } from '@/lib/calendar';
+import { ulid } from '@/lib/ulid';
+import { useCalendarCreate } from '@/offline/mutationDefaults';
 import { localDayKey } from '@/lib/dates';
 // The shared splitter — Food's two views each grew a private copy of this and
 // a third would make the rule genuinely untraceable.
@@ -97,16 +99,12 @@ export function Calendar() {
     ? fetched?.filter(e => parseEventTags(e.tags).includes(tagFilter))
     : fetched;
 
-  const createEvent = useMutation({
-    mutationFn: api.calendar.create,
-    onSuccess: () => {
-      // The 'calendar' prefix covers the tags query too, so a tag typed on a
-      // brand-new event shows up in the pill row without a reload.
-      queryClient.invalidateQueries({ queryKey: ['calendar'] });
-      setNewEvent(EMPTY_NEW_EVENT);
-      setShowNewEvent(false);
-    },
-  });
+  // Queued rather than posted: an event written offline waits in the write
+  // queue and lands when the backend is back. The form closes either way — the
+  // 'calendar' prefix invalidation (which covers the tags query, so a tag typed
+  // on a brand-new event reaches the pill row) happens in the mutation's own
+  // onSettled.
+  const createEvent = useCalendarCreate();
 
   const navigate = (direction: number) => {
     if (viewMode === 'month') {
@@ -163,6 +161,7 @@ export function Calendar() {
   const submitNewEvent = () => {
     if (!selectedDate) return;
     createEvent.mutate({
+      id: ulid(),
       title: newEvent.title,
       date: selectedDate,
       description: newEvent.description || undefined,
@@ -178,6 +177,11 @@ export function Calendar() {
           : null,
       repeatUntil: newEvent.repeatUntil || null,
     });
+    // Closed here rather than on success: the write may be sitting in the
+    // offline queue, and a form that stays open until the server answers is a
+    // form the user retypes into.
+    setNewEvent(EMPTY_NEW_EVENT);
+    setShowNewEvent(false);
   };
 
   const toggleWeekday = (day: number) =>

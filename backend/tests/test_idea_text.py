@@ -41,3 +41,14 @@ def test_content_is_used_when_the_transcript_is_gone():
 def test_an_empty_idea_is_untitled():
     assert display_title({'title': '', 'rawContent': '   \n  '}) == 'Untitled idea'
     assert display_title({}) == 'Untitled idea'
+
+
+def test_an_idea_created_with_a_client_id_replays_once(client):
+    """Same idempotent-replay contract as calendar/journal/todos: the id comes
+    from the browser, so a queued offline capture can be replayed safely."""
+    body = {'id': '01ARZ3NDEKTSV4RRFFQ69G5FAW', 'title': 'Offline capture'}
+    assert client.post('/api/ideas', json=body).status_code == 201
+    assert client.post('/api/ideas', json=body).status_code == 201
+
+    ideas = client.get('/api/ideas').get_json()
+    assert [i['title'] for i in ideas] == ['Offline capture']
