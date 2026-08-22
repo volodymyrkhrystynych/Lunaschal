@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, waitFor, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { NotebookEditorPane } from './NotebookEditorPane';
+import type { NotebookPaneHandle } from './NotebookEditorPane';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
@@ -233,10 +234,19 @@ describe('NotebookEditorPane', () => {
     expect(mocks.write).toHaveBeenCalledWith('index.md', '');
   });
 
-  it('does nothing on :q when already on the index page', async () => {
+  // The index is the end of the road: re-opening it was indistinguishable
+  // from `:q` doing nothing, and left vim holding every key the app's own
+  // shortcuts needed.
+  it('releases the keyboard on :q from the index page', async () => {
     mocks.read.mockResolvedValue({ content: 'home' });
     const onOpenPath = vi.fn();
-    const { container } = renderPane({ filePath: 'index.md', onOpenPath });
+    const onExit = vi.fn();
+    const { container } = renderPane({
+      filePath: 'index.md',
+      onOpenPath,
+      onExit,
+      autoFocus: true,
+    });
 
     const content = await waitFor(() => {
       const el = container.querySelector('.cm-content');
@@ -260,6 +270,44 @@ describe('NotebookEditorPane', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(onOpenPath).not.toHaveBeenCalled();
     expect(mocks.write).not.toHaveBeenCalled();
+    expect(onExit).toHaveBeenCalled();
+    // …and the editor really let go, rather than the ex dialog's own
+    // re-focus putting it straight back.
+    await waitFor(() =>
+      expect(container.querySelector('.cm-content')).not.toBe(
+        document.activeElement
+      )
+    );
+  });
+
+  // Arriving on the Notebook tab used to focus index.md's buffer, so every
+  // app shortcut was swallowed before the user had done anything at all.
+  it('does not take the keyboard unless asked to', async () => {
+    mocks.read.mockResolvedValue({ content: 'home' });
+    const { container } = renderPane({ filePath: 'index.md' });
+
+    const content = await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      expect(el).toBeTruthy();
+      return el as Element;
+    });
+    expect(document.activeElement).not.toBe(content);
+  });
+
+  it('focuses the editor through its handle', async () => {
+    mocks.read.mockResolvedValue({ content: 'home' });
+    const handle = { current: null } as {
+      current: NotebookPaneHandle | null;
+    };
+    const { container } = renderPane({ filePath: 'index.md', handle });
+
+    const content = await waitFor(() => {
+      const el = container.querySelector('.cm-content');
+      expect(el).toBeTruthy();
+      return el as Element;
+    });
+    handle.current?.focus();
+    expect(document.activeElement).toBe(content);
   });
 
   it('calls onGoBack on Backspace instead of moving the cursor', async () => {

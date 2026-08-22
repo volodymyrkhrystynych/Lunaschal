@@ -552,8 +552,8 @@ export interface BriefingTodoDecision {
 // A delegate confirm card — calendar/calorie/food/recipe/task/flashcards from
 // a live chat turn, plus recipe_link from the background homemade-match check
 // (backend/food/recipe_match.py). `note` proposals draft immediately with no
-// confirm step, so they never get one of these (backend/delegate/runs.py),
-// and `remember` writes straight away with no card at all. Written into the
+// confirm step, so they never get one of these (backend/delegate/runs.py).
+// Written into the
 // assistant message's metadata the moment the run that staged it finishes (or,
 // for recipe_link, the moment the background check finds a match), and
 // resolved in place by POST /api/chat/proposals/<messageId>/<id> — the only
@@ -2338,9 +2338,9 @@ export const api = {
       ),
   },
 
-  // The standing document the assistant keeps about the user. It writes here
-  // without a confirm card (backend/delegate/tools.py's `remember`), which is
-  // only reasonable because these routes make every change visible and undoable.
+  // The standing document about the user that rides in every chat system
+  // prompt. These routes are its only write path — chat used to edit it itself,
+  // with no confirm card, and no longer can.
   memory: {
     get: () => get<UserMemory>('/api/memory'),
     update: (content: string) => put<UserMemory>('/api/memory', { content }),

@@ -2,12 +2,12 @@
 /**
  * The chat composer: photos and dictation.
  *
- * The behaviour worth pinning down is that dictation no longer sends. It used to
- * POST the transcript straight through as the message — the only view in the app
- * that did — which meant a misheard name became a permanent record with no
- * moment in which to fix it. There used to be an automated correction pass here
- * too; it moved to Journal's Polish instead, so dictation now just lands in the
- * box like every other view's (BrainDump, IdeaCapture, Journal, FoodCapture).
+ * The behaviour worth pinning down is that dictation sends on its own. It used
+ * to, then stopped: a transcript could mishear a proper noun, and a message is
+ * a permanent record, so the box-and-a-second-click gave you somewhere to fix
+ * it. Every dictation now goes through two STT models reconciled by an LLM
+ * (`merge_transcripts`), and the read-then-click step costs more than it buys —
+ * speaking to the chat should be a conversation, not a form.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, screen, waitFor } from '@testing-library/react';
@@ -123,65 +123,61 @@ const attachViaPaste = async () => {
 };
 
 describe('dictation', () => {
-  it('puts the raw transcript in the box instead of sending it', async () => {
+  it('sends the transcript as a message the moment it arrives', async () => {
     renderChat();
     const input = await ready();
-    dictate('had vary nikki at motivate');
+    dictate('had vareniki at Movati');
 
     await waitFor(() =>
-      expect((input as HTMLTextAreaElement).value).toBe(
-        'had vary nikki at motivate'
+      expect(api.chat.addMessage).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({
+          role: 'user',
+          content: 'had vareniki at Movati',
+        })
       )
     );
-    expect(api.chat.addMessage).not.toHaveBeenCalled();
+    // …and the box is left empty, not holding a copy of what was just sent.
+    expect((input as HTMLTextAreaElement).value).toBe('');
   });
 
-  it('sends with no rawContent when the dictated text goes through unedited', async () => {
+  it('sends what was typed and what was spoken as one message', async () => {
     renderChat();
     const input = await ready();
-    dictate('had vary nikki at motivate');
+    fireEvent.change(input, { target: { value: 'note:' } });
+    dictate('had vareniki at Movati');
+
     await waitFor(() =>
-      expect((input as HTMLTextAreaElement).value).toBe(
-        'had vary nikki at motivate'
+      expect(api.chat.addMessage).toHaveBeenCalledWith(
+        'c1',
+        expect.objectContaining({ content: 'note: had vareniki at Movati' })
       )
     );
-    fireEvent.keyDown(input, { key: 'Enter' });
-
-    // content already *is* the verbatim transcript here, so there's nothing
-    // separate left to preserve as rawContent — same as a typed message.
-    await waitFor(() =>
-      expect(api.chat.addMessage).toHaveBeenCalledWith('c1', {
-        role: 'user',
-        content: 'had vary nikki at motivate',
-        metadata: undefined,
-        rawContent: undefined,
-        attachmentIds: [],
-      })
-    );
+    expect(api.chat.addMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('sends the verbatim transcript as rawContent once the box is hand-edited', async () => {
+  it('sends no rawContent — the message already is the transcript', async () => {
+    renderChat();
+    await ready();
+    dictate('had vareniki at Movati');
+
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+    const [, body] = vi.mocked(api.chat.addMessage).mock.calls[0];
+    expect(body.rawContent).toBeUndefined();
+  });
+
+  it('puts the words back in the box when the send fails', async () => {
+    // Nothing was typed, so a dropped transcript is not something the user can
+    // retype — it is the only copy of what they said.
+    vi.mocked(api.chat.addMessage).mockRejectedValueOnce(new Error('offline'));
     renderChat();
     const input = await ready();
-    dictate('had vary nikki at motivate');
-    await waitFor(() =>
-      expect((input as HTMLTextAreaElement).value).toBe(
-        'had vary nikki at motivate'
-      )
-    );
-    // The user catches the mishearing themselves — no correction pass does
-    // this automatically anymore (moved to Journal's Polish).
-    fireEvent.change(input, { target: { value: 'had vareniki at Movati' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
+    dictate('had vareniki at Movati');
 
     await waitFor(() =>
-      expect(api.chat.addMessage).toHaveBeenCalledWith('c1', {
-        role: 'user',
-        content: 'had vareniki at Movati',
-        metadata: undefined,
-        rawContent: 'had vary nikki at motivate',
-        attachmentIds: [],
-      })
+      expect((input as HTMLTextAreaElement).value).toBe(
+        'had vareniki at Movati'
+      )
     );
   });
 
@@ -195,19 +191,6 @@ describe('dictation', () => {
       expect(api.chat.addMessage).toHaveBeenCalledWith(
         'c1',
         expect.objectContaining({ rawContent: undefined })
-      )
-    );
-  });
-
-  it('appends dictation after typed text, leaving the typed part alone', async () => {
-    renderChat();
-    const input = await ready();
-    fireEvent.change(input, { target: { value: 'note:' } });
-    dictate('had vary nikki at motivate');
-
-    await waitFor(() =>
-      expect((input as HTMLTextAreaElement).value).toBe(
-        'note: had vary nikki at motivate'
       )
     );
   });

@@ -1,20 +1,50 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import {
+  useShortcuts,
+  useShortcutScope,
+} from '../../shortcuts/ShortcutProvider';
 import { NotebookEditorPane } from './NotebookEditorPane';
+import type { NotebookPaneHandle } from './NotebookEditorPane';
 import { NotebookReviewSession } from './NotebookReviewSession';
 import { INDEX_PATH } from '../../lib/notebookVim';
 import { buildIndexContent, treeEntriesFor } from '../../lib/notebookIndex';
 
+// Same step the Fanfic reader scrolls its chapter by, so W/S feels the same
+// in both places.
+const SCROLL_STEP_PX = 120;
+
 export function Notebook() {
   const [selectedPath, setSelectedPath] = useState<string>(INDEX_PATH);
   const [reviewing, setReviewing] = useState(false);
+  // Whether the editor currently owns the keyboard. Starts false: arriving on
+  // the Notebook tab used to drop you straight into index.md's vim buffer,
+  // where every app shortcut is swallowed and `:q` — with nowhere further back
+  // to go — re-opened the page you were already on. Now the tab opens with the
+  // note merely *shown*, `nav.in` steps into it, and `:q` on the index steps
+  // back out.
+  const [editing, setEditing] = useState(false);
+  const paneRef = useRef<NotebookPaneHandle | null>(null);
+  const { setLevel } = useShortcuts();
   // Vim's <BS> "go back" needs no backlink index — as long as this history
   // unwinds as many hops as the diary-jump/link-follow drilling made, it's
   // fine that nothing tracks who links to what. Every hop after the initial
   // index page happens via a link/diary jump/`:q`, so the chain is sound.
   const [history, setHistory] = useState<string[]>([]);
   const queryClient = useQueryClient();
+
+  useShortcutScope(1, {
+    drillIn: () => {
+      setEditing(true);
+      paneRef.current?.focus();
+      return true;
+    },
+    // The editor is a single document, not a list — W/S scroll it rather than
+    // moving a selection, which is what makes a note readable without a mouse.
+    scrollDown: () => paneRef.current?.scrollBy(SCROLL_STEP_PX),
+    scrollUp: () => paneRef.current?.scrollBy(-SCROLL_STEP_PX),
+  });
 
   // Creates index.md if it's missing, then refreshes the generated file-tree
   // block inside it. Everything the user wrote outside that block survives —
@@ -60,9 +90,20 @@ export function Notebook() {
     queryFn: syncIndex,
   });
 
+  // Every caller is a vim command run inside the buffer (link follow, diary
+  // jump, `:find`), so the keyboard was already in the editor and stays there.
   const openPath = (path: string) => {
+    setEditing(true);
     setHistory(h => [...h, selectedPath]);
     void navigateTo(path);
+  };
+
+  // `:q` on the index. The pane has already blurred CodeMirror; this puts the
+  // shortcut level back inside the tab, so W/S scroll the note, `nav.out`
+  // reaches the sidebar, and `nav.in` steps back into the buffer.
+  const exitEditor = () => {
+    setEditing(false);
+    setLevel(1);
   };
 
   // Deliberately not folded into the setHistory updater: navigateTo writes to
@@ -128,6 +169,9 @@ export function Notebook() {
           filePath={selectedPath}
           onOpenPath={openPath}
           onGoBack={goBack}
+          onExit={exitEditor}
+          autoFocus={editing}
+          handle={paneRef}
         />
       ) : (
         <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">

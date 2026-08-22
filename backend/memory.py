@@ -6,7 +6,7 @@ one conversation survives into the next. This is the store behind the part of
 the system prompt that always claimed otherwise.
 
 Its most concrete job is speech-to-text. Dictation mangles proper nouns, and a
-name written down once here is a name every feature's own correction pass can
+name written down here once is a name every feature's own correction pass can
 fix afterwards: Journal's Polish (`backend/ai/journal.py`), Ideas' background
 cleanup on voice capture (`backend/ai/idea_polish.py`), and the OS-level voice
 listener's manual correction route (`backend/routes/stt.py`).
@@ -15,13 +15,15 @@ Three things are load-bearing:
 
 - **It is one free-text document, not a list of rows.** The user asked for one
   piece of text, and it goes into the prompt as one block.
-- **Every write snapshots the previous document first.** The assistant writes to
-  this without a confirmation step, and an immediate write is only safe when it
-  is visible and undoable — the same reason `wiki_revisions` exists.
+- **Every write snapshots the previous document first.** The same reason
+  `wiki_revisions` exists: an edit is only safe when it is visible and undoable.
+- **The user is the only writer.** Chat used to edit this itself, through a
+  `remember`/`revise_memory` pair that saved with no confirmation card — an
+  unbidden write on every correction, for something nobody had asked to be made
+  permanent. Settings → Memory is the whole write path now.
 - **It is capped.** This rides in every chat system prompt, on both the decision
   turn and the answer turn, so an unbounded document is a tax on every message.
-  Past the cap `append_note` refuses with a reason the model can act on rather
-  than silently truncating.
+  Past the cap `set_memory` refuses rather than silently truncating.
 """
 import time
 
@@ -33,6 +35,9 @@ from backend.db.connection import get_db
 # small enough that nobody has to think about it.
 MAX_CHARS = 4000
 
+# 'remember'/'revise' are what the retired chat tools wrote under; they stay
+# valid because the revisions they left behind are still in the table and still
+# have to render in Settings.
 VALID_SOURCES = {'remember', 'revise', 'user', 'restore'}
 
 
@@ -75,26 +80,6 @@ def set_memory(content: str, *, source: str, note: str | None = None) -> str:
     )
     db.commit()
     return content
-
-
-def append_note(note: str) -> str:
-    """Add one line to the document. Raises MemoryFull when it no longer fits.
-
-    Appending rather than rewriting is what keeps the common case — the user
-    corrects a name mid-sentence — off the model's blocking decision turn.
-    """
-    note = ' '.join((note or '').split())
-    if not note:
-        raise ValueError('note is empty')
-    line = note if note.startswith('- ') else f'- {note}'
-
-    current = get_memory()
-    updated = f'{current}\n{line}' if current else line
-    if len(updated) > MAX_CHARS:
-        raise MemoryFull(
-            f'the memory is full ({MAX_CHARS} characters) — consolidate it before adding more'
-        )
-    return set_memory(updated, source='remember', note=note)
 
 
 def list_revisions(limit: int = 50) -> list[dict]:

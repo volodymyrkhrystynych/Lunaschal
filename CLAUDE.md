@@ -96,7 +96,7 @@ Feature-logic packages (kept out of the route files so they can be unit-tested):
 - `backend/research/` — the Ideas agent: deterministic repo extraction (`repo_facts.py`), SSRF-guarded web tools (`web.py`), the copy-on-write wiki, the sync tool loop, the research worker and the evidence-backed assessment. Design record: [docs/ideas-tab.md](docs/ideas-tab.md)
 - `backend/delegate/` — the Chat tab's delegate: the proposal toolbox (`tools.py`), the loop that drives it (`agent.py`), and the decide-delegate-answer glue behind `/api/chat/stream` (`chat.py`). See Chat delegate below
 - `backend/chat/` — file storage for chat photo attachments (`storage.py`) and the helper that turns their readings into text the chat model can see (`context.py`)
-- `backend/memory.py` — the one standing document the assistant keeps about the user; read into every chat system prompt, copy-on-write
+- `backend/memory.py` — the one standing document about the user; read into every chat system prompt, copy-on-write, and written only from Settings → Memory
 - `backend/imaging.py` — HEIC→JPEG transcoding at the upload boundary, shared by the food log and chat photos (it also registers Pillow's HEIF opener)
 - `backend/geo.py` — the one latitude/longitude validator (`parse_coord`, `coord_pair`); a lone coordinate is rejected rather than stored, since half a location is a row that looks located and isn't
 - `backend/tags.py` — shared normalization for JSON-array tag columns (use it, don't grow per-feature rules)
@@ -126,7 +126,6 @@ There is no cron and no general scheduler: four hand-rolled daemon loops start f
 - `journal.py` — entry polish/metadata (tags constrained to the closed `JOURNAL_TAGS` vocabulary by schema enum); `polish_journal_entry`'s `context` also carries the standing memory document alongside attachment descriptions, so a misheard name gets fixed against both — this is where Chat dictation's now-removed correction pass moved; `classify_entry_for_tag(content, tag_name) -> bool` for the curated-tag background scan
 - `idea_polish.py` — `polish_idea`, the same memory-document correction as Journal's but lighter (no paragraph reformatting — ideas stay one short block); fires once, in the background, right after `POST /api/ideas/voice` (see backend/research/CLAUDE.md)
 - `images.py` — `describe_image(path, *, system, prompt)` is the **only** call in the app that sends an image anywhere; `caption_image` (journal prose) and `read_chat_photo` (chat, quotes legible text verbatim) are its two callers
-- `memory.py` — background rewrite of the standing memory document to an instruction; returns None rather than a fallback, because a failed revision must leave the document alone
 - `learning_generation.py` / `learning_grading.py` / `learning_verification.py` — flashcard generation, claim-coverage grading, MCP-grounded verification (see Learning below)
 - `mcp_client.py` — asyncio bridge to the `mcp` SDK (per-request sessions, stdio/http transports), MCP→OpenAI tool mapping
 - `writing.py` — `summarize_discussion` for the Writing module

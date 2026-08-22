@@ -239,6 +239,45 @@ describe('useRecorder', () => {
     expect(onRecording.mock.calls[0][0].recovered).toBe(true);
   });
 
+  // `mr.onstop` is assigned inside start(), so the callback it closes over is
+  // the one from the render that began the recording. That was invisible while
+  // every caller only did `setInput(prev => …)`; it stopped being invisible
+  // when they started *sending* the transcript, where a callback minutes out of
+  // date sends against stale state.
+  it('delivers the transcript to the current callback, not the one recording started with', async () => {
+    const fake = installFakeMediaRecorder();
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue({ ok: true, json: async () => ({ text: 'hi' }) })
+    );
+
+    const stale = vi.fn();
+    const fresh = vi.fn();
+    const { result, rerender } = renderHook(
+      ({ onTranscript }: { onTranscript: (t: string) => void }) =>
+        useRecorder(onTranscript),
+      { initialProps: { onTranscript: stale } }
+    );
+
+    await act(async () => {
+      await result.current.start();
+    });
+    // The component re-renders mid-recording — a new message arrives, a photo
+    // finishes uploading — and hands over a new closure.
+    rerender({ onTranscript: fresh });
+
+    await act(async () => {
+      fake.emit();
+      result.current.stop();
+      await fake.stop();
+    });
+
+    expect(fresh).toHaveBeenCalledWith('hi');
+    expect(stale).not.toHaveBeenCalled();
+  });
+
   it('leaves nothing in the store for a non-durable recording', async () => {
     const fake = installFakeMediaRecorder();
     const onAudio = vi.fn();

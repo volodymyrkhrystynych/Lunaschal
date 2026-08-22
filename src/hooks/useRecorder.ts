@@ -105,6 +105,13 @@ export function useRecorder(
   // installed once and still see the current ones.
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  // Same reason, and it matters more than it looks: `mr.onstop` is assigned
+  // inside `start()`, so without this the transcript would be handed to the
+  // callback as it was *when recording began*. Fine while a callback only did
+  // `setInput(prev => …)`, wrong the moment one of them sends the message —
+  // it would send against a stale conversation.
+  const deliverRef = useRef({ onTranscript, onAudio });
+  deliverRef.current = { onTranscript, onAudio };
 
   const setStatusIfMounted = (s: RecorderStatus) => {
     if (mountedRef.current) setStatus(s);
@@ -151,10 +158,11 @@ export function useRecorder(
   };
 
   const handleFinishedBlob = async (blob: Blob) => {
-    if (modeRef.current === 'audio' && onAudio) {
+    const deliverAudio = deliverRef.current.onAudio;
+    if (modeRef.current === 'audio' && deliverAudio) {
       setStatusIfMounted('saving');
       try {
-        await onAudio(blob);
+        await deliverAudio(blob);
       } catch (err) {
         setErrorIfMounted(err instanceof Error ? err.message : 'Saving failed');
       } finally {
@@ -173,7 +181,7 @@ export function useRecorder(
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Transcription failed');
-      if (data.text) onTranscript(data.text);
+      if (data.text) deliverRef.current.onTranscript(data.text);
     } catch (err) {
       setErrorIfMounted(
         err instanceof Error ? err.message : 'Transcription failed'

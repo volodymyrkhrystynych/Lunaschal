@@ -129,9 +129,13 @@ export function stepLabel(step: AgentStep): string {
       return target
         ? `Asked for clarification about ${target}`
         : 'Asked for clarification';
-    // Also not proposals: these three write immediately, with no card. Saying
+    // Also not a proposal: this writes immediately, with no card. Saying
     // "Staged" would be the same lie in the other direction — the user needs to
     // know something was written so they can go and unwrite it.
+    //
+    // `remember`/`revise_memory` are retired (the memory document is the user's
+    // to write now), but their labels stay: the steps they left behind are
+    // persisted in old messages' metadata and still have to render.
     case 'remember':
       return step.ok
         ? `Remembered: ${target}`

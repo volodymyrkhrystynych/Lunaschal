@@ -96,6 +96,10 @@ vi.mock('../../hooks/api', () => ({
       },
       addToFolder: vi.fn().mockResolvedValue({ success: true }),
       removeFromFolder: vi.fn().mockResolvedValue({ success: true }),
+      linkJournal: vi.fn().mockResolvedValue({ success: true }),
+    },
+    journal: {
+      createFromVoice: vi.fn().mockResolvedValue({ id: 'j1' }),
     },
     shortcuts: {
       get: vi.fn().mockResolvedValue({ bindings: {} }),
@@ -449,11 +453,15 @@ describe('Reader mobile master-detail bookmark restore', () => {
 
 describe('Reader commentary microphone', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     Element.prototype.scrollIntoView = vi.fn();
     Element.prototype.scrollTo = vi.fn();
   });
 
-  it('records and drops the transcript into the commentary box', async () => {
+  // Dictated commentary saves itself. You are mid-chapter when you say it, not
+  // looking at the box — and every dictation now goes through the two-model STT
+  // cross-check, which is what the read-it-back-then-click step was for.
+  it('records and saves the transcript straight to the journal', async () => {
     class FakeMediaRecorder {
       onstop: (() => void) | null = null;
       ondataavailable: ((e: { data: Blob }) => void) | null = null;
@@ -486,12 +494,70 @@ describe('Reader commentary microphone', () => {
     const stop = await screen.findByRole('button', { name: '■ Stop' });
     fireEvent.click(stop);
 
-    await waitFor(() => {
+    await waitFor(() =>
+      expect(api.journal.createFromVoice).toHaveBeenCalledWith(
+        'loved this chapter'
+      )
+    );
+    // Linked to the fic and the open chapter, the same as a typed-then-saved
+    // one. (Which chapter is open depends on where the reader last was, so it
+    // is deliberately not pinned here.)
+    await waitFor(() =>
+      expect(api.fanfic.linkJournal).toHaveBeenCalledWith(
+        'fic1',
+        'j1',
+        expect.any(String)
+      )
+    );
+    // …and the box is emptied, not left holding a copy of what was saved.
+    await waitFor(() =>
       expect(
         (screen.getByPlaceholderText(/Your thoughts on/) as HTMLTextAreaElement)
           .value
-      ).toBe('loved this chapter');
+      ).toBe('')
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it('saves what was typed together with what was spoken', async () => {
+    class FakeMediaRecorder {
+      onstop: (() => void) | null = null;
+      ondataavailable: ((e: { data: Blob }) => void) | null = null;
+      start() {}
+      stop() {
+        this.onstop?.();
+      }
+    }
+    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      mediaDevices: {
+        getUserMedia: vi
+          .fn()
+          .mockResolvedValue({ getTracks: () => [], getAudioTracks: () => [] }),
+      },
     });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ text: 'loved this chapter' }),
+      })
+    );
+
+    renderReader();
+    fireEvent.click(await screen.findByText(/Commentary/));
+    fireEvent.change(screen.getByPlaceholderText(/Your thoughts on/), {
+      target: { value: 'ch3 spoiler:' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '🎤' }));
+    fireEvent.click(await screen.findByRole('button', { name: '■ Stop' }));
+
+    await waitFor(() =>
+      expect(api.journal.createFromVoice).toHaveBeenCalledWith(
+        'ch3 spoiler:\nloved this chapter'
+      )
+    );
     vi.unstubAllGlobals();
   });
 });

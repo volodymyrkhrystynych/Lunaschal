@@ -3,13 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type MemoryRevision } from '../../hooks/api';
 
 /**
- * The standing document the assistant keeps about the user.
+ * The standing document about the user, read into every chat system prompt.
  *
- * This section is what makes the assistant's `remember` tool safe to let write
- * without a confirmation card: every change it makes is visible here and every
- * previous version is one click away. Without an editor and a history, an
- * unconfirmed write into a document that rides in every system prompt would be
- * a thing the user could neither see nor take back.
+ * This section is now the only thing that writes it. Chat used to write here
+ * too, with no confirmation card, which is what the revision history was built
+ * to make safe — the history stays, both for the user's own edits and because
+ * the rows those retired tools left behind still have to render.
  */
 const SOURCE_LABEL: Record<MemoryRevision['source'], string> = {
   remember: 'assistant added a line',
