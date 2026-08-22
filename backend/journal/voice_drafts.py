@@ -38,24 +38,12 @@ logger = logging.getLogger(__name__)
 # against a mis-picked file filling the disk.
 MAX_DRAFT_BYTES = 100 * 1024 * 1024
 
-# Local backends run per draft, in order. The first of these that matches the
-# user's configured default STT backend becomes the "primary" candidate (see
-# _pick_primary) — the one whose raw text becomes journal_entries.raw_content.
+# The backend list moved to backend/routes/stt.py when every dictation
+# surface started using it, not just this pipeline. Imported lazily inside
+# _process_draft_inner for the same reason stt is: it drags in numpy/torch.
 #
-# Deliberately two, not three, for now. NVIDIA Canary 180M Flash was tried as
-# a third opinion (onnx-asr, same VAD-chunked path as Parakeet) and reverted:
-# its onnx-asr decoder (NemoConformerAED._decoding) is pure greedy argmax with
-# no repetition penalty, generating up to a fixed 1024-token cap per chunk
-# regardless of how much audio that chunk actually contains. On a real ~3.4
-# minute draft it produced 1270 words against Parakeet/Whisper's ~190 for the
-# same clip, and took 695s to do it (RTF 3.4 — slower than the recording
-# itself) — a runaway-decode failure, not a slow-but-correct one. The next
-# candidate worth trying is a Wav2Vec2 CTC model: CTC output length is capped
-# by input frame count, so it's structurally immune to this specific failure
-# mode, unlike any attention-decoder model (Canary, Whisper-style AED). No
-# single canonical pre-converted onnx-asr checkpoint with a solid current WER
-# number was settled on yet, which is why it isn't here either.
-DRAFT_BACKENDS = ('parakeet', 'local')
+# _pick_primary moved with it — the "whose text becomes raw_content" rule is
+# the same wherever a clip is transcribed by more than one model.
 
 _storage = IdScopedStorage('JOURNAL_DRAFTS_ROOT', './data/journal_drafts')
 resolve_stored_path = _storage.resolve_stored_path
@@ -213,16 +201,6 @@ def retry_draft(draft_id: str) -> bool:
     return True
 
 
-def _pick_primary(candidates: list[dict], active_backend: str) -> dict:
-    for c in candidates:
-        if c['backend'] == active_backend:
-            return c
-    for c in candidates:
-        if c['backend'] == 'parakeet':
-            return c
-    return candidates[0]
-
-
 def _memory_context() -> str | None:
     from backend.memory import get_memory
     memory = get_memory()
@@ -351,7 +329,7 @@ def _process_draft_inner(draft_id: str) -> None:
     content = Path(path).read_bytes()
     filename = Path(path).name
     results = stt_routes.run_multi_backend_transcribe(
-        content, filename, None, list(DRAFT_BACKENDS)
+        content, filename, None, list(stt_routes.MULTI_BACKENDS)
     )
 
     candidates = [r for r in results if (r.get('text') or '').strip()]
@@ -362,7 +340,7 @@ def _process_draft_inner(draft_id: str) -> None:
         _finish_error(draft_id, summary, results)
         return
 
-    primary = _pick_primary(candidates, stt_routes._get_active_stt_backend())
+    primary = stt_routes.pick_primary(candidates, stt_routes._get_active_stt_backend())
     raw_text = primary['text']
 
     try:

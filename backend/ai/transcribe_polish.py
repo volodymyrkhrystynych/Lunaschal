@@ -73,3 +73,66 @@ def polish_transcript(raw_text: str) -> str:
         logger.warning('Transcript polish failed: %s', e)
         return raw_text
     return _clean_output(result) or raw_text
+
+
+_MERGE_SYSTEM = (
+    "You clean up short speech-to-text transcripts. You will be given several "
+    "independent transcriptions of the SAME recording, produced by different "
+    "models — they may disagree in places because one of them misheard a word. "
+    "Cross-check them against each other and decide what was most likely "
+    "actually said, preferring the reading most of them agree on; where they "
+    "all disagree, use your best judgement. Then return ONE clean transcript "
+    "of that.\n"
+    "\n"
+    "Do this:\n"
+    "1. Add punctuation where it is clearly missing.\n"
+    "2. Capitalise the first word of each sentence.\n"
+    "3. Fix spelling mistakes and obvious transcription errors beyond what the "
+    "cross-check above already resolved.\n"
+    "\n"
+    "Never do this:\n"
+    "- Remove, add, reorder, or rephrase a word beyond reconciling the "
+    "transcripts against each other. Every word you keep must appear in at "
+    "least one candidate, in the order it was said.\n"
+    "- Improve the vocabulary, or make it sound more formal.\n"
+    "- Break it into multiple paragraphs, or add line breaks that weren't spoken.\n"
+    "\n"
+    "Do not repeat the transcripts or their labels in your reply. Return only "
+    "the cleaned text. No preamble, no commentary, no wrapping quotation marks."
+)
+
+
+def _format_candidates(texts: list[str]) -> str:
+    return '\n\n'.join(f'Transcript {i}:\n{t}' for i, t in enumerate(texts, 1))
+
+
+def merge_transcripts(texts: list[str]) -> str:
+    """Reconcile several transcriptions of one recording into a single clean
+    transcript, or return the first one unchanged if that isn't possible.
+
+    The multi-model counterpart of `polish_transcript`, and it keeps that
+    function's two defining properties rather than Journal's `merge_voice_draft`:
+    it is **best-effort, never a gate** (every dictation surface depends on
+    /api/transcribe returning text, so a dead llama-server must degrade to the
+    raw transcript rather than fail the request), and it **never reformats** —
+    no paragraph breaking, because the caller may be dictating a single phrase
+    into a text field. `merge_voice_draft` deliberately does break paragraphs,
+    which is correct for a journal entry and wrong here.
+
+    A single candidate is polished rather than merged: cross-checking one
+    transcript against itself just spends tokens telling the model to agree
+    with itself.
+    """
+    texts = [t.strip() for t in texts if (t or '').strip()]
+    if not texts:
+        return ''
+    if len(texts) == 1:
+        return polish_transcript(texts[0])
+    if not is_ai_configured():
+        return texts[0]
+    try:
+        result = chat_text(_format_candidates(texts), system=_MERGE_SYSTEM)
+    except Exception as e:
+        logger.warning('Transcript merge failed: %s', e)
+        return texts[0]
+    return _clean_output(result) or texts[0]
