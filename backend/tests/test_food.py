@@ -1,3 +1,4 @@
+import json
 import io
 from datetime import datetime
 
@@ -332,3 +333,44 @@ def test_extract_photo_meta_gracefully_handles_non_image(tmp_path):
     p = tmp_path / 'not-an-image.jpg'
     p.write_bytes(b'\xff\xd8\xffNOTREALLYJPEG')
     assert extract_photo_meta(p) == {'taken_at': None, 'latitude': None, 'longitude': None}
+
+
+def test_a_food_entry_with_a_client_id_replays_once(client):
+    """The meal's id is minted by the browser so an offline capture can be
+    replayed — and so its photos can be uploaded under the same entry
+    afterwards, whichever of the two lands first."""
+    body = {'id': '01ARZ3NDEKTSV4RRFFQ69G5FB0', 'text': 'ramen, very good'}
+    first = client.post('/api/food', json=body)
+    assert first.status_code == 201
+    assert first.get_json()['id'] == body['id']
+    assert client.post('/api/food', json=body).status_code == 201
+
+    entries = client.get('/api/food').get_json()
+    assert [e['id'] for e in entries] == [body['id']]
+
+
+def test_a_replayed_photo_upload_does_not_duplicate_the_media(client):
+    """A queued offline capture replays the whole multipart — text and photo
+    together. The entry is idempotent by id, and so is each photo: without that
+    a retry after a dropped response leaves the meal with two copies of the
+    same picture."""
+    import io
+
+    def post():
+        return client.post(
+            '/api/food',
+            data={
+                'id': '01ARZ3NDEKTSV4RRFFQ69G5FB1',
+                'mediaIds': json.dumps(['01ARZ3NDEKTSV4RRFFQ69G5FB2']),
+                'text': 'ramen',
+                'media': (io.BytesIO(b'\xff\xd8\xff\xe0jpegbytes'), 'meal.jpg'),
+            },
+            content_type='multipart/form-data',
+        )
+
+    assert post().status_code == 201
+    assert post().status_code == 201
+
+    entries = client.get('/api/food').get_json()
+    assert len(entries) == 1
+    assert [m['id'] for m in entries[0]['media']] == ['01ARZ3NDEKTSV4RRFFQ69G5FB2']

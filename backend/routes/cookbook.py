@@ -44,10 +44,17 @@ def _next_media_position(db, recipe_id: str) -> int:
     return row['n']
 
 
-def _save_media_file(recipe_id: str, file, position: int):
+def _save_media_file(recipe_id: str, file, position: int, media_id: str | None = None):
     """Persist one upload, same contract as backend/routes/food.py's helper of
     the same name: HEIC/HEIF is transcoded to JPEG so it renders everywhere.
-    Returns the public dict, or None if the type isn't allowed."""
+    Returns the public dict, or None if the type isn't allowed.
+
+    `media_id` is the client's, for a photo queued offline — a replay finds the
+    row already there and stops, rather than adding the same picture twice."""
+    if media_id and get_db().execute(
+        'SELECT 1 FROM recipe_media WHERE id=?', (media_id,)
+    ).fetchone():
+        return None
     ext = storage.resolve_ext(file.mimetype, file.filename)
     if ext is None:
         return None
@@ -56,7 +63,7 @@ def _save_media_file(recipe_id: str, file, position: int):
     if is_heic:
         ext, mime = 'jpg', 'image/jpeg'
 
-    media_id = str(ULID())
+    media_id = media_id or str(ULID())
     path = storage.media_path(recipe_id, media_id, ext)
     if path is None:
         return None
@@ -131,11 +138,15 @@ def get_recipe(id):
     return jsonify(_recipe_dict(db, row))
 
 
-def _insert_recipe(title: str, content: str, tags: list | None, source_url: str | None = None) -> str:
+def _insert_recipe(title: str, content: str, tags: list | None, source_url: str | None = None,
+                   recipe_id: str | None = None) -> str:
     now = int(time.time())
-    id = str(ULID())
+    # Client-supplied ULID when the recipe was written offline, so the queued
+    # create replays idempotently — same contract as journal, food and paper.
+    id = recipe_id or str(ULID())
     get_db().execute(
-        'INSERT INTO recipes(id, title, content, tags, source_url, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+        'INSERT OR IGNORE INTO recipes(id, title, content, tags, source_url, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?)',
         (id, title, content, json.dumps(tags) if tags else None, source_url, now, now),
     )
     get_db().commit()
@@ -161,14 +172,30 @@ def create_recipe():
     if not title or not content:
         return jsonify({'error': 'title and content required'}), 400
 
-    id = _insert_recipe(title, content, tags)
+    id = _insert_recipe(title, content, tags, recipe_id=(form.get('id') or '').strip() or None)
+    media_ids = _parse_media_ids(form.get('mediaIds'))
     for i, f in enumerate(files):
         if f and f.filename:
-            _save_media_file(id, f, i)
+            _save_media_file(id, f, i, media_ids[i] if i < len(media_ids) else None)
     get_db().commit()
 
     row = get_db().execute('SELECT * FROM recipes WHERE id=?', (id,)).fetchone()
     return jsonify(_recipe_dict(get_db(), row)), 201
+
+
+def _parse_media_ids(raw) -> list:
+    """The client's ids for this upload's photos, positionally. Unparseable
+    means "no ids" rather than an error — they are an idempotency hint, and
+    refusing the recipe over a malformed one would lose the capture."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return [str(x) for x in parsed] if isinstance(parsed, list) else []
 
 
 def _parse_tags_field(raw) -> list | None:
@@ -222,11 +249,12 @@ def add_media(id):
     if not db.execute('SELECT 1 FROM recipes WHERE id=?', (id,)).fetchone():
         return jsonify({'error': 'Not found'}), 404
     files = request.files.getlist('media')
+    media_ids = _parse_media_ids(request.form.get('mediaIds'))
     saved = []
     pos = _next_media_position(db, id)
-    for f in files:
+    for i, f in enumerate(files):
         if f and f.filename:
-            res = _save_media_file(id, f, pos)
+            res = _save_media_file(id, f, pos, media_ids[i] if i < len(media_ids) else None)
             if res:
                 saved.append(res)
                 pos += 1
