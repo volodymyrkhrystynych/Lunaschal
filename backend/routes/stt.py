@@ -58,6 +58,10 @@ _KOKORO_BASE   = 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/
 
 _stt_lock           = threading.Lock()
 _transcribe_lock    = threading.Lock()   # serialises Whisper/Parakeet inference — models are not thread-safe
+# Guards the draft-side handle cache below. Separate from _transcribe_lock on
+# purpose: the whole point of that cache is that draft work never waits on, or
+# is waited on by, an interactive dictation request.
+_draft_handle_lock  = threading.Lock()
 _tts_lock           = threading.Lock()
 _openai_lock        = threading.Lock()
 _stt_model          = None
@@ -70,6 +74,24 @@ _loaded_stt_backend = None   # 'local' or 'openai'
 _loaded_model_name  = None   # whisper model name when _loaded_stt_backend == 'local'
 _loaded_tts_backend = None   # 'local' or 'openai'
 _loaded_device      = None   # 'cuda' or 'cpu'
+
+# Persistent STT handles for the multi-backend draft path, keyed by
+# (backend, model_name, device). Kept for the life of the process: the draft
+# pipeline runs every backend in DRAFT_BACKENDS on every clip, and rebuilding
+# them each time cost ~5s of the ~13-18s a 30-60s draft takes — about a third,
+# spent reloading models that were discarded minutes earlier.
+#
+# These are deliberately NOT the interactive singleton above. Sharing one model
+# object across both paths would undo the two properties private handles were
+# introduced for: a draft would evict whatever a live dictation had loaded, and
+# two threads could enter a non-thread-safe model at once. A separate cache
+# keeps both, and just stops throwing the result away.
+#
+# Cost is RAM only — every draft backend is CPU-resident (parakeet is CPU-only
+# by construction, and WHISPER_DEVICE defaults to cpu because llama-server holds
+# the card). Roughly 1.1 GB for the parakeet + whisper-small pair actually
+# configured.
+_draft_handles: dict[tuple, dict] = {}
 
 # Listener process reports its recording state here so the frontend can mirror it
 _listener_state: dict = {'recording': False, 'transcribing': False, 'mode': None}
@@ -281,6 +303,10 @@ def stt_reload():
         _stt_ready = False
         _loaded_stt_backend = None
         _loaded_model_name = None
+    # The draft path holds its own long-lived handles, which a reload must
+    # clear too — otherwise "reload" would drop only half the loaded models and
+    # the next voice draft would still run on the previous backend/model.
+    reset_draft_handles()
     return jsonify({'success': True})
 
 
@@ -426,26 +452,72 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
             raise
 
 
+def _draft_handle(backend: str) -> dict:
+    """A cached, process-lifetime STT handle for the draft path.
+
+    Built once per (backend, model_name, device) and kept. A settings change —
+    a different Whisper model or device — lands under a new key rather than
+    mutating the old entry, and the superseded key is evicted from the cache so
+    only one handle per backend stays resident. Eviction is from the dict only:
+    a draft already mid-transcription holds its own reference, so it finishes on
+    the handle it started with instead of having the model pulled out from under
+    it.
+    """
+    key = (backend, _get_active_whisper_model(), _get_active_stt_device())
+    with _draft_handle_lock:
+        handle = _draft_handles.get(key)
+        if handle is None:
+            handle = _build_stt_backend(backend, key[1], key[2])
+            # Drop any handle for this backend under a stale config; only the
+            # current key stays resident.
+            for stale in [k for k in _draft_handles if k[0] == backend and k != key]:
+                del _draft_handles[stale]
+            _draft_handles[key] = handle
+    return handle
+
+
+def reset_draft_handles() -> None:
+    """Drop every cached draft handle. For tests, and for /api/stt/reload — a
+    user who switches STT backend or Whisper model expects the next draft to
+    honour it without waiting for a process restart."""
+    with _draft_handle_lock:
+        _draft_handles.clear()
+
+
 def run_multi_backend_transcribe(
     content: bytes, filename: str, language: str | None, backends: list[str],
 ) -> list[dict]:
-    """Transcribe the same clip with each of `backends`, in turn, each using
-    its own private handle rather than the shared singleton — so this can run
-    fully alongside a live interactive request instead of evicting whatever it
-    has loaded. Used by backend/journal/voice_drafts.py's draft pipeline.
+    """Transcribe the same clip with each of `backends`, in turn, each using a
+    handle private to this path rather than the shared singleton — so this can
+    run fully alongside a live interactive request instead of evicting whatever
+    it has loaded. Used by backend/journal/voice_drafts.py's draft pipeline.
+
+    The handles are cached for the life of the process (see _draft_handles), so
+    only the first draft after a restart pays the model load. They stay private
+    to this path: reusing the interactive singleton instead would reintroduce
+    both the eviction and the thread-safety problem that separate handles exist
+    to avoid.
 
     One backend failing doesn't stop the others. Each result is
     {'backend': ..., 'text': ...} on success or {'backend': ..., 'error': ...}
-    on failure.
+    on failure. A backend that fails also has its handle dropped, so a model
+    left in a bad state is rebuilt next time rather than being reused forever —
+    the same reasoning as _do_transcribe's _reset_stt_model().
     """
     results = []
     for backend in backends:
         try:
-            handle = _build_stt_backend(backend)
+            handle = _draft_handle(backend)
             result = _transcribe_with_handle(handle, content, filename, language)
             results.append({'backend': backend, 'text': result['text']})
         except Exception as e:
             logger.warning('Draft transcription failed for backend %s: %s', backend, e)
+            # A ValueError is about the audio (too short/empty), not the model —
+            # that handle is still good and worth keeping.
+            if not isinstance(e, ValueError):
+                with _draft_handle_lock:
+                    for stale in [k for k in _draft_handles if k[0] == backend]:
+                        del _draft_handles[stale]
             results.append({'backend': backend, 'error': str(e)})
     return results
 
