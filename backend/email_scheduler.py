@@ -1,4 +1,5 @@
-"""Background Gmail polling daemon.
+"""Background email polling daemon — every connected provider (gmail,
+outlook, imap), one shared poll loop.
 
 Like the chat-title and briefing sweeps, there is no general scheduler in the
 Flask backend — this is a small daemon thread on a fixed poll tick, gated by
@@ -27,7 +28,7 @@ def _accounts_due(db) -> list:
     return db.execute(
         """
         SELECT * FROM email_accounts
-        WHERE provider='gmail' AND sync_enabled=1 AND refresh_token IS NOT NULL
+        WHERE sync_enabled=1 AND (refresh_token IS NOT NULL OR imap_password IS NOT NULL)
           AND (last_synced_at IS NULL OR last_synced_at <= ?)
         """,
         (cutoff,),

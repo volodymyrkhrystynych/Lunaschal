@@ -109,6 +109,9 @@ def init_db() -> None:
     _reset_stale_idea_research(db)
     _ensure_email_settings(db)
     _ensure_email_body_html(db)
+    _ensure_provider_message_id(db)
+    _ensure_provider_outlook_imap(db)
+    _ensure_microsoft_oauth_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -893,6 +896,102 @@ def _ensure_email_body_html(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(emails)')}
     if 'body_html' not in cols:
         db.execute("ALTER TABLE emails ADD COLUMN body_html TEXT NOT NULL DEFAULT ''")
+    db.commit()
+
+
+def _ensure_provider_message_id(db: sqlite3.Connection) -> None:
+    """Rename emails.gmail_id -> provider_message_id: Outlook and generic-IMAP
+    accounts write their own native message id (an IMAP UID) into this column
+    too, and the Gmail-branded name was actively misleading once this stopped
+    being a Gmail-only feature (see backend/email/sync.py, imap_client.py).
+    SQLite 3.25+ RENAME COLUMN updates the inline UNIQUE(account_id, gmail_id)
+    constraint automatically, so this is a single statement, not a rebuild.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(emails)')}
+    if 'gmail_id' in cols and 'provider_message_id' not in cols:
+        db.execute('ALTER TABLE emails RENAME COLUMN gmail_id TO provider_message_id')
+    db.commit()
+
+
+def _ensure_provider_outlook_imap(db: sqlite3.Connection) -> None:
+    """Widen email_accounts.provider to allow 'outlook' and 'imap', and add
+    the IMAP-only columns (host/port/username/password, uid_validity/uid_next
+    sync cursor) those providers need.
+
+    SQLite has no ALTER TABLE for CHECK constraints, so this is the
+    documented 12-step rebuild procedure rather than a guarded ADD COLUMN
+    like every other migration in this file. Detection reads the table's own
+    stored DDL (PRAGMA table_info only reports columns, not CHECK clauses) —
+    the presence of 'imap' in the CHECK is what proves the rebuild already
+    ran. foreign_keys is a no-op inside a transaction, so it must be toggled
+    outside BEGIN/COMMIT, and this app runs on one long-lived connection —
+    getting that toggle wrong would silently leave FK enforcement off for the
+    rest of the process's life, so the ON/OFF calls bracket the whole
+    try/finally rather than living inside it.
+    """
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='email_accounts'"
+    ).fetchone()
+    if row and row['sql'] and "'imap'" in row['sql']:
+        return
+
+    db.execute('PRAGMA foreign_keys=OFF')
+    try:
+        db.execute('BEGIN')
+        db.execute("""
+            CREATE TABLE email_accounts_new (
+                id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT 'gmail'
+                    CHECK(provider IN ('gmail','outlook','imap')),
+                email_address TEXT NOT NULL,
+                access_token TEXT,
+                refresh_token TEXT,
+                token_expires_at INTEGER,
+                scope TEXT,
+                history_id TEXT,
+                imap_host TEXT,
+                imap_port INTEGER,
+                imap_username TEXT,
+                imap_password TEXT,
+                uid_validity INTEGER,
+                uid_next INTEGER,
+                last_synced_at INTEGER,
+                last_sync_error TEXT,
+                sync_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(provider, email_address)
+            )
+        """)
+        db.execute("""
+            INSERT INTO email_accounts_new
+                (id, provider, email_address, access_token, refresh_token,
+                 token_expires_at, scope, history_id, last_synced_at,
+                 last_sync_error, sync_enabled, created_at, updated_at)
+            SELECT id, provider, email_address, access_token, refresh_token,
+                   token_expires_at, scope, history_id, last_synced_at,
+                   last_sync_error, sync_enabled, created_at, updated_at
+            FROM email_accounts
+        """)
+        db.execute('DROP TABLE email_accounts')
+        db.execute('ALTER TABLE email_accounts_new RENAME TO email_accounts')
+        fk_problems = db.execute('PRAGMA foreign_key_check').fetchall()
+        if fk_problems:
+            raise RuntimeError(f'email_accounts migration broke FK integrity: {fk_problems}')
+        db.execute('COMMIT')
+    except Exception:
+        db.execute('ROLLBACK')
+        raise
+    finally:
+        db.execute('PRAGMA foreign_keys=ON')
+
+
+def _ensure_microsoft_oauth_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'microsoft_oauth_client_id' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN microsoft_oauth_client_id TEXT')
+    if 'microsoft_oauth_client_secret' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN microsoft_oauth_client_secret TEXT')
     db.commit()
 
 

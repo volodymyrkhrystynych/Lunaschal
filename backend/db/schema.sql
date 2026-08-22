@@ -1120,13 +1120,26 @@ CREATE INDEX IF NOT EXISTS idx_practice_recall_attempts_snippet ON practice_reca
 
 CREATE TABLE IF NOT EXISTS email_accounts (
     id TEXT PRIMARY KEY,
-    provider TEXT NOT NULL DEFAULT 'gmail' CHECK(provider IN ('gmail')),
+    provider TEXT NOT NULL DEFAULT 'gmail' CHECK(provider IN ('gmail','outlook','imap')),
     email_address TEXT NOT NULL,
     access_token TEXT,
     refresh_token TEXT,
     token_expires_at INTEGER,
     scope TEXT,
     history_id TEXT,
+    -- IMAP-only (provider IN ('outlook','imap')): outlook's host/port are
+    -- fixed constants (backend/email/outlook_client.py) but still stored so
+    -- the row is self-describing; imap's are user-supplied. imap_password is
+    -- plaintext, matching access_token/refresh_token above — this is a
+    -- single-user local app with no at-rest secret encryption anywhere else.
+    imap_host TEXT,
+    imap_port INTEGER,
+    imap_username TEXT,
+    imap_password TEXT,
+    -- IMAP sync cursor (INBOX only in v1 — see backend/email/imap_client.py).
+    -- Gmail uses history_id above instead; these stay NULL for gmail rows.
+    uid_validity INTEGER,
+    uid_next INTEGER,
     last_synced_at INTEGER,
     last_sync_error TEXT,
     sync_enabled INTEGER NOT NULL DEFAULT 1,
@@ -1140,7 +1153,9 @@ CREATE TABLE IF NOT EXISTS email_accounts (
 CREATE TABLE IF NOT EXISTS emails (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
-    gmail_id TEXT NOT NULL,
+    -- The provider's own native message id: Gmail's message id, Outlook's
+    -- IMAP UID, or a generic IMAP account's UID.
+    provider_message_id TEXT NOT NULL,
     thread_id TEXT,
     subject TEXT,
     sender TEXT,
@@ -1158,7 +1173,7 @@ CREATE TABLE IF NOT EXISTS emails (
     classified_at INTEGER,
     classification_error TEXT,
     created_at INTEGER NOT NULL,
-    UNIQUE(account_id, gmail_id)
+    UNIQUE(account_id, provider_message_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at DESC);

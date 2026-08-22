@@ -80,8 +80,8 @@ def test_first_connect_backfills_and_sets_history_id(client, monkeypatch, accoun
     result = sync.sync_account(account_row)
 
     assert result == {'status': 'ok', 'newCount': 2}
-    rows = get_db().execute('SELECT gmail_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchall()
-    assert {r['gmail_id'] for r in rows} == {'m1', 'm2'}
+    rows = get_db().execute('SELECT provider_message_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchall()
+    assert {r['provider_message_id'] for r in rows} == {'m1', 'm2'}
     updated = get_db().execute('SELECT * FROM email_accounts WHERE id=?', (account_row['id'],)).fetchone()
     assert updated['history_id'] == 'h100'
     assert updated['last_synced_at'] is not None
@@ -111,8 +111,8 @@ def test_first_connect_pages_through_the_whole_mailbox(client, monkeypatch, acco
     result = sync.sync_account(account_row)
 
     assert result == {'status': 'ok', 'newCount': 3}
-    rows = get_db().execute('SELECT gmail_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchall()
-    assert {r['gmail_id'] for r in rows} == {'m1', 'm2', 'm3'}
+    rows = get_db().execute('SELECT provider_message_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchall()
+    assert {r['provider_message_id'] for r in rows} == {'m1', 'm2', 'm3'}
 
 
 def test_rerunning_backfill_is_idempotent(client, monkeypatch, account_row):
@@ -191,8 +191,8 @@ def test_expired_history_cursor_falls_back_to_full_relist(client, monkeypatch, a
     assert result == {'status': 'ok', 'newCount': 1}
     updated = get_db().execute('SELECT * FROM email_accounts WHERE id=?', (account_row['id'],)).fetchone()
     assert updated['history_id'] == 'h-fresh'
-    row = get_db().execute('SELECT gmail_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchone()
-    assert row['gmail_id'] == 'ancient-message'
+    row = get_db().execute('SELECT provider_message_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchone()
+    assert row['provider_message_id'] == 'ancient-message'
 
 
 def test_backfill_snapshots_history_id_before_paging_messages(client, monkeypatch, account_row):
@@ -320,7 +320,7 @@ def test_a_second_concurrent_sync_is_refused_rather_than_racing(
     client, monkeypatch, account_row
 ):
     """Regression for `UNIQUE constraint failed: emails.account_id,
-    emails.gmail_id`. The scheduler treats an account as due for the whole
+    emails.provider_message_id`. The scheduler treats an account as due for the whole
     time last_synced_at IS NULL — the entire backfill — so a manual sync
     landing mid-walk started a second one over the same mailbox."""
     reentered = []
@@ -341,7 +341,7 @@ def test_a_second_concurrent_sync_is_refused_rather_than_racing(
     assert get_db().execute('SELECT COUNT(*) c FROM emails').fetchone()['c'] == 1
 
 
-def test_a_duplicate_gmail_id_does_not_abort_the_sync(client, monkeypatch, account_row):
+def test_a_duplicate_provider_message_id_does_not_abort_the_sync(client, monkeypatch, account_row):
     """Belt to the lock's braces: even if two writers get past the SELECT,
     the unique index must resolve it as 'already have it', not an
     IntegrityError that kills the run and discards its progress."""
@@ -354,7 +354,7 @@ def test_a_duplicate_gmail_id_does_not_abort_the_sync(client, monkeypatch, accou
         if gmail_id == 'g1':
             now = int(time.time())
             db.execute(
-                'INSERT INTO emails (id, account_id, gmail_id, body_text, received_at, created_at)'
+                'INSERT INTO emails (id, account_id, provider_message_id, body_text, received_at, created_at)'
                 " VALUES ('other-writer', ?, 'g1', 'x', ?, ?)",
                 (account_row['id'], now, now),
             )
@@ -374,7 +374,7 @@ def test_a_duplicate_gmail_id_does_not_abort_the_sync(client, monkeypatch, accou
     assert result['status'] == 'ok'
     assert result['newCount'] == 1
     assert db.execute('SELECT COUNT(*) c FROM emails').fetchone()['c'] == 2
-    assert db.execute("SELECT id FROM emails WHERE gmail_id='g1'").fetchone()['id'] == 'other-writer'
+    assert db.execute("SELECT id FROM emails WHERE provider_message_id='g1'").fetchone()['id'] == 'other-writer'
 
 
 def test_a_404_on_one_message_is_skipped_not_fatal(client, monkeypatch, account_row):
@@ -401,8 +401,8 @@ def test_a_404_on_one_message_is_skipped_not_fatal(client, monkeypatch, account_
     result = sync.sync_account(account_row)
 
     assert result == {'status': 'ok', 'newCount': 1}
-    rows = get_db().execute('SELECT gmail_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchall()
-    assert {r['gmail_id'] for r in rows} == {'g2'}
+    rows = get_db().execute('SELECT provider_message_id FROM emails WHERE account_id=?', (account_row['id'],)).fetchall()
+    assert {r['provider_message_id'] for r in rows} == {'g2'}
     updated = get_db().execute('SELECT * FROM email_accounts WHERE id=?', (account_row['id'],)).fetchone()
     assert updated['history_id'] == 'h100'
     assert updated['last_synced_at'] is not None

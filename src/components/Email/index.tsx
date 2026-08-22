@@ -11,28 +11,28 @@ export function Email() {
   const [selected, setSelected] = useState<EmailMessage | null>(null);
   const queryClient = useQueryClient();
 
-  const { data: oauthStatus } = useQuery({
-    queryKey: ['email', 'oauthStatus'],
-    queryFn: api.email.oauthStatus,
+  const { data: accounts } = useQuery({
+    queryKey: ['email', 'accounts'],
+    queryFn: api.email.accounts,
   });
 
   const syncNow = useMutation({
-    mutationFn: api.email.syncNow,
+    mutationFn: () => api.email.syncNow(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['email'] });
     },
   });
 
-  if (!oauthStatus?.connected) {
+  if (!accounts?.some(a => a.connected)) {
     return (
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="text-center max-w-md">
           <p className="text-[var(--color-text)] mb-2">
-            No Gmail account connected
+            No email accounts connected
           </p>
           <p className="text-sm text-[var(--color-text-muted)]">
-            Connect your Gmail account in Settings → Email to start syncing and
-            classifying your inbox.
+            Connect an email account (Gmail, Outlook, or IMAP) in Settings →
+            Email to start syncing and classifying your inbox.
           </p>
         </div>
       </div>

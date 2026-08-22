@@ -19,7 +19,7 @@ def _insert_email(db, **overrides) -> str:
         (account_id, f'{account_id}@example.com', now, now),
     )
     defaults = dict(
-        id=row_id, account_id=account_id, gmail_id='g1', thread_id='t1',
+        id=row_id, account_id=account_id, provider_message_id='g1', thread_id='t1',
         subject='Your application to Acme', sender='Acme Recruiting', sender_email='r@acme.example',
         snippet='snip', body_text='Thanks for applying to the Acme role.', label_ids='[]',
         received_at=now, created_at=now,
@@ -28,9 +28,9 @@ def _insert_email(db, **overrides) -> str:
     db.execute(
         """
         INSERT INTO emails
-            (id, account_id, gmail_id, thread_id, subject, sender, sender_email,
+            (id, account_id, provider_message_id, thread_id, subject, sender, sender_email,
              snippet, body_text, label_ids, received_at, created_at)
-        VALUES (:id, :account_id, :gmail_id, :thread_id, :subject, :sender, :sender_email,
+        VALUES (:id, :account_id, :provider_message_id, :thread_id, :subject, :sender, :sender_email,
                 :snippet, :body_text, :label_ids, :received_at, :created_at)
         """,
         defaults,
@@ -126,7 +126,7 @@ def test_classify_email_llm_failure_records_error_and_stays_pending(client, monk
 def test_sweep_unclassified_reenqueues_pending_rows(client, monkeypatch):
     db = get_db()
     pending_id = _insert_email(db)
-    done_id = _insert_email(db, gmail_id='g2')
+    done_id = _insert_email(db, provider_message_id='g2')
     db.execute(
         'UPDATE emails SET classified_at=?, category=? WHERE id=?',
         (int(time.time()), 'other', done_id),
