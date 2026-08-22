@@ -647,8 +647,10 @@ export interface AppSettings {
   whisperModel: string | null;
   sttDevice: string | null;
   voicePipelineEnabled: boolean;
-  /** Whether /api/transcribe runs its quick LLM cleanup pass (punctuation,
-   * capitalisation, obvious mishearings) before returning text. */
+  /** Whether every dictation surface transcribes with two STT models and has
+   * the LLM reconcile them, instead of taking the single configured backend.
+   * Off is faster; on is markedly more accurate on mishearings. Despite the
+   * name it now switches the whole strategy, not just a cleanup pass. */
   transcribePolishEnabled: boolean;
   preventSleep: boolean;
   meetingEchoCancel: boolean;

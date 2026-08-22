@@ -127,10 +127,11 @@ export function ShortcutsSection() {
           />
         </div>
         <span className="text-sm text-[var(--color-text)]">
-          Polish transcriptions with AI
+          Cross-check transcriptions with AI
         </span>
         <span className="text-xs text-[var(--color-text-muted)]">
-          (fixes punctuation, capitalisation, obvious mishearings)
+          (transcribes with two models and reconciles them — slower, more
+          accurate)
         </span>
       </label>
 

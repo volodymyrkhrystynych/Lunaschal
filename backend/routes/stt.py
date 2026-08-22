@@ -75,6 +75,26 @@ _loaded_model_name  = None   # whisper model name when _loaded_stt_backend == 'l
 _loaded_tts_backend = None   # 'local' or 'openai'
 _loaded_device      = None   # 'cuda' or 'cpu'
 
+# Local backends run over every clip, in order. The first of these that matches the
+# user's configured default STT backend becomes the "primary" candidate (see
+# _pick_primary) — the one whose raw text is kept as what was actually heard,
+# and the one returned unmerged when the LLM pass is off or unavailable.
+#
+# Deliberately two, not three, for now. NVIDIA Canary 180M Flash was tried as
+# a third opinion (onnx-asr, same VAD-chunked path as Parakeet) and reverted:
+# its onnx-asr decoder (NemoConformerAED._decoding) is pure greedy argmax with
+# no repetition penalty, generating up to a fixed 1024-token cap per chunk
+# regardless of how much audio that chunk actually contains. On a real ~3.4
+# minute draft it produced 1270 words against Parakeet/Whisper's ~190 for the
+# same clip, and took 695s to do it (RTF 3.4 — slower than the recording
+# itself) — a runaway-decode failure, not a slow-but-correct one. The next
+# candidate worth trying is a Wav2Vec2 CTC model: CTC output length is capped
+# by input frame count, so it's structurally immune to this specific failure
+# mode, unlike any attention-decoder model (Canary, Whisper-style AED). No
+# single canonical pre-converted onnx-asr checkpoint with a solid current WER
+# number was settled on yet, which is why it isn't here either.
+MULTI_BACKENDS = ('parakeet', 'local')
+
 # Persistent STT handles for the multi-backend draft path, keyed by
 # (backend, model_name, device). Kept for the life of the process: the draft
 # pipeline runs every backend in DRAFT_BACKENDS on every clip, and rebuilding
@@ -522,6 +542,65 @@ def run_multi_backend_transcribe(
     return results
 
 
+def pick_primary(candidates: list[dict], active_backend: str) -> dict:
+    """The candidate treated as what was actually heard: the user's configured
+    backend if it produced text, else Parakeet, else whatever succeeded.
+
+    It matters in two places — it is the transcript kept as journal
+    raw_content, and it is what a caller gets back when the LLM merge is off or
+    unavailable. Falling back to Parakeet rather than list order is deliberate:
+    it is the app's default backend, so it is the one whose output the settings
+    were most likely tuned against.
+    """
+    for c in candidates:
+        if c['backend'] == active_backend:
+            return c
+    for c in candidates:
+        if c['backend'] == 'parakeet':
+            return c
+    return candidates[0]
+
+
+def transcribe_multi(content: bytes, filename: str, language: str | None) -> dict:
+    """Transcribe one clip with every backend in MULTI_BACKENDS and reconcile
+    the results into a single transcript.
+
+    The shared implementation behind every dictation surface in the app: the
+    three listener hotkeys and the twelve in-app microphone buttons all reach it
+    through POST /api/transcribe, and journal attachment transcription calls it
+    directly. Journal voice drafts run the same two backends through
+    `run_multi_backend_transcribe` but merge with Journal's own prompt, which
+    reformats into paragraphs — right for an entry, wrong for dictating a phrase
+    into a text field, which is why this path uses `merge_transcripts` instead.
+
+    Returns {'text', 'raw_text', 'language', 'candidates'}: `text` is the
+    reconciled transcript, `raw_text` the primary candidate before merging.
+    Raises RuntimeError only if *every* backend failed — one surviving backend
+    is a normal, usable result, since the merge degrades to polishing it.
+    """
+    from backend.ai.transcribe_polish import merge_transcripts
+
+    results = run_multi_backend_transcribe(content, filename, language, list(MULTI_BACKENDS))
+    candidates = [r for r in results if (r.get('text') or '').strip()]
+    if not candidates:
+        summary = '; '.join(
+            f"{r['backend']}: {r.get('error', 'no speech detected')}" for r in results
+        ) or 'All STT backends failed'
+        raise RuntimeError(summary)
+
+    primary = pick_primary(candidates, _get_active_stt_backend())
+    # Primary first: merge_transcripts falls back to texts[0] whenever the LLM
+    # is unreachable, so the candidate we'd have picked anyway must be the one
+    # it falls back to.
+    ordered = [primary['text']] + [c['text'] for c in candidates if c is not primary]
+    return {
+        'text': merge_transcripts(ordered),
+        'raw_text': primary['text'],
+        'language': language or 'en',
+        'candidates': results,
+    }
+
+
 # Sources whose transcriptions are kept in the transcription log (Journal view,
 # hidden behind a toggle). Journal-key transcriptions already persist as journal
 # entries; voice mode is conversational and intentionally not logged.
@@ -577,6 +656,29 @@ def transcribe():
         return jsonify({'error': 'Empty audio file'}), 400
     language = request.form.get('language') or None
 
+    # The "Polish transcriptions with AI" setting now switches the whole
+    # transcription strategy, not just a cleanup pass on the end of it. On, a
+    # clip goes through every backend in MULTI_BACKENDS and the results are
+    # cross-checked by the LLM; off, it takes the single configured backend and
+    # nothing else. Running both models and then *not* reconciling them would
+    # be the worst of both — twice the CPU for a transcript no better than the
+    # primary one — so the choice is made here rather than at the merge.
+    if _get_transcribe_polish_enabled():
+        try:
+            result = transcribe_multi(content, audio_file.filename or '', language)
+        except ValueError as e:
+            logger.warning('Transcription skipped: %s', e)
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:
+            logger.error('Transcription error: %s', e)
+            return jsonify({'error': str(e)}), 500
+        _log_transcription(result, request.form)
+        return jsonify({
+            'text': result['text'],
+            'language': result['language'],
+            'language_probability': 1.0,
+        })
+
     active_backend = _get_active_stt_backend()
     active_model = _get_active_whisper_model()
     try:
@@ -586,8 +688,6 @@ def transcribe():
 
     try:
         result = _do_transcribe(content, audio_file.filename or '', language)
-        if _get_transcribe_polish_enabled():
-            result['text'] = polish_transcript(result['text'])
         _log_transcription(result, request.form)
         return jsonify({**result, 'language_probability': 1.0})
     except ValueError as e:
@@ -615,20 +715,39 @@ def transcribe_correct():
     ground_truth = (request.form.get('ground_truth') or '').strip()
     language = request.form.get('language') or None
 
-    active_backend = _get_active_stt_backend()
-    active_model = _get_active_whisper_model()
-    try:
-        _load_stt(active_model, active_backend)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 503
+    # Same switch as /api/transcribe: on, every backend runs and the results
+    # are reconciled before the ground-truth correction below sees them. The
+    # two LLM passes do different jobs and both are worth having here — the
+    # merge decides what was said, the correction below decides what the
+    # speaker's own vocabulary calls it.
+    if _get_transcribe_polish_enabled():
+        try:
+            multi = transcribe_multi(content, audio_file.filename or '', language)
+        except Exception as e:
+            logger.error('Transcription error: %s', e)
+            return jsonify({'error': str(e)}), 500
+        # `raw` is what the Editor's STT panel shows beside the correction, so
+        # it stays the unreconciled primary transcript — showing the merged text
+        # as "raw" would hide half of what this panel exists to let you compare.
+        raw_text = multi['raw_text']
+        stt_result = {'text': multi['text'], 'language': multi['language']}
+        corrected_input = multi['text']
+    else:
+        active_backend = _get_active_stt_backend()
+        active_model = _get_active_whisper_model()
+        try:
+            _load_stt(active_model, active_backend)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 503
 
-    try:
-        stt_result = _do_transcribe(content, audio_file.filename or '', language)
-    except Exception as e:
-        logger.error('Transcription error: %s', e)
-        return jsonify({'error': str(e)}), 500
+        try:
+            stt_result = _do_transcribe(content, audio_file.filename or '', language)
+        except Exception as e:
+            logger.error('Transcription error: %s', e)
+            return jsonify({'error': str(e)}), 500
 
-    raw_text = stt_result['text']
+        raw_text = stt_result['text']
+        corrected_input = raw_text
 
     from backend.memory import get_memory
     memory = get_memory().strip()
@@ -653,7 +772,7 @@ def transcribe_correct():
     )
     user_message = (
         f'Reference material:\n---\n{reference}\n---\n\n'
-        f'Raw transcription:\n{raw_text}\n\nCorrected transcription:'
+        f'Raw transcription:\n{corrected_input}\n\nCorrected transcription:'
     )
 
     try:

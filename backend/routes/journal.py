@@ -856,12 +856,18 @@ def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str, name: 
 
 
 def _do_attachment_audio(path: str) -> str:
-    """Transcribe an audio *or video* attachment through whichever STT backend
-    is configured, loading it on demand exactly as POST /api/transcribe does.
+    """Transcribe an audio *or video* attachment, taking the same
+    cross-checked path POST /api/transcribe does.
 
     Video needs no special handling: every backend goes through ffmpeg (directly
     for Parakeet, internally for Whisper) and ffmpeg reads the audio track out of
     a container without caring that there are also video frames in it.
+
+    This runs on `run_bg` with nobody waiting on it, so the multi-backend cost
+    is free here in a way it isn't on the interactive path — but the switch is
+    still shared, because a user who turned the LLM pass off did so to stop the
+    app spending model time on transcripts, and that reason doesn't stop
+    applying in the background.
     """
     # Imported here rather than at module scope: the STT module pulls in numpy
     # and (for the local backend) torch, and the journal blueprint is imported
@@ -871,8 +877,13 @@ def _do_attachment_audio(path: str) -> str:
     p = storage.resolve_stored_path(path)
     if p is None or not p.is_file():
         raise RuntimeError('The recording is missing')
-    stt_routes._load_stt()
-    result = stt_routes._do_transcribe(p.read_bytes(), p.name, None)
+
+    content = p.read_bytes()
+    if stt_routes._get_transcribe_polish_enabled():
+        result = stt_routes.transcribe_multi(content, p.name, None)
+    else:
+        stt_routes._load_stt()
+        result = stt_routes._do_transcribe(content, p.name, None)
     text = (result.get('text') or '').strip()
     if not text:
         raise RuntimeError('No speech found in the recording')

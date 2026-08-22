@@ -20,11 +20,37 @@ def _post(client, ground_truth=None):
 
 @pytest.fixture(autouse=True)
 def _stub_transcription(monkeypatch):
+    """Stub both transcription strategies to the same mishearing.
+
+    This route follows the transcribe_polish_enabled setting the same way
+    /api/transcribe does: on (the default) every backend in MULTI_BACKENDS runs
+    and the results are reconciled, off it takes the single configured backend.
+    Both are stubbed to one text so these tests stay about the ground-truth
+    correction, which is what they exist to cover.
+    """
     monkeypatch.setattr(stt, '_load_stt', lambda *a, **k: None)
     monkeypatch.setattr(
         stt, '_do_transcribe',
         lambda *a, **k: {'text': 'had vary nikki', 'language': 'en'},
     )
+    monkeypatch.setattr(
+        stt, '_build_stt_backend',
+        lambda backend, model_name=None, device=None: {
+            'backend': backend, 'model': object(), 'vad': None,
+            'model_name': model_name, 'device': device},
+    )
+    monkeypatch.setattr(
+        stt, '_transcribe_with_handle',
+        lambda *a, **k: {'text': 'had vary nikki', 'language': 'en'},
+    )
+    # Identical candidates would otherwise reach the merge and try to call an
+    # LLM; with every backend agreeing there is nothing to reconcile anyway.
+    monkeypatch.setattr(
+        'backend.ai.transcribe_polish.merge_transcripts', lambda texts: texts[0]
+    )
+    stt.reset_draft_handles()
+    yield
+    stt.reset_draft_handles()
 
 
 def test_returns_raw_text_unchanged_with_no_reference_at_all(client, monkeypatch):
