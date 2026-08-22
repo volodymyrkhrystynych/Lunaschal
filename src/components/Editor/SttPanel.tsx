@@ -172,7 +172,11 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const unavailable = (mode: RecordMode) =>
     busyElsewhere(mode) || settling(mode);
 
-  const buttonDisabled = unavailable('normal');
+  // The two transcribing buttons need the server; the audio one does not — it
+  // writes to IndexedDB and uploads later — so it stays live offline. That
+  // split is the whole point of using the mic as the offline indicator: what
+  // goes flat is exactly what stopped working.
+  const buttonDisabled = unavailable('normal') || !recorder.canTranscribe;
 
   const buttonLabel = !inAppNormalActive
     ? effectiveStatus === 'recording' && isListenerControlling
@@ -189,7 +193,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
       : 'Transcribing…';
 
   const journalButtonDisabled =
-    unavailable('journal') || saveJournalFromVoice.isPending;
+    unavailable('journal') ||
+    saveJournalFromVoice.isPending ||
+    !recorder.canTranscribe;
 
   const journalButtonLabel = inAppJournalActive
     ? status === 'recording'
@@ -335,7 +341,11 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
               : startRecording
           }
           disabled={buttonDisabled}
-          title="Record → transcribe into the active editor or the clipboard"
+          title={
+            recorder.canTranscribe
+              ? 'Record → transcribe into the active editor or the clipboard'
+              : 'Offline — dictation needs the server'
+          }
           className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
             effectiveStatus === 'recording' && isJournalMode
               ? 'bg-amber-600 hover:bg-amber-700 text-white'
@@ -365,7 +375,11 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
               : startJournalRecording
           }
           disabled={journalButtonDisabled}
-          title="Record → transcribe → save as a journal entry (same as the journal voice shortcut)"
+          title={
+            recorder.canTranscribe
+              ? 'Record → transcribe → save as a journal entry (same as the journal voice shortcut)'
+              : 'Offline — dictation needs the server. The audio button still works.'
+          }
           className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
             inAppJournalActive && status === 'recording'
               ? 'bg-amber-600 hover:bg-amber-700 text-white'

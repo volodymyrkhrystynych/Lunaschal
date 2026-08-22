@@ -92,10 +92,12 @@ def create_idea():
     if not title and not raw_content.strip():
         return jsonify({'error': 'title or rawContent required'}), 400
     now = int(time.time())
-    id = str(ULID())
+    # Client-supplied ULID, so an idea captured offline replays idempotently
+    # (see the note in backend/routes/calendar.py's create_event).
+    id = body.get('id') or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT INTO ideas(id, title, raw_content, content, status, tags, created_at, updated_at)'
+        'INSERT OR IGNORE INTO ideas(id, title, raw_content, content, status, tags, created_at, updated_at)'
         ' VALUES (?,?,?,?,?,?,?,?)',
         (id, title, raw_content, '', 'new', tags_json(body.get('tags')), now, now),
     )
@@ -181,10 +183,14 @@ def create_from_voice():
     if not raw_content:
         return jsonify({'error': 'rawContent required'}), 400
     now = int(time.time())
-    id = str(ULID())
+    # Client-supplied ULID, so an idea captured offline replays idempotently.
+    # The polish pass below is deliberately outside that guarantee: it reads the
+    # row it was given and rewrites it, so a replay that inserted nothing simply
+    # polishes an already-polished idea, which is a no-op in practice.
+    id = body.get('id') or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT INTO ideas(id, title, raw_content, content, status, created_at, updated_at)'
+        'INSERT OR IGNORE INTO ideas(id, title, raw_content, content, status, created_at, updated_at)'
         ' VALUES (?,?,?,?,?,?,?)',
         (id, '', raw_content, '', 'new', now, now),
     )

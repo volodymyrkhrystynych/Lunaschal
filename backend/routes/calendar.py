@@ -320,11 +320,15 @@ def create_event():
         return jsonify({'error': err}), 400
 
     now = int(time.time())
-    id = str(ULID())
+    # A client-supplied ULID makes an offline-queued create replay idempotently:
+    # INSERT OR IGNORE turns a duplicate into a no-op, so a replay that the
+    # server already applied (an answer lost on the way back) cannot produce a
+    # second event. Same contract as journal, todos and learning.
+    id = body.get('id') or str(ULID())
     tags = body.get('tags')
     is_all_day = all_day.get('all_day', 0)
     get_db().execute(
-        '''INSERT INTO calendar_events(
+        '''INSERT OR IGNORE INTO calendar_events(
                id, title, description, date, time, end_time, all_day, tags,
                journal_id, created_at,
                repeat_freq, repeat_interval, repeat_byweekday, repeat_until,

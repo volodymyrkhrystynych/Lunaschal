@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../hooks/api';
+import { ulid } from '../../lib/ulid';
+import { useIdeaCreate } from '../../offline/mutationDefaults';
 import { useRecorder } from '../../hooks/useRecorder';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 
@@ -16,20 +16,15 @@ interface IdeaCaptureProps {
 export function IdeaCapture({ onCreated }: IdeaCaptureProps) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const queryClient = useQueryClient();
 
   const recorder = useRecorder(transcript =>
     setText(prev => (prev ? `${prev}\n${transcript}` : transcript))
   );
 
-  const create = useMutation({
-    mutationFn: (rawContent: string) => api.ideas.createFromVoice(rawContent),
-    onSuccess: data => {
-      setText('');
-      queryClient.invalidateQueries({ queryKey: ['ideas'] });
-      onCreated(data.id);
-    },
-  });
+  // Queued, not posted: an idea captured with no backend in reach is still an
+  // idea. The id is minted here so the optimistic row and the eventual server
+  // row are the same row, and `onCreated` can open it before it has been sent.
+  const create = useIdeaCreate();
 
   const toggleRecording = () => {
     if (recorder.status === 'recording') recorder.stop();
@@ -43,7 +38,11 @@ export function IdeaCapture({ onCreated }: IdeaCaptureProps) {
 
   const submit = () => {
     const trimmed = text.trim();
-    if (trimmed && !create.isPending) create.mutate(trimmed);
+    if (!trimmed || create.isPending) return;
+    const id = ulid();
+    create.mutate({ id, rawContent: trimmed });
+    setText('');
+    onCreated(id);
   };
 
   const busy = recorder.status !== 'idle';
@@ -69,7 +68,14 @@ export function IdeaCapture({ onCreated }: IdeaCaptureProps) {
         <button
           type="button"
           onClick={toggleRecording}
-          disabled={recorder.status === 'transcribing'}
+          disabled={
+            recorder.status === 'transcribing' || !recorder.canTranscribe
+          }
+          title={
+            recorder.canTranscribe
+              ? undefined
+              : 'Offline — dictation needs the server'
+          }
           aria-label={
             recorder.status === 'recording'
               ? 'Stop recording'

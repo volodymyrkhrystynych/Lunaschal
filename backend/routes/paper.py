@@ -102,19 +102,26 @@ def journal_papers():
 def create_paper():
     body = request.get_json(silent=True) or {}
     now = int(time.time())
-    paper_id = str(ULID())
+    # Client-supplied ULIDs, for both the paper and its first page. Paper is the
+    # one feature whose data exists *only* on the tablet it was written on, so
+    # starting a new page must not require a server: the ids are minted on the
+    # device, the writing begins immediately, and the create replays
+    # idempotently whenever the backend is next in reach.
+    paper_id = (body.get('id') or '').strip() or str(ULID())
+    page_id = (body.get('pageId') or '').strip() or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT INTO papers(id, title, created_at, updated_at) VALUES (?,?,?,?)',
+        'INSERT OR IGNORE INTO papers(id, title, created_at, updated_at) VALUES (?,?,?,?)',
         (paper_id, body.get('title', '').strip(), now, now),
     )
     # Every paper starts with one blank page.
     db.execute(
-        'INSERT INTO paper_pages(id, paper_id, position, created_at, updated_at) VALUES (?,?,?,?,?)',
-        (str(ULID()), paper_id, 0, now, now),
+        'INSERT OR IGNORE INTO paper_pages(id, paper_id, position, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?)',
+        (page_id, paper_id, 0, now, now),
     )
     db.commit()
-    return jsonify({'id': paper_id}), 201
+    return jsonify({'id': paper_id, 'pageId': page_id}), 201
 
 
 @bp.get('/<paper_id>')
@@ -174,9 +181,11 @@ def add_page(paper_id):
         (paper_id,),
     ).fetchone()
     now = int(time.time())
-    page_id = str(ULID())
+    body = request.get_json(silent=True) or {}
+    page_id = (body.get('id') or '').strip() or str(ULID())
     db.execute(
-        'INSERT INTO paper_pages(id, paper_id, position, created_at, updated_at) VALUES (?,?,?,?,?)',
+        'INSERT OR IGNORE INTO paper_pages(id, paper_id, position, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?)',
         (page_id, paper_id, row['next_pos'], now, now),
     )
     db.execute('UPDATE papers SET updated_at=? WHERE id=?', (now, paper_id))
@@ -334,7 +343,14 @@ def add_page_image(page_id):
     if width <= 0 or height <= 0:
         return jsonify({'error': 'width and height must be positive'}), 400
 
-    image_id = str(ULID())
+    # Client-supplied id for a picture pasted offline: the upload is queued, and
+    # a replay of it must land the same picture rather than a second copy of it.
+    image_id = (request.form.get('id') or '').strip() or str(ULID())
+    existing = db.execute(
+        f'SELECT {_IMAGE_COLUMNS} FROM paper_page_images WHERE id=?', (image_id,)
+    ).fetchone()
+    if existing:
+        return jsonify(_image_row(existing)), 201
     path = storage.pasted_image_path(page['paper_id'], image_id, ext)
     if path is None:
         return jsonify({'error': 'Invalid id'}), 500
@@ -349,7 +365,7 @@ def add_page_image(page_id):
         (page_id,),
     ).fetchone()['p']
     db.execute(
-        '''INSERT INTO paper_page_images(
+        '''INSERT OR IGNORE INTO paper_page_images(
                id, page_id, file_path, x, y, width, height, position, created_at, updated_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)''',
         (image_id, page_id, str(path), request.form.get('x', type=float),

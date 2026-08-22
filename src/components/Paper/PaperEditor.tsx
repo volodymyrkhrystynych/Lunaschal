@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  usePaperImageAdd,
+  usePaperImageUpdate,
+  usePaperPageAdd,
+  usePaperPageSave,
+} from '@/offline/mutationDefaults';
+import { storePageSave } from '@/offline/pageStore';
+import { getPhoto, storePhoto } from '@/offline/photoStore';
+import { ulid } from '@/lib/ulid';
 import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval';
 import { api, type PaperPageContent } from '../../hooks/api';
 import {
@@ -137,11 +146,15 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     enabled: !!currentPage?.id,
   });
 
-  const addPage = useMutation({
-    mutationFn: () => api.paper.addPage(paperId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['paper', paperId] }),
-  });
+  // The page save goes through the offline queue: paused while the backend is
+  // unreachable, replayed when it is back, and always uploading the *newest*
+  // state of the page rather than the one that happened to be pending first
+  // (src/offline/pageStore.ts).
+  const savePage = usePaperPageSave();
+  const addPageImage = usePaperImageAdd();
+  const updatePageImage = usePaperImageUpdate();
+
+  const addPage = usePaperPageAdd();
 
   const archiveRequested = paper?.archiveRequested ?? false;
   const setArchive = useMutation({
@@ -170,9 +183,34 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     setSaving(true);
     try {
       if (data) {
-        await api.paper.savePage(currentPage.id, data);
-        // Guarded by the revision: strokes drawn during the upload stay dirty.
-        canvasRef.current?.markSaved(data.revision);
+        // Written to the device first, then queued. The upload may happen right
+        // now or next week; either way the page is saved as far as this tablet
+        // is concerned, which is the only place it has ever lived.
+        await storePageSave(
+          currentPage.id,
+          {
+            strokes: data.strokes,
+            width: data.width,
+            height: data.height,
+            revision: data.revision,
+          },
+          data.snapshot
+        );
+        // Fired, not awaited: while the backend is unreachable this mutation
+        // *pauses* — its promise never settles — and awaiting it would leave
+        // the editor spinning on "Saving…" for as long as the wifi is out.
+        savePage.mutate(
+          { pageId: currentPage.id },
+          {
+            // Guarded by the revision: strokes drawn during the upload stay
+            // dirty. Only on a real upload, too — the canvas buffer is what a
+            // reload reads back, so it has to outlive a save that is still
+            // sitting in the queue, or reopening the page would show the
+            // server's older copy and let the next save overwrite the newer
+            // ink with it.
+            onSuccess: () => canvasRef.current?.markSaved(data.revision),
+          }
+        );
         // Write what we just uploaded straight into the page's cache entry.
         // Without this the entry keeps whatever the page held when it was
         // opened — empty, for a page written on for the first time — and
@@ -196,11 +234,14 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
         );
       }
       if (imageEdits.length > 0) {
-        await Promise.all(
-          imageEdits.map(([id, edit]) => api.paper.updateImage(id, edit))
-        );
+        // Queued rather than awaited, like the page itself: a PATCH of the
+        // geometry is last-write-wins, so replaying one is harmless, and
+        // waiting on the network here would strand a staged drag behind an
+        // unreachable backend.
+        for (const [id, edit] of imageEdits) {
+          updatePageImage.mutate({ imageId: id, pageId: currentPage.id, edit });
+        }
         setPendingImageEdits({});
-        refreshPage();
       }
       setSaveError(null);
       // Only the grid needs refreshing. Invalidating the whole 'paper' prefix
@@ -226,12 +267,11 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     if (res.index === currentIndex && !res.createPage) return;
     await saveCurrent();
     if (res.createPage) {
-      try {
-        await addPage.mutateAsync();
-      } catch (e) {
-        setSaveError(e instanceof Error ? e.message : 'Could not add a page');
-        return;
-      }
+      // Fired, not awaited — the mutation pauses while the backend is out of
+      // reach and its promise would never settle, leaving a tap on "next page"
+      // doing nothing at all. The page exists on the device the moment its id
+      // is minted; the server hears about it when it can.
+      addPage.mutate({ paperId, pageId: ulid() });
     }
     setCurrentIndex(res.index);
   };
@@ -246,12 +286,8 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   const addNewPage = async () => {
     await saveCurrent();
     const target = pages.length;
-    try {
-      await addPage.mutateAsync();
-    } catch (e) {
-      setSaveError(e instanceof Error ? e.message : 'Could not add a page');
-      return;
-    }
+    // Fired, not awaited: see the note in the page-navigation handler above.
+    addPage.mutate({ paperId, pageId: ulid() });
     setCurrentIndex(target);
   };
 
@@ -305,12 +341,54 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [toggleEraser]);
 
+  // A picture pasted while the backend was unreachable has no server URL yet —
+  // it is a blob on this device. Object URLs are made here rather than stored
+  // on the cached image, because a blob: URL written into the persisted cache
+  // is dead the moment the tab reloads, and the picture would come back as a
+  // broken image on a page that still has it.
+  const [localUrls, setLocalUrls] = useState<Record<string, string>>({});
+  const pendingImageIds = (content?.images ?? [])
+    .filter(i => !i.url)
+    .map(i => i.id)
+    .join(',');
+  useEffect(() => {
+    const ids = pendingImageIds ? pendingImageIds.split(',') : [];
+    if (ids.length === 0) {
+      setLocalUrls(prev => {
+        Object.values(prev).forEach(URL.revokeObjectURL);
+        return {};
+      });
+      return;
+    }
+    let cancelled = false;
+    const made: string[] = [];
+    void (async () => {
+      const next: Record<string, string> = {};
+      for (const id of ids) {
+        const stored = await getPhoto(id);
+        if (!stored) continue;
+        const url = URL.createObjectURL(stored.blob);
+        made.push(url);
+        next[id] = url;
+      }
+      if (cancelled) {
+        made.forEach(URL.revokeObjectURL);
+        return;
+      }
+      setLocalUrls(next);
+    })();
+    return () => {
+      cancelled = true;
+      made.forEach(URL.revokeObjectURL);
+    };
+  }, [pendingImageIds]);
+
   // SQLite hands booleans back as 0/1; the geometry module wants real booleans.
   const images = useMemo<PageImage[]>(
     () =>
       (content?.images ?? []).map(i => ({
         id: i.id,
-        url: i.url,
+        url: i.url || localUrls[i.id] || '',
         x: i.x,
         y: i.y,
         width: i.width,
@@ -320,7 +398,7 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
         locked: !!i.locked,
         position: i.position,
       })),
-    [content]
+    [content, localUrls]
   );
 
   // What the canvas and the overlay actually draw: the server's list with any
@@ -405,12 +483,22 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     try {
       const size = await naturalSize(file);
       const box = fitPastedImage(size.width, size.height);
-      const created = await api.paper.addImage(currentPage.id, file, box, name);
-      refreshPage();
+      const imageId = ulid();
+      // The picture goes to the device before anything is sent. Paper is only
+      // ever used on the tablet, and a pasted photo is the one thing on a page
+      // that cannot be redrawn — so it is stored first and uploaded whenever
+      // the backend is next in reach.
+      await storePhoto(imageId, file, 'paper', currentPage.id, box);
+      addPageImage.mutate({
+        imageId,
+        pageId: currentPage.id,
+        box,
+        filename: name,
+      });
       // Land in select mode with it chosen — pasting is always followed by
       // placing it.
       setSelectMode(true);
-      setSelectedImageId(created.id);
+      setSelectedImageId(imageId);
     } catch (e) {
       setSaveError(
         e instanceof Error ? e.message : 'Could not add the picture'

@@ -1,7 +1,9 @@
 import { useRef, useState, useEffect } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../hooks/api';
+import { useQueryClient } from '@tanstack/react-query';
 import { useRecorder } from '../../hooks/useRecorder';
+import { ulid } from '../../lib/ulid';
+import { useFoodCreate } from '../../offline/mutationDefaults';
+import { storePhoto } from '../../offline/photoStore';
 import { mediaKind } from '../../lib/food';
 // Best-effort device GPS; resolves null if unavailable or denied, so a log is
 // never blocked by location. Shared with the Chat composer — see src/lib/geo.ts.
@@ -28,7 +30,7 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
   const videoRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
-  const { status, error, start, stop } = useRecorder(t =>
+  const { status, error, start, stop, canTranscribe } = useRecorder(t =>
     setText(prev => (prev ? `${prev} ${t}` : t))
   );
   const recording = status === 'recording';
@@ -63,29 +65,43 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
     });
   };
 
-  const create = useMutation({
-    mutationFn: async () => {
-      const pos = await currentPosition();
-      return api.food.create({
-        text: text.trim() || undefined,
-        media: media.map(m => m.file),
-        latitude: pos?.latitude,
-        longitude: pos?.longitude,
-      });
-    },
+  // Queued, photos and all. The meal's id and each photo's id are minted here
+  // and the pictures are written to the device (photoStore) before anything is
+  // sent, so a meal photographed with no signal is a meal that is *saved* — it
+  // uploads itself later, under the same ids, without becoming a second entry.
+  const create = useFoodCreate({
     onSuccess: () => {
-      media.forEach(m => URL.revokeObjectURL(m.url));
-      setText('');
-      setMedia([]);
-      queryClient.invalidateQueries({ queryKey: ['food'] });
       // The AI structuring finishes shortly after; refetch again to catch it.
       setTimeout(
         () => queryClient.invalidateQueries({ queryKey: ['food'] }),
         3000
       );
-      onDone?.();
     },
   });
+
+  const submit = async () => {
+    const entryId = ulid();
+    const photos = media.map(m => ({ id: ulid(), file: m.file }));
+    // The blobs go to the device first: a queued upload that refers to a photo
+    // nothing stored is an upload that can only fail.
+    await Promise.all(
+      photos.map(p => storePhoto(p.id, p.file, 'food', entryId))
+    );
+    const pos = await currentPosition();
+    create.mutate({
+      id: entryId,
+      photoIds: photos.map(p => p.id),
+      text: text.trim() || undefined,
+      latitude: pos?.latitude,
+      longitude: pos?.longitude,
+    });
+    // Cleared on send, not on the server's answer: the entry is already saved
+    // as far as this device is concerned.
+    media.forEach(m => URL.revokeObjectURL(m.url));
+    setText('');
+    setMedia([]);
+    onDone?.();
+  };
 
   const canSubmit = (text.trim() || media.length > 0) && !create.isPending;
 
@@ -102,8 +118,14 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
         <button
           type="button"
           onClick={() => (recording ? stop() : void start())}
-          disabled={transcribing}
-          title={recording ? 'Stop recording' : 'Dictate'}
+          disabled={transcribing || !canTranscribe}
+          title={
+            !canTranscribe
+              ? 'Offline — dictation needs the server'
+              : recording
+                ? 'Stop recording'
+                : 'Dictate'
+          }
           className={`absolute top-2 right-2 w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
             recording
               ? 'bg-red-500 text-white animate-pulse'
@@ -187,7 +209,7 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
           🎥 Video
         </button>
         <button
-          onClick={() => create.mutate()}
+          onClick={() => void submit()}
           disabled={!canSubmit}
           className="ml-auto px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50 transition-colors"
         >

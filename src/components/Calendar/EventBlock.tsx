@@ -119,6 +119,12 @@ export function EventBlock({
           type="button"
           aria-label="Record for this event"
           data-testid="calendar-event-mic"
+          disabled={!recorder.canTranscribe}
+          title={
+            recorder.canTranscribe
+              ? undefined
+              : 'Offline — dictation needs the server'
+          }
           onPointerDown={e => e.stopPropagation()}
           onClick={e => {
             e.stopPropagation();

@@ -6,6 +6,7 @@ filtering, media upload/serve/delete, and the import endpoint's validation —
 with no network calls.
 """
 import io
+import json
 
 import pytest
 
@@ -302,3 +303,29 @@ def test_strip_html_drops_script_and_style():
     text = cookbook._strip_html(html)
     assert 'Hello' in text and 'World' in text
     assert 'evil' not in text and 'p{}' not in text
+
+
+def test_a_recipe_and_its_photo_replay_without_duplicating(client):
+    """A recipe captured offline carries its own id and one per photo, so the
+    queued multipart can be replayed — after a dropped answer or a reload —
+    without leaving a second recipe or a second copy of the picture."""
+    def post():
+        return client.post(
+            '/api/cookbook',
+            data={
+                'id': '01ARZ3NDEKTSV4RRFFQ69G5FD0',
+                'mediaIds': json.dumps(['01ARZ3NDEKTSV4RRFFQ69G5FD1']),
+                'title': 'Ramen',
+                'content': 'Boil water.',
+                'media': (io.BytesIO(b'\xff\xd8\xff\xe0jpeg'), 'dish.jpg'),
+            },
+            content_type='multipart/form-data',
+        )
+
+    assert post().status_code == 201
+    assert post().status_code == 201
+
+    recipes = client.get('/api/cookbook').get_json()
+    assert [r['id'] for r in recipes] == ['01ARZ3NDEKTSV4RRFFQ69G5FD0']
+    detail = client.get('/api/cookbook/01ARZ3NDEKTSV4RRFFQ69G5FD0').get_json()
+    assert [m['id'] for m in detail['media']] == ['01ARZ3NDEKTSV4RRFFQ69G5FD1']

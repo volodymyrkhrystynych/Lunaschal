@@ -81,11 +81,15 @@ describe('capture', () => {
   });
 
   it('uploads what the camera returns', async () => {
+    // Via the device store now: the photo is written to IndexedDB first and the
+    // upload is queued, so a selfie taken with no signal still gets logged. It
+    // is the same image either way — the store hands back what it was given.
     renderCard();
     const image = new File(['x'], 'selfie.jpg', { type: 'image/jpeg' });
     fireEvent.change(cameraInput(), { target: { files: [image] } });
 
-    await waitFor(() => expect(upload).toHaveBeenCalledWith(image));
+    await waitFor(() => expect(upload).toHaveBeenCalled());
+    expect(upload.mock.calls[0][0]).toBe(image);
   });
 
   it('says Retake once today already has a selfie', async () => {

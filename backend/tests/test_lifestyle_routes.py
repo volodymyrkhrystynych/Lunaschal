@@ -468,3 +468,14 @@ def test_calorie_entry_without_a_date_defaults_to_day_key_for(client, monkeypatc
     )
     day = client.get('/api/lifestyle/calories?date=2026-07-24').get_json()
     assert [e['description'] for e in day['entries']] == ['rice']
+
+
+def test_a_calorie_log_with_a_client_id_replays_once(client):
+    body = {'id': '01ARZ3NDEKTSV4RRFFQ69G5FAX', 'description': 'a coke',
+            'calories': 140, 'date': '2026-08-05'}
+    assert client.post('/api/lifestyle/calories', json=body).status_code == 201
+    assert client.post('/api/lifestyle/calories', json=body).status_code == 201
+
+    day = client.get('/api/lifestyle/calories?date=2026-08-05').get_json()
+    assert [e['description'] for e in day['entries']] == ['a coke']
+    assert day['total'] == 140

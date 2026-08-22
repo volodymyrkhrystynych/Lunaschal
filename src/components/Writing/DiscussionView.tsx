@@ -453,8 +453,19 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
           />
           <button
             onClick={toggleRecording}
-            disabled={isStreaming || !aiConfigured || isTranscribing}
-            title={isRecording ? 'Stop recording' : 'Speak to send'}
+            disabled={
+              isStreaming ||
+              !aiConfigured ||
+              isTranscribing ||
+              !recorder.canTranscribe
+            }
+            title={
+              !recorder.canTranscribe
+                ? 'Offline â€” dictation needs the server'
+                : isRecording
+                  ? 'Stop recording'
+                  : 'Speak to send'
+            }
             className={`px-3 rounded self-end py-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               isRecording
                 ? 'bg-red-500 text-white animate-pulse hover:bg-red-500'

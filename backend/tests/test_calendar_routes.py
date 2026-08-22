@@ -610,3 +610,19 @@ def test_clearing_category_tags_stores_null_not_an_empty_array(client):
     client.patch(f'/api/calendar/{id}', data=json.dumps({'categoryTags': []}),
                  content_type='application/json')
     assert client.get(f'/api/calendar/{id}').get_json()['categoryTags'] is None
+
+
+def test_a_client_supplied_id_replays_without_duplicating(client):
+    """An event created offline carries the id the browser minted, so the
+    queued write can be replayed — after a dropped answer, or a reload that
+    replayed the whole queue — without producing a second event."""
+    body = {'id': '01ARZ3NDEKTSV4RRFFQ69G5FAV', 'title': 'Dentist', 'date': '2026-08-05'}
+    first = client.post('/api/calendar', json=body)
+    assert first.status_code == 201
+    assert first.get_json()['id'] == body['id']
+
+    second = client.post('/api/calendar', json=body)
+    assert second.status_code == 201
+
+    events = client.get('/api/calendar?start=2026-08-01&end=2026-08-31').get_json()
+    assert [e['title'] for e in events] == ['Dentist']

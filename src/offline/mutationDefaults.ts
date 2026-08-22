@@ -8,10 +8,20 @@ import {
 import {
   api,
   ApiError,
+  NetworkError,
+  type CalorieDay,
+  type CalorieLog,
   type ClaimCoverage,
   type DailyTask,
+  type FoodEntry,
   type JournalAttachment,
+  type IdeaSummary,
   type JournalEntry,
+  type PaperDetail,
+  type PaperPageContent,
+  type PaperPageImage,
+  type Recipe,
+  type Selfie,
   type TodoItem,
   type TodoPayload,
 } from '../hooks/api';
@@ -21,6 +31,12 @@ import {
   getRecording,
   markAttempt,
 } from './recordingStore';
+import {
+  deletePhoto,
+  getPhoto,
+  markAttempt as markPhotoAttempt,
+} from './photoStore';
+import { clearPageSave, getPageSave } from './pageStore';
 
 /**
  * Offline write queue.
@@ -57,6 +73,17 @@ export const MUTATION_KEYS = {
   learningAttempt: ['learning', 'attempt'] as const,
   learningReview: ['learning', 'review'] as const,
   notebookWrite: ['notebook', 'write'] as const,
+  calendarCreate: ['calendar', 'create'] as const,
+  ideaCreate: ['ideas', 'create'] as const,
+  calorieLog: ['lifestyle', 'calories', 'create'] as const,
+  foodCreate: ['food', 'create'] as const,
+  selfieUpload: ['lifestyle', 'selfie', 'upload'] as const,
+  paperCreate: ['paper', 'create'] as const,
+  paperPageAdd: ['paper', 'page', 'add'] as const,
+  paperPageSave: ['paper', 'page', 'save'] as const,
+  paperImageAdd: ['paper', 'image', 'add'] as const,
+  paperImageUpdate: ['paper', 'image', 'update'] as const,
+  recipeCreate: ['cookbook', 'create'] as const,
 };
 
 // --- variable shapes (self-contained so a reloaded replay can run them) ---
@@ -133,6 +160,97 @@ export interface NotebookWriteVars {
   path: string;
   content: string;
 }
+/** Every one of these carries the id the browser minted, for the same reason
+ * JournalCreateVars does: the row's identity has to exist before the server
+ * does, or a replay cannot be told apart from a second capture. */
+export type CalendarCreateVars = Parameters<typeof api.calendar.create>[0] & {
+  id: string;
+};
+export interface IdeaCreateVars {
+  id: string;
+  title?: string;
+  rawContent?: string;
+  tags?: string[];
+}
+export interface CalorieLogVars {
+  id: string;
+  date?: string;
+  description: string;
+  calories: number;
+}
+/**
+ * Note what is *not* here, for the same reason `JournalRecordingVars` omits the
+ * audio: the photos. Vars are structured-cloned into the persisted cache on
+ * every unrelated write, so they carry ids and the blobs are fetched from
+ * `photoStore` inside the mutationFn.
+ */
+export interface FoodCreateVars {
+  id: string;
+  photoIds: string[];
+  text?: string;
+  latitude?: number;
+  longitude?: number;
+}
+export interface SelfieUploadVars {
+  photoId: string;
+  date?: string;
+}
+export interface PaperCreateVars {
+  id: string;
+  pageId: string;
+}
+export interface PaperPageAddVars {
+  paperId: string;
+  pageId: string;
+}
+
+/**
+ * Everything paper does, in one lane.
+ *
+ * Mutations sharing a `scope.id` run one at a time, in the order they were
+ * started — and paper's writes depend on each other: a page belongs to a paper,
+ * a saved page and a pasted picture belong to a page. Replayed in parallel
+ * (which is what `resumePausedMutations` does otherwise) a page-add can reach
+ * the server before the paper it belongs to exists, and answer 404 — which is
+ * not a network failure, so nothing would retry it and the page would be gone.
+ *
+ * One lane for the whole feature rather than one per paper: the queue is a
+ * tablet's afternoon, not a fleet's, and a single ordering is easier to reason
+ * about than several that can interleave.
+ */
+const PAPER_LANE = { scope: { id: 'paper' } };
+/** A page id and nothing else: the payload is read from `pageStore` when the
+ *  upload actually runs, so a page written on all afternoon uploads once, with
+ *  the afternoon's final state rather than its first. */
+export interface PaperPageSaveVars {
+  pageId: string;
+}
+export interface PaperImageAddVars {
+  imageId: string;
+  pageId: string;
+  box: { x: number; y: number; width: number; height: number };
+  filename: string;
+}
+export interface PaperImageUpdateVars {
+  imageId: string;
+  pageId: string;
+  edit: Partial<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    rotation: number;
+    flipped: boolean;
+    locked: boolean;
+  }>;
+}
+export interface RecipeCreateVars {
+  id: string;
+  title: string;
+  content: string;
+  tags?: string[];
+  photoIds: string[];
+}
 
 // The behavioral slice of a mutation's options that both the hook and the
 // registered default share.
@@ -144,9 +262,37 @@ type Cfg<TData, TVars> = Pick<
   | 'onSettled'
   | 'retry'
   | 'retryDelay'
+  | 'scope'
 >;
 
-const ONLINE = { networkMode: 'online' as const };
+/**
+ * The shared shape of a queueable write: paused while the backend is known to
+ * be unreachable, and retried when a request discovers that it is.
+ *
+ * The retry is not belt-and-braces, it is the whole hinge. React Query pauses a
+ * mutation *before* firing it, by asking whether we are online — so a write
+ * issued in the moment the link drops, before anything has noticed, fires and
+ * fails at the network level instead. With no retry that mutation went straight
+ * to `error`, `onSettled` invalidated, and the optimistic entry the user had
+ * just watched appear was rolled back off the screen. The write was gone.
+ *
+ * Now the failing request itself reports the backend unreachable
+ * (`reportFetchOutcome`), so by the time the retry is scheduled we are offline
+ * and React Query parks the mutation in the queue instead of running it —
+ * which is where it should have gone in the first place.
+ *
+ * Only network failures qualify. An `ApiError` means the server answered and
+ * refused: replaying that just gets refused again, and hiding it behind a retry
+ * would turn a real error into a silent one.
+ */
+const ONLINE = {
+  networkMode: 'online' as const,
+  retry: (failureCount: number, error: Error) =>
+    error instanceof NetworkError && failureCount < 3,
+  // Long enough for the online manager to have settled the verdict the failure
+  // above reported, short enough that a blip costs nothing.
+  retryDelay: 300,
+};
 
 // --- optimistic cache updaters (only for cache-driven UIs whose shapes we
 // know; queue-only mutations reconcile on reconnect via onSettled) ---
@@ -456,6 +602,23 @@ const notebookWriteCfg = (
  */
 export function registerOfflineMutationDefaults(qc: QueryClient): void {
   const pairs: Array<[readonly unknown[], Cfg<unknown, never>]> = [
+    [MUTATION_KEYS.foodCreate, foodCreateCfg(qc) as Cfg<unknown, never>],
+    [MUTATION_KEYS.paperCreate, paperCreateCfg(qc) as Cfg<unknown, never>],
+    [MUTATION_KEYS.paperPageAdd, paperPageAddCfg(qc) as Cfg<unknown, never>],
+    [MUTATION_KEYS.paperPageSave, paperPageSaveCfg(qc) as Cfg<unknown, never>],
+    [MUTATION_KEYS.paperImageAdd, paperImageAddCfg(qc) as Cfg<unknown, never>],
+    [
+      MUTATION_KEYS.paperImageUpdate,
+      paperImageUpdateCfg(qc) as Cfg<unknown, never>,
+    ],
+    [MUTATION_KEYS.recipeCreate, recipeCreateCfg(qc) as Cfg<unknown, never>],
+    [MUTATION_KEYS.selfieUpload, selfieUploadCfg(qc) as Cfg<unknown, never>],
+    [
+      MUTATION_KEYS.calendarCreate,
+      calendarCreateCfg(qc) as Cfg<unknown, never>,
+    ],
+    [MUTATION_KEYS.ideaCreate, ideaCreateCfg(qc) as Cfg<unknown, never>],
+    [MUTATION_KEYS.calorieLog, calorieLogCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.journalCreate, journalCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.journalUpdate, journalUpdateCfg(qc) as Cfg<unknown, never>],
     [
@@ -519,6 +682,381 @@ function useOfflineMutation<TData, TVars>(
     ...options,
   });
 }
+
+const calendarCreateCfg = (
+  qc: QueryClient
+): Cfg<{ id: string }, CalendarCreateVars> => ({
+  ...ONLINE,
+  mutationFn: vars => api.calendar.create(vars),
+  // No optimistic patch: the calendar's cache is keyed by the visible range and
+  // recurrence is expanded server-side, so a plausible-looking local occurrence
+  // is exactly the kind of half-truth that would then disagree with the real
+  // one. The event is queued and appears when the range refetches.
+  onSettled: () => qc.invalidateQueries({ queryKey: ['calendar'] }),
+});
+
+const ideaCreateCfg = (
+  qc: QueryClient
+): Cfg<{ id: string }, IdeaCreateVars> => ({
+  ...ONLINE,
+  // The voice endpoint, not the plain create: it is what the capture box has
+  // always used, and it runs the background polish pass that fixes a misheard
+  // name against the memory document. Queuing must not quietly downgrade that.
+  mutationFn: vars =>
+    vars.rawContent !== undefined
+      ? api.ideas.createFromVoice(vars.rawContent, vars.id)
+      : api.ideas.create(vars),
+  onMutate: vars => {
+    const captured: IdeaSummary = {
+      id: vars.id,
+      title: vars.title || (vars.rawContent ?? '').slice(0, 80),
+      status: 'new',
+      tags: vars.tags ? JSON.stringify(vars.tags) : null,
+      sketchCount: 0,
+      openQuestionCount: 0,
+      articleCount: 0,
+      hasPlan: false,
+      verdict: null,
+      confidence: null,
+      effort: null,
+      onRoadmap: false,
+      assessmentStale: false,
+      userVerdict: null,
+      researchState: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    qc.setQueryData<IdeaSummary[]>(['ideas'], old =>
+      old ? [captured, ...old] : [captured]
+    );
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ['ideas'] }),
+});
+
+const calorieLogCfg = (qc: QueryClient): Cfg<CalorieLog, CalorieLogVars> => ({
+  ...ONLINE,
+  mutationFn: vars => api.lifestyle.calories.create(vars),
+  onMutate: vars => {
+    const entry: CalorieLog = {
+      id: vars.id,
+      date: vars.date ?? new Date().toISOString().slice(0, 10),
+      description: vars.description,
+      calories: vars.calories,
+      createdAt: new Date().toISOString(),
+    };
+    qc.setQueriesData<CalorieDay>(
+      {
+        predicate: q =>
+          q.queryKey[0] === 'lifestyle' && q.queryKey[1] === 'calories',
+      },
+      old =>
+        old && old.date === entry.date
+          ? {
+              ...old,
+              entries: [...old.entries, entry],
+              total: old.total + entry.calories,
+            }
+          : old
+    );
+  },
+  onSettled: () =>
+    qc.invalidateQueries({ queryKey: ['lifestyle', 'calories'] }),
+});
+
+const foodCreateCfg = (qc: QueryClient): Cfg<FoodEntry, FoodCreateVars> => ({
+  ...ONLINE,
+  mutationFn: async vars => {
+    // The photos come back off the device, not out of the mutation's payload —
+    // and they are loaded at *replay* time, which is the point: a meal captured
+    // in a basement uploads its picture days later from the same blob it stored
+    // the moment it was taken.
+    const stored = await Promise.all(vars.photoIds.map(id => getPhoto(id)));
+    const present = vars.photoIds.filter((_, i) => stored[i]);
+    try {
+      const entry = await api.food.create({
+        id: vars.id,
+        text: vars.text,
+        latitude: vars.latitude,
+        longitude: vars.longitude,
+        media: stored.flatMap(p => (p ? [p.blob] : [])),
+        mediaIds: present,
+      });
+      // Confirmed stored. This is the only place the photos may be let go of.
+      await Promise.all(present.map(id => deletePhoto(id)));
+      return entry;
+    } catch (e) {
+      // A 4xx is the server refusing this upload — retrying changes nothing —
+      // but the photo is kept either way. Marking happens here rather than in
+      // an `onError` so it also runs for a headless replay after a reload.
+      const message = e instanceof Error ? e.message : 'Upload failed';
+      await Promise.all(
+        present.map(id => markPhotoAttempt(id, message, isTerminal(e)))
+      );
+      throw e;
+    }
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ['food'] }),
+});
+
+const selfieUploadCfg = (qc: QueryClient): Cfg<Selfie, SelfieUploadVars> => ({
+  ...ONLINE,
+  mutationFn: async vars => {
+    const stored = await getPhoto(vars.photoId);
+    if (!stored) throw new Error('That photo is no longer on this device.');
+    try {
+      const selfie = await api.lifestyle.selfies.upload(stored.blob, vars.date);
+      await deletePhoto(vars.photoId);
+      return selfie;
+    } catch (e) {
+      await markPhotoAttempt(
+        vars.photoId,
+        e instanceof Error ? e.message : 'Upload failed',
+        isTerminal(e)
+      );
+      throw e;
+    }
+  },
+  // No client id needed here, unlike every other queued create: the route is
+  // already idempotent by day — one selfie per date, a re-upload replaces it —
+  // so a replay overwrites itself rather than leaving two.
+  onSettled: () => qc.invalidateQueries({ queryKey: ['lifestyle', 'selfies'] }),
+});
+
+const paperCreateCfg = (
+  qc: QueryClient
+): Cfg<{ id: string }, PaperCreateVars> => ({
+  ...ONLINE,
+  ...PAPER_LANE,
+  mutationFn: vars => api.paper.create(vars),
+  onMutate: vars => {
+    // Seed the detail the editor is about to open. Without this a paper started
+    // offline navigates to a page whose query is paused and whose cache is
+    // empty — a blank editor for a paper that does exist, on this device, with
+    // ids the server will agree with later.
+    qc.setQueryData<PaperDetail>(['paper', vars.id], {
+      id: vars.id,
+      title: '',
+      archiveRequested: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      pages: [{ id: vars.pageId, position: 0, imageUrl: null }],
+    });
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ['paper'], exact: true }),
+});
+
+const paperPageAddCfg = (
+  qc: QueryClient
+): Cfg<{ id: string }, PaperPageAddVars> => ({
+  ...ONLINE,
+  ...PAPER_LANE,
+  mutationFn: vars => api.paper.addPage(vars.paperId, vars.pageId),
+  onMutate: vars => {
+    // The page has to exist on the tablet the moment it is asked for — that is
+    // the whole point of a fresh page. The server will compute its own
+    // position on replay; this one only has to be right for the client's
+    // ordering until then.
+    qc.setQueryData<PaperDetail>(['paper', vars.paperId], prev =>
+      prev
+        ? {
+            ...prev,
+            pages: [
+              ...prev.pages,
+              {
+                id: vars.pageId,
+                position: prev.pages.length,
+                imageUrl: null,
+              },
+            ],
+          }
+        : prev
+    );
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ['paper'], exact: true }),
+});
+
+const paperPageSaveCfg = (
+  qc: QueryClient
+): Cfg<{ success: boolean }, PaperPageSaveVars> => ({
+  ...ONLINE,
+  ...PAPER_LANE,
+  mutationFn: async vars => {
+    const pending = await getPageSave(vars.pageId);
+    // Nothing pending means an earlier attempt already landed it. Not an
+    // error: a page save is the whole page, so there is nothing left to send.
+    if (!pending) return { success: true };
+    const result = await api.paper.savePage(vars.pageId, {
+      strokes: pending.meta.strokes,
+      width: pending.meta.width,
+      height: pending.meta.height,
+      snapshot: pending.snapshot,
+    });
+    await clearPageSave(vars.pageId, pending.meta.revision);
+    return result;
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ['paper'], exact: true }),
+});
+
+const paperImageAddCfg = (
+  qc: QueryClient
+): Cfg<PaperPageImage, PaperImageAddVars> => ({
+  ...ONLINE,
+  ...PAPER_LANE,
+  mutationFn: async vars => {
+    const stored = await getPhoto(vars.imageId);
+    if (!stored) throw new Error('That picture is no longer on this device.');
+    try {
+      const image = await api.paper.addImage(
+        vars.pageId,
+        stored.blob,
+        vars.box,
+        vars.filename,
+        vars.imageId
+      );
+      await deletePhoto(vars.imageId);
+      return image;
+    } catch (e) {
+      await markPhotoAttempt(
+        vars.imageId,
+        e instanceof Error ? e.message : 'Upload failed',
+        isTerminal(e)
+      );
+      throw e;
+    }
+  },
+  onMutate: vars => {
+    // The picture has to be *on the page* the instant it is pasted, backend or
+    // no backend. `url` is left empty on purpose: a blob: URL baked into the
+    // persisted cache is dead after a reload, so the editor resolves the image
+    // from the device store instead (see PaperEditor's localUrls).
+    qc.setQueryData<PaperPageContent>(['paper', 'page', vars.pageId], prev =>
+      prev
+        ? {
+            ...prev,
+            images: [
+              ...prev.images,
+              {
+                id: vars.imageId,
+                pageId: vars.pageId,
+                url: '',
+                ...vars.box,
+                rotation: 0,
+                flipped: 0,
+                locked: 0,
+                position: prev.images.length,
+              },
+            ],
+          }
+        : prev
+    );
+  },
+});
+
+const paperImageUpdateCfg = (
+  qc: QueryClient
+): Cfg<PaperPageImage, PaperImageUpdateVars> => ({
+  ...ONLINE,
+  ...PAPER_LANE,
+  // A PATCH of the geometry is last-write-wins on its own, so a replay is
+  // harmless and no client id is needed beyond the image's own.
+  mutationFn: vars => api.paper.updateImage(vars.imageId, vars.edit),
+  onMutate: vars => {
+    qc.setQueryData<PaperPageContent>(['paper', 'page', vars.pageId], prev =>
+      prev
+        ? {
+            ...prev,
+            images: prev.images.map(i =>
+              i.id === vars.imageId
+                ? {
+                    ...i,
+                    ...vars.edit,
+                    flipped:
+                      vars.edit.flipped === undefined
+                        ? i.flipped
+                        : vars.edit.flipped
+                          ? 1
+                          : 0,
+                    locked:
+                      vars.edit.locked === undefined
+                        ? i.locked
+                        : vars.edit.locked
+                          ? 1
+                          : 0,
+                  }
+                : i
+            ),
+          }
+        : prev
+    );
+  },
+});
+
+const recipeCreateCfg = (qc: QueryClient): Cfg<Recipe, RecipeCreateVars> => ({
+  ...ONLINE,
+  mutationFn: async vars => {
+    const stored = await Promise.all(vars.photoIds.map(id => getPhoto(id)));
+    const present = vars.photoIds.filter((_, i) => stored[i]);
+    try {
+      const recipe = await api.cookbook.create({
+        id: vars.id,
+        title: vars.title,
+        content: vars.content,
+        tags: vars.tags,
+        media: stored.flatMap(p => (p ? [p.blob] : [])),
+        mediaIds: present,
+      });
+      await Promise.all(present.map(id => deletePhoto(id)));
+      return recipe;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Upload failed';
+      await Promise.all(
+        present.map(id => markPhotoAttempt(id, message, isTerminal(e)))
+      );
+      throw e;
+    }
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ['recipes'] }),
+});
+
+export const usePaperCreate = (
+  o?: CallerOptions<{ id: string }, PaperCreateVars>
+) => useOfflineMutation(MUTATION_KEYS.paperCreate, paperCreateCfg, o);
+
+export const usePaperPageAdd = (
+  o?: CallerOptions<{ id: string }, PaperPageAddVars>
+) => useOfflineMutation(MUTATION_KEYS.paperPageAdd, paperPageAddCfg, o);
+
+export const usePaperPageSave = (
+  o?: CallerOptions<{ success: boolean }, PaperPageSaveVars>
+) => useOfflineMutation(MUTATION_KEYS.paperPageSave, paperPageSaveCfg, o);
+
+export const usePaperImageAdd = (
+  o?: CallerOptions<PaperPageImage, PaperImageAddVars>
+) => useOfflineMutation(MUTATION_KEYS.paperImageAdd, paperImageAddCfg, o);
+
+export const usePaperImageUpdate = (
+  o?: CallerOptions<PaperPageImage, PaperImageUpdateVars>
+) => useOfflineMutation(MUTATION_KEYS.paperImageUpdate, paperImageUpdateCfg, o);
+
+export const useRecipeCreate = (o?: CallerOptions<Recipe, RecipeCreateVars>) =>
+  useOfflineMutation(MUTATION_KEYS.recipeCreate, recipeCreateCfg, o);
+
+export const useFoodCreate = (o?: CallerOptions<FoodEntry, FoodCreateVars>) =>
+  useOfflineMutation(MUTATION_KEYS.foodCreate, foodCreateCfg, o);
+
+export const useSelfieUpload = (o?: CallerOptions<Selfie, SelfieUploadVars>) =>
+  useOfflineMutation(MUTATION_KEYS.selfieUpload, selfieUploadCfg, o);
+
+export const useCalendarCreate = (
+  o?: CallerOptions<{ id: string }, CalendarCreateVars>
+) => useOfflineMutation(MUTATION_KEYS.calendarCreate, calendarCreateCfg, o);
+
+export const useIdeaCreate = (
+  o?: CallerOptions<{ id: string }, IdeaCreateVars>
+) => useOfflineMutation(MUTATION_KEYS.ideaCreate, ideaCreateCfg, o);
+
+export const useCalorieLog = (o?: CallerOptions<CalorieLog, CalorieLogVars>) =>
+  useOfflineMutation(MUTATION_KEYS.calorieLog, calorieLogCfg, o);
 
 export const useJournalCreate = (
   o?: CallerOptions<{ id: string }, JournalCreateVars>

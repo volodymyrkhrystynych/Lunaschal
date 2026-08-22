@@ -750,11 +750,16 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                           ? recorder.stop()
                           : recorder.start()
                       }
-                      disabled={recorder.status === 'transcribing'}
+                      disabled={
+                        recorder.status === 'transcribing' ||
+                        !recorder.canTranscribe
+                      }
                       title={
-                        recorder.status === 'recording'
-                          ? 'Stop recording'
-                          : 'Speak to save to the journal'
+                        !recorder.canTranscribe
+                          ? 'Offline — dictation needs the server'
+                          : recorder.status === 'recording'
+                            ? 'Stop recording'
+                            : 'Speak to save to the journal'
                       }
                       className={`px-3 py-1 rounded disabled:opacity-50 ${
                         recorder.status === 'recording'

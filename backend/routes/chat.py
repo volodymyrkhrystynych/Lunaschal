@@ -1045,13 +1045,35 @@ def stream():
         q = runs.start(message_id, messages, system_prompt, tools_enabled=not system_prompt)
 
         def generate():
-            yield f'data: {json.dumps({"messageId": message_id})}\n\n'
-            while True:
-                kind, payload = q.get()
-                if kind == '_end':
-                    break
-                yield _format_event(kind, payload)
-            yield 'data: [DONE]\n\n'
+            relayed = 0
+            drained = False
+            started = time.monotonic()
+            try:
+                # First frame, and inside the try with everything else: a client
+                # that hangs up before the first token is exactly the case worth
+                # hearing about.
+                yield f'data: {json.dumps({"messageId": message_id})}\n\n'
+                while True:
+                    kind, payload = q.get()
+                    if kind == '_end':
+                        drained = True
+                        break
+                    relayed += 1
+                    yield _format_event(kind, payload)
+                yield 'data: [DONE]\n\n'
+            finally:
+                # The run itself is unaffected — it owns the row and finishes
+                # regardless (that is the whole point of the background
+                # thread). But whether the *browser* stopped listening is the
+                # one fact that separates "the reply was slow" from "the
+                # connection dropped and the reply came back from the row",
+                # and it is invisible from either side otherwise.
+                if not drained:
+                    logger.warning(
+                        'Chat stream disconnected mid-reply after %.1fs and %d events '
+                        '(message %s); the run continues in the background',
+                        time.monotonic() - started, relayed, message_id,
+                    )
 
         return Response(
             stream_with_context(generate()),

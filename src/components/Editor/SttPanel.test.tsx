@@ -17,6 +17,7 @@ vi.mock('../../hooks/useRecorder', () => ({
     }
   ) => ({
     status: 'idle',
+    canTranscribe: true,
     error: '',
     // start('audio') is the no-transcription path: the stored recording goes
     // straight to onRecording and nothing is ever handed to onTranscript.
