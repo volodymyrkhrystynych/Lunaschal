@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useOnline } from '../offline/useOnline';
 import {
   appendChunk,
   beginRecording,
@@ -113,6 +114,19 @@ export function useRecorder(
   const deliverRef = useRef({ onTranscript, onAudio });
   deliverRef.current = { onTranscript, onAudio };
 
+  // Dictation is the one thing on this hook that genuinely needs the backend:
+  // the microphone and the audio work anywhere, but turning speech into text is
+  // a server call. So the mic button doubles as the app's offline indicator — a
+  // control going flat where you were about to use it says more, and says it
+  // where you are looking, than a status bar somewhere else on the screen.
+  //
+  // `audio` mode is deliberately unaffected: those recordings go to IndexedDB
+  // and upload later (src/offline/recordingQueue.ts), so they work offline and
+  // must keep working.
+  const canTranscribe = useOnline();
+  const canTranscribeRef = useRef(canTranscribe);
+  canTranscribeRef.current = canTranscribe;
+
   const setStatusIfMounted = (s: RecorderStatus) => {
     if (mountedRef.current) setStatus(s);
   };
@@ -196,6 +210,10 @@ export function useRecorder(
     opts: { durable?: boolean } = {}
   ) => {
     setError('');
+    if (mode === 'transcribe' && !canTranscribeRef.current) {
+      setError('Dictation needs the server — the mic is back when you are.');
+      return;
+    }
     modeRef.current = mode;
     recoveredRef.current = false;
     // Per-start, because SttPanel drives three buttons off one recorder and only
@@ -388,5 +406,5 @@ export function useRecorder(
     };
   }, []);
 
-  return { status, error, start, stop };
+  return { status, error, start, stop, canTranscribe };
 }

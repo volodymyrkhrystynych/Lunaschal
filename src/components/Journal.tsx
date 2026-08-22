@@ -595,7 +595,15 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                   else if (editRecorder.status === 'idle')
                     void editRecorder.start();
                 }}
-                disabled={editRecorder.status === 'transcribing'}
+                disabled={
+                  editRecorder.status === 'transcribing' ||
+                  !editRecorder.canTranscribe
+                }
+                title={
+                  editRecorder.canTranscribe
+                    ? undefined
+                    : 'Offline — dictation needs the server'
+                }
                 aria-label={
                   editRecorder.status === 'recording'
                     ? 'Stop recording'

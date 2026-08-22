@@ -70,7 +70,14 @@ export function BrainDump({ folderId, onGenerated }: Props) {
                 ? recorder.stop()
                 : recorder.start()
             }
-            disabled={recorder.status === 'transcribing'}
+            disabled={
+              recorder.status === 'transcribing' || !recorder.canTranscribe
+            }
+            title={
+              recorder.canTranscribe
+                ? undefined
+                : 'Offline — dictation needs the server'
+            }
             className={`px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
               recorder.status === 'recording'
                 ? 'bg-red-600 hover:bg-red-700 text-white'

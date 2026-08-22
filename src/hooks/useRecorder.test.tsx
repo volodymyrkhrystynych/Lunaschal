@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import { useRecorder } from './useRecorder';
+import { onlineManager } from '@tanstack/react-query';
 import { installFakeMediaRecorder } from '../test/mediaRecorder';
 
 // jsdom has no indexedDB, and recordingStore decides between the real store and
@@ -294,6 +295,50 @@ describe('useRecorder', () => {
 
     expect(onAudio).toHaveBeenCalledTimes(1);
     expect(await listRecordings()).toEqual([]);
+  });
+
+  // --- offline -------------------------------------------------------------
+  //
+  // The mic *is* the offline indicator. Dictation is the one thing on this hook
+  // that genuinely needs the backend, so the button going flat says "no server"
+  // exactly where the user was about to need one — without a banner somewhere
+  // else on the screen that they have to notice.
+
+  it('refuses to dictate offline, and says why', async () => {
+    const fake = installFakeMediaRecorder();
+    onlineManager.setOnline(false);
+    const onTranscript = vi.fn();
+    const { result } = renderHook(() => useRecorder(onTranscript));
+
+    expect(result.current.canTranscribe).toBe(false);
+    await act(async () => {
+      await result.current.start();
+    });
+
+    expect(result.current.status).toBe('idle');
+    expect(result.current.error).toMatch(/needs the server/i);
+    // The microphone was never opened — there is nothing running to stop.
+    expect(fake.state()).toBe('none');
+    expect(onTranscript).not.toHaveBeenCalled();
+  });
+
+  it('still records audio offline, because that never needed the server', async () => {
+    // Journal audio goes to IndexedDB and uploads later. Disabling it would
+    // take away the one capture path that works offline by design.
+    const fake = installFakeMediaRecorder();
+    onlineManager.setOnline(false);
+    const { result } = renderHook(() => useRecorder(vi.fn(), undefined, {}));
+
+    await act(async () => {
+      await result.current.start('audio', { durable: true });
+    });
+    await act(async () => {
+      fake.emit(new Blob(['spoken offline']));
+    });
+
+    expect(result.current.status).toBe('recording');
+    const [rec] = await listRecordings();
+    expect(await (await assembleBlob(rec.id))!.text()).toBe('spoken offline');
   });
 });
 

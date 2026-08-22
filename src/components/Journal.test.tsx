@@ -74,6 +74,7 @@ vi.mock('../hooks/api', () => ({
 vi.mock('../hooks/useRecorder', () => ({
   useRecorder: (onTranscript: (text: string) => void) => ({
     status: 'idle',
+    canTranscribe: true,
     error: '',
     start: vi.fn(async () => onTranscript('and one more thing')),
     stop: vi.fn(),
