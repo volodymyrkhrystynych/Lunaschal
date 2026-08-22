@@ -25,8 +25,12 @@ vi.mock('../../hooks/api', () => ({
 }));
 
 /** A /api/chat/stream response whose body stays open until the test closes it,
- * so we can inspect what the app does *while* a reply is generating. */
-function openStream() {
+ * so we can inspect what the app does *while* a reply is generating.
+ *
+ * `messageId` is the row the background run writes into, announced in the
+ * stream's first frame exactly as the persisted path does — it is what tells
+ * the live bubble which row will eventually relieve it. */
+function openStream(messageId?: string) {
   let push!: (chunk: string) => void;
   let pushEvent!: (event: object) => void;
   let close!: (done?: object) => void;
@@ -36,6 +40,7 @@ function openStream() {
       const encode = new TextEncoder();
       const send = (event: object) =>
         controller.enqueue(encode.encode(`data: ${JSON.stringify(event)}\n\n`));
+      if (messageId) send({ messageId });
       push = chunk => send({ content: chunk });
       pushEvent = send;
       close = done => {
@@ -580,6 +585,152 @@ describe('reply persistence', () => {
       'c1',
       expect.objectContaining({ role: 'assistant' })
     );
+  });
+});
+
+describe('the hand-off from the live stream to the saved row', () => {
+  const userTurn = {
+    id: 'm-user',
+    role: 'user',
+    content: 'hello there',
+    metadata: null,
+    status: 'done',
+    createdAt: '2026-01-01T08:00:00.000Z',
+  };
+  const conversation = (assistant: object) => ({
+    id: 'c1',
+    messages: [userTurn, assistant],
+  });
+  const stillRunning = conversation({
+    id: 'm-assistant',
+    role: 'assistant',
+    content: '',
+    metadata: null,
+    status: 'streaming',
+    createdAt: '2026-01-01T08:00:01.000Z',
+  });
+  const finished = conversation({
+    id: 'm-assistant',
+    role: 'assistant',
+    content: 'General Kenobi',
+    metadata: null,
+    status: 'done',
+    createdAt: '2026-01-01T08:00:01.000Z',
+  });
+
+  const send = async () => {
+    const input = await screen.findByPlaceholderText('Type a message...');
+    fireEvent.change(input, { target: { value: 'hello there' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+  };
+
+  /** Wait for one more `today` fetch than have already happened. Counted
+   * relative to now, because the mock's call history accumulates across the
+   * tests in this file. */
+  const nextFetch = async () => {
+    const before = vi.mocked(api.chat.today).mock.calls.length;
+    await waitFor(
+      () =>
+        expect(vi.mocked(api.chat.today).mock.calls.length).toBeGreaterThan(
+          before
+        ),
+      { timeout: 4000 }
+    );
+  };
+
+  it('keeps the streamed reply on screen until the row carries it', async () => {
+    // The ten-second hole: the streamed text used to be wiped the instant the
+    // stream ended, on the assumption that the next `today` fetch would arrive
+    // in its place. It can be a poll away — or paused entirely while the app
+    // thinks the backend is unreachable — and until it lands the reply is
+    // rendered nowhere at all.
+    const stream = openStream('m-assistant');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    // The row stays empty and 'streaming' for as long as this test says it
+    // does — standing in for a refetch that lands before the run's final
+    // write, or a poll that is paused while the app believes the backend is
+    // unreachable.
+    let row: object = stillRunning;
+    vi.mocked(api.chat.today)
+      .mockResolvedValueOnce(null)
+      .mockImplementation(async () => row as never);
+
+    renderChat();
+    await send();
+    stream.push('General Kenobi');
+    await screen.findByText('General Kenobi');
+    stream.close();
+
+    // Whatever the refetches say, the reply has to survive them.
+    await nextFetch();
+    await nextFetch();
+    expect(screen.getByText('General Kenobi')).toBeTruthy();
+
+    row = finished;
+
+    // …and once the poll finds the finished row, exactly one copy remains: the
+    // saved one. (Never two: the live bubble hands over, it doesn't stack.)
+    await nextFetch();
+    await waitFor(() =>
+      expect(screen.getAllByText('General Kenobi')).toHaveLength(1)
+    );
+  });
+
+  it('survives a drop mid-reply without the text ever leaving the screen', async () => {
+    const stream = openStream('m-assistant');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    let row: object = stillRunning;
+    vi.mocked(api.chat.today)
+      .mockResolvedValueOnce(null)
+      .mockImplementation(async () => row as never);
+
+    renderChat();
+    await send();
+    stream.push('General Ken');
+    await screen.findByText('General Ken');
+    stream.fail(new Error('Load failed'));
+
+    // The half-sentence this tab did receive stays put — the run is still
+    // going, and wiping it leaves the user staring at nothing.
+    await nextFetch();
+    expect(screen.getByText('General Ken')).toBeTruthy();
+    expect(screen.queryByText(/^Error:/)).toBeNull();
+
+    row = finished;
+
+    expect(
+      await screen.findByText('General Kenobi', {}, { timeout: 4000 })
+    ).toBeTruthy();
+    expect(screen.queryByText('General Ken')).toBeNull();
+  });
+
+  it('does not print the reply twice when the poll lands mid-stream', async () => {
+    // The run checkpoints every 0.5s and the poll runs at 1.5s, so a
+    // half-written copy of the text this tab is already showing arrives while
+    // it is still streaming.
+    const stream = openStream('m-assistant');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    vi.mocked(api.chat.today)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue(
+        conversation({
+          id: 'm-assistant',
+          role: 'assistant',
+          content: 'General Ken',
+          metadata: null,
+          status: 'streaming',
+          createdAt: '2026-01-01T08:00:01.000Z',
+        }) as never
+      );
+
+    renderChat();
+    await send();
+    await nextFetch();
+    stream.push('General Ken');
+    await screen.findByText('General Ken');
+
+    expect(screen.getAllByText('General Ken')).toHaveLength(1);
   });
 });
 
