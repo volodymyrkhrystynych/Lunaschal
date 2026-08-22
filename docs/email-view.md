@@ -1,6 +1,6 @@
 # Email view — design plan
 
-Status: planning. Complements the higher-level "Email ingestion" section in [ROADMAP.md](./ROADMAP.md).
+Status: Gmail, Outlook, and generic IMAP connectors are implemented (`backend/email/gmail_client.py`, `backend/email/outlook_client.py` + `backend/email/imap_client.py`, dispatched by `backend/email/sync.py`). Complements the higher-level "Email ingestion" section in [ROADMAP.md](./ROADMAP.md).
 
 ## Goal
 
@@ -24,27 +24,28 @@ A dedicated email view inside Lunaschal that pulls messages out of cloud provide
 
 ## Providers and auth
 
-| Provider | Protocol                            | Notes                                                                                |
-| -------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
-| Gmail    | IMAP + OAuth 2.0                    | Use the Gmail IMAP endpoint; tokens stored locally in SQLite, refresh automatically. |
-| Outlook  | Microsoft Graph or IMAP + OAuth 2.0 | Graph is richer, IMAP is simpler to start with.                                      |
-| Generic  | IMAP/SMTP                           | Password or app-token; lowest-common-denominator provider support.                   |
+| Provider | Protocol              | Notes                                                                                                                                                                                                |
+| -------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gmail    | Gmail API + OAuth 2.0 | `backend/email/gmail_client.py`. History API for incremental sync; tokens stored locally in SQLite, refresh automatically.                                                                           |
+| Outlook  | IMAP + OAuth 2.0      | `backend/email/outlook_client.py` (Microsoft identity platform token dance) + `backend/email/imap_client.py` — chosen over Graph so it shares the IMAP sync engine with the generic connector below. |
+| Generic  | IMAP                  | `backend/email/imap_client.py`. Password or app-token, any host/port — Fastmail, Yahoo, a custom domain.                                                                                             |
 
-## Data model (proposed)
+One connected account per provider slot (max 3 total) — reconnecting a provider with a different address is rejected until the existing one is disconnected.
 
-- `email_accounts` — provider, tokens, last sync cursor.
-- `email_threads` — subject, participants, `last_message_at`, `unread_count`, `account_id`.
-- `email_messages` — `thread_id`, `account_id`, `message_id`, headers, body text/HTML, `received_at`, `is_read`, `is_starred`, `raw_path`.
-- `email_labels` — account labels, mapping to local categories.
-- `email_message_labels` — many-to-many.
-- `email_actions` — AI-extracted actions: `todo`, `event`, `job_application`, `rejection`, `next_step`.
+## Data model (as implemented)
 
-## Sync model
+Simpler than originally proposed below — no separate threads/labels tables; `backend/db/schema.sql`:
 
-- First run: fetch the last N days (configurable, default 90), save messages locally, build threads.
-- Incremental: use IMAP `UIDVALIDITY` / `UIDNEXT` or provider-specific sync tokens.
-- Store the full raw message on disk (`./data/emails/<account>/<uid>.eml`) and the indexed text/blobs in SQLite.
-- Deletions on the server are marked `is_deleted` locally rather than hard-deleted.
+- `email_accounts` — `provider` (`gmail`/`outlook`/`imap`), OAuth tokens (gmail/outlook) or `imap_host`/`imap_port`/`imap_username`/`imap_password` (imap), sync cursor (`history_id` for gmail, `uid_validity`/`uid_next` for outlook/imap).
+- `emails` — flat per-message row: `account_id`, `provider_message_id` (the provider's own native id), subject/sender/body text+HTML, `received_at`, AI `category`/`job_status`.
+- `email_images` — content-addressed cache for HTML images, keyed by a hash of the original URL (never fetched by the browser directly — see `backend/email/sanitize.py`).
+
+## Sync model (as implemented)
+
+- No day-bounded window for any provider: first connect is a complete mailbox mirror (Gmail: full `messages.list`; Outlook/IMAP: `UID SEARCH ALL`), since already-synced messages are skipped cheaply on any re-list.
+- Incremental: Gmail's History API (`history_id`); Outlook/IMAP's `UID SEARCH <uid_next>:*` against `uid_validity`/`uid_next`. A cursor going stale (Gmail history expiring, or IMAP `UIDVALIDITY` changing) falls back to a full re-list automatically.
+- No raw `.eml` files — sanitized HTML/text and extracted metadata live directly in the `emails` row; images referenced by HTML are fetched separately into `email_images`.
+- No `is_deleted`/soft-delete tracking yet — deletions on the server aren't currently reflected locally.
 
 ## View and sorting
 
@@ -94,7 +95,4 @@ Hold this for a second phase. The first useful version is "show me job stuff and
 
 ## Next steps
 
-1. Add `email_*` tables to `backend/db/schema.sql` and migration helpers.
-2. Implement a minimal `backend/routes/email.py` for a single IMAP account.
-3. Add the React view at `src/components/Email/`.
-4. Add the job-search AI prompt and schema in `backend/ai/email.py`.
+Done: `email_*` tables and migrations, `backend/routes/email.py` (multi-provider), the React view at `src/components/Email/`, and the job-search AI prompt/schema in `backend/ai/email.py`. Remaining, per "Scope later" above: ad/newsletter filtering, spam auto-archive, two-way sync and sending.

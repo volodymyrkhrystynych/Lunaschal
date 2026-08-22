@@ -24,7 +24,7 @@ def _insert_email(db, account_id, **overrides) -> str:
     row_id = str(ULID())
     now = int(time.time())
     defaults = dict(
-        id=row_id, account_id=account_id, gmail_id=row_id, thread_id='t',
+        id=row_id, account_id=account_id, provider_message_id=row_id, thread_id='t',
         subject='Hello', sender='Someone', sender_email='s@example.com',
         snippet='snip', body_text='body text here', label_ids='[]',
         received_at=now, category=None, job_status=None, created_at=now,
@@ -33,9 +33,9 @@ def _insert_email(db, account_id, **overrides) -> str:
     db.execute(
         """
         INSERT INTO emails
-            (id, account_id, gmail_id, thread_id, subject, sender, sender_email,
+            (id, account_id, provider_message_id, thread_id, subject, sender, sender_email,
              snippet, body_text, label_ids, received_at, category, job_status, created_at)
-        VALUES (:id, :account_id, :gmail_id, :thread_id, :subject, :sender, :sender_email,
+        VALUES (:id, :account_id, :provider_message_id, :thread_id, :subject, :sender, :sender_email,
                 :snippet, :body_text, :label_ids, :received_at, :category, :job_status, :created_at)
         """,
         defaults,
@@ -127,7 +127,7 @@ def test_sync_now_without_account_is_400(client):
 
 def test_sync_now_calls_sync_account(client, monkeypatch):
     db = get_db()
-    _insert_account(db)
+    account_id = _insert_account(db)
 
     monkeypatch.setattr(
         'backend.email.sync.sync_account', lambda account: {'status': 'ok', 'newCount': 3}
@@ -135,4 +135,28 @@ def test_sync_now_calls_sync_account(client, monkeypatch):
 
     resp = client.post('/api/email/sync')
     assert resp.status_code == 200
-    assert resp.get_json() == {'status': 'ok', 'newCount': 3}
+    assert resp.get_json() == {account_id: {'status': 'ok', 'newCount': 3}}
+
+
+def test_sync_now_with_provider_syncs_only_that_account(client, monkeypatch):
+    db = get_db()
+    _insert_account(db)
+
+    monkeypatch.setattr(
+        'backend.email.sync.sync_account', lambda account: {'status': 'ok', 'newCount': 5}
+    )
+
+    resp = client.post('/api/email/sync?provider=gmail')
+    assert resp.status_code == 200
+    assert resp.get_json() == {'status': 'ok', 'newCount': 5}
+
+
+def test_sync_now_with_unconnected_provider_is_400(client, monkeypatch):
+    db = get_db()
+    _insert_account(db)
+    monkeypatch.setattr(
+        'backend.email.sync.sync_account', lambda account: {'status': 'ok', 'newCount': 1}
+    )
+
+    resp = client.post('/api/email/sync?provider=outlook')
+    assert resp.status_code == 400

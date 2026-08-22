@@ -680,6 +680,7 @@ export interface AppSettings {
   researchSearchTimeoutSeconds: number;
   researchDeepTimeoutSeconds: number;
   hasGoogleOauthClient: boolean;
+  hasMicrosoftOauthClient: boolean;
   /** Fallback location for the weather card when no geolocation fix has ever
    * been logged. Null lat/lon means it's unset. */
   weatherDefaultLat: number | null;
@@ -1008,12 +1009,23 @@ export interface SyncResult {
   error?: string;
 }
 
+export type EmailProvider = 'gmail' | 'outlook' | 'imap';
+
 export interface EmailOauthStatus {
   connected: boolean;
   emailAddress?: string | null;
   lastSyncedAt?: string | null;
   lastSyncError?: string | null;
   syncEnabled?: boolean;
+}
+
+export interface EmailAccountStatus {
+  provider: EmailProvider;
+  emailAddress: string;
+  connected: boolean;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
+  syncEnabled: boolean;
 }
 
 export type EmailCategory =
@@ -1025,7 +1037,7 @@ export type JobApplicationStatus =
 export interface EmailMessage {
   id: string;
   accountId: string;
-  gmailId: string;
+  providerMessageId: string;
   threadId: string | null;
   subject: string | null;
   sender: string | null;
@@ -1559,6 +1571,8 @@ export const api = {
           websearchSearchKey?: string;
           googleOauthClientId?: string;
           googleOauthClientSecret?: string;
+          microsoftOauthClientId?: string;
+          microsoftOauthClientSecret?: string;
         }
       >
     ) => patch<{ success: boolean }>('/api/settings/ai', data),
@@ -2627,9 +2641,31 @@ export const api = {
   },
 
   email: {
-    oauthStatus: () => get<EmailOauthStatus>('/api/email/oauth/status'),
-    disconnect: () => post<{ success: boolean }>('/api/email/oauth/disconnect'),
-    syncNow: () => post<EmailSyncResult>('/api/email/sync'),
+    accounts: () => get<EmailAccountStatus[]>('/api/email/accounts'),
+    oauthStatus: (provider: EmailProvider = 'gmail') =>
+      get<EmailOauthStatus>(`/api/email/oauth/status?provider=${provider}`),
+    disconnect: (provider: EmailProvider = 'gmail') =>
+      post<{ success: boolean }>(
+        `/api/email/oauth/disconnect?provider=${provider}`
+      ),
+    connectImap: (body: {
+      host: string;
+      port: number;
+      username: string;
+      password: string;
+      emailAddress: string;
+    }) =>
+      post<{ success: boolean } | { error: string }>(
+        '/api/email/imap/connect',
+        body
+      ),
+    /** No provider: syncs every connected account, returned as
+     *  {accountId: result}. With a provider: syncs just that one account,
+     *  returned as a single result. */
+    syncNow: (provider?: EmailProvider) =>
+      post<Record<string, EmailSyncResult> | EmailSyncResult>(
+        `/api/email/sync${provider ? `?provider=${provider}` : ''}`
+      ),
     list: (
       params: {
         category?: EmailCategory;
