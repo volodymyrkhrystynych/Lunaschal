@@ -7,7 +7,11 @@ import {
   fireEvent,
   screen,
 } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import {
+  QueryClient,
+  QueryClientProvider,
+  onlineManager,
+} from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { PaperEditor } from './PaperEditor';
 import { PAGE_HEIGHT, PAGE_WIDTH } from '@/lib/paper';
@@ -214,5 +218,75 @@ describe('manual save', () => {
       'img-1',
       expect.objectContaining({ x: expect.any(Number), y: expect.any(Number) })
     );
+  });
+});
+
+describe('a picture pasted with no backend in reach', () => {
+  /** A paste event carrying one image file, the shape the handler reads. */
+  const pasteImage = (file: File) => {
+    const event = new Event('paste') as Event & { clipboardData: unknown };
+    event.clipboardData = {
+      items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
+    };
+    window.dispatchEvent(event);
+  };
+
+  it('lands on the page, on the device, and uploads under the id it already has', async () => {
+    // The one thing on a paper page that cannot be redrawn — and paper only
+    // ever exists on the tablet it was written on, which may be nowhere near
+    // the server. So: on the page at once, in IndexedDB at once, uploaded
+    // whenever the backend comes back, under the id the page already shows.
+    const created = vi.fn().mockResolvedValue({ id: 'ignored' });
+    vi.mocked(api.paper.addImage).mockImplementation(created);
+    const objectUrls: Blob[] = [];
+    URL.createObjectURL = vi.fn((b: Blob) => {
+      objectUrls.push(b);
+      return 'blob:pasted';
+    }) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    // naturalSize resolves off an <img> load, which jsdom never fires.
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      configurable: true,
+      set() {
+        setTimeout(() => this.onerror?.(), 0);
+      },
+    });
+
+    const { queryClient } = renderEditor();
+    await waitFor(() => expect(api.paper.getPage).toHaveBeenCalled());
+
+    onlineManager.setOnline(false);
+    const file = new File(['pixels'], 'pasted.png', { type: 'image/png' });
+    await act(async () => {
+      pasteImage(file);
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    // On the page immediately, carrying no server url — the editor draws it
+    // from the device instead, which is what survives a reload.
+    const page = queryClient.getQueryData<{
+      images: { id: string; url: string }[];
+    }>(['paper', 'page', PAGE_1]);
+    expect(page?.images).toHaveLength(1);
+    const imageId = page!.images[0].id;
+    expect(page!.images[0].url).toBe('');
+
+    // And on the device: the bytes are in the store under that same id, so the
+    // upload can happen an hour from now from the same picture.
+    const { getPhoto } = await import('@/offline/photoStore');
+    const stored = await getPhoto(imageId);
+    expect(await stored!.blob.text()).toBe('pixels');
+    expect(stored!.meta.placement).toBeTruthy();
+
+    // Nothing was sent — there was nowhere to send it.
+    expect(api.paper.addImage).not.toHaveBeenCalled();
+
+    // …and when the backend comes back it goes up under that same id, so the
+    // replay cannot paste the picture a second time.
+    onlineManager.setOnline(true);
+    await act(() => queryClient.resumePausedMutations());
+    await waitFor(() => expect(api.paper.addImage).toHaveBeenCalled());
+    expect(vi.mocked(api.paper.addImage).mock.calls[0][4]).toBe(imageId);
+    await waitFor(async () => expect(await getPhoto(imageId)).toBeUndefined());
   });
 });
