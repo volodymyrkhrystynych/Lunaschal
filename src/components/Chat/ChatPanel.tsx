@@ -63,10 +63,6 @@ export function ChatPanel() {
   const [staged, setStaged] = useState<ChatAttachment[]>([]);
   const [attachError, setAttachError] = useState('');
   const [isUploading, setIsUploading] = useState(false);
-  // The verbatim transcript behind whatever is in the box, when it was dictated.
-  // Kept so it can be shown, and so it rides to the server as the message's
-  // `rawContent` whenever a later hand-edit makes it differ from what was said.
-  const [dictated, setDictated] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -270,15 +266,14 @@ export function ChatPanel() {
     if ((!userMessage && staged.length === 0) || isStreaming) return;
 
     const attachmentIds = staged.map(a => a.id);
-    // Only ever the transcript that produced *this* text, and only when it
-    // differs — a typed message must leave rawContent null, exactly as a typed
-    // journal entry does.
-    const rawContent =
-      dictated && dictated !== userMessage ? dictated : undefined;
+    // No `rawContent` from here any more. It carried the verbatim transcript
+    // for the window in which a dictated message sat in the box being edited,
+    // and dictation now sends on its own — so `content` *is* what was said,
+    // and a second copy of it would be noise. Older messages that do have one
+    // still render it under the bubble.
 
     if (messageText === undefined) setInput('');
     setStaged([]);
-    setDictated(null);
     setAttachError('');
 
     let convId = conversationId;
@@ -292,7 +287,6 @@ export function ChatPanel() {
       convId,
       role: 'user',
       content: userMessage,
-      rawContent,
       attachmentIds,
     });
 
@@ -392,24 +386,26 @@ export function ChatPanel() {
   };
 
   /**
-   * Dictation lands in the box, it doesn't send.
+   * Dictation sends. Speak, stop, and the message goes.
    *
-   * This used to POST the transcript straight through as the message, which is
-   * the one place in the app that did — every other view appends to a textarea
-   * (BrainDump, IdeaCapture, Journal, FoodCapture) precisely so a mangled proper
-   * noun can be fixed before it becomes a record.
+   * It landed in the box and waited for a second click for as long as a
+   * transcript could not be trusted with a proper noun — the mangled-name
+   * problem. Every dictation now goes through two STT models and an LLM
+   * cross-check (`backend/ai/transcribe_polish.merge_transcripts`), which is
+   * what makes talking to the chat a conversation again rather than a
+   * speak-read-click loop.
    *
-   * There used to be an automated correction pass here too (`polishTranscript`,
-   * checking the transcript against the memory document and any attached
-   * photos) — moved to Journal's Polish instead, which already exists to turn
-   * a raw transcript into clean text and now takes the same memory-document
-   * reference. One place to fix a misheard word beats two.
+   * Whatever was already typed goes with it: half a message in the box and the
+   * rest spoken is one message, not two.
    */
   const handleTranscript = (text: string) => {
     const raw = text.trim();
     if (!raw) return;
-    setInput(prev => (prev.trim() ? `${prev.trim()} ${raw}` : raw));
-    setDictated(prev => (prev ? `${prev} ${raw}` : raw));
+    const combined = input.trim() ? `${input.trim()} ${raw}` : raw;
+    setInput('');
+    // Nothing here was typed, so a failed send has nothing to retype from —
+    // put the words back in the box instead of dropping them on the floor.
+    void sendMessage(combined).catch(() => setInput(combined));
   };
 
   const recorder = useRecorder(handleTranscript);
@@ -647,9 +643,10 @@ export function ChatPanel() {
                     Cut off at the reply time limit (Settings → llama.cpp)
                   </div>
                 )}
-                {/* What was actually dictated, kept whenever the correction pass
-                    or an edit changed it — the journal's "As captured". Only
-                    ever present on a message that was spoken. */}
+                {/* What was actually dictated, on the messages old enough to
+                    have one — the journal's "As captured". Nothing writes
+                    `rawContent` from the chat composer any more (dictation
+                    sends verbatim), so this only ever renders history. */}
                 {message.role === 'user' && message.rawContent && (
                   <details className="mt-1 text-xs text-[var(--color-text-muted)] text-right">
                     <summary className="cursor-pointer select-none">
@@ -905,21 +902,10 @@ export function ChatPanel() {
             ))}
           </div>
         )}
-        {(photoStatus || attachError || dictated) && (
+        {(photoStatus || attachError) && (
           <div className="mb-2 space-y-1 text-xs text-[var(--color-text-muted)]">
             {attachError && <div className="text-red-400">{attachError}</div>}
             {photoStatus && <div>{photoStatus}</div>}
-            {/* Shown before sending, not just after: only once the box has
-                been hand-edited since dictating is there a "raw" left to
-                show — otherwise the box already reads exactly what was said. */}
-            {dictated && dictated !== input.trim() && (
-              <details>
-                <summary className="cursor-pointer select-none">
-                  As dictated
-                </summary>
-                <div className="mt-1 whitespace-pre-wrap">{dictated}</div>
-              </details>
-            )}
           </div>
         )}
         <div className="flex gap-2">

@@ -218,7 +218,7 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
     assert offered == {'delegate', 'propose_task', 'propose_calendar_event',
                        'propose_calorie_log', 'propose_food_log', 'propose_recipe',
                        'draft_flashcard', 'propose_flashcards',
-                       'remember', 'create_note_to_self', 'revise_memory', 'ask_user'}
+                       'create_note_to_self', 'ask_user'}
 
 
 def test_a_tool_call_the_model_invented_is_ignored(monkeypatch, answered):

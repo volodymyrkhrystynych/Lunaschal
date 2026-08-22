@@ -57,10 +57,17 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const queryClient = useQueryClient();
   const { setLevel, level } = useShortcuts();
 
-  // Speak the commentary instead of typing it — appended to whatever is there.
-  const recorder = useRecorder(t =>
-    setCommentary(prev => (prev ? `${prev}\n${t}` : t))
-  );
+  // Speak the commentary instead of typing it — and it saves itself, the same
+  // as dictation in Chat and the writing discussions. Reacting to a chapter is
+  // the case that most wants to stay hands-free: you are mid-read, not looking
+  // at the box. Anything already typed goes into the same entry.
+  const recorder = useRecorder(t => {
+    const raw = t.trim();
+    if (!raw) return;
+    const combined = commentary.trim() ? `${commentary.trim()}\n${raw}` : raw;
+    setCommentary(combined);
+    saveCommentary.mutate(combined);
+  });
 
   // Opening a fic (even by mouse) puts keyboard focus inside the reader so
   // W/S move between chapters instead of switching app tabs.
@@ -744,6 +751,11 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                           : recorder.start()
                       }
                       disabled={recorder.status === 'transcribing'}
+                      title={
+                        recorder.status === 'recording'
+                          ? 'Stop recording'
+                          : 'Speak to save to the journal'
+                      }
                       className={`px-3 py-1 rounded disabled:opacity-50 ${
                         recorder.status === 'recording'
                           ? 'bg-red-600 hover:bg-red-700 text-white'

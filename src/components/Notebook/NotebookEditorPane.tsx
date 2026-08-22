@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState } from 'react';
 // Aliased so it doesn't shadow the DOM's own KeyboardEvent.
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, RefObject } from 'react';
 import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
 import { markdown } from '@codemirror/lang-markdown';
@@ -20,6 +20,14 @@ import {
 } from '../../lib/notebookVim';
 import { matchesQuery } from '../../lib/notebookSearch';
 
+/** The imperative surface the Notebook view drives from its shortcut scope:
+ * the editor's focus and scroll position both live inside CodeMirror, and
+ * neither is a thing a prop can express. */
+export interface NotebookPaneHandle {
+  focus: () => void;
+  scrollBy: (delta: number) => void;
+}
+
 interface Props {
   filePath: string;
   /** Switches the open file — used by the diary-jump, wiki-link-follow, and
@@ -27,6 +35,15 @@ interface Props {
   onOpenPath: (path: string) => void;
   /** Pops one hop off the caller's drill-down history — <BS> below. */
   onGoBack: () => void;
+  /** `:q` on the index page: there is nowhere further back to go, so the
+   * editor releases the keyboard instead of swallowing it. */
+  onExit?: () => void;
+  /** Whether a freshly built editor should take the keyboard. False on the
+   * view's first render, so arriving on the Notebook tab doesn't trap you in
+   * index.md with no shortcut that works; true once you're actually editing,
+   * so following a link or `:q`-ing back to the index keeps the cursor. */
+  autoFocus?: boolean;
+  handle?: RefObject<NotebookPaneHandle | null>;
 }
 
 const SAVE_DEBOUNCE_MS = 1500;
@@ -80,7 +97,9 @@ function registerVimCustomizationsOnce() {
   });
   // Without a file tree to fall back to, "quit" means "back to the index" —
   // the same ensureAndOpen path diary/link-follow already use, so it stays
-  // mounted and focused rather than blurring out to nowhere.
+  // mounted and focused. On the index itself there is no further back, and
+  // re-opening the page you are already on is what used to make `:q` look
+  // like it bounced you straight back in; it releases the keyboard instead.
   Vim.defineEx('quit', 'q', cm => {
     editorCallbacks.get(cm.cm6)?.goHome();
   });
@@ -170,10 +189,21 @@ function registerVimCustomizationsOnce() {
 }
 registerVimCustomizationsOnce();
 
-export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
+export function NotebookEditorPane({
+  filePath,
+  onOpenPath,
+  onGoBack,
+  onExit,
+  autoFocus = false,
+  handle,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Read through a ref inside the build effect, which must not re-run (and
+  // rebuild CodeMirror, losing the cursor) just because focus moved.
+  const autoFocusRef = useRef(autoFocus);
+  autoFocusRef.current = autoFocus;
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>(
     'saved'
   );
@@ -234,6 +264,23 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
     if (path === filePath) return;
     await api.notebook.files.ensure(path);
     onOpenPath(path);
+  };
+
+  // `:q` — one hop back toward the index, and off the keyboard once there.
+  // The blur is done here rather than left to the caller because CodeMirror
+  // holds the focus: without it the vim keymap keeps eating every key and the
+  // app's own shortcuts (tab switching, scrolling) stay unreachable.
+  //
+  // Deferred by a tick because codemirror-vim's ex dialog re-focuses the
+  // editor the moment our handler returns (openDialog's `close()` calls
+  // `me.focus()`), so blurring inline here would simply be undone.
+  const goHome = () => {
+    if (filePath !== INDEX_PATH) {
+      void ensureAndOpen(INDEX_PATH);
+      return;
+    }
+    setTimeout(() => viewRef.current?.contentDOM.blur(), 0);
+    onExit?.();
   };
 
   // `:find <query>` — jump to a note by name. The tree is re-fetched per
@@ -358,14 +405,14 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
     viewRef.current = view;
     editorCallbacks.set(view, {
       save: saveNow,
-      goHome: () => ensureAndOpen(INDEX_PATH),
+      goHome,
       diary: () => ensureAndOpen(diaryPathFor()),
       openLink: target => ensureAndOpen(resolveWikiLinkPath(target, filePath)),
       goBack: onGoBack,
       find: query => void runFind(query),
     });
     setSaveStatus('saved');
-    view.focus();
+    if (autoFocusRef.current) view.focus();
 
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
@@ -382,7 +429,7 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
     if (!viewRef.current) return;
     const cb = editorCallbacks.get(viewRef.current);
     if (!cb) return;
-    cb.goHome = () => ensureAndOpen(INDEX_PATH);
+    cb.goHome = goHome;
     cb.diary = () => ensureAndOpen(diaryPathFor());
     cb.openLink = target =>
       ensureAndOpen(resolveWikiLinkPath(target, filePath));
@@ -390,6 +437,16 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
     cb.find = query => void runFind(query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onOpenPath, onGoBack, filePath]);
+
+  useImperativeHandle(
+    handle,
+    () => ({
+      focus: () => viewRef.current?.focus(),
+      scrollBy: (delta: number) =>
+        viewRef.current?.scrollDOM.scrollBy({ top: delta, behavior: 'smooth' }),
+    }),
+    []
+  );
 
   if (!filePath) return null;
 
@@ -413,6 +470,13 @@ export function NotebookEditorPane({ filePath, onOpenPath, onGoBack }: Props) {
           {filePath}
         </span>
         <div className="flex items-center gap-3">
+          {/* `:q` is now the way out of the editor as well as the way back to
+              the index, and neither is guessable from an empty page. */}
+          <span className="text-xs text-[var(--color-text-muted)] hidden sm:inline">
+            {filePath === INDEX_PATH
+              ? ':q to leave the editor'
+              : ':q for the index'}
+          </span>
           <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] cursor-pointer select-none">
             <input
               type="checkbox"
