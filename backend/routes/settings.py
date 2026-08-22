@@ -8,6 +8,7 @@ import urllib.request
 from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
 from backend.db.connection import build_update, get_db
+from backend.geo import parse_coord
 
 _sleep_inhibitor: subprocess.Popen | None = None
 _INHIBIT_WHO = 'Lunaschal'
@@ -87,6 +88,7 @@ def get_settings():
         'whisperModel': s.get('whisper_model'),
         'sttDevice': s.get('stt_device'),
         'voicePipelineEnabled': bool(s.get('voice_pipeline_enabled', 1)),
+        'transcribePolishEnabled': bool(s.get('transcribe_polish_enabled', 1)),
         'preventSleep': bool(s.get('prevent_sleep', 0)),
         'meetingEchoCancel': bool(s.get('meeting_echo_cancel', 0)),
         'nudgeEnabled': bool(s.get('nudge_enabled', 1)),
@@ -119,8 +121,12 @@ def get_settings():
         'researchSearchTimeoutSeconds': s.get('research_search_timeout_seconds') or 120,
         'researchDeepTimeoutSeconds': s.get('research_deep_timeout_seconds') or 600,
         'hasGoogleOauthClient': bool(s.get('google_oauth_client_id')) and bool(s.get('google_oauth_client_secret')),
+        'hasMicrosoftOauthClient': bool(s.get('microsoft_oauth_client_id')) and bool(s.get('microsoft_oauth_client_secret')),
         'emailSyncEnabled': bool(s.get('email_sync_enabled', 1)),
         'emailSyncIntervalMinutes': s.get('email_sync_interval_minutes') or 15,
+        'weatherDefaultLat': s.get('weather_default_lat'),
+        'weatherDefaultLon': s.get('weather_default_lon'),
+        'weatherDefaultLabel': s.get('weather_default_label') or '',
         # Tailored-resume retention. Defaults repeated from
         # backend/jobs/retention.py for a settings row predating the columns.
         'jobRetentionDays': s.get('job_retention_days') or 180,
@@ -150,6 +156,7 @@ def update_ai():
         'whisperModel': 'whisper_model', 'sttDevice': 'stt_device',
         'hfToken': 'hf_token',
         'voicePipelineEnabled': 'voice_pipeline_enabled',
+        'transcribePolishEnabled': 'transcribe_polish_enabled',
         'preventSleep': 'prevent_sleep',
         'meetingEchoCancel': 'meeting_echo_cancel',
         'nudgeEnabled': 'nudge_enabled',
@@ -179,8 +186,13 @@ def update_ai():
         'websearchSearxngUrl': 'websearch_searxng_url',
         'googleOauthClientId': 'google_oauth_client_id',
         'googleOauthClientSecret': 'google_oauth_client_secret',
+        'microsoftOauthClientId': 'microsoft_oauth_client_id',
+        'microsoftOauthClientSecret': 'microsoft_oauth_client_secret',
         'emailSyncEnabled': 'email_sync_enabled',
         'emailSyncIntervalMinutes': 'email_sync_interval_minutes',
+        'weatherDefaultLat': 'weather_default_lat',
+        'weatherDefaultLon': 'weather_default_lon',
+        'weatherDefaultLabel': 'weather_default_label',
         'jobRetentionDays': 'job_retention_days',
         'jobPurgeOnRejection': 'job_purge_on_rejection',
         'jobRejectionGraceDays': 'job_rejection_grace_days',
@@ -213,6 +225,10 @@ def update_ai():
                 try:
                     value = max(30, min(7200, int(value)))
                 except (TypeError, ValueError):
+                    continue
+            elif camel in ('weatherDefaultLat', 'weatherDefaultLon'):
+                value = parse_coord(value)
+                if value is None:
                     continue
             updates[snake] = value
     db = get_db()

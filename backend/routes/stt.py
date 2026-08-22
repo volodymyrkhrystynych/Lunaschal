@@ -13,6 +13,7 @@ from ulid import ULID
 
 from backend.ai.chat import chat_stream
 from backend.ai.provider import is_ai_configured
+from backend.ai.transcribe_polish import polish_transcript
 
 import soundfile as sf
 from flask import Blueprint, Response, jsonify, request
@@ -57,6 +58,10 @@ _KOKORO_BASE   = 'https://github.com/thewh1teagle/kokoro-onnx/releases/download/
 
 _stt_lock           = threading.Lock()
 _transcribe_lock    = threading.Lock()   # serialises Whisper/Parakeet inference — models are not thread-safe
+# Guards the draft-side handle cache below. Separate from _transcribe_lock on
+# purpose: the whole point of that cache is that draft work never waits on, or
+# is waited on by, an interactive dictation request.
+_draft_handle_lock  = threading.Lock()
 _tts_lock           = threading.Lock()
 _openai_lock        = threading.Lock()
 _stt_model          = None
@@ -69,6 +74,44 @@ _loaded_stt_backend = None   # 'local' or 'openai'
 _loaded_model_name  = None   # whisper model name when _loaded_stt_backend == 'local'
 _loaded_tts_backend = None   # 'local' or 'openai'
 _loaded_device      = None   # 'cuda' or 'cpu'
+
+# Local backends run over every clip, in order. The first of these that matches the
+# user's configured default STT backend becomes the "primary" candidate (see
+# _pick_primary) — the one whose raw text is kept as what was actually heard,
+# and the one returned unmerged when the LLM pass is off or unavailable.
+#
+# Deliberately two, not three, for now. NVIDIA Canary 180M Flash was tried as
+# a third opinion (onnx-asr, same VAD-chunked path as Parakeet) and reverted:
+# its onnx-asr decoder (NemoConformerAED._decoding) is pure greedy argmax with
+# no repetition penalty, generating up to a fixed 1024-token cap per chunk
+# regardless of how much audio that chunk actually contains. On a real ~3.4
+# minute draft it produced 1270 words against Parakeet/Whisper's ~190 for the
+# same clip, and took 695s to do it (RTF 3.4 — slower than the recording
+# itself) — a runaway-decode failure, not a slow-but-correct one. The next
+# candidate worth trying is a Wav2Vec2 CTC model: CTC output length is capped
+# by input frame count, so it's structurally immune to this specific failure
+# mode, unlike any attention-decoder model (Canary, Whisper-style AED). No
+# single canonical pre-converted onnx-asr checkpoint with a solid current WER
+# number was settled on yet, which is why it isn't here either.
+MULTI_BACKENDS = ('parakeet', 'local')
+
+# Persistent STT handles for the multi-backend draft path, keyed by
+# (backend, model_name, device). Kept for the life of the process: the draft
+# pipeline runs every backend in DRAFT_BACKENDS on every clip, and rebuilding
+# them each time cost ~5s of the ~13-18s a 30-60s draft takes — about a third,
+# spent reloading models that were discarded minutes earlier.
+#
+# These are deliberately NOT the interactive singleton above. Sharing one model
+# object across both paths would undo the two properties private handles were
+# introduced for: a draft would evict whatever a live dictation had loaded, and
+# two threads could enter a non-thread-safe model at once. A separate cache
+# keeps both, and just stops throwing the result away.
+#
+# Cost is RAM only — every draft backend is CPU-resident (parakeet is CPU-only
+# by construction, and WHISPER_DEVICE defaults to cpu because llama-server holds
+# the card). Roughly 1.1 GB for the parakeet + whisper-small pair actually
+# configured.
+_draft_handles: dict[tuple, dict] = {}
 
 # Listener process reports its recording state here so the frontend can mirror it
 _listener_state: dict = {'recording': False, 'transcribing': False, 'mode': None}
@@ -114,6 +157,18 @@ def _get_active_stt_device() -> str:
     return DEVICE
 
 
+def _get_transcribe_polish_enabled() -> bool:
+    try:
+        s = get_db().execute(
+            'SELECT transcribe_polish_enabled FROM settings LIMIT 1'
+        ).fetchone()
+        if s and s['transcribe_polish_enabled'] is not None:
+            return bool(s['transcribe_polish_enabled'])
+    except Exception:
+        pass
+    return True
+
+
 def _ensure_openai():
     global _openai_client
     if _openai_client is not None:
@@ -127,6 +182,45 @@ def _ensure_openai():
         from openai import OpenAI
         _openai_client = OpenAI(api_key=api_key)
     return _openai_client
+
+
+def _build_stt_backend(backend: str, model_name: str | None = None, device: str | None = None) -> dict:
+    """Build a fresh, unshared STT handle for `backend`.
+
+    Pure — never touches the module-level singleton (_stt_model,
+    _loaded_stt_backend, …) that the interactive /api/transcribe path uses.
+    `_load_stt` calls this and caches the result in that singleton;
+    `run_multi_backend_transcribe` (backend/journal/voice_drafts.py's draft
+    pipeline) calls it directly for a private, throwaway instance per backend,
+    so a slow multi-model batch never evicts what a live dictation request has
+    loaded, and never contends with it over `_transcribe_lock` either.
+
+    Handle shape: {'backend', 'model', 'vad', 'model_name', 'device'} —
+    unused fields are None for a given backend.
+    """
+    model_name = model_name or _get_active_whisper_model()
+    device = device or _get_active_stt_device()
+
+    if backend == 'openai':
+        _ensure_openai()
+        return {'backend': 'openai', 'model': None, 'vad': None, 'model_name': None, 'device': None}
+    elif backend == 'parakeet':
+        import onnx_asr
+        model_id = PARAKEET_MODEL
+        logger.info("Loading %s '%s' on CPU (onnx-asr)…", backend, model_id)
+        model = onnx_asr.load_model(model_id)
+        # Load Silero VAD for long-audio chunking. The transformer
+        # self-attention in these models crashes on sequences > ~15 min; VAD
+        # splits audio into 20-second speech windows before transcription.
+        vad = onnx_asr.load_vad('silero')
+        logger.info('STT ready (%s).', backend)
+        return {'backend': backend, 'model': model, 'vad': vad, 'model_name': model_id, 'device': 'cpu'}
+    else:
+        import whisper
+        logger.info("Loading Whisper '%s' on %s…", model_name, device)
+        model = whisper.load_model(model_name, device=device)
+        logger.info('STT ready.')
+        return {'backend': 'local', 'model': model, 'vad': None, 'model_name': model_name, 'device': device}
 
 
 def _load_stt(model_name: str | None = None, backend: str | None = None):
@@ -162,31 +256,12 @@ def _load_stt(model_name: str | None = None, backend: str | None = None):
         _stt_vad = None
         _stt_ready = False
 
-        if backend == 'openai':
-            _ensure_openai()
-            _loaded_stt_backend = 'openai'
-            _loaded_model_name = None
-            _loaded_device = None
-        elif backend == 'parakeet':
-            import onnx_asr
-            logger.info("Loading Parakeet '%s' on CPU (onnx-asr)…", PARAKEET_MODEL)
-            _stt_model = onnx_asr.load_model(PARAKEET_MODEL)
-            # Load Silero VAD for long-audio chunking. Parakeet's transformer
-            # self-attention crashes on sequences > ~15 min; VAD splits audio
-            # into 20-second speech windows before transcription.
-            _stt_vad = onnx_asr.load_vad('silero')
-            _loaded_stt_backend = 'parakeet'
-            _loaded_model_name = PARAKEET_MODEL
-            _loaded_device = 'cpu'
-            logger.info("STT ready (Parakeet).")
-        else:
-            import whisper
-            logger.info("Loading Whisper '%s' on %s…", model_name, device)
-            _stt_model = whisper.load_model(model_name, device=device)
-            _loaded_device = device
-            _loaded_stt_backend = 'local'
-            _loaded_model_name = model_name
-            logger.info("STT ready.")
+        handle = _build_stt_backend(backend, model_name, device)
+        _stt_model = handle['model']
+        _stt_vad = handle['vad']
+        _loaded_stt_backend = handle['backend']
+        _loaded_model_name = handle['model_name']
+        _loaded_device = handle['device']
         _stt_ready = True
 
 
@@ -248,6 +323,10 @@ def stt_reload():
         _stt_ready = False
         _loaded_stt_backend = None
         _loaded_model_name = None
+    # The draft path holds its own long-lived handles, which a reload must
+    # clear too — otherwise "reload" would drop only half the loaded models and
+    # the next voice draft would still run on the previous backend/model.
+    reset_draft_handles()
     return jsonify({'success': True})
 
 
@@ -309,8 +388,13 @@ def _decode_to_16k_mono(path: str):
     return np.frombuffer(proc.stdout, dtype=np.float32)
 
 
-def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
-    """Transcribe audio bytes; returns {'text': str, 'language': str}."""
+def _transcribe_with_handle(handle: dict, content: bytes, filename: str, language: str | None) -> dict:
+    """Transcribe audio bytes with a handle from `_build_stt_backend`.
+
+    Pure — reads no module globals, so a caller can safely run this
+    concurrently with the interactive singleton path using its own private
+    handle (see `run_multi_backend_transcribe`). Returns {'text', 'language'}.
+    """
     if len(content) < 1000:
         raise ValueError('Audio too short or empty')
 
@@ -319,7 +403,8 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
         tmp.write(content)
         tmp_path = tmp.name
     try:
-        if _loaded_stt_backend == 'openai':
+        backend = handle['backend']
+        if backend == 'openai':
             with open(tmp_path, 'rb') as f:
                 result = _openai_client.audio.transcriptions.create(
                     model=OPENAI_STT_MODEL,
@@ -328,43 +413,192 @@ def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
                     response_format='verbose_json',
                 )
             return {'text': result.text.strip(), 'language': result.language or language or 'en'}
-        elif _loaded_stt_backend == 'parakeet':
-            # onnx-asr is not thread-safe; serialise like Whisper.
-            # Parakeet TDT v2/v3 is English-only and does no language detection.
-            # Long audio (> ~15 min) crashes the transformer's self-attention,
-            # so we use VAD chunking (20-second speech windows) via with_vad().
+        elif backend == 'parakeet':
+            # Parakeet is English-only and does no language detection. Long
+            # audio (> ~15 min) crashes the transformer's self-attention, so
+            # we use VAD chunking (20-second speech windows) via with_vad().
             waveform = _decode_to_16k_mono(tmp_path)
-            vad_model = _stt_model.with_vad(_stt_vad)
-            with _transcribe_lock:
-                try:
-                    segments = list(vad_model.recognize(waveform, sample_rate=16000,
-                                                         max_speech_duration_s=20))
-                    text = ' '.join(seg.text for seg in segments if seg.text.strip())
-                except Exception:
-                    _reset_stt_model()
-                    raise
+            vad_model = handle['model'].with_vad(handle['vad'])
+            segments = list(vad_model.recognize(waveform, sample_rate=16000,
+                                                 max_speech_duration_s=20))
+            text = ' '.join(seg.text for seg in segments if seg.text.strip())
             return {'text': (text or '').strip(), 'language': language or 'en'}
         else:
             opts = {'language': language} if language else {}
-            if _loaded_device == 'cpu':
+            device = handle.get('device')
+            if device == 'cpu':
                 # CPU is a deliberate choice (Settings > STT Device), not an accidental
                 # fallback — skip the fp16 probe and its "CUDA available but unused"
                 # warning, which would otherwise fire on every single transcription.
                 opts['fp16'] = False
-            with _transcribe_lock:
-                try:
-                    with warnings.catch_warnings():
-                        if _loaded_device == 'cpu':
-                            warnings.filterwarnings(
-                                'ignore', message='Performing inference on CPU when CUDA is available')
-                        result = _stt_model.transcribe(tmp_path, **opts)
-                    return {'text': result['text'].strip(), 'language': result.get('language', language or 'en')}
-                except Exception:
-                    # Reset so the next request reloads with a fresh CUDA context
-                    _reset_stt_model()
-                    raise
+            with warnings.catch_warnings():
+                if device == 'cpu':
+                    warnings.filterwarnings(
+                        'ignore', message='Performing inference on CPU when CUDA is available')
+                result = handle['model'].transcribe(tmp_path, **opts)
+            return {'text': result['text'].strip(), 'language': result.get('language', language or 'en')}
     finally:
         os.unlink(tmp_path)
+
+
+def _do_transcribe(content: bytes, filename: str, language: str | None) -> dict:
+    """Transcribe audio bytes using whichever backend is currently loaded into
+    the shared singleton (`_load_stt`); returns {'text': str, 'language': str}.
+
+    Locks around parakeet/local — those model objects are shared
+    across every interactive request and aren't thread-safe — and resets the
+    singleton on failure so the next request reloads fresh (except on a
+    too-short-audio ValueError, which isn't a model problem). openai isn't
+    locked, matching its previous behaviour: it's a stateless HTTP client, not
+    a loaded model.
+    """
+    handle = {
+        'backend': _loaded_stt_backend,
+        'model': _stt_model,
+        'vad': _stt_vad,
+        'model_name': _loaded_model_name,
+        'device': _loaded_device,
+    }
+    if _loaded_stt_backend == 'openai':
+        return _transcribe_with_handle(handle, content, filename, language)
+
+    with _transcribe_lock:
+        try:
+            return _transcribe_with_handle(handle, content, filename, language)
+        except ValueError:
+            raise
+        except Exception:
+            _reset_stt_model()
+            raise
+
+
+def _draft_handle(backend: str) -> dict:
+    """A cached, process-lifetime STT handle for the draft path.
+
+    Built once per (backend, model_name, device) and kept. A settings change —
+    a different Whisper model or device — lands under a new key rather than
+    mutating the old entry, and the superseded key is evicted from the cache so
+    only one handle per backend stays resident. Eviction is from the dict only:
+    a draft already mid-transcription holds its own reference, so it finishes on
+    the handle it started with instead of having the model pulled out from under
+    it.
+    """
+    key = (backend, _get_active_whisper_model(), _get_active_stt_device())
+    with _draft_handle_lock:
+        handle = _draft_handles.get(key)
+        if handle is None:
+            handle = _build_stt_backend(backend, key[1], key[2])
+            # Drop any handle for this backend under a stale config; only the
+            # current key stays resident.
+            for stale in [k for k in _draft_handles if k[0] == backend and k != key]:
+                del _draft_handles[stale]
+            _draft_handles[key] = handle
+    return handle
+
+
+def reset_draft_handles() -> None:
+    """Drop every cached draft handle. For tests, and for /api/stt/reload — a
+    user who switches STT backend or Whisper model expects the next draft to
+    honour it without waiting for a process restart."""
+    with _draft_handle_lock:
+        _draft_handles.clear()
+
+
+def run_multi_backend_transcribe(
+    content: bytes, filename: str, language: str | None, backends: list[str],
+) -> list[dict]:
+    """Transcribe the same clip with each of `backends`, in turn, each using a
+    handle private to this path rather than the shared singleton — so this can
+    run fully alongside a live interactive request instead of evicting whatever
+    it has loaded. Used by backend/journal/voice_drafts.py's draft pipeline.
+
+    The handles are cached for the life of the process (see _draft_handles), so
+    only the first draft after a restart pays the model load. They stay private
+    to this path: reusing the interactive singleton instead would reintroduce
+    both the eviction and the thread-safety problem that separate handles exist
+    to avoid.
+
+    One backend failing doesn't stop the others. Each result is
+    {'backend': ..., 'text': ...} on success or {'backend': ..., 'error': ...}
+    on failure. A backend that fails also has its handle dropped, so a model
+    left in a bad state is rebuilt next time rather than being reused forever —
+    the same reasoning as _do_transcribe's _reset_stt_model().
+    """
+    results = []
+    for backend in backends:
+        try:
+            handle = _draft_handle(backend)
+            result = _transcribe_with_handle(handle, content, filename, language)
+            results.append({'backend': backend, 'text': result['text']})
+        except Exception as e:
+            logger.warning('Draft transcription failed for backend %s: %s', backend, e)
+            # A ValueError is about the audio (too short/empty), not the model —
+            # that handle is still good and worth keeping.
+            if not isinstance(e, ValueError):
+                with _draft_handle_lock:
+                    for stale in [k for k in _draft_handles if k[0] == backend]:
+                        del _draft_handles[stale]
+            results.append({'backend': backend, 'error': str(e)})
+    return results
+
+
+def pick_primary(candidates: list[dict], active_backend: str) -> dict:
+    """The candidate treated as what was actually heard: the user's configured
+    backend if it produced text, else Parakeet, else whatever succeeded.
+
+    It matters in two places — it is the transcript kept as journal
+    raw_content, and it is what a caller gets back when the LLM merge is off or
+    unavailable. Falling back to Parakeet rather than list order is deliberate:
+    it is the app's default backend, so it is the one whose output the settings
+    were most likely tuned against.
+    """
+    for c in candidates:
+        if c['backend'] == active_backend:
+            return c
+    for c in candidates:
+        if c['backend'] == 'parakeet':
+            return c
+    return candidates[0]
+
+
+def transcribe_multi(content: bytes, filename: str, language: str | None) -> dict:
+    """Transcribe one clip with every backend in MULTI_BACKENDS and reconcile
+    the results into a single transcript.
+
+    The shared implementation behind every dictation surface in the app: the
+    three listener hotkeys and the twelve in-app microphone buttons all reach it
+    through POST /api/transcribe, and journal attachment transcription calls it
+    directly. Journal voice drafts run the same two backends through
+    `run_multi_backend_transcribe` but merge with Journal's own prompt, which
+    reformats into paragraphs — right for an entry, wrong for dictating a phrase
+    into a text field, which is why this path uses `merge_transcripts` instead.
+
+    Returns {'text', 'raw_text', 'language', 'candidates'}: `text` is the
+    reconciled transcript, `raw_text` the primary candidate before merging.
+    Raises RuntimeError only if *every* backend failed — one surviving backend
+    is a normal, usable result, since the merge degrades to polishing it.
+    """
+    from backend.ai.transcribe_polish import merge_transcripts
+
+    results = run_multi_backend_transcribe(content, filename, language, list(MULTI_BACKENDS))
+    candidates = [r for r in results if (r.get('text') or '').strip()]
+    if not candidates:
+        summary = '; '.join(
+            f"{r['backend']}: {r.get('error', 'no speech detected')}" for r in results
+        ) or 'All STT backends failed'
+        raise RuntimeError(summary)
+
+    primary = pick_primary(candidates, _get_active_stt_backend())
+    # Primary first: merge_transcripts falls back to texts[0] whenever the LLM
+    # is unreachable, so the candidate we'd have picked anyway must be the one
+    # it falls back to.
+    ordered = [primary['text']] + [c['text'] for c in candidates if c is not primary]
+    return {
+        'text': merge_transcripts(ordered),
+        'raw_text': primary['text'],
+        'language': language or 'en',
+        'candidates': results,
+    }
 
 
 # Sources whose transcriptions are kept in the transcription log (Journal view,
@@ -422,6 +656,29 @@ def transcribe():
         return jsonify({'error': 'Empty audio file'}), 400
     language = request.form.get('language') or None
 
+    # The "Polish transcriptions with AI" setting now switches the whole
+    # transcription strategy, not just a cleanup pass on the end of it. On, a
+    # clip goes through every backend in MULTI_BACKENDS and the results are
+    # cross-checked by the LLM; off, it takes the single configured backend and
+    # nothing else. Running both models and then *not* reconciling them would
+    # be the worst of both — twice the CPU for a transcript no better than the
+    # primary one — so the choice is made here rather than at the merge.
+    if _get_transcribe_polish_enabled():
+        try:
+            result = transcribe_multi(content, audio_file.filename or '', language)
+        except ValueError as e:
+            logger.warning('Transcription skipped: %s', e)
+            return jsonify({'error': str(e)}), 400
+        except Exception as e:
+            logger.error('Transcription error: %s', e)
+            return jsonify({'error': str(e)}), 500
+        _log_transcription(result, request.form)
+        return jsonify({
+            'text': result['text'],
+            'language': result['language'],
+            'language_probability': 1.0,
+        })
+
     active_backend = _get_active_stt_backend()
     active_model = _get_active_whisper_model()
     try:
@@ -458,20 +715,39 @@ def transcribe_correct():
     ground_truth = (request.form.get('ground_truth') or '').strip()
     language = request.form.get('language') or None
 
-    active_backend = _get_active_stt_backend()
-    active_model = _get_active_whisper_model()
-    try:
-        _load_stt(active_model, active_backend)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 503
+    # Same switch as /api/transcribe: on, every backend runs and the results
+    # are reconciled before the ground-truth correction below sees them. The
+    # two LLM passes do different jobs and both are worth having here — the
+    # merge decides what was said, the correction below decides what the
+    # speaker's own vocabulary calls it.
+    if _get_transcribe_polish_enabled():
+        try:
+            multi = transcribe_multi(content, audio_file.filename or '', language)
+        except Exception as e:
+            logger.error('Transcription error: %s', e)
+            return jsonify({'error': str(e)}), 500
+        # `raw` is what the Editor's STT panel shows beside the correction, so
+        # it stays the unreconciled primary transcript — showing the merged text
+        # as "raw" would hide half of what this panel exists to let you compare.
+        raw_text = multi['raw_text']
+        stt_result = {'text': multi['text'], 'language': multi['language']}
+        corrected_input = multi['text']
+    else:
+        active_backend = _get_active_stt_backend()
+        active_model = _get_active_whisper_model()
+        try:
+            _load_stt(active_model, active_backend)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 503
 
-    try:
-        stt_result = _do_transcribe(content, audio_file.filename or '', language)
-    except Exception as e:
-        logger.error('Transcription error: %s', e)
-        return jsonify({'error': str(e)}), 500
+        try:
+            stt_result = _do_transcribe(content, audio_file.filename or '', language)
+        except Exception as e:
+            logger.error('Transcription error: %s', e)
+            return jsonify({'error': str(e)}), 500
 
-    raw_text = stt_result['text']
+        raw_text = stt_result['text']
+        corrected_input = raw_text
 
     from backend.memory import get_memory
     memory = get_memory().strip()
@@ -496,7 +772,7 @@ def transcribe_correct():
     )
     user_message = (
         f'Reference material:\n---\n{reference}\n---\n\n'
-        f'Raw transcription:\n{raw_text}\n\nCorrected transcription:'
+        f'Raw transcription:\n{corrected_input}\n\nCorrected transcription:'
     )
 
     try:

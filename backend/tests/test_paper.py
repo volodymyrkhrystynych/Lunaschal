@@ -373,3 +373,57 @@ def test_deleting_a_page_takes_its_image_rows_with_it(client):
 
     assert client.delete(f'/api/paper/pages/{page_id}').status_code == 200
     assert client.get(f"/api/paper/images/{img['id']}/file").status_code == 404
+
+
+def test_a_paper_created_offline_replays_under_its_own_ids(client):
+    """Paper is the one feature whose data lives only on the tablet it was
+    written on, so a new page cannot wait for a server. The ids are minted on
+    the device and the create replays without producing a second paper."""
+    body = {'id': '01ARZ3NDEKTSV4RRFFQ69G5FC0', 'pageId': '01ARZ3NDEKTSV4RRFFQ69G5FC1'}
+    first = client.post('/api/paper', json=body)
+    assert first.status_code == 201
+    assert first.get_json() == {'id': body['id'], 'pageId': body['pageId']}
+    assert client.post('/api/paper', json=body).status_code == 201
+
+    papers = client.get('/api/paper').get_json()
+    assert [p['id'] for p in papers] == [body['id']]
+    detail = client.get(f"/api/paper/{body['id']}").get_json()
+    assert [pg['id'] for pg in detail['pages']] == [body['pageId']]
+
+
+def test_a_page_save_written_offline_is_replayable(client):
+    """The save is a PUT — last write wins — so replaying a queued page save is
+    safe by construction. What this pins down is that the *page* it targets can
+    itself have been created offline moments earlier."""
+    client.post('/api/paper', json={'id': 'PAP1', 'pageId': 'PAGE1'})
+
+    import io
+    for _ in range(2):
+        r = client.put(
+            '/api/paper/pages/PAGE1',
+            data={
+                'strokes': (io.BytesIO(b'[{"points":[1,2]}]'), 'strokes.json'),
+                'width': '2100',
+                'height': '2970',
+                'snapshot': (io.BytesIO(b'\x89PNG\r\n\x1a\n'), 'snapshot.png'),
+            },
+            content_type='multipart/form-data',
+        )
+        assert r.status_code == 200
+
+    page = client.get('/api/paper/pages/PAGE1').get_json()
+    assert page['strokes'] == '[{"points":[1,2]}]'
+    assert page['width'] == 2100
+
+
+def test_a_page_added_offline_replays_under_its_own_id(client):
+    """A page added on the tablet carries the id it was drawn on, so the queued
+    create can replay without leaving a second, blank page behind it."""
+    client.post('/api/paper', json={'id': 'PAP2', 'pageId': 'PAGE-A'})
+
+    body = {'id': 'PAGE-B'}
+    assert client.post('/api/paper/PAP2/pages', json=body).status_code == 201
+    assert client.post('/api/paper/PAP2/pages', json=body).status_code == 201
+
+    detail = client.get('/api/paper/PAP2').get_json()
+    assert [p['id'] for p in detail['pages']] == ['PAGE-A', 'PAGE-B']

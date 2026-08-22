@@ -1,10 +1,22 @@
 """OAuth route tests for the Email feature. No real network calls — every
-gmail_client HTTP call is monkeypatched, matching test_newspapers.py's style."""
+gmail_client/outlook_client HTTP call is monkeypatched, matching
+test_newspapers.py's style."""
+import base64
+import json as _json
+import time
+
 import pytest
 
 from backend.db.connection import get_db
 from backend.email import gmail_client
 from backend.routes.email import _get_account
+
+
+def _fake_id_token(email: str) -> str:
+    """A minimal unsigned JWT with the shape outlook_client.decode_id_token_email
+    expects — header.payload.signature, payload base64url-encoded JSON."""
+    payload = base64.urlsafe_b64encode(_json.dumps({'email': email}).encode()).decode().rstrip('=')
+    return f'header.{payload}.sig'
 
 
 def _set_oauth_client(client):
@@ -32,7 +44,7 @@ def test_get_account_prefers_most_recently_updated_over_created(client):
     )
     db.commit()
 
-    account = _get_account()
+    account = _get_account('gmail')
 
     assert account['id'] == 'acct-a'
 
@@ -182,7 +194,7 @@ def test_disconnect_with_no_account_is_a_noop(client):
 
 def _valid_state():
     from backend.routes.email import _new_state
-    return _new_state()
+    return _new_state('gmail')
 
 
 def test_callback_shows_googles_reason_not_just_the_status_line(client, monkeypatch):
@@ -210,7 +222,7 @@ def test_callback_shows_googles_reason_not_just_the_status_line(client, monkeypa
     assert resp.status_code == 502
     body = resp.get_data(as_text=True)
     assert 'has not been used in project 12345' in body
-    assert _get_account() is None
+    assert _get_account('gmail') is None
 
 
 def test_callback_escapes_the_provider_error_it_reflects(client):
@@ -223,3 +235,148 @@ def test_callback_escapes_the_provider_error_it_reflects(client):
     body = resp.get_data(as_text=True)
     assert '<script>' not in body
     assert '&lt;script&gt;' in body
+
+
+# --- multi-provider: accounts list, state->provider derivation, second-account guard ---
+
+
+def test_list_accounts_reflects_each_provider_slot(client, monkeypatch):
+    resp = client.get('/api/email/accounts')
+    assert resp.get_json() == []
+
+    _set_oauth_client(client)
+    captured = {}
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.build_auth_url',
+        lambda client_id, redirect_uri, state: captured.setdefault('state', state) or 'https://x',
+    )
+    client.get('/api/email/oauth/authorize')
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.exchange_code',
+        lambda *a, **k: {'access_token': 'at', 'refresh_token': 'rt', 'expires_in': 3600},
+    )
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.get_profile',
+        lambda token: {'emailAddress': 'me@example.com'},
+    )
+    client.get(f'/api/email/oauth/callback?state={captured["state"]}&code=abc')
+
+    resp = client.get('/api/email/accounts')
+    accounts = resp.get_json()
+    assert len(accounts) == 1
+    assert accounts[0] == {
+        'provider': 'gmail', 'emailAddress': 'me@example.com', 'connected': True,
+        'lastSyncedAt': None, 'lastSyncError': None, 'syncEnabled': True,
+    }
+
+
+def test_callback_derives_provider_from_state_not_url(client, monkeypatch):
+    """The callback route takes no `provider` query param at all — the
+    provider comes only from the server-trusted state that /authorize
+    minted, so a state minted for one provider always drives that
+    provider's own token exchange regardless of anything in the callback
+    URL itself."""
+    client.patch('/api/settings/ai', json={
+        'microsoftOauthClientId': 'ms-client', 'microsoftOauthClientSecret': 'ms-secret',
+    })
+    captured = {}
+    monkeypatch.setattr(
+        'backend.routes.email.outlook_client.build_auth_url',
+        lambda client_id, redirect_uri, state: captured.setdefault('state', state) or 'https://x',
+    )
+    client.get('/api/email/oauth/authorize?provider=outlook')
+
+    gmail_called = []
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.exchange_code',
+        lambda *a, **k: gmail_called.append(1) or {},
+    )
+    outlook_called = []
+    monkeypatch.setattr(
+        'backend.routes.email.outlook_client.exchange_code',
+        lambda *a, **k: outlook_called.append(1) or {
+            'access_token': 'at', 'refresh_token': 'rt', 'expires_in': 3600,
+            'id_token': _fake_id_token('me@outlook.example'),
+        },
+    )
+
+    resp = client.get(f'/api/email/oauth/callback?state={captured["state"]}&code=abc')
+
+    assert resp.status_code == 302
+    assert outlook_called == [1]
+    assert gmail_called == []
+    row = get_db().execute("SELECT * FROM email_accounts WHERE provider='outlook'").fetchone()
+    assert row['email_address'] == 'me@outlook.example'
+
+
+def test_reconnecting_gmail_with_a_different_account_is_rejected(client, monkeypatch):
+    _set_oauth_client(client)
+    db = get_db()
+    now = int(time.time())
+    db.execute(
+        "INSERT INTO email_accounts (id, provider, email_address, refresh_token, sync_enabled, created_at, updated_at)"
+        " VALUES ('acct-a', 'gmail', 'first@example.com', 'rt', 1, ?, ?)",
+        (now, now),
+    )
+    db.commit()
+
+    captured = {}
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.build_auth_url',
+        lambda client_id, redirect_uri, state: captured.setdefault('state', state) or 'https://x',
+    )
+    client.get('/api/email/oauth/authorize')
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.exchange_code',
+        lambda *a, **k: {'access_token': 'at2', 'refresh_token': 'rt2', 'expires_in': 3600},
+    )
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.get_profile',
+        lambda token: {'emailAddress': 'second@example.com'},
+    )
+
+    resp = client.get(f'/api/email/oauth/callback?state={captured["state"]}&code=abc')
+
+    assert resp.status_code == 409
+    row = get_db().execute(
+        "SELECT * FROM email_accounts WHERE provider='gmail' AND email_address='second@example.com'"
+    ).fetchone()
+    assert row is None
+    # The original account is untouched.
+    row_a = get_db().execute("SELECT * FROM email_accounts WHERE id='acct-a'").fetchone()
+    assert row_a['refresh_token'] == 'rt'
+
+
+def test_reconnecting_gmail_with_the_same_account_still_updates(client, monkeypatch):
+    """The second-account guard only blocks a *different* address — refreshing
+    consent for the same mailbox must keep working exactly as before."""
+    _set_oauth_client(client)
+    db = get_db()
+    now = int(time.time())
+    db.execute(
+        "INSERT INTO email_accounts (id, provider, email_address, refresh_token, sync_enabled, created_at, updated_at)"
+        " VALUES ('acct-a', 'gmail', 'me@example.com', 'rt-old', 1, ?, ?)",
+        (now, now),
+    )
+    db.commit()
+
+    captured = {}
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.build_auth_url',
+        lambda client_id, redirect_uri, state: captured.setdefault('state', state) or 'https://x',
+    )
+    client.get('/api/email/oauth/authorize')
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.exchange_code',
+        lambda *a, **k: {'access_token': 'at-new', 'refresh_token': 'rt-new', 'expires_in': 3600},
+    )
+    monkeypatch.setattr(
+        'backend.routes.email.gmail_client.get_profile',
+        lambda token: {'emailAddress': 'me@example.com'},
+    )
+
+    resp = client.get(f'/api/email/oauth/callback?state={captured["state"]}&code=abc')
+
+    assert resp.status_code == 302
+    row = get_db().execute("SELECT * FROM email_accounts WHERE provider='gmail'").fetchone()
+    assert row['refresh_token'] == 'rt-new'

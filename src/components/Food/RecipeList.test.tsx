@@ -30,7 +30,13 @@ let dictate: (text: string) => void = () => {};
 vi.mock('../../hooks/useRecorder', () => ({
   useRecorder: (onTranscript: (text: string) => void) => {
     dictate = onTranscript;
-    return { status: 'idle', error: '', start: vi.fn(), stop: vi.fn() };
+    return {
+      status: 'idle',
+      canTranscribe: true,
+      error: '',
+      start: vi.fn(),
+      stop: vi.fn(),
+    };
   },
 }));
 

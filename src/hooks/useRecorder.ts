@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { useOnline } from '../offline/useOnline';
 import {
   appendChunk,
   beginRecording,
@@ -105,6 +106,26 @@ export function useRecorder(
   // installed once and still see the current ones.
   const optionsRef = useRef(options);
   optionsRef.current = options;
+  // Same reason, and it matters more than it looks: `mr.onstop` is assigned
+  // inside `start()`, so without this the transcript would be handed to the
+  // callback as it was *when recording began*. Fine while a callback only did
+  // `setInput(prev => …)`, wrong the moment one of them sends the message —
+  // it would send against a stale conversation.
+  const deliverRef = useRef({ onTranscript, onAudio });
+  deliverRef.current = { onTranscript, onAudio };
+
+  // Dictation is the one thing on this hook that genuinely needs the backend:
+  // the microphone and the audio work anywhere, but turning speech into text is
+  // a server call. So the mic button doubles as the app's offline indicator — a
+  // control going flat where you were about to use it says more, and says it
+  // where you are looking, than a status bar somewhere else on the screen.
+  //
+  // `audio` mode is deliberately unaffected: those recordings go to IndexedDB
+  // and upload later (src/offline/recordingQueue.ts), so they work offline and
+  // must keep working.
+  const canTranscribe = useOnline();
+  const canTranscribeRef = useRef(canTranscribe);
+  canTranscribeRef.current = canTranscribe;
 
   const setStatusIfMounted = (s: RecorderStatus) => {
     if (mountedRef.current) setStatus(s);
@@ -151,10 +172,11 @@ export function useRecorder(
   };
 
   const handleFinishedBlob = async (blob: Blob) => {
-    if (modeRef.current === 'audio' && onAudio) {
+    const deliverAudio = deliverRef.current.onAudio;
+    if (modeRef.current === 'audio' && deliverAudio) {
       setStatusIfMounted('saving');
       try {
-        await onAudio(blob);
+        await deliverAudio(blob);
       } catch (err) {
         setErrorIfMounted(err instanceof Error ? err.message : 'Saving failed');
       } finally {
@@ -173,7 +195,7 @@ export function useRecorder(
       });
       const data = await r.json();
       if (!r.ok) throw new Error(data.error || 'Transcription failed');
-      if (data.text) onTranscript(data.text);
+      if (data.text) deliverRef.current.onTranscript(data.text);
     } catch (err) {
       setErrorIfMounted(
         err instanceof Error ? err.message : 'Transcription failed'
@@ -188,6 +210,10 @@ export function useRecorder(
     opts: { durable?: boolean } = {}
   ) => {
     setError('');
+    if (mode === 'transcribe' && !canTranscribeRef.current) {
+      setError('Dictation needs the server — the mic is back when you are.');
+      return;
+    }
     modeRef.current = mode;
     recoveredRef.current = false;
     // Per-start, because SttPanel drives three buttons off one recorder and only
@@ -380,5 +406,5 @@ export function useRecorder(
     };
   }, []);
 
-  return { status, error, start, stop };
+  return { status, error, start, stop, canTranscribe };
 }

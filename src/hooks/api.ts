@@ -1,5 +1,6 @@
 // Typed API client — replaces tRPC hooks
 
+import { reportFetchOutcome } from '../offline/onlineManager';
 import {
   recordingFilename,
   uploadFilenameFor,
@@ -52,6 +53,31 @@ export interface FicRef {
   ficTitle: string;
   chapterId: string | null;
   chapterTitle: string | null;
+}
+
+/** One STT backend's output for a voice draft, kept for the dropdown even
+ * after promotion — {text} on success, {error} on failure. */
+export interface JournalVoiceDraftCandidate {
+  backend: string;
+  text?: string;
+  error?: string;
+}
+
+/** A clip recorded via the STT listener's Journal hotkey, before it resolves
+ * into an entry. Several local STT backends transcribe it in the background
+ * and the LLM reconciles their outputs — see backend/journal/voice_drafts.py.
+ * A 'done' draft has already become a normal JournalEntry. */
+export interface JournalVoiceDraft {
+  id: string;
+  url: string;
+  mime: string | null;
+  size: number | null;
+  status: 'processing' | 'done' | 'error';
+  error: string | null;
+  candidates: JournalVoiceDraftCandidate[];
+  entryId: string | null;
+  createdAt: string;
+  completedAt: string | null;
 }
 
 export interface FicDownloadProgress {
@@ -527,8 +553,8 @@ export interface BriefingTodoDecision {
 // A delegate confirm card — calendar/calorie/food/recipe/task/flashcards from
 // a live chat turn, plus recipe_link from the background homemade-match check
 // (backend/food/recipe_match.py). `note` proposals draft immediately with no
-// confirm step, so they never get one of these (backend/delegate/runs.py),
-// and `remember` writes straight away with no card at all. Written into the
+// confirm step, so they never get one of these (backend/delegate/runs.py).
+// Written into the
 // assistant message's metadata the moment the run that staged it finishes (or,
 // for recipe_link, the moment the background check finds a match), and
 // resolved in place by POST /api/chat/proposals/<messageId>/<id> — the only
@@ -622,6 +648,11 @@ export interface AppSettings {
   whisperModel: string | null;
   sttDevice: string | null;
   voicePipelineEnabled: boolean;
+  /** Whether every dictation surface transcribes with two STT models and has
+   * the LLM reconcile them, instead of taking the single configured backend.
+   * Off is faster; on is markedly more accurate on mishearings. Despite the
+   * name it now switches the whole strategy, not just a cleanup pass. */
+  transcribePolishEnabled: boolean;
   preventSleep: boolean;
   meetingEchoCancel: boolean;
   nudgeEnabled: boolean;
@@ -652,6 +683,12 @@ export interface AppSettings {
   researchSearchTimeoutSeconds: number;
   researchDeepTimeoutSeconds: number;
   hasGoogleOauthClient: boolean;
+  hasMicrosoftOauthClient: boolean;
+  /** Fallback location for the weather card when no geolocation fix has ever
+   * been logged. Null lat/lon means it's unset. */
+  weatherDefaultLat: number | null;
+  weatherDefaultLon: number | null;
+  weatherDefaultLabel: string;
   emailSyncEnabled: boolean;
   emailSyncIntervalMinutes: number;
   // Tailored-resume retention: whichever of the two clocks runs out first.
@@ -981,12 +1018,23 @@ export interface SyncResult {
   error?: string;
 }
 
+export type EmailProvider = 'gmail' | 'outlook' | 'imap';
+
 export interface EmailOauthStatus {
   connected: boolean;
   emailAddress?: string | null;
   lastSyncedAt?: string | null;
   lastSyncError?: string | null;
   syncEnabled?: boolean;
+}
+
+export interface EmailAccountStatus {
+  provider: EmailProvider;
+  emailAddress: string;
+  connected: boolean;
+  lastSyncedAt: string | null;
+  lastSyncError: string | null;
+  syncEnabled: boolean;
 }
 
 export type EmailCategory =
@@ -998,7 +1046,7 @@ export type JobApplicationStatus =
 export interface EmailMessage {
   id: string;
   accountId: string;
-  gmailId: string;
+  providerMessageId: string;
   threadId: string | null;
   subject: string | null;
   sender: string | null;
@@ -1649,6 +1697,35 @@ export interface CalorieDay {
   total: number;
 }
 
+export interface WeatherHour {
+  id: string;
+  dayKey: string;
+  hourTs: string;
+  weatherCode: number;
+  temperatureC: number;
+  wetBulbC: number | null;
+  humidityPct: number | null;
+  /** Whether this hour has already passed — its values are Open-Meteo's
+   * observed conditions rather than a forecast. */
+  isActual: boolean;
+  latitude: number;
+  longitude: number;
+  locationSource: 'geolocation' | 'default';
+}
+
+export interface WeatherLocation {
+  latitude: number;
+  longitude: number;
+  source: 'geolocation' | 'default';
+}
+
+export interface WeatherToday {
+  hours: WeatherHour[];
+  /** null when no geolocation fix has ever been logged and no default
+   * location is configured in Settings. */
+  location: WeatherLocation | null;
+}
+
 export interface PracticeSnippetProgress {
   snippetId: string;
   attemptsCount: number;
@@ -1793,6 +1870,27 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The request never reached the backend — DNS, TCP, TLS, a dropped link, or a
+ * timeout. Distinct from `ApiError`, which means the backend answered and said
+ * no: that is a decision, and repeating the request will get the same one.
+ *
+ * The distinction is what the offline layer runs on. A write that fails this
+ * way is retried into the paused queue and replayed later; a write the server
+ * rejected is a real error the user has to see.
+ */
+export class NetworkError extends Error {
+  /** True when we gave up waiting rather than being refused outright. An
+   * overloaded backend can time out while being perfectly reachable, so this
+   * one asks for a health probe instead of declaring the app offline. */
+  readonly timedOut: boolean;
+  constructor(message: string, timedOut: boolean) {
+    super(message);
+    this.name = 'NetworkError';
+    this.timedOut = timedOut;
+  }
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit,
@@ -1801,7 +1899,22 @@ async function fetchWithTimeout(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    // Any answer at all — a 500 included — proves the backend is there. This
+    // is the app's real reachability signal: it rides on traffic it was
+    // already making, and it is never stale, which is what a polled health
+    // check can only approximate.
+    reportFetchOutcome('reachable');
+    return response;
+  } catch (error) {
+    const timedOut = controller.signal.aborted;
+    reportFetchOutcome(timedOut ? 'slow' : 'unreachable');
+    throw new NetworkError(
+      timedOut
+        ? `Timed out after ${Math.round(timeoutMs / 1000)}s`
+        : 'Could not reach the server',
+      timedOut
+    );
   } finally {
     clearTimeout(timer);
   }
@@ -1848,10 +1961,17 @@ const patch = <T>(url: string, body: unknown) => send<T>('PATCH', url, body);
 const put = <T>(url: string, body: unknown) => send<T>('PUT', url, body);
 const del = <T>(url: string) => send<T>('DELETE', url);
 
-async function upload<T>(url: string, form: FormData): Promise<T> {
+const upload = <T>(url: string, form: FormData) =>
+  uploadWith<T>('POST', url, form);
+
+async function uploadWith<T>(
+  method: string,
+  url: string,
+  form: FormData
+): Promise<T> {
   const r = await fetchWithTimeout(
     url,
-    { method: 'POST', credentials: 'include', body: form },
+    { method, credentials: 'include', body: form },
     UPLOAD_TIMEOUT_MS
   );
   if (!r.ok) {
@@ -1893,6 +2013,8 @@ export const api = {
           websearchSearchKey?: string;
           googleOauthClientId?: string;
           googleOauthClientSecret?: string;
+          microsoftOauthClientId?: string;
+          microsoftOauthClientSecret?: string;
           // Write-only, like the OAuth pair above: the GET returns
           // hasAdzunaCredentials rather than the key.
           adzunaAppId?: string;
@@ -2009,6 +2131,18 @@ export const api = {
           `/api/journal/attachments/${attachmentId}/describe-audio`
         ),
     },
+
+    // Voice drafts (backend/journal/voice_drafts.py): clips from the STT
+    // listener's Journal hotkey, saved for slow multi-model transcription
+    // instead of being turned into text on the spot. Creation happens on the
+    // listener's Python side, not here — these cover the dropdown's needs.
+    voiceDrafts: {
+      list: () => get<JournalVoiceDraft[]>('/api/journal/voice-drafts'),
+      delete: (id: string) =>
+        del<{ success: boolean }>(`/api/journal/voice-drafts/${id}`),
+      retry: (id: string) =>
+        post<{ success: boolean }>(`/api/journal/voice-drafts/${id}/retry`),
+    },
   },
 
   transcriptions: {
@@ -2085,13 +2219,26 @@ export const api = {
       title: string;
       content: string;
       tags?: string[];
-      media?: File[];
+      media?: Blob[];
+      // Client-minted ids — see api.food.create. A recipe queued offline
+      // replays under the same id, photos included.
+      id?: string;
+      mediaIds?: string[];
     }) => {
       const form = new FormData();
+      if (data.id) form.set('id', data.id);
+      if (data.mediaIds?.length)
+        form.set('mediaIds', JSON.stringify(data.mediaIds));
       form.set('title', data.title);
       form.set('content', data.content);
       if (data.tags) form.set('tags', JSON.stringify(data.tags));
-      for (const f of data.media ?? []) form.append('media', f);
+      data.media?.forEach((f, i) =>
+        form.append(
+          'media',
+          f,
+          f instanceof File ? f.name : `${data.mediaIds?.[i] ?? 'photo'}.jpg`
+        )
+      );
       return upload<Recipe>('/api/cookbook', form);
     },
     update: (
@@ -2105,9 +2252,18 @@ export const api = {
       post<{ id: string; recipe: Recipe }>('/api/cookbook/generate', {
         prompt,
       }),
-    addMedia: (id: string, media: File[]) => {
+    addMedia: (id: string, media: Blob[], mediaIds?: string[]) => {
       const form = new FormData();
-      for (const f of media) form.append('media', f);
+      // Ids, when the caller has them: this is also the path a photo takes when
+      // its recipe was already created and only the picture is still queued.
+      if (mediaIds?.length) form.set('mediaIds', JSON.stringify(mediaIds));
+      media.forEach((f, i) =>
+        form.append(
+          'media',
+          f,
+          f instanceof File ? f.name : `${mediaIds?.[i] ?? 'photo'}.jpg`
+        )
+      );
       return upload<{ media: RecipeMedia[] }>(
         `/api/cookbook/${id}/media`,
         form
@@ -2136,11 +2292,19 @@ export const api = {
       notes?: string;
       rating?: number;
       tags?: string[];
-      media?: File[];
+      media?: Blob[];
       latitude?: number;
       longitude?: number;
+      // Client-minted ids: the entry's, and one per photo, positionally. They
+      // are what let a queued offline capture be replayed without producing a
+      // second meal or a second copy of the picture.
+      id?: string;
+      mediaIds?: string[];
     }) => {
       const form = new FormData();
+      if (data.id) form.set('id', data.id);
+      if (data.mediaIds?.length)
+        form.set('mediaIds', JSON.stringify(data.mediaIds));
       if (data.text) form.set('text', data.text);
       if (data.dish) form.set('dish', data.dish);
       if (data.place) form.set('place', data.place);
@@ -2151,7 +2315,17 @@ export const api = {
         form.set('latitude', String(data.latitude));
       if (data.longitude !== undefined)
         form.set('longitude', String(data.longitude));
-      for (const f of data.media ?? []) form.append('media', f);
+      // A queued photo comes back from IndexedDB as a Blob, not a File, and
+      // FormData would then name it "blob" — the server resolves an upload's
+      // extension from its filename when the mime type is unhelpful, so it
+      // gets a real one.
+      data.media?.forEach((f, i) =>
+        form.append(
+          'media',
+          f,
+          f instanceof File ? f.name : `${data.mediaIds?.[i] ?? 'photo'}.jpg`
+        )
+      );
       return upload<FoodEntry>('/api/food', form);
     },
     update: (
@@ -2307,6 +2481,9 @@ export const api = {
         allDay?: boolean;
         tags?: string[];
         journalId?: string;
+        // Optional client-supplied ULID so an offline-queued create replays
+        // idempotently (server does INSERT OR IGNORE on this id).
+        id?: string;
       } & CalendarRepeat
     ) => post<{ id: string }>('/api/calendar', data),
     // Edits/erases every occurrence, past ones included.
@@ -2648,9 +2825,9 @@ export const api = {
       ),
   },
 
-  // The standing document the assistant keeps about the user. It writes here
-  // without a confirm card (backend/delegate/tools.py's `remember`), which is
-  // only reasonable because these routes make every change visible and undoable.
+  // The standing document about the user that rides in every chat system
+  // prompt. These routes are its only write path — chat used to edit it itself,
+  // with no confirm card, and no longer can.
   memory: {
     get: () => get<UserMemory>('/api/memory'),
     update: (content: string) => put<UserMemory>('/api/memory', { content }),
@@ -2695,6 +2872,13 @@ export const api = {
         get<FileEntry[]>(
           `/api/notebook/files?${path ? `path=${encodeURIComponent(path)}` : ''}`
         ),
+      /** Every note in the notebook, walked recursively — what the index page's
+       * generated tree and `:find` are both built from. `list` only sees one
+       * directory, so both would otherwise need a request per folder. */
+      tree: () =>
+        get<{ entries: FileEntry[]; truncated: boolean }>(
+          '/api/notebook/files/tree'
+        ),
       read: (path: string) =>
         get<{ content: string }>(
           `/api/notebook/files/read?path=${encodeURIComponent(path)}`
@@ -2704,6 +2888,21 @@ export const api = {
           path,
           content,
         }),
+      /** Reads `path`, silently creating it as an empty note first if it
+       * doesn't exist yet — shared by Notebook's auto-open-index-on-mount,
+       * diary-jump, link-follow, and :q-goes-home flows. */
+      ensure: async (path: string): Promise<void> => {
+        try {
+          await get<{ content: string }>(
+            `/api/notebook/files/read?path=${encodeURIComponent(path)}`
+          );
+        } catch {
+          await post<{ success: boolean }>('/api/notebook/files/write', {
+            path,
+            content: '',
+          });
+        }
+      },
       rename: (from: string, to: string) =>
         post<{ success: boolean }>('/api/notebook/files/rename', {
           from,
@@ -2769,10 +2968,15 @@ export const api = {
   ideas: {
     list: () => get<IdeaSummary[]>('/api/ideas'),
     get: (id: string) => get<Idea>(`/api/ideas/${id}`),
-    create: (data: { title?: string; rawContent?: string; tags?: string[] }) =>
-      post<{ id: string }>('/api/ideas', data),
-    createFromVoice: (rawContent: string) =>
-      post<{ id: string }>('/api/ideas/voice', { rawContent }),
+    create: (data: {
+      title?: string;
+      rawContent?: string;
+      tags?: string[];
+      // Optional client-supplied ULID — see api.journal.create.
+      id?: string;
+    }) => post<{ id: string }>('/api/ideas', data),
+    createFromVoice: (rawContent: string, id?: string) =>
+      post<{ id: string }>('/api/ideas/voice', { rawContent, id }),
     update: (
       id: string,
       data: {
@@ -2931,9 +3135,31 @@ export const api = {
   },
 
   email: {
-    oauthStatus: () => get<EmailOauthStatus>('/api/email/oauth/status'),
-    disconnect: () => post<{ success: boolean }>('/api/email/oauth/disconnect'),
-    syncNow: () => post<EmailSyncResult>('/api/email/sync'),
+    accounts: () => get<EmailAccountStatus[]>('/api/email/accounts'),
+    oauthStatus: (provider: EmailProvider = 'gmail') =>
+      get<EmailOauthStatus>(`/api/email/oauth/status?provider=${provider}`),
+    disconnect: (provider: EmailProvider = 'gmail') =>
+      post<{ success: boolean }>(
+        `/api/email/oauth/disconnect?provider=${provider}`
+      ),
+    connectImap: (body: {
+      host: string;
+      port: number;
+      username: string;
+      password: string;
+      emailAddress: string;
+    }) =>
+      post<{ success: boolean } | { error: string }>(
+        '/api/email/imap/connect',
+        body
+      ),
+    /** No provider: syncs every connected account, returned as
+     *  {accountId: result}. With a provider: syncs just that one account,
+     *  returned as a single result. */
+    syncNow: (provider?: EmailProvider) =>
+      post<Record<string, EmailSyncResult> | EmailSyncResult>(
+        `/api/email/sync${provider ? `?provider=${provider}` : ''}`
+      ),
     list: (
       params: {
         category?: EmailCategory;
@@ -2998,21 +3224,31 @@ export const api = {
     },
     get: (id: string) => get<PaperDetail>(`/api/paper/${id}`),
     journal: () => get<JournalPaper[]>('/api/paper/journal'),
-    create: () => post<{ id: string }>('/api/paper'),
+    // Both ids are the client's: a paper started with no backend in reach has
+    // to have an identity before the server can give it one.
+    create: (data?: { id: string; pageId: string; title?: string }) =>
+      post<{ id: string; pageId: string }>('/api/paper', data),
     updateTitle: (id: string, title: string) =>
       patch<{ success: boolean }>(`/api/paper/${id}`, { title }),
     setArchiveRequested: (id: string, archiveRequested: boolean) =>
       patch<{ success: boolean }>(`/api/paper/${id}`, { archiveRequested }),
     remove: (id: string) => del<{ success: boolean }>(`/api/paper/${id}`),
-    addPage: (id: string) =>
-      post<{ id: string; position: number }>(`/api/paper/${id}/pages`),
+    // The page's id is the client's too: a fresh page has to exist on the
+    // tablet before the server hears about it.
+    addPage: (id: string, pageId?: string) =>
+      post<{ id: string; position: number }>(`/api/paper/${id}/pages`, {
+        id: pageId,
+      }),
     getPage: (pageId: string) =>
       get<PaperPageContent>(`/api/paper/pages/${pageId}`),
-    addImage: async (
+    addImage: (
       pageId: string,
       file: Blob,
       box: { x: number; y: number; width: number; height: number },
-      filename = 'pasted.png'
+      filename = 'pasted.png',
+      // Client-minted, so a picture pasted offline can be queued and replayed
+      // without pasting itself twice.
+      id?: string
     ) => {
       const form = new FormData();
       form.set('image', file, filename);
@@ -3020,13 +3256,8 @@ export const api = {
       form.set('y', String(box.y));
       form.set('width', String(box.width));
       form.set('height', String(box.height));
-      const r = await fetch(`/api/paper/pages/${pageId}/images`, {
-        method: 'POST',
-        credentials: 'include',
-        body: form,
-      });
-      if (!r.ok) throw new Error((await r.json()).error ?? 'Upload failed');
-      return (await r.json()) as PaperPageImage;
+      if (id) form.set('id', id);
+      return upload<PaperPageImage>(`/api/paper/pages/${pageId}/images`, form);
     },
     updateImage: (
       imageId: string,
@@ -3042,7 +3273,7 @@ export const api = {
     ) => patch<PaperPageImage>(`/api/paper/images/${imageId}`, data),
     deleteImage: (imageId: string) =>
       del<{ success: boolean }>(`/api/paper/images/${imageId}`),
-    savePage: async (
+    savePage: (
       pageId: string,
       data: { strokes: string; width: number; height: number; snapshot: Blob }
     ) => {
@@ -3059,16 +3290,15 @@ export const api = {
       form.set('width', String(data.width));
       form.set('height', String(data.height));
       form.set('snapshot', data.snapshot, 'snapshot.png');
-      const r = await fetch(`/api/paper/pages/${pageId}`, {
-        method: 'PUT',
-        credentials: 'include',
-        body: form,
-      });
-      if (!r.ok) {
-        const b = await r.json().catch(() => ({}));
-        throw new Error(b.error || `HTTP ${r.status}`);
-      }
-      return r.json() as Promise<{ success: boolean }>;
+      // Through the shared upload helper rather than a bare fetch: that is what
+      // gives it a timeout, a typed NetworkError, and — the reason it matters
+      // here — a reachability report, so a page that fails to save is what
+      // tells the app it is offline.
+      return uploadWith<{ success: boolean }>(
+        'PUT',
+        `/api/paper/pages/${pageId}`,
+        form
+      );
     },
     removePage: (pageId: string) =>
       del<{ success: boolean }>(`/api/paper/pages/${pageId}`),
@@ -3170,9 +3400,19 @@ export const api = {
         date?: string;
         description: string;
         calories: number;
+        // Optional client-supplied ULID — see api.journal.create.
+        id?: string;
       }) => post<CalorieLog>('/api/lifestyle/calories', data),
       delete: (id: string) =>
         del<{ success: boolean }>(`/api/lifestyle/calories/${id}`),
+    },
+    weather: {
+      today: () => get<WeatherToday>('/api/lifestyle/weather/today'),
+      updateLocation: (latitude: number, longitude: number) =>
+        post<WeatherToday>('/api/lifestyle/weather/location', {
+          latitude,
+          longitude,
+        }),
     },
   },
 

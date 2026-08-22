@@ -5,6 +5,8 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import { api, type PaperDoc } from '../../hooks/api';
+import { ulid } from '../../lib/ulid';
+import { usePaperCreate } from '../../offline/mutationDefaults';
 import { PaperEditor } from './PaperEditor';
 
 const PAGE_SIZE = 60;
@@ -28,13 +30,15 @@ export function Paper() {
 
   const papers = data?.pages.flat() ?? [];
 
-  const create = useMutation({
-    mutationFn: () => api.paper.create(),
-    onSuccess: ({ id }) => {
-      queryClient.invalidateQueries({ queryKey: ['paper'] });
-      setOpenId(id);
-    },
-  });
+  // Both ids are minted here, so a new paper opens the instant it is asked for
+  // — with no wifi, on a tablet, which is the only place paper is ever used.
+  // The create replays under the same ids when the backend is next in reach.
+  const create = usePaperCreate();
+  const startPaper = () => {
+    const id = ulid();
+    create.mutate({ id, pageId: ulid() });
+    setOpenId(id);
+  };
 
   const remove = useMutation({
     mutationFn: (id: string) => api.paper.remove(id),
@@ -82,7 +86,7 @@ export function Paper() {
           {/* Create new paper — hidden while deleting to keep the two modes distinct. */}
           {!deleteMode && (
             <button
-              onClick={() => create.mutate()}
+              onClick={startPaper}
               disabled={create.isPending}
               className="aspect-[210/297] rounded-lg border-2 border-dashed border-white/15 flex flex-col items-center justify-center gap-2 transition-colors hover:bg-white/5 disabled:opacity-50"
             >

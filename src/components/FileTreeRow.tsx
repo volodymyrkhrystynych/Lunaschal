@@ -13,8 +13,8 @@ interface Props {
   onRenameStart: (entry: FileEntry) => void;
 }
 
-/** One row of a file tree (Editor's FileTree, Notebook's NotebookTree) —
- * name + expand caret, with hover-revealed rename/delete buttons. */
+/** One row of a file tree (currently just Editor's FileTree) — name + expand
+ * caret, with hover-revealed rename/delete buttons. */
 export function FileTreeRow({
   entry,
   depth,

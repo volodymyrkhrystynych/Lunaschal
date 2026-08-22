@@ -4,18 +4,51 @@ import time
 
 import pytest
 
+from backend.ai import transcribe_polish
 from backend.db.connection import get_db
 from backend.routes import stt
 from ulid import ULID
 
 
-@pytest.fixture
-def mock_stt(monkeypatch):
+def _stub_stt(monkeypatch, text='hello world'):
+    """Make both transcription strategies return `text` without a real model.
+
+    /api/transcribe picks its strategy from the transcribe_polish_enabled
+    setting: on (the default) it runs every backend in MULTI_BACKENDS through
+    _transcribe_with_handle and reconciles them, off it takes the single
+    configured backend via _do_transcribe. These tests are about the
+    transcription *log*, not about which strategy ran, so both are stubbed and
+    every test here works either way.
+    """
     monkeypatch.setattr(stt, '_load_stt', lambda *a, **k: None)
     monkeypatch.setattr(
         stt, '_do_transcribe',
-        lambda content, filename, language: {'text': 'hello world', 'language': 'en'},
+        lambda content, filename, language: {'text': text, 'language': 'en'},
     )
+    monkeypatch.setattr(
+        stt, '_build_stt_backend',
+        lambda backend, model_name=None, device=None: {
+            'backend': backend, 'model': object(), 'vad': None,
+            'model_name': model_name, 'device': device},
+    )
+    monkeypatch.setattr(
+        stt, '_transcribe_with_handle',
+        lambda handle, content, filename, language: {'text': text, 'language': 'en'},
+    )
+    # The multi-backend handles are cached for the process lifetime, so a stub
+    # from one test must not survive into the next.
+    stt.reset_draft_handles()
+
+
+@pytest.fixture(autouse=True)
+def _clear_draft_handles():
+    yield
+    stt.reset_draft_handles()
+
+
+@pytest.fixture
+def mock_stt(monkeypatch):
+    _stub_stt(monkeypatch)
 
 
 def _post_audio(client, source=None, **fields):
@@ -62,14 +95,42 @@ def test_other_sources_are_not_logged(client, mock_stt, source):
     assert _rows(client) == []
 
 
-def test_empty_transcription_is_not_logged(client, monkeypatch):
-    monkeypatch.setattr(stt, '_load_stt', lambda *a, **k: None)
+def test_transcribe_runs_the_llm_pass_before_returning_and_logging(client, mock_stt, monkeypatch):
+    monkeypatch.setattr(transcribe_polish, 'is_ai_configured', lambda: True)
     monkeypatch.setattr(
-        stt, '_do_transcribe',
-        lambda content, filename, language: {'text': '', 'language': 'en'},
+        transcribe_polish, 'chat_text', lambda prompt, system=None: 'Hello, world.'
     )
     resp = _post_audio(client, source='paste')
     assert resp.status_code == 200
+    assert resp.get_json()['text'] == 'Hello, world.'
+    assert _rows(client)[0]['text'] == 'Hello, world.'
+
+
+def test_transcribe_falls_back_to_raw_text_when_ai_not_configured(client, mock_stt, monkeypatch):
+    monkeypatch.setattr(transcribe_polish, 'is_ai_configured', lambda: False)
+    resp = _post_audio(client, source='paste')
+    assert resp.get_json()['text'] == 'hello world'
+
+
+def test_the_llm_pass_can_be_disabled_via_setting(client, mock_stt, monkeypatch):
+    monkeypatch.setattr(transcribe_polish, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(
+        transcribe_polish, 'chat_text', lambda prompt, system=None: 'Hello, world.'
+    )
+    get_db().execute('UPDATE settings SET transcribe_polish_enabled = 0')
+    get_db().commit()
+    resp = _post_audio(client, source='paste')
+    assert resp.get_json()['text'] == 'hello world'
+    assert _rows(client)[0]['text'] == 'hello world'
+
+
+def test_empty_transcription_is_not_logged(client, monkeypatch):
+    # No backend heard anything: with every candidate empty the multi-backend
+    # path has nothing to reconcile and answers 500, and either way nothing
+    # reaches the log.
+    _stub_stt(monkeypatch, text='')
+    resp = _post_audio(client, source='paste')
+    assert resp.status_code in (200, 500)
     assert _rows(client) == []
 
 

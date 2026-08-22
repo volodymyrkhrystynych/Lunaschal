@@ -14,7 +14,13 @@ const recorderStart = vi.fn();
 vi.mock('../../hooks/useRecorder', () => ({
   useRecorder: (onTranscript: (text: string) => void) => {
     dictate = onTranscript;
-    return { status: 'idle', error: '', start: recorderStart, stop: vi.fn() };
+    return {
+      status: 'idle',
+      canTranscribe: true,
+      error: '',
+      start: recorderStart,
+      stop: vi.fn(),
+    };
   },
 }));
 
@@ -65,8 +71,25 @@ const project: WritingProject = {
   updatedAt: '',
 };
 
+/** A /api/chat/stream response that is already finished. */
+function closedStream() {
+  return {
+    ok: true,
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    }),
+  } as unknown as Response;
+}
+
 beforeEach(() => {
   vi.mocked(api.writing.summarizeDiscussion).mockReset();
+  // The api mock is module-level, so call history survives into the next test
+  // unless it is cleared — and several assertions here count calls.
+  vi.mocked(api.chat.addMessage).mockClear();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(closedStream()));
 });
 
 function renderWithProviders(children: ReactNode) {
@@ -201,21 +224,48 @@ describe('discussion summarize', () => {
 });
 
 describe('speech to text', () => {
-  it('lands the transcript in the box instead of sending it', async () => {
+  // Dictation used to land in the box and wait for a click, so a misheard
+  // proper noun could be caught. The two-model STT cross-check is what made
+  // that step cost more than it was worth.
+  it('sends the transcript as a message the moment it arrives', async () => {
     renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
     await screen.findByText('What if?');
 
     dictate('a masked stranger arrives at the gate');
 
+    await waitFor(() =>
+      expect(api.chat.addMessage).toHaveBeenCalledWith(
+        'd1',
+        expect.objectContaining({
+          role: 'user',
+          content: 'a masked stranger arrives at the gate',
+        })
+      )
+    );
     const input = screen.getByPlaceholderText(
       'Discuss your story… (Enter to send)'
     );
+    expect((input as HTMLTextAreaElement).value).toBe('');
+  });
+
+  it('sends what was typed and what was spoken as one message', async () => {
+    renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
+    await screen.findByText('What if?');
+
+    const input = screen.getByPlaceholderText(
+      'Discuss your story… (Enter to send)'
+    );
+    fireEvent.change(input, { target: { value: 'what about this:' } });
+    dictate('a masked stranger arrives at the gate');
+
     await waitFor(() =>
-      expect((input as HTMLTextAreaElement).value).toBe(
-        'a masked stranger arrives at the gate'
+      expect(api.chat.addMessage).toHaveBeenCalledWith(
+        'd1',
+        expect.objectContaining({
+          content: 'what about this: a masked stranger arrives at the gate',
+        })
       )
     );
-    expect(api.chat.addMessage).not.toHaveBeenCalled();
   });
 
   it('starts recording from the mic button', async () => {
@@ -225,7 +275,7 @@ describe('speech to text', () => {
     renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
     await screen.findByText('What if?');
 
-    fireEvent.click(screen.getByTitle('Speak to add to the box'));
+    fireEvent.click(screen.getByTitle('Speak to send'));
     expect(recorderStart).toHaveBeenCalled();
   });
 });

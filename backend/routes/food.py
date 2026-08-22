@@ -79,11 +79,22 @@ def _parse_tags_field(raw) -> list | None:
 # --- Media persistence ---
 
 
-def _save_media_file(entry_id: str, file, position: int):
+def _save_media_file(entry_id: str, file, position: int, media_id: str | None = None):
     """Persist one upload. Returns (public_dict, disk_path, kind), or None if the
     type isn't allowed. The public dict is what the client sees; disk_path/kind
     are for server-side use (EXIF). HEIC/HEIF is transcoded to JPEG so it renders
-    everywhere; its EXIF (capture date + GPS) is carried across."""
+    everywhere; its EXIF (capture date + GPS) is carried across.
+
+    `media_id` is supplied by the client for a photo that was queued offline, so
+    the upload can be replayed: a second attempt finds the row already there and
+    stops, rather than writing the same picture twice under a new id. Without
+    that, a retry after a dropped response — the most likely way an upload
+    fails — is exactly what produces the duplicate.
+    """
+    if media_id and get_db().execute(
+        'SELECT 1 FROM food_media WHERE id=?', (media_id,)
+    ).fetchone():
+        return None
     ext = storage.resolve_ext(file.mimetype, file.filename)
     if ext is None:
         return None
@@ -92,7 +103,7 @@ def _save_media_file(entry_id: str, file, position: int):
     if is_heic:
         ext, mime = 'jpg', 'image/jpeg'
 
-    media_id = str(ULID())
+    media_id = media_id or str(ULID())
     path = storage.media_path(entry_id, media_id, ext)
     if path is None:
         return None
@@ -107,11 +118,27 @@ def _save_media_file(entry_id: str, file, position: int):
     kind = storage.kind_for_ext(ext)
     now = int(time.time())
     get_db().execute(
-        'INSERT INTO food_media(id, entry_id, kind, path, mime, position, created_at) VALUES (?,?,?,?,?,?,?)',
+        'INSERT OR IGNORE INTO food_media(id, entry_id, kind, path, mime, position, created_at)'
+        ' VALUES (?,?,?,?,?,?,?)',
         (media_id, entry_id, kind, str(path), mime, position, now),
     )
     public = {'id': media_id, 'kind': kind, 'position': position, 'url': _media_url(media_id)}
     return public, path, kind
+
+
+def _parse_media_ids(raw) -> list:
+    """The client's ids for the photos in this upload, positionally. Anything
+    unparseable means "no ids" rather than an error: the ids are an idempotency
+    hint, and refusing the meal over a malformed one would lose the capture."""
+    if not raw:
+        return []
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return [str(x) for x in parsed] if isinstance(parsed, list) else []
 
 
 def _photo_meta_from(paths: list) -> dict:
@@ -263,19 +290,26 @@ def create_entry():
         return jsonify({'error': 'provide text, media, or details'}), 400
 
     now = int(time.time())
-    entry_id = str(ULID())
+    # Client-supplied ULID so a meal captured offline replays idempotently —
+    # and, unlike the text-only features, so its photos can be uploaded under
+    # the same entry afterwards (POST /<id>/media) whichever order they land in.
+    entry_id = (form.get('id') or '').strip() or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT INTO food_entries(id, raw_content, dish, place, notes, rating, tags, '
+        'INSERT OR IGNORE INTO food_entries(id, raw_content, dish, place, notes, rating, tags, '
         'latitude, longitude, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         (entry_id, text or None, dish, place, notes, rating, tags_json(tags) if tags else None,
          latitude, longitude, now, now),
     )
 
+    # Ids for the photos, positionally, when the client minted them (an offline
+    # capture does). Sent as a JSON array so one field covers any number of them.
+    media_ids = _parse_media_ids(form.get('mediaIds'))
+
     image_paths = []
     for i, f in enumerate(files):
         if f and f.filename:
-            res = _save_media_file(entry_id, f, i)
+            res = _save_media_file(entry_id, f, i, media_ids[i] if i < len(media_ids) else None)
             if res and res[2] == 'image':
                 image_paths.append(res[1])
 

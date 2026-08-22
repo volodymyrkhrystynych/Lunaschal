@@ -85,3 +85,56 @@ class TestFilesCRUD:
     def test_delete_not_found(self, client, prefix):
         r = client.delete(prefix, query_string={'path': 'missing.md'})
         assert r.status_code == 404
+
+    def test_tree_walks_recursively(self, client, prefix):
+        client.post(f'{prefix}/write', json={'path': 'top.md', 'content': 'x'})
+        client.post(f'{prefix}/write', json={'path': 'a/b/deep.md', 'content': 'x'})
+
+        r = client.get(f'{prefix}/tree')
+        assert r.status_code == 200
+        assert r.json['truncated'] is False
+        by_path = {e['path'] for e in r.json['entries']}
+        # The single-level list endpoint would only ever return the first two.
+        assert by_path == {'top.md', 'a', 'a/b', 'a/b/deep.md'}
+        dirs = {e['path'] for e in r.json['entries'] if e['isDir']}
+        assert dirs == {'a', 'a/b'}
+
+    def test_tree_lists_a_parent_before_its_children(self, client, prefix):
+        client.post(f'{prefix}/write', json={'path': 'a/b/deep.md', 'content': 'x'})
+        paths = [e['path'] for e in client.get(f'{prefix}/tree').json['entries']]
+        assert paths.index('a') < paths.index('a/b') < paths.index('a/b/deep.md')
+
+    def test_tree_hides_dotfiles_and_deleted_notes(self, client, prefix):
+        client.post(f'{prefix}/write', json={'path': 'keep.md', 'content': 'x'})
+        client.post(f'{prefix}/write', json={'path': 'gone.md', 'content': 'x'})
+        client.post(f'{prefix}/write', json={'path': '.hidden/secret.md', 'content': 'x'})
+        # delete_file moves into .trash/, which must not resurface as a note.
+        assert client.delete(prefix, query_string={'path': 'gone.md'}).status_code == 200
+
+        paths = {e['path'] for e in client.get(f'{prefix}/tree').json['entries']}
+        assert paths == {'keep.md'}
+
+    def test_tree_on_a_missing_root_creates_it_and_returns_empty(self, client, prefix):
+        r = client.get(f'{prefix}/tree')
+        assert r.status_code == 200
+        assert r.json == {'entries': [], 'truncated': False}
+
+    def test_tree_stops_at_the_entry_ceiling(self, client, prefix, monkeypatch):
+        monkeypatch.setattr('backend.routes.files.MAX_TREE_ENTRIES', 3)
+        for i in range(6):
+            client.post(f'{prefix}/write', json={'path': f'n{i}.md', 'content': 'x'})
+
+        r = client.get(f'{prefix}/tree')
+        assert len(r.json['entries']) == 3
+        assert r.json['truncated'] is True
+
+    def test_tree_does_not_follow_a_symlinked_directory(self, client, prefix, tmp_path):
+        client.post(f'{prefix}/write', json={'path': 'real/note.md', 'content': 'x'})
+        root = tmp_path / 'root'
+        # A loop: without the is_symlink() guard this recurses to the depth cap.
+        (root / 'loop').symlink_to(root, target_is_directory=True)
+
+        r = client.get(f'{prefix}/tree')
+        assert r.json['truncated'] is False
+        paths = {e['path'] for e in r.json['entries']}
+        assert paths == {'real', 'real/note.md', 'loop'}

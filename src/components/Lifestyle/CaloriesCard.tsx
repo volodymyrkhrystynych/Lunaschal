@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import { parseCalorieEntry } from '@/lib/lifestyle';
+import { ulid } from '@/lib/ulid';
+import { useCalorieLog } from '@/offline/mutationDefaults';
 import { CARD } from './card';
 
 /**
@@ -26,14 +28,9 @@ export function CaloriesCard() {
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ['lifestyle', 'calories'] });
 
-  const create = useMutation({
-    mutationFn: (entry: { description: string; calories: number }) =>
-      api.lifestyle.calories.create(entry),
-    onSuccess: () => {
-      setText('');
-      setError(null);
-      invalidate();
-    },
+  // Queued, and optimistic: the line appears in today's list and the running
+  // total moves the moment it is typed, whether or not the backend is there.
+  const create = useCalorieLog({
     onError: (e: Error) => setError(e.message),
   });
   const remove = useMutation({
@@ -49,7 +46,11 @@ export function CaloriesCard() {
       );
       return;
     }
-    create.mutate(parsed);
+    create.mutate({ id: ulid(), ...parsed });
+    // Cleared here rather than on success: the entry is already in the list
+    // (optimistically) and may not reach the server for hours.
+    setText('');
+    setError(null);
   };
 
   const preview = parseCalorieEntry(text);

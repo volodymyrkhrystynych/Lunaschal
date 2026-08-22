@@ -6,6 +6,7 @@ import { ShortcutSettings } from '../ShortcutSettings';
 import { STTStatusSection } from './STTStatusSection';
 import { ShortcutsSection } from './ShortcutsSection';
 import { NudgeSection } from './NudgeSection';
+import { WeatherSection } from './WeatherSection';
 import { BriefingSection } from './BriefingSection';
 import { ResearchSection } from './ResearchSection';
 import { VRAMSection } from './VRAMSection';
@@ -16,6 +17,7 @@ import { JobsSection } from './JobsSection';
 import { DisplaySection } from './DisplaySection';
 import { LlamaConfigSection } from './LlamaConfigSection';
 import { MemorySection } from './MemorySection';
+import { CollapsibleSection } from './CollapsibleSection';
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<'general' | 'tags' | 'shortcuts'>(
@@ -65,43 +67,70 @@ export function Settings() {
         <ShortcutSettings />
       ) : (
         <>
-          <DisplaySection />
+          <CollapsibleSection title="Display" defaultExpanded>
+            <DisplaySection />
+          </CollapsibleSection>
 
-          <VRAMSection />
+          <CollapsibleSection title="Model & VRAM" defaultExpanded>
+            <VRAMSection />
+          </CollapsibleSection>
 
-          <LlamaConfigSection />
+          <CollapsibleSection title="llama.cpp Configuration" defaultExpanded>
+            <LlamaConfigSection />
+          </CollapsibleSection>
 
-          <MemorySection />
+          <CollapsibleSection title="Memory" defaultExpanded>
+            <MemorySection />
+          </CollapsibleSection>
 
-          <STTStatusSection />
+          <CollapsibleSection title="Voice Status">
+            <STTStatusSection />
+          </CollapsibleSection>
 
-          <ShortcutsSection />
+          <CollapsibleSection title="Voice Shortcuts">
+            <ShortcutsSection />
+          </CollapsibleSection>
 
-          <NudgeSection />
+          <CollapsibleSection title="Task Nudges">
+            <NudgeSection />
+          </CollapsibleSection>
 
-          <BriefingSection />
+          <CollapsibleSection title="Weather">
+            <WeatherSection />
+          </CollapsibleSection>
 
-          <ResearchSection />
+          <CollapsibleSection title="Overnight Briefing">
+            <BriefingSection />
+          </CollapsibleSection>
 
-          <FanficCookiesSection />
+          <CollapsibleSection title="Research Agent">
+            <ResearchSection />
+          </CollapsibleSection>
 
-          <EmailSection />
+          <CollapsibleSection title="Fanfic Site Cookies">
+            <FanficCookiesSection />
+          </CollapsibleSection>
 
-          <JobsSection />
+          <CollapsibleSection title="Email (Gmail)">
+            <EmailSection />
+          </CollapsibleSection>
 
-          {settings?.networkMode && <NetworkSection />}
+          <CollapsibleSection title="Jobs">
+            <JobsSection />
+          </CollapsibleSection>
 
-          <section>
-            <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">
-              About
-            </h2>
-            <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
-              <p className="text-[var(--color-text)]">Lunaschal v0.1.0</p>
-              <p className="text-sm text-[var(--color-text-muted)] mt-1">
-                A privacy-first, self-hosted personal AI knowledge assistant.
-              </p>
-            </div>
-          </section>
+          {settings?.networkMode && (
+            <CollapsibleSection title="Network Access">
+              <NetworkSection />
+            </CollapsibleSection>
+          )}
+
+          <CollapsibleSection title="About" defaultExpanded>
+            <p className="text-[var(--color-text)]">Lunaschal v0.1.0</p>
+            <p className="text-sm text-[var(--color-text-muted)] mt-1">
+              A privacy-first, self-hosted personal AI knowledge assistant.
+            </p>
+          </CollapsibleSection>
         </>
       )}
     </div>

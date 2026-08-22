@@ -13,7 +13,7 @@ from backend.ai.journal import (
     generate_journal_metadata,
 )
 from backend.ai.background import run_bg
-from backend.journal import storage
+from backend.journal import storage, voice_drafts
 from backend.tags import tags_json
 
 bp = Blueprint('journal', __name__, url_prefix='/api/journal')
@@ -156,6 +156,38 @@ def get_entry(id):
     return jsonify(_enrich_with_attachments(db, [row_to_dict(row)])[0])
 
 
+def create_journal_entry(
+    content: str,
+    raw_content: str | None,
+    created_at: int,
+    *,
+    title: str | None = None,
+    tags=None,
+    entry_id: str | None = None,
+    polish: bool = False,
+) -> str | None:
+    """Inserts a journal entry and kicks off background metadata generation
+    (and, if `polish` and `raw_content` is set, background polish — the STT
+    dictation path). `entry_id` lets a caller supply its own id for an
+    idempotent replay (e.g. an offline-queued create, or a scheduler's
+    catch-up promotion); a collision is a no-op and returns None.
+    """
+    id = entry_id or str(ULID())
+    cur = get_db().execute(
+        'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+        (id, content, raw_content, title, tags_json(tags), created_at, created_at),
+    )
+    get_db().commit()
+    if cur.rowcount == 0:
+        return None
+    _notify_subscribers(id)
+    if polish and raw_content:
+        _polish_bg(id, raw_content)
+    if not title or not tags:
+        _generate_metadata_bg(id, content)
+    return id
+
+
 @bp.post('')
 def create_entry():
     body = request.json or {}
@@ -175,21 +207,13 @@ def create_entry():
 
     now = int(time.time())
     # Accept a client-supplied ULID so an offline-queued create replays
-    # idempotently: INSERT OR IGNORE makes a duplicate a no-op, and rowcount==0
-    # means we've already saved this entry — skip the background work.
+    # idempotently: create_journal_entry's INSERT OR IGNORE makes a duplicate
+    # a no-op, and a None return means we've already saved this entry.
     id = body.get('id') or str(ULID())
-    cur = get_db().execute(
-        'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-        (id, content, raw_content, title, tags_json(tags), now, now),
+    create_journal_entry(
+        content, raw_content, now,
+        title=title, tags=tags, entry_id=id, polish=True,
     )
-    get_db().commit()
-    if cur.rowcount == 0:
-        return jsonify({'id': id}), 201
-    _notify_subscribers(id)
-    if raw_content:
-        _polish_bg(id, raw_content)
-    if not title or not tags:
-        _generate_metadata_bg(id, content)
     return jsonify({'id': id}), 201
 
 
@@ -832,12 +856,18 @@ def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str, name: 
 
 
 def _do_attachment_audio(path: str) -> str:
-    """Transcribe an audio *or video* attachment through whichever STT backend
-    is configured, loading it on demand exactly as POST /api/transcribe does.
+    """Transcribe an audio *or video* attachment, taking the same
+    cross-checked path POST /api/transcribe does.
 
     Video needs no special handling: every backend goes through ffmpeg (directly
     for Parakeet, internally for Whisper) and ffmpeg reads the audio track out of
     a container without caring that there are also video frames in it.
+
+    This runs on `run_bg` with nobody waiting on it, so the multi-backend cost
+    is free here in a way it isn't on the interactive path — but the switch is
+    still shared, because a user who turned the LLM pass off did so to stop the
+    app spending model time on transcripts, and that reason doesn't stop
+    applying in the background.
     """
     # Imported here rather than at module scope: the STT module pulls in numpy
     # and (for the local backend) torch, and the journal blueprint is imported
@@ -847,8 +877,13 @@ def _do_attachment_audio(path: str) -> str:
     p = storage.resolve_stored_path(path)
     if p is None or not p.is_file():
         raise RuntimeError('The recording is missing')
-    stt_routes._load_stt()
-    result = stt_routes._do_transcribe(p.read_bytes(), p.name, None)
+
+    content = p.read_bytes()
+    if stt_routes._get_transcribe_polish_enabled():
+        result = stt_routes.transcribe_multi(content, p.name, None)
+    else:
+        stt_routes._load_stt()
+        result = stt_routes._do_transcribe(content, p.name, None)
     text = (result.get('text') or '').strip()
     if not text:
         raise RuntimeError('No speech found in the recording')
@@ -891,6 +926,68 @@ def _transcribe_attachment_bg(
         except Exception as e:
             print(f'Failed to record transcription result for {attachment_id}: {e}')
     run_bg(_run)
+
+
+# --- Voice drafts -------------------------------------------------------------
+#
+# A clip recorded via the STT listener's Journal hotkey. Unlike /recordings
+# above (an intentionally text-free entry), a voice draft is meant to become
+# entry text — but instead of transcribing it on the spot with whichever
+# single STT model happens to be loaded, several local backends transcribe it
+# in the background and the main LLM reconciles their outputs into one entry.
+# See backend/journal/voice_drafts.py for the pipeline; these routes are thin
+# wrappers over it.
+
+@bp.post('/voice-drafts')
+def create_voice_draft():
+    try:
+        draft_id = _client_id(request.form.get('id'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if not draft_id:
+        return jsonify({'error': 'id required'}), 400
+
+    file = request.files.get('audio')
+    if file is None:
+        return jsonify({'error': 'audio is required'}), 400
+
+    draft, failure = voice_drafts.create_draft(draft_id, file)
+    if failure is not None:
+        message, status = failure
+        return jsonify({'error': message}), status
+    return jsonify(draft), 201
+
+
+@bp.get('/voice-drafts')
+def list_voice_drafts():
+    return jsonify(voice_drafts.list_drafts())
+
+
+@bp.get('/voice-drafts/<id>/file')
+def get_voice_draft_file(id):
+    row = get_db().execute(
+        'SELECT path, mime FROM journal_voice_drafts WHERE id=?', (id,)
+    ).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    path = voice_drafts.resolve_stored_path(row['path'])
+    if path is None or not path.is_file():
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(path, mimetype=row['mime'] or None, conditional=True)
+
+
+@bp.delete('/voice-drafts/<id>')
+def delete_voice_draft(id):
+    if not voice_drafts.delete_draft(id):
+        return jsonify({'error': 'Not found, or already promoted to an entry'}), 404
+    return jsonify({'success': True})
+
+
+@bp.post('/voice-drafts/<id>/retry')
+def retry_voice_draft(id):
+    if not voice_drafts.retry_draft(id):
+        return jsonify({'error': 'Not found, or not in an error state'}), 404
+    return jsonify({'success': True})
 
 
 def _generate_metadata_bg(journal_id: str, content: str) -> None:

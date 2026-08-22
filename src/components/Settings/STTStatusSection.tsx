@@ -36,46 +36,41 @@ export function STTStatusSection() {
   );
 
   return (
-    <section className="mb-8">
-      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">
-        Voice Status
-      </h2>
-      <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 space-y-3">
-        {isLoading ? (
-          <p className="text-sm text-[var(--color-text-muted)]">Checking…</p>
-        ) : data ? (
-          <>
-            <Row
-              label="Speech-to-text"
-              ready={data.stt_ready}
-              detail={`${data.stt_backend} · ${data.stt_model}`}
-            />
-            <Row
-              label="Text-to-speech"
-              ready={data.tts_ready}
-              detail={data.tts_backend}
-            />
-            {(!data.stt_ready || !data.tts_ready) && (
-              <div className="mt-3 pt-3 border-t border-white/10 text-xs text-[var(--color-text-muted)] space-y-1">
-                <p>
-                  To enable local models:{' '}
-                  <code>pip install faster-whisper kokoro-onnx</code> (requires
-                  GPU)
-                </p>
-                <p>
-                  To use OpenAI: set{' '}
-                  <code>
-                    STT_BACKEND=openai TTS_BACKEND=openai OPENAI_API_KEY=sk-…
-                  </code>{' '}
-                  and restart
-                </p>
-              </div>
-            )}
-          </>
-        ) : (
-          <p className="text-sm text-red-400">Could not reach STT service</p>
-        )}
-      </div>
-    </section>
+    <>
+      {isLoading ? (
+        <p className="text-sm text-[var(--color-text-muted)]">Checking…</p>
+      ) : data ? (
+        <>
+          <Row
+            label="Speech-to-text"
+            ready={data.stt_ready}
+            detail={`${data.stt_backend} · ${data.stt_model}`}
+          />
+          <Row
+            label="Text-to-speech"
+            ready={data.tts_ready}
+            detail={data.tts_backend}
+          />
+          {(!data.stt_ready || !data.tts_ready) && (
+            <div className="mt-3 pt-3 border-t border-white/10 text-xs text-[var(--color-text-muted)] space-y-1">
+              <p>
+                To enable local models:{' '}
+                <code>pip install faster-whisper kokoro-onnx</code> (requires
+                GPU)
+              </p>
+              <p>
+                To use OpenAI: set{' '}
+                <code>
+                  STT_BACKEND=openai TTS_BACKEND=openai OPENAI_API_KEY=sk-…
+                </code>{' '}
+                and restart
+              </p>
+            </div>
+          )}
+        </>
+      ) : (
+        <p className="text-sm text-red-400">Could not reach STT service</p>
+      )}
+    </>
   );
 }

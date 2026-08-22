@@ -408,7 +408,15 @@ export function ReviewSession({ folderId, tag }: Props) {
                       ? recorder.stop()
                       : recorder.start()
                   }
-                  disabled={recorder.status === 'transcribing'}
+                  disabled={
+                    recorder.status === 'transcribing' ||
+                    !recorder.canTranscribe
+                  }
+                  title={
+                    recorder.canTranscribe
+                      ? undefined
+                      : 'Offline — dictation needs the server'
+                  }
                   className={`px-4 py-3 rounded-lg font-medium transition-colors disabled:opacity-50 ${
                     recorder.status === 'recording'
                       ? 'bg-red-600 hover:bg-red-700 text-white'

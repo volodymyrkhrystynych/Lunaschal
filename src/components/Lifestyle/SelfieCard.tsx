@@ -1,8 +1,11 @@
 import { useLayoutEffect, useRef, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import { addDays, todayISO } from '@/lib/lifestyle';
 import { CARD } from './card';
+import { ulid } from '@/lib/ulid';
+import { useSelfieUpload } from '@/offline/mutationDefaults';
+import { storePhoto } from '@/offline/photoStore';
 
 /** Days of history in the thumbnail strip — enough that a gap is obvious. */
 const STRIP_DAYS = 14;
@@ -70,7 +73,6 @@ function RetryingImage({
  * just enlarges it.
  */
 export function SelfieCard() {
-  const queryClient = useQueryClient();
   const cameraRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
@@ -90,19 +92,22 @@ export function SelfieCard() {
     if (el) el.scrollLeft = el.scrollWidth;
   }, []);
 
-  const upload = useMutation({
-    mutationFn: (image: Blob) => api.lifestyle.selfies.upload(image),
-    onSuccess: () => {
-      setError(null);
-      queryClient.invalidateQueries({ queryKey: ['lifestyle', 'selfies'] });
-    },
+  // Queued: the photo is written to the device and uploaded when the backend is
+  // reachable. The route is idempotent by day — one selfie per date, a
+  // re-upload replaces it — so a replay overwrites itself rather than leaving
+  // two, and no client-minted id is needed.
+  const upload = useSelfieUpload({
+    onSuccess: () => setError(null),
     onError: (e: Error) => setError(e.message),
   });
 
-  const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const pick = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) upload.mutate(file);
     e.target.value = '';
+    if (!file) return;
+    const photoId = ulid();
+    await storePhoto(photoId, file, 'selfie', todayISO());
+    upload.mutate({ photoId });
   };
 
   // A fixed run of recent days, so a day with no selfie shows as an empty slot

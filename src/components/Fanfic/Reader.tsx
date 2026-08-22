@@ -57,10 +57,17 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const queryClient = useQueryClient();
   const { setLevel, level } = useShortcuts();
 
-  // Speak the commentary instead of typing it — appended to whatever is there.
-  const recorder = useRecorder(t =>
-    setCommentary(prev => (prev ? `${prev}\n${t}` : t))
-  );
+  // Speak the commentary instead of typing it — and it saves itself, the same
+  // as dictation in Chat and the writing discussions. Reacting to a chapter is
+  // the case that most wants to stay hands-free: you are mid-read, not looking
+  // at the box. Anything already typed goes into the same entry.
+  const recorder = useRecorder(t => {
+    const raw = t.trim();
+    if (!raw) return;
+    const combined = commentary.trim() ? `${commentary.trim()}\n${raw}` : raw;
+    setCommentary(combined);
+    saveCommentary.mutate(combined);
+  });
 
   // Opening a fic (even by mouse) puts keyboard focus inside the reader so
   // W/S move between chapters instead of switching app tabs.
@@ -143,7 +150,11 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   }, [chapterId]);
 
   // Restore a pending bookmark's scroll position once its chapter has
-  // actually rendered (scrollHeight isn't known until then).
+  // actually rendered (scrollHeight isn't known until then). On mobile the
+  // content pane doesn't mount until the user backs out of the chapter list
+  // (contentShown), so contentRef.current is still null the first time this
+  // runs — refs aren't reactive, so contentShown must be a dep too, or the
+  // effect never gets a second chance once the pane finally exists.
   useEffect(() => {
     const pending = pendingScrollRef.current;
     const el = contentRef.current;
@@ -156,7 +167,13 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
       ),
     });
     pendingScrollRef.current = null;
-  }, [chapter]);
+  }, [chapter, contentShown]);
+
+  // Both mutations used to fail silently on error — a dropped bookmark create
+  // or delete looked identical to "nothing happened", which is exactly what
+  // made a real failure indistinguishable from the mistap this file also
+  // guards against below.
+  const [bookmarkError, setBookmarkError] = useState<string | null>(null);
 
   const createBookmark = useMutation({
     mutationFn: (data: {
@@ -167,18 +184,24 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
         chapterId: chapterId!,
         ...data,
       }),
-    onSuccess: () =>
+    onSuccess: () => {
+      setBookmarkError(null);
       queryClient.invalidateQueries({
         queryKey: ['fanfic', 'bookmarks', ficId],
-      }),
+      });
+    },
+    onError: (e: Error) => setBookmarkError(e.message),
   });
 
   const deleteBookmark = useMutation({
     mutationFn: (bookmarkId: string) => api.fanfic.bookmarks.delete(bookmarkId),
-    onSuccess: () =>
+    onSuccess: () => {
+      setBookmarkError(null);
       queryClient.invalidateQueries({
         queryKey: ['fanfic', 'bookmarks', ficId],
-      }),
+      });
+    },
+    onError: (e: Error) => setBookmarkError(e.message),
   });
 
   const [showBookmarkMenu, setShowBookmarkMenu] = useState(false);
@@ -188,6 +211,9 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
     Array<{ id: string; type: 'favorite' | 'continue'; top: number }>
   >([]);
 
+  // Same non-reactive-ref issue as the scroll restore above: on mobile
+  // contentRef.current is null until contentShown flips true, so that has to
+  // be a dep or the indicator lines never get computed once the pane mounts.
   useLayoutEffect(() => {
     const el = contentRef.current;
     if (!chapter || !el || !bookmarks?.length) {
@@ -207,7 +233,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
         top: bm.scrollPosition * range,
       }));
     setBookmarkIndicators(indicators);
-  }, [chapter, bookmarks, chapterId, fontSize]);
+  }, [chapter, bookmarks, chapterId, fontSize, contentShown]);
 
   // Recalculate when the window resizes so lines stay at the correct positions.
   useEffect(() => {
@@ -405,7 +431,10 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                 </div>
                 {continueBookmark && (
                   <button
-                    onClick={() => deleteBookmark.mutate(continueBookmark.id)}
+                    onClick={() => {
+                      if (confirm('Clear the continue bookmark for this fic?'))
+                        deleteBookmark.mutate(continueBookmark.id);
+                    }}
                     className="shrink-0 mt-0.5 text-xs text-[var(--color-text-muted)] hover:text-red-400"
                     title="Clear continue bookmark"
                   >
@@ -465,7 +494,12 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                             {bm.chapterTitle}
                           </button>
                           <button
-                            onClick={() => deleteBookmark.mutate(bm.id)}
+                            onClick={() => {
+                              if (
+                                confirm(`Remove favorite "${bm.chapterTitle}"?`)
+                              )
+                                deleteBookmark.mutate(bm.id);
+                            }}
                             className="px-2 py-1.5 text-xs shrink-0 text-white/25 hover:text-red-400"
                             title="Remove favorite"
                           >
@@ -666,6 +700,11 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                   Bookmark
                 </button>
               </div>
+              {bookmarkError && (
+                <div className="mx-4 mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
+                  {bookmarkError}
+                </div>
+              )}
               {showCommentary && (
                 <div className="px-4 pb-3">
                   <textarea
@@ -711,7 +750,17 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                           ? recorder.stop()
                           : recorder.start()
                       }
-                      disabled={recorder.status === 'transcribing'}
+                      disabled={
+                        recorder.status === 'transcribing' ||
+                        !recorder.canTranscribe
+                      }
+                      title={
+                        !recorder.canTranscribe
+                          ? 'Offline — dictation needs the server'
+                          : recorder.status === 'recording'
+                            ? 'Stop recording'
+                            : 'Speak to save to the journal'
+                      }
                       className={`px-3 py-1 rounded disabled:opacity-50 ${
                         recorder.status === 'recording'
                           ? 'bg-red-600 hover:bg-red-700 text-white'

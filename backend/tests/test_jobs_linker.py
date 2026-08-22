@@ -33,7 +33,7 @@ def make_email(db, account_id, *, subject, sender_email, job_status=None,
                received_at=None, body='', category='job_application'):
     email_id = str(ULID())
     db.execute(
-        'INSERT INTO emails (id, account_id, gmail_id, subject, sender, sender_email,'
+        'INSERT INTO emails (id, account_id, provider_message_id, subject, sender, sender_email,'
         ' body_text, received_at, category, job_status, created_at)'
         ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (email_id, account_id, str(ULID()), subject, sender_email, sender_email,

@@ -9,18 +9,19 @@ staged payload the chat UI renders as a confirm card, and the row is inserted by
 replaces the *classifier* — which guessed an intent after the reply and swallowed
 its own failures — without also quietly taking the confirm click away.
 
-**`remember`, `revise_memory` and `create_note_to_self` are the exception, and
-the exception is narrow.** `remember`/`revise_memory` edit the standing
-document in backend/memory.py without a card, because the thing they exist for
-is the user correcting a misheard name mid-sentence and a confirmation click
-there costs more than it protects. What makes that safe is not the write being
-small but its being reversible: every change snapshots the previous document,
-and Settings shows the whole history. `create_note_to_self` writes a
-backend/notes.py row the same way — a note-to-self is meant to be jotted down
-without a click, and it stays correctable afterward (editing tracks a
-revision, backend/routes/notes.py) rather than needing to be gotten right the
-first time. These three are the only tools here that touch the database at
-all.
+**`create_note_to_self` is the exception, and the exception is narrow.** It
+writes a backend/notes.py row with no card, because a note-to-self is meant to
+be jotted down without a click, and what makes that safe is not the write being
+small but its being reversible — it stays correctable afterward (editing tracks
+a revision, backend/routes/notes.py) rather than needing to be gotten right the
+first time. It is the only tool here that touches the database at all.
+
+**The standing memory document is no longer written from chat.** `remember` and
+`revise_memory` used to sit beside it, editing backend/memory.py mid-reply to
+catch a misheard name. They are gone: an unbidden write on every correction put
+a step in the trace and a "noted" in the reply for something the user had not
+asked to be made permanent. The document itself stays, read into every system
+prompt as before, and Settings → Memory is now the only thing that writes it.
 
 **They run in the main chat, not in the delegate.** They used to live in the
 delegate's loop, which is handed one `task` string and cannot see the
@@ -319,39 +320,6 @@ TOOLS = [
     {
         'type': 'function',
         'function': {
-            'name': 'remember',
-            'description': (
-                'Write one line into the standing document you keep about the '
-                'user. This saves immediately — there is no confirmation card.\n'
-                'Use it for things that stay true: a proper name and its exact '
-                'spelling, who someone is, where they train or work, a standing '
-                'preference. Above all use it when they correct you, since '
-                'speech-to-text mangles names and a correction is the only '
-                'chance to learn the right one.\n'
-                'Do NOT use it for anything that stops being true — what they '
-                'ate today, a plan for this afternoon, their mood. Those belong '
-                'in the journal or a to-do, not here. One line at a time.'
-            ),
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'note': {
-                        'type': 'string',
-                        'description': (
-                            'The fact, in one self-contained sentence that will '
-                            'still make sense months from now — "Their gym is '
-                            'Movati (speech-to-text hears \'motivate\')", not '
-                            '"it\'s Movati".'
-                        ),
-                    },
-                },
-                'required': ['note'],
-            },
-        },
-    },
-    {
-        'type': 'function',
-        'function': {
             'name': 'create_note_to_self',
             'description': (
                 'Write a note to yourself immediately — no confirmation card. '
@@ -371,32 +339,6 @@ TOOLS = [
                     },
                 },
                 'required': ['content'],
-            },
-        },
-    },
-    {
-        'type': 'function',
-        'function': {
-            'name': 'revise_memory',
-            'description': (
-                'Change or remove something already in the standing document — a '
-                'fact that is now wrong, out of date, or duplicated. Not for '
-                'adding: use `remember` for that. Describe the change; do not '
-                'write out the document.'
-            ),
-            'parameters': {
-                'type': 'object',
-                'properties': {
-                    'instruction': {
-                        'type': 'string',
-                        'description': (
-                            'One sentence saying what to change — "their gym is '
-                            'now GoodLife, not Movati" or "drop the line about '
-                            'the old apartment".'
-                        ),
-                    },
-                },
-                'required': ['instruction'],
             },
         },
     },
@@ -633,40 +575,11 @@ def _propose_recipe(args: dict) -> tuple[str, dict]:
     return _staged('recipe', 'propose_recipe', data, f'recipe "{title}"')
 
 
-def _remember(args: dict) -> tuple[str, dict]:
-    """One of the three tools here that write. Its event carries no
-    `proposal`, the `ask_user` shape, so nothing about it can reach the
-    confirm-card path.
-
-    Writing without a card is a deliberate trade: a correction mid-sentence
-    should not cost a click, and unlike a calendar event this is reversible from
-    Settings, where every revision is kept.
-    """
-    from backend.memory import MemoryFull, append_note
-
-    note = _text(args.get('note'))
-    if not note:
-        return _refused('remember', 'there is nothing to remember yet — say what the fact is')
-    try:
-        append_note(note)
-    except MemoryFull as e:
-        return _refused('remember', str(e))
-    except Exception as e:
-        logger.warning('remember failed: %s', e)
-        return _refused('remember', 'the memory could not be written')
-    return (
-        f'Saved to your standing notes about the user: {note}\n'
-        'It is written already — acknowledge it in a few words at most, and do '
-        'not ask them to confirm it.',
-        {'tool': 'remember', 'ok': True, 'arg': note},
-    )
-
-
 def _create_note_to_self(args: dict) -> tuple[str, dict]:
-    """Writes a backend/notes.py row immediately, no confirm card — same
-    trade `remember` makes: jotting a note down shouldn't cost a click, and
-    it stays correctable afterward (the note view's edit tracks a revision)
-    rather than needing to be right the first time.
+    """Writes a backend/notes.py row immediately, no confirm card: jotting a
+    note down shouldn't cost a click, and it stays correctable afterward (the
+    note view's edit tracks a revision) rather than needing to be right the
+    first time. The only tool here that writes.
     """
     from backend.notes import create_note
 
@@ -680,43 +593,6 @@ def _create_note_to_self(args: dict) -> tuple[str, dict]:
         'to confirm it.',
         {'tool': 'create_note_to_self', 'ok': True, 'arg': content},
     )
-
-
-def _revise_memory(args: dict) -> tuple[str, dict]:
-    """Queues the rewrite rather than doing it here.
-
-    Rewriting the whole document is a full generation, and this runs on the
-    blocking decision turn that sits in front of the user's reply. `run_bg` puts
-    it behind the same single worker journal polish uses, so the reply starts
-    streaming now and the document catches up.
-    """
-    from backend.ai.background import run_bg
-
-    instruction = _text(args.get('instruction'))
-    if not instruction:
-        return _refused('revise_memory', 'say what about the memory should change')
-    run_bg(lambda: _apply_revision(instruction))
-    return (
-        f'Queued a revision of your standing notes: {instruction}\n'
-        'It happens in the background — say in a few words that you have updated '
-        'them, and do not read the notes back.',
-        {'tool': 'revise_memory', 'ok': True, 'arg': instruction},
-    )
-
-
-def _apply_revision(instruction: str) -> None:
-    from backend.ai.memory import revise_memory_document
-    from backend.memory import get_memory, set_memory
-
-    try:
-        revised = revise_memory_document(get_memory(), instruction)
-        # None means the model was unavailable or answered unusably. Leaving the
-        # document untouched is the whole point of that signal — a half-answer
-        # overwriting a page of standing facts is the failure worth avoiding.
-        if revised is not None:
-            set_memory(revised, source='revise', note=instruction)
-    except Exception as e:
-        logger.warning('Applying memory revision failed: %s', e)
 
 
 def _ask_user(args: dict) -> tuple[str, dict]:
@@ -752,9 +628,7 @@ _HANDLERS = {
     'propose_recipe': _propose_recipe,
     'draft_flashcard': _draft_flashcard,
     'propose_flashcards': _propose_flashcards,
-    'remember': _remember,
     'create_note_to_self': _create_note_to_self,
-    'revise_memory': _revise_memory,
     'ask_user': _ask_user,
 }
 

@@ -11,6 +11,7 @@ out of it, so a deadline or an urgency mentioned in passing never survived the
 hand-off.
 """
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -218,7 +219,7 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
     assert offered == {'delegate', 'propose_task', 'propose_calendar_event',
                        'propose_calorie_log', 'propose_food_log', 'propose_recipe',
                        'draft_flashcard', 'propose_flashcards',
-                       'remember', 'create_note_to_self', 'revise_memory', 'ask_user'}
+                       'create_note_to_self', 'ask_user'}
 
 
 def test_a_tool_call_the_model_invented_is_ignored(monkeypatch, answered):
@@ -550,3 +551,86 @@ def test_with_the_timeout_off_nothing_is_cut_short(client, monkeypatch):
     events = list(delegate_chat.stream_reply([{'role': 'user', 'content': 'hi'}]))
     assert ''.join(p for k, p in events if k == 'content') == 'ab'
     assert events[-1][1]['timedOut'] is False
+
+
+# --- SSE framing on the persisted (conversationId) path ---
+
+def _conversation(db, conv_id='conv-sse'):
+    import time as _time
+    now = int(_time.time())
+    db.execute(
+        'INSERT INTO conversations(id, title, created_at, updated_at) VALUES (?,?,?,?)',
+        (conv_id, None, now, now),
+    )
+    db.commit()
+    return conv_id
+
+
+def test_the_persisted_path_announces_the_row_before_anything_else(client, monkeypatch):
+    """The first frame names the row the run is writing into. The browser keeps
+    the reply it streamed on screen until *that* row comes back carrying it, so
+    a missing frame is a reply rendered nowhere for the length of a refetch."""
+    from backend.db.connection import get_db
+
+    conv_id = _conversation(get_db())
+    monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
+    monkeypatch.setattr(
+        'backend.routes.chat.runs.delegate_chat.stream_reply',
+        lambda messages, system_prompt, tools_enabled=True: iter([
+            ('content', 'Here you go.'),
+            ('done', {'steps': [], 'sources': [], 'proposals': []}),
+        ]),
+    )
+
+    body = _post(client, {'messages': [{'role': 'user', 'content': 'hi'}],
+                          'conversationId': conv_id})
+    events = _events(body)
+
+    message_id = events[0]['messageId']
+    assert message_id
+    assert events[1] == {'content': 'Here you go.'}
+    assert events[2]['done'] is True
+    assert body.rstrip().endswith('data: [DONE]')
+
+    row = get_db().execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone()
+    assert (row['status'], row['content']) == ('done', 'Here you go.')
+
+
+def test_a_client_that_stops_reading_does_not_stop_the_run(client, monkeypatch, caplog):
+    """Closing the response mid-reply is what a dropped connection looks like
+    from here — and it must cost the connection, not the reply. The browser
+    recovers by polling the row, so the row has to finish."""
+    from backend.db.connection import get_db
+    from backend.delegate import runs
+
+    conv_id = _conversation(get_db(), 'conv-drop')
+    release = threading.Event()
+    monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
+
+    def slow_stream_reply(messages, system_prompt, tools_enabled=True):
+        yield ('content', 'half a ')
+        release.wait(timeout=5)
+        yield ('content', 'sentence.')
+        yield ('done', {'steps': [], 'sources': [], 'proposals': []})
+
+    monkeypatch.setattr('backend.routes.chat.runs.delegate_chat.stream_reply',
+                        slow_stream_reply)
+
+    resp = client.post('/api/chat/stream',
+                       data=json.dumps({'messages': [{'role': 'user', 'content': 'hi'}],
+                                        'conversationId': conv_id}),
+                       content_type='application/json')
+    frames = iter(resp.response)
+    message_id = json.loads(next(frames)[6:].decode().strip())['messageId']
+    assert json.loads(next(frames)[6:].decode().strip()) == {'content': 'half a '}
+    # Walk away mid-reply, exactly as a browser losing the connection does.
+    resp.close()
+    release.set()
+
+    assert runs.wait_idle(timeout=5)
+    row = get_db().execute('SELECT * FROM messages WHERE id=?', (message_id,)).fetchone()
+    assert (row['status'], row['content']) == ('done', 'half a sentence.')
+    # …and it says so. A reply that arrives whole after a pause is either a
+    # slow one or a recovered one, and the two are indistinguishable from
+    # either end without this line.
+    assert any('disconnected mid-reply' in r.message for r in caplog.records)

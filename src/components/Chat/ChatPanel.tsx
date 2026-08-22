@@ -48,6 +48,10 @@ export function ChatPanel() {
   const [streamingReasoning, setStreamingReasoning] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
   const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
+  // The assistant row this tab's run is writing into, from the stream's first
+  // frame. It is what tells the live bubble when the persisted row has caught
+  // up and it can stand down — see `handedOff` below.
+  const [liveMessageId, setLiveMessageId] = useState<string | null>(null);
   const [noteCards, setNoteCards] = useState<DraftCard[] | null>(null);
   // Which drafted note card has its "request changes" text box open.
   const [noteRegenId, setNoteRegenId] = useState<string | null>(null);
@@ -63,10 +67,6 @@ export function ChatPanel() {
   const [staged, setStaged] = useState<ChatAttachment[]>([]);
   const [attachError, setAttachError] = useState('');
   const [isUploading, setIsUploading] = useState(false);
-  // The verbatim transcript behind whatever is in the box, when it was dictated.
-  // Kept so it can be shown, and so it rides to the server as the message's
-  // `rawContent` whenever a later hand-edit makes it differ from what was said.
-  const [dictated, setDictated] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -74,6 +74,9 @@ export function ChatPanel() {
   // When set, the next scroll effect pins the newest break divider to the top
   // (the "New chat" clear) instead of scrolling to the bottom.
   const justBrokeRef = useRef(false);
+  // When this tab stopped receiving the stream, so the hand-off below can say
+  // how long the saved row took to catch up.
+  const streamEndedAtRef = useRef<number | null>(null);
   const queryClient = useQueryClient();
 
   // The single conversation for the current chat day (4am -> 4am).
@@ -204,6 +207,27 @@ export function ChatPanel() {
   // The id of the last break marker, so only that divider carries the ref.
   const lastBreakId = [...messages].reverse().find(isBreak)?.id ?? null;
 
+  // Has the persisted row caught up with what this tab streamed?
+  //
+  // Until it has, the live bubble is the *only* copy of the reply on screen, so
+  // it has to stay. Clearing it the moment the stream ended (which is what this
+  // used to do) assumed the next `today` fetch would arrive in its place —
+  // but that fetch is a whole round trip away at best, the 1.5s poll that
+  // would follow it only switches on once it lands, and with
+  // `networkMode: 'online'` every refetch is *paused* for as long as the
+  // online manager thinks the backend is unreachable (one missed /api/health
+  // ping = up to 15s). That is the ten-second hole a finished reply fell into
+  // before reappearing whole. Whichever way the stream ended — cleanly or
+  // dropped mid-reply — the row is what replaces it, so it waits for the row.
+  const liveRow = liveMessageId
+    ? messages.find(m => m.id === liveMessageId)
+    : undefined;
+  const handedOff =
+    !!liveRow &&
+    (liveRow.content.trim().length > 0 ||
+      liveRow.status === 'done' ||
+      liveRow.status === 'error');
+
   // Whether the view should follow new content. A ref, not state: it is read
   // and written inside a scroll handler that fires at frame rate, and it must
   // never itself cause a render.
@@ -252,6 +276,28 @@ export function ChatPanel() {
     if (delta > 0) c.scrollTop += delta;
   }, [messages, streamingContent, streamingReasoning, liveSteps, noteCards]);
 
+  // The live bubble stands down once — and only once — the row it was covering
+  // for is on screen carrying the reply. The render below already hides it on
+  // `handedOff`, so this is the state cleanup, not the visual switch.
+  useEffect(() => {
+    if (isStreaming || !liveMessageId || !handedOff) return;
+    const waited = Date.now() - (streamEndedAtRef.current ?? Date.now());
+    // A hand-off is normally one round trip. Anything longer is the gap this
+    // fix exists to cover, and knowing how long it actually was is the only
+    // way to tell a slow fetch from a paused (offline) one — the online
+    // manager logs its own transitions right beside this.
+    if (waited > 1000) {
+      console.info(
+        `[chat] saved reply caught up ${(waited / 1000).toFixed(1)}s after the stream ended`
+      );
+    }
+    streamEndedAtRef.current = null;
+    setStreamingContent('');
+    setStreamingReasoning('');
+    setLiveSteps([]);
+    setLiveMessageId(null);
+  }, [isStreaming, liveMessageId, handedOff]);
+
   const startNewChat = async () => {
     if (!conversationId || !hasChat || isStreaming) return;
     justBrokeRef.current = true;
@@ -263,6 +309,26 @@ export function ChatPanel() {
     });
   };
 
+  /**
+   * Hand the reply over from this tab's live bubble to the row the background
+   * run has been checkpointing it into.
+   *
+   * With a row id, the streamed text stays put and the hand-off effect above
+   * retires it once that row is on screen carrying the reply. Without one — a
+   * stream that never sent the frame — this falls back to the guarantee this
+   * code had before the save moved server-side: refetch *first*, clear second,
+   * never the other way round.
+   */
+  const finishStream = async (liveId: string | null) => {
+    streamEndedAtRef.current = Date.now();
+    const refetched = invalidateToday();
+    if (liveId) return;
+    await refetched;
+    setStreamingContent('');
+    setStreamingReasoning('');
+    setLiveSteps([]);
+  };
+
   const sendMessage = async (messageText?: string) => {
     const userMessage = (messageText ?? input).trim();
     // A photo on its own is a complete message — "what is this?" is implied by
@@ -270,15 +336,14 @@ export function ChatPanel() {
     if ((!userMessage && staged.length === 0) || isStreaming) return;
 
     const attachmentIds = staged.map(a => a.id);
-    // Only ever the transcript that produced *this* text, and only when it
-    // differs — a typed message must leave rawContent null, exactly as a typed
-    // journal entry does.
-    const rawContent =
-      dictated && dictated !== userMessage ? dictated : undefined;
+    // No `rawContent` from here any more. It carried the verbatim transcript
+    // for the window in which a dictated message sat in the box being edited,
+    // and dictation now sends on its own — so `content` *is* what was said,
+    // and a second copy of it would be noise. Older messages that do have one
+    // still render it under the bubble.
 
     if (messageText === undefined) setInput('');
     setStaged([]);
-    setDictated(null);
     setAttachError('');
 
     let convId = conversationId;
@@ -292,7 +357,6 @@ export function ChatPanel() {
       convId,
       role: 'user',
       content: userMessage,
-      rawContent,
       attachmentIds,
     });
 
@@ -321,6 +385,7 @@ export function ChatPanel() {
     setStreamingContent('');
     setStreamingReasoning('');
     setLiveSteps([]);
+    setLiveMessageId(null);
 
     let fullContent = '';
     let proposals: DelegateProposal[] = [];
@@ -352,8 +417,19 @@ export function ChatPanel() {
       // `today` query's refetchInterval picks up wherever it lands. Only a
       // failure *before* that point (caught below) is a real, nothing-ever-
       // started error worth showing.
+
+      // The row that run is writing into, announced in the stream's first
+      // frame. Kept in a local as well as in state because `finishStream`
+      // below reads it from this closure, where a re-render could not yet
+      // have delivered the state back.
+      let liveId: string | null = null;
+      const startedAt = Date.now();
       try {
         for await (const parsed of readSSE(reader)) {
+          if (typeof parsed.messageId === 'string') {
+            liveId = parsed.messageId;
+            setLiveMessageId(liveId);
+          }
           // Tool events arrive as each delegate call finishes, so a hand-off
           // reads as progress rather than a spinner.
           if (parsed.tool) {
@@ -372,13 +448,19 @@ export function ChatPanel() {
           if (parsed.error) throw new Error(parsed.error);
         }
 
-        invalidateToday();
-        setStreamingContent('');
+        await finishStream(liveId);
         stageNoteProposals(proposals);
-      } catch {
-        // The backend already has this reply — see the comment above.
-        invalidateToday();
-        setStreamingContent('');
+      } catch (streamError) {
+        // The backend already has this reply — see the comment above. Said out
+        // loud, though: a reply that arrives complete after a pause is a
+        // *dropped stream* recovered from the row, and swallowing that silently
+        // left no way to tell it apart from a slow one.
+        console.warn(
+          `[chat] reply stream ended early after ${((Date.now() - startedAt) / 1000).toFixed(1)}s ` +
+            `and ${fullContent.length} chars; recovering from the saved row`,
+          streamError
+        );
+        await finishStream(liveId);
       }
     } catch (error) {
       setStreamingContent(
@@ -386,30 +468,30 @@ export function ChatPanel() {
       );
     } finally {
       setIsStreaming(false);
-      setLiveSteps([]);
-      setStreamingReasoning('');
     }
   };
 
   /**
-   * Dictation lands in the box, it doesn't send.
+   * Dictation sends. Speak, stop, and the message goes.
    *
-   * This used to POST the transcript straight through as the message, which is
-   * the one place in the app that did — every other view appends to a textarea
-   * (BrainDump, IdeaCapture, Journal, FoodCapture) precisely so a mangled proper
-   * noun can be fixed before it becomes a record.
+   * It landed in the box and waited for a second click for as long as a
+   * transcript could not be trusted with a proper noun — the mangled-name
+   * problem. Every dictation now goes through two STT models and an LLM
+   * cross-check (`backend/ai/transcribe_polish.merge_transcripts`), which is
+   * what makes talking to the chat a conversation again rather than a
+   * speak-read-click loop.
    *
-   * There used to be an automated correction pass here too (`polishTranscript`,
-   * checking the transcript against the memory document and any attached
-   * photos) — moved to Journal's Polish instead, which already exists to turn
-   * a raw transcript into clean text and now takes the same memory-document
-   * reference. One place to fix a misheard word beats two.
+   * Whatever was already typed goes with it: half a message in the box and the
+   * rest spoken is one message, not two.
    */
   const handleTranscript = (text: string) => {
     const raw = text.trim();
     if (!raw) return;
-    setInput(prev => (prev.trim() ? `${prev.trim()} ${raw}` : raw));
-    setDictated(prev => (prev ? `${prev} ${raw}` : raw));
+    const combined = input.trim() ? `${input.trim()} ${raw}` : raw;
+    setInput('');
+    // Nothing here was typed, so a failed send has nothing to retype from —
+    // put the words back in the box instead of dropping them on the floor.
+    void sendMessage(combined).catch(() => setInput(combined));
   };
 
   const recorder = useRecorder(handleTranscript);
@@ -556,6 +638,11 @@ export function ChatPanel() {
               </div>
             );
           }
+          // The row the live bubble is standing in for. Rendering both prints
+          // the reply twice — the poll runs at 1.5s while the run checkpoints
+          // every 0.5s, so a half-written copy of the text this tab is already
+          // showing lands mid-stream.
+          if (message.id === liveMessageId && !handedOff) return null;
           const metadata = message.metadata
             ? JSON.parse(message.metadata)
             : null;
@@ -647,9 +734,10 @@ export function ChatPanel() {
                     Cut off at the reply time limit (Settings → llama.cpp)
                   </div>
                 )}
-                {/* What was actually dictated, kept whenever the correction pass
-                    or an edit changed it — the journal's "As captured". Only
-                    ever present on a message that was spoken. */}
+                {/* What was actually dictated, on the messages old enough to
+                    have one — the journal's "As captured". Nothing writes
+                    `rawContent` from the chat composer any more (dictation
+                    sends verbatim), so this only ever renders history. */}
                 {message.role === 'user' && message.rawContent && (
                   <details className="mt-1 text-xs text-[var(--color-text-muted)] text-right">
                     <summary className="cursor-pointer select-none">
@@ -727,7 +815,9 @@ export function ChatPanel() {
             </div>
           );
         })}
-        {(streamingContent || (isStreaming && streamingReasoning)) && (
+        {/* Stays up after the stream ends, until `handedOff` says the saved row
+            is on screen with the reply in it — see the note on `handedOff`. */}
+        {!handedOff && (streamingContent || streamingReasoning) && (
           <div className="flex justify-start">
             <div className="max-w-[80%]">
               {streamingContent && (
@@ -743,19 +833,35 @@ export function ChatPanel() {
                 thinking={streamingReasoning}
                 live
               />
+              {/* This tab has stopped receiving, but the row it was covering
+                  for hasn't come back with the reply yet — the run is still
+                  going somewhere else. The label used to belong to the row
+                  itself, which is unreachable while the bubble stands in
+                  for it. */}
+              {!isStreaming && liveMessageId && (
+                <div className="mt-1 text-xs text-[var(--color-text-muted)]">
+                  <ThinkingLabel />
+                </div>
+              )}
             </div>
           </div>
         )}
-        {isStreaming && !streamingContent && !streamingReasoning && (
-          <div className="flex justify-start">
-            <div className="max-w-[80%]">
-              <div className="bg-[var(--color-surface)] rounded-lg px-4 py-2 text-[var(--color-text-muted)]">
-                <ThinkingLabel />
+        {/* Nothing to show yet — either the reply hasn't started, or this tab
+            stopped receiving before it did and the row it was covering for is
+            still empty. Either way the run is going and the placeholder is all
+            there is to say about it. */}
+        {(isStreaming || (liveMessageId && !handedOff)) &&
+          !streamingContent &&
+          !streamingReasoning && (
+            <div className="flex justify-start">
+              <div className="max-w-[80%]">
+                <div className="bg-[var(--color-surface)] rounded-lg px-4 py-2 text-[var(--color-text-muted)]">
+                  <ThinkingLabel />
+                </div>
+                <AgentSteps steps={liveSteps} live />
               </div>
-              <AgentSteps steps={liveSteps} live />
             </div>
-          </div>
-        )}
+          )}
         <div ref={messagesEndRef} />
         {/* Room for a fresh segment to pin to the top of the viewport after a
             "New chat" break. Rendered only while the break is still the last
@@ -905,21 +1011,10 @@ export function ChatPanel() {
             ))}
           </div>
         )}
-        {(photoStatus || attachError || dictated) && (
+        {(photoStatus || attachError) && (
           <div className="mb-2 space-y-1 text-xs text-[var(--color-text-muted)]">
             {attachError && <div className="text-red-400">{attachError}</div>}
             {photoStatus && <div>{photoStatus}</div>}
-            {/* Shown before sending, not just after: only once the box has
-                been hand-edited since dictating is there a "raw" left to
-                show — otherwise the box already reads exactly what was said. */}
-            {dictated && dictated !== input.trim() && (
-              <details>
-                <summary className="cursor-pointer select-none">
-                  As dictated
-                </summary>
-                <div className="mt-1 whitespace-pre-wrap">{dictated}</div>
-              </details>
-            )}
           </div>
         )}
         <div className="flex gap-2">
@@ -972,8 +1067,19 @@ export function ChatPanel() {
           </button>
           <button
             onClick={toggleRecording}
-            disabled={!isConfigured || isStreaming || isTranscribing}
-            title={isRecording ? 'Stop recording' : 'Speak to send'}
+            disabled={
+              !isConfigured ||
+              isStreaming ||
+              isTranscribing ||
+              !recorder.canTranscribe
+            }
+            title={
+              !recorder.canTranscribe
+                ? 'Offline — dictation needs the server'
+                : isRecording
+                  ? 'Stop recording'
+                  : 'Speak to send'
+            }
             className={`px-3 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               isRecording
                 ? 'bg-red-500 text-white animate-pulse hover:bg-red-500'

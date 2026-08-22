@@ -51,8 +51,8 @@ def isolated_db(tmp_path, _schema_template):
     existed there; it stopped working the moment one didn't, and it was always
     one stray write away from being worse than a broken test.
 
-    `client` layers its own throwaway database on top of this; the point here is
-    that the ambient default is already safe.
+    `client` reuses this same database rather than building its own; the point
+    here is that the ambient default is already safe.
     """
     path = tmp_path / 'ambient.db'
     shutil.copyfile(_schema_template, path)
@@ -70,17 +70,18 @@ def isolated_db(tmp_path, _schema_template):
 
 
 @pytest.fixture
-def client(tmp_path):
-    prev_path, prev_conn = connection._DB_PATH, connection._conn
-    if prev_conn is not None:
+def client(isolated_db):
+    """Reuses `isolated_db`'s already-copied schema DB rather than pointing at
+    a second fresh path — this used to write a full extra ~1MB copy of the
+    template per test (`init_db()` in `create_app()` doesn't know one already
+    exists here), and across ~2,000 tests that alone was enough to fill a
+    tmpfs-backed /tmp."""
+    if connection._conn is not None:
         try:
-            prev_conn.close()
+            connection._conn.close()
         except Exception:
             pass
-
-    # Fresh, isolated DB for this test; `init_db()` runs the schema + migrations.
-    connection._DB_PATH = str(tmp_path / 'test.db')
-    connection._conn = None
+        connection._conn = None
 
     from backend.app import create_app
     app = create_app()
@@ -89,20 +90,24 @@ def client(tmp_path):
         with app.test_client() as c:
             yield c
     finally:
-        # Three things run jobs on background threads against this same
+        # Four things run jobs on background threads against this same
         # module-global connection — the research worker, run_bg's queue
-        # (journal polish, metadata, transcription, workout parsing…), and a
-        # chat reply generating via backend/delegate/runs.py. A test that
-        # triggers any of them can outlive its own teardown, and closing the
-        # connection underneath a thread mid-query segfaults the interpreter
-        # rather than raising. Stop the work before taking its database away.
+        # (journal polish, metadata, transcription, workout parsing…), a chat
+        # reply generating via backend/delegate/runs.py, and the voice-draft
+        # pipeline's own executor (backend/journal/voice_drafts.py). A test
+        # that triggers any of them can outlive its own teardown, and closing
+        # the connection underneath a thread mid-query segfaults the
+        # interpreter rather than raising. Stop the work before taking its
+        # database away.
         from backend.ai import background
         from backend.delegate import runs
         from backend.research import worker
+        from backend.journal import voice_drafts
         worker.cancel()
         worker.wait_idle(timeout=15.0)
         background.wait_idle(timeout=15.0)
         runs.wait_idle(timeout=15.0)
+        voice_drafts.wait_idle(timeout=15.0)
         if connection._conn is not None:
             connection._conn.close()
-        connection._DB_PATH, connection._conn = prev_path, prev_conn
+            connection._conn = None

@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ulid } from '@/lib/ulid';
+import { useRecipeCreate } from '@/offline/mutationDefaults';
+import { storePhoto } from '@/offline/photoStore';
 import { api } from '../../hooks/api';
 import type { Recipe, RecipeMedia } from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
@@ -199,6 +202,7 @@ export function RecipeList() {
     error: dictateError,
     start: startDictate,
     stop: stopDictate,
+    canTranscribe,
   } = useRecorder(t => setNewContent(prev => (prev ? `${prev} ${t}` : t)));
   const dictating = dictateStatus === 'recording';
   const transcribing = dictateStatus === 'transcribing';
@@ -245,23 +249,32 @@ export function RecipeList() {
     queryClient.invalidateQueries({ queryKey: ['cookbook'] });
   };
 
-  const createRecipe = useMutation({
-    mutationFn: (data: {
-      title: string;
-      content: string;
-      tags?: string[];
-      media?: File[];
-    }) => api.cookbook.create(data),
-    onSuccess: () => {
-      invalidate();
-      newMedia.forEach(m => URL.revokeObjectURL(m.url));
-      setNewTitle('');
-      setNewContent('');
-      setNewTags('');
-      setNewMedia([]);
-      setShowNewRecipe(false);
-    },
-  });
+  // Queued, photos and all: the same path the food log takes, for the same
+  // reason — a recipe photographed in someone else's kitchen should not need
+  // their wifi.
+  const createRecipe = useRecipeCreate();
+
+  const submitRecipe = async () => {
+    const id = ulid();
+    const photos = newMedia.map(m => ({ id: ulid(), file: m.file }));
+    await Promise.all(
+      photos.map(ph => storePhoto(ph.id, ph.file, 'cookbook', id))
+    );
+    createRecipe.mutate({
+      id,
+      title: newTitle.trim(),
+      content: newContent.trim(),
+      tags: splitTagInput(newTags),
+      photoIds: photos.map(ph => ph.id),
+    });
+    // Cleared on send: as far as this device is concerned the recipe is saved.
+    newMedia.forEach(m => URL.revokeObjectURL(m.url));
+    setNewTitle('');
+    setNewContent('');
+    setNewTags('');
+    setNewMedia([]);
+    setShowNewRecipe(false);
+  };
 
   const updateRecipe = useMutation({
     mutationFn: ({
@@ -449,8 +462,14 @@ export function RecipeList() {
             <button
               type="button"
               onClick={() => (dictating ? stopDictate() : void startDictate())}
-              disabled={transcribing}
-              title={dictating ? 'Stop recording' : 'Dictate'}
+              disabled={transcribing || !canTranscribe}
+              title={
+                !canTranscribe
+                  ? 'Offline — dictation needs the server'
+                  : dictating
+                    ? 'Stop recording'
+                    : 'Dictate'
+              }
               className={`absolute top-2 right-2 w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
                 dictating
                   ? 'bg-red-500 text-white animate-pulse'
@@ -484,14 +503,7 @@ export function RecipeList() {
               Cancel
             </button>
             <button
-              onClick={() =>
-                createRecipe.mutate({
-                  title: newTitle.trim(),
-                  content: newContent.trim(),
-                  tags: splitTagInput(newTags),
-                  media: newMedia.map(m => m.file),
-                })
-              }
+              onClick={() => void submitRecipe()}
               disabled={
                 !newTitle.trim() || !newContent.trim() || createRecipe.isPending
               }

@@ -28,10 +28,7 @@ export function JobsSection() {
   const configured = settings?.hasAdzunaCredentials ?? false;
 
   return (
-    <section>
-      <h2 className="text-lg font-medium text-[var(--color-text)] mb-4">
-        Jobs
-      </h2>
+    <>
       <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10 space-y-3">
         <p className="text-sm text-[var(--color-text-muted)]">
           Adzuna aggregates broadly and has a free API tier. Register at{' '}
@@ -110,7 +107,7 @@ export function JobsSection() {
           </label>
         </div>
       </div>
-    </section>
+    </>
   );
 }
 

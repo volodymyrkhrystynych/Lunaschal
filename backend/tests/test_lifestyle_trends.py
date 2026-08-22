@@ -89,7 +89,7 @@ def _insert_email(day: date, *, category='job_application', job_status='sent') -
     db = get_db()
     row_id = str(ULID())
     db.execute(
-        'INSERT INTO emails(id, account_id, gmail_id, subject, sender_email,'
+        'INSERT INTO emails(id, account_id, provider_message_id, subject, sender_email,'
         ' received_at, category, job_status, created_at)'
         ' VALUES (?,?,?,?,?,?,?,?,?)',
         (row_id, _account(), row_id, 'Application received', 'hr@example.com',

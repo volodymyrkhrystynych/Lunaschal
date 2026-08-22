@@ -48,6 +48,37 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
 CREATE INDEX IF NOT EXISTS idx_journal_attachments_entry
     ON journal_attachments(entry_id, position);
 
+-- A voice clip recorded via the STT listener's Journal hotkey, before it
+-- becomes an entry. The files live under ./data/journal_drafts/<draft_id>/
+-- (backend/journal/voice_drafts.py) — a separate root from journal_attachments
+-- above, since a draft has no entry_id yet. Several local STT backends
+-- transcribe the same clip in the background; their outputs are cross-checked
+-- and polished into one entry by backend/ai/journal.py's merge_voice_draft.
+CREATE TABLE IF NOT EXISTS journal_voice_drafts (
+    id TEXT PRIMARY KEY,
+    path TEXT NOT NULL,
+    mime TEXT,
+    size INTEGER,
+    -- 'processing' | 'done' | 'error'. Reset to 'error' at startup for any row
+    -- left 'processing' by a crash (backend/db/connection.py) — unlike an idle
+    -- attachment transcript, there is no button to re-arm; the user retries
+    -- explicitly from the drafts dropdown.
+    status TEXT NOT NULL DEFAULT 'processing',
+    error TEXT,
+    -- JSON array of {backend, text} | {backend, error} — one entry per STT
+    -- backend that ran, kept for the drafts dropdown even after promotion to
+    -- an entry. Not surfaced as journal_entries.raw_content, which stays a
+    -- single plain transcript so the existing manual Polish button keeps
+    -- working unmodified.
+    candidates TEXT,
+    entry_id TEXT REFERENCES journal_entries(id),
+    created_at INTEGER NOT NULL,
+    completed_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_voice_drafts_status
+    ON journal_voice_drafts(status, created_at);
+
 CREATE TABLE IF NOT EXISTS calendar_events (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -661,6 +692,15 @@ CREATE TABLE IF NOT EXISTS notebook_review_state (
 
 CREATE INDEX IF NOT EXISTS idx_notebook_review_due ON notebook_review_state(enabled, due);
 
+-- Tracks which diary/YYYY-MM-DD.md notes have already been promoted into a
+-- Journal entry (backend/notebook_diary_scheduler.py), so a catch-up scan
+-- after the app was closed overnight never double-promotes one.
+CREATE TABLE IF NOT EXISTS notebook_diary_promotions (
+    date TEXT PRIMARY KEY,
+    journal_entry_id TEXT NOT NULL,
+    promoted_at INTEGER NOT NULL
+);
+
 -- Notes to self: freeform notes jotted from chat, resurfaced on a fixed
 -- 1/2/4/7/14-day ladder (backend/notes.py) rather than FSRS — there's no
 -- correctness signal to grade, just seen-or-not, so nothing for a
@@ -829,6 +869,47 @@ CREATE TABLE IF NOT EXISTS calorie_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_calorie_logs_date ON calorie_logs(date);
+
+-- Hourly weather, one row per (day_key, hour_ts). day_key is the 4am-anchored
+-- day from backend/day_boundary.py, not the raw calendar date Open-Meteo
+-- returns — see backend/weather/sync.py. Rows are upserted in place as the day
+-- progresses: is_actual flips from 0 to 1 once hour_ts has passed, and every
+-- resync (a fresh geolocation fix, or the day's first tab visit) overwrites
+-- forecast values with fresher ones for the location known at sync time.
+CREATE TABLE IF NOT EXISTS lifestyle_weather_hours (
+    id TEXT PRIMARY KEY,
+    day_key TEXT NOT NULL,
+    hour_ts INTEGER NOT NULL,
+    weather_code INTEGER NOT NULL,
+    temperature_c REAL NOT NULL,
+    wet_bulb_c REAL,
+    humidity_pct REAL,
+    is_actual INTEGER NOT NULL DEFAULT 0,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    location_source TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(day_key, hour_ts)
+);
+
+CREATE INDEX IF NOT EXISTS idx_weather_hours_day ON lifestyle_weather_hours(day_key);
+
+-- Append-only log of the location used at each weather sync — kept separate
+-- from lifestyle_weather_hours because a resync overwrites that table's rows
+-- for the whole day (there's no continuous GPS trail to preserve per-hour
+-- location history), so this is the only record of "where the app thought
+-- the user was" at a given moment.
+CREATE TABLE IF NOT EXISTS lifestyle_weather_locations (
+    id TEXT PRIMARY KEY,
+    day_key TEXT NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    source TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_weather_locations_day ON lifestyle_weather_locations(day_key, created_at);
 
 -- Ideas: the app's own feature backlog, developed with the research agent.
 -- raw_content is what was spoken/typed and is never overwritten; content is the
@@ -1039,13 +1120,26 @@ CREATE INDEX IF NOT EXISTS idx_practice_recall_attempts_snippet ON practice_reca
 
 CREATE TABLE IF NOT EXISTS email_accounts (
     id TEXT PRIMARY KEY,
-    provider TEXT NOT NULL DEFAULT 'gmail' CHECK(provider IN ('gmail')),
+    provider TEXT NOT NULL DEFAULT 'gmail' CHECK(provider IN ('gmail','outlook','imap')),
     email_address TEXT NOT NULL,
     access_token TEXT,
     refresh_token TEXT,
     token_expires_at INTEGER,
     scope TEXT,
     history_id TEXT,
+    -- IMAP-only (provider IN ('outlook','imap')): outlook's host/port are
+    -- fixed constants (backend/email/outlook_client.py) but still stored so
+    -- the row is self-describing; imap's are user-supplied. imap_password is
+    -- plaintext, matching access_token/refresh_token above — this is a
+    -- single-user local app with no at-rest secret encryption anywhere else.
+    imap_host TEXT,
+    imap_port INTEGER,
+    imap_username TEXT,
+    imap_password TEXT,
+    -- IMAP sync cursor (INBOX only in v1 — see backend/email/imap_client.py).
+    -- Gmail uses history_id above instead; these stay NULL for gmail rows.
+    uid_validity INTEGER,
+    uid_next INTEGER,
     last_synced_at INTEGER,
     last_sync_error TEXT,
     sync_enabled INTEGER NOT NULL DEFAULT 1,
@@ -1059,7 +1153,9 @@ CREATE TABLE IF NOT EXISTS email_accounts (
 CREATE TABLE IF NOT EXISTS emails (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES email_accounts(id) ON DELETE CASCADE,
-    gmail_id TEXT NOT NULL,
+    -- The provider's own native message id: Gmail's message id, Outlook's
+    -- IMAP UID, or a generic IMAP account's UID.
+    provider_message_id TEXT NOT NULL,
     thread_id TEXT,
     subject TEXT,
     sender TEXT,
@@ -1077,7 +1173,7 @@ CREATE TABLE IF NOT EXISTS emails (
     classified_at INTEGER,
     classification_error TEXT,
     created_at INTEGER NOT NULL,
-    UNIQUE(account_id, gmail_id)
+    UNIQUE(account_id, provider_message_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at DESC);

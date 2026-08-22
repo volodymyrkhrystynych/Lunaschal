@@ -25,6 +25,7 @@ Development happens on two machines: a desktop (comfortable, full mouse/keyboard
 - Vitest defaults to the `node` environment for pure-logic tests; component tests (`.test.tsx`) opt into jsdom per-file with a `// @vitest-environment jsdom` pragma and use `@testing-library/react` (auto-cleanup is registered in `src/test/setup.ts`). Extractable logic lives in `src/lib/` precisely so it can be tested without jsdom.
 - Favor fast, isolated tests: unit-test AI parsing/classification (`backend/ai/`), route handlers, the FSRS scheduling adapter, pure parsers (`backend/fanfic/xenforo.py`, `backend/meetings/merge.py`), and the DB layer against a temporary SQLite file. Mock external AI providers and network fetches rather than calling them.
 - **Every backend test gets an isolated database, whether it asks for one or not** — `conftest.py`'s autouse `isolated_db` copies a session-built schema template per test. `get_db()` opens the configured path lazily and never runs the schema, so before that fixture a test with no `client` opened the developer's real `./data/lunaschal.db` and silently depended on whatever was in it. The template is built once (`init_db()` is ~150 ms; 1,500 times is four minutes).
+- That per-test DB copy (~1MB) lives in `tmp_path`, and pytest's default retention keeps every test's `tmp_path` alive for the whole session — across ~1,800 tests that's enough on its own to fill a quota-limited tmp partition. `pytest.ini` sets `tmp_path_retention_policy = failed` so a passing test's `tmp_path` is freed the moment that test ends (pytest still keeps failing tests' dirs around to debug), and `scripts/test-backend.sh` (what `npm run test:backend` runs) additionally splits the suite into batches, wiping pytest's tmp root before each one — so a full run's peak tmp usage stays bounded even when a batch has real failures.
 - After making changes, run the relevant tests and report the actual results. Treat a green test suite — not a manual walkthrough — as the default bar for "done."
 - No ESLint; **Prettier** runs on staged files via a pre-commit hook (`simple-git-hooks` + `lint-staged`). `npm run format` / `format:check` run it manually.
 
@@ -59,7 +60,8 @@ systemctl --user status lunaschal-llama   # see llama/lunaschal-llama.service to
 npm run stt              # or ./stt-start.sh
 
 # Tests
-npm run test:backend     # pytest (backend/tests)
+npm run test:backend     # scripts/test-backend.sh: runs backend/tests in batches
+                         # (pytest directly for a single file: .venv/bin/pytest backend/tests/test_foo.py)
 npm run test             # vitest run (src/**/*.{test,spec}.{ts,tsx})
 npm run test:all         # both suites
 npm run test:watch       # vitest in watch mode
@@ -95,7 +97,7 @@ Feature-logic packages (kept out of the route files so they can be unit-tested):
 - `backend/jobs/` — job applications: the master profile, bounded-schema resume tailoring, the Answer Kit, email linkage over the existing `job_application` classifier, resume retention, discovery (`sources/` board adapters → `sync.py` → the phone's triage feed → `queue.py`'s background resume worker), and the routes the browser extension applies through
 - `backend/delegate/` — the Chat tab's delegate: the proposal toolbox (`tools.py`), the loop that drives it (`agent.py`), and the decide-delegate-answer glue behind `/api/chat/stream` (`chat.py`). See Chat delegate below
 - `backend/chat/` — file storage for chat photo attachments (`storage.py`) and the helper that turns their readings into text the chat model can see (`context.py`)
-- `backend/memory.py` — the one standing document the assistant keeps about the user; read into every chat system prompt, copy-on-write
+- `backend/memory.py` — the one standing document about the user; read into every chat system prompt, copy-on-write, and written only from Settings → Memory
 - `backend/imaging.py` — HEIC→JPEG transcoding at the upload boundary, shared by the food log and chat photos (it also registers Pillow's HEIF opener)
 - `backend/geo.py` — the one latitude/longitude validator (`parse_coord`, `coord_pair`); a lone coordinate is rejected rather than stored, since half a location is a row that looks located and isn't
 - `backend/tags.py` — shared normalization for JSON-array tag columns (use it, don't grow per-feature rules)
@@ -125,7 +127,6 @@ There is no cron and no general scheduler: hand-rolled daemon loops start from `
 - `journal.py` — entry polish/metadata (tags constrained to the closed `JOURNAL_TAGS` vocabulary by schema enum); `polish_journal_entry`'s `context` also carries the standing memory document alongside attachment descriptions, so a misheard name gets fixed against both — this is where Chat dictation's now-removed correction pass moved; `classify_entry_for_tag(content, tag_name) -> bool` for the curated-tag background scan
 - `idea_polish.py` — `polish_idea`, the same memory-document correction as Journal's but lighter (no paragraph reformatting — ideas stay one short block); fires once, in the background, right after `POST /api/ideas/voice` (see backend/research/CLAUDE.md)
 - `images.py` — `describe_image(path, *, system, prompt)` is the **only** call in the app that sends an image anywhere; `caption_image` (journal prose) and `read_chat_photo` (chat, quotes legible text verbatim) are its two callers
-- `memory.py` — background rewrite of the standing memory document to an instruction; returns None rather than a fallback, because a failed revision must leave the document alone
 - `learning_generation.py` / `learning_grading.py` / `learning_verification.py` — flashcard generation, claim-coverage grading, MCP-grounded verification (see Learning below)
 - `mcp_client.py` — asyncio bridge to the `mcp` SDK (per-request sessions, stdio/http transports), MCP→OpenAI tool mapping
 - `writing.py` — `summarize_discussion` for the Writing module

@@ -58,7 +58,7 @@ def _out_of_time(deadline: float | None) -> bool:
 #
 # 320 -> 512 when propose_food_log joined: dish, place, notes, calories, rating
 # and tags in one call is the largest argument set on this turn, and a food
-# message often stages that *and* a `remember` for a name in the same breath.
+# message often stages that *and* asks a clarifying question in one breath.
 #
 # 512 -> 768 when propose_recipe joined: its `content` is a whole markdown
 # recipe (ingredients + numbered instructions), the largest single string any

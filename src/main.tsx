@@ -14,6 +14,7 @@ import { shouldPersistQuery } from './offline/shouldPersistQuery';
 import { installBackendOnlineManager } from './offline/onlineManager';
 import { registerOfflineMutationDefaults } from './offline/mutationDefaults';
 import { resumeStoredRecordings } from './offline/recordingQueue';
+import { resumeStoredPhotos } from './offline/photoQueue';
 import './index.css';
 
 applyFontSize(getStoredFontSize());
@@ -72,6 +73,10 @@ createRoot(document.getElementById('root')!).render(
         // mid-capture (screen lock, tab discarded) leaves no paused mutation
         // behind, so it has to be found in the recording store instead.
         void resumeStoredRecordings(queryClient);
+        // …and any photo the device is still holding: a meal or a selfie whose
+        // upload never made it into the persisted queue (killed tab, busted
+        // cache) would otherwise sit in IndexedDB, safe and never sent.
+        void resumeStoredPhotos(queryClient);
       }}
     >
       <App />

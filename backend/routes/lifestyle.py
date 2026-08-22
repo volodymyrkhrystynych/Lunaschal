@@ -750,10 +750,12 @@ def log_calories():
     if err:
         return jsonify({'error': err}), 400
 
-    entry_id = str(ULID())
+    # Client-supplied ULID for idempotent offline replay; the weigh-in above
+    # needs none because it already upserts on the day.
+    entry_id = body.get('id') or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT INTO calorie_logs(id, date, description, calories, created_at)'
+        'INSERT OR IGNORE INTO calorie_logs(id, date, description, calories, created_at)'
         ' VALUES (?,?,?,?,?)',
         (entry_id, day, description, calories, int(time.time())),
     )

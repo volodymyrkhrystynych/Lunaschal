@@ -80,7 +80,7 @@ export function ResearchSection() {
   });
 
   return (
-    <section className="space-y-3">
+    <>
       <div>
         <h3 className="text-sm font-medium text-[var(--color-text)]">
           Repo context
@@ -322,6 +322,6 @@ export function ResearchSection() {
           <p className="mt-1 whitespace-pre-wrap">{snapshot.changeSummary}</p>
         </details>
       )}
-    </section>
+    </>
   );
 }

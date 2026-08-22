@@ -120,11 +120,11 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
     return prompt;
   };
 
-  const sendMessage = async () => {
-    if (!input.trim() || isStreaming) return;
+  const sendMessage = async (messageText?: string) => {
+    const userMessage = (messageText ?? input).trim();
+    if (!userMessage || isStreaming) return;
 
-    const userMessage = input.trim();
-    setInput('');
+    if (messageText === undefined) setInput('');
 
     await addMessage.mutateAsync({ role: 'user', content: userMessage });
 
@@ -213,15 +213,16 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
     if (trimmed && trimmed !== conversation?.title) updateTitle.mutate(trimmed);
   };
 
-  // Dictation lands in the box, it doesn't send â€” same reasoning as the Chat
-  // tab (a misheard proper noun needs a moment to be caught before it becomes
-  // part of the discussion). No correction pass here, unlike Chat: that pass
-  // corrects against the memory document and attached photos, neither of
-  // which a writing discussion has.
+  // Dictation sends, same as the Chat tab: the box-and-a-second-click step
+  // existed to catch a misheard proper noun, and the two-model STT cross-check
+  // (`backend/ai/transcribe_polish.merge_transcripts`) is what made it
+  // unnecessary. Anything already typed goes with it as one message.
   const handleTranscript = (text: string) => {
     const raw = text.trim();
     if (!raw) return;
-    setInput(prev => (prev.trim() ? `${prev.trim()} ${raw}` : raw));
+    const combined = input.trim() ? `${input.trim()} ${raw}` : raw;
+    setInput('');
+    void sendMessage(combined).catch(() => setInput(combined));
   };
 
   const recorder = useRecorder(handleTranscript);
@@ -452,8 +453,19 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
           />
           <button
             onClick={toggleRecording}
-            disabled={isStreaming || !aiConfigured || isTranscribing}
-            title={isRecording ? 'Stop recording' : 'Speak to add to the box'}
+            disabled={
+              isStreaming ||
+              !aiConfigured ||
+              isTranscribing ||
+              !recorder.canTranscribe
+            }
+            title={
+              !recorder.canTranscribe
+                ? 'Offline â€” dictation needs the server'
+                : isRecording
+                  ? 'Stop recording'
+                  : 'Speak to send'
+            }
             className={`px-3 rounded self-end py-2 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               isRecording
                 ? 'bg-red-500 text-white animate-pulse hover:bg-red-500'
@@ -494,7 +506,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
             )}
           </button>
           <button
-            onClick={sendMessage}
+            onClick={() => sendMessage()}
             disabled={!input.trim() || isStreaming || !aiConfigured}
             className="px-3 rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/30 disabled:opacity-50 transition-colors self-end py-2 text-sm"
           >

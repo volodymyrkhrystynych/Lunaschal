@@ -15,7 +15,7 @@ TIMESTAMP_COLS = frozenset({
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
     'researched_at', 'last_practiced_at', 'last_recall_at',
     'received_at', 'classified_at', 'last_synced_at', 'token_expires_at',
-    'finished_at',
+    'finished_at', 'hour_ts',
     # Job applications. 'fetched_at' also exists on email_images, which never
     # goes through row_to_dict today — and ISO is the right shape there too if
     # it ever does, so this is a widening rather than a special case.
@@ -114,6 +114,9 @@ def init_db() -> None:
     _reset_stale_idea_research(db)
     _ensure_email_settings(db)
     _ensure_email_body_html(db)
+    _ensure_provider_message_id(db)
+    _ensure_provider_outlook_imap(db)
+    _ensure_microsoft_oauth_settings(db)
     _ensure_job_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
@@ -146,6 +149,7 @@ def init_db() -> None:
     _ensure_food_location(db)
     _ensure_food_recipe_match_status(db)
     _ensure_hf_token(db)
+    _ensure_weather_settings(db)
     _ensure_meeting_speaker_names(db)
     _ensure_meeting_echo_cancel(db)
     _ensure_meeting_source(db)
@@ -162,6 +166,7 @@ def init_db() -> None:
     _reset_stale_attachment_transcripts(db)
     _reset_stale_chat_attachment_descriptions(db)
     _reset_stale_message_runs(db)
+    _reset_stale_voice_drafts(db)
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:
@@ -203,6 +208,8 @@ def _ensure_stt_model_settings(db: sqlite3.Connection) -> None:
             db.execute(f'ALTER TABLE settings ADD COLUMN {col} TEXT')
     if 'voice_pipeline_enabled' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN voice_pipeline_enabled INTEGER DEFAULT 1')
+    if 'transcribe_polish_enabled' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN transcribe_polish_enabled INTEGER DEFAULT 1')
     db.commit()
 
 
@@ -582,6 +589,21 @@ def _reset_stale_attachment_transcripts(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _reset_stale_voice_drafts(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_fic_downloads: the multi-model STT +
+    merge job (backend/journal/voice_drafts.py) runs on a daemon thread whose
+    state dies with the process, so a row still 'processing' at startup has no
+    thread left behind it. Reset to 'error' rather than 'idle' — there is no
+    button that re-arms it on its own, the drafts dropdown's Retry is what
+    starts it again."""
+    db.execute(
+        "UPDATE journal_voice_drafts SET status='error',"
+        " error='Interrupted by an app restart.'"
+        " WHERE status='processing'"
+    )
+    db.commit()
+
+
 def _reset_stale_message_runs(db: sqlite3.Connection) -> None:
     """Same reasoning as _reset_stale_fic_downloads: a chat reply's generation
     thread (backend/delegate/runs.py) dies with the process, but a row it left
@@ -600,6 +622,20 @@ def _ensure_hf_token(db: sqlite3.Connection) -> None:
     if 'hf_token' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN hf_token TEXT')
         db.commit()
+
+
+def _ensure_weather_settings(db: sqlite3.Connection) -> None:
+    """Fallback location for the weather card, used when no geolocation fix
+    has ever been logged. Raw lat/lon rather than a geocoded place name — no
+    geocoding dependency, matching the food-entry location columns."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'weather_default_lat' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN weather_default_lat REAL')
+    if 'weather_default_lon' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN weather_default_lon REAL')
+    if 'weather_default_label' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN weather_default_label TEXT')
+    db.commit()
 
 
 def _ensure_meeting_echo_cancel(db: sqlite3.Connection) -> None:
@@ -907,6 +943,102 @@ def _ensure_email_body_html(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(emails)')}
     if 'body_html' not in cols:
         db.execute("ALTER TABLE emails ADD COLUMN body_html TEXT NOT NULL DEFAULT ''")
+    db.commit()
+
+
+def _ensure_provider_message_id(db: sqlite3.Connection) -> None:
+    """Rename emails.gmail_id -> provider_message_id: Outlook and generic-IMAP
+    accounts write their own native message id (an IMAP UID) into this column
+    too, and the Gmail-branded name was actively misleading once this stopped
+    being a Gmail-only feature (see backend/email/sync.py, imap_client.py).
+    SQLite 3.25+ RENAME COLUMN updates the inline UNIQUE(account_id, gmail_id)
+    constraint automatically, so this is a single statement, not a rebuild.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(emails)')}
+    if 'gmail_id' in cols and 'provider_message_id' not in cols:
+        db.execute('ALTER TABLE emails RENAME COLUMN gmail_id TO provider_message_id')
+    db.commit()
+
+
+def _ensure_provider_outlook_imap(db: sqlite3.Connection) -> None:
+    """Widen email_accounts.provider to allow 'outlook' and 'imap', and add
+    the IMAP-only columns (host/port/username/password, uid_validity/uid_next
+    sync cursor) those providers need.
+
+    SQLite has no ALTER TABLE for CHECK constraints, so this is the
+    documented 12-step rebuild procedure rather than a guarded ADD COLUMN
+    like every other migration in this file. Detection reads the table's own
+    stored DDL (PRAGMA table_info only reports columns, not CHECK clauses) —
+    the presence of 'imap' in the CHECK is what proves the rebuild already
+    ran. foreign_keys is a no-op inside a transaction, so it must be toggled
+    outside BEGIN/COMMIT, and this app runs on one long-lived connection —
+    getting that toggle wrong would silently leave FK enforcement off for the
+    rest of the process's life, so the ON/OFF calls bracket the whole
+    try/finally rather than living inside it.
+    """
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='email_accounts'"
+    ).fetchone()
+    if row and row['sql'] and "'imap'" in row['sql']:
+        return
+
+    db.execute('PRAGMA foreign_keys=OFF')
+    try:
+        db.execute('BEGIN')
+        db.execute("""
+            CREATE TABLE email_accounts_new (
+                id TEXT PRIMARY KEY,
+                provider TEXT NOT NULL DEFAULT 'gmail'
+                    CHECK(provider IN ('gmail','outlook','imap')),
+                email_address TEXT NOT NULL,
+                access_token TEXT,
+                refresh_token TEXT,
+                token_expires_at INTEGER,
+                scope TEXT,
+                history_id TEXT,
+                imap_host TEXT,
+                imap_port INTEGER,
+                imap_username TEXT,
+                imap_password TEXT,
+                uid_validity INTEGER,
+                uid_next INTEGER,
+                last_synced_at INTEGER,
+                last_sync_error TEXT,
+                sync_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(provider, email_address)
+            )
+        """)
+        db.execute("""
+            INSERT INTO email_accounts_new
+                (id, provider, email_address, access_token, refresh_token,
+                 token_expires_at, scope, history_id, last_synced_at,
+                 last_sync_error, sync_enabled, created_at, updated_at)
+            SELECT id, provider, email_address, access_token, refresh_token,
+                   token_expires_at, scope, history_id, last_synced_at,
+                   last_sync_error, sync_enabled, created_at, updated_at
+            FROM email_accounts
+        """)
+        db.execute('DROP TABLE email_accounts')
+        db.execute('ALTER TABLE email_accounts_new RENAME TO email_accounts')
+        fk_problems = db.execute('PRAGMA foreign_key_check').fetchall()
+        if fk_problems:
+            raise RuntimeError(f'email_accounts migration broke FK integrity: {fk_problems}')
+        db.execute('COMMIT')
+    except Exception:
+        db.execute('ROLLBACK')
+        raise
+    finally:
+        db.execute('PRAGMA foreign_keys=ON')
+
+
+def _ensure_microsoft_oauth_settings(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'microsoft_oauth_client_id' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN microsoft_oauth_client_id TEXT')
+    if 'microsoft_oauth_client_secret' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN microsoft_oauth_client_secret TEXT')
     db.commit()
 
 

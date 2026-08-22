@@ -10,6 +10,18 @@ from backend.db.connection import get_db
 from backend.research import web
 
 
+@pytest.fixture(autouse=True)
+def _reset_search_pacing(monkeypatch):
+    """Every test gets a clean pacing/breaker state and never really sleeps.
+
+    Without this, tests exercising _dispatch (added alongside the pacing/retry/
+    circuit-breaker logic) would incur real SEARCH_STAGGER_SECONDS/backoff
+    sleeps once run back-to-back, and breaker state would leak between tests.
+    """
+    web._search_state.update({'last_request': 0.0, 'consecutive_failures': 0, 'breaker_until': 0.0})
+    monkeypatch.setattr(web, '_sleep', lambda seconds: None)
+
+
 # --- The SSRF guard ---
 
 @pytest.mark.parametrize('url', [
@@ -286,6 +298,297 @@ def test_search_network_errors_become_search_unavailable(client, monkeypatch):
 
 def test_an_empty_query_searches_nothing(client):
     assert web.web_search('   ') == []
+
+
+# --- Pacing, retry, circuit breaker ---
+
+class _SearxResponse:
+    """A fake SearXNG JSON response, success or error."""
+
+    def __init__(self, *, status=200, results=None, unresponsive=None):
+        self.status_code = status
+        self._results = results if results is not None else []
+        self._unresponsive = unresponsive or []
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            err = requests.HTTPError(str(self.status_code))
+            err.response = self
+            raise err
+
+    def json(self):
+        return {'results': self._results, 'unresponsive_engines': self._unresponsive}
+
+
+_OK_RESULT = [{'title': 'S', 'url': 'https://ex.com/s', 'content': 'c'}]
+
+
+def test_stagger_delays_a_second_immediate_call(client, monkeypatch):
+    _configure('searxng', url='http://localhost:8888')
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: _SearxResponse(results=_OK_RESULT))
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    web.web_search('q')  # first call: nothing to stagger against yet
+    web.web_search('q')  # second call: paced against the first
+
+    assert len(sleeps) == 1
+    assert sleeps[0] == pytest.approx(web.SEARCH_STAGGER_SECONDS, abs=0.5)
+
+
+def test_429_then_success_retries_with_backoff(client, monkeypatch):
+    _configure('searxng', url='http://localhost:8888')
+    responses = [_SearxResponse(status=429), _SearxResponse(status=429), _SearxResponse(results=_OK_RESULT)]
+    seen = {'n': 0}
+
+    def fake_get(*a, **k):
+        r = responses[seen['n']]
+        seen['n'] += 1
+        return r
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    results = web.web_search('q')
+
+    assert results[0]['title'] == 'S'
+    assert seen['n'] == 3
+    assert sleeps == list(web.SEARCH_RETRY_BACKOFF[:2])
+
+
+def test_429_exhausts_all_backoff_then_fails(client, monkeypatch):
+    _configure('searxng', url='http://localhost:8888')
+    seen = {'n': 0}
+
+    def fake_get(*a, **k):
+        seen['n'] += 1
+        return _SearxResponse(status=429)
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    with pytest.raises(web.SearchUnavailable):
+        web.web_search('q')
+
+    assert seen['n'] == len(web.SEARCH_RETRY_BACKOFF) + 1
+    assert sleeps == list(web.SEARCH_RETRY_BACKOFF)
+
+
+def test_connection_error_fails_fast_without_backoff(client, monkeypatch):
+    _configure('searxng', url='http://localhost:8888')
+    seen = {'n': 0}
+
+    def boom(*a, **k):
+        seen['n'] += 1
+        raise requests.ConnectionError('down')
+
+    monkeypatch.setattr(web.requests, 'get', boom)
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    with pytest.raises(web.SearchUnavailable):
+        web.web_search('q')
+
+    assert seen['n'] == 1, 'a hard connection failure is not rate-limit shaped: no retry'
+    assert sleeps == []
+
+
+def test_breaker_trips_after_repeated_failures_without_hitting_network(client, monkeypatch):
+    _configure('searxng', url='http://localhost:8888')
+    seen = {'n': 0}
+
+    def fake_get(*a, **k):
+        seen['n'] += 1
+        return _SearxResponse(status=429)
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    monkeypatch.setattr(web, '_sleep', lambda s: None)
+
+    for _ in range(web.SEARCH_BREAKER_THRESHOLD):
+        with pytest.raises(web.SearchUnavailable):
+            web.web_search('q')
+
+    calls_before = seen['n']
+    with pytest.raises(web.SearchCircuitOpen):
+        web.web_search('q')
+    assert seen['n'] == calls_before, 'a tripped breaker must not make a network call'
+
+
+def test_breaker_resets_after_its_cooldown(client, monkeypatch):
+    clock = {'t': 1000.0}
+    monkeypatch.setattr(web, '_monotonic', lambda: clock['t'])
+    monkeypatch.setattr(web, '_sleep', lambda s: None)
+    _configure('searxng', url='http://localhost:8888')
+
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: _SearxResponse(status=429))
+    for _ in range(web.SEARCH_BREAKER_THRESHOLD):
+        with pytest.raises(web.SearchUnavailable):
+            web.web_search('q')
+    with pytest.raises(web.SearchCircuitOpen):
+        web.web_search('q')
+
+    clock['t'] += web.SEARCH_BREAKER_COOLDOWN + 1
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: _SearxResponse(results=_OK_RESULT))
+
+    assert web.web_search('q')[0]['title'] == 'S'
+
+
+def test_a_success_resets_the_failure_counter(client, monkeypatch):
+    """One failure below threshold, then a success, must not leave a stale
+    count that trips the breaker on a later unrelated single failure."""
+    _configure('searxng', url='http://localhost:8888')
+    monkeypatch.setattr(web, '_sleep', lambda s: None)
+
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: _SearxResponse(status=429))
+    with pytest.raises(web.SearchUnavailable):
+        web.web_search('q')
+
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: _SearxResponse(results=_OK_RESULT))
+    web.web_search('q')
+    assert web._search_state['consecutive_failures'] == 0
+
+    monkeypatch.setattr(web.requests, 'get', lambda *a, **k: _SearxResponse(status=429))
+    with pytest.raises(web.SearchUnavailable):
+        web.web_search('q')
+    assert web._search_state['breaker_until'] == 0.0, 'a single failure alone must not trip it'
+
+
+def test_searxng_soft_block_triggers_a_retry_that_recovers(client, monkeypatch):
+    _configure('searxng', url='http://localhost:8888')
+    responses = [
+        _SearxResponse(results=[], unresponsive=[['startpage', 'CAPTCHA'], ['duckduckgo', 'too many requests']]),
+        _SearxResponse(results=_OK_RESULT),
+    ]
+    seen = {'n': 0}
+
+    def fake_get(*a, **k):
+        r = responses[seen['n']]
+        seen['n'] += 1
+        return r
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    results = web.web_search('q')
+
+    assert results[0]['title'] == 'S'
+    assert sleeps == [web.SEARCH_RETRY_BACKOFF[0]]
+
+
+def test_a_suspended_engine_is_not_retried_and_opens_the_breaker(client, monkeypatch):
+    """SearXNG's real answer when Brave/Startpage bench us — see searxng/settings.yml.
+
+    While an engine is suspended SearXNG makes no request to it, so the three
+    backoff sleeps would buy 50 seconds of the same empty payload.
+    """
+    _configure('searxng', url='http://localhost:8888')
+    calls = {'n': 0}
+
+    def fake_get(*a, **k):
+        calls['n'] += 1
+        return _SearxResponse(
+            results=[],
+            unresponsive=[
+                ['brave', 'Suspended: too many requests'],
+                ['startpage', 'Suspended: CAPTCHA'],
+            ],
+        )
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    with pytest.raises(web.SearchUnavailable):
+        web.web_search('q')
+
+    assert calls['n'] == 1, 'a suspension must not be retried'
+    assert sleeps == []
+    assert web._search_state['breaker_until'] > 0.0, 'one suspension is enough to open it'
+
+    with pytest.raises(web.SearchCircuitOpen):
+        web.web_search('q')
+    assert calls['n'] == 1, 'the breaker short-circuits without a network call'
+
+
+def test_a_fresh_captcha_alongside_a_suspension_still_retries(client, monkeypatch):
+    """DuckDuckGo's CAPTCHA carries suspended_time=0, so the engine is still asked."""
+    _configure('searxng', url='http://localhost:8888')
+    responses = [
+        _SearxResponse(
+            results=[],
+            unresponsive=[['brave', 'Suspended: too many requests'], ['duckduckgo', 'CAPTCHA']],
+        ),
+        _SearxResponse(results=_OK_RESULT),
+    ]
+    seen = {'n': 0}
+
+    def fake_get(*a, **k):
+        r = responses[seen['n']]
+        seen['n'] += 1
+        return r
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    assert web.web_search('q')[0]['title'] == 'S'
+    assert sleeps == [web.SEARCH_RETRY_BACKOFF[0]]
+
+
+def test_a_suspension_beside_a_timeout_still_retries(client, monkeypatch):
+    """The timeout might not repeat, so the retry has something to win."""
+    _configure('searxng', url='http://localhost:8888')
+    responses = [
+        _SearxResponse(
+            results=[],
+            unresponsive=[['startpage', 'Suspended: CAPTCHA'], ['bing', 'timeout']],
+        ),
+        _SearxResponse(results=_OK_RESULT),
+    ]
+    seen = {'n': 0}
+
+    def fake_get(*a, **k):
+        r = responses[seen['n']]
+        seen['n'] += 1
+        return r
+
+    monkeypatch.setattr(web.requests, 'get', fake_get)
+    monkeypatch.setattr(web, '_sleep', lambda s: None)
+
+    assert web.web_search('q')[0]['title'] == 'S'
+
+
+def test_benign_unresponsive_engines_still_return_empty_without_retry(client, monkeypatch, caplog):
+    _configure('searxng', url='http://localhost:8888')
+    monkeypatch.setattr(
+        web.requests, 'get',
+        lambda *a, **k: _SearxResponse(results=[], unresponsive=[['startpage', 'timeout']]),
+    )
+    sleeps = []
+    monkeypatch.setattr(web, '_sleep', lambda s: sleeps.append(s))
+
+    with caplog.at_level('INFO', logger='backend.research.web'):
+        results = web.web_search('q')
+
+    assert results == []
+    assert sleeps == []
+    assert any('unresponsive' in r.message.lower() for r in caplog.records)
+
+
+def test_run_tool_wording_distinguishes_circuit_open_from_plain_unavailable(client, monkeypatch):
+    def _raise(q, limit=5):
+        raise web.SearchCircuitOpen('searxng search failed repeatedly and will not be retried for about 42s')
+
+    monkeypatch.setattr(web, 'web_search', _raise)
+    text, event = web.run_tool('web_search', {'query': 'fsrs'})
+
+    assert 'do not call web_search again' in text.lower()
+    assert 'could not search' not in text.lower()
+    assert event['ok'] is False
+    assert event['circuit_open'] is True
 
 
 # --- run_tool: the model-facing surface ---
