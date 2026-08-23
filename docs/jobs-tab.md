@@ -1,12 +1,13 @@
 # Jobs tab — design doc
 
-**Status: phase 1 built and tested, not yet run against a live job search.** The profile, resume
-tailoring, application tracking, the Answer Kit, email linkage and resume retention all ship in
-`c30e811` on `feat/job-applications`, with 151 backend and 20 frontend tests. Discovery (phase 2)
-and the in-app browser (phase 3) are designed but not built — see
-[The three phases](#the-three-phases). Nothing here has been exercised against a real posting, a
-real ATS, or a real rejection email yet; [What we do not know yet](#what-we-do-not-know-yet) is
-honest about which parts that makes provisional.
+**Status: all three phases built and tested, not yet run against a live job search.** The profile,
+tailoring, application tracking, the Answer Kit, email linkage and retention ship in `c30e811`;
+discovery, the triage feed and the resume queue in `d53dd54`; the browser extension and the routes
+it applies through in `a384a64`. All of it lives on `feat/browser-extension` — the one branch the
+Jobs stack was collapsed onto — with 419 backend and 96 frontend/extension tests passing. Nothing
+here has been exercised against a real posting, a real ATS, or a real rejection email yet;
+[What we do not know yet](#what-we-do-not-know-yet) is honest about which parts that makes
+provisional.
 
 This is the design record. `backend/jobs/CLAUDE.md` documents how the code works and what will
 bite someone changing it; this documents why it is shaped this way, and what was rejected.
@@ -444,7 +445,8 @@ file called "… Google Resume.pdf" arriving at Meta is a fatal and entirely avo
 
 ## What we do not know yet
 
-Phase 1 is tested but has never met a real job search. The parts that are genuinely provisional:
+All three phases are tested but have never met a real job search. The parts that are genuinely
+provisional:
 
 - **Every linkage threshold is a guess.** `AUTO_LINK_THRESHOLD = 0.6`, `SUGGEST_THRESHOLD = 0.3`,
   the 0.15 contest margin, the individual signal weights. They are calibrated against fixtures that
