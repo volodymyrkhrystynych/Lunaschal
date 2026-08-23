@@ -119,7 +119,9 @@ export function rejectedFilesMessage(rejected: File[]): string | null {
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null || bytes < 0) return '';
   if (bytes < 1024) return `${bytes} B`;
-  const units = ['KB', 'MB', 'GB'];
+  // TB is here for the Settings → Backup panel's 7.3TB drive, not for
+  // attachments — without it a whole-disk figure renders as "7451 GB".
+  const units = ['KB', 'MB', 'GB', 'TB'];
   let value = bytes / 1024;
   let unit = 0;
   while (value >= 1024 && unit < units.length - 1) {

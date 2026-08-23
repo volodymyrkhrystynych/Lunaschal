@@ -143,6 +143,10 @@ matching how `TAILSCALE_HOSTNAME` is already used for network-mode HTTPS.
 
 ### Configure `ops/backup.env`
 
+Only the tablet settings below still matter here; the HDD destination and
+retention are set in Settings → Backup (this file's `BACKUP_HDD_PATH` is used
+only to seed a database that has never had one).
+
 ```bash
 cp ops/backup.env.example ops/backup.env
 ```
@@ -168,6 +172,62 @@ systemctl --user enable --now lunaschal-backup.timer
 ./ops/backup.sh
 journalctl --user -u lunaschal-backup
 ```
+
+### Watch it from the app: Settings → Backup
+
+`systemctl status` is **not** a sufficient check on this job. `backup.sh`
+deliberately skips (rather than fails) when the destination is missing, so a
+destination that has gone away permanently exits 0 exactly like one that is
+unplugged for a night. That is not hypothetical: when this drive moved from a
+udisks auto-mount to an fstab one, `BACKUP_HDD_PATH` was left pointing at the
+old path and the job reported `Result=success` every night for nineteen days
+while backing up nothing.
+
+Settings → Backup watches the evidence on the drive instead — how old the
+newest dated snapshot is — and reports `unconfigured` / `unreachable` /
+`readonly` / `permissions` / `empty` / `stale` / `ok`.
+
+`readonly` and `permissions` are deliberately separate states for what
+`os.access()` reports identically. A read-only _mount_ (`ST_RDONLY`) needs an
+fsck and a remount; a read-write mount this user cannot write to is an
+ownership problem. On exFAT — which stores no POSIX ownership, so the driver
+synthesizes it from mount options — that means the fstab entry is missing
+`uid=`/`gid=` and everything is owned by root. udisks sets `uid=` to the
+mounting user automatically, so moving a drive from an auto-mount to a
+hand-written fstab line silently makes it unwritable for the user the backup
+timer runs as:
+
+````
+UUID=00E7-4937  /media/expansion  exfat  defaults,nofail,uid=1000,gid=1000,x-systemd.automount  0  0
+``` It also refuses to describe a clean
+systemd exit as a success when nothing actually landed, shows free space and
+the retention window, and has a **Back up now** button that runs `ops/backup.sh`
+and shows its log inline. A broken backup pops its section open on load; a
+healthy one stays collapsed like every other settings group.
+
+### Settings owns the destination
+
+The destination and the retention window live in the `settings` table and are
+edited in Settings → Backup, with a folder picker that browses the server's
+filesystem (`GET /api/backup/browse` — a server path is what rsync needs, and a
+browser file input cannot produce one). `ops/backup.sh` reads them back out with
+
+```bash
+.venv/bin/python -m backend.ops.backup config --get hdd-path
+.venv/bin/python -m backend.ops.backup config --get retention-days
+````
+
+so the path the panel shows is by construction the path the job writes to. A
+locked or missing database falls back to `backup.env` rather than aborting the
+night's run.
+
+`ops/backup.env` is now only for the tablet destination, plus a fallback
+`BACKUP_HDD_PATH` for a database that has never had one set. The migration that
+adds the column seeds it from that file, so upgrading an existing install does
+not quietly unconfigure a working backup.
+
+Logic in `backend/ops/backup_status.py` and `backend/routes/backup.py`; tests in
+`backend/tests/test_ops_backup_status.py` and `test_routes_backup.py`.
 
 Confirm this layout appears under `BACKUP_HDD_PATH`:
 

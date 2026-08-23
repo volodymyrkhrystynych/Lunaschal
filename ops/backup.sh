@@ -27,6 +27,22 @@ if [ -f ops/backup.env ]; then
   set -a; source ops/backup.env; set +a
 fi
 
+# The Settings -> Backup panel is the source of truth for the destination and
+# the retention window; both live in the `settings` table. backup.env is still
+# sourced above for the tablet destination, and its BACKUP_HDD_PATH survives
+# only as the fallback for a database that has never had one set.
+#
+# `|| true` and the emptiness checks are deliberate: a locked or missing
+# database must degrade to the file's values, not abort the night's backup via
+# `set -e`.
+db_config() { .venv/bin/python -m backend.ops.backup config --get "$1" 2>/dev/null || true; }
+
+DB_HDD_PATH=$(db_config hdd-path)
+[ -n "$DB_HDD_PATH" ] && BACKUP_HDD_PATH="$DB_HDD_PATH"
+
+DB_RETENTION=$(db_config retention-days)
+[ -n "$DB_RETENTION" ] && BACKUP_RETENTION_DAYS="$DB_RETENTION"
+
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-14}"
 TODAY=$(date +%Y-%m-%d)
 DATE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
@@ -81,13 +97,23 @@ backup_to_hdd() {
   local base="$1"
   HDD_BASE="$base"
 
-  # $base is a directory *on* the drive, so it does not exist until the first
-  # successful run — testing it directly would report "unplugged" and skip
-  # forever. The mount point above it is what actually indicates the drive.
+  # Two ways the drive counts as present, matching destination_present() in
+  # backend/ops/backup_config.py so the script and the Settings panel never
+  # disagree about whether the drive is there:
+  #
+  #   1. $base itself exists. This is the normal case now — the folder picker
+  #      only offers folders that already exist, so a chosen destination that
+  #      has vanished means the drive is gone.
+  #   2. $base does not exist yet but its parent is a real mount point. That is
+  #      a path configured by hand before the first run.
+  #
+  # Requiring an actual mount point in case 2 (rather than just a directory, as
+  # this used to) is what stops a path under $HOME from looking like a mounted
+  # drive and backing up onto the system disk.
   local parent
   parent=$(dirname "$base")
-  if [ ! -d "$parent" ]; then
-    log "HDD mount point '$parent' not present — skipping (drive unplugged?)"
+  if [ ! -d "$base" ] && ! { [ -d "$parent" ] && mountpoint -q "$parent"; }; then
+    log "HDD destination '$base' not present — skipping (drive unplugged?)"
     return
   fi
 

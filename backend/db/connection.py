@@ -118,6 +118,7 @@ def init_db() -> None:
     _ensure_provider_outlook_imap(db)
     _ensure_microsoft_oauth_settings(db)
     _ensure_job_settings(db)
+    _ensure_backup_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -887,6 +888,35 @@ def _ensure_email_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_id TEXT')
     if 'google_oauth_client_secret' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN google_oauth_client_secret TEXT')
+    db.commit()
+
+
+def _ensure_backup_settings(db: sqlite3.Connection) -> None:
+    """Where the nightly backup writes, and how many DB snapshots it keeps.
+
+    These live in `settings` because the Settings → Backup panel is the source
+    of truth for them; `ops/backup.sh` asks the DB rather than the other way
+    round (see backend/ops/backup_config.py).
+
+    The seed matters more than the columns. `ops/backup.env` was the source of
+    truth until now, so adding an empty column would silently unconfigure a
+    working backup at exactly the moment the user upgrades — the same class of
+    quiet failure this whole panel exists to prevent. So on the migration that
+    first creates the column, the existing `BACKUP_HDD_PATH` is copied in.
+    Reading a file from a migration is unusual and deliberate: it happens once,
+    only when the column is genuinely new, and never overwrites a value the
+    user has since set.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    fresh = 'backup_path' not in cols
+    if fresh:
+        db.execute('ALTER TABLE settings ADD COLUMN backup_path TEXT')
+    if 'backup_retention_days' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN backup_retention_days INTEGER DEFAULT 14')
+
+    if fresh:
+        from backend.ops.backup_config import seed_from_env_file
+        seed_from_env_file(db)
     db.commit()
 
 

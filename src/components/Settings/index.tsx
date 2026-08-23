@@ -17,7 +17,9 @@ import { JobsSection } from './JobsSection';
 import { DisplaySection } from './DisplaySection';
 import { LlamaConfigSection } from './LlamaConfigSection';
 import { MemorySection } from './MemorySection';
+import { BackupSection } from './BackupSection';
 import { CollapsibleSection } from './CollapsibleSection';
+import { shouldAutoExpand } from '../../lib/backup';
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<'general' | 'tags' | 'shortcuts'>(
@@ -28,6 +30,15 @@ export function Settings() {
     queryKey: ['settings'],
     queryFn: api.settings.get,
   });
+
+  // Same queryKey as BackupSection's own query, so react-query serves both
+  // from one request. Only a *broken* backup pops its section open — the whole
+  // point of collapsing by default is undone if every group finds a reason.
+  const { data: backup } = useQuery({
+    queryKey: ['backup', 'status'],
+    queryFn: api.backup.status,
+  });
+  const backupBroken = shouldAutoExpand(backup);
 
   if (isLoading) {
     return (
@@ -67,19 +78,23 @@ export function Settings() {
         <ShortcutSettings />
       ) : (
         <>
-          <CollapsibleSection title="Display" defaultExpanded>
+          <CollapsibleSection title="Display">
             <DisplaySection />
           </CollapsibleSection>
 
-          <CollapsibleSection title="Model & VRAM" defaultExpanded>
+          <CollapsibleSection title="Backup" autoExpand={backupBroken}>
+            <BackupSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Model & VRAM">
             <VRAMSection />
           </CollapsibleSection>
 
-          <CollapsibleSection title="llama.cpp Configuration" defaultExpanded>
+          <CollapsibleSection title="llama.cpp Configuration">
             <LlamaConfigSection />
           </CollapsibleSection>
 
-          <CollapsibleSection title="Memory" defaultExpanded>
+          <CollapsibleSection title="Memory">
             <MemorySection />
           </CollapsibleSection>
 
@@ -125,7 +140,7 @@ export function Settings() {
             </CollapsibleSection>
           )}
 
-          <CollapsibleSection title="About" defaultExpanded>
+          <CollapsibleSection title="About">
             <p className="text-[var(--color-text)]">Lunaschal v0.1.0</p>
             <p className="text-sm text-[var(--color-text-muted)] mt-1">
               A privacy-first, self-hosted personal AI knowledge assistant.
