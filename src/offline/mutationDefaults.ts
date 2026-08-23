@@ -259,6 +259,7 @@ type Cfg<TData, TVars> = Pick<
   | 'networkMode'
   | 'mutationFn'
   | 'onMutate'
+  | 'onSuccess'
   | 'onSettled'
   | 'retry'
   | 'retryDelay'
@@ -950,6 +951,23 @@ const paperImageAddCfg = (
                 position: prev.images.length,
               },
             ],
+          }
+        : prev
+    );
+  },
+  onSuccess: (image, vars) => {
+    // Swap the placeholder for the row the server actually stored — above all
+    // for its `url`. The device copy is deleted the moment the upload lands, so
+    // a cache entry still carrying the empty placeholder url has nothing left
+    // to draw from: the picture would blank out on the next visit to the page,
+    // looking exactly like the photo was lost.
+    qc.setQueryData<PaperPageContent>(['paper', 'page', vars.pageId], prev =>
+      prev
+        ? {
+            ...prev,
+            images: prev.images.some(i => i.id === image.id)
+              ? prev.images.map(i => (i.id === image.id ? image : i))
+              : [...prev.images, image],
           }
         : prev
     );

@@ -242,15 +242,22 @@ def _first_page(client, paper_id):
     return client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
 
 
-def _add_image(client, page_id, name='pic.png', data=b'\x89PNG-fake', **over):
+def _add_image(client, page_id, name='pic.png', data=b'\x89PNG-fake', mime=None, **over):
     form = {'x': '100', 'y': '200', 'width': '400', 'height': '300'}
     form.update({k: str(v) for k, v in over.items()})
-    form['image'] = (io.BytesIO(data), name)
+    form['image'] = (io.BytesIO(data), name) if mime is None else (io.BytesIO(data), name, mime)
     return client.post(
         f'/api/paper/pages/{page_id}/images',
         data=form,
         content_type='multipart/form-data',
     )
+
+
+def _jpeg(size=(8, 8)) -> bytes:
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new('RGB', size, (120, 120, 120)).save(buf, 'JPEG')
+    return buf.getvalue()
 
 
 def test_add_image_stores_the_file_and_returns_placement(client, paper_root):
@@ -280,6 +287,53 @@ def test_page_read_includes_its_images_in_draw_order(client):
     page = client.get(f'/api/paper/pages/{page_id}').get_json()
     assert [i['id'] for i in page['images']] == [first['id'], second['id']]
     assert [i['position'] for i in page['images']] == [0, 1]
+
+
+def test_add_image_accepts_the_heic_an_ipad_hands_over(client, paper_root):
+    """The regression this pins: paper matched on the filename's extension
+    alone, and an iPad's photo library hands over `IMG_0042.HEIC`. Every picture
+    put on a page from the tablet the feature exists for was answered 400 — and
+    since the paste kept showing it until the page was left, the loss was
+    invisible until the picture was already gone."""
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+
+    resp = _add_image(client, page_id, name='IMG_0042.HEIC', data=_jpeg(),
+                      mime='image/heic')
+    assert resp.status_code == 201, resp.get_json()
+
+    # Stored as JPEG: no browser renders HEIC, so a page would be carrying a
+    # picture it could never draw.
+    stored = list((paper_root / paper_id).glob('img-*'))
+    assert len(stored) == 1 and stored[0].suffix == '.jpg'
+    served = client.get(resp.get_json()['url'])
+    assert served.status_code == 200
+    assert served.mimetype == 'image/jpeg'
+    assert served.data.startswith(b'\xff\xd8\xff')
+
+
+def test_add_image_reads_the_mime_type_when_the_filename_has_no_extension(client, paper_root):
+    """A clipboard picture has no name of its own, so the mime type is all
+    there is to go on."""
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+
+    resp = _add_image(client, page_id, name='pasted', data=_jpeg(), mime='image/jpeg')
+    assert resp.status_code == 201, resp.get_json()
+    assert [p.suffix for p in (paper_root / paper_id).glob('img-*')] == ['.jpg']
+
+
+def test_a_heic_that_cannot_be_decoded_is_refused_and_leaves_nothing_behind(
+    client, paper_root
+):
+    paper_id = _create(client)
+    page_id = _first_page(client, paper_id)
+
+    resp = _add_image(client, page_id, name='broken.heic', data=b'not an image',
+                      mime='image/heic')
+    assert resp.status_code == 400
+    assert list((paper_root / paper_id).glob('img-*')) == []
+    assert client.get(f'/api/paper/pages/{page_id}').get_json()['images'] == []
 
 
 def test_add_image_rejects_an_unsupported_type(client):

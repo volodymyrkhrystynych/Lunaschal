@@ -608,4 +608,66 @@ describe('paper, which only ever exists on the tablet it was written on', () => 
     expect((init.body as FormData).get('id')).toBe('img1');
     await waitFor(async () => expect(await getPhoto('img1')).toBeUndefined());
   });
+
+  it('keeps a pasted picture drawable once its device copy is gone', async () => {
+    // The placeholder written on paste carries no url, because the picture is
+    // drawn from the device instead. The upload deletes that device copy — so
+    // if the cache is left holding the placeholder, the page has nothing left
+    // to draw and the picture blanks out on the next visit, looking for all
+    // the world like the photo was lost.
+    const stored = {
+      id: 'img1',
+      pageId: 'page1',
+      url: '/api/paper/images/img1/file?v=1',
+      x: 10,
+      y: 20,
+      width: 300,
+      height: 400,
+      rotation: 0,
+      flipped: 0,
+      locked: 0,
+      position: 0,
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: true, json: async () => stored }))
+    );
+
+    const qc = makeClient();
+    qc.setQueryData(['paper', 'page', 'page1'], {
+      strokes: '[]',
+      width: 2100,
+      height: 2970,
+      images: [],
+    });
+    const { result } = renderHook(() => usePaperImageAdd(), {
+      wrapper: wrapperFor(qc),
+    });
+
+    const box = { x: 10, y: 20, width: 300, height: 400 };
+    await storePhoto(
+      'img1',
+      new File(['pixels'], 'pasted.png', { type: 'image/png' }),
+      'paper',
+      'page1',
+      box
+    );
+    act(() =>
+      result.current.mutate({
+        imageId: 'img1',
+        pageId: 'page1',
+        box,
+        filename: 'pasted.png',
+      })
+    );
+
+    await waitFor(async () => expect(await getPhoto('img1')).toBeUndefined());
+    // Replaced in place, not appended: one picture was pasted, not two.
+    const page = qc.getQueryData<{ images: unknown[] }>([
+      'paper',
+      'page',
+      'page1',
+    ]);
+    expect(page?.images).toEqual([stored]);
+  });
 });
