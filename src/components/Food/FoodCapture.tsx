@@ -26,6 +26,9 @@ interface PickedMedia {
 export function FoodCapture({ onDone }: { onDone?: () => void }) {
   const [text, setText] = useState('');
   const [media, setMedia] = useState<PickedMedia[]>([]);
+  // A picked file that cannot be read (see storePhoto) is the one failure that
+  // must not be swallowed: the meal would be queued without its photograph.
+  const [saveError, setSaveError] = useState<string | null>(null);
   const photoRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
@@ -84,9 +87,17 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
     const photos = media.map(m => ({ id: ulid(), file: m.file }));
     // The blobs go to the device first: a queued upload that refers to a photo
     // nothing stored is an upload that can only fail.
-    await Promise.all(
-      photos.map(p => storePhoto(p.id, p.file, 'food', entryId))
-    );
+    try {
+      await Promise.all(
+        photos.map(p => storePhoto(p.id, p.file, 'food', entryId))
+      );
+    } catch (e) {
+      setSaveError(
+        e instanceof Error ? e.message : 'Could not read one of those photos'
+      );
+      return;
+    }
+    setSaveError(null);
     const pos = await currentPosition();
     create.mutate({
       id: entryId,
@@ -136,9 +147,9 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
         </button>
       </div>
 
-      {error && (
+      {(error || saveError) && (
         <div className="mt-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
-          {error}
+          {error || saveError}
         </div>
       )}
 

@@ -188,6 +188,9 @@ export function RecipeList() {
   const [newContent, setNewContent] = useState('');
   const [newTags, setNewTags] = useState('');
   const [newMedia, setNewMedia] = useState<PickedMedia[]>([]);
+  // A picked file that cannot be read (see storePhoto) is the one failure that
+  // must not be swallowed: the recipe would be queued without its photograph.
+  const [newMediaError, setNewMediaError] = useState<string | null>(null);
   const [showImport, setShowImport] = useState(false);
   const [importText, setImportText] = useState('');
   const [importUrl, setImportUrl] = useState('');
@@ -257,9 +260,17 @@ export function RecipeList() {
   const submitRecipe = async () => {
     const id = ulid();
     const photos = newMedia.map(m => ({ id: ulid(), file: m.file }));
-    await Promise.all(
-      photos.map(ph => storePhoto(ph.id, ph.file, 'cookbook', id))
-    );
+    try {
+      await Promise.all(
+        photos.map(ph => storePhoto(ph.id, ph.file, 'cookbook', id))
+      );
+    } catch (e) {
+      setNewMediaError(
+        e instanceof Error ? e.message : 'Could not read one of those photos'
+      );
+      return;
+    }
+    setNewMediaError(null);
     createRecipe.mutate({
       id,
       title: newTitle.trim(),
@@ -495,6 +506,9 @@ export function RecipeList() {
             onAdd={addNewMedia}
             onRemove={removeNewMedia}
           />
+          {newMediaError && (
+            <div className="mt-2 text-sm text-red-400">{newMediaError}</div>
+          )}
           <div className="flex justify-end gap-2 mt-2">
             <button
               onClick={() => setShowNewRecipe(false)}

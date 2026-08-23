@@ -45,6 +45,56 @@ describe('photoStore', () => {
     expect(found!.meta.mimeType).toBe('image/jpeg');
   });
 
+  it('stores the bytes, not the picked file itself', async () => {
+    // A File from a picker is a reference to something the OS owns. On iOS
+    // that reference stops resolving once the input is reset, and Safari's
+    // networking process reads nothing from one cloned into IndexedDB — the
+    // upload then goes out with no file part and the server answers "image is
+    // required" about a photo that is sitting right there. What is stored has
+    // to be a blob of our own.
+    const picked = jpeg('the actual pixels', 'IMG_0042.HEIC');
+    await storePhoto('p1', picked, 'selfie', '2026-08-22');
+
+    const stored = idb.get('blob:p1') as Blob;
+    expect(stored).not.toBe(picked);
+    expect(stored instanceof File).toBe(false);
+    expect(await stored.text()).toBe('the actual pixels');
+    // The name only the File had is carried on the metadata instead.
+    expect((await getPhoto('p1'))!.meta.filename).toBe('IMG_0042.HEIC');
+  });
+
+  it('refuses a photo that reads as nothing rather than queuing it', async () => {
+    // An iCloud-optimized photo whose full-size original never came down. It
+    // used to be stored, uploaded, and rejected by the server; failing here
+    // says so while the user is still looking at the picker.
+    await expect(
+      storePhoto(
+        'p1',
+        new File([], 'IMG_0001.HEIC', { type: 'image/heic' }),
+        'selfie',
+        '2026-08-22'
+      )
+    ).rejects.toThrow(/empty/i);
+
+    expect(idb.size).toBe(0);
+    expect(await getPhoto('p1')).toBeUndefined();
+  });
+
+  it('refuses a photo the device will not read, and stores nothing', async () => {
+    const unreadable = {
+      type: 'image/jpeg',
+      name: 'IMG_0002.jpg',
+      size: 900,
+      arrayBuffer: () => Promise.reject(new Error('NotReadableError')),
+    } as unknown as File;
+
+    await expect(
+      storePhoto('p1', unreadable, 'selfie', '2026-08-22')
+    ).rejects.toThrow(/could not read/i);
+
+    expect(idb.size).toBe(0);
+  });
+
   it('writes the blob before the metadata that points at it', async () => {
     // Reversed, a crash between the two writes leaves a queued upload whose
     // photo does not exist — which fails forever instead of not existing.

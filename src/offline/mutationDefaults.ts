@@ -804,7 +804,11 @@ const selfieUploadCfg = (qc: QueryClient): Cfg<Selfie, SelfieUploadVars> => ({
     const stored = await getPhoto(vars.photoId);
     if (!stored) throw new Error('That photo is no longer on this device.');
     try {
-      const selfie = await api.lifestyle.selfies.upload(stored.blob, vars.date);
+      const selfie = await api.lifestyle.selfies.upload(
+        stored.blob,
+        vars.date,
+        stored.meta.filename
+      );
       await deletePhoto(vars.photoId);
       return selfie;
     } catch (e) {
