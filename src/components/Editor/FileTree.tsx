@@ -1,3 +1,5 @@
+import { useRef, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useShortcuts } from '../../shortcuts/ShortcutProvider';
 import { useFileTree } from '../../hooks/useFileTree';
@@ -10,6 +12,29 @@ interface Props {
 
 export function FileTree({ selectedPath, onSelectFile }: Props) {
   const { level } = useShortcuts();
+  const qc = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [dragOverRoot, setDragOverRoot] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const upload = useMutation({
+    mutationFn: ({ dir, files }: { dir: string; files: File[] }) =>
+      api.files.upload(dir, files),
+    onSuccess: result => {
+      qc.invalidateQueries({ queryKey: ['files', 'list'] });
+      setUploadError(
+        result.errors.length
+          ? `Could not upload: ${result.errors.map(e => e.name).join(', ')}`
+          : null
+      );
+    },
+    onError: (err: Error) => setUploadError(err.message || 'Upload failed'),
+  });
+
+  const uploadFiles = (dir: string, files: File[]) => {
+    if (files.length) upload.mutate({ dir, files });
+  };
+
   const {
     visibleNodes,
     rootEntries,
@@ -61,10 +86,48 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
           >
             + New
           </button>
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1"
+            title="Upload files"
+          >
+            ⬆ Upload
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={e => {
+              const files = Array.from(e.target.files ?? []);
+              uploadFiles('', files);
+              e.target.value = '';
+            }}
+          />
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-1">
+      <div
+        className={`flex-1 overflow-y-auto py-1 ${dragOverRoot ? 'bg-[var(--color-primary)]/5 ring-1 ring-inset ring-[var(--color-primary)]' : ''}`}
+        onDragOver={e => {
+          e.preventDefault();
+          setDragOverRoot(true);
+        }}
+        onDragLeave={() => setDragOverRoot(false)}
+        onDrop={e => {
+          e.preventDefault();
+          setDragOverRoot(false);
+          uploadFiles('', Array.from(e.dataTransfer.files));
+        }}
+      >
+        {upload.isPending && (
+          <div className="px-4 py-1 text-xs text-[var(--color-text-muted)]">
+            Uploading…
+          </div>
+        )}
+        {uploadError && (
+          <div className="px-4 py-1 text-xs text-red-400">{uploadError}</div>
+        )}
         {showNewFile && (
           <div className="px-2 py-1">
             <input
@@ -141,12 +204,13 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
             onSelectFile={onSelectFile}
             onDelete={handleDelete}
             onRenameStart={handleRenameStart}
+            onDropFiles={uploadFiles}
           />
         ))}
 
         {rootEntries?.length === 0 && !showNewFile && (
           <div className="px-4 py-4 text-xs text-[var(--color-text-muted)]">
-            No files yet. Click "+ New" to create one.
+            No files yet. Click "+ New", "Upload", or drop files here.
           </div>
         )}
       </div>

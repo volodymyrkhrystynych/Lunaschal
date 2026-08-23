@@ -119,6 +119,7 @@ def init_db() -> None:
     _ensure_microsoft_oauth_settings(db)
     _ensure_job_settings(db)
     _ensure_backup_settings(db)
+    _ensure_files_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -917,6 +918,20 @@ def _ensure_backup_settings(db: sqlite3.Connection) -> None:
     if fresh:
         from backend.ops.backup_config import seed_from_env_file
         seed_from_env_file(db)
+    db.commit()
+
+
+def _ensure_files_settings(db: sqlite3.Connection) -> None:
+    """Where the Files tab's cloud-drive root lives, per Settings → Files.
+
+    Same shape as `_ensure_backup_settings` just above, minus the env-file
+    seed — the Files root never had an env-file predecessor to migrate off
+    of, only the `FILES_ROOT` env var, which `_files_root()` in
+    `backend/routes/files.py` still falls back to when this column is empty.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'files_root' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN files_root TEXT')
     db.commit()
 
 

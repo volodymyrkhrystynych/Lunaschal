@@ -1,31 +1,41 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import type { BackupBrowse } from '../../hooks/api';
 
 /**
  * Modal for choosing a directory on the machine running the backend.
  *
  * Server-side browsing rather than a native dialog or `<input webkitdirectory>`:
- * the value being chosen is a **server** path that `ops/backup.sh` will pass to
- * rsync, and neither of those gives you one. A browser file input yields file
- * handles with no real filesystem path, and a PyWebView folder dialog would only
- * work in the desktop window — this panel also has to work over the LAN in
- * network mode.
+ * the value being chosen is a **server** path (for rsync, or for the Files
+ * tab's root) and neither of those gives you one. A browser file input yields
+ * file handles with no real filesystem path, and a PyWebView folder dialog
+ * would only work in the desktop window — this panel also has to work over
+ * the LAN in network mode.
+ *
+ * `browse` defaults to the backup destination's listing endpoint — it's
+ * already generic (any server path in, its subdirectories out, nothing
+ * backup-specific) so other pickers (Settings → Files) reuse it rather than
+ * duplicating the same directory walk under a different route.
  */
 export function FolderPicker({
   initialPath,
   onSelect,
   onClose,
+  browse = api.backup.browse,
+  title = 'Choose a backup folder',
 }: {
   initialPath: string;
   onSelect: (path: string) => void;
   onClose: () => void;
+  browse?: (path: string) => Promise<BackupBrowse>;
+  title?: string;
 }) {
   const [path, setPath] = useState(initialPath || '/');
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['backup', 'browse', path],
-    queryFn: () => api.backup.browse(path),
+    queryKey: ['folderPicker', 'browse', path],
+    queryFn: () => browse(path),
     retry: false,
   });
 
@@ -49,7 +59,7 @@ export function FolderPicker({
       >
         <div className="p-3 border-b border-white/10">
           <h3 className="text-sm font-medium text-[var(--color-text)] mb-2">
-            Choose a backup folder
+            {title}
           </h3>
           <code className="block text-xs text-[var(--color-text-muted)] break-all">
             {data?.path ?? path}

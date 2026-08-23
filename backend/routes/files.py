@@ -1,10 +1,11 @@
+import mimetypes
 import os
 import shutil
 import time
 from pathlib import Path
 from typing import Callable
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 
 # Ceilings for the recursive /tree walk below.
 MAX_TREE_DEPTH = 12
@@ -18,16 +19,31 @@ def make_files_blueprint(
     default_root: str,
     on_rename: Callable[[str, str], None] | None = None,
     on_delete: Callable[[str], None] | None = None,
+    root_resolver: Callable[[], Path] | None = None,
+    extra_routes: Callable[[Blueprint, Callable[[str], Path | None], Callable[[], Path]], None]
+    | None = None,
 ) -> Blueprint:
     """Build a sandboxed file-CRUD blueprint rooted at `root_env` (or `default_root`).
 
     The root is re-read from the environment on every call (not cached at import
     time) so it can be overridden per-test via monkeypatch and so multiple mounts
     (Files tab, Notebook) can share this factory with independent roots.
+
+    `root_resolver`, when given, replaces the env-var lookup entirely — used by
+    the `files` mount so Settings → Files can point it at a DB-configured root;
+    Notebook passes neither param and keeps the env-var-only behavior above.
+
+    `extra_routes`, when given, is called with `(bp, _safe, _root)` before the
+    blueprint is returned, so routes that need the same traversal guard (the
+    Files mount's upload/content/config endpoints) can be registered without
+    exposing `_safe`/`_root` outside this factory — Notebook doesn't pass this
+    either, so it gets none of those routes.
     """
     bp = Blueprint(name, __name__, url_prefix=url_prefix)
 
     def _root() -> Path:
+        if root_resolver:
+            return root_resolver()
         return Path(os.environ.get(root_env, default_root)).expanduser().resolve()
 
     def _safe(rel: str) -> Path | None:
@@ -180,9 +196,120 @@ def make_files_blueprint(
             on_delete(rel)
         return jsonify({'success': True})
 
+    if extra_routes:
+        extra_routes(bp, _safe, _root)
+
     return bp
 
 
+def _files_extra_routes(
+    bp: Blueprint, _safe: Callable[[str], Path | None], _root: Callable[[], Path]
+) -> None:
+    """Upload/content/config routes for the `files` mount only.
+
+    Kept out of the shared factory body (registered instead via
+    `extra_routes=`) so Notebook, which shares `make_files_blueprint` for its
+    own independent root, never gets a settings-backed config endpoint or the
+    binary upload/download surface — Notebook only ever holds plain-text notes.
+    """
+
+    def _unique_dest(dest: Path) -> Path:
+        if not dest.exists():
+            return dest
+        stem, suffix, i = dest.stem, dest.suffix, 1
+        while True:
+            candidate = dest.with_name(f'{stem}_{i}{suffix}')
+            if not candidate.exists():
+                return candidate
+            i += 1
+
+    @bp.post('/upload')
+    def upload_files():
+        dir_rel = request.form.get('path', '')
+        dest_dir = _safe(dir_rel) if dir_rel else _root()
+        if dest_dir is None:
+            return jsonify({'error': 'Invalid path'}), 400
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        uploaded: list[dict] = []
+        errors: list[dict] = []
+        root = _root()
+        for storage in request.files.getlist('file'):
+            name = os.path.basename((storage.filename or '').strip())
+            if not name or name in ('.', '..'):
+                errors.append({'name': storage.filename or '', 'error': 'Invalid filename'})
+                continue
+            dest = _unique_dest(dest_dir / name)
+            try:
+                dest.relative_to(root)
+            except ValueError:
+                errors.append({'name': name, 'error': 'Invalid path'})
+                continue
+            storage.save(str(dest))
+            uploaded.append({
+                'name': dest.name,
+                'path': str(dest.relative_to(root)),
+                'size': dest.stat().st_size,
+            })
+        return jsonify({'uploaded': uploaded, 'errors': errors})
+
+    @bp.get('/content')
+    def file_content():
+        rel = request.args.get('path', '')
+        p = _safe(rel)
+        if p is None:
+            return jsonify({'error': 'Invalid path'}), 400
+        if not p.is_file():
+            return jsonify({'error': 'Not found'}), 404
+        download = request.args.get('download', '0') == '1'
+        mimetype = mimetypes.guess_type(p.name)[0] or 'application/octet-stream'
+        return send_file(
+            p, mimetype=mimetype, as_attachment=download, download_name=p.name
+        )
+
+    @bp.get('/config')
+    def get_files_config():
+        from backend.db.connection import get_db
+        from backend.files_config import get_config
+
+        return jsonify(get_config(get_db()))
+
+    @bp.put('/config')
+    def put_files_config():
+        from backend.db.connection import get_db
+        from backend.files_config import set_config, validate_root
+
+        body = request.get_json(silent=True) or {}
+        path = body.get('destination')
+        if path is not None:
+            problem = validate_root(str(path))
+            if problem:
+                return jsonify({'error': problem}), 400
+        try:
+            cfg = set_config(get_db(), path=None if path is None else str(path))
+        except ValueError:
+            return jsonify({'error': 'Settings row missing'}), 500
+        return jsonify(cfg)
+
+
+def _files_root() -> Path:
+    """`files_root` from Settings, falling back to `FILES_ROOT` and then the
+    historical default — same precedence backup_config.get_config uses for
+    `backup_path` vs. its env-file fallback."""
+    from backend.db.connection import get_db
+    from backend.files_config import get_config
+
+    path = get_config(get_db())['path']
+    if not path:
+        path = os.environ.get('FILES_ROOT', str(Path.home() / 'notes'))
+    return Path(path).expanduser().resolve()
+
+
 bp = make_files_blueprint(
-    'files', '/api/files', 'FILES_ROOT', str(Path.home() / 'notes')
+    'files',
+    '/api/files',
+    'FILES_ROOT',
+    str(Path.home() / 'notes'),
+    root_resolver=_files_root,
+    extra_routes=_files_extra_routes,
 )
