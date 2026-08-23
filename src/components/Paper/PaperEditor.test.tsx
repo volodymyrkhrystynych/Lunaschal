@@ -12,24 +12,32 @@ import {
   QueryClientProvider,
   onlineManager,
 } from '@tanstack/react-query';
-import { api } from '../../hooks/api';
+import { api, ApiError } from '../../hooks/api';
 import { PaperEditor } from './PaperEditor';
 import { PAGE_HEIGHT, PAGE_WIDTH } from '@/lib/paper';
 
-vi.mock('../../hooks/api', () => ({
-  api: {
-    paper: {
-      get: vi.fn(),
-      getPage: vi.fn(),
-      savePage: vi.fn(),
-      addPage: vi.fn(),
-      setArchiveRequested: vi.fn(),
-      updateImage: vi.fn(),
-      addImage: vi.fn(),
-      deleteImage: vi.fn(),
+// The real module minus its `api`: `ApiError` and `NetworkError` are the two
+// classes the offline queue decides with (`instanceof`), so stubbing them away
+// would quietly change which failures are treated as terminal.
+vi.mock('../../hooks/api', async () => {
+  const actual =
+    await vi.importActual<typeof import('../../hooks/api')>('../../hooks/api');
+  return {
+    ...actual,
+    api: {
+      paper: {
+        get: vi.fn(),
+        getPage: vi.fn(),
+        savePage: vi.fn(),
+        addPage: vi.fn(),
+        setArchiveRequested: vi.fn(),
+        updateImage: vi.fn(),
+        addImage: vi.fn(),
+        deleteImage: vi.fn(),
+      },
     },
-  },
-}));
+  };
+});
 
 vi.mock('idb-keyval', () => ({
   get: vi.fn(() => Promise.resolve(undefined)),
@@ -288,5 +296,106 @@ describe('a picture pasted with no backend in reach', () => {
     await waitFor(() => expect(api.paper.addImage).toHaveBeenCalled());
     expect(vi.mocked(api.paper.addImage).mock.calls[0][4]).toBe(imageId);
     await waitFor(async () => expect(await getPhoto(imageId)).toBeUndefined());
+  });
+
+  it("re-renders the page's snapshot, so a page that is only a photo is not a blank thumbnail", async () => {
+    // The snapshot is what the explorer grid and the Journal filmstrip show,
+    // and it is only regenerated when the page is dirty. Adding a picture never
+    // marked it so: a page whose only content was a photo saved a blank sheet
+    // and stayed blank until something was drawn on it.
+    vi.mocked(api.paper.addImage).mockResolvedValue({ id: 'ignored' } as never);
+    URL.createObjectURL = vi.fn(
+      () => 'blob:pasted'
+    ) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      configurable: true,
+      set() {
+        setTimeout(() => this.onerror?.(), 0);
+      },
+    });
+
+    renderEditor();
+    await waitFor(() => expect(api.paper.getPage).toHaveBeenCalled());
+
+    await act(async () => {
+      pasteImage(new File(['pixels'], 'pasted.png', { type: 'image/png' }));
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    const save = screen.getByRole('button', { name: /save/i });
+    expect((save as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(api.paper.savePage).toHaveBeenCalled());
+    expect(
+      vi.mocked(api.paper.savePage).mock.calls[0][1].snapshot
+    ).toBeTruthy();
+  });
+
+  it('says so when the server refuses it, and sends it again on demand', async () => {
+    // What this pins: every picture put on a page from the iPad was answered
+    // 400 (the filename said .HEIC and the server had never heard of it) and
+    // nothing said a word. The paste kept showing — it was being drawn from the
+    // blob it came from — so the loss only surfaced on the way back to the
+    // page, by which time the picture was simply gone.
+    vi.mocked(api.paper.addImage).mockRejectedValue(
+      new ApiError('unsupported image type: image/heic', 400)
+    );
+    URL.createObjectURL = vi.fn(
+      () => 'blob:pasted'
+    ) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      configurable: true,
+      set() {
+        setTimeout(() => this.onerror?.(), 0);
+      },
+    });
+
+    renderEditor();
+    await waitFor(() => expect(api.paper.getPage).toHaveBeenCalled());
+
+    const file = new File(['pixels'], 'IMG_0042.HEIC', { type: 'image/heic' });
+    await act(async () => {
+      pasteImage(file);
+      await new Promise(r => setTimeout(r, 20));
+    });
+
+    // Visible, naming the reason, and offering the way out.
+    await screen.findByText(/never reached the server/);
+    expect(screen.getByText(/unsupported image type/)).toBeTruthy();
+
+    // And the bytes are still here — that is what makes the retry worth
+    // offering at all.
+    const { listPhotos } = await import('@/offline/photoStore');
+    const [held] = (await listPhotos()).filter(p => p.target === 'paper');
+    expect(held.failed).toBe(true);
+
+    // A backend that has learned to accept the format: the same picture goes
+    // up, under the id it already had.
+    vi.mocked(api.paper.addImage).mockResolvedValue({
+      id: held.id,
+      pageId: PAGE_1,
+      url: `/api/paper/images/${held.id}/file?v=1`,
+      x: held.placement!.x,
+      y: held.placement!.y,
+      width: held.placement!.width,
+      height: held.placement!.height,
+      rotation: 0,
+      flipped: 0,
+      locked: 0,
+      position: 0,
+    } as never);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry pictures/i }));
+      await new Promise(r => setTimeout(r, 20));
+    });
+
+    await waitFor(() => expect(api.paper.addImage).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.paper.addImage).mock.calls[1][4]).toBe(held.id);
+    await waitFor(() =>
+      expect(screen.queryByText(/never reached the server/)).toBeNull()
+    );
   });
 });

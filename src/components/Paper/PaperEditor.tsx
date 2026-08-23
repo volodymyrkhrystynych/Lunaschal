@@ -7,7 +7,13 @@ import {
   usePaperPageSave,
 } from '@/offline/mutationDefaults';
 import { storePageSave } from '@/offline/pageStore';
-import { getPhoto, storePhoto } from '@/offline/photoStore';
+import {
+  clearFailure,
+  getPhoto,
+  listPhotos,
+  storePhoto,
+  type StoredPhoto,
+} from '@/offline/photoStore';
 import { ulid } from '@/lib/ulid';
 import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval';
 import { api, type PaperPageContent } from '../../hooks/api';
@@ -99,6 +105,14 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const savingRef = useRef(false);
+  // Pictures this device is still holding for the open paper because an
+  // upload of them was refused. A refusal used to be completely silent: the
+  // picture stayed on screen (drawn from the blob it was pasted from) until the
+  // page was left, and was simply gone after that, with the bytes sitting in
+  // IndexedDB that nothing would ever send again. Paper is the one feature
+  // whose pictures cannot be re-taken from anywhere else, so a refused one has
+  // to say so and stay retryable.
+  const [refusedPhotos, setRefusedPhotos] = useState<StoredPhoto[]>([]);
 
   // The page is fitted into whatever the drawing area currently is, so its size
   // has to be measured rather than assumed (the sidebar reflows it without any
@@ -437,12 +451,16 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   const commitImageEdit = (id: string, data: PendingImageEdit) => {
     setPendingImageEdits(prev => ({ ...prev, [id]: { ...prev[id], ...data } }));
     setImagePreview(null);
+    // The page looks different now, so its snapshot is out of date — and the
+    // snapshot is the whole of what the explorer grid and the Journal show.
+    canvasRef.current?.markDirty();
   };
 
   const removeImage = useMutation({
     mutationFn: (id: string) => api.paper.deleteImage(id),
     onSuccess: (_data, id) => {
       setSelectedImageId(null);
+      canvasRef.current?.markDirty();
       // A pending transform for a picture that no longer exists would 404 the
       // next save.
       setPendingImageEdits(prev => {
@@ -454,6 +472,66 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     },
     onError: (e: Error) => setSaveError(e.message || 'Could not delete it'),
   });
+
+  /** Re-read what this device is still holding for this paper. Scoped to the
+   * whole paper rather than the page on screen: a refusal that repeats does so
+   * on every page, and one Retry that clears the lot beats hunting for the
+   * pages that happen to be carrying one. */
+  const pageIdList = pages.map(p => p.id).join(',');
+  const refreshRefused = useCallback(async () => {
+    const ids = new Set(pageIdList ? pageIdList.split(',') : []);
+    if (ids.size === 0) {
+      setRefusedPhotos([]);
+      return;
+    }
+    const held = await listPhotos().catch(() => []);
+    setRefusedPhotos(
+      held.filter(
+        p =>
+          p.target === 'paper' &&
+          ids.has(p.targetId) &&
+          !!p.lastError &&
+          // Every paper photo is stored with the box it was pasted into,
+          // precisely so it can be put back where it was rather than guessed
+          // at — one without a placement is not something we can re-place.
+          !!p.placement
+      )
+    );
+  }, [pageIdList]);
+
+  useEffect(() => {
+    void refreshRefused();
+  }, [refreshRefused]);
+
+  /** Send the refused pictures again, each to the page it was pasted onto. The
+   * refusal is cleared first: `failed` means "the server said no to this file",
+   * which is a reason that can stop being true — a backend that has learned to
+   * accept the format is exactly what makes a retry worth offering. */
+  const retryRefused = async () => {
+    for (const photo of refusedPhotos) {
+      if (!photo.placement) continue;
+      await clearFailure(photo.id);
+      addPageImage.mutate(
+        {
+          imageId: photo.id,
+          pageId: photo.targetId,
+          box: photo.placement,
+          filename: photo.filename,
+        },
+        {
+          onSuccess: () => {
+            // Only the page on screen has a canvas to mark; another page's
+            // snapshot is regenerated when it is next drawn on and saved.
+            if (photo.targetId === currentPage?.id) {
+              canvasRef.current?.markDirty();
+            }
+          },
+          onSettled: () => void refreshRefused(),
+        }
+      );
+    }
+    await refreshRefused();
+  };
 
   /** Read a blob's pixel size, so a pasted picture can be placed at a sane
    * scale before it is uploaded. */
@@ -489,12 +567,22 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
       // that cannot be redrawn — so it is stored first and uploaded whenever
       // the backend is next in reach.
       await storePhoto(imageId, file, 'paper', currentPage.id, box);
-      addPageImage.mutate({
-        imageId,
-        pageId: currentPage.id,
-        box,
-        filename: name,
-      });
+      // The picture is drawn by the canvas, so the page's snapshot no longer
+      // matches it until the next save regenerates one.
+      canvasRef.current?.markDirty();
+      addPageImage.mutate(
+        { imageId, pageId: currentPage.id, box, filename: name },
+        {
+          // A refused upload is the one failure that used to pass unnoticed:
+          // the picture kept showing until the page was left. Reported through
+          // the refused-pictures bar rather than `saveError`, because the
+          // picture is still here and the useful thing to offer is another go
+          // at sending it — and that has to still be true tomorrow, which a
+          // dismissable one-shot error is not.
+          onError: () => void refreshRefused(),
+          onSuccess: () => void refreshRefused(),
+        }
+      );
       // Land in select mode with it chosen — pasting is always followed by
       // placing it.
       setSelectMode(true);
@@ -709,6 +797,20 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
           </button>
           <button onClick={() => setSaveError(null)} className={btn}>
             Dismiss
+          </button>
+        </div>
+      )}
+
+      {refusedPhotos.length > 0 && (
+        <div className="flex items-center gap-3 px-3 py-2 text-sm bg-amber-500/20 border-b border-amber-500/40 shrink-0">
+          <span className="flex-1">
+            {refusedPhotos.length === 1
+              ? 'A picture in this paper never reached the server'
+              : `${refusedPhotos.length} pictures in this paper never reached the server`}{' '}
+            ({refusedPhotos[0].lastError}) — still held on this device.
+          </span>
+          <button onClick={() => void retryRefused()} className={btn}>
+            Retry pictures
           </button>
         </div>
       )}

@@ -174,6 +174,11 @@ const MIME_EXT: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/webp': 'webp',
   'image/gif': 'gif',
+  // Accepted, then transcoded to JPEG by the server before it is stored. Paper
+  // is a tablet feature and this is what an iPad's photo library hands over, so
+  // refusing it here would refuse the common case.
+  'image/heic': 'heic',
+  'image/heif': 'heif',
 };
 
 /** Filename to upload a pasted blob under, or null if we don't store that type.

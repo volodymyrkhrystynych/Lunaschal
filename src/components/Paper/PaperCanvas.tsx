@@ -62,6 +62,12 @@ export interface PaperCanvasHandle {
   /** Clear the dirty flag and discard the local (IndexedDB) buffer, but only if
    * nothing has been drawn since `revision` was issued. */
   markSaved: (revision: number) => void;
+  /** Treat the page as changed without a stroke being drawn. A picture added,
+   * moved or deleted changes what the page looks like, and the snapshot is what
+   * the explorer grid and the Journal filmstrip show — without this, a page
+   * whose only content is a photo has a blank thumbnail until something is
+   * drawn on it. */
+  markDirty: () => void;
 }
 
 interface PaperCanvasProps {
@@ -669,6 +675,15 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
             });
           }, 'image/png');
         }),
+      markDirty: () => {
+        // No persistBuffer: the strokes have not changed, so the buffer on the
+        // device already matches them. The revision still moves, or a save
+        // already in flight would clear the dirty flag with a snapshot taken
+        // before the picture existed.
+        dirtyRef.current = true;
+        revisionRef.current += 1;
+        notify();
+      },
       markSaved: (revision: number) => {
         // A stroke landed while the upload was in flight — the page is still
         // dirty and the buffer must survive for the next save.

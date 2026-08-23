@@ -217,6 +217,13 @@ describe('pastedFilename', () => {
     expect(pastedFilename('IMAGE/WEBP')).toBe('pasted.webp');
   });
 
+  it('names the HEIC an iPad hands over, which the server transcodes', () => {
+    // Refusing it here would refuse the common case: paper is a tablet
+    // feature, and the tablet's photo library is where its pictures come from.
+    expect(pastedFilename('image/heic')).toBe('pasted.heic');
+    expect(pastedFilename('image/heif')).toBe('pasted.heif');
+  });
+
   it('refuses a type the server would reject anyway', () => {
     // Better to say so in the UI than to upload and take a 400.
     expect(pastedFilename('image/svg+xml')).toBeNull();

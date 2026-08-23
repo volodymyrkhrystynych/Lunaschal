@@ -6,6 +6,7 @@ from ulid import ULID
 
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
+from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.paper import storage
 
 bp = Blueprint('paper', __name__, url_prefix='/api/paper')
@@ -283,18 +284,6 @@ def serve_page_image(page_id):
 
 # --- pasted images ---
 
-# Extensions we will store, mapped to the mimetype we serve them back as.
-# Deliberately closed: the file is written straight to disk from an upload, and
-# an open-ended list is how an .html or .svg ends up being served from our own
-# origin.
-_IMAGE_EXTS = {
-    'png': 'image/png',
-    'jpg': 'image/jpeg',
-    'jpeg': 'image/jpeg',
-    'webp': 'image/webp',
-    'gif': 'image/gif',
-}
-
 _IMAGE_COLUMNS = (
     'id, page_id, file_path, x, y, width, height, rotation, flipped, locked, '
     'position, created_at, updated_at'
@@ -329,11 +318,16 @@ def add_page_image(page_id):
     upload = request.files.get('image')
     if upload is None or not upload.filename:
         return jsonify({'error': 'image file required'}), 400
-    ext = upload.filename.rsplit('.', 1)[-1].lower() if '.' in upload.filename else ''
-    if ext == 'jpe':
+    ext = storage.resolve_ext(upload.mimetype, upload.filename)
+    if ext is None:
+        return jsonify({
+            'error': f'unsupported image type: {upload.mimetype or upload.filename}'
+        }), 400
+    # HEIC becomes JPEG here or the picture is dead weight everywhere after:
+    # no browser renders it, so the page would carry an image it cannot draw.
+    is_heic = ext in HEIC_EXTS
+    if is_heic:
         ext = 'jpg'
-    if ext not in _IMAGE_EXTS:
-        return jsonify({'error': f'unsupported image type: {ext or "unknown"}'}), 400
 
     for field in ('x', 'y', 'width', 'height'):
         if request.form.get(field, type=float) is None:
@@ -355,9 +349,14 @@ def add_page_image(page_id):
     if path is None:
         return jsonify({'error': 'Invalid id'}), 500
     path.parent.mkdir(parents=True, exist_ok=True)
-    # Streamed to disk, not read() into memory: a phone photo is happily
-    # several MB and this is the same rule journal attachments follow.
-    upload.save(path)
+    if is_heic:
+        if not transcode_to_jpeg(upload, path):
+            path.unlink(missing_ok=True)
+            return jsonify({'error': 'could not read that picture'}), 400
+    else:
+        # Streamed to disk, not read() into memory: a phone photo is happily
+        # several MB and this is the same rule journal attachments follow.
+        upload.save(path)
 
     now = int(time.time())
     next_pos = db.execute(
@@ -457,6 +456,6 @@ def serve_page_image_file(image_id):
     path = storage.resolve_stored_path(row['file_path'])
     if path is None or not path.is_file():
         return jsonify({'error': 'Not found'}), 404
-    return send_file(path, mimetype=_IMAGE_EXTS.get(path.suffix.lstrip('.').lower(),
-                                                    'application/octet-stream'),
+    return send_file(path, mimetype=storage.STORED_EXTS.get(path.suffix.lstrip('.').lower(),
+                                                            'application/octet-stream'),
                      conditional=True)

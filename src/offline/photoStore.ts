@@ -191,6 +191,18 @@ export async function markAttempt(
   });
 }
 
+/** Forget a terminal failure so the photo is queueable again.
+ *
+ * `failed` means "the server refused this file", which stops the boot sweep
+ * retrying it forever. But the reason can stop being true — a build that
+ * accepts a format it used to reject is exactly what happened to paper's HEIC
+ * uploads — so a refusal has to be clearable rather than permanent. */
+export async function clearFailure(id: string): Promise<void> {
+  const meta = await take<StoredPhoto>(metaKey(id));
+  if (!meta) return;
+  await put(metaKey(id), { ...meta, failed: false, lastError: null });
+}
+
 /** Called in exactly one place: after the server has confirmed the upload. */
 export async function deletePhoto(id: string): Promise<void> {
   await drop(blobKey(id));
