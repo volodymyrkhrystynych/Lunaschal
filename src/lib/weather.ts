@@ -56,11 +56,73 @@ export const WMO_CODES: Record<number, WeatherCondition> = {
 
 const UNKNOWN_CONDITION: WeatherCondition = { label: 'Unknown', icon: '❔' };
 
+export interface MoonPhaseInfo {
+  /** 0 = new moon, 4 = full moon. */
+  index: number;
+  name: string;
+  emoji: string;
+}
+
+const MOON_PHASES: MoonPhaseInfo[] = [
+  { index: 0, name: 'New moon', emoji: '🌑' },
+  { index: 1, name: 'Waxing crescent', emoji: '🌒' },
+  { index: 2, name: 'First quarter', emoji: '🌓' },
+  { index: 3, name: 'Waxing gibbous', emoji: '🌔' },
+  { index: 4, name: 'Full moon', emoji: '🌕' },
+  { index: 5, name: 'Waning gibbous', emoji: '🌖' },
+  { index: 6, name: 'Last quarter', emoji: '🌗' },
+  { index: 7, name: 'Waning crescent', emoji: '🌘' },
+];
+
+const SYNODIC_MONTH_DAYS = 29.530588853;
+// A known new moon, UTC. Only the fractional position within a synodic month
+// matters, so any confirmed new moon works as the reference epoch.
+const REFERENCE_NEW_MOON_MS = Date.UTC(2000, 0, 6, 18, 14, 0);
+const MS_PER_DAY = 86_400_000;
+
+/** Pure, deterministic synodic-month calculation — no astronomy library
+ * needed since only the phase (not rise/set/illumination angle) is wanted. */
+export function moonPhase(date: Date = new Date()): MoonPhaseInfo {
+  const daysSince = (date.getTime() - REFERENCE_NEW_MOON_MS) / MS_PER_DAY;
+  const cycles = daysSince / SYNODIC_MONTH_DAYS;
+  const fraction = cycles - Math.floor(cycles);
+  const index = Math.floor(fraction * 8) % 8;
+  return MOON_PHASES[index];
+}
+
+/** Whether `hourTs` falls outside [sunrise, sunset) for the day it belongs
+ * to. Never claims night without real sun data — a missing sunrise/sunset
+ * (no location yet, or a sync that hasn't run) resolves to "day" so icons
+ * fall back to their existing, always-correct-enough day form. */
+export function isNight(
+  hourTs: string,
+  sunriseTs: string | null,
+  sunsetTs: string | null
+): boolean {
+  if (sunriseTs === null || sunsetTs === null) return false;
+  const t = new Date(hourTs).getTime();
+  return t < new Date(sunriseTs).getTime() || t >= new Date(sunsetTs).getTime();
+}
+
 /** Never throws — an unmapped code (a WMO value Open-Meteo starts emitting
  * later, or a bad row) sorts safely into "Unknown" rather than crashing the
- * card. */
-export function describeWeatherCode(code: number): WeatherCondition {
-  return WMO_CODES[code] ?? UNKNOWN_CONDITION;
+ * card.
+ *
+ * `opts.night` swaps in an icon accurate to the real moon phase for clear/
+ * mainly-clear conditions, and a moon+cloud combo for partly cloudy — codes
+ * that already show a cloud/precipitation icon (overcast and up) are left
+ * unchanged, since cloud cover looks the same regardless of the hour. */
+export function describeWeatherCode(
+  code: number,
+  opts?: { night?: boolean; moon?: MoonPhaseInfo }
+): WeatherCondition {
+  const base = WMO_CODES[code] ?? UNKNOWN_CONDITION;
+  if (!opts?.night) return base;
+
+  const moon = opts.moon ?? moonPhase();
+  if (code === 0 || code === 1) return { label: base.label, icon: moon.emoji };
+  if (code === 2) return { label: base.label, icon: `${moon.emoji}☁️` };
+  return base;
 }
 
 /** Index of the hour row that best represents "now": the latest one that has

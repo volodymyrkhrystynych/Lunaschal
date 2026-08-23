@@ -16,11 +16,17 @@ def _location_dict(db) -> dict | None:
     return {'latitude': lat, 'longitude': lon, 'source': source}
 
 
+def _sun_dict(sun: dict | None) -> dict:
+    if sun is None:
+        return {'sunriseTs': None, 'sunsetTs': None}
+    return {'sunriseTs': sun['sunriseTs'], 'sunsetTs': sun['sunsetTs']}
+
+
 @bp.get('/today')
 def today():
     db = get_db()
-    hours = sync.ensure_today(db)
-    return jsonify({'hours': hours, 'location': _location_dict(db)})
+    hours, sun = sync.ensure_today(db)
+    return jsonify({'hours': hours, 'location': _location_dict(db), **_sun_dict(sun)})
 
 
 @bp.post('/location')
@@ -39,4 +45,5 @@ def update_location():
     day_key = day_key_for()
     sync.record_location(db, day_key, lat, lon, 'geolocation')
     hours = sync.sync_day(db, day_key, lat, lon, 'geolocation')
-    return jsonify({'hours': hours, 'location': _location_dict(db)})
+    sun = sync.sync_sun_times(db, day_key, lat, lon, 'geolocation')
+    return jsonify({'hours': hours, 'location': _location_dict(db), **_sun_dict(sun)})

@@ -106,18 +106,72 @@ def _day_rows(db, day_key: str) -> list[dict]:
     return [row_to_dict(r) for r in rows]
 
 
-def ensure_today(db) -> list[dict]:
-    """The no-daemon entry point for GET /today: returns today's rows,
-    fetching them for the first time this day if none exist yet. A GET must
-    not hit Open-Meteo on every render, so an existing day is returned as-is —
-    fresh data only comes from a POST /location resync."""
+def _day_sun_times(db, day_key: str) -> dict | None:
+    row = db.execute(
+        'SELECT * FROM lifestyle_weather_days WHERE day_key=?', (day_key,)
+    ).fetchone()
+    return row_to_dict(row) if row else None
+
+
+def sync_sun_times(db, day_key: str, lat: float, lon: float, source: str) -> dict | None:
+    """Upsert today's sunrise/sunset. Independent of sync_day (its own
+    Open-Meteo request via fetch.fetch_sun_times) so a sun-times fetch
+    failure never breaks the hourly forecast. Returns None only if
+    Open-Meteo's response has no entry for day_key (shouldn't happen given
+    the past_days/forecast_days window, but defensive rather than crashing)."""
+    sun_map = fetch.fetch_sun_times(lat, lon)
+    times = sun_map.get(day_key)
+    if times is None:
+        return _day_sun_times(db, day_key)
+
+    now = int(time.time())
+    db.execute(
+        """
+        INSERT INTO lifestyle_weather_days
+            (id, day_key, sunrise_ts, sunset_ts, latitude, longitude,
+             location_source, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(day_key) DO UPDATE SET
+            sunrise_ts=excluded.sunrise_ts,
+            sunset_ts=excluded.sunset_ts,
+            latitude=excluded.latitude,
+            longitude=excluded.longitude,
+            location_source=excluded.location_source,
+            updated_at=excluded.updated_at
+        """,
+        (
+            str(ULID()), day_key, times['sunrise_ts'], times['sunset_ts'],
+            lat, lon, source, now, now,
+        ),
+    )
+    db.commit()
+    return _day_sun_times(db, day_key)
+
+
+def ensure_today(db) -> tuple[list[dict], dict | None]:
+    """The no-daemon entry point for GET /today: returns today's rows (and
+    sun times), fetching them for the first time this day if none exist yet.
+    A GET must not hit Open-Meteo on every render, so an existing day's hours
+    are returned as-is — fresh data only comes from a POST /location resync."""
     day_key = day_key_for()
     existing = _day_rows(db, day_key)
+    sun = _day_sun_times(db, day_key)
+
     if existing:
-        return existing
+        # Backfill sun times for a day synced before this feature shipped
+        # (or whose sun-times fetch previously failed) without refetching
+        # the hours that already succeeded.
+        if sun is None:
+            location = resolve_location(db)
+            if location is not None:
+                lat, lon, source = location
+                sun = sync_sun_times(db, day_key, lat, lon, source)
+        return existing, sun
 
     location = resolve_location(db)
     if location is None:
-        return []
+        return [], None
     lat, lon, source = location
-    return sync_day(db, day_key, lat, lon, source)
+    hours = sync_day(db, day_key, lat, lon, source)
+    sun = sync_sun_times(db, day_key, lat, lon, source)
+    return hours, sun

@@ -68,3 +68,39 @@ def fetch_hourly(lat: float, lon: float) -> list[dict]:
             'humidity_pct': humidity[i],
         })
     return out
+
+
+def fetch_sun_times(lat: float, lon: float) -> dict:
+    """day_key -> {sunrise_ts, sunset_ts} for the same multi-day window
+    fetch_hourly covers, via Open-Meteo's `daily=sunrise,sunset`. Its own
+    request rather than folded into fetch_hourly, so a sun-times outage can't
+    take down the hourly forecast that already works.
+
+    Open-Meteo's `daily.time[i]` is a plain `YYYY-MM-DD` string, which matches
+    backend.day_boundary.day_key_for()'s format directly.
+    """
+    resp = requests.get(
+        OPEN_METEO_URL,
+        params={
+            'latitude': lat,
+            'longitude': lon,
+            'daily': 'sunrise,sunset',
+            'timezone': 'auto',
+            'past_days': 1,
+            'forecast_days': 2,
+        },
+        timeout=FETCH_TIMEOUT,
+    )
+    resp.raise_for_status()
+    daily = resp.json()['daily']
+    times = daily['time']
+    sunrise = daily['sunrise']
+    sunset = daily['sunset']
+
+    return {
+        times[i]: {
+            'sunrise_ts': int(time.mktime(datetime.fromisoformat(sunrise[i]).timetuple())),
+            'sunset_ts': int(time.mktime(datetime.fromisoformat(sunset[i]).timetuple())),
+        }
+        for i in range(len(times))
+    }
