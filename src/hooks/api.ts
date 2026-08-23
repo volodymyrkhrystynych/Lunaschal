@@ -723,6 +723,89 @@ export interface GpuVram {
   llmMb?: number;
 }
 
+/** Health of the nightly backup job — see backend/routes/backup.py. */
+export type BackupHealth =
+  | 'ok'
+  | 'stale'
+  | 'unreachable'
+  | 'readonly'
+  | 'permissions'
+  | 'empty'
+  | 'unconfigured';
+
+export interface BackupConfig {
+  path: string;
+  retentionDays: number;
+  /** Which source supplied `path`: the settings table, the legacy
+   *  ops/backup.env fallback, or nothing at all. */
+  source: 'settings' | 'backup.env' | 'unset';
+}
+
+export interface BackupBrowseEntry {
+  name: string;
+  path: string;
+  writable: boolean;
+}
+
+export interface BackupBrowse {
+  path: string;
+  parent: string | null;
+  entries: BackupBrowseEntry[];
+  truncated: boolean;
+  writable: boolean;
+  isMount: boolean;
+  suggestions: { name: string; path: string }[];
+}
+
+export interface BackupRun {
+  running: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  ok: boolean | null;
+  output: string | null;
+}
+
+export interface BackupStatus {
+  configured: boolean;
+  destination: string | null;
+  /** The directory tested to decide the drive is present — the parent of
+   *  `destination`, matching what ops/backup.sh checks. */
+  mountPoint: string | null;
+  configSource: BackupConfig['source'];
+  retentionDays: number;
+  health: BackupHealth;
+  /** Human-readable explanations for a non-ok health; empty when ok. */
+  problems: string[];
+  mount: {
+    present: boolean;
+    writable: boolean;
+    /** True only for a genuinely read-only *mount* (ST_RDONLY) — distinct from
+     *  a read-write mount this user merely lacks permission to write to. */
+    readonly: boolean;
+    freeBytes: number | null;
+    totalBytes: number | null;
+  };
+  snapshots: {
+    latest: string | null;
+    ageDays: number | null;
+    count: number;
+    /** What `count` should be given how long this drive has been backing up —
+     *  a three-day-old backup holding 3 snapshots is complete, not broken. */
+    expectedCount: number;
+    latestSizeBytes: number | null;
+    dates: string[];
+  };
+  media: { lastModified: string | null };
+  timer: {
+    available: boolean;
+    enabled: boolean | null;
+    lastRun: string | null;
+    lastResult: string | null;
+    nextRun: string | null;
+  };
+  run: BackupRun;
+}
+
 export interface AuthStatus {
   authenticated: boolean;
   networkMode: boolean;
@@ -3414,6 +3497,16 @@ export const api = {
           longitude,
         }),
     },
+  },
+
+  backup: {
+    status: () => get<BackupStatus>('/api/backup/status'),
+    run: () => post<BackupRun>('/api/backup/run', {}),
+    getConfig: () => get<BackupConfig>('/api/backup/config'),
+    setConfig: (data: { destination?: string; retentionDays?: number }) =>
+      put<BackupConfig>('/api/backup/config', data),
+    browse: (path: string) =>
+      get<BackupBrowse>(`/api/backup/browse?path=${encodeURIComponent(path)}`),
   },
 
   tts: {

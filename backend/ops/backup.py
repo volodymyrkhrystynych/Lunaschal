@@ -62,6 +62,13 @@ def main() -> None:
     p_prune.add_argument('--keep-days', type=int, required=True)
     p_prune.add_argument('existing', nargs='*')
 
+    # `config` is how ops/backup.sh learns where to write. The Settings panel is
+    # the source of truth for that, so the script asks the database rather than
+    # reading BACKUP_HDD_PATH out of backup.env — the two drifting apart is the
+    # exact failure this whole feature exists to prevent.
+    p_config = sub.add_parser('config')
+    p_config.add_argument('--get', required=True, choices=('hdd-path', 'retention-days'))
+
     args = parser.parse_args()
 
     if args.command == 'snapshot':
@@ -69,6 +76,12 @@ def main() -> None:
     elif args.command == 'prune':
         for name in prune_candidates(args.existing, args.keep_days, date.today()):
             print(name)
+    elif args.command == 'config':
+        from backend.db.connection import get_db
+        from backend.ops.backup_config import get_config
+
+        cfg = get_config(get_db())
+        print(cfg['path'] if args.get == 'hdd-path' else cfg['retentionDays'])
 
 
 if __name__ == '__main__':
