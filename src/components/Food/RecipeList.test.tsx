@@ -202,6 +202,8 @@ describe('RecipeList new-recipe capture', () => {
     await waitFor(() => expect(api.cookbook.create).toHaveBeenCalled());
     const call = vi.mocked(api.cookbook.create).mock.calls[0][0];
     expect(call.title).toBe('New Dish');
-    expect(call.media).toEqual([file]);
+    // A copy of the picked file's bytes, not the File itself — see photoStore.
+    expect(call.media).toHaveLength(1);
+    expect(await call.media![0].text()).toBe('x');
   });
 });

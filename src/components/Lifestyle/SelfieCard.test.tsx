@@ -51,6 +51,9 @@ function renderCard() {
 const cameraInput = () =>
   screen.getByTestId('selfie-camera-input') as HTMLInputElement;
 
+const fileInput = () =>
+  screen.getByTestId('selfie-file-input') as HTMLInputElement;
+
 describe('capture', () => {
   it('opens the device camera instead of an in-page preview', async () => {
     // The old button called getUserMedia and rendered a <video>; on an iPad the
@@ -82,14 +85,51 @@ describe('capture', () => {
 
   it('uploads what the camera returns', async () => {
     // Via the device store now: the photo is written to IndexedDB first and the
-    // upload is queued, so a selfie taken with no signal still gets logged. It
-    // is the same image either way — the store hands back what it was given.
+    // upload is queued, so a selfie taken with no signal still gets logged.
+    // What travels is a copy of the bytes rather than the File itself — see
+    // photoStore — so this checks the pixels, not object identity.
     renderCard();
     const image = new File(['x'], 'selfie.jpg', { type: 'image/jpeg' });
     fireEvent.change(cameraInput(), { target: { files: [image] } });
 
     await waitFor(() => expect(upload).toHaveBeenCalled());
-    expect(upload.mock.calls[0][0]).toBe(image);
+    expect(await (upload.mock.calls[0][0] as Blob).text()).toBe('x');
+  });
+
+  it('sends the picked file name along, so a HEIC is still a HEIC', async () => {
+    // The route resolves the stored extension from the mime type first and the
+    // filename second. A camera roll HEIC that arrives without a usable mime
+    // type used to be written as a .jpg that was not a JPEG.
+    renderCard();
+    const image = new File(['x'], 'IMG_0042.HEIC', { type: '' });
+    fireEvent.change(fileInput(), { target: { files: [image] } });
+
+    await waitFor(() => expect(upload).toHaveBeenCalled());
+    expect(upload.mock.calls[0][2]).toBe('IMG_0042.HEIC');
+  });
+
+  it('says so when a picked photo cannot be read, instead of uploading it', async () => {
+    // An iCloud-optimized photo that never came down reads as nothing. Queued,
+    // it reached the server as a request with no file part at all and came
+    // back as "image is required" — a message about the request, not about the
+    // photo, on the one device where this happens.
+    renderCard();
+    const empty = new File([], 'IMG_0001.HEIC', { type: 'image/heic' });
+    fireEvent.change(fileInput(), { target: { files: [empty] } });
+
+    expect(await screen.findByText(/came back empty/i)).toBeTruthy();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('clears the picker after a failed read, so the same photo can be retried', async () => {
+    renderCard();
+    const empty = new File([], 'IMG_0001.HEIC', { type: 'image/heic' });
+    fireEvent.change(fileInput(), { target: { files: [empty] } });
+
+    await screen.findByText(/came back empty/i);
+    // Left set, re-picking the same photo fires no change event and the retry
+    // looks like nothing happened.
+    expect(fileInput().value).toBe('');
   });
 
   it('says Retake once today already has a selfie', async () => {

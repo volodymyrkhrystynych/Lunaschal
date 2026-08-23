@@ -3463,11 +3463,16 @@ export const api = {
         get<Selfie[]>(
           `/api/lifestyle/selfies${limit ? `?limit=${limit}` : ''}`
         ),
-      upload: (image: Blob, date?: string) => {
+      upload: (image: Blob, date?: string, filename?: string) => {
         const form = new FormData();
-        // A canvas-captured Blob has no filename; the route falls back to the
-        // mime type, but a name keeps the multipart part well-formed.
-        form.set('image', image, 'selfie.jpg');
+        // A queued photo comes back from IndexedDB as a Blob, which has no
+        // name of its own — so the picked file's name is carried alongside it.
+        // The route resolves the stored extension from the mime type first and
+        // the filename second, and a camera roll HEIC arriving as
+        // `application/octet-stream` is exactly the case where the second one
+        // decides whether it gets transcoded or written as a .jpg that is not
+        // a JPEG.
+        form.set('image', image, filename || 'selfie.jpg');
         if (date) form.set('date', date);
         return upload<Selfie>('/api/lifestyle/selfies', form);
       },

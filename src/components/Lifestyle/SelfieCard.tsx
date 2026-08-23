@@ -102,11 +102,30 @@ export function SelfieCard() {
   });
 
   const pick = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
+    const input = e.target;
+    const file = input.files?.[0];
+    if (!file) {
+      input.value = '';
+      return;
+    }
     const photoId = ulid();
-    await storePhoto(photoId, file, 'selfie', todayISO());
+    try {
+      // Stored — which reads its bytes — *before* the input is reset. On iOS a
+      // library pick is a reference into the photo store, and clearing the
+      // input is what stops that reference resolving; reading first is what
+      // makes the copy on the device the device's own.
+      await storePhoto(photoId, file, 'selfie', todayISO());
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'Could not read that photo'
+      );
+      return;
+    } finally {
+      // Always: otherwise picking the same photo twice fires no `change` event
+      // and the retry looks like nothing happened.
+      input.value = '';
+    }
+    setError(null);
     upload.mutate({ photoId });
   };
 

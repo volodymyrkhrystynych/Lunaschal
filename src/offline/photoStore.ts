@@ -133,14 +133,18 @@ export async function storePhoto(
   targetId: string,
   placement?: StoredPhoto['placement']
 ): Promise<StoredPhoto> {
+  const blob = await materialize(file);
   const meta: StoredPhoto = {
     id,
     target,
     targetId,
     placement,
     mimeType: file.type || 'application/octet-stream',
+    // The name is read off the original File — a materialized Blob has none —
+    // and it is what tells the server a HEIC from the camera roll apart from a
+    // JPEG when the mime type arrives empty.
     filename: file.name || `${id}.jpg`,
-    size: file.size,
+    size: blob.size,
     createdAt: Date.now(),
     attempts: 0,
     lastError: null,
@@ -148,9 +152,46 @@ export async function storePhoto(
   };
   // Blob first: metadata pointing at a blob that was never written is a
   // queued upload that can only ever fail.
-  await put(blobKey(id), file);
+  await put(blobKey(id), blob);
   await put(metaKey(id), meta);
   return meta;
+}
+
+/**
+ * Copy the picked file's bytes into a blob of our own, before anything is
+ * stored or queued.
+ *
+ * A `File` from a picker is a *reference* to something the OS owns, not the
+ * bytes: on iOS a photo-library pick points into the photo store, and the
+ * reference stops resolving the moment the input that produced it is reset —
+ * or, in Safari, when the blob is handed to `fetch` from a different process
+ * than the one that cloned it into IndexedDB. Either way the multipart POST
+ * goes out with no file part at all, and the selfie route answers the only way
+ * it can: `image is required`, about a photo the device is still holding.
+ *
+ * Reading it here, while the reference is certainly still live, is what makes
+ * a queued photo independent of the picker that produced it. It also turns the
+ * two failure modes that used to surface as a server error into a local one:
+ * a file that cannot be read, and an iCloud-optimized photo whose full-size
+ * original never came down and reads as nothing.
+ */
+async function materialize(file: Blob): Promise<Blob> {
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await file.arrayBuffer();
+  } catch (e) {
+    warn('could not read the picked file', e);
+    throw new Error(
+      'Could not read that photo from this device. Try picking it again.'
+    );
+  }
+  if (!bytes.byteLength) {
+    throw new Error(
+      'That photo came back empty — if it lives in iCloud, open it in Photos ' +
+        'first so the full-size copy is on this device.'
+    );
+  }
+  return new Blob([bytes], { type: file.type || 'application/octet-stream' });
 }
 
 export async function getPhoto(
