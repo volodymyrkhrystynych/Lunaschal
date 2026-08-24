@@ -18,6 +18,7 @@ import { DisplaySection } from './DisplaySection';
 import { LlamaConfigSection } from './LlamaConfigSection';
 import { MemorySection } from './MemorySection';
 import { BackupSection } from './BackupSection';
+import { FilesSection } from './FilesSection';
 import { CollapsibleSection } from './CollapsibleSection';
 import { shouldAutoExpand } from '../../lib/backup';
 
@@ -84,6 +85,10 @@ export function Settings() {
 
           <CollapsibleSection title="Backup" autoExpand={backupBroken}>
             <BackupSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Files">
+            <FilesSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Model & VRAM">

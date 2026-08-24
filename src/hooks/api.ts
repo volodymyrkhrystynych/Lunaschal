@@ -819,6 +819,17 @@ export interface FileEntry {
   modified: number;
 }
 
+export interface FilesConfig {
+  path: string;
+  /** Whether `path` came from Settings → Files, or nothing has been chosen. */
+  source: 'settings' | 'unset';
+}
+
+export interface FileUploadResult {
+  uploaded: { name: string; path: string; size: number }[];
+  errors: { name: string; error: string }[];
+}
+
 export interface NotebookReviewState {
   path: string;
   enabled: boolean;
@@ -2951,6 +2962,18 @@ export const api = {
       del<{ success: boolean }>(`/api/files?path=${encodeURIComponent(path)}`),
     mkdir: (path: string) =>
       post<{ success: boolean }>('/api/files/mkdir', { path }),
+    upload: (path: string, files: File[]) => {
+      const form = new FormData();
+      form.append('path', path);
+      for (const file of files) form.append('file', file);
+      return upload<FileUploadResult>('/api/files/upload', form);
+    },
+    /** Not fetched — pointed at directly as an <img>/<video>/<a> src or href. */
+    contentUrl: (path: string, download = false) =>
+      `/api/files/content?path=${encodeURIComponent(path)}${download ? '&download=1' : ''}`,
+    getConfig: () => get<FilesConfig>('/api/files/config'),
+    setConfig: (destination: string) =>
+      put<FilesConfig>('/api/files/config', { destination }),
   },
 
   notebook: {

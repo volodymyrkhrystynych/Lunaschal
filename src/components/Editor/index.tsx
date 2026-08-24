@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { FileTree } from './FileTree';
 import { EditorPane } from './EditorPane';
+import { FilePreview } from './FilePreview';
+import { previewKind } from '@/lib/filePreview';
 import { useMasterDetail } from '@/hooks/useMasterDetail';
 import { MasterDetailBack } from '@/components/MasterDetailBack';
 
@@ -33,11 +35,15 @@ export function Editor({ pendingInsert, onInsertDone }: Props) {
         <div className="flex-1 flex flex-col overflow-hidden">
           <MasterDetailBack onClick={openList} label="Files" />
           {selectedPath ? (
-            <EditorPane
-              filePath={selectedPath}
-              pendingInsert={pendingInsert}
-              onInsertDone={onInsertDone}
-            />
+            previewKind(selectedPath) === 'text' ? (
+              <EditorPane
+                filePath={selectedPath}
+                pendingInsert={pendingInsert}
+                onInsertDone={onInsertDone}
+              />
+            ) : (
+              <FilePreview filePath={selectedPath} />
+            )
           ) : (
             <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
               Select a file to edit

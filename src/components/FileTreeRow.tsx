@@ -11,6 +11,9 @@ interface Props {
   onSelectFile: (path: string) => void;
   onDelete: (entry: FileEntry) => void;
   onRenameStart: (entry: FileEntry) => void;
+  /** Files dropped directly on a folder row — Editor's FileTree passes this
+   * to upload straight into that folder rather than the tree root. */
+  onDropFiles?: (dirPath: string, files: File[]) => void;
 }
 
 /** One row of a file tree (currently just Editor's FileTree) — name + expand
@@ -25,9 +28,12 @@ export function FileTreeRow({
   onSelectFile,
   onDelete,
   onRenameStart,
+  onDropFiles,
 }: Props) {
   const [hovered, setHovered] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const indent = depth * 12 + 8;
+  const droppable = entry.isDir && !!onDropFiles;
 
   return (
     <div
@@ -38,13 +44,32 @@ export function FileTreeRow({
         isSelected
           ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
           : 'text-[var(--color-text)] hover:bg-white/5'
-      } ${isFocused ? 'ring-1 ring-[var(--color-primary)]' : ''}`}
+      } ${isFocused ? 'ring-1 ring-[var(--color-primary)]' : ''} ${
+        dragOver
+          ? 'ring-1 ring-[var(--color-primary)] bg-[var(--color-primary)]/10'
+          : ''
+      }`}
       style={{ paddingLeft: indent }}
       onClick={() =>
         entry.isDir ? onToggleDir(entry.path) : onSelectFile(entry.path)
       }
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
+      onDragOver={e => {
+        if (!droppable) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={e => {
+        if (!droppable) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setDragOver(false);
+        const files = Array.from(e.dataTransfer.files);
+        if (files.length) onDropFiles!(entry.path, files);
+      }}
     >
       <span className="w-3 text-[var(--color-text-muted)] shrink-0 text-xs">
         {entry.isDir ? (isExpanded ? '▾' : '▸') : ''}
