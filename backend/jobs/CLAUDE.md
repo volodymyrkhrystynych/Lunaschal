@@ -218,26 +218,60 @@ touches only `resume_versions` and `applications`, and a test pins that.
 
 ## Layout
 
-| file               | role                                                          |
-| ------------------ | ------------------------------------------------------------- |
-| `linkage.py`       | pure scoring + status advance. No DB, no network, no model    |
-| `keywords.py`      | pure JD↔profile keyword gap — also the feed's match score     |
-| `retention.py`     | pure date policy + the purge executor                         |
-| `profile.py`       | DB reads in the shapes tailoring and rendering want           |
-| `resume_import.py` | an existing `.docx`/text → the profile, bullets index-bound   |
-| `tailor.py`        | the bounded-schema resume call                                |
-| `build.py`         | tailor → render → persist, shared by the route and the queue  |
-| `answers.py`       | form filling: profile → bank → model, in that order           |
-| `render.py`        | one HTML template → preview, WeasyPrint PDF, python-docx      |
-| `ingest.py`        | one user-supplied URL → structured job                        |
-| `sources/`         | one adapter per board → normalized dicts. No DB, no model     |
-| `resolve.py`       | careers page URL → which ATS + slug, verified against the API |
-| `sync.py`          | saved searches → `jobs` rows, scored inline                   |
-| `queue.py`         | the single-slot resume worker behind the phone's Queue button |
-| `linker.py`        | applies `linkage.py` to the database                          |
-| `urlmatch.py`      | pure: is this browser tab that posting? Declines on ambiguity |
-| `scheduler.py`     | linkage + sync + drain every tick, purge daily in 07:00–08:00 |
-| `storage.py`       | `IdScopedStorage('JOBS_ROOT', './data/jobs')`                 |
+| file               | role                                                                     |
+| ------------------ | ------------------------------------------------------------------------ |
+| `linkage.py`       | pure scoring + status advance. No DB, no network, no model               |
+| `keywords.py`      | pure JD↔profile keyword gap — also the feed's match score                |
+| `retention.py`     | pure date policy + the purge executor                                    |
+| `profile.py`       | DB reads in the shapes tailoring and rendering want                      |
+| `resume_import.py` | an existing `.docx`/text → the profile, bullets index-bound              |
+| `tailor.py`        | the bounded-schema resume call                                           |
+| `build.py`         | tailor → render → persist, shared by the route and the queue             |
+| `answers.py`       | form filling: profile → bank → model, in that order                      |
+| `render.py`        | one HTML template → preview, WeasyPrint PDF, python-docx                 |
+| `ingest.py`        | one user-supplied URL → structured job                                   |
+| `sources/`         | one adapter per board → normalized dicts. No DB, no model                |
+| `resolve.py`       | careers page URL → which ATS + slug, verified against the API            |
+| `sync.py`          | saved searches → `jobs` rows, scored inline                              |
+| `queue.py`         | the single-slot resume worker behind the phone's Queue button            |
+| `linker.py`        | applies `linkage.py` to the database                                     |
+| `urlmatch.py`      | pure: is this browser tab that posting? Declines on ambiguity            |
+| `scheduler.py`     | linkage + sync + drain every tick, purge daily in 07:00–08:00            |
+| `storage.py`       | `IdScopedStorage('JOBS_ROOT', './data/jobs')`                            |
+| `backfill.py`      | confirmation mail → applications, for a search that predates the feature |
+
+## Backfilling a search that started before the feature
+
+`backfill.py` reconstructs `applications` from the confirmation mail they
+produced, because the feature only records what you apply to _through_ it — a
+mailbox with thousands of classified job emails and no applications gives
+linkage nothing to attach to, which is exactly what the first real mailbox
+looked like.
+
+**It has no route, no button and no scheduler entry, so re-running it means a
+shell.** The procedure, the reset SQL, and the numbers a healthy run produces
+are in [docs/application-backfill.md](../../docs/application-backfill.md) —
+including the ordering that matters (`backend/email/refetch.py` first, since
+Indeed's plain-text part names no employer and only the HTML does).
+
+Two rules decide what is created, and both are about refusing to store half a
+fact rather than maximising rows:
+
+- **A confirmation must name a company.** `geo.py`'s rule — an application with
+  no employer cannot be linked or matched, so it pads the pipeline with entries
+  that never resolve. The title may be empty; the company may not.
+- **The whole normalized name must not be generic.** A live run created a
+  company called "Software", and since linkage matches on company name it
+  absorbed 144 links belonging to real employers. A poisoned row is worse than a
+  missing one. The check is on the _whole_ name, not a substring, or every
+  staffing firm in the mailbox disappears with it.
+
+Rows are created at `submitted` and nothing here infers further: the linker
+advances them from the very mail they were built out of. `commit()` reopens the
+`job_email_scans` verdicts itself, from the earliest application rather than
+from now — they were all reached against an empty applications table, and
+`rescan_since`'s fortnight lookback around a current timestamp would leave years
+of them standing.
 
 ## Things that will bite
 
