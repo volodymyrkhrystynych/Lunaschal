@@ -287,3 +287,193 @@ def test_the_company_key_collapses_legal_suffixes():
 def test_parsing_is_pure_and_survives_empty_input():
     assert parse() is None
     assert parse(subject='', sender_email='', body_text='', body_html='') is None
+
+
+# --- planning and committing against a database -------------------------------
+
+import time
+
+import pytest
+from ulid import ULID
+
+from backend.db.connection import get_db
+from backend.jobs import backfill
+
+NOW = int(time.time())
+DAY = 86400
+
+
+@pytest.fixture
+def account(_db=None):
+    db = get_db()
+    account_id = str(ULID())
+    db.execute(
+        'INSERT INTO email_accounts (id, provider, email_address, created_at, updated_at)'
+        " VALUES (?, 'gmail', 'me@example.com', ?, ?)",
+        (account_id, NOW, NOW),
+    )
+    db.commit()
+    return account_id
+
+
+def add_email(account_id, *, subject, sender_email, body='', html='',
+              received_at=None, job_status='sent'):
+    db = get_db()
+    email_id = str(ULID())
+    db.execute(
+        'INSERT INTO emails (id, account_id, provider_message_id, subject, sender,'
+        ' sender_email, body_text, body_html, received_at, category, job_status,'
+        ' created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+        (email_id, account_id, str(ULID()), subject, sender_email, sender_email,
+         body, html, received_at or NOW, 'job_application', job_status, NOW),
+    )
+    db.commit()
+    return email_id
+
+
+def test_plan_reports_what_it_would_create_and_writes_nothing(account):
+    db = get_db()
+    add_email(account, subject='Thank you for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io')
+    add_email(account, subject='Volodymyr, your application was sent to Klue',
+              sender_email='jobs-noreply@linkedin.com',
+              body='Your application was sent to Klue\n\nBackend Engineer\n')
+
+    plan = backfill.plan(db)
+    assert plan['toCreate'] == 2
+    assert plan['companies'] == 2
+    assert {i['company'] for i in plan['items']} == {'Samsara', 'Klue'}
+    # A preview that writes is not a preview.
+    assert db.execute('SELECT COUNT(*) c FROM applications').fetchone()['c'] == 0
+    assert db.execute('SELECT COUNT(*) c FROM jobs').fetchone()['c'] == 0
+
+
+def test_commit_creates_a_job_and_an_application_per_candidate(account):
+    db = get_db()
+    add_email(account, subject='Thank you for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io',
+              body='Thank you for applying to the Senior Engineer role at Samsara.')
+
+    result = backfill.commit(db, applied_email='me@example.com')
+    assert result['created'] == 1
+
+    row = db.execute(
+        'SELECT j.company, j.title, j.source, j.source_id, a.status, a.applied_email'
+        ' FROM applications a JOIN jobs j ON j.id = a.job_id').fetchone()
+    assert row['company'] == 'Samsara'
+    assert row['source'] == 'manual'
+    assert row['source_id'].startswith('backfill:')
+    assert row['applied_email'] == 'me@example.com'
+
+
+def test_a_backfilled_application_starts_below_acknowledged(account):
+    """It must be created at a rank the linker can advance *from*. Writing
+    'acknowledged' here would freeze every backfilled row at its starting
+    status, because advance_status only ever moves forward."""
+    db = get_db()
+    add_email(account, subject='Thank you for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io')
+    backfill.commit(db)
+
+    from backend.jobs.linkage import PROGRESS_RANK, advance_status
+    status = db.execute('SELECT status FROM applications').fetchone()['status']
+    assert status == 'submitted'
+    assert PROGRESS_RANK[status] < PROGRESS_RANK['acknowledged']
+    assert advance_status(status, 'rejection') == 'rejected'
+    assert advance_status(status, 'interview_next_step') == 'interview'
+
+
+def test_committing_twice_creates_nothing_the_second_time(account):
+    """UNIQUE(source, source_id) is the idempotency, so an interrupted run
+    resumes instead of doubling the pipeline."""
+    db = get_db()
+    add_email(account, subject='Thank you for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io')
+
+    assert backfill.commit(db)['created'] == 1
+    second = backfill.commit(db)
+    assert second['created'] == 0
+    assert second['alreadyPresent'] == 1
+    assert db.execute('SELECT COUNT(*) c FROM applications').fetchone()['c'] == 1
+
+
+def test_two_confirmations_for_one_application_collapse(account):
+    """An ATS acknowledgement and the board's own copy describe one
+    application, not two."""
+    db = get_db()
+    add_email(account, subject='Thank you for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io',
+              body='for the Senior Engineer role', received_at=NOW - 5 * DAY)
+    add_email(account, subject='Thanks for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io',
+              body='for the Senior Engineer position', received_at=NOW)
+
+    assert backfill.commit(db)['created'] == 1
+
+
+def test_applied_at_is_the_earliest_confirmation(account):
+    """A resend is not a second application and must not redate the first."""
+    db = get_db()
+    first = NOW - 30 * DAY
+    add_email(account, subject='Thanks for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io',
+              body='for the Senior Engineer role', received_at=NOW)
+    add_email(account, subject='Thank you for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io',
+              body='for the Senior Engineer position', received_at=first)
+
+    backfill.commit(db)
+    assert db.execute('SELECT applied_at FROM applications').fetchone()['applied_at'] == first
+
+
+def test_two_roles_at_one_company_are_two_applications(account):
+    db = get_db()
+    add_email(account, subject='Thank you for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io',
+              body='for the Senior Engineer role')
+    add_email(account, subject='Thank you for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io',
+              body='for the Data Engineer role')
+
+    assert backfill.commit(db)['created'] == 2
+
+
+def test_unparseable_mail_creates_nothing_but_is_counted(account):
+    db = get_db()
+    add_email(account, subject="Here's your magic link for Robinhood",
+              sender_email='noreply@mail3.guide.co')
+    add_email(account, subject='Indeed Application: Front End Developer',
+              sender_email='indeedapply@indeed.com',
+              body='Your application has been submitted. Good luck!')
+
+    plan = backfill.plan(db)
+    assert plan['toCreate'] == 0
+    assert plan['skipped'] == 2
+    assert plan['unresolved_indeed'] == 1
+
+
+def test_commit_reopens_the_scan_verdicts_the_new_rows_invalidate(account):
+    """Every rejection in the mailbox has already been walked and dismissed
+    against an empty application table. If those verdicts stand, the backfilled
+    pipeline never advances past 'submitted'."""
+    db = get_db()
+    old = NOW - 200 * DAY
+    add_email(account, subject='Thank you for applying to Samsara',
+              sender_email='no-reply@us.greenhouse-mail.io', received_at=old)
+    rejection = add_email(
+        account, subject='Your application to Samsara',
+        sender_email='no-reply@us.greenhouse-mail.io',
+        received_at=old + DAY, job_status='rejection')
+
+    # The linker already considered that rejection and found nothing to link.
+    db.execute(
+        'INSERT INTO job_email_scans (email_id, matched, scanned_at)'
+        ' VALUES (?,0,?)', (rejection, old + DAY))
+    db.commit()
+
+    result = backfill.commit(db)
+    assert result['created'] == 1
+    assert result['reopenedScans'] >= 1
+    assert db.execute(
+        'SELECT COUNT(*) c FROM job_email_scans WHERE email_id=?',
+        (rejection,)).fetchone()['c'] == 0

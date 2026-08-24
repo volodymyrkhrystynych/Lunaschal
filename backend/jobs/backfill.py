@@ -43,10 +43,22 @@ alone. `unresolved_indeed()` reports how many are in that state.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+
+from ulid import ULID
 
 from backend.htmltext import strip_html
 from backend.jobs.linkage import domain_of_email, is_ats_domain, normalize_company
+
+# Backfilled postings are 'manual' because that is the only source value
+# meaning "not from a board sync", and `jobs.source`'s CHECK cannot be ALTERed
+# in SQLite without rebuilding the table — the same trade queued_at made rather
+# than becoming a tenth status. Provenance lives in source_id's prefix instead,
+# which is also what makes a re-run idempotent: UNIQUE(source, source_id) turns
+# the second attempt into a no-op rather than a duplicate pipeline.
+SOURCE = 'manual'
+SOURCE_PREFIX = 'backfill:'
 
 # Subdomains a company sends mail from; they precede the name rather than being
 # it, so 'careers.acosta.com' is Acosta and not Careers.
@@ -525,3 +537,217 @@ def is_unresolved_indeed(subject: str, body_html: str) -> bool:
     if not re.match(r'^Indeed Application:\s*\S', (subject or '').strip(), re.I):
         return False
     return not (body_html or '').strip()
+
+
+# --- turning parsed mail into rows -------------------------------------------
+
+@dataclass
+class Candidate:
+    """One reconstructed application, and the mail that evidenced it.
+
+    Several confirmations can describe a single application — an ATS
+    acknowledgement and the board's own copy, or a resend. They collapse here by
+    (company, title) rather than being counted twice, which is the same
+    uniqueness `UNIQUE(job_id)` enforces one level down.
+    """
+    company: str
+    title: str
+    parser: str
+    applied_at: int
+    email_ids: list[str] = field(default_factory=list)
+
+    @property
+    def key(self) -> str:
+        return f'{normalize_company(self.company)}|{_normalize_title(self.title)}'
+
+    @property
+    def source_id(self) -> str:
+        return SOURCE_PREFIX + self.key
+
+
+def _normalize_title(title: str) -> str:
+    return ' '.join(re.sub(r'[^a-z0-9]+', ' ', (title or '').lower()).split())
+
+
+def collect(rows) -> tuple[dict[str, Candidate], dict]:
+    """Parse confirmation rows into deduplicated candidates plus a tally.
+
+    Pure: `rows` is any iterable of mappings with the `emails` columns, so this
+    is testable without a database and reusable over a preview or a commit.
+    """
+    candidates: dict[str, Candidate] = {}
+    stats = {'scanned': 0, 'parsed': 0, 'skipped': 0, 'unresolved_indeed': 0}
+
+    for row in rows:
+        stats['scanned'] += 1
+        subject = row['subject'] or ''
+        body_html = row['body_html'] or ''
+        parsed = parse_confirmation(
+            subject=subject,
+            sender_email=row['sender_email'] or '',
+            body_text=row['body_text'] or '',
+            body_html=body_html,
+        )
+        if not parsed:
+            stats['skipped'] += 1
+            if is_unresolved_indeed(subject, body_html):
+                stats['unresolved_indeed'] += 1
+            continue
+
+        stats['parsed'] += 1
+        received = int(row['received_at'] or 0)
+        candidate = Candidate(
+            company=parsed.company,
+            title=parsed.title,
+            parser=parsed.parser,
+            applied_at=received,
+        )
+        existing = candidates.get(candidate.key)
+        if existing is None:
+            candidate.email_ids.append(row['id'])
+            candidates[candidate.key] = candidate
+            continue
+        existing.email_ids.append(row['id'])
+        # The earliest confirmation is when the application was actually made;
+        # a later resend is not a second application and must not redate it.
+        if received and received < existing.applied_at:
+            existing.applied_at = received
+        # A later message may carry the title the first one lacked.
+        if not existing.title and candidate.title:
+            existing.title = candidate.title
+
+    return candidates, stats
+
+
+CONFIRMATION_QUERY = (
+    "SELECT id, subject, sender_email, body_text, body_html, received_at"
+    " FROM emails WHERE category='job_application' AND job_status='sent'"
+    ' ORDER BY received_at'
+)
+
+
+def plan(db) -> dict:
+    """What a backfill would create, without creating any of it.
+
+    resume_import.py's split: a pass that writes nothing and can be read, and a
+    separate one that applies it. The reason is the same and stronger here —
+    these rows are reconstructed from a model's classification of mail, so the
+    only way to know the parsers agreed with reality is to look at the result
+    before it becomes the pipeline.
+    """
+    candidates, stats = collect(db.execute(CONFIRMATION_QUERY).fetchall())
+
+    existing = {
+        row['source_id']
+        for row in db.execute(
+            'SELECT source_id FROM jobs WHERE source=? AND source_id LIKE ?',
+            (SOURCE, SOURCE_PREFIX + '%'),
+        ).fetchall()
+    }
+
+    new, already = [], 0
+    for candidate in candidates.values():
+        if candidate.source_id in existing:
+            already += 1
+            continue
+        new.append(candidate)
+
+    new.sort(key=lambda c: c.applied_at, reverse=True)
+    return {
+        **stats,
+        'candidates': len(candidates),
+        'toCreate': len(new),
+        'alreadyPresent': already,
+        'companies': len({normalize_company(c.company) for c in new}),
+        'items': [
+            {
+                'company': c.company,
+                'title': c.title,
+                'parser': c.parser,
+                'appliedAt': c.applied_at,
+                'emailCount': len(c.email_ids),
+            }
+            for c in new
+        ],
+    }
+
+
+def commit(db, *, applied_email: str = '', limit: int | None = None) -> dict:
+    """Create the jobs and applications rows a plan described.
+
+    Re-running is safe: a candidate whose source_id is already present is
+    skipped, so an interrupted commit resumes rather than duplicating.
+
+    Status is 'submitted' on purpose. The linker advances it from the very mail
+    this was built out of — 'sent' to acknowledged, then interview, then
+    rejected — and it can only do so from a rank below those. Writing a status
+    here would be a second, worse implementation of linkage.advance_status.
+    """
+    candidates, stats = collect(db.execute(CONFIRMATION_QUERY).fetchall())
+    ordered = sorted(candidates.values(), key=lambda c: c.applied_at, reverse=True)
+    if limit is not None:
+        ordered = ordered[:limit]
+
+    now = int(time.time())
+    created = skipped_existing = 0
+
+    for candidate in ordered:
+        row = db.execute(
+            'SELECT id FROM jobs WHERE source=? AND source_id=?',
+            (SOURCE, candidate.source_id),
+        ).fetchone()
+        if row:
+            skipped_existing += 1
+            continue
+
+        job_id = str(ULID())
+        db.execute(
+            'INSERT INTO jobs (id, source, source_id, company, title,'
+            ' description, posted_at, created_at, updated_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?)',
+            (job_id, SOURCE, candidate.source_id, candidate.company,
+             candidate.title,
+             # No description exists — a confirmation email is not a posting.
+             # Leaving it empty keeps keyword scoring honest: an empty
+             # description scores nothing rather than scoring against prose
+             # that was never the job ad.
+             '', candidate.applied_at or None, now, now),
+        )
+        db.execute(
+            'INSERT INTO applications (id, job_id, status, applied_email,'
+            ' applied_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+            (str(ULID()), job_id, 'submitted', applied_email,
+             candidate.applied_at or None, now, now),
+        )
+        created += 1
+
+    db.commit()
+
+    # `job_email_scans` records that an email was considered, and that verdict
+    # was only ever true against the applications existing at the time — here,
+    # none. Every rejection and interview email in the mailbox has already been
+    # walked and dismissed, so without reopening them the backfill would create
+    # a pipeline that stays frozen at 'submitted' forever.
+    #
+    # Reopened from the *earliest* application rather than from now: these span
+    # years, and rescan_since's fourteen-day lookback around a current
+    # timestamp would leave all but the last fortnight of them untouched. Done
+    # here rather than left to the caller for the reason recompute_purge_after
+    # takes its status as an argument — a caller that forgets gets a silently
+    # inert result, not an error.
+    reopened = 0
+    if created:
+        from backend.jobs import linker  # local: keeps the parser half DB-free
+
+        earliest = min(
+            (c.applied_at for c in ordered if c.applied_at), default=0
+        )
+        if earliest:
+            reopened = linker.rescan_since(db, earliest)
+
+    return {
+        **stats,
+        'created': created,
+        'alreadyPresent': skipped_existing,
+        'reopenedScans': reopened,
+    }
