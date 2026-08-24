@@ -1,9 +1,21 @@
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import { currentPosition } from '@/lib/geo';
-import { currentHourIndex, describeWeatherCode } from '@/lib/weather';
+import {
+  currentHourIndex,
+  describeWeatherCode,
+  isNight,
+  moonPhase,
+} from '@/lib/weather';
 import { CARD } from './card';
+
+function formatClockTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
 
 /**
  * The day's weather, sourced from wherever the device actually is.
@@ -53,6 +65,10 @@ export function WeatherCard() {
   const hours = data?.hours ?? [];
   const nowIndex = currentHourIndex(hours);
   const current = nowIndex >= 0 ? hours[nowIndex] : null;
+  const sunriseTs = data?.sunriseTs ?? null;
+  const sunsetTs = data?.sunsetTs ?? null;
+  // Phase barely moves within one render's lifetime — compute once.
+  const moon = useMemo(() => moonPhase(), []);
 
   // Hours render oldest-to-newest across the day; scroll the strip to "now"
   // on mount/data-arrival, the same pattern SelfieCard/ActivityHeatmap use.
@@ -78,7 +94,12 @@ export function WeatherCard() {
         <>
           <div className="flex items-center gap-3">
             <span className="text-3xl" aria-hidden>
-              {describeWeatherCode(current.weatherCode).icon}
+              {
+                describeWeatherCode(current.weatherCode, {
+                  night: isNight(current.hourTs, sunriseTs, sunsetTs),
+                  moon,
+                }).icon
+              }
             </span>
             <div>
               <div className="text-2xl font-semibold text-[var(--color-text)] tabular-nums">
@@ -92,6 +113,13 @@ export function WeatherCard() {
             </div>
           </div>
 
+          {sunriseTs && sunsetTs && (
+            <div className="mt-2 flex gap-4 text-xs text-[var(--color-text-muted)]">
+              <span>🌅 {formatClockTime(sunriseTs)}</span>
+              <span>🌇 {formatClockTime(sunsetTs)}</span>
+            </div>
+          )}
+
           <div ref={stripRef} className="mt-3 flex gap-2 overflow-x-auto pb-1">
             {hours.map((hour, i) => (
               <div
@@ -104,7 +132,12 @@ export function WeatherCard() {
                   {new Date(hour.hourTs).getHours()}:00
                 </div>
                 <div className="text-base" aria-hidden>
-                  {describeWeatherCode(hour.weatherCode).icon}
+                  {
+                    describeWeatherCode(hour.weatherCode, {
+                      night: isNight(hour.hourTs, sunriseTs, sunsetTs),
+                      moon,
+                    }).icon
+                  }
                 </div>
                 <div className="text-xs text-[var(--color-text)] tabular-nums">
                   {Math.round(hour.temperatureC)}°

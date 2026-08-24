@@ -15,7 +15,7 @@ TIMESTAMP_COLS = frozenset({
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
     'researched_at', 'last_practiced_at', 'last_recall_at',
     'received_at', 'classified_at', 'last_synced_at', 'token_expires_at',
-    'finished_at', 'hour_ts',
+    'finished_at', 'hour_ts', 'sunrise_ts', 'sunset_ts',
     # Job applications. 'fetched_at' also exists on email_images, which never
     # goes through row_to_dict today — and ISO is the right shape there too if
     # it ever does, so this is a widening rather than a special case.

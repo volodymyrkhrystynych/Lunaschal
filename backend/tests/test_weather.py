@@ -27,6 +27,10 @@ def _fake_hours(start: int, end: int) -> list[dict]:
     return hours
 
 
+_FAKE_SUNRISE_TS = 1000
+_FAKE_SUNSET_TS = 2000
+
+
 @pytest.fixture
 def mock_fetch(monkeypatch):
     calls = {'n': 0}
@@ -37,7 +41,11 @@ def mock_fetch(monkeypatch):
         start, end = day_bounds(day_key)
         return _fake_hours(start, end)
 
+    def fake_fetch_sun_times(lat, lon):
+        return {day_key_for(): {'sunrise_ts': _FAKE_SUNRISE_TS, 'sunset_ts': _FAKE_SUNSET_TS}}
+
     monkeypatch.setattr('backend.weather.sync.fetch.fetch_hourly', fake_fetch_hourly)
+    monkeypatch.setattr('backend.weather.sync.fetch.fetch_sun_times', fake_fetch_sun_times)
     return calls
 
 
@@ -137,7 +145,9 @@ def test_record_location_dedupes_identical_fixes(client):
 def test_get_today_on_empty_db(client):
     resp = client.get('/api/lifestyle/weather/today')
     assert resp.status_code == 200
-    assert resp.get_json() == {'hours': [], 'location': None}
+    assert resp.get_json() == {
+        'hours': [], 'location': None, 'sunriseTs': None, 'sunsetTs': None,
+    }
 
 
 def test_get_today_does_not_refetch_once_synced(client, mock_fetch):
@@ -174,6 +184,53 @@ def test_post_location_syncs_and_logs(client, mock_fetch):
     assert logged == 1
 
 
+def test_sync_sun_times_upserts_by_day_key(client, mock_fetch):
+    db = get_db()
+    day_key = day_key_for()
+
+    sync.sync_sun_times(db, day_key, 43.6, -79.4, 'geolocation')
+    rows = db.execute(
+        'SELECT * FROM lifestyle_weather_days WHERE day_key=?', (day_key,)
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]['sunrise_ts'] == _FAKE_SUNRISE_TS
+    assert rows[0]['latitude'] == 43.6
+
+    sync.sync_sun_times(db, day_key, 10.0, 10.0, 'geolocation')
+    rows = db.execute(
+        'SELECT * FROM lifestyle_weather_days WHERE day_key=?', (day_key,)
+    ).fetchall()
+    assert len(rows) == 1  # overwritten, not duplicated
+    assert rows[0]['latitude'] == 10.0
+
+
+def test_get_today_includes_sun_times(client, mock_fetch):
+    client.patch('/api/settings/ai', json={'weatherDefaultLat': 1.0, 'weatherDefaultLon': 2.0})
+    resp = client.get('/api/lifestyle/weather/today')
+    body = resp.get_json()
+    assert body['sunriseTs'] is not None
+    assert body['sunsetTs'] is not None
+
+
+def test_ensure_today_backfills_sun_times_when_missing(client, mock_fetch):
+    """A day synced before this feature shipped (or whose sun-times fetch
+    previously failed) has hours but no lifestyle_weather_days row —
+    ensure_today should backfill sun times without refetching the hours."""
+    db = get_db()
+    day_key = day_key_for()
+
+    # sync_day alone (unlike ensure_today) never touches lifestyle_weather_days,
+    # so this reproduces "hours exist, sun times don't" exactly.
+    sync.record_location(db, day_key, 43.6, -79.4, 'geolocation')
+    sync.sync_day(db, day_key, 43.6, -79.4, 'geolocation')
+    assert sync._day_sun_times(db, day_key) is None
+
+    hours_out, sun = sync.ensure_today(db)
+    assert len(hours_out) == 24
+    assert sun is not None
+    assert sun['sunriseTs'] is not None
+
+
 def test_fetch_hourly_parses_response(monkeypatch):
     from backend.weather import fetch
 
@@ -204,3 +261,31 @@ def test_fetch_hourly_parses_response(monkeypatch):
     assert hours[0]['humidity_pct'] == 80
     expected_ts = int(datetime.fromisoformat('2026-08-17T00:00').timestamp())
     assert hours[0]['hour_ts'] == expected_ts
+
+
+def test_fetch_sun_times_parses_response(monkeypatch):
+    from backend.weather import fetch
+
+    payload = {
+        'daily': {
+            'time': ['2026-08-16', '2026-08-17', '2026-08-18'],
+            'sunrise': ['2026-08-16T06:10', '2026-08-17T06:11', '2026-08-18T06:12'],
+            'sunset': ['2026-08-16T20:30', '2026-08-17T20:29', '2026-08-18T20:27'],
+        }
+    }
+
+    class FakeResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return payload
+
+    monkeypatch.setattr('requests.get', lambda *a, **kw: FakeResponse())
+
+    sun_map = fetch.fetch_sun_times(43.6532, -79.3832)
+    assert set(sun_map.keys()) == {'2026-08-16', '2026-08-17', '2026-08-18'}
+    expected_sunrise = int(datetime.fromisoformat('2026-08-17T06:11').timestamp())
+    expected_sunset = int(datetime.fromisoformat('2026-08-17T20:29').timestamp())
+    assert sun_map['2026-08-17']['sunrise_ts'] == expected_sunrise
+    assert sun_map['2026-08-17']['sunset_ts'] == expected_sunset

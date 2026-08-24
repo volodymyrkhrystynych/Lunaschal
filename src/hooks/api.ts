@@ -1807,6 +1807,10 @@ export interface WeatherToday {
   /** null when no geolocation fix has ever been logged and no default
    * location is configured in Settings. */
   location: WeatherLocation | null;
+  /** ISO strings, null until a location is known and the day's sun times
+   * have synced. */
+  sunriseTs: string | null;
+  sunsetTs: string | null;
 }
 
 export interface PracticeSnippetProgress {

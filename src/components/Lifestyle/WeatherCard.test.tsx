@@ -43,7 +43,12 @@ const hour = (
   ...overrides,
 });
 
-const EMPTY: WeatherToday = { hours: [], location: null };
+const EMPTY: WeatherToday = {
+  hours: [],
+  location: null,
+  sunriseTs: null,
+  sunsetTs: null,
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -80,7 +85,7 @@ describe('geolocation on mount', () => {
 
 describe('rendering', () => {
   it('prompts to set a default location when none is known', async () => {
-    today.mockResolvedValue({ hours: [], location: null });
+    today.mockResolvedValue(EMPTY);
     renderCard();
     expect(
       await screen.findByText(/set a default location in settings/i)
@@ -96,8 +101,62 @@ describe('rendering', () => {
         hour('2020-01-01T11:00:00', { temperatureC: 25, isActual: true }),
       ],
       location: { latitude: 1, longitude: 2, source: 'geolocation' },
+      sunriseTs: null,
+      sunsetTs: null,
     });
     renderCard();
     expect(await screen.findByText(/25°C/)).toBeTruthy();
+  });
+});
+
+describe('sunrise/sunset', () => {
+  it('renders the sunrise/sunset row when both are known', async () => {
+    today.mockResolvedValue({
+      hours: [hour('2020-01-01T10:00:00', { isActual: true })],
+      location: { latitude: 1, longitude: 2, source: 'geolocation' },
+      sunriseTs: '2020-01-01T06:30:00',
+      sunsetTs: '2020-01-01T20:15:00',
+    });
+    renderCard();
+    expect(await screen.findByText(/🌅/)).toBeTruthy();
+    expect(await screen.findByText(/🌇/)).toBeTruthy();
+  });
+
+  it('omits the sunrise/sunset row when unknown', async () => {
+    today.mockResolvedValue({
+      hours: [hour('2020-01-01T10:00:00', { isActual: true })],
+      location: { latitude: 1, longitude: 2, source: 'geolocation' },
+      sunriseTs: null,
+      sunsetTs: null,
+    });
+    renderCard();
+    await screen.findByText(/21°C/);
+    expect(screen.queryByText(/🌅/)).toBeNull();
+  });
+});
+
+describe('night icons', () => {
+  it('shows the real moon phase instead of the sun icon at night', async () => {
+    // Bracket "now" with a sunrise 6h in the future so isNight is true
+    // without needing to fake the system clock — the component's internal
+    // moonPhase() (which defaults to `new Date()`) then resolves to the
+    // real current phase, computed identically here for the assertion.
+    const now = Date.now();
+    const iso = (ms: number) => new Date(ms).toISOString();
+
+    today.mockResolvedValue({
+      hours: [hour(iso(now - 1000), { weatherCode: 0, isActual: true })],
+      location: { latitude: 1, longitude: 2, source: 'geolocation' },
+      sunriseTs: iso(now + 6 * 3600_000),
+      sunsetTs: iso(now + 18 * 3600_000),
+    });
+    renderCard();
+
+    const { moonPhase } = await import('@/lib/weather');
+    const expectedEmoji = moonPhase(new Date()).emoji;
+    // The same icon renders in both the current-condition summary and the
+    // (single-hour) strip cell, so there are two matches.
+    expect(await screen.findAllByText(expectedEmoji)).toHaveLength(2);
+    expect(screen.queryByText('☀️')).toBeNull();
   });
 });

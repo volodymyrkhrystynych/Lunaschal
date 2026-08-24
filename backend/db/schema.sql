@@ -911,6 +911,21 @@ CREATE TABLE IF NOT EXISTS lifestyle_weather_locations (
 
 CREATE INDEX IF NOT EXISTS idx_weather_locations_day ON lifestyle_weather_locations(day_key, created_at);
 
+-- One row per day: sunrise/sunset for the day's weather card. Separate from
+-- lifestyle_weather_hours (once-per-day data, not once-per-hour) but upserted
+-- the same overwrite-on-resync way — see backend/weather/sync.py.
+CREATE TABLE IF NOT EXISTS lifestyle_weather_days (
+    id TEXT PRIMARY KEY,
+    day_key TEXT UNIQUE NOT NULL,
+    sunrise_ts INTEGER NOT NULL,
+    sunset_ts INTEGER NOT NULL,
+    latitude REAL NOT NULL,
+    longitude REAL NOT NULL,
+    location_source TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 -- Ideas: the app's own feature backlog, developed with the research agent.
 -- raw_content is what was spoken/typed and is never overwritten; content is the
 -- AI-cleaned prose, following the journal_entries split.
