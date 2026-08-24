@@ -39,6 +39,8 @@ import logging
 import time
 from dataclasses import dataclass, field
 
+import requests
+
 from backend.db.connection import get_db
 from backend.email import gmail_client, images
 from backend.email.sanitize import sanitize_email_html
@@ -100,16 +102,25 @@ def _retry_after_seconds(error, attempt: int) -> float:
 
 
 def _with_retry(call, *, attempts: int = MAX_ATTEMPTS):
-    """Run `call`, retrying the statuses that mean "later", not "no".
+    """Run `call`, retrying the failures that mean "later", not "no".
 
-    429 is a rate limit and 5xx is the provider having a bad moment; both are
-    worth waiting out. Everything else — 404 above all — is an answer, and
-    retrying it would just be a slower way to get the same one.
+    429 is a rate limit and 5xx is the provider having a bad moment. A read
+    timeout or a dropped connection is the same category and was the one this
+    missed at first: a live run of 25 messages produced two read timeouts, and
+    over four thousand they accumulate into a run that looks half-broken.
+    Because GmailApiError subclasses requests.HTTPError, catching HTTPError's
+    siblings needs saying explicitly.
+
+    Everything else — 404 above all — is an answer, and retrying it is just a
+    slower way to get the same one.
     """
     last = None
     for attempt in range(attempts):
         try:
             return call()
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last = e
+            time.sleep(_retry_after_seconds(e, attempt))
         except gmail_client.GmailApiError as e:
             status = getattr(e, 'status_code', None)
             if status != 429 and not (status and 500 <= status < 600):

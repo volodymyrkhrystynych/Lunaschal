@@ -270,3 +270,30 @@ def test_unconfigured_oauth_reports_rather_than_raising(account, monkeypatch):
     result = refetch.run(rate_per_second=0)
     assert result['finished'] is True
     assert 'OAuth' in result['error']
+
+
+def test_a_read_timeout_is_retried(account, monkeypatch):
+    """A live run of 25 messages produced two read timeouts. They are the same
+    "later, not no" category as a 429, but GmailApiError subclasses HTTPError,
+    so its siblings have to be caught by name or they fall through as failures.
+    """
+    import requests
+
+    add_email(account, provider_message_id='m1')
+    monkeypatch.setattr(time, 'sleep', lambda s: None)
+    calls = {'n': 0}
+
+    def get_message(token, message_id):
+        calls['n'] += 1
+        if calls['n'] < 3:
+            raise requests.exceptions.ReadTimeout('read timed out')
+        return {'id': message_id}
+
+    monkeypatch.setattr(gmail_client, 'get_message', get_message)
+    monkeypatch.setattr(gmail_client, 'parse_message',
+                        lambda raw: {'bodyHtml': '<p>ok</p>', 'bodyText': 't'})
+
+    result = refetch.run(rate_per_second=0)
+    assert result['filled'] == 1
+    assert result['failed'] == 0
+    assert calls['n'] == 3
