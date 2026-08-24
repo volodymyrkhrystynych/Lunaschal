@@ -110,6 +110,22 @@ _GENERIC_COMPANY = frozenset({
     'this job', 'the job', 'job', 'our organization', 'the organisation',
     'our organisation', 'the organization', 'your application', 'application',
     'the following', 'career', 'careers', 'this vacancy', 'the vacancy',
+    # Industry and structure words that are a real company name's *modifier*,
+    # never the whole of it. Checked against the fully normalized name, which
+    # has already had legal suffixes stripped — so this rejects "Software",
+    # "Canada Inc" and "Management Inc" while leaving "ISG Search Inc" and
+    # "Score Media and Gaming Inc" untouched.
+    #
+    # The cost of missing one is not a lost row, it is a poisoned one: a
+    # company called "Software" matches almost any subject line, and the first
+    # live run produced exactly that — one bogus application that absorbed 144
+    # email links that belonged to real employers.
+    'software', 'recruiting', 'recruitment', 'consulting', 'technologies',
+    'technology', 'solutions', 'systems', 'services', 'staffing', 'search',
+    'management', 'canada', 'usa', 'group', 'holdings', 'confidential',
+    'indeed', 'linkedin', 'talent', 'people', 'hr', 'corp', 'company',
+    'limited', 'agency', 'partners', 'labs', 'ventures', 'capital', 'digital',
+    'global', 'international', 'consultants', 'associates', 'enterprises',
 })
 
 # Mailbox providers and aggregators: the domain is real but it is not the

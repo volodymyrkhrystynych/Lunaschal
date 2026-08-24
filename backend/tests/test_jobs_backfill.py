@@ -477,3 +477,24 @@ def test_commit_reopens_the_scan_verdicts_the_new_rows_invalidate(account):
     assert db.execute(
         'SELECT COUNT(*) c FROM job_email_scans WHERE email_id=?',
         (rejection,)).fetchone()['c'] == 0
+
+
+def test_a_bare_industry_word_is_not_a_company():
+    """The first live run created an application at a company called
+    "Software". Because linkage matches on the company name, that one bogus row
+    absorbed 144 email links belonging to real employers — a poisoned record,
+    not merely a missing one."""
+    for name in ('Software', 'Recruiting', 'Confidential', 'Indeed',
+                 'Management Inc', 'Canada Inc', 'Technologies'):
+        p = parse(subject=f'Thank you for applying to {name}',
+                  sender_email='no-reply@example-ats.invalid')
+        assert p is None or p.company != name, f'{name} became a company'
+
+
+def test_a_real_name_containing_an_industry_word_survives():
+    """The rule is 'the whole name is generic', not 'contains a generic word'."""
+    for name in ('ISG Search Inc', 'Score Media and Gaming Inc',
+                 'Millennium Software and Staffing Inc', 'Atlantis IT'):
+        p = parse(subject=f'Thank you for applying to {name}',
+                  sender_email='no-reply@example-ats.invalid')
+        assert p is not None and p.company == name, f'{name} was rejected'
