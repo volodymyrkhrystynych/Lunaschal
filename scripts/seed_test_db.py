@@ -54,6 +54,7 @@ from ulid import ULID  # noqa: E402  (after the env-var guard, on purpose)
 from PIL import Image, ImageDraw  # noqa: E402
 
 from backend.db import connection  # noqa: E402
+from backend.tags import tags_json  # noqa: E402
 
 DAY = 86400
 
@@ -95,15 +96,15 @@ def seed_journal(db):
     from backend.journal.storage import attachment_dir, attachment_path
 
     entries = [
-        (new_id(), 'Morning pages', 'Woke up early and got a good hour of writing in before the day got noisy. Feeling optimistic about the week.', 'journal,writing', 6),
-        (new_id(), 'Long walk', 'Took the long way home along the river. Cold enough to see my breath, which always makes a walk feel like an event rather than a chore.', 'journal,outside', 3),
-        (new_id(), '', 'Quick note: need to call the dentist back about rescheduling. Also finally fixed the squeaky drawer in the kitchen.', 'journal', 1),
+        (new_id(), 'Morning pages', 'Woke up early and got a good hour of writing in before the day got noisy. Feeling optimistic about the week.', ['journal', 'writing'], 6),
+        (new_id(), 'Long walk', 'Took the long way home along the river. Cold enough to see my breath, which always makes a walk feel like an event rather than a chore.', ['journal', 'outside'], 3),
+        (new_id(), '', 'Quick note: need to call the dentist back about rescheduling. Also finally fixed the squeaky drawer in the kitchen.', ['journal'], 1),
     ]
     for entry_id, title, content, tags, days_ago in entries:
         db.execute(
             'INSERT INTO journal_entries (id, content, raw_content, title, tags, created_at, updated_at) '
             'VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (entry_id, content, content, title, tags, ts(days_ago), ts(days_ago)),
+            (entry_id, content, content, title, tags_json(tags), ts(days_ago), ts(days_ago)),
         )
 
     # One image attachment on the oldest entry.
@@ -131,7 +132,7 @@ def seed_calendar(db, journal_ids):
     db.execute(
         'INSERT INTO calendar_events (id, title, description, date, time, end_time, all_day, tags, journal_id, created_at) '
         'VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
-        (past_id, 'Dentist checkup', 'Routine cleaning', yesterday, '10:00', '10:30', 'health', journal_ids[-1], ts(1)),
+        (past_id, 'Dentist checkup', 'Routine cleaning', yesterday, '10:00', '10:30', tags_json(['health']), journal_ids[-1], ts(1)),
     )
     db.execute(
         'INSERT INTO calendar_journal_links (id, calendar_event_id, journal_entry_id, created_at) VALUES (?, ?, ?, ?)',
@@ -140,18 +141,18 @@ def seed_calendar(db, journal_ids):
     db.execute(
         'INSERT INTO calendar_events (id, title, description, date, time, end_time, all_day, tags, created_at) '
         'VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)',
-        (new_id(), 'Team sync', 'Weekly check-in', today, '14:00', '14:30', 'work', ts(0)),
+        (new_id(), 'Team sync', 'Weekly check-in', today, '14:00', '14:30', tags_json(['work']), ts(0)),
     )
     db.execute(
         'INSERT INTO calendar_events (id, title, description, date, all_day, tags, created_at) '
         'VALUES (?, ?, ?, ?, 1, ?, ?)',
-        (new_id(), "Friend's birthday", '', next_week, 'family', ts(0)),
+        (new_id(), "Friend's birthday", '', next_week, tags_json(['family']), ts(0)),
     )
     db.execute(
         'INSERT INTO calendar_events '
         '(id, title, description, date, time, all_day, tags, created_at, repeat_freq, repeat_interval, repeat_byweekday) '
         'VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)',
-        (new_id(), 'Gym', 'Leg day', today, '07:00', 'exercise', ts(0), 'weekly', 1, '1,3,5'),
+        (new_id(), 'Gym', 'Leg day', today, '07:00', tags_json(['exercise']), ts(0), 'weekly', 1, '1,3,5'),
     )
 
 
@@ -191,7 +192,7 @@ def seed_cookbook(db):
          '## Ingredients\n- 1 cup red lentils\n- 1 onion\n- 2 carrots\n- 1 tsp cumin\n\n'
          '## Steps\n1. Saute onion and carrots.\n2. Add lentils, cumin, and 4 cups water.\n'
          '3. Simmer 25 minutes until lentils are soft.',
-         'soup,vegetarian,quick', ts(10), ts(10)),
+         tags_json(['soup', 'vegetarian', 'quick']), ts(10), ts(10)),
     )
     recipe_dir(recipe_id).mkdir(parents=True, exist_ok=True)
     media_id = new_id()
