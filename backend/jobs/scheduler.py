@@ -1,6 +1,6 @@
 """The jobs module's daemon loop.
 
-Four jobs on three cadences, sorted by what each one costs:
+Six jobs on three cadences, sorted by what each one costs:
 
 - **Linkage** is pure string matching over new mail. It costs nothing, so it
   runs every tick — a rejection that landed at 09:00 shows up on the
@@ -8,9 +8,13 @@ Four jobs on three cadences, sorted by what each one costs:
 - **Sync** is network but no model. It runs every tick too, gated per search by
   its own `interval_hours`, so the tick stays cheap while a daily search stays
   daily.
-- **The queue drain** is the only part that touches the model, so it is the
-  only part that defers through `backend/ai/priority.py` — the same moment-to-
-  moment yielding `research_scheduler` does, rather than an hour window.
+- **The triage gate** is pure string work over the postings awaiting a
+  verdict, so it runs every tick too and the obvious noise never survives long
+  enough to cost a model call.
+- **The triage drain and the queue drain** are the only parts that touch the
+  model, so they are the only parts that defer through `backend/ai/priority.py`
+  — the same moment-to-moment yielding `research_scheduler` does, rather than
+  an hour window.
 - **Retention** deletes files and only needs to be right once a day.
 
 Retention's window is **07:00–08:00**, chosen because 02:00–07:00 is already
@@ -25,7 +29,7 @@ import threading
 import time
 from datetime import datetime
 
-from backend.jobs import linker, queue, retention, sync
+from backend.jobs import linker, queue, retention, sync, triager
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +47,8 @@ def tick(now: datetime | None = None, last_purge_date=None):
     `run_title_sweep` is.
     """
     now = now or datetime.now()
-    results = {'linkage': None, 'sync': None, 'queued': None, 'purge': None}
+    results = {'linkage': None, 'sync': None, 'gated': None, 'triaged': None,
+               'queued': None, 'purge': None}
 
     results['linkage'] = linker.run_linkage_sweep()
 
@@ -53,6 +58,18 @@ def tick(now: datetime | None = None, last_purge_date=None):
         results['sync'] = sync.run_sync_sweep()
     except Exception as e:
         logger.warning('Job sync sweep failed: %s', e)
+
+    # The title gate is pure string work over pending rows, so it runs every
+    # tick beside linkage and sync. Only the model half below asks the gate.
+    try:
+        results['gated'] = triager.run_gate_sweep()
+    except Exception as e:
+        logger.warning('Job triage gate sweep failed: %s', e)
+
+    try:
+        results['triaged'] = triager.drain_once()
+    except Exception as e:
+        logger.warning('Job triage drain failed: %s', e)
 
     try:
         results['queued'] = queue.drain_once()

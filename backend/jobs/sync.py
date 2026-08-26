@@ -99,7 +99,8 @@ def upsert_job(db, kind: str, job: dict, loaded_profile: dict) -> str | None:
     score, reasons = score_job(job, loaded_profile)
     now = _now()
     existing = db.execute(
-        'SELECT id FROM jobs WHERE source=? AND source_id=?', (kind, source_id)
+        'SELECT id, description FROM jobs WHERE source=? AND source_id=?',
+        (kind, source_id),
     ).fetchone()
 
     fields = {
@@ -128,6 +129,19 @@ def upsert_job(db, kind: str, job: dict, loaded_profile: dict) -> str | None:
             f'UPDATE jobs SET {assignments} WHERE id=?',
             (*fields.values(), existing['id']),
         )
+        # A third judgement field, for the same reason as the other two: boards
+        # re-list the same posting nightly with byte-identical text, and
+        # re-triaging on every list would spend the model on ~1,300 verdicts a
+        # night to reproduce yesterday's. Only a body that actually changed is
+        # worth a second opinion — but that one is, or a rewritten posting
+        # keeps a summary describing a job it no longer is.
+        if (existing['description'] or '') != fields['description']:
+            db.execute(
+                "UPDATE jobs SET triage_state='pending', triage_reason='',"
+                " triage_fit='', triage_summary='', triage_flags=NULL,"
+                ' triage_error=NULL WHERE id=?',
+                (existing['id'],),
+            )
         return existing['id']
 
     job_id = str(ULID())
