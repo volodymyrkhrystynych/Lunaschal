@@ -1,10 +1,10 @@
 """Pure date arithmetic and field validation for todos — no DB, no Flask.
 
 The `parse_*` helpers live here rather than in backend/routes/tasks.py because
-two callers need the identical rules: the todos API, and the chat's
-`propose_task` tool (backend/delegate/tools.py). A second copy in the tool would
-be a second set of bounds to drift out of sync, and the tool's whole job is to
-stage something the API will later accept.
+more than one caller needs the identical rules: the todos API, and the chat
+delegate's date-staging tools (backend/delegate/tools.py's
+`propose_calendar_event`, and `_accept_calendar` in backend/routes/chat.py). A
+second copy in either would be a second set of bounds to drift out of sync.
 """
 
 import calendar

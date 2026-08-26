@@ -153,6 +153,48 @@ def test_events_respect_the_limit_param(client):
     assert len(_events(client, limit=2)) == 2
 
 
+# --- Chat to-dos (the day-scoped bar above the chat input) -----------------
+
+
+def test_completing_a_chat_todo_logs_one_event(client):
+    added = client.post(
+        '/api/tasks/chat-todos', json={'items': [{'title': 'call the dentist'}]}
+    ).get_json()
+    chat_todo_id = added[0]['id']
+    client.patch(f'/api/tasks/chat-todos/{chat_todo_id}', json={'done': True})
+
+    events = _events(client)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev['kind'] == 'chat_todo_completed'
+    assert ev['title'] == 'call the dentist'
+    assert ev['refId'] == chat_todo_id
+    assert ev['taskList'] == 'chat'
+
+
+def test_chat_todo_event_snapshots_notes_as_detail(client):
+    added = client.post(
+        '/api/tasks/chat-todos',
+        json={'items': [{'title': 'call plumber', 'notes': 'ask about parts'}]},
+    ).get_json()
+    chat_todo_id = added[0]['id']
+    client.patch(f'/api/tasks/chat-todos/{chat_todo_id}', json={'done': True})
+
+    assert _events(client)[0]['detail'] == 'ask about parts'
+
+
+def test_uncompleting_a_chat_todo_retracts_its_event(client):
+    added = client.post(
+        '/api/tasks/chat-todos', json={'items': [{'title': 'call the dentist'}]}
+    ).get_json()
+    chat_todo_id = added[0]['id']
+    client.patch(f'/api/tasks/chat-todos/{chat_todo_id}', json={'done': True})
+    assert len(_events(client)) == 1
+
+    client.patch(f'/api/tasks/chat-todos/{chat_todo_id}', json={'done': False})
+    assert _events(client) == []
+
+
 # --- Daily tasks -----------------------------------------------------------
 
 

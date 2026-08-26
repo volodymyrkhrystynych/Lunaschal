@@ -87,7 +87,6 @@ export function parseDelegateProposals(
 // Full noun phrases, article included — "flashcards" is plural and reads wrong
 // behind a hardcoded "a".
 const PROPOSAL_LABELS: Record<string, string> = {
-  propose_task: 'a to-do',
   propose_calendar_event: 'a calendar event',
   propose_calorie_log: 'a calorie entry',
   propose_food_log: 'a food entry',
@@ -148,6 +147,12 @@ export function stepLabel(step: AgentStep): string {
       return step.ok
         ? `Noted: ${target}`
         : `Didn't save that note${step.error ? ` — ${step.error}` : ''}`;
+    // Also writes immediately, straight into the Chat tab's to-do bar — no
+    // card, same reasoning as create_note_to_self above.
+    case 'add_todos':
+      return step.ok
+        ? `Added to today's to-dos: ${target}`
+        : `Didn't add that${step.error ? ` — ${step.error}` : ''}`;
     default: {
       const kind = step.tool ? PROPOSAL_LABELS[step.tool] : undefined;
       if (kind) {

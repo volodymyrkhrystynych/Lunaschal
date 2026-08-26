@@ -21,6 +21,8 @@ import {
   parseCategoryTags,
 } from '../lib/calendarCategories';
 import { isBreak, parseProposedTodos } from '../lib/chatSegments';
+import type { ProposedTodo } from '../hooks/api';
+import { formatCompletedAt } from '../lib/todos';
 import {
   ACCEPT_AUDIO,
   ACCEPT_IMAGE,
@@ -29,7 +31,6 @@ import {
   isVoiceOnlyEntry,
   rejectedFilesMessage,
 } from '../lib/journalAttachments';
-import { BriefingTodos } from './BriefingTodos';
 import { ImageLightbox, useLightbox } from './ImageLightbox';
 import { JournalAttachments } from './JournalAttachments';
 import { MessageMarkdown } from './MessageMarkdown';
@@ -1128,6 +1129,47 @@ function VoiceDraftsPanel({ drafts }: { drafts: JournalVoiceDraft[] }) {
   );
 }
 
+// `duplicate` is legacy: briefings written before linking existed can still
+// carry it. `pending` covers an item that was never resolved before the
+// accept/reject card retired — there is no backend left to act on it, so it
+// just shows as still-open history.
+const PROPOSED_TODO_STATUS_LABEL: Record<string, string> = {
+  pending: 'Not resolved',
+  done: 'Done',
+  accepted: 'Added to to-dos',
+  rejected: 'Dismissed',
+  duplicate: 'Already on your list — skipped',
+};
+
+// A frozen, read-only rendering of a past briefing's plan for the day. The
+// accept/reject card (BriefingTodos.tsx) that used to sit here is retired —
+// the briefing now writes straight into the Chat tab's to-do bar with no
+// confirm step — but the day's plan is still the record of what actually got
+// done, so old messages' resolved status is kept visible rather than dropped.
+function ProposedTodoHistory({ items }: { items: ProposedTodo[] }) {
+  return (
+    <div className="mt-2 space-y-1 rounded-lg border border-white/10 bg-[var(--color-surface)]/60 p-2">
+      {items.map(p => (
+        <div
+          key={p.id}
+          className="flex items-baseline justify-between gap-2 px-1 py-0.5"
+        >
+          <span
+            className={`text-sm ${p.status === 'rejected' ? 'text-[var(--color-text-muted)] line-through' : 'text-[var(--color-text)]'}`}
+          >
+            {p.title}
+          </span>
+          <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+            {PROPOSED_TODO_STATUS_LABEL[p.status] ?? p.status}
+            {p.resolvedAt &&
+              ` · ${formatCompletedAt(new Date(p.resolvedAt * 1000).toISOString())}`}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // A saved chat day in the journal feed: collapsed by default (chats get long),
 // dimmed like transcriptions, with its full transcript lazily fetched on expand.
 function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
@@ -1197,7 +1239,7 @@ function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
                   <MessageMarkdown content={m.content} />
                 )}
                 {proposedTodos.length > 0 && (
-                  <BriefingTodos messageId={m.id} proposals={proposedTodos} />
+                  <ProposedTodoHistory items={proposedTodos} />
                 )}
               </div>
             </div>

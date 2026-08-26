@@ -247,20 +247,20 @@ def test_the_proposal_picks_up_the_user_message_it_answered_not_the_latest(clien
 
 
 def test_other_proposal_kinds_still_work_through_the_widened_handler(client):
-    """The accept handlers grew a `ctx` argument; the four that predate it must
+    """The accept handlers grew a `ctx` argument; the ones that predate it must
     behave exactly as before."""
     conv = client.post('/api/chat/conversations', json={}).get_json()['id']
     assistant_id = client.post(f'/api/chat/conversations/{conv}/messages',
                                json={'role': 'assistant', 'content': ''}).get_json()['id']
-    meta = {'proposals': [{'id': 'p1', 'status': 'pending', 'kind': 'task',
-                           'data': {'title': 'buy milk', 'list': 'todo'}}]}
+    meta = {'proposals': [{'id': 'p1', 'status': 'pending', 'kind': 'calendar',
+                           'data': {'title': 'Dentist', 'date': '2026-08-14'}}]}
     db = get_db()
     db.execute('UPDATE messages SET metadata=? WHERE id=?', (json.dumps(meta), assistant_id))
     db.commit()
 
     r = client.post(f'/api/chat/proposals/{assistant_id}/p1', json={'action': 'accept'})
     assert r.status_code == 200
-    assert db.execute('SELECT title FROM todos').fetchone()['title'] == 'buy milk'
+    assert db.execute('SELECT title FROM calendar_events').fetchone()['title'] == 'Dentist'
 
 
 # --- Location on the food entry ---

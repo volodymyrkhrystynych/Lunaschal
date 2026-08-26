@@ -522,10 +522,14 @@ export interface ConversationWithMessages extends Conversation {
 // A to-do the briefing suggested. It lives in the briefing message's metadata
 // until the user accepts it (which creates the real todo, reusing this id) or
 // rejects it.
-// One item on the briefing's plan for the day. Lives in the chat message's
-// metadata, not the todos table — only an explicit 'accept' creates a row.
-// `duplicate` is legacy: briefings written before linking existed can still
-// carry it, and the link fields are absent on those.
+// One item on a *historical* briefing's plan for the day, frozen at whatever
+// status it resolved to before this shape was retired (the briefing now
+// writes straight into ChatTodoItem/chat_todos, no accept step, no per-item
+// status). Lives only in old chat messages' metadata — Journal.tsx renders it
+// read-only, since there is no backend left to accept/reject/dismiss it. `list`
+// is the old permanent-todos list it would have joined, and `duplicate` is
+// legacy: briefings written before linking existed can still carry it, and the
+// link fields are absent on those.
 export interface ProposedTodo {
   id: string;
   title: string;
@@ -533,28 +537,19 @@ export interface ProposedTodo {
   priority: number;
   due: number | null;
   status: 'pending' | 'done' | 'accepted' | 'rejected' | 'duplicate';
-  // The existing to-do / daily task this item restates, when there is one.
-  // Crossing off a linked item completes that row too.
+  // The existing to-do / daily task this item restated, when there was one.
   linkedType?: 'todo' | 'daily' | null;
   linkedId?: string | null;
   linkedTitle?: string | null;
   resolvedAt?: number | null;
 }
 
-export interface BriefingTodoDecision {
-  id: string;
-  action: 'done' | 'accept' | 'reject';
-  title?: string;
-  priority?: number;
-  due?: number | null;
-  list?: TodoList;
-}
-
-// A delegate confirm card — calendar/calorie/food/recipe/task/flashcards from
-// a live chat turn, plus recipe_link from the background homemade-match check
+// A delegate confirm card — calendar/calorie/food/recipe/flashcards from a
+// live chat turn, plus recipe_link from the background homemade-match check
 // (backend/food/recipe_match.py). `note` proposals draft immediately with no
-// confirm step, so they never get one of these (backend/delegate/runs.py).
-// Written into the
+// confirm step, so they never get one of these (backend/delegate/runs.py) —
+// nor does a to-do, which now writes straight into ChatTodoItem/chat_todos via
+// the add_todos tool. Written into the
 // assistant message's metadata the moment the run that staged it finishes (or,
 // for recipe_link, the moment the background check finds a match), and
 // resolved in place by POST /api/chat/proposals/<messageId>/<id> — the only
@@ -562,17 +557,11 @@ export interface BriefingTodoDecision {
 export interface DelegateProposalRecord {
   id: string;
   kind:
-    | 'calendar'
-    | 'calorie'
-    | 'food'
-    | 'recipe'
-    | 'recipe_link'
-    | 'task'
-    | 'flashcards';
+    'calendar' | 'calorie' | 'food' | 'recipe' | 'recipe_link' | 'flashcards';
   data: Record<string, unknown>;
   status: 'pending' | 'accepted' | 'dismissed';
   resolvedAt?: number;
-  // What accepting produced — {id} for calendar/calorie/task, {count} for
+  // What accepting produced — {id} for calendar/calorie, {count} for
   // flashcards, {id, photos, calorieLogId} for food — so the resolved state
   // renders from metadata alone.
   result?: {
@@ -1054,12 +1043,13 @@ export interface DailyTask {
 }
 
 export type TaskEventKind =
-  'todo_completed' | 'daily_completed' | 'task_deleted';
+  'todo_completed' | 'daily_completed' | 'task_deleted' | 'chat_todo_completed';
 
-// Which list the task came from: a todo list, or 'daily' for a daily task.
-// 'chores' is history — the list is retired, but events logged while it existed
-// still name it and the Journal feed still labels them.
-export type TaskListSource = 'todo' | 'chores' | 'archive' | 'daily';
+// Which list the task came from: a todo list, 'daily' for a daily task, or
+// 'chat' for an item completed from the Chat tab's to-do bar. 'chores' is
+// history — the list is retired, but events logged while it existed still
+// name it and the Journal feed still labels them.
+export type TaskListSource = 'todo' | 'chores' | 'archive' | 'daily' | 'chat';
 
 export interface TaskEvent {
   id: string;
@@ -1098,6 +1088,32 @@ export interface TodoPayload {
   repeatInterval?: number | null;
   repeatUnit?: RepeatUnit | null;
   priority?: number;
+}
+
+// A day-scoped, ephemeral to-do shown in the Chat tab's bar above the input
+// box. Written instantly by the chat delegate's add_todos tool or the morning
+// briefing — there is no accept step. Resets at the next day boundary: the
+// list endpoint only ever returns today's rows, so an unfinished item from a
+// prior day just stops showing rather than needing to be purged.
+export interface ChatTodoItem {
+  id: string;
+  dayKey: string;
+  title: string;
+  notes: string | null;
+  due: string | null;
+  priority: number;
+  done: boolean;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChatTodoPayload {
+  title?: string;
+  notes?: string | null;
+  due?: number | null;
+  priority?: number;
+  done?: boolean;
 }
 
 export interface FrontPage {
@@ -2950,16 +2966,8 @@ export const api = {
         conversationId: string;
         messageId: string;
         briefing: string;
-        todosProposed: number;
+        todosAdded: number;
       }>('/api/chat/briefing/run', {}),
-    decideBriefingTodos: (
-      messageId: string,
-      decisions: BriefingTodoDecision[]
-    ) =>
-      post<{ proposedTodos: ProposedTodo[]; created: number }>(
-        `/api/chat/briefing/${messageId}/todos`,
-        { decisions }
-      ),
     // `data` carries the card's edited values on accept — the card is a form,
     // so what gets written is what the user is looking at, not what the model
     // first staged. Omitted on dismiss, and on an accept with no edits.
@@ -3288,6 +3296,20 @@ export const api = {
     update: (id: string, data: TodoPayload) =>
       patch<{ success: boolean }>(`/api/tasks/todos/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/tasks/todos/${id}`),
+  },
+
+  // Today's chat to-dos (see ChatTodoItem above) — the Chat tab's bar reads
+  // and edits these; `promote` moves one into the permanent list above.
+  chatTodos: {
+    list: () => get<ChatTodoItem[]>('/api/tasks/chat-todos'),
+    add: (items: { title: string; notes?: string }[]) =>
+      post<ChatTodoItem[]>('/api/tasks/chat-todos', { items }),
+    update: (id: string, data: ChatTodoPayload) =>
+      patch<{ success: boolean }>(`/api/tasks/chat-todos/${id}`, data),
+    remove: (id: string) =>
+      del<{ success: boolean }>(`/api/tasks/chat-todos/${id}`),
+    promote: (id: string, data: TodoPayload & { title: string }) =>
+      post<{ id: string }>(`/api/tasks/chat-todos/${id}/promote`, data),
   },
 
   newspapers: {

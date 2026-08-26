@@ -3,19 +3,19 @@
 A plain function (no Flask request, no thread) so it can be called directly by
 the scheduler thread, by the manual-trigger route, and by tests. It find-or-
 creates today's chat and drops in the AI briefing as the first assistant
-message. The to-dos it suggests are *today's plan*, not backlog: they ride
-along in the message metadata and are crossed off in the chat itself. Only an
-explicit "add to to-dos" ever writes a `todos` row (see
-`POST /api/chat/briefing/<message_id>/todos`). An item that restates something
-already on the user's lists carries a link to that row, so crossing it off here
-completes the real one.
+message. The to-dos it suggests are *today's plan*, not backlog: they land
+straight in `chat_todos` — the same day-scoped table the chat delegate's
+`add_todos` tool writes to — with no confirm step, since the Chat tab's bar
+above the input is where the user edits, completes, dismisses or promotes them
+afterward. `_seed_chat_todos` skips anything already tracked (an open todo, a
+pending daily task, or something already added to today's bar) so the same
+item never shows up twice.
 
 The plan is the part the user actually needs, so it never comes back empty while
 they have something pending: a model that returns no items (or no usable
 completion at all) falls back to `fallback_plan`, built from their own lists.
 """
 import json
-import re
 import time
 
 from ulid import ULID
@@ -24,7 +24,6 @@ from backend.db.connection import get_db
 from backend.day_boundary import day_key_for
 from backend.ai.provider import is_ai_configured
 from backend.ai.briefing import (
-    _pending_daily_tasks,
     fallback_plan,
     gather_briefing_context,
     generate_briefing,
@@ -32,8 +31,9 @@ from backend.ai.briefing import (
     MAX_BRIEFING_TODOS,
 )
 from backend.ai.llm import EmptyCompletion
-from backend.routes.tasks import _parse_priority, _parse_due
-from backend.todo_recurrence import normalize_list
+from backend.routes.tasks import (
+    _parse_priority, _parse_due, _today_chat_todo_titles,
+)
 
 
 def find_or_create_day_conversation(db, day_key: str, now: int) -> str:
@@ -67,59 +67,25 @@ def _has_briefing(db, conv_id: str) -> bool:
     return False
 
 
-# Trailing "(due 2026-07-30)" / "[priority 4/5]" / "[shopping]" groups, as added by
-# backend.ai.briefing._format_todo when it renders the existing lists into the
-# prompt. Anchored to the end and applied repeatedly, so a real title that merely
-# contains brackets ("Fix [urgent] parser bug") keeps them.
-_PROMPT_ANNOTATION_RE = re.compile(r'\s*(?:\([^()]*\)|\[[^\[\]]*\])\s*$')
-
-
-def _strip_prompt_annotations(text: str) -> str:
-    """Undo _format_todo's decorations so a title copied out of the prompt can be
-    matched against the real row."""
-    prev = None
-    while prev != text:
-        prev = text
-        text = _PROMPT_ANNOTATION_RE.sub('', text).strip()
-    return text
-
-
-def _twin_lookup(db, today: str) -> dict[str, tuple[str, str]]:
-    """`{lowercased title: (linkedType, id)}` for everything a proposal may be a
-    twin of: open todos and daily tasks still pending today. Todos win a title
-    collision — they're the list the briefing draws most of its plan from."""
-    lookup: dict[str, tuple[str, str]] = {}
-    for r in _pending_daily_tasks(db, today):
-        lookup[r['title'].strip().lower()] = ('daily', r['id'])
-    for r in db.execute('SELECT id, title FROM todos WHERE done=0').fetchall():
-        lookup[r['title'].strip().lower()] = ('todo', r['id'])
-    return lookup
-
-
-def _propose_todos(db, proposed: list, today: str) -> list[dict]:
-    """Validate/clamp, link each item to its existing twin where there is one,
-    and cap. Returns pending proposals for the message metadata — nothing is
-    inserted. Each carries its own id so accepting is idempotent.
-
-    Items that restate an open todo or a pending daily task are deliberately
-    *kept* rather than dropped: today's plan should show the whole day, and the
-    link is what lets crossing one off here cross off the real row too."""
-    twins = _twin_lookup(db, today)
+def _seed_chat_todos(db, proposed: list, today: str, now: int) -> int:
+    """Validate/clamp each briefing-suggested item and insert it straight into
+    chat_todos — no confirm step. The plan is deliberately allowed to restate
+    an open todo or a pending daily task (that's most of what it is); it only
+    skips a title already sitting in today's bar, so a forced re-run or a
+    same-batch repeat can't duplicate it. Caps at MAX_BRIEFING_TODOS. Returns
+    the count actually inserted."""
+    taken = _today_chat_todo_titles(db, today)
     seen: set[str] = set()
-    items: list[dict] = []
+    inserted = 0
     for item in proposed:
-        if len(items) >= MAX_BRIEFING_TODOS:
+        if inserted >= MAX_BRIEFING_TODOS:
             break
         if not isinstance(item, dict):
             continue
         title = (item.get('title') or '').strip()
-        # Only same-batch repeats are dropped; twins of existing rows are linked.
-        if not title or title.lower() in seen:
+        if not title or title.lower() in seen or title.lower() in taken:
             continue
 
-        todo_list, err = normalize_list(item.get('list'))
-        if err:
-            todo_list = 'todo'
         priority, err = _parse_priority(item.get('priority'))
         if err:
             priority = 3
@@ -127,40 +93,14 @@ def _propose_todos(db, proposed: list, today: str) -> list[dict]:
         if err:
             due = None
 
-        # Trust the model's declared link first — it sees the same titles we do
-        # and can match on meaning. Fall back to the proposal's own title so a
-        # verbatim restatement links even when the model forgot to say so.
-        declared = item.get('linkedTitle')
-        declared = declared.strip() if isinstance(declared, str) else ''
-        twin = twins.get(declared.lower()) if declared else None
-        matched_title = declared
-        if twin is None and declared:
-            # The prompt renders each existing item as "Title (due X) [priority
-            # 4/5]", and asks for the title back "exactly as it appears above" —
-            # so the model quite reasonably hands back the decorated line, which
-            # matches nothing. Retry on the bare title before giving up.
-            bare = _strip_prompt_annotations(declared)
-            if bare != declared:
-                twin = twins.get(bare.lower())
-                matched_title = bare if twin else declared
-        if twin is None:
-            twin = twins.get(title.lower())
-            matched_title = title if twin else ''
-
-        items.append({
-            'id': str(ULID()),
-            'title': title,
-            'list': todo_list,
-            'priority': priority,
-            'due': due,
-            'status': 'pending',
-            'linkedType': twin[0] if twin else None,
-            'linkedId': twin[1] if twin else None,
-            'linkedTitle': matched_title if twin else None,
-            'resolvedAt': None,
-        })
+        db.execute(
+            'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
+            ' VALUES (?,?,?,NULL,?,?,0,?,?)',
+            (str(ULID()), today, title, due, priority, now, now),
+        )
         seen.add(title.lower())
-    return items
+        inserted += 1
+    return inserted
 
 
 def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
@@ -196,18 +136,18 @@ def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         db.commit()
         return None
 
-    proposed = _propose_todos(db, result.get('todos', []), context['today'])
-    if not proposed:
+    inserted = _seed_chat_todos(db, result.get('todos', []), context['today'], now)
+    if not inserted:
         # The model dropped the plan — it sometimes writes one into the check-in
         # prose and then returns an empty array, which renders as nothing at all.
         # Their own lists are a better answer than silence.
-        proposed = _propose_todos(db, fallback_plan(context), context['today'])
-    if degraded and not proposed:
-        # No prose *and* nothing pending: there's no briefing to leave.
+        inserted = _seed_chat_todos(db, fallback_plan(context), context['today'], now)
+    if degraded and not inserted:
+        # No prose *and* nothing added: there's no briefing to leave.
         db.commit()
         return None
 
-    metadata = {'briefing': True, 'proposedTodos': proposed}
+    metadata = {'briefing': True}
     if degraded:
         metadata['degraded'] = True
     message_id = str(ULID())
@@ -222,6 +162,6 @@ def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         'conversationId': conv_id,
         'messageId': message_id,
         'briefing': briefing,
-        'todosProposed': len(proposed),
+        'todosAdded': inserted,
         'degraded': degraded,
     }

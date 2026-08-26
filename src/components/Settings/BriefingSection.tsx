@@ -65,9 +65,9 @@ export function BriefingSection() {
     mutationFn: api.chat.runBriefing,
     onSuccess: result => {
       queryClient.invalidateQueries({ queryKey: ['chat', 'today'] });
-      queryClient.invalidateQueries({ queryKey: ['todos'] });
+      queryClient.invalidateQueries({ queryKey: ['chatTodos'] });
       setStatus(
-        `Briefing ready — ${result.todosProposed} to-do${result.todosProposed === 1 ? '' : 's'} proposed; accept them in today's chat.`
+        `Briefing ready — ${result.todosAdded} to-do${result.todosAdded === 1 ? '' : 's'} added to today's chat bar.`
       );
       setTimeout(() => setStatus(null), 5000);
     },

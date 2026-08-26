@@ -3,7 +3,7 @@ import time
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
-from backend.db.connection import get_db, row_to_dict
+from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
 from backend.todo_recurrence import (
     next_due, normalize_list, parse_priority as _parse_priority,
@@ -219,36 +219,45 @@ def list_todos():
     return jsonify(todos)
 
 
-@bp.post('/todos')
-def create_todo():
-    body = request.json or {}
+def _insert_todo_row(db, body: dict) -> tuple[str | None, str | None]:
+    """Validate and insert a permanent todos row. Returns (id, None) on success
+    or (None, error). Shared by create_todo and promote_chat_todo so there is
+    exactly one place that decides what a valid todo looks like."""
     title = (body.get('title') or '').strip()
     if not title:
-        return jsonify({'error': 'title required'}), 400
+        return None, 'title required'
     todo_list, err = normalize_list(body.get('list'))
     if err:
-        return jsonify({'error': err}), 400
+        return None, err
     notes = (body.get('notes') or '').strip() or None
     due, err = _parse_due(body.get('due'))
     if err:
-        return jsonify({'error': err}), 400
+        return None, err
     repeat, err = _parse_repeat(body.get('repeatInterval'), body.get('repeatUnit'))
     if err:
-        return jsonify({'error': err}), 400
+        return None, err
     priority, err = _parse_priority(body.get('priority'))
     if err:
-        return jsonify({'error': err}), 400
+        return None, err
 
     now = int(time.time())
     # Accept a client-supplied ULID so an offline-queued create replays
     # idempotently (INSERT OR IGNORE makes a duplicate a no-op).
     todo_id = body.get('id') or str(ULID())
-    db = get_db()
     db.execute(
         'INSERT OR IGNORE INTO todos(id, title, done, list, notes, due, repeat_interval, repeat_unit, priority, created_at, updated_at)'
         ' VALUES (?,?,0,?,?,?,?,?,?,?,?)',
         (todo_id, title, todo_list, notes, due, repeat[0], repeat[1], priority, now, now),
     )
+    return todo_id, None
+
+
+@bp.post('/todos')
+def create_todo():
+    db = get_db()
+    todo_id, err = _insert_todo_row(db, request.json or {})
+    if err:
+        return jsonify({'error': err}), 400
     db.commit()
     return jsonify({'id': todo_id}), 201
 
@@ -391,6 +400,214 @@ def delete_todo(todo_id):
     db.execute('DELETE FROM todos WHERE id=?', (todo_id,))
     db.commit()
     return jsonify({'success': True})
+
+
+
+# --- Chat to-dos (ephemeral, day-scoped items in the Chat tab's bar) ---
+
+_CHAT_TODO_COLS = (
+    'id, day_key, title, notes, due, priority, done, completed_at, created_at, updated_at'
+)
+
+MAX_CHAT_TODO_ITEMS = 10
+
+
+def _today_chat_todo_titles(db, today: str) -> set[str]:
+    """Lowercased titles already sitting in today's bar. The briefing seed uses
+    only this — not _today_taken_titles below — because its whole job is to
+    mirror the user's open todos and pending daily tasks into the bar; skipping
+    a title just because it's already an open todo would silently drop most of
+    the plan. This still prevents a forced re-run (or a same-batch repeat) from
+    inserting the same title twice."""
+    return {
+        r['title'].strip().lower()
+        for r in db.execute(
+            'SELECT title FROM chat_todos WHERE day_key=?', (today,)
+        ).fetchall()
+    }
+
+
+def _today_taken_titles(db, today: str) -> set[str]:
+    """Lowercased titles already spoken for today: open todos, pending daily
+    tasks, and today's existing chat_todos rows. Used by the live-chat add
+    paths (the bulk-add route and the add_todos tool) so a to-do added mid-
+    conversation doesn't duplicate something already tracked elsewhere."""
+    from backend.ai.briefing import _pending_daily_tasks
+
+    taken = {
+        r['title'].strip().lower()
+        for r in db.execute('SELECT title FROM todos WHERE done=0').fetchall()
+    }
+    taken |= {r['title'].strip().lower() for r in _pending_daily_tasks(db, today)}
+    taken |= {
+        r['title'].strip().lower()
+        for r in db.execute(
+            'SELECT title FROM chat_todos WHERE day_key=?', (today,)
+        ).fetchall()
+    }
+    return taken
+
+
+@bp.get('/chat-todos')
+def list_chat_todos():
+    db = get_db()
+    rows = db.execute(
+        f'SELECT {_CHAT_TODO_COLS} FROM chat_todos WHERE day_key=? ORDER BY done, created_at',
+        (_today(),),
+    ).fetchall()
+    todos = [row_to_dict(r) for r in rows]
+    for t in todos:
+        t['done'] = bool(t['done'])
+    return jsonify(todos)
+
+
+@bp.post('/chat-todos')
+def add_chat_todos():
+    """Instant, no-confirm bulk add — used by both the chat delegate's
+    add_todos tool and the nightly briefing seed. A bad item is skipped, not
+    fatal: the caller sent several at once and one bad title shouldn't cost
+    the rest."""
+    body = request.json or {}
+    items = body.get('items')
+    if not isinstance(items, list) or not items:
+        return jsonify({'error': 'items required'}), 400
+
+    db = get_db()
+    today = _today()
+    taken = _today_taken_titles(db, today)
+    now = int(time.time())
+    created = []
+    for item in items[:MAX_CHAT_TODO_ITEMS]:
+        if not isinstance(item, dict):
+            continue
+        title = (item.get('title') or '').strip()
+        if not title or title.lower() in taken:
+            continue
+        notes = (item.get('notes') or '').strip() or None
+        chat_todo_id = str(ULID())
+        db.execute(
+            'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
+            ' VALUES (?,?,?,?,NULL,3,0,?,?)',
+            (chat_todo_id, today, title, notes, now, now),
+        )
+        taken.add(title.lower())
+        row = mapping_to_dict({
+            'id': chat_todo_id, 'day_key': today, 'title': title, 'notes': notes,
+            'due': None, 'priority': 3, 'done': 0, 'completed_at': None,
+            'created_at': now, 'updated_at': now,
+        })
+        row['done'] = False
+        created.append(row)
+    db.commit()
+    return jsonify(created), 201
+
+
+def _complete_chat_todo_row(db, chat_todo_id: str, now: int) -> bool:
+    """Mark a chat to-do done and log its completion, surfaced in the Journal
+    feed the same way a permanent todo's completion is. Returns False if it
+    was already done or doesn't exist. Does not commit — caller's job."""
+    row = db.execute(
+        'SELECT title, done, notes FROM chat_todos WHERE id=?', (chat_todo_id,)
+    ).fetchone()
+    if row is None or row['done']:
+        return False
+    db.execute(
+        'UPDATE chat_todos SET done=1, completed_at=?, updated_at=? WHERE id=?',
+        (now, now, chat_todo_id),
+    )
+    _log_event(db, 'chat_todo_completed', row['title'], chat_todo_id, 'chat', row['notes'])
+    return True
+
+
+def _uncomplete_chat_todo_row(db, chat_todo_id: str, now: int) -> None:
+    """Reopen a chat to-do and retract its completion notification."""
+    db.execute(
+        'UPDATE chat_todos SET done=0, completed_at=NULL, updated_at=? WHERE id=?',
+        (now, chat_todo_id),
+    )
+    db.execute(
+        "DELETE FROM task_events WHERE kind='chat_todo_completed' AND ref_id=?",
+        (chat_todo_id,),
+    )
+
+
+@bp.patch('/chat-todos/<chat_todo_id>')
+def update_chat_todo(chat_todo_id):
+    body = request.json or {}
+    db = get_db()
+    row = db.execute(
+        'SELECT title, done, notes FROM chat_todos WHERE id=?', (chat_todo_id,)
+    ).fetchone()
+    if row is None:
+        return jsonify({'error': 'not found'}), 404
+
+    fields = []
+    values = []
+    if 'title' in body:
+        title = (body.get('title') or '').strip()
+        if not title:
+            return jsonify({'error': 'title required'}), 400
+        fields.append('title=?')
+        values.append(title)
+    if 'notes' in body:
+        fields.append('notes=?')
+        values.append((body.get('notes') or '').strip() or None)
+    if 'priority' in body:
+        priority, err = _parse_priority(body.get('priority'))
+        if err:
+            return jsonify({'error': err}), 400
+        fields.append('priority=?')
+        values.append(priority)
+    if 'due' in body:
+        due, err = _parse_due(body.get('due'))
+        if err:
+            return jsonify({'error': err}), 400
+        fields.append('due=?')
+        values.append(due)
+    # Applied after the field UPDATE below, matching update_todo's ordering.
+    completion_change = None
+    if 'done' in body:
+        completion_change = 'complete' if body['done'] else 'uncomplete'
+    if not fields and completion_change is None:
+        return jsonify({'error': 'nothing to update'}), 400
+
+    now = int(time.time())
+    if fields:
+        fields.append('updated_at=?')
+        values.extend([now, chat_todo_id])
+        db.execute(f'UPDATE chat_todos SET {", ".join(fields)} WHERE id=?', values)
+    if completion_change == 'complete':
+        _complete_chat_todo_row(db, chat_todo_id, now)
+    elif completion_change == 'uncomplete':
+        _uncomplete_chat_todo_row(db, chat_todo_id, now)
+    db.commit()
+    return jsonify({'success': True})
+
+
+@bp.delete('/chat-todos/<chat_todo_id>')
+def delete_chat_todo(chat_todo_id):
+    # No task_events log — dismissing an ephemeral item was never a notable
+    # event, same as the accept/reject cards this bar replaced.
+    db = get_db()
+    db.execute('DELETE FROM chat_todos WHERE id=?', (chat_todo_id,))
+    db.commit()
+    return jsonify({'success': True})
+
+
+@bp.post('/chat-todos/<chat_todo_id>/promote')
+def promote_chat_todo(chat_todo_id):
+    """Move a chat to-do to the permanent list: insert via the same validation
+    path create_todo uses, then remove the ephemeral row — one transaction, so
+    a rejected payload leaves the source row untouched."""
+    db = get_db()
+    if not db.execute('SELECT 1 FROM chat_todos WHERE id=?', (chat_todo_id,)).fetchone():
+        return jsonify({'error': 'not found'}), 404
+    todo_id, err = _insert_todo_row(db, request.json or {})
+    if err:
+        return jsonify({'error': err}), 400
+    db.execute('DELETE FROM chat_todos WHERE id=?', (chat_todo_id,))
+    db.commit()
+    return jsonify({'id': todo_id}), 201
 
 
 @bp.get('/events')

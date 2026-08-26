@@ -71,12 +71,35 @@ describe('stepLabel', () => {
     // Nothing is written until the user clicks the confirm card, so a step
     // list claiming otherwise is a lie they only catch by going to look.
     const label = stepLabel({
-      tool: 'propose_task',
-      arg: 'to-do "Call the dentist"',
+      tool: 'propose_calendar_event',
+      arg: 'event "Dentist"',
       ok: true,
     });
-    expect(label).toBe('Staged a to-do: to-do "Call the dentist"');
+    expect(label).toBe('Staged a calendar event: event "Dentist"');
     expect(label).not.toMatch(/saved/i);
+  });
+
+  it('says to-dos were added, never staged, since add_todos writes immediately', () => {
+    // add_todos has no `proposal` key on its event — same as
+    // create_note_to_self — so it must not read like the propose_ tools it
+    // sits alongside.
+    const label = stepLabel({
+      tool: 'add_todos',
+      arg: 'Call the dentist; Buy milk',
+      ok: true,
+    });
+    expect(label).toBe("Added to today's to-dos: Call the dentist; Buy milk");
+    expect(label).not.toMatch(/staged/i);
+  });
+
+  it('says when add_todos added nothing, and why', () => {
+    expect(
+      stepLabel({
+        tool: 'add_todos',
+        ok: false,
+        error: 'nothing new to add — already on the list',
+      })
+    ).toBe("Didn't add that — nothing new to add — already on the list");
   });
 
   it('names every proposal kind rather than falling through to the raw tool name', () => {

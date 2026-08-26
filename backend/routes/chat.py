@@ -14,9 +14,7 @@ from backend.ai.provider import chat_vision_enabled, is_ai_configured
 from backend.ai.chat_title import generate_conversation_title
 from backend.delegate import chat as delegate_chat
 from backend.delegate import runs
-from backend.todo_recurrence import (
-    normalize_list, parse_due_date, parse_priority, parse_repeat,
-)
+from backend.todo_recurrence import parse_due_date
 
 bp = Blueprint('chat', __name__, url_prefix='/api/chat')
 
@@ -448,133 +446,6 @@ def run_briefing_now():
     return jsonify(result)
 
 
-def _cross_off(db, item: dict, now: int) -> None:
-    """Cross off one plan item, completing its linked row when it has one.
-
-    An unlinked item never becomes a `todos` row — that's the whole point of the
-    daily plan — but it still logs an event so the day's work shows up in the
-    Journal feed alongside everything else that got finished."""
-    from backend.routes.tasks import (
-        _log_event, complete_daily_task, complete_todo_row,
-    )
-
-    linked_id = item.get('linkedId')
-    linked_type = item.get('linkedType')
-    if linked_id and linked_type == 'todo':
-        complete_todo_row(db, linked_id, now)
-    elif linked_id and linked_type == 'daily':
-        complete_daily_task(db, linked_id, day_key_for(now), now)
-    else:
-        _log_event(db, 'todo_completed', item['title'], None, item.get('list'), None)
-
-
-def _apply_briefing_decision(db, item: dict, decision: dict, now: int) -> bool:
-    """Resolve one plan item in place. Returns True if a todo row was inserted."""
-    from backend.routes.tasks import _parse_priority, _parse_due
-
-    action = decision.get('action')
-    if action == 'reject':
-        item['status'] = 'rejected'
-        item['resolvedAt'] = now
-        return False
-    if action == 'done':
-        _cross_off(db, item, now)
-        item['status'] = 'done'
-        item['resolvedAt'] = now
-        return False
-
-    # Already on one of the user's lists — there is nothing to add. Left pending
-    # so it can still be crossed off.
-    if item.get('linkedId'):
-        return False
-
-    # Accepting may carry inline edits from the card.
-    title = (decision.get('title') if 'title' in decision else item.get('title')) or ''
-    title = title.strip()
-    if not title:
-        return False
-    if 'priority' in decision:
-        priority, err = _parse_priority(decision.get('priority'))
-        if err:
-            priority = item.get('priority') or 3
-    else:
-        priority = item.get('priority') or 3
-    if 'due' in decision:
-        due, err = _parse_due(decision.get('due'))
-        if err:
-            due = item.get('due')
-    else:
-        due = item.get('due')
-    todo_list, err = normalize_list(decision.get('list', item.get('list')))
-    if err:
-        todo_list = 'todo'
-
-    item.update({'title': title, 'priority': priority, 'due': due, 'list': todo_list})
-
-    # Re-check for a same-titled open todo at accept time: the list may have
-    # moved on since the briefing was written. Link to it and stay pending
-    # rather than resolving the card — a twin you can cross off is more useful
-    # than a dead "already on your list" row.
-    dupe = db.execute(
-        'SELECT id, title FROM todos WHERE done=0 AND lower(title)=? AND id!=?',
-        (title.lower(), item['id']),
-    ).fetchone()
-    if dupe:
-        item['linkedType'] = 'todo'
-        item['linkedId'] = dupe['id']
-        item['linkedTitle'] = dupe['title']
-        return False
-
-    # The proposal's own id becomes the todo id, so a double-accept is a no-op.
-    db.execute(
-        'INSERT OR IGNORE INTO todos(id, title, done, list, notes, due, repeat_interval,'
-        ' repeat_unit, priority, created_at, updated_at) VALUES (?,?,0,?,?,?,?,?,?,?,?)',
-        (item['id'], title, todo_list, None, due, None, None, priority, now, now),
-    )
-    item['status'] = 'accepted'
-    item['resolvedAt'] = now
-    return True
-
-
-@bp.post('/briefing/<message_id>/todos')
-def decide_briefing_todos(message_id):
-    """Resolve items on the briefing's plan for the day: cross one off (`done`),
-    dismiss it (`reject`), or add it to the to-do list for later (`accept`,
-    optionally with inline edits). Decisions are written back into the message
-    metadata so the chat cards keep the day's record across reloads."""
-    body = request.json or {}
-    decisions = body.get('decisions')
-    if not isinstance(decisions, list) or not decisions:
-        return jsonify({'error': 'decisions required'}), 400
-
-    db = get_db()
-    row = db.execute('SELECT metadata FROM messages WHERE id=?', (message_id,)).fetchone()
-    if not row:
-        return jsonify({'error': 'not found'}), 404
-    meta = json.loads(row['metadata']) if row['metadata'] else {}
-    proposed = meta.get('proposedTodos')
-    if not isinstance(proposed, list):
-        return jsonify({'error': 'message has no proposed to-dos'}), 400
-
-    by_id = {i.get('id'): i for i in proposed if isinstance(i, dict)}
-    now = int(time.time())
-    created = 0
-    for decision in decisions:
-        if not isinstance(decision, dict):
-            continue
-        item = by_id.get(decision.get('id'))
-        # Only pending proposals are actionable — a resolved card can't flip.
-        if not item or item.get('status') != 'pending':
-            continue
-        if _apply_briefing_decision(db, item, decision, now):
-            created += 1
-
-    meta['proposedTodos'] = proposed
-    db.execute('UPDATE messages SET metadata=? WHERE id=?', (json.dumps(meta), message_id))
-    db.commit()
-    return jsonify({'proposedTodos': proposed, 'created': created})
-
-
 class _AcceptRejected(ValueError):
     """A proposal's data failed validation — 400, proposal stays pending."""
 
@@ -625,39 +496,6 @@ def _accept_calorie(db, data: dict, ctx: dict) -> dict:
     db.execute(
         'INSERT INTO calorie_logs(id, date, description, calories, created_at) VALUES (?,?,?,?,?)',
         (id, day, description, calories, now),
-    )
-    return {'id': id}
-
-
-def _accept_task(db, data: dict, ctx: dict) -> dict:
-    title = (data.get('title') or '').strip()
-    if not title:
-        raise _AcceptRejected('title required')
-    todo_list, err = normalize_list(data.get('list'))
-    if err:
-        raise _AcceptRejected(err)
-
-    # These four used to be hard-coded null/null/null/3 here, so a to-do the
-    # user had given a deadline and an urgency for landed in the list bare.
-    # `due` travels through the proposal as the YYYY-MM-DD the model wrote and
-    # becomes a timestamp only here, at the DB boundary.
-    due, err = parse_due_date(data.get('due'))
-    if err:
-        raise _AcceptRejected(err)
-    priority, err = parse_priority(data.get('priority'))
-    if err:
-        raise _AcceptRejected(err)
-    repeat, err = parse_repeat(data.get('repeatInterval'), data.get('repeatUnit'))
-    if err:
-        raise _AcceptRejected(err)
-    notes = (data.get('notes') or '').strip() or None
-
-    now = int(time.time())
-    id = str(ULID())
-    db.execute(
-        'INSERT INTO todos(id, title, done, list, notes, due, repeat_interval,'
-        ' repeat_unit, priority, created_at, updated_at) VALUES (?,?,0,?,?,?,?,?,?,?,?)',
-        (id, title, todo_list, notes, due, repeat[0], repeat[1], priority, now, now),
     )
     return {'id': id}
 
@@ -913,19 +751,17 @@ _ACCEPT_HANDLERS = {
     'food': _accept_food,
     'recipe': _accept_recipe,
     'recipe_link': _accept_recipe_link,
-    'task': _accept_task,
     'flashcards': _accept_flashcards,
 }
 
 
 @bp.post('/proposals/<message_id>/<proposal_id>')
 def resolve_proposal(message_id, proposal_id):
-    """Accept or dismiss one delegate confirm card in place — the same shape
-    as decide_briefing_todos, generalized across the delegate's proposal
-    kinds. A proposal is stamped with a stable id and 'pending' status the
-    moment the run that staged it finishes, so this is the only place one
-    ever leaves that state — surviving a reload or a dropped connection
-    exactly like the reply itself now does."""
+    """Accept or dismiss one delegate confirm card in place. A proposal is
+    stamped with a stable id and 'pending' status the moment the run that
+    staged it finishes, so this is the only place one ever leaves that state
+    — surviving a reload or a dropped connection exactly like the reply
+    itself now does."""
     body = request.json or {}
     action = body.get('action')
     if action not in ('accept', 'dismiss'):
