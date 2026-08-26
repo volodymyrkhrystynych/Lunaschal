@@ -692,6 +692,7 @@ export interface AppSettings {
   emailSyncEnabled: boolean;
   emailSyncIntervalMinutes: number;
   // Tailored-resume retention: whichever of the two clocks runs out first.
+  jobTriageEnabled: boolean;
   jobRetentionDays: number;
   jobPurgeOnRejection: boolean;
   jobRejectionGraceDays: number;
@@ -1292,9 +1293,60 @@ export interface JobAssessment {
   angle: string;
 }
 
+/** What triage decided about a posting.
+ *
+ * 'pending' is not a failure state — it is what every row shows before the
+ * model has reached it, and pending rows stay in the feed so it behaves
+ * normally when the model is off. */
+export type TriageState = 'pending' | 'kept' | 'rejected' | 'error';
+
+/** How close the posting is, as a coarse bucket rather than a score.
+ *
+ * Deliberately coarse: it groups the feed, but ordering *within* a group is
+ * still the deterministic keyword coverage, so the sort does not reshuffle
+ * between refreshes. */
+export type TriageFit = 'strong' | 'possible' | 'stretch' | '';
+
+/** Something a careful reader would resent finding out after applying. */
+export interface TriageFlag {
+  kind:
+    | 'seniority_mismatch'
+    | 'unpaid'
+    | 'commission_only'
+    | 'unclear_role'
+    | 'contract_only'
+    | 'onsite_required'
+    | 'security_clearance'
+    | 'heavy_travel'
+    | 'stack_mismatch';
+  detail: string;
+}
+
 /** A posting on the triage feed: undismissed, and with no application yet. */
 export interface FeedJob extends JobPosting {
   matchReasons: MatchReasons | null;
+  triageState: TriageState;
+  /** Why it was rejected. Always set when the state is 'rejected', so the
+   * filtered list can always explain itself. */
+  triageReason: string;
+  triageFit: TriageFit;
+  /** The condensed posting — two sentences meant to be decided from without
+   * opening the original. Empty until the model has read it. */
+  triageSummary: string;
+  triageFlags: TriageFlag[];
+  /** When the verdict was reached. Null until it has been. */
+  triageAt: string | null;
+  triageError: string | null;
+}
+
+export interface TriageStatus {
+  enabled: boolean;
+  pending: number;
+  rejected: number;
+  failed: number;
+  running: boolean;
+  current: { jobId: string; startedAt: number } | null;
+  last: { jobId: string; error: string | null; seconds: number } | null;
 }
 
 /** A resume read into profile shape, before anything is written.
@@ -3738,6 +3790,22 @@ export const api = {
     rescore: () => post<{ rescored: number }>('/api/jobs/rescore'),
 
     feed: (limit = 100) => get<FeedJob[]>(`/api/jobs/feed?limit=${limit}`),
+    /** What triage threw out. The filter discards opportunities, so it has to
+     * be reviewable — see backend/jobs/triager.py. */
+    filtered: (limit = 200) =>
+      get<FeedJob[]>(`/api/jobs/filtered?limit=${limit}`),
+    triageStatus: () => get<TriageStatus>('/api/jobs/triage/status'),
+    /** Judge one posting now. Synchronous: 3-8s against a full posting. */
+    triage: (jobId: string) =>
+      post<{ ok: boolean; state: TriageState; job: FeedJob | null }>(
+        `/api/jobs/${jobId}/triage`
+      ),
+    restoreTriage: (jobId: string) =>
+      post<FeedJob>(`/api/jobs/${jobId}/triage/restore`),
+    resetTriage: (jobId: string) =>
+      post<{ ok: boolean }>(`/api/jobs/${jobId}/triage/reset`),
+    runTriageGate: () =>
+      post<{ scanned: number; rejected: number }>('/api/jobs/triage/gate'),
 
     /** Returns as soon as the row is written — the resume is built in the
      * background by backend/jobs/queue.py. */

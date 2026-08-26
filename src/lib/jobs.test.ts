@@ -293,6 +293,13 @@ function feedJob(id: string, matchReasons: MatchReasons | null): FeedJob {
     postedAt: null,
     createdAt: '2026-08-01T00:00:00Z',
     matchReasons,
+    triageState: 'pending',
+    triageReason: '',
+    triageFit: '',
+    triageSummary: '',
+    triageFlags: [],
+    triageAt: null,
+    triageError: null,
   };
 }
 
