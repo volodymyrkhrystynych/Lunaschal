@@ -76,6 +76,30 @@ export function JobsSection() {
         </button>
 
         <div className="pt-3 border-t border-white/10 space-y-3">
+          <label className="flex items-start gap-2 text-sm text-[var(--color-text)]">
+            <input
+              type="checkbox"
+              checked={settings?.jobTriageEnabled ?? true}
+              onChange={e =>
+                updateAI.mutate({ jobTriageEnabled: e.target.checked })
+              }
+              className="mt-1"
+            />
+            <span>
+              Read and filter new postings
+              <span className="block text-xs text-[var(--color-text-muted)]">
+                A board lists every opening it has, so the feed is a whole job
+                board unless something filters it. With this on, obvious
+                non-software titles are dropped for free and the rest are read
+                once and condensed to a couple of sentences. Off leaves every
+                posting in the feed, unsummarised — nothing is deleted either
+                way, and what was filtered stays reviewable in the feed.
+              </span>
+            </span>
+          </label>
+        </div>
+
+        <div className="pt-3 border-t border-white/10 space-y-3">
           <p className="text-sm text-[var(--color-text-muted)]">
             Tailored resumes are deleted on whichever clock runs out first. The
             structured version is kept forever either way — only the rendered

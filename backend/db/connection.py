@@ -20,7 +20,7 @@ TIMESTAMP_COLS = frozenset({
     # goes through row_to_dict today — and ISO is the right shape there too if
     # it ever does, so this is a widening rather than a special case.
     'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
-    'scanned_at', 'queued_at', 'last_run_at',
+    'scanned_at', 'queued_at', 'last_run_at', 'triage_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -118,6 +118,7 @@ def init_db() -> None:
     _ensure_provider_outlook_imap(db)
     _ensure_microsoft_oauth_settings(db)
     _ensure_job_settings(db)
+    _ensure_job_triage_columns(db)
     _ensure_backup_settings(db)
     _ensure_files_settings(db)
     _ensure_llm_generation_settings(db)
@@ -973,6 +974,56 @@ def _ensure_job_settings(db: sqlite3.Connection) -> None:
         'INSERT OR IGNORE INTO job_profile (id, created_at, updated_at) VALUES (1, ?, ?)',
         (now, now),
     )
+    db.commit()
+
+
+def _ensure_job_triage_columns(db: sqlite3.Connection) -> None:
+    """Where the feed triage verdict lives.
+
+    The board adapters pull every open posting on a board, so the feed has
+    always been a whole job board with a sort applied. `backend/jobs/triage.py`
+    and `backend/ai/job_triage.py` decide what is worth showing; these columns
+    are where that decision is cached, which is the whole reason a model can
+    afford to make it — a posting is judged once, not on every sync.
+
+    `triage_state` carries no CHECK constraint. SQLite cannot ALTER one in, and
+    rebuilding the table for it would be the same bad trade that made
+    `queued_at` a column rather than a tenth `applications.status`. The states
+    are 'pending' | 'kept' | 'rejected' | 'error', enforced by the one module
+    that writes them.
+
+    Existing rows default to 'pending', which is correct: they have never been
+    triaged, and the feed shows pending rows exactly as it does today. That is
+    what keeps this migration from emptying the feed of a user who never turns
+    the model on.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(jobs)')}
+    if 'triage_state' not in cols:
+        db.execute("ALTER TABLE jobs ADD COLUMN triage_state TEXT NOT NULL DEFAULT 'pending'")
+    if 'triage_reason' not in cols:
+        db.execute("ALTER TABLE jobs ADD COLUMN triage_reason TEXT NOT NULL DEFAULT ''")
+    if 'triage_fit' not in cols:
+        db.execute("ALTER TABLE jobs ADD COLUMN triage_fit TEXT NOT NULL DEFAULT ''")
+    if 'triage_summary' not in cols:
+        db.execute("ALTER TABLE jobs ADD COLUMN triage_summary TEXT NOT NULL DEFAULT ''")
+    if 'triage_flags' not in cols:
+        db.execute('ALTER TABLE jobs ADD COLUMN triage_flags TEXT')
+    if 'triage_at' not in cols:
+        db.execute('ALTER TABLE jobs ADD COLUMN triage_at INTEGER')
+    if 'triage_error' not in cols:
+        db.execute('ALTER TABLE jobs ADD COLUMN triage_error TEXT')
+    db.commit()
+
+    # The worker scans for pending rows on every tick, and the feed filters on
+    # state. Both are hot enough on a few thousand postings to want the index.
+    db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_jobs_triage_state '
+        'ON jobs(triage_state) WHERE dismissed = 0'
+    )
+
+    settings_cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'job_triage_enabled' not in settings_cols:
+        db.execute('ALTER TABLE settings ADD COLUMN job_triage_enabled INTEGER DEFAULT 1')
     db.commit()
 
 

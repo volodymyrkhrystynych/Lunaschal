@@ -316,6 +316,31 @@ coverage is computed against a summary and understates the match. Those rows car
 and the card marks the number provisional rather than pretending it is the same measurement the
 company boards produce.
 
+#### What triage changed about that, and what it did not
+
+The reasoning above held on cost, and was wrong on scope. It assumed scoring every posting on
+**every sync**; with the verdict cached on the row, the model judges each posting **once**, and
+`sync.py` already tells added from updated. Measured against real postings on this hardware, one
+judge-and-condense call is **3–8 seconds**, so a nightly delta of new postings is a couple of
+minutes rather than hours.
+
+What was actually load-bearing in the original decision was not "no model" but "the ordering must be
+explainable and must not change between refreshes". That is kept exactly:
+
+- The model decides **membership** (is this in the feed at all) and a coarse **bucket**
+  (`strong`/`possible`/`stretch`) that groups it.
+- The **order within a bucket is still `keyword_report` coverage** — deterministic, computed at
+  sync, unchanged.
+
+A bucket is stable across re-runs in the way a 0–100 model score would not be, so the feed does not
+reshuffle while it is being read. `ai/job_match.py` is untouched and still answers the different,
+later question — what should this application lead with — on demand.
+
+The thing that forced this was that filtering was never optional: a board API takes a slug and
+returns _every_ opening the company has. Without triage the feed is a whole job board with a sort
+applied, which is what the first real board turned out to be — 74 postings from a marketing agency,
+59 of which are caught for free by `triage.py`'s title gate before any model call happens.
+
 ### Company directories, and why the resolver replaced the slug field
 
 Adzuna's results turned out to be poor in practice, and the better workflow is

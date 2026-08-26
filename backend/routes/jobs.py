@@ -16,7 +16,8 @@ from backend.ai import job_match, priority
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.jobs import (
     build, ingest, linker, profile as profile_mod, queue as queue_mod, render,
-    resolve, resume_import, retention, sources, storage, sync, tailor, urlmatch,
+    resolve, resume_import, retention, sources, storage, sync, tailor,
+    triager, urlmatch,
 )
 
 bp = Blueprint('jobs', __name__, url_prefix='/api/jobs')
@@ -1214,9 +1215,16 @@ def rescore():
 def job_feed():
     """The triage feed: undismissed postings with no application yet.
 
-    Ordered by score, unscored last. Postings that already have an application
-    are excluded because they have left triage — they live in the pipeline now,
-    and showing them here would offer Queue on something already queued.
+    Rejected postings are excluded; **pending ones are not**. That is what
+    keeps the feed working when the model is off or the triage backlog has not
+    drained — a row nobody has judged shows exactly as it did before this
+    feature existed, rather than the feed silently emptying.
+
+    Ordering is the fit bucket first, then the deterministic keyword score
+    within it. The model chooses the bucket but never the order inside one:
+    a coarse grouping is stable between refreshes in a way a model-produced
+    0-100 score would not be, which is the property `job_match.py` set out to
+    protect.
     """
     db = get_db()
     limit = min(int(request.args.get('limit') or 100), 500)
@@ -1224,26 +1232,116 @@ def job_feed():
         """
         SELECT j.* FROM jobs j
         LEFT JOIN applications a ON a.job_id = j.id
-        WHERE j.dismissed = 0 AND a.id IS NULL
-        ORDER BY j.match_score IS NULL, j.match_score DESC, j.posted_at DESC,
+        WHERE j.dismissed = 0 AND a.id IS NULL AND j.triage_state != 'rejected'
+        ORDER BY CASE j.triage_fit
+                     WHEN 'strong' THEN 0 WHEN 'possible' THEN 1
+                     WHEN 'stretch' THEN 2 ELSE 3 END,
+                 j.match_score IS NULL, j.match_score DESC, j.posted_at DESC,
                  j.created_at DESC
         LIMIT ?
         """,
         (limit,),
     ).fetchall()
 
-    feed = []
-    for row in rows:
-        item = row_to_dict(row)
-        try:
-            item['matchReasons'] = json.loads(row['match_reasons']) if row['match_reasons'] else None
-        except ValueError:
-            item['matchReasons'] = None
-        # The description is the largest column by far and the card shows only
-        # a few lines of it; sending all of it for 100 postings is megabytes.
-        item['description'] = (row['description'] or '')[:600]
-        feed.append(item)
+    feed = [_feed_item(row) for row in rows]
     return jsonify(feed)
+
+
+def _feed_item(row) -> dict:
+    item = row_to_dict(row)
+    try:
+        item['matchReasons'] = json.loads(row['match_reasons']) if row['match_reasons'] else None
+    except ValueError:
+        item['matchReasons'] = None
+    try:
+        item['triageFlags'] = json.loads(row['triage_flags']) if row['triage_flags'] else []
+    except ValueError:
+        item['triageFlags'] = []
+    # The description is the largest column by far and the card shows only a
+    # few lines of it; sending all of it for 100 postings is megabytes. Once a
+    # posting has been triaged the card shows `triageSummary` instead, and this
+    # is only the fallback for a row still waiting on a verdict.
+    item['description'] = (row['description'] or '')[:600]
+    return item
+
+
+@bp.get('/filtered')
+def filtered_jobs():
+    """What triage threw out, so it can be audited.
+
+    This route is the reason rejection is a state rather than a delete. A
+    filter that discards job opportunities has to be reviewable, or a bad rule
+    is invisible until the search is over — the lesson the backfill's bogus
+    "Software" company taught, where sampling by recency hid a row that had
+    quietly absorbed 144 email links.
+    """
+    db = get_db()
+    limit = min(int(request.args.get('limit') or 200), 1000)
+    rows = db.execute(
+        "SELECT * FROM jobs WHERE triage_state IN ('rejected', 'error')"
+        ' ORDER BY triage_at DESC, created_at DESC LIMIT ?',
+        (limit,),
+    ).fetchall()
+    return jsonify([_feed_item(row) for row in rows])
+
+
+@bp.post('/<job_id>/triage/restore')
+def restore_job(job_id):
+    """Put a wrongly-rejected posting back in the feed."""
+    db = get_db()
+    if not triager.restore(db, job_id):
+        return jsonify({'error': 'Not found, or not rejected.'}), 404
+    row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+    return jsonify(_feed_item(row))
+
+
+@bp.post('/<job_id>/triage')
+def triage_job(job_id):
+    """Judge one posting now, synchronously.
+
+    Interactive, so it runs inline rather than through the worker — the user is
+    looking at the result. Measured at 3-8 seconds against a full posting.
+    """
+    token = priority.begin('job-triage')
+    try:
+        result = triager.process_one(job_id)
+    finally:
+        priority.end(token)
+    if not result['ok'] and result.get('error') == 'Not found':
+        return jsonify({'error': 'Not found'}), 404
+    row = get_db().execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
+    return jsonify({**result, 'job': _feed_item(row) if row else None})
+
+
+@bp.post('/<job_id>/triage/reset')
+def reset_job_triage(job_id):
+    """Send a posting back through triage — the explicit retry after an error."""
+    db = get_db()
+    if not triager.reset_pending(db, job_id):
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'ok': True})
+
+
+@bp.get('/triage/status')
+def triage_status():
+    db = get_db()
+    return jsonify({
+        'enabled': triager.is_enabled(db),
+        'pending': triager.pending_count(db),
+        'rejected': db.execute(
+            "SELECT COUNT(*) c FROM jobs WHERE triage_state='rejected'"
+        ).fetchone()['c'],
+        'failed': db.execute(
+            'SELECT COUNT(*) c FROM jobs WHERE triage_error IS NOT NULL'
+        ).fetchone()['c'],
+        **triager.status(),
+    })
+
+
+@bp.post('/triage/gate')
+def run_triage_gate():
+    """Apply the free title gate to everything pending. No model."""
+    return jsonify(triager.run_gate_sweep(get_db()))
 
 
 @bp.post('/<job_id>/dismiss')

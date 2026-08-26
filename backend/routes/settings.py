@@ -129,6 +129,7 @@ def get_settings():
         'weatherDefaultLabel': s.get('weather_default_label') or '',
         # Tailored-resume retention. Defaults repeated from
         # backend/jobs/retention.py for a settings row predating the columns.
+        'jobTriageEnabled': bool(s.get('job_triage_enabled', 1)),
         'jobRetentionDays': s.get('job_retention_days') or 180,
         'jobPurgeOnRejection': bool(s.get('job_purge_on_rejection', 1)),
         'jobRejectionGraceDays': (
@@ -193,6 +194,7 @@ def update_ai():
         'weatherDefaultLat': 'weather_default_lat',
         'weatherDefaultLon': 'weather_default_lon',
         'weatherDefaultLabel': 'weather_default_label',
+        'jobTriageEnabled': 'job_triage_enabled',
         'jobRetentionDays': 'job_retention_days',
         'jobPurgeOnRejection': 'job_purge_on_rejection',
         'jobRejectionGraceDays': 'job_rejection_grace_days',

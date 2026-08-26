@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type FeedJob } from '@/hooks/api';
 import {
+  FIT_LABELS,
+  FLAG_LABELS,
   formatSalary,
   isPartialScore,
   matchBand,
@@ -27,6 +29,11 @@ export function Feed() {
   const { data: queue } = useQuery({
     queryKey: ['jobs', 'queueStatus'],
     queryFn: api.jobs.queueStatus,
+    refetchInterval: 15_000,
+  });
+  const { data: triage } = useQuery({
+    queryKey: ['jobs', 'triageStatus'],
+    queryFn: api.jobs.triageStatus,
     refetchInterval: 15_000,
   });
 
@@ -66,6 +73,15 @@ export function Feed() {
         </p>
       )}
 
+      {triage && triage.pending > 0 && (
+        <div className="rounded-lg border border-white/10 bg-[var(--color-surface)] p-3 text-xs text-[var(--color-text-muted)]">
+          {triage.pending} posting{triage.pending === 1 ? '' : 's'} still being
+          read
+          {triage.running && ' · one being read now'}
+          {' — they show unsummarised until then.'}
+        </div>
+      )}
+
       {promising.length > 0 && (
         <Section label="Worth a look" jobs={promising} />
       )}
@@ -75,6 +91,74 @@ export function Feed() {
           jobs={rest}
         />
       )}
+
+      <FilteredSection count={triage?.rejected ?? 0} />
+    </div>
+  );
+}
+
+/**
+ * What triage threw out.
+ *
+ * Collapsed, but present. This filter discards job opportunities on a rule the
+ * user never sees, so it has to be reviewable — a bad rule is otherwise
+ * invisible until the search is over.
+ */
+function FilteredSection({ count }: { count: number }) {
+  const [open, setOpen] = useState(false);
+  const { data: filtered } = useQuery({
+    queryKey: ['jobs', 'filtered'],
+    queryFn: () => api.jobs.filtered(),
+    enabled: open,
+  });
+
+  if (count === 0) return null;
+
+  return (
+    <div className="space-y-2 pt-2">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="text-xs uppercase tracking-wide text-[var(--color-text-muted)] hover:text-[var(--color-text)] min-h-[36px]"
+      >
+        {open ? '▾' : '▸'} Filtered out ({count})
+      </button>
+      {open && (
+        <div className="space-y-2">
+          {(filtered ?? []).map(job => (
+            <FilteredCard key={job.id} job={job} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilteredCard({ job }: { job: FeedJob }) {
+  const queryClient = useQueryClient();
+  const restore = useMutation({
+    mutationFn: () => api.jobs.restoreTriage(job.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+  });
+
+  return (
+    <div className="rounded border border-white/5 bg-[var(--color-surface)] px-3 py-2 flex items-start gap-2">
+      <div className="min-w-0 flex-1">
+        <p className="text-xs text-[var(--color-text)] truncate">{job.title}</p>
+        <p className="text-xs text-[var(--color-text-muted)] truncate">
+          {job.company}
+          {job.triageReason && ` · ${job.triageReason}`}
+          {job.triageError && ` · failed: ${job.triageError}`}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => restore.mutate()}
+        disabled={restore.isPending}
+        className="shrink-0 min-h-[36px] px-2 rounded text-xs border border-white/20 bg-white/5 hover:bg-white/10 disabled:opacity-50"
+      >
+        Restore
+      </button>
     </div>
   );
 }
@@ -211,8 +295,37 @@ function FeedCard({ job }: { job: FeedJob }) {
         </p>
       </div>
 
-      {/* The coverage bar is the whole point of the card: it is computed, free,
-          and it is what the feed is ordered by. */}
+      {/* The condensed posting. This is what the card is *for*: two sentences
+          meant to be decided from without opening the original, which is the
+          whole reason a model reads every posting at sync time. */}
+      {job.triageSummary && (
+        <p className="text-xs text-[var(--color-text)] leading-relaxed">
+          {job.triageSummary}
+        </p>
+      )}
+
+      {job.triageFlags.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {job.triageFlags.map(flag => (
+            <span
+              key={flag.kind}
+              title={flag.detail}
+              className="px-1.5 py-0.5 rounded text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/30"
+            >
+              {FLAG_LABELS[flag.kind] ?? flag.kind}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {job.triageState === 'pending' && (
+        <p className="text-xs text-[var(--color-text-muted)] italic">
+          Not read yet
+        </p>
+      )}
+
+      {/* The coverage bar stays, and still orders the feed within a bucket: it
+          is computed, free, and stable between refreshes. */}
       <div className="flex items-center gap-2">
         <div className="flex-1 h-1.5 rounded bg-white/10 overflow-hidden">
           <div
@@ -224,6 +337,11 @@ function FeedCard({ job }: { job: FeedJob }) {
           {percent == null ? 'unscored' : `${percent}%`}
           {isPartialScore(job.matchReasons) && '*'}
         </span>
+        {job.triageFit && (
+          <span className="text-xs text-[var(--color-text-muted)]">
+            {FIT_LABELS[job.triageFit]}
+          </span>
+        )}
       </div>
 
       {gaps.length > 0 && (

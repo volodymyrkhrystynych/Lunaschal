@@ -10,6 +10,7 @@ import type {
   MatchReasons,
   ResumeImportPreview,
   TailoredContent,
+  TriageFlag,
 } from '@/hooks/api';
 
 export const STATUS_LABELS: Record<ApplicationStatus, string> = {
@@ -237,10 +238,16 @@ export function isPartialScore(reasons: MatchReasons | null): boolean {
 }
 
 /**
- * Feed cards grouped into "worth a look" and the rest.
+ * Feed cards grouped by how close the posting is.
  *
- * The split is presentational only — the order inside each group is the order
- * the server sent, which is the deterministic score. Nothing here re-sorts.
+ * The grouping is the model's (a coarse bucket), the order *inside* each group
+ * is the server's — which is the deterministic keyword score. That split is
+ * deliberate: a bucket is stable between refreshes in a way a model-produced
+ * number is not, so the feed never reshuffles while it is being read.
+ *
+ * Untriaged postings fall into `rest` rather than being hidden. With the model
+ * off, every row is untriaged and the feed reads exactly as it did before
+ * triage existed.
  */
 export function splitFeed(
   jobs: FeedJob[],
@@ -249,12 +256,41 @@ export function splitFeed(
   const promising: FeedJob[] = [];
   const rest: FeedJob[] = [];
   for (const job of jobs) {
+    if (job.triageFit) {
+      if (job.triageFit === 'strong' || job.triageFit === 'possible') {
+        promising.push(job);
+      } else {
+        rest.push(job);
+      }
+      continue;
+    }
+    // Never triaged: fall back to the keyword score, as before.
     const percent = matchPercent(job.matchReasons);
     if (percent != null && percent >= threshold) promising.push(job);
     else rest.push(job);
   }
   return { promising, rest };
 }
+
+/** Human labels for the flags `ai/job_triage.py` may raise. */
+export const FLAG_LABELS: Record<TriageFlag['kind'], string> = {
+  seniority_mismatch: 'Seniority mismatch',
+  unpaid: 'Unpaid',
+  commission_only: 'Commission only',
+  unclear_role: 'Vague role',
+  contract_only: 'Contract only',
+  onsite_required: 'On-site required',
+  security_clearance: 'Clearance required',
+  heavy_travel: 'Heavy travel',
+  stack_mismatch: 'Different stack',
+};
+
+/** Labels for the fit bucket, said the way a person would say it. */
+export const FIT_LABELS: Record<string, string> = {
+  strong: 'Worth applying',
+  possible: 'Worth a look',
+  stretch: 'A stretch',
+};
 
 /**
  * What a reviewed resume import currently adds up to.
