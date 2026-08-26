@@ -72,28 +72,110 @@ human, and `withdrawn` is never overwritten.
 
 ## Discovery and the feed
 
-**The score is not the model's.** `keywords.py` computes coverage
-deterministically at sync time, for every posting, with no model call — so a
-200-job sync is free and the feed is sorted the moment it lands. `ai/job_match.py`
-writes one advisory paragraph, on demand, when you open a posting, and it is
-handed the keyword report as fact. It **never moves the sort order**: a
-stable, explainable ordering beats a cleverer one that changes between
-refreshes, and hours of GPU spent scoring postings you will never read is the
-alternative.
+**The board gives you everything, so something has to filter.** The adapters
+fetch every open posting a board has — a company with 400 openings puts 400
+rows in `jobs`. There is no title filter at the source and no way to ask for
+one: Greenhouse, Lever and Ashby take a slug and nothing else. Only Adzuna
+accepts a query (`what`/`where`), and that is the aggregator filtering server
+side. So the feed was a whole job board with an ordering applied, and the
+filtering happens here instead.
 
-Two upsert rules in `sync.py` keep the feed usable, and both are cheap now and
-expensive to discover later:
+### The triage cascade
+
+Three layers, each only passing on what it cannot decide:
+
+| layer            | cost                   | file                   |
+| ---------------- | ---------------------- | ---------------------- |
+| title gate       | free, every tick       | `triage.py` (pure)     |
+| body fetch       | Adzuna rows only       | `ingest.fetch_posting` |
+| judge + condense | one model call, cached | `ai/job_triage.py`     |
+
+**The gate is exclusion-only and fails open.** An inclusion whitelist for
+"developer" and "AI" drops exactly the tangential roles worth seeing — Forward
+Deployed Engineer, Solutions Architect, Developer Advocate. An exclusion list
+drops none of them. Anything the gate is unsure about survives to the layer
+qualified to judge it, the same instinct that makes `urlmatch.py` resolve
+ambiguity to None.
+
+Its three tiers exist because rescue-first alone is not enough. A **hard**
+phrase settles a title outright; a **software signal** rescues an ambiguous one
+("Clinical Data Scientist", "Warehouse Automation Engineer"); a **soft** phrase
+rejects only what the signal did not vouch for. A phrase belongs in the hard
+tier **only when the phrase itself collides with a software signal** — "Security
+Guard" contains 'security', "Data Entry Clerk" contains 'data'. Putting anything
+else there is how `seo` briefly rejected "Sr. Full Stack Engineer (SEO)", a
+posting the user had actually applied to.
+
+**Judging and condensing are one model call, not two.** Both need the whole
+posting read, and that prefill is the expensive part. Measured at 3–8 seconds
+against a 10,000-character description, which is what makes judging every new
+posting affordable at all — and it is why there is no title-only model pass
+between the gate and the judge: at that speed the extra layer would only add a
+chance to discard a tangential role on the weakest available signal.
+
+**What is computable is computed first and handed over as fact.** `triage.py`
+extracts the stated seniority and the years of experience demanded, and flags
+the case where they disagree — a "Junior" title wanting ten years. That is a
+regex result, not an opinion, so `normalize_result` adds the flag even when the
+model failed to raise it. `missingMustHaves` is `enum`-bound to the terms
+`keyword_report` already returned as missing, so the model cannot invent a
+requirement the posting never stated.
+
+**Two conditions decide whether a posting is worth a model call at all**, both
+learned from the live database, where 1,296 of 1,370 pending rows were neither:
+it must have a body (the backfilled rows were rebuilt from confirmation mail,
+which never carried the posting — judging one means judging its title), and
+nothing may have been applied to it yet (those have left triage, and the feed
+excludes them for the same reason). `_TRIAGEABLE` is one constant shared by the
+selector and the counter, so the status panel can never disagree with the
+worker.
+
+**A rejection is a state, not a delete, and not `dismissed`.** `dismissed` means
+_the user_ said no; conflating the two destroys the record of who decided.
+Rejected rows stay in the table and are reachable at `GET /filtered`, because a
+filter that discards job opportunities on a rule the user never sees has to be
+reviewable — the lesson the backfill's bogus "Software" company taught, where
+sampling by recency hid a row that had absorbed 144 email links.
+
+**The feed shows `kept` and `pending`; only `rejected` is excluded.** So with
+the model off, or the backlog undrained, the feed behaves exactly as it did
+before triage existed rather than silently emptying.
+
+### The score, and what the model is allowed to move
+
+`keywords.py` computes coverage deterministically at sync time, for every
+posting, with no model call — so a 200-job sync is free and the feed is sorted
+the moment it lands.
+
+Triage **changed one thing** about the rule that the model never moves the sort
+order, and it is worth being precise about what: the model now chooses a coarse
+**bucket** (`strong`/`possible`/`stretch`) that groups the feed, and decides
+what is in the feed at all. It still does not order anything — within a bucket
+the order is the deterministic keyword score. A bucket is stable between
+refreshes in the way the original rule was protecting; a model-produced 0–100
+score would not be.
+
+`ai/job_match.py` is untouched and still narrates one posting on demand when you
+open it, answering "what should this application lead with" — a different
+question from "should this be on the screen", and only worth asking once you are
+already interested.
+
+Two upsert rules in `sync.py` keep the feed usable, and now a third:
 
 - **A re-sync never clears `dismissed`.** Boards re-list the same posting every
   night. A feed that makes you reject the same job twice is one you stop opening.
 - **A re-sync never touches `created_at`**, which is what "new since yesterday"
   measures from.
+- **A re-sync only re-triages a posting whose description actually changed.**
+  Boards re-list byte-identical text nightly; without this the model would spend
+  every night reproducing yesterday's verdicts. But a genuinely rewritten
+  posting _is_ re-judged, or a stale summary describes a job it no longer is.
 
-**Adzuna's `description` is a truncated snippet, not the posting.** Its
-coverage number is therefore computed against a summary and understates the
-match, so those rows carry `partial: true` in `match_reasons` and the card
-marks the number provisional. Presenting it as the same measurement the company
-boards produce would quietly mis-rank the feed.
+**Adzuna's `description` is a truncated snippet, not the posting.** Its coverage
+number is therefore computed against a summary and understates the match, so
+those rows carry `partial: true` in `match_reasons` and the card marks the
+number provisional. Triage fetches the real body before judging one, since
+summarising a snippet produces a summary of a summary.
 
 Board slugs are user input that lands in a URL path, so `sources/base.py`'s
 `clean_slug` validates them to `[A-Za-z0-9_-]+`. That is the one
@@ -233,10 +315,12 @@ touches only `resume_versions` and `applications`, and a test pins that.
 | `sources/`         | one adapter per board → normalized dicts. No DB, no model                |
 | `resolve.py`       | careers page URL → which ATS + slug, verified against the API            |
 | `sync.py`          | saved searches → `jobs` rows, scored inline                              |
+| `triage.py`        | pure: the title gate, stated seniority, years demanded                   |
+| `triager.py`       | applies triage to the DB: the free sweep + the model worker              |
 | `queue.py`         | the single-slot resume worker behind the phone's Queue button            |
 | `linker.py`        | applies `linkage.py` to the database                                     |
 | `urlmatch.py`      | pure: is this browser tab that posting? Declines on ambiguity            |
-| `scheduler.py`     | linkage + sync + drain every tick, purge daily in 07:00–08:00            |
+| `scheduler.py`     | linkage + sync + gate + both drains every tick, purge daily 07:00–08:00  |
 | `storage.py`       | `IdScopedStorage('JOBS_ROOT', './data/jobs')`                            |
 | `backfill.py`      | confirmation mail → applications, for a search that predates the feature |
 
