@@ -76,25 +76,23 @@ def test_an_ordinary_message_runs_no_tools_at_all(monkeypatch, answered):
 def test_a_proposal_tool_runs_on_this_turn_and_stages_a_card(monkeypatch, answered):
     """It used to take a delegate round-trip to get here, and the detail the
     user gave had to survive being paraphrased into a task string on the way."""
-    _decides(monkeypatch, [_call('propose_task', {
-        'title': 'Book the flights', 'due': '2026-08-14', 'priority': 5,
+    _decides(monkeypatch, [_call('propose_calendar_event', {
+        'title': 'Book the flights', 'date': '2026-08-14',
     })])
     events = _drain()
 
     payload = events[-1][1]
-    assert payload['proposals'] == [{
-        'kind': 'task',
-        'data': {'title': 'Book the flights', 'list': 'todo', 'due': '2026-08-14',
-                 'priority': 5, 'notes': None, 'repeatInterval': None,
-                 'repeatUnit': None},
-    }]
-    assert payload['steps'][0]['tool'] == 'propose_task'
+    assert payload['proposals'][0]['kind'] == 'calendar'
+    assert payload['proposals'][0]['data']['title'] == 'Book the flights'
+    assert payload['steps'][0]['tool'] == 'propose_calendar_event'
 
 
 def test_the_answering_turn_is_told_the_card_is_not_saved(monkeypatch, answered):
     """A reply that says "added that for you" over an unconfirmed card is worse
     than not offering at all."""
-    _decides(monkeypatch, [_call('propose_task', {'title': 'Buy milk'})])
+    _decides(monkeypatch, [_call('propose_calendar_event', {
+        'title': 'Dentist appointment', 'date': '2026-08-14',
+    })])
     _drain()
 
     tool_message = next(m for m in answered['messages'] if m['role'] == 'tool')
@@ -102,19 +100,21 @@ def test_the_answering_turn_is_told_the_card_is_not_saved(monkeypatch, answered)
 
 
 def test_several_tool_calls_on_one_turn_all_run(monkeypatch, answered):
-    """"add buy milk, and remind me about the Dave thing" is one card and one
-    question. The old code kept the first delegate call and dropped the rest."""
+    """"add this to my calendar, and remind me about the Dave thing" is one
+    card and one question. The old code kept the first delegate call and
+    dropped the rest."""
     _decides(monkeypatch, [
-        _call('propose_task', {'title': 'Buy milk'}, call_id='c1'),
+        _call('propose_calendar_event',
+              {'title': 'Dentist appointment', 'date': '2026-08-14'}, call_id='c1'),
         _call('ask_user', {'question': 'When is the Dave thing?'}, call_id='c2'),
     ])
     events = _drain()
 
     payload = events[-1][1]
-    assert [s['tool'] for s in payload['steps']] == ['propose_task', 'ask_user']
+    assert [s['tool'] for s in payload['steps']] == ['propose_calendar_event', 'ask_user']
     # Asking never cancels an unrelated card, and never adds one of its own.
     assert len(payload['proposals']) == 1
-    assert payload['proposals'][0]['data']['title'] == 'Buy milk'
+    assert payload['proposals'][0]['data']['title'] == 'Dentist appointment'
     assert len([m for m in answered['messages'] if m['role'] == 'tool']) == 2
 
 
@@ -216,7 +216,7 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
 
     assert seen['max_tokens'] == delegate_chat.DECISION_MAX_TOKENS
     offered = {t['function']['name'] for t in seen['tools']}
-    assert offered == {'delegate', 'propose_task', 'propose_calendar_event',
+    assert offered == {'delegate', 'add_todos', 'propose_calendar_event',
                        'propose_calorie_log', 'propose_food_log', 'propose_recipe',
                        'draft_flashcard', 'propose_flashcards',
                        'create_note_to_self', 'ask_user'}

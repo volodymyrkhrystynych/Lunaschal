@@ -430,6 +430,28 @@ CREATE TABLE IF NOT EXISTS task_events (
 
 CREATE INDEX IF NOT EXISTS idx_task_events_created ON task_events(created_at);
 
+-- Day-scoped, ephemeral to-dos shown in the Chat tab's bar above the input
+-- box. Both the nightly briefing (backend/briefing_job.py) and the chat
+-- delegate's `add_todos` tool write here directly and instantly, with no
+-- accept step. `day_key` scopes "today" the same way backend/day_boundary.py's
+-- day_key_for() scopes the daily chat conversation — a new day is just a
+-- fresh query, nothing here is purged. "Send to permanent" moves a row into
+-- `todos` (backend/routes/tasks.py's promote_chat_todo) and deletes it here.
+CREATE TABLE IF NOT EXISTS chat_todos (
+    id TEXT PRIMARY KEY,
+    day_key TEXT NOT NULL,
+    title TEXT NOT NULL,
+    notes TEXT,
+    due INTEGER,
+    priority INTEGER NOT NULL DEFAULT 3,
+    done INTEGER NOT NULL DEFAULT 0,
+    completed_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_todos_day_key ON chat_todos(day_key);
+
 CREATE TABLE IF NOT EXISTS curated_tags (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,

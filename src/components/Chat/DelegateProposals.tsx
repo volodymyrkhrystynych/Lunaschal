@@ -1,16 +1,14 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type DelegateProposalRecord } from '../../hooks/api';
-import { PRIORITY_LABELS } from '../../lib/todos';
 
 interface Props {
   messageId: string;
   proposals: DelegateProposalRecord[];
 }
 
-// Same idea as BriefingTodos.tsx's STATUS_LABEL: once a card is resolved it
-// collapses to one quiet line rather than disappearing, so the transcript
-// keeps a record of what actually happened.
+// Once a card is resolved it collapses to one quiet line rather than
+// disappearing, so the transcript keeps a record of what actually happened.
 function resolvedLabel(p: DelegateProposalRecord): string {
   if (p.status === 'dismissed') return 'Dismissed';
   switch (p.kind) {
@@ -22,8 +20,6 @@ function resolvedLabel(p: DelegateProposalRecord): string {
       return p.result?.calorieLogId
         ? 'Saved to your food log, with calories'
         : 'Saved to your food log';
-    case 'task':
-      return 'Added to tasks';
     case 'recipe':
       return 'Saved to your recipes';
     case 'recipe_link':
@@ -39,7 +35,6 @@ const HEADLINE: Record<string, string> = {
   calendar: 'Save as calendar event?',
   calorie: 'Log calories?',
   food: 'Add to your food log?',
-  task: 'Add to your tasks?',
   recipe: 'Save this recipe?',
   recipe_link: 'Link this meal to that recipe?',
   flashcards: 'Generate flashcards?',
@@ -49,7 +44,6 @@ const ACCEPT_LABEL: Record<string, string> = {
   calendar: 'Save',
   calorie: 'Log',
   food: 'Log Meal',
-  task: 'Add',
   recipe: 'Save',
   recipe_link: 'Link',
   flashcards: 'Queue Cards',
@@ -59,7 +53,6 @@ const ACCEPT_PENDING_LABEL: Record<string, string> = {
   calendar: 'Saving...',
   calorie: 'Logging...',
   food: 'Logging...',
-  task: 'Adding...',
   recipe: 'Saving...',
   recipe_link: 'Linking...',
   flashcards: 'Generating...',
@@ -110,86 +103,6 @@ function ProposalForm({
   set: (patch: Record<string, unknown>) => void;
 }) {
   switch (kind) {
-    case 'task':
-      return (
-        <div className="space-y-1.5">
-          <input
-            aria-label="Title"
-            value={str(data, 'title')}
-            onChange={e => set({ title: e.target.value })}
-            className={`${fieldClass} w-full`}
-          />
-          <input
-            aria-label="Notes"
-            value={str(data, 'notes')}
-            onChange={e => set({ notes: e.target.value })}
-            placeholder="More information…"
-            className={`${fieldClass} w-full text-xs`}
-          />
-          <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-            <Field label="Due">
-              <input
-                type="date"
-                value={str(data, 'due')}
-                onChange={e => set({ due: e.target.value || null })}
-                className={fieldClass}
-              />
-            </Field>
-            <Field label="Priority">
-              <select
-                value={typeof data.priority === 'number' ? data.priority : 3}
-                onChange={e => set({ priority: Number(e.target.value) })}
-                className={fieldClass}
-              >
-                {Object.entries(PRIORITY_LABELS).map(([value, label]) => (
-                  <option key={value} value={value}>
-                    {value} — {label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="List">
-              <select
-                value={str(data, 'list') || 'todo'}
-                onChange={e => set({ list: e.target.value })}
-                className={fieldClass}
-              >
-                <option value="todo">To-do</option>
-                <option value="chores">Chores</option>
-                <option value="archive">Archive</option>
-              </select>
-            </Field>
-            <Field label="Every">
-              <input
-                aria-label="Repeat interval"
-                type="number"
-                min={1}
-                value={str(data, 'repeatInterval')}
-                onChange={e =>
-                  set({
-                    repeatInterval: e.target.value
-                      ? Number(e.target.value)
-                      : null,
-                  })
-                }
-                placeholder="—"
-                className={`${fieldClass} w-16`}
-              />
-              <select
-                aria-label="Repeat unit"
-                value={str(data, 'repeatUnit') || 'week'}
-                onChange={e => set({ repeatUnit: e.target.value })}
-                className={fieldClass}
-              >
-                <option value="day">days</option>
-                <option value="week">weeks</option>
-                <option value="month">months</option>
-              </select>
-            </Field>
-          </div>
-        </div>
-      );
-
     case 'calendar': {
       const allDay = data.allDay === true;
       return (

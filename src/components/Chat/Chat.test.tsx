@@ -16,6 +16,7 @@ vi.mock('../../hooks/api', () => ({
     settings: { get: vi.fn() },
     learning: { generateFromNote: vi.fn() },
     notes: { due: vi.fn().mockResolvedValue([]) },
+    chatTodos: { list: vi.fn().mockResolvedValue([]) },
   },
 }));
 
@@ -180,15 +181,15 @@ describe('delegate steps', () => {
     await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
 
     stream.push({
-      tool: 'propose_task',
-      arg: 'to-do "Call the dentist"',
+      tool: 'propose_calendar_event',
+      arg: 'event "Dentist"',
       ok: true,
     });
     fireEvent.click(await screen.findByText(/1 step so far/));
 
     // Nothing is written until the user clicks the confirm card below, and a
     // step list claiming otherwise is a lie they only catch by going to look.
-    const label = await screen.findByText(/Staged a to-do/);
+    const label = await screen.findByText(/Staged a calendar event/);
     expect(label.textContent).not.toMatch(/saved/i);
   });
 });

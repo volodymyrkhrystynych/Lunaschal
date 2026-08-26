@@ -21,6 +21,7 @@ vi.mock('../../hooks/api', () => ({
       deny: vi.fn(),
     },
     notes: { due: vi.fn().mockResolvedValue([]) },
+    chatTodos: { list: vi.fn().mockResolvedValue([]) },
   },
 }));
 
@@ -161,32 +162,32 @@ describe('delegate proposals are durable confirm cards', () => {
       conversationWithProposals([
         {
           id: 'p1',
-          kind: 'task',
+          kind: 'calendar',
           status: 'pending',
-          data: { title: 'call the dentist' },
+          data: { title: 'Dentist appointment', date: '2026-08-05' },
         },
       ]) as never
     );
     vi.mocked(api.chat.resolveProposal).mockResolvedValue({
       proposal: {
         id: 'p1',
-        kind: 'task',
+        kind: 'calendar',
         status: 'accepted',
         data: {},
-        result: { id: 'task1' },
+        result: { id: 'cal1' },
       },
     } as never);
 
     renderChat();
-    await screen.findByText('Add to your tasks?');
-    fireEvent.click(screen.getByText('Add'));
+    await screen.findByText('Save as calendar event?');
+    fireEvent.click(screen.getByText('Save'));
 
     await waitFor(() =>
       expect(api.chat.resolveProposal).toHaveBeenCalledWith(
         'm-assistant',
         'p1',
         'accept',
-        { title: 'call the dentist' }
+        { title: 'Dentist appointment', date: '2026-08-05' }
       )
     );
   });
@@ -268,9 +269,9 @@ describe('delegate proposals are durable confirm cards', () => {
             proposals: [
               {
                 id: 'p1',
-                kind: 'task',
+                kind: 'calendar',
                 status: 'pending',
-                data: { title: 'call the dentist' },
+                data: { title: 'Dentist appointment', date: '2026-08-05' },
               },
             ],
           }),
@@ -303,7 +304,7 @@ describe('delegate proposals are durable confirm cards', () => {
 
     renderChat();
 
-    expect(await screen.findByText('Add to your tasks?')).toBeTruthy();
+    expect(await screen.findByText('Save as calendar event?')).toBeTruthy();
     expect(screen.getByText("It's 8am.")).toBeTruthy();
   });
 

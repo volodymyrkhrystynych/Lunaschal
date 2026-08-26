@@ -3,7 +3,12 @@
 Every propose_* tool must stage rather than write, and must refuse a payload the
 save routes would reject — the model can read a refusal and correct itself,
 whereas a bad payload that reaches the card only fails when the user clicks it.
+`add_todos` and `create_note_to_self` are the exceptions: they write straight
+into the DB, so their tests need the isolated per-test database (`client`,
+even though they never call it directly — it's what points get_db() at a
+throwaway file instead of the developer's real one).
 """
+from backend.db import connection
 from backend.delegate import tools
 
 
@@ -12,69 +17,91 @@ def _proposal(name, args):
     return text, event, event.get('proposal')
 
 
-def test_a_staged_tool_never_claims_to_have_saved():
-    """The model writes the reply the user reads off this text."""
-    text, event, proposal = _proposal('propose_task', {'title': 'Call the dentist'})
-
-    assert proposal == {
-        'kind': 'task',
-        'data': {'title': 'Call the dentist', 'list': 'todo', 'due': None,
-                 'priority': 3, 'notes': None, 'repeatInterval': None,
-                 'repeatUnit': None},
-    }
-    assert event['ok'] is True
-    assert 'Nothing has been saved yet' in text
-    assert 'do not claim it is done' in text
+def _chat_todos():
+    return connection.get_db().execute(
+        'SELECT title, notes, priority, due FROM chat_todos ORDER BY created_at'
+    ).fetchall()
 
 
-def test_a_task_carries_the_due_date_and_priority_it_was_given():
-    """These were not parameters at all, so `due` and `priority` were dropped
-    on the floor and every staged to-do arrived undated at neutral priority —
-    the bug this whole toolbox change exists to fix."""
-    _, _, proposal = _proposal('propose_task', {
-        'title': 'Book the flights', 'due': '2026-08-14', 'priority': 5,
-        'notes': 'window seat', 'repeatInterval': 2, 'repeatUnit': 'week',
+def test_add_todos_writes_immediately_with_no_card(client):
+    """Unlike the propose_* tools, nothing here is staged — the model is told
+    it's already saved, and the event carries no `proposal` key."""
+    text, event, proposal = _proposal('add_todos', {
+        'items': [{'title': 'Call the dentist'}],
     })
-    data = proposal['data']
-    # Staged as the model's own YYYY-MM-DD; the timestamp conversion happens at
-    # accept time, so the card can show and edit a real date.
-    assert data['due'] == '2026-08-14'
-    assert data['priority'] == 5
-    assert data['notes'] == 'window seat'
-    assert (data['repeatInterval'], data['repeatUnit']) == (2, 'week')
 
-
-def test_a_task_field_the_todos_api_would_reject_is_refused_here():
-    """Refused where the model can read the reason and correct itself, rather
-    than at the click, where the user just sees a card that fails."""
-    for args in (
-        {'title': 'x', 'priority': 9},
-        {'title': 'x', 'priority': True},
-        {'title': 'x', 'due': 'next friday'},
-        {'title': 'x', 'due': '2026-02-30'},
-        {'title': 'x', 'repeatInterval': 2},
-    ):
-        _, event, proposal = _proposal('propose_task', args)
-        assert proposal is None, f'{args!r} should not stage a to-do'
-        assert event['ok'] is False
-
-
-def test_a_task_priority_defaults_to_neutral():
-    _, _, proposal = _proposal('propose_task', {'title': 'Buy milk'})
-    assert proposal['data']['priority'] == 3
-    assert proposal['data']['due'] is None
-
-
-def test_task_list_falls_back_when_the_model_invents_one():
-    _, _, proposal = _proposal('propose_task', {'title': 'x', 'list': 'nonsense'})
-    assert proposal['data']['list'] == 'todo'
-
-
-def test_a_task_without_a_title_is_refused():
-    text, event, proposal = _proposal('propose_task', {'title': '   '})
     assert proposal is None
+    assert event['ok'] is True
+    assert 'already saved' in text
+    rows = _chat_todos()
+    assert [(r['title'], r['priority'], r['due']) for r in rows] == [
+        ('Call the dentist', 3, None)
+    ]
+
+
+def test_add_todos_adds_several_in_one_call(client):
+    """The whole reason this replaced propose_task: 'today I want to do X, Y,
+    and Z' is one call, not three round trips through a confirm card."""
+    text, event, _ = _proposal('add_todos', {'items': [
+        {'title': 'Buy milk'},
+        {'title': 'Call the dentist', 'notes': 'ask about the filling'},
+        {'title': 'Water the plants'},
+    ]})
+
+    assert event['ok'] is True
+    rows = _chat_todos()
+    assert [(r['title'], r['notes']) for r in rows] == [
+        ('Buy milk', None),
+        ('Call the dentist', 'ask about the filling'),
+        ('Water the plants', None),
+    ]
+
+
+def test_add_todos_skips_a_title_already_tracked_elsewhere(client):
+    """A to-do added mid-conversation shouldn't duplicate something already on
+    the permanent list or already sitting in today's bar."""
+    db = connection.get_db()
+    db.execute(
+        "INSERT INTO todos(id, title, done, list, priority, created_at, updated_at)"
+        " VALUES ('t1', 'Buy milk', 0, 'todo', 3, 0, 0)"
+    )
+    db.commit()
+
+    _, event, _ = _proposal('add_todos', {'items': [
+        {'title': 'buy MILK'}, {'title': 'Call the dentist'},
+    ]})
+
+    assert event['ok'] is True
+    assert [r['title'] for r in _chat_todos()] == ['Call the dentist']
+
+
+def test_add_todos_with_only_duplicates_is_refused(client):
+    db = connection.get_db()
+    db.execute(
+        "INSERT INTO todos(id, title, done, list, priority, created_at, updated_at)"
+        " VALUES ('t1', 'Buy milk', 0, 'todo', 3, 0, 0)"
+    )
+    db.commit()
+
+    text, event, _ = _proposal('add_todos', {'items': [{'title': 'Buy milk'}]})
     assert event['ok'] is False
-    assert 'needs a title' in text
+    assert 'already on the list' in text
+    assert _chat_todos() == []
+
+
+def test_add_todos_with_no_items_is_refused(client):
+    text, event, _ = _proposal('add_todos', {'items': []})
+    assert event['ok'] is False
+    assert 'no items given' in text
+    assert _chat_todos() == []
+
+
+def test_add_todos_skips_a_blank_title_but_keeps_the_rest(client):
+    _, event, _ = _proposal('add_todos', {'items': [
+        {'title': '   '}, {'title': 'Buy milk'},
+    ]})
+    assert event['ok'] is True
+    assert [r['title'] for r in _chat_todos()] == ['Buy milk']
 
 
 def test_a_calendar_event_without_a_date_asks_rather_than_assuming_today():
@@ -209,14 +236,14 @@ def test_an_unknown_tool_is_reported_not_raised():
     assert event['ok'] is False
 
 
-def test_run_tool_survives_non_dict_arguments():
+def test_run_tool_survives_non_dict_arguments(client):
     """A malformed tool call is refused, not raised.
 
     The loop turns an exception here into an abandoned turn; a refusal is
     something the model can read and retry."""
-    text, event = tools.run_tool('propose_task', None)
+    text, event = tools.run_tool('add_todos', None)
     assert event['ok'] is False
-    assert 'needs a title' in text
+    assert 'no items given' in text
 
 
 def test_every_advertised_tool_has_a_handler():

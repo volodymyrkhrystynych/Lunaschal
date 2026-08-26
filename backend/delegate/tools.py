@@ -1,20 +1,26 @@
 """The main chat model's toolbox: stage something, write something immediately,
 or ask.
 
-**The `propose_*` tools only ever propose.** `propose_task`,
-`propose_calendar_event`, `propose_calorie_log`, `propose_food_log`,
-`draft_flashcard` and `propose_flashcards` write nothing. They hand back a
-staged payload the chat UI renders as a confirm card, and the row is inserted by
-`resolve_proposal` in backend/routes/chat.py when the user clicks. So this
-replaces the *classifier* — which guessed an intent after the reply and swallowed
-its own failures — without also quietly taking the confirm click away.
+**The `propose_*` tools only ever propose.** `propose_calendar_event`,
+`propose_calorie_log`, `propose_food_log`, `draft_flashcard` and
+`propose_flashcards` write nothing. They hand back a staged payload the chat UI
+renders as a confirm card, and the row is inserted by `resolve_proposal` in
+backend/routes/chat.py when the user clicks. So this replaces the *classifier*
+— which guessed an intent after the reply and swallowed its own failures —
+without also quietly taking the confirm click away.
 
-**`create_note_to_self` is the exception, and the exception is narrow.** It
-writes a backend/notes.py row with no card, because a note-to-self is meant to
-be jotted down without a click, and what makes that safe is not the write being
-small but its being reversible — it stays correctable afterward (editing tracks
-a revision, backend/routes/notes.py) rather than needing to be gotten right the
-first time. It is the only tool here that touches the database at all.
+**`create_note_to_self` and `add_todos` are the exceptions, and the exception
+is narrow.** Both write immediately with no confirm card: a note-to-self goes
+to a backend/notes.py row, a to-do to `chat_todos` — the day-scoped table
+behind the Chat tab's to-do bar. What makes either safe is not the write being
+small but its being reversible — a note stays correctable afterward (editing
+tracks a revision, backend/routes/notes.py), and a to-do sits in an editable
+bar the user can retitle, complete, dismiss, or promote to a permanent to-do
+themselves. Neither needs to be gotten right on the first try the way a
+confirmed card does. `add_todos` used to be `propose_task`, staged like the
+others; it moved to instant writes because a to-do added while chatting about
+something else was routinely left sitting unconfirmed, unlike a calendar event
+or a calorie log the user is actively looking at.
 
 **The standing memory document is no longer written from chat.** `remember` and
 `revise_memory` used to sit beside it, editing backend/memory.py mid-reply to
@@ -44,10 +50,7 @@ fine.
 """
 import logging
 
-from backend.todo_recurrence import (
-    VALID_LISTS, VALID_UNITS, normalize_list, parse_due_date, parse_priority,
-    parse_repeat,
-)
+from backend.todo_recurrence import parse_due_date
 
 logger = logging.getLogger(__name__)
 
@@ -63,64 +66,42 @@ TOOLS = [
     {
         'type': 'function',
         'function': {
-            'name': 'propose_task',
+            'name': 'add_todos',
             'description': (
-                'Stage a to-do for the user to confirm. Use when they ask to add '
-                'a task, or to be reminded to do something later. Fill in every '
-                'field the user actually gave — a to-do staged without the '
-                'deadline or the urgency they just told you is one they have to '
-                'go and fix by hand.'
+                "Add one or more lightweight to-dos for today straight to the "
+                "user's day-plan bar in the Chat tab — no confirmation needed, "
+                "they see it immediately and can edit, complete, dismiss, or "
+                "promote it to a permanent to-do themselves. Use this for "
+                "\"today I want to do X, Y, and Z\" or \"add a to-do for...\". "
+                "This bar resets at the next day boundary — for anything that "
+                "needs to persist beyond today (a real deadline, a repeating "
+                "chore), tell the user to add it from the Tasks tab instead, "
+                "where it can carry a due date and priority."
             ),
             'parameters': {
                 'type': 'object',
                 'properties': {
-                    'title': {
-                        'type': 'string',
-                        'description': 'What needs doing, phrased as an action.',
-                    },
-                    'list': {
-                        'type': 'string',
-                        'enum': sorted(VALID_LISTS),
-                        'description': 'Which list it belongs on. Defaults to todo.',
-                    },
-                    'due': {
-                        'type': 'string',
-                        'description': (
-                            'When it is due, as YYYY-MM-DD. Resolve relative '
-                            'wording ("Friday", "in two weeks") against the '
-                            'current date yourself. Omit if the user gave no '
-                            'deadline; if they implied one too vaguely to '
-                            'resolve ("soon", "before the trip"), call ask_user '
-                            'instead of guessing.'
-                        ),
-                    },
-                    'priority': {
-                        'type': 'integer',
-                        'minimum': 1,
-                        'maximum': 5,
-                        'description': (
-                            'How important: 1 very unimportant, 2 unimportant, '
-                            '3 normal, 4 important, 5 very important. Defaults '
-                            'to 3. Only move off 3 when the user said something '
-                            'about urgency or importance.'
-                        ),
-                    },
-                    'notes': {
-                        'type': 'string',
-                        'description': 'Extra detail that does not belong in the title.',
-                    },
-                    'repeatInterval': {
-                        'type': 'integer',
-                        'minimum': 1,
-                        'description': 'For a repeating to-do: every N units. Needs repeatUnit.',
-                    },
-                    'repeatUnit': {
-                        'type': 'string',
-                        'enum': list(VALID_UNITS),
-                        'description': 'Unit for repeatInterval. Needs repeatInterval.',
+                    'items': {
+                        'type': 'array',
+                        'minItems': 1,
+                        'maxItems': 10,
+                        'items': {
+                            'type': 'object',
+                            'properties': {
+                                'title': {
+                                    'type': 'string',
+                                    'description': 'What needs doing, phrased as an action.',
+                                },
+                                'notes': {
+                                    'type': 'string',
+                                    'description': 'Extra detail that does not belong in the title.',
+                                },
+                            },
+                            'required': ['title'],
+                        },
                     },
                 },
-                'required': ['title'],
+                'required': ['items'],
             },
         },
     },
@@ -327,8 +308,8 @@ TOOLS = [
                 'have said what the note actually is. This is for a stray '
                 'thought, plan, or reminder they want resurfaced for review '
                 'over the following days — not a fact to memorize (use '
-                'draft_flashcard for that) and not a dated to-do (use '
-                'propose_task).'
+                'draft_flashcard for that) and not a to-do (use '
+                'add_todos).'
             ),
             'parameters': {
                 'type': 'object',
@@ -409,43 +390,52 @@ def _refused(tool: str, reason: str) -> tuple[str, dict]:
     )
 
 
-def _propose_task(args: dict) -> tuple[str, dict]:
-    title = _text(args.get('title'))[:MAX_TITLE_CHARS]
-    if not title:
-        return _refused('propose_task', 'a task needs a title')
-    todo_list, err = normalize_list(_text(args.get('list')))
-    if err:
-        todo_list = 'todo'
+def _add_todos(args: dict) -> tuple[str, dict]:
+    """Writes chat_todos rows immediately, no confirm card — same rationale as
+    create_note_to_self: it lands in a bar the user can edit or remove
+    themselves, so getting it exactly right before the click was never the
+    point."""
+    import time
 
-    # Validated here, against the same rules /api/tasks/todos enforces, so a bad
-    # value comes back as text the model can correct on its next turn rather
-    # than as a card that fails at the click. `due` is staged as the YYYY-MM-DD
-    # the model wrote and converted to a timestamp only at accept time — that
-    # keeps the proposal payload readable, editable in the card, and one
-    # representation the whole way through the confirm step.
-    due = _text(args.get('due')) or None
-    if due is not None:
-        _, err = parse_due_date(due)
-        if err:
-            return _refused('propose_task', err)
-    priority, err = parse_priority(args.get('priority'))
-    if err:
-        return _refused('propose_task', err)
-    repeat, err = parse_repeat(args.get('repeatInterval'), args.get('repeatUnit'))
-    if err:
-        return _refused('propose_task', err)
+    from ulid import ULID
 
-    data = {
-        'title': title,
-        'list': todo_list,
-        'due': due,
-        'priority': priority,
-        'notes': _text(args.get('notes')) or None,
-        'repeatInterval': repeat[0],
-        'repeatUnit': repeat[1],
-    }
-    detail = f' (due {due})' if due else ''
-    return _staged('task', 'propose_task', data, f'to-do "{title}"{detail}')
+    from backend.db.connection import get_db
+    from backend.day_boundary import day_key_for
+    from backend.routes.tasks import _today_taken_titles
+
+    raw_items = args.get('items')
+    if not isinstance(raw_items, list) or not raw_items:
+        return _refused('add_todos', 'no items given')
+
+    db = get_db()
+    today = day_key_for()
+    taken = _today_taken_titles(db, today)
+    now = int(time.time())
+    added = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        title = _text(raw.get('title'))[:MAX_TITLE_CHARS]
+        if not title or title.lower() in taken:
+            continue
+        notes = _text(raw.get('notes'))[:MAX_NOTE_CHARS] or None
+        db.execute(
+            'INSERT INTO chat_todos(id, day_key, title, notes, due, priority, done, created_at, updated_at)'
+            ' VALUES (?,?,?,?,NULL,3,0,?,?)',
+            (str(ULID()), today, title, notes, now, now),
+        )
+        taken.add(title.lower())
+        added.append(title)
+    db.commit()
+
+    if not added:
+        return _refused('add_todos', 'nothing new to add — already on the list')
+    summary = '; '.join(added)
+    return (
+        f"Added to today's to-do bar: {summary}. These are already saved — "
+        'acknowledge briefly and do not ask them to confirm.',
+        {'tool': 'add_todos', 'ok': True, 'arg': summary},
+    )
 
 
 def _propose_calendar_event(args: dict) -> tuple[str, dict]:
@@ -621,7 +611,7 @@ def _ask_user(args: dict) -> tuple[str, dict]:
 
 
 _HANDLERS = {
-    'propose_task': _propose_task,
+    'add_todos': _add_todos,
     'propose_calendar_event': _propose_calendar_event,
     'propose_calorie_log': _propose_calorie_log,
     'propose_food_log': _propose_food_log,
