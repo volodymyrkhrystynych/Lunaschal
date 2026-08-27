@@ -948,6 +948,35 @@ CREATE TABLE IF NOT EXISTS lifestyle_weather_days (
     updated_at INTEGER NOT NULL
 );
 
+-- Repositories the Ideas agent can read. Registered by git URL and cloned by
+-- Luna into ./data/repos/<slug>/ (REPOS_ROOT); nothing here points at a
+-- directory the user maintains, so a repo is always a checkout we own and can
+-- reset --hard without destroying anyone's work.
+--
+-- graph_built_at/graph_node_count track the graphify graph inside the clone.
+-- Both are nullable: a repo with no graph simply never offers the code_map
+-- tool, the same degrade-by-absence the web search provider uses.
+CREATE TABLE IF NOT EXISTS repos (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    remote_url TEXT NOT NULL,
+    -- '' means the remote's default branch, resolved at clone time.
+    branch TEXT NOT NULL DEFAULT '',
+    clone_state TEXT NOT NULL DEFAULT 'pending'
+        CHECK(clone_state IN ('pending','cloning','ready','error')),
+    clone_error TEXT,
+    head_sha TEXT,
+    last_pulled_at INTEGER,
+    graph_built_at INTEGER,
+    graph_node_count INTEGER,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_repos_updated ON repos(updated_at DESC);
+
 -- Ideas: the app's own feature backlog, developed with the research agent.
 -- raw_content is what was spoken/typed and is never overwritten; content is the
 -- AI-cleaned prose, following the journal_entries split.

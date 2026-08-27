@@ -73,6 +73,14 @@ fi
 # anywhere in this script — see the header.
 RSYNC_FLAGS=(-rt --modify-window=1)
 
+# What never goes to the backup drive.
+#   lunaschal.db*  — the live DB and its WAL; the dated snapshot is the backup.
+#   repos/         — clones the Ideas agent reads (backend/repos/storage.py).
+#                    A checkout plus its graphify graph and cache is tens of MB
+#                    per repo, rsynced nightly, for bytes that are one
+#                    `git clone` away. The rows that matter are in the DB.
+MEDIA_EXCLUDES=(--exclude='lunaschal.db*' --exclude='repos/')
+
 # Delete the dated DB directories that have aged out. The caller passes the name
 # of a function that removes one snapshot, so the local and remote destinations
 # share this loop without the removal command having to survive a round-trip
@@ -119,7 +127,7 @@ backup_to_hdd() {
 
   mkdir -p "$base/media"
   log "mirroring media to $base/media"
-  rsync "${RSYNC_FLAGS[@]}" --exclude='lunaschal.db*' data/ "$base/media/"
+  rsync "${RSYNC_FLAGS[@]}" "${MEDIA_EXCLUDES[@]}" data/ "$base/media/"
 
   if [ "$DB_SNAPSHOT_OK" = 1 ]; then
     mkdir -p "$base/db/$TODAY"
@@ -155,7 +163,7 @@ backup_to_tablet() {
 
   ssh "$target" "mkdir -p '$base/media'"
   log "mirroring media to $host:$base/media"
-  rsync "${RSYNC_FLAGS[@]}" -e ssh --exclude='lunaschal.db*' data/ "$target:$base/media/"
+  rsync "${RSYNC_FLAGS[@]}" -e ssh "${MEDIA_EXCLUDES[@]}" data/ "$target:$base/media/"
 
   if [ "$DB_SNAPSHOT_OK" = 1 ]; then
     ssh "$target" "mkdir -p '$base/db/$TODAY'"
