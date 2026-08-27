@@ -1,6 +1,15 @@
 # Ideas tab — design doc
 
-**Status: built, and run for real.** Capture, the nightly repo-context agent, the research agent
+**Status: rebuilt around reading code, across six commits on
+`feat/multi-repo-ideas-agent`.** The original build (below, still accurate about
+everything it describes) shipped an agent that could not open a source file: its
+whole picture of the codebase was `repo_facts.py`'s inventory, and the system
+prompt said so — _"Do not use them to look up things about Lunaschal itself; the
+inventory below is authoritative."_ Correct while the agent had no way to look
+anything up, and exactly backwards for the thing the tab is for. See
+[Reading the code](#reading-the-code) for what changed and why.
+
+**Status of the original build: built, and run for real.** Capture, the nightly repo-context agent, the research agent
 and its wiki, the tool-using discussion and plan generation all ship, across five commits on
 `feat/ideas-research-agent`, and every part of it has now been exercised against a live
 llama-server and a real search provider — see [The first live run](#the-first-live-run) for what
@@ -355,6 +364,177 @@ Three bugs only a live run could produce, all fixed:
   autouse fixture that drains it is torn down _after_ the `client` fixture that closes the
   connection. `client` now stops the worker before taking its database away.
 
+## Reading the code
+
+The tab was meant to develop a feature idea against a codebase: weigh
+approaches, find where the work goes, spot where a bug might be, and hand a
+coding agent something it can execute immediately. It shipped without the one
+capability that requires — the agent had `web_search`, `web_fetch` and the wiki,
+and had never opened a source file.
+
+### What the inventory could and could not do
+
+`repo_facts.py` is genuinely good at what it does: routes from an `ast` walk,
+tables from `PRAGMA`, views cross-checked across three hand-synced literals. It
+answers "is there already a `paper_pages` table?" exactly, where a model
+summarizing the repo nightly would drift.
+
+It cannot answer "is this loop racy?", "where would this go?", or "what breaks
+if I change this?" — because those are questions about _behaviour_, and an
+inventory is a list of names. So the inventory stays, demoted from
+"authoritative" to "an index — verify against the source", and the agent got
+tools.
+
+### Four tools, and the loop is unchanged
+
+`code_search` (ripgrep), `read_file`, `list_dir`, `code_map` (a graphify graph
+lookup). The same four moves a person makes.
+
+`agent._loop` dispatches by calling `dispatch[name].run_tool(name, args)`, so
+`CodeTools` is an object satisfying that duck type and **the shared loop is not
+modified** — which is the whole reason it takes `tools=`/`dispatch=`. Budgets
+change at the call site only: `max_turns` goes to 24, because the web-tuned 12
+ran out while the agent was still orienting (a `list_dir`, a search and three
+reads is the cheap version of understanding a module).
+
+Two things carried over from lessons the web tools already learned:
+
+- **`code_map` is absent, not failing, when a repo has no graph.** A tool that
+  always answers "unavailable" spends a turn to learn nothing. Same
+  degrade-by-absence as `web.is_search_configured`.
+- **Its result carries the read-a-file reminder**, in the position
+  `READ_ONE_REMINDER` was _measured_ to work (see
+  [Why it never read a page](#why-it-never-read-a-page)): on the freshest
+  message, not thousands of tokens back in the system prompt. The map lists
+  symbols and their files; the failure it prevents is answering from the index
+  without opening what it points at.
+
+### Refusals are two layers, because a clone is someone else's code
+
+`storage.resolve_within` refuses `.env`, `.git`, keys, and anything resolving
+outside the checkout — symlinks included, since a repository may legitimately
+contain any symlink it likes and the guarantee is about what we hand back, not
+what is on disk.
+
+ripgrep _additionally_ gets glob exclusions. It walks the tree itself, and would
+otherwise print a matching line out of a `.env` before anybody asked to read
+that file. An article that quotes a credential leaks it into every prompt that
+article is ever retrieved into.
+
+The read budget lives in `CodeTools` rather than the loop, so the loop keeps one
+counter — and a _refused_ read costs nothing, or a model probing paths could
+burn the whole budget on files it never opened.
+
+## Several repositories
+
+Repos are registered by **git URL and cloned** into `./data/repos/<slug>/`. Luna
+owns every checkout, which is what makes `reset --hard` safe: there is no
+working tree of the user's to destroy, and nothing ever writes into a clone.
+
+- **`assert_clone_url` is not `web.py`'s SSRF guard.** There, the _model_ picks
+  the URL, so the question is where the request goes. Here the user types it, so
+  the question is what git will do with it: `ext::` runs an arbitrary shell
+  command _by design_, `file://` clones a path off this machine, and an argument
+  starting with `-` is read as a flag — `--upload-pack=<cmd>` being remote code
+  execution on this side. https and the two SSH spellings only.
+- **Pull is `fetch` + `reset --hard`, not `git pull`.** The clone carries an
+  untracked `graphify-out/`, and a merge-based pull is one conflict away from
+  wedging a checkout nobody is watching.
+- **`graphify update <path>` builds a graph from nothing.** There is no separate
+  build command; code extraction is AST-only, with no LLM and no API key. So one
+  call covers the import and every pull. `--force`, because the tree was just
+  reset to the remote and a commit deleting a package _should_ shrink the graph
+  rather than leave a stale one standing. Measured: 0.2 s on a small repo, and
+  `graphify query` answers in well under a second.
+- **`ops/backup.sh` excludes `repos/`.** A checkout plus its graph and cache is
+  tens of MB per repo, mirrored nightly, for bytes one `git clone` away.
+
+### The wiki became per-repo, which needed a real migration
+
+`wiki_articles.slug` was `UNIQUE` across the table. Two codebases will both have
+something worth calling `scheduling`, and one silently overwriting the other is
+not a conflict anyone would notice. SQLite cannot drop a constraint, so this is
+a create-copy-drop-rename — precedent in `email_accounts`.
+
+Two ordering traps, both real, both now covered:
+
+- **`wiki_revisions` cascades on delete.** With foreign keys enforced,
+  `DROP TABLE wiki_articles` deleted every revision row — the entire audit trail
+  that makes a background process editing the user's prose acceptable. Caught by
+  a test that wrote a revision and looked for it afterwards. Enforcement is off
+  for the rebuild (the pragma is a no-op inside a transaction, so it goes before
+  `BEGIN`) and restored in a `finally`.
+- **`wiki_fts` is external-content, keyed on rowid**, and `DROP TABLE` takes its
+  triggers with it. So the migration runs _before_ `_init_wiki_fts`, which
+  recreates them and issues a `'rebuild'`. Its index cannot live in `schema.sql`
+  either: that file runs before every migration, and on an unmigrated table an
+  index naming `repo_id` fails outright.
+
+Every pre-existing article migrated to `repo_id = NULL, kind = 'research'`. They
+are web notes about a problem space and belong to no codebase; assigning one
+would be inventing a fact. A repo's agent sees its own articles **and** those
+unscoped ones — "how do other people solve this" is not about any one codebase —
+but never another repo's notes about a same-named module.
+
+### One capability is genuinely weaker, and it is written down
+
+A registered clone has no live database, so its tables come from parsing
+`schema.sql`. Columns added by idempotent `_ensure_*` ALTERs do not appear, and
+that is where most recent columns live. `repo_facts.py`'s docstring asserted the
+opposite and now says which path applies when; the rendered digest prints the
+caveat, because a missing column is otherwise indistinguishable from one that
+does not exist — the difference between "add this" and "this is already there".
+
+It is acceptable _because_ the code tools exist: the agent can open
+`connection.py` and read the migrations itself, which is strictly better than a
+snapshot that happened to include them. This app's own scan still uses the exact
+`PRAGMA` path.
+
+## The nightly pass
+
+Per repo, inside the existing 03:00–05:00 window: **pull, graph, scan, write.**
+The order is the point — a snapshot of a tree that was not pulled describes
+yesterday, and a note written against it cites lines that have moved. A failed
+pull stops that repo there rather than scanning a stale tree.
+
+Only the last step spends model time. `plan_modules` holds the whole policy and
+reads only the DB and the snapshot's module index, so it is testable without
+threads:
+
+- **Changed modules first**, oldest note first among them. A note that no longer
+  describes the code is worse than a missing one, because it will be retrieved
+  and believed.
+- **Then modules with no note, largest first.** The biggest undocumented module
+  is both the most worth writing up and the least likely to be written by hand.
+- **A handful per night** (default six, configurable, 0 disables). A full churn
+  on a 25 tok/s local model is hours of GPU time that mostly rewrites articles
+  which did not change. A repo's wiki fills in over a week or two, then tracks
+  change.
+
+The slug comes from the module _path_, not the model's chosen title, so a
+refresh lands on the same article every time. A retitled note is fine; a second
+article about the same directory is not.
+
+**Writing nothing is a real outcome.** `write_article` returns None when the
+model reports it did not see enough — asked as a boolean, because a boolean
+cannot be hedged. An invented note is worse than no note: it will be retrieved
+later and believed.
+
+## Plans that name real files
+
+The last piece is what makes a plan droppable into a coding agent. A path that
+does not exist sends that agent looking, failing, and then improvising — so file
+citations get the treatment evidence already gets: the server builds a numbered
+candidate list, the model picks **by number**, and llama-server compiles the
+bound into a grammar, so citing a file nobody opened is impossible during
+decoding rather than caught after.
+
+The candidates are files somebody actually read, in order of trust: read while
+discussing this idea, then cited by the assessment, then read by the nightly
+pass. Nothing is generated — with no candidates the schema drops the field and
+the prompt does not mention it, so the plan simply has no file list. That is
+honest, and better than a guessed one.
+
 ## Open questions carried forward
 
 - **One page per pass is still thin.** Reading is now reliable but shallow: the model opens a
@@ -375,6 +555,18 @@ Three bugs only a live run could produce, all fixed:
   decided, which is exactly what would tell a research pass where to look — but nothing carries it
   across. There is no `researchTopics` field in the assessment schema or on `idea_assessments`
   (an earlier draft of this doc claimed there was), and `plan_next` just researches the whole idea.
+- **Still open, and now larger: the wiki has no UI.** It was one wiki of a few dozen research
+  notes; it is now that plus a growing per-repo code wiki, so "read, edit, lock or revert an
+  article" is worth more than it was. `wiki_revisions` and `locked` exist precisely so that UI can
+  be built.
+- **The nightly cap of six is a guess**, the same shape of guess as the 24 h research cooldown.
+  Whether a repo's wiki wants six a night or twenty wants a few weeks of real runs to judge.
+- **The code-wiki pass has not been run against a live llama-server.** The loop, the tools and the
+  article write were exercised end to end against this repository with the model stubbed — four
+  real tool calls including a graphify lookup, provenance recorded from the file actually opened —
+  but what the model _writes_ when it reads a module for real is unmeasured, and that is exactly
+  the kind of thing [the first live run](#the-first-live-run) found three separate bugs in last
+  time.
 - **The 24 h cooldown is a guess.** It exists to stop a tight re-research loop; whether a
   researched idea deserves revisiting daily, weekly, or only when edited is unknown until this has
   run on a real backlog.
@@ -393,5 +585,14 @@ Three bugs only a live run could produce, all fixed:
 3. **Priority gate, web tools, wiki, agent loop, worker, assessment** — `52b5403`
 4. **Agentic discussion and Create plan** — `6b789ab`
 5. **The research scheduler** — `e375993`
+
+Then the rebuild around reading code, on `feat/multi-repo-ideas-agent`:
+
+6. **Repositories, cloned by URL** — the `repos` table, `backend/repos/`, the git allowlist
+7. **The code toolbox** — `code.py`, the discussion rewiring, `ideas.repo_id`
+8. **Per-repo wiki and snapshots** — the `wiki_articles` rebuild
+9. **Generic repo scanning** — `repo_scan.py`, the schema-file fallback
+10. **The nightly pass** — `code_wiki.py`, pull/graph/scan/write
+11. **Plans that name real files** — `plan_files.py`
 
 Each phase landed with its own tests and was verified independently before the next.
