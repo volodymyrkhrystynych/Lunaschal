@@ -8,6 +8,7 @@ import { ShortcutsSection } from './ShortcutsSection';
 import { NudgeSection } from './NudgeSection';
 import { WeatherSection } from './WeatherSection';
 import { BriefingSection } from './BriefingSection';
+import { ReposSection } from './ReposSection';
 import { ResearchSection } from './ResearchSection';
 import { VRAMSection } from './VRAMSection';
 import { NetworkSection } from './NetworkSection';
@@ -126,6 +127,10 @@ export function Settings() {
 
           <CollapsibleSection title="Overnight Briefing">
             <BriefingSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Repositories">
+            <ReposSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Research Agent">

@@ -2,13 +2,22 @@
 
 Unlike Writing discussions — where the frontend assembles the system prompt from
 checked notes — this one is built server-side. The wiki, the repo snapshot and
-the assessment are all server data; round-tripping them through the browser
-just to send them back would be wasteful and would let a stale tab feed the
-model an out-of-date picture of the repo.
+the assessment are all server data; round-tripping them through the browser just
+to send them back would be wasteful and would let a stale tab feed the model an
+out-of-date picture of the repo.
+
+**The system prompt used to forbid the thing this tab is for.** It said, in so
+many words, "do not use them to look up things about Lunaschal itself; the
+inventory below is authoritative" — because the agent had no way to look
+anything up, and a model guessing about the codebase from a route list was worse
+than one that stayed inside the list. Now it can read the code, so the
+instruction is inverted: the inventory is an index, the source is the truth, and
+an answer about the code is expected to cite `file:line`.
 """
 import json
 
 from backend.db.connection import get_db, row_to_dict
+from backend.repos import registry
 from backend.research import assess, wiki
 from backend.research.idea_text import display_title
 from backend.research.repo_job import current_snapshot
@@ -17,27 +26,93 @@ MAX_DIGEST_CHARS = 8000
 MAX_IDEA_CHARS = 4000
 MAX_HISTORY_MESSAGES = 12
 
-SYSTEM_PROMPT = """You are helping the owner of Lunaschal — a single-user, \
-local-first life-management app — think through a feature idea for it.
+# A code pass reads far more than a web pass fetches — orienting in an unfamiliar
+# module is a list_dir, a search and three reads before anything is understood.
+# The web-tuned 12 ran out before the agent had opened anything.
+CODE_MAX_TURNS = 24
 
-You have tools: search and read the web, and read a wiki of research notes you \
-maintain yourself. Use them when the answer depends on how other people have \
-solved something, or on facts you are not certain of. Do not use them to look \
-up things about Lunaschal itself; the inventory below is authoritative.
+_BASE_SYSTEM = """You are helping an experienced developer think through an \
+idea for a codebase they own — a feature, a refactor, or a suspected bug.
 
-Be concrete and opinionated. The owner is an experienced developer building for \
-themselves, so:
+What you produce is read by them and then handed to a coding agent that will \
+implement it without talking to you. So be concrete and opinionated:
 - Recommend, don't enumerate. If there is a clear best option, say which and why.
-- Say when an idea is already built, or already mostly built, and point at what exists.
-- Name real trade-offs, including cost on a machine running a 26B model locally \
-on one 8 GB GPU.
+- Name real trade-offs, including cost on a machine running a 35B MoE model \
+locally on one 8 GB GPU.
 - If you did not find something, say so. Never present a guess as a finding."""
 
+_CODE_RULES = """
+You can read this repository: search it, open files, list directories{map_note}. \
+Use them. The rules that make your answer worth acting on:
+- **Check before you assert.** Any claim about how this code behaves must come \
+from a file you opened in this conversation. If you did not open it, say you \
+did not check.
+- **Cite `path/to/file.py:123`.** The person reading this will go and look, and \
+a coding agent will start there.
+- Say plainly when an idea is already built, or already mostly built, and point \
+at the code that does it.
+- Prefer extending what is there to adding something parallel to it. Find the \
+existing thing first.
+- The inventory below is an index, not the truth. It is generated, it can be \
+stale, and it does not describe behaviour. The source does."""
+
+_WEB_RULES = """
+You can also search and read the web. Use it for how other people solved \
+something, or for a fact about a library you are not certain of — not for \
+questions about this repository, which you answer by reading it."""
+
+_NO_REPO_RULES = """
+You have no checkout of this codebase to read, so you cannot verify anything \
+about it. Work from the inventory below, and be explicit that you are reasoning \
+from an index rather than from the code. You can still search and read the web."""
+
 ANSWER_INSTRUCTION = (
-    'Now answer the owner using what you gathered. Cite any web source you '
-    'actually read by name. If your search came up short, say so plainly '
-    'rather than filling the gap with a guess.'
+    'Now answer the owner using what you gathered. Cite each file you read as '
+    'path:line, and each web source by name. If you could not confirm something, '
+    'say which part and why, rather than filling the gap with a guess.'
 )
+
+
+def system_prompt(has_repo: bool, has_map: bool = False, repo_name: str = '') -> str:
+    """The prompt for one discussion, shaped by what tools it actually has.
+
+    Built rather than constant because promising tools that are not in the
+    toolbox is the same mistake as offering a tool that always fails: the model
+    spends turns reaching for something that is not there.
+    """
+    parts = [_BASE_SYSTEM]
+    if has_repo:
+        map_note = (
+            ', and look a concept up in the code map to find out what things '
+            'are called' if has_map else ''
+        )
+        parts.append(_CODE_RULES.format(map_note=map_note))
+        if repo_name:
+            parts.append(f'The repository you are reading is **{repo_name}**.')
+        parts.append(_WEB_RULES)
+    else:
+        parts.append(_NO_REPO_RULES)
+    return '\n'.join(parts)
+
+
+# Kept for the callers that predate per-repo prompts (and for tests that assert
+# the shape of a no-repo discussion).
+SYSTEM_PROMPT = system_prompt(has_repo=False)
+
+
+def idea_repo(idea_id: str) -> dict | None:
+    """The repo an idea is about: its own, or the default when it has none.
+
+    Falling back to the default is what makes a single-repo setup need no
+    configuring — and what lets ideas captured before repositories existed pick
+    up code tools without being edited.
+    """
+    row = get_db().execute('SELECT repo_id FROM ideas WHERE id=?', (idea_id,)).fetchone()
+    if row and row['repo_id']:
+        repo = registry.get_repo(row['repo_id'])
+        if repo and repo.get('cloneState') == 'ready':
+            return repo
+    return registry.default_repo()
 
 
 def build_context(idea_id: str) -> str:
@@ -111,7 +186,10 @@ def build_context(idea_id: str) -> str:
 
     snapshot = current_snapshot()
     if snapshot and snapshot.get('digest'):
-        parts.append('# App inventory (authoritative)\n\n'
+        # Deliberately no longer labelled "authoritative": it is generated, it
+        # can be stale, and it says nothing about behaviour. It is a map of
+        # where to start reading.
+        parts.append('# App inventory (an index — verify against the source)\n\n'
                      + snapshot['digest'][:MAX_DIGEST_CHARS])
 
     return '\n\n'.join(parts)
@@ -149,3 +227,45 @@ def build_gather_request(context: str, history: list[dict], question: str) -> st
         'already know enough, reply with a short note saying so.'
     )
     return '\n\n'.join(parts)
+
+
+def build_toolbox(repo: dict | None):
+    """(tools, dispatch, code_tools) for one discussion.
+
+    The three toolboxes compose rather than replace each other: code for this
+    repo, the web for prior art, the wiki for what has already been written
+    down. `tools` and `dispatch` travel together — a tool the model can see but
+    the dispatch cannot run comes back as "Unknown tool", which reads to the
+    model as a broken tool rather than as one it should not have called.
+
+    `code_tools` is handed back so the caller can ask what was actually read;
+    it is per-run state and must not be shared between runs.
+    """
+    from backend.research import agent, code, web, wiki as wiki_mod
+
+    repo_id = (repo or {}).get('id')
+    # Wiki tools are bound to the repo so a discussion sees this codebase's
+    # notes plus the unscoped research ones — never another repo's notes about
+    # a module that happens to share a name.
+    wiki_tools = wiki_mod.WikiTools(repo_id)
+
+    tools = web.TOOLS + wiki_mod.TOOLS
+    dispatch = dict(agent._DISPATCH)
+    dispatch.update({t['function']['name']: wiki_tools for t in wiki_mod.TOOLS})
+    code_tools = None
+
+    root = repo_root_for(repo)
+    if root is not None:
+        code_tools = code.CodeTools(root)
+        tools = code.tools_for(root) + tools
+        dispatch.update(code.dispatch_for(code_tools, root))
+    return tools, dispatch, code_tools
+
+
+def repo_root_for(repo: dict | None):
+    """The checkout to read, or None when there is nothing usable to read."""
+    if not repo or repo.get('cloneState') != 'ready':
+        return None
+    from backend.repos import storage
+    root = storage.repo_dir(repo['slug'])
+    return root if root and root.is_dir() else None

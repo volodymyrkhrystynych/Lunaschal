@@ -6,6 +6,12 @@ import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 
 interface IdeaCaptureProps {
   onCreated: (id: string) => void;
+  /**
+   * Which repo to file the new idea under. Undefined means "let the server
+   * decide" — it stamps the registered default, so a single-repo setup never
+   * has to say so.
+   */
+  repoId?: string;
 }
 
 /**
@@ -13,7 +19,7 @@ interface IdeaCaptureProps {
  * rather than submitting straight away (the BrainDump pattern) so a transcript
  * can be corrected, or two thoughts recorded into one idea, before saving.
  */
-export function IdeaCapture({ onCreated }: IdeaCaptureProps) {
+export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -40,7 +46,7 @@ export function IdeaCapture({ onCreated }: IdeaCaptureProps) {
     const trimmed = text.trim();
     if (!trimmed || create.isPending) return;
     const id = ulid();
-    create.mutate({ id, rawContent: trimmed });
+    create.mutate({ id, rawContent: trimmed, ...(repoId ? { repoId } : {}) });
     setText('');
     onCreated(id);
   };

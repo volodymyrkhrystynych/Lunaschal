@@ -1,6 +1,7 @@
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useShortcuts } from '../../shortcuts/ShortcutProvider';
-import type { IdeaSummary } from '../../hooks/api';
+import { api, type IdeaSummary } from '../../hooks/api';
 import {
   displayTitle,
   filterIdeas,
@@ -31,12 +32,44 @@ export function IdeaList({
   const [filter, setFilter] = useState<IdeaFilter>({ status: 'all' });
   const { level } = useShortcuts();
 
+  const { data: repos } = useQuery({
+    queryKey: ['repos'],
+    queryFn: api.repos.list,
+  });
+
   const tags = tagCounts(ideas);
   const visible = filterIdeas(ideas, filter);
 
+  // The switcher only earns its row when there is a choice to make. With one
+  // repo — or none — it is a control that can only be set one way.
+  const showRepoSwitcher = (repos?.length ?? 0) > 1;
+  const captureRepoId =
+    filter.repoId && filter.repoId !== 'all' ? filter.repoId : undefined;
+
   return (
     <>
-      <IdeaCapture onCreated={onSelect} />
+      <IdeaCapture onCreated={onSelect} repoId={captureRepoId} />
+
+      {showRepoSwitcher && (
+        <div className="px-3 py-2 border-b border-white/10 shrink-0">
+          <select
+            value={filter.repoId ?? 'all'}
+            onChange={e =>
+              setFilter(f => ({ ...f, repoId: e.target.value as string }))
+            }
+            aria-label="Repository"
+            className="w-full rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+          >
+            <option value="all">All repositories</option>
+            {repos?.map(repo => (
+              <option key={repo.id} value={repo.id}>
+                {repo.name}
+                {repo.cloneState === 'ready' ? '' : ' (not ready)'}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {tags.length > 0 && (
         <div className="flex flex-wrap gap-1 px-3 py-2 border-b border-white/10 shrink-0">

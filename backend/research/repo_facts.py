@@ -12,6 +12,19 @@ the kind of question a summary gets wrong.
 The LLM's only job (backend/research/repo_job.py) is to summarize the *delta*
 since the previous snapshot.
 
+**These extractors are specific to this app**, and say so by returning nothing
+when their fingerprints are absent. backend/research/repo_scan.py is the half
+that works on any checkout; the two are combined in `build_facts`.
+
+One capability is genuinely weaker for a registered repository than for this
+one, and it is worth knowing rather than discovering. A clone has no live
+database, so its tables come from parsing `schema.sql` — which means columns
+added by idempotent `_ensure_*` ALTERs do not appear, and those are where most
+recent columns live. That is acceptable *because* the agent can now open
+connection.py and read the migrations itself (backend/research/code.py), which
+is strictly better than a snapshot that happened to include them. For this
+app's own scan, the live PRAGMA path is still used and still exact.
+
 Nothing here reads ./data/ — that holds the user's DB and media.
 """
 import ast
@@ -191,12 +204,90 @@ def route_facts(root: Path) -> list[dict]:
     return routes[:MAX_ROUTES]
 
 
+# CREATE TABLE <name> ( <body> ) — enough for a schema file, which is written
+# by hand and formatted conventionally. Not a SQL parser, and does not need to
+# be: the fallback path's job is to name tables and columns, and anything it
+# cannot parse simply is not listed.
+_CREATE_TABLE = re.compile(
+    r'CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["\'`]?(\w+)["\'`]?\s*\((.*?)\n\)\s*;',
+    re.IGNORECASE | re.DOTALL,
+)
+_CONSTRAINT_WORDS = (
+    'primary', 'unique', 'check', 'foreign', 'constraint', 'references',
+)
+
+
+def table_facts_from_sql(root: Path) -> list[dict]:
+    """Tables parsed out of a repo's schema file, for a checkout with no live DB.
+
+    Strictly weaker than the PRAGMA path — see the module docstring — and used
+    only for a *registered* repository, where there is no running database to
+    ask. Returns [] for a repo with no recognisable schema file, which is most
+    of them.
+    """
+    for rel in ('backend/db/schema.sql', 'db/schema.sql', 'schema.sql'):
+        text = _read(root, rel)
+        if text:
+            break
+    else:
+        return []
+
+    tables = []
+    for match in _CREATE_TABLE.finditer(text):
+        name, body = match.group(1), match.group(2)
+        columns = []
+        for definition in _split_columns(body):
+            # Split on whitespace *or* '(' so a table-level `UNIQUE(a, b)` is
+            # recognised as a constraint rather than read as a column named
+            # "UNIQUE(a,".
+            first = re.split(r'[(\s]', definition, maxsplit=1)[0].strip('"`\'').lower()
+            if first in _CONSTRAINT_WORDS:
+                continue
+            parts = definition.split()
+            columns.append({
+                'name': parts[0].strip('"`\''),
+                'type': parts[1] if len(parts) > 1 else '',
+                'notnull': 'NOT NULL' in definition.upper(),
+                'pk': 'PRIMARY KEY' in definition.upper(),
+            })
+        if columns:
+            tables.append({'table': name, 'columns': columns, 'virtual': False})
+    tables.sort(key=lambda t: t['table'])
+    return tables
+
+
+def _split_columns(body: str) -> list[str]:
+    """A CREATE TABLE body split into definitions, on depth-0 commas.
+
+    Not on newlines: a column whose CHECK constraint wraps to the next line
+    would otherwise be read as a second column called `CHECK(clone_state`. And
+    not on every comma either, since `CHECK(x IN ('a','b'))` is full of them.
+    Comments are stripped first, because a `--` line can contain anything.
+    """
+    cleaned = '\n'.join(line.split('--', 1)[0] for line in body.splitlines())
+    out, current, depth = [], [], 0
+    for char in cleaned:
+        if char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+        if char == ',' and depth == 0:
+            out.append(''.join(current))
+            current = []
+            continue
+        current.append(char)
+    out.append(''.join(current))
+    return [d.strip() for d in out if d.strip()]
+
+
 def table_facts(db) -> list[dict]:
     """Tables and columns from the live DB.
 
     Deliberately the live connection rather than a parse of schema.sql: by
     construction it has schema.sql *plus* every idempotent `_ensure_*` migration
-    applied, and the migrations are where most recent columns live.
+    applied, and the migrations are where most recent columns live. Only
+    available for the checkout this app is running from; a registered clone
+    falls back to `table_facts_from_sql`.
     """
     tables = []
     rows = db.execute(
@@ -365,37 +456,90 @@ def doc_facts(root: Path) -> list[dict]:
     return out
 
 
-def build_facts(root: Path | None = None, db=None, since_sha: str | None = None) -> dict:
-    """The whole deterministic inventory."""
+def build_facts(
+    root: Path | None = None,
+    db=None,
+    since_sha: str | None = None,
+    *,
+    live_db: bool = True,
+) -> dict:
+    """The whole deterministic inventory: the generic scan plus whatever
+    specific extractors this repo's shape supports.
+
+    `live_db=False` is the registered-repository case: there is no running
+    database for someone else's checkout, so tables come from its schema file
+    and there are no settings columns to report. Each specific extractor
+    already returns [] when its directory is absent, so a Rust repo simply
+    yields the generic half without anything having to detect that.
+    """
+    from backend.research import repo_scan
+
     root = root or repo_root()
-    if db is None:
+    if live_db and db is None:
         from backend.db.connection import get_db
         db = get_db()
-    return {
-        'root': str(root),
-        'git': git_facts(root, since_sha),
+
+    facts = repo_scan.build_scan(root)
+    facts['git'] = git_facts(root, since_sha)
+    facts.update({
         'routes': route_facts(root),
-        'tables': table_facts(db),
+        'tables': table_facts(db) if live_db else table_facts_from_sql(root),
         'views': view_facts(root),
         'api': api_facts(root),
         'components': component_facts(root),
         'ai': ai_facts(root),
-        'settings': settings_facts(db),
-        'docs': doc_facts(root),
-    }
+        'settings': settings_facts(db) if live_db else [],
+        # The specific doc list (CLAUDE.md, ROADMAP, TODO) where it applies;
+        # repo_scan's generic sweep already found whatever else is there.
+        'docs': doc_facts(root) or facts.get('docs') or [],
+        # False means "tables here were parsed, not read" — the renderer says
+        # so, because a missing column is otherwise indistinguishable from a
+        # column that does not exist.
+        'liveDb': live_db,
+    })
+    return facts
 
 
-def render_digest(facts: dict) -> str:
+def render_digest(facts: dict, name: str = '') -> str:
     """Markdown rendering of the facts — the artifact the agent reads.
 
     Pure: no DB, no filesystem, no model. Kept compact enough to sit inside a
-    24K slot alongside an idea and a tool transcript.
+    slot alongside an idea and a tool transcript.
+
+    The generic sections (languages, layout, modules) come first because they
+    are the only ones every repo has; the specific ones follow and are simply
+    absent when this repo has no Flask routes or React views to report.
     """
-    lines: list[str] = ['# Lunaschal repo inventory', '']
+    title = f'# {name} repo inventory' if name else '# Repo inventory'
+    lines: list[str] = [title, '']
 
     git = facts.get('git') or {}
     if git.get('sha'):
         lines += [f"Commit `{git['sha'][:10]}` on `{git.get('branch') or 'unknown'}`.", '']
+
+    languages = facts.get('languages') or []
+    if languages:
+        lines += ['## Languages', '', ', '.join(
+            f"{e['language']} ({e['files']} files, {e['lines']:,} lines)"
+            for e in languages[:8]
+        ), '']
+
+    layout = facts.get('layout') or []
+    if layout:
+        lines += ['## Layout', '', ', '.join(layout), '']
+
+    modules = facts.get('modules') or []
+    if modules:
+        lines += ['## Modules, largest first', '']
+        for module in modules[:30]:
+            lines.append(
+                f"- `{module['path'] or '(root)'}` — {module['files']} files,"
+                f" {module['lines']:,} lines"
+            )
+        remaining = facts.get('moduleCount', len(modules)) - min(30, len(modules))
+        if remaining > 0:
+            lines.append(f'- … and {remaining} more')
+        lines.append('')
 
     views = facts.get('views') or {}
     nav = views.get('navItems') or []
@@ -420,6 +564,17 @@ def render_digest(facts: dict) -> str:
     tables = [t for t in (facts.get('tables') or []) if not t.get('virtual')]
     if tables:
         lines += ['## Tables', '']
+        if facts.get('liveDb') is False:
+            # Say so: a column added by a migration is missing here, and a
+            # missing column is otherwise indistinguishable from one that does
+            # not exist — which is the difference between "add this" and
+            # "this is already there".
+            lines += [
+                '> Parsed from the schema file, not read from a live database,'
+                ' so columns added by migrations are not listed. Read the'
+                ' migration code to be sure.',
+                '',
+            ]
         for table in tables:
             cols = ', '.join(c['name'] for c in table['columns'])
             lines.append(f"- **{table['table']}**: {cols}")

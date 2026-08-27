@@ -948,6 +948,35 @@ CREATE TABLE IF NOT EXISTS lifestyle_weather_days (
     updated_at INTEGER NOT NULL
 );
 
+-- Repositories the Ideas agent can read. Registered by git URL and cloned by
+-- Luna into ./data/repos/<slug>/ (REPOS_ROOT); nothing here points at a
+-- directory the user maintains, so a repo is always a checkout we own and can
+-- reset --hard without destroying anyone's work.
+--
+-- graph_built_at/graph_node_count track the graphify graph inside the clone.
+-- Both are nullable: a repo with no graph simply never offers the code_map
+-- tool, the same degrade-by-absence the web search provider uses.
+CREATE TABLE IF NOT EXISTS repos (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    remote_url TEXT NOT NULL,
+    -- '' means the remote's default branch, resolved at clone time.
+    branch TEXT NOT NULL DEFAULT '',
+    clone_state TEXT NOT NULL DEFAULT 'pending'
+        CHECK(clone_state IN ('pending','cloning','ready','error')),
+    clone_error TEXT,
+    head_sha TEXT,
+    last_pulled_at INTEGER,
+    graph_built_at INTEGER,
+    graph_node_count INTEGER,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_repos_updated ON repos(updated_at DESC);
+
 -- Ideas: the app's own feature backlog, developed with the research agent.
 -- raw_content is what was spoken/typed and is never overwritten; content is the
 -- AI-cleaned prose, following the journal_entries split.
@@ -986,6 +1015,9 @@ CREATE INDEX IF NOT EXISTS idx_idea_sketches_idea ON idea_sketches(idea_id, posi
 -- failed summary must never cost us the facts, which are the actual product.
 CREATE TABLE IF NOT EXISTS repo_snapshots (
     id TEXT PRIMARY KEY,
+    -- Which registered repository this describes; NULL is the checkout the app
+    -- itself is running from.
+    repo_id TEXT REFERENCES repos(id),
     git_sha TEXT,
     git_branch TEXT,
     facts TEXT NOT NULL DEFAULT '{}',
@@ -1008,21 +1040,36 @@ CREATE INDEX IF NOT EXISTS idx_repo_snapshots_generated ON repo_snapshots(genera
 -- something the user relied on.
 CREATE TABLE IF NOT EXISTS wiki_articles (
     id TEXT PRIMARY KEY,
-    slug TEXT NOT NULL UNIQUE,
+    -- NULL means a research note about a problem space, belonging to no
+    -- codebase — the only kind that existed before repositories did, and still
+    -- the right shape for "how do other people solve this".
+    repo_id TEXT REFERENCES repos(id) ON DELETE CASCADE,
+    slug TEXT NOT NULL,
     title TEXT NOT NULL,
     summary TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '',
     sources TEXT,
     tags TEXT,
+    kind TEXT NOT NULL DEFAULT 'research' CHECK(kind IN ('research','code')),
     revision INTEGER NOT NULL DEFAULT 1,
     -- A locked article is the user's; the agent proposes changes instead.
     locked INTEGER NOT NULL DEFAULT 0,
     last_researched_at INTEGER,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    -- Per repo, not global: two codebases will both have something worth
+    -- calling `scheduling`, and one silently overwriting the other is the bug
+    -- this shape prevents. NULLs are distinct to UNIQUE, which is what keeps
+    -- the unscoped research notes out of every repo's way.
+    -- backend/db/wiki_repo_migration.py rebuilds pre-existing tables to match.
+    UNIQUE(repo_id, slug)
 );
 
 CREATE INDEX IF NOT EXISTS idx_wiki_articles_updated ON wiki_articles(updated_at DESC);
+-- idx_wiki_articles_repo is created in backend/db/wiki_repo_migration.py, not
+-- here: this file runs before any migration, and on a database predating the
+-- repo_id column the CREATE TABLE above is skipped while an index naming that
+-- column would fail outright.
 
 CREATE TABLE IF NOT EXISTS wiki_revisions (
     id TEXT PRIMARY KEY,

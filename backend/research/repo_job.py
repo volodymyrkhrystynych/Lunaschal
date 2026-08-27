@@ -20,40 +20,76 @@ logger = logging.getLogger(__name__)
 # history is plenty to answer "what changed recently".
 KEEP_SNAPSHOTS = 30
 
+# The checkout this app runs from is not a registered repository and has no row
+# to take a name from.
+SELF_NAME = 'Lunaschal'
 
-def current_snapshot() -> dict | None:
-    """The newest snapshot as a row dict, or None before the first run."""
+
+def current_snapshot(repo_id: str | None = None) -> dict | None:
+    """The newest snapshot for a repo, or None before its first scan.
+
+    Ordered by `generated_at DESC, id DESC`: generated_at is second-resolution,
+    so two scans in the same second tie and the ULID is what actually breaks it.
+    Without the tiebreak, scanning twice could leave the app reading the *older*
+    snapshot — a real bug, caught by a test.
+    """
     from backend.db.connection import row_to_dict
+    clause, params = _repo_clause(repo_id)
     row = get_db().execute(
-        'SELECT * FROM repo_snapshots ORDER BY generated_at DESC, id DESC LIMIT 1'
+        f'SELECT * FROM repo_snapshots WHERE {clause}'
+        ' ORDER BY generated_at DESC, id DESC LIMIT 1',
+        params,
     ).fetchone()
     return row_to_dict(row) if row else None
 
 
-def _latest_row():
+def _repo_clause(repo_id: str | None) -> tuple[str, list]:
+    """`repo_id = NULL` is never true in SQL, so the unscoped case needs IS."""
+    if repo_id is None:
+        return 'repo_id IS NULL', []
+    return 'repo_id = ?', [repo_id]
+
+
+def _latest_row(repo_id: str | None = None):
+    clause, params = _repo_clause(repo_id)
     return get_db().execute(
-        'SELECT id, git_sha FROM repo_snapshots ORDER BY generated_at DESC, id DESC LIMIT 1'
+        f'SELECT id, git_sha FROM repo_snapshots WHERE {clause}'
+        ' ORDER BY generated_at DESC, id DESC LIMIT 1',
+        params,
     ).fetchone()
 
 
-def run_repo_snapshot(now: int | None = None, force: bool = False) -> dict | None:
-    """Build a snapshot of the repo. Returns the new row's summary, or None
-    when the repo has not moved since the last one (unless `force`).
+def run_repo_snapshot(
+    now: int | None = None,
+    force: bool = False,
+    repo_id: str | None = None,
+) -> dict | None:
+    """Build a snapshot of a repo. Returns the new row's summary, or None when
+    the repo has not moved since the last one (unless `force`).
+
+    With no `repo_id` this scans the checkout the app is running from, which is
+    what it always did. With one, it scans that registered repository's clone.
 
     Ordering matters: the facts are extracted and committed before the model is
     ever called, so an LLM failure — or a restart mid-call — cannot cost us the
     deterministic half.
     """
-    root = repo_facts.repo_root()
-    if not repo_facts.is_repo(root):
-        logger.warning('Repo-context skipped: %s is not a Lunaschal checkout', root)
+    root = _root_for(repo_id)
+    if root is None:
+        logger.warning('Repo-context skipped: no usable checkout for %s', repo_id)
         return None
 
     db = get_db()
-    previous = _latest_row()
+    previous = _latest_row(repo_id)
     prev_sha = previous['git_sha'] if previous else None
 
-    facts = repo_facts.build_facts(root, db, since_sha=prev_sha)
+    # A registered clone has no live database of its own; its tables come from
+    # parsing its schema file, and the digest says so. Only this app's own
+    # checkout gets the exact PRAGMA reading.
+    facts = repo_facts.build_facts(
+        root, db if repo_id is None else None, since_sha=prev_sha,
+        live_db=repo_id is None,
+    )
     sha = (facts.get('git') or {}).get('sha')
 
     if not force and sha and prev_sha == sha:
@@ -64,16 +100,17 @@ def run_repo_snapshot(now: int | None = None, force: bool = False) -> dict | Non
     warnings = (facts.get('views') or {}).get('warnings') or []
 
     db.execute(
-        'INSERT INTO repo_snapshots(id, git_sha, git_branch, facts, digest,'
+        'INSERT INTO repo_snapshots(id, repo_id, git_sha, git_branch, facts, digest,'
         ' change_summary, route_count, table_count, component_count, warnings,'
         ' prev_snapshot_id, generated_at, created_at)'
-        ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (
             snapshot_id,
+            repo_id,
             sha,
             (facts.get('git') or {}).get('branch'),
             repo_facts.facts_json(facts),
-            repo_facts.render_digest(facts),
+            repo_facts.render_digest(facts, _display_name(repo_id)),
             None,
             len(facts.get('routes') or []),
             len([t for t in facts.get('tables') or [] if not t.get('virtual')]),
@@ -107,7 +144,7 @@ def run_repo_snapshot(now: int | None = None, force: bool = False) -> dict | Non
         )
         db.commit()
 
-    _prune(db)
+    _prune(db, repo_id)
 
     return {
         'id': snapshot_id,
@@ -119,10 +156,47 @@ def run_repo_snapshot(now: int | None = None, force: bool = False) -> dict | Non
     }
 
 
-def _prune(db) -> None:
+def _display_name(repo_id: str | None) -> str:
+    """What to head the digest with.
+
+    The app's own checkout keeps its name rather than becoming a generic
+    "Repo inventory" — the agent is often reading several of these, and an
+    untitled one is the one it cannot tell apart.
+    """
+    if repo_id is None:
+        return SELF_NAME
+    from backend.repos import registry
+    return (registry.get_repo(repo_id) or {}).get('name') or ''
+
+
+def _root_for(repo_id: str | None):
+    """The checkout to scan.
+
+    No repo_id means the checkout this app runs from — the original behaviour,
+    and still what the Settings "Scan now" button does. A repo_id means a
+    registered clone, and `is_repo`'s Lunaschal fingerprint deliberately does
+    not apply there: an arbitrary repository is still worth scanning, it just
+    yields the generic half of the facts.
+    """
+    if repo_id is None:
+        root = repo_facts.repo_root()
+        return root if repo_facts.is_repo(root) else None
+    from backend.repos import registry
+    root = registry.repo_root(repo_id)
+    return root if root and (root / '.git').exists() else None
+
+
+def _prune(db, repo_id: str | None = None) -> None:
+    """Keep the newest KEEP_SNAPSHOTS *per repo*.
+
+    Pruning globally would let a busy repo's history evict a quiet one's only
+    snapshot, and an idea judged against nothing gets no assessment at all.
+    """
+    clause, params = _repo_clause(repo_id)
     db.execute(
-        'DELETE FROM repo_snapshots WHERE id NOT IN ('
-        ' SELECT id FROM repo_snapshots ORDER BY generated_at DESC, id DESC LIMIT ?)',
-        (KEEP_SNAPSHOTS,),
+        f'DELETE FROM repo_snapshots WHERE {clause} AND id NOT IN ('
+        f' SELECT id FROM repo_snapshots WHERE {clause}'
+        ' ORDER BY generated_at DESC, id DESC LIMIT ?)',
+        [*params, *params, KEEP_SNAPSHOTS],
     )
     db.commit()

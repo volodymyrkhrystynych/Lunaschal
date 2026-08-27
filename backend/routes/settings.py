@@ -107,6 +107,9 @@ def get_settings():
         'repoContextHour': (
             s.get('repo_context_hour') if s.get('repo_context_hour') is not None else 3
         ),
+        'codeWikiArticles': (
+            s.get('code_wiki_articles') if s.get('code_wiki_articles') is not None else 6
+        ),
         'researchEnabled': bool(s.get('research_enabled', 0)),
         'researchSearchProvider': s.get('research_search_provider') or '',
         # Never the key itself, following hasHfToken.
@@ -170,6 +173,7 @@ def update_ai():
         'briefingMaxTokens': 'briefing_max_tokens',
         'repoContextEnabled': 'repo_context_enabled',
         'repoContextHour': 'repo_context_hour',
+        'codeWikiArticles': 'code_wiki_articles',
         'researchEnabled': 'research_enabled',
         'researchSearchProvider': 'research_search_provider',
         'researchSearchKey': 'research_search_key',

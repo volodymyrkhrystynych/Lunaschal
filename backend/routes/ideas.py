@@ -25,7 +25,8 @@ STATUSES = ('new', 'researching', 'ready', 'planned', 'building', 'shipped', 'pa
 # Columns the list endpoint returns: everything except the two body columns,
 # which are only needed once an idea is opened.
 _LIST_COLUMNS = (
-    'id, title, status, tags, user_verdict, research_state, created_at, updated_at'
+    'id, title, status, tags, user_verdict, research_state, repo_id,'
+    ' created_at, updated_at'
 )
 
 
@@ -84,6 +85,20 @@ def list_ideas():
     return jsonify(result)
 
 
+def _resolve_repo_id(requested) -> str | None:
+    """The repo a new idea belongs to.
+
+    An explicit repoId wins. With none given, a single-repo setup should not
+    have to say so on every capture — so the registered default is stamped on,
+    and only a genuinely repo-less setup leaves the column NULL.
+    """
+    requested = (requested or '').strip()
+    if requested:
+        return requested
+    from backend.repos.registry import default_repo
+    return (default_repo() or {}).get('id')
+
+
 @bp.post('')
 def create_idea():
     body = request.json or {}
@@ -97,9 +112,10 @@ def create_idea():
     id = body.get('id') or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT OR IGNORE INTO ideas(id, title, raw_content, content, status, tags, created_at, updated_at)'
-        ' VALUES (?,?,?,?,?,?,?,?)',
-        (id, title, raw_content, '', 'new', tags_json(body.get('tags')), now, now),
+        'INSERT OR IGNORE INTO ideas(id, title, raw_content, content, status, tags,'
+        ' repo_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        (id, title, raw_content, '', 'new', tags_json(body.get('tags')),
+         _resolve_repo_id(body.get('repoId')), now, now),
     )
     db.commit()
     return jsonify({'id': id}), 201
@@ -138,6 +154,8 @@ def update_idea(idea_id):
         updates['user_verdict'] = verdict or None
     if 'userVerdictNote' in body:
         updates['user_verdict_note'] = (body['userVerdictNote'] or '').strip() or None
+    if 'repoId' in body:
+        updates['repo_id'] = (body['repoId'] or '').strip() or None
     db = get_db()
     build_update(db, 'ideas', updates, 'id=?', (idea_id,))
     db.commit()
@@ -190,9 +208,9 @@ def create_from_voice():
     id = body.get('id') or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT OR IGNORE INTO ideas(id, title, raw_content, content, status, created_at, updated_at)'
-        ' VALUES (?,?,?,?,?,?,?)',
-        (id, '', raw_content, '', 'new', now, now),
+        'INSERT OR IGNORE INTO ideas(id, title, raw_content, content, status,'
+        ' repo_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
+        (id, '', raw_content, '', 'new', _resolve_repo_id(body.get('repoId')), now, now),
     )
     db.commit()
     _polish_idea_bg(id, raw_content)
@@ -443,6 +461,7 @@ def discuss(idea_id):
     from backend.ai import priority
     from backend.ai.llm import chat_stream_deltas
     from backend.research import agent, discuss as ctx
+    from backend.research.code import files_read as code_files
 
     if not is_ai_configured():
         return jsonify({'error': 'AI provider not configured'}), 400
@@ -479,6 +498,18 @@ def discuss(idea_id):
     history = ctx.history_messages(conversation_id)[:-1]  # drop the turn just saved
     gather_request = ctx.build_gather_request(context, history, question)
 
+    # The toolbox is assembled per discussion, because it depends on which repo
+    # this idea is about and whether that repo has a code graph. The system
+    # prompt is built from the same answer: promising tools the model does not
+    # have is the same mistake as offering one that always fails.
+    repo = ctx.idea_repo(idea_id)
+    tools, dispatch, code_tools = ctx.build_toolbox(repo)
+    system = ctx.system_prompt(
+        has_repo=code_tools is not None,
+        has_map=any(t['function']['name'] == 'code_map' for t in tools),
+        repo_name=(repo or {}).get('name', ''),
+    )
+
     # Acquired in the view, released in the generator's finally — see the same
     # shape in backend/routes/chat.py.
     token = priority.begin('ideas.discuss')
@@ -491,13 +522,18 @@ def discuss(idea_id):
             result = {}
             # The generator form, so a tool event reaches the browser the
             # moment that call finishes rather than after all gathering ends.
-            for kind, payload in agent.gather_events(ctx.SYSTEM_PROMPT, gather_request):
+            for kind, payload in agent.gather_events(
+                system, gather_request, tools=tools, dispatch=dispatch,
+                max_turns=ctx.CODE_MAX_TURNS,
+            ):
                 if kind == 'step':
                     yield f'data: {json.dumps(payload)}\n\n'
                 else:
                     result = payload
             steps = result.get('steps', [])
-            sources = result.get('sources', [])
+            # Sources are what was actually opened, never what the model says it
+            # read: web pages from the loop, files from the read events.
+            sources = result.get('sources', []) + code_files(steps)
 
             messages = result.get('messages', []) + [
                 {'role': 'user', 'content': ctx.ANSWER_INSTRUCTION}
@@ -556,6 +592,7 @@ def create_plan(idea_id):
     the user pressed the button."""
     from backend.ai import priority
     from backend.research import assess, discuss as ctx, plan as plan_mod
+    from backend.research import plan_files
     from backend.research.idea_text import display_title
     from backend.research.repo_job import current_snapshot
 
@@ -577,21 +614,33 @@ def create_plan(idea_id):
     ).fetchall()
     open_questions = [{'question': r['question']} for r in open_rows]
 
-    prompt = ctx.build_context(idea_id) + (
-        '\n\n# Your task\n\nWrite the implementation spec for this idea.'
-    )
+    # Files somebody actually opened while working on this idea. The model
+    # picks from these by number and the grammar bounds the choice, so a plan
+    # cannot send a coding agent to a path that does not exist.
+    repo = ctx.idea_repo(idea_id)
+    candidates = plan_files.gather_file_candidates(idea_id, (repo or {}).get('id'))
+
+    prompt = ctx.build_context(idea_id)
+    if candidates:
+        prompt += (
+            '\n\n# Candidate files (cite these by number in fileIndexes)\n\n'
+            + plan_files.render_candidates(candidates)
+        )
+    prompt += '\n\n# Your task\n\nWrite the implementation spec for this idea.'
+
     with priority.interactive('ideas.plan'):
-        spec = plan_mod.generate_spec(prompt)
+        spec = plan_mod.generate_spec(prompt, plan_mod.build_schema(len(candidates)))
     if spec is None:
         return jsonify({'error': 'The model returned no usable plan'}), 502
 
-    snapshot = current_snapshot()
+    snapshot = current_snapshot((repo or {}).get('id'))
     content = plan_mod.render_plan_markdown(
         display_title(idea),
         spec,
         evidence=evidence,
         answered=answered,
         open_questions=open_questions,
+        files=plan_files.resolve_indexes(spec.get('fileIndexes'), candidates),
     )
     saved = plan_mod.save_plan(idea_id, content, spec, (snapshot or {}).get('id'))
     db.execute(

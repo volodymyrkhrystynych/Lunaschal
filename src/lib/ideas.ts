@@ -81,6 +81,12 @@ export interface IdeaFilter {
   status?: IdeaStatus | 'all';
   tag?: string;
   query?: string;
+  /**
+   * Which repository's ideas to show. 'all' (or undefined) shows every idea,
+   * including the ones belonging to no repo — the list is a personal backlog,
+   * and hiding rows by default is how an idea gets forgotten.
+   */
+  repoId?: string | 'all';
 }
 
 /**
@@ -102,6 +108,13 @@ export function filterIdeas(
       return false;
     }
     if (filter.tag && !parseTags(idea.tags).includes(filter.tag)) return false;
+    if (
+      filter.repoId &&
+      filter.repoId !== 'all' &&
+      idea.repoId !== filter.repoId
+    ) {
+      return false;
+    }
     if (q && !idea.title.toLowerCase().includes(q)) return false;
     return true;
   });

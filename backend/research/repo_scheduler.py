@@ -6,8 +6,26 @@ backend/briefing_scheduler.py, which this copies). The window defaults to
 05:00-07:00, so this contends with neither for the two llama slots — and it
 runs *before* the briefing, so a morning briefing sees a current snapshot.
 
-The run body lives in backend/research/repo_job.py so tests can call it directly.
+Each night it does, per registered repository and then for this app's own
+checkout: **pull, graph, scan, write.**
+
+- `git fetch` + `reset --hard` — the tree is the truth, and reset leaves the
+  untracked graph alone.
+- `graphify update --force` — 0.2 s on a small repo, no LLM, no API key. Forced
+  past the "fewer nodes" guard because the tree was just reset to the remote, so
+  a commit that deletes a package *should* shrink the graph rather than leave a
+  stale one standing.
+- the deterministic snapshot.
+- a few code-wiki module notes.
+
+Only the last of those spends model time, and it goes through the priority gate
+between modules, so a pass still running at 05:00 yields to whatever the user
+asks for rather than fighting the briefing for a slot.
+
+The run bodies live in repo_job.py and code_wiki.py so tests and the Settings
+buttons can call them directly, the same split the overnight briefing uses.
 """
+import logging
 import os
 import threading
 import time
@@ -15,6 +33,8 @@ from datetime import datetime
 
 from backend.db.connection import get_db
 from backend.research.repo_job import run_repo_snapshot
+
+logger = logging.getLogger(__name__)
 
 WINDOW_SPAN_HOURS = 2
 _POLL_SECONDS = 300
@@ -51,6 +71,60 @@ def should_run(enabled: bool, hour: int, now: datetime, last_run_date) -> bool:
     return enabled and in_window(hour, now) and last_run_date != now.date()
 
 
+def run_nightly(cancel=None) -> dict:
+    """One night's work across every repository. Returns a per-repo summary.
+
+    Sequential on purpose: two repos pulling and scanning at once would give
+    the disk and the model nothing but contention, and there is all night.
+    """
+    from backend.repos import job, registry
+    from backend.research import code_wiki
+
+    results = {}
+    for repo in registry.list_repos():
+        if cancel is not None and cancel.is_set():
+            break
+        try:
+            results[repo['slug']] = _run_one(repo, job, code_wiki, cancel)
+        except Exception as e:
+            # One repo's failure must not cost the others their night.
+            logger.warning('Nightly pass failed for %s: %s', repo['slug'], e)
+            results[repo['slug']] = {'error': str(e)}
+
+    # This app's own checkout is not a registered repo and has no clone to
+    # pull; it still gets the snapshot it always got.
+    try:
+        run_repo_snapshot()
+    except Exception as e:
+        logger.warning('Self repo-context snapshot failed: %s', e)
+    return results
+
+
+def _run_one(repo: dict, job, code_wiki, cancel) -> dict:
+    """Pull, graph, scan, write — for one repository, in that order.
+
+    The order is the point: a snapshot of a tree that was not pulled describes
+    yesterday, and a code note written against it cites lines that moved.
+    """
+    if repo.get('cloneState') == 'ready':
+        pulled = job.run_pull(repo['id'], cancel)
+    else:
+        # A repo that never finished cloning gets its clone now rather than
+        # being skipped forever.
+        pulled = job.run_import(repo['id'], cancel)
+    if not pulled.get('ok'):
+        return {'pulled': False, 'error': pulled.get('error')}
+
+    snapshot = run_repo_snapshot(repo_id=repo['id'])
+    written = code_wiki.run_code_wiki(repo['id'], cancel=cancel)
+    return {
+        'pulled': True,
+        'snapshot': bool(snapshot),
+        'articles': written.get('written') or [],
+        'skipped': written.get('skipped', 0),
+    }
+
+
 def _scheduler_loop() -> None:
     last_run_date = None
     while True:
@@ -59,9 +133,9 @@ def _scheduler_loop() -> None:
             now = datetime.now()
             if should_run(enabled, hour, now, last_run_date):
                 last_run_date = now.date()
-                run_repo_snapshot()
+                run_nightly()
         except Exception as e:
-            print(f'Repo-context snapshot failed: {e}')
+            logger.warning('Repo-context nightly pass failed: %s', e)
         time.sleep(_POLL_SECONDS)
 
 

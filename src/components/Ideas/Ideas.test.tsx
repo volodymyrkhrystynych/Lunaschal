@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Ideas } from './index';
-import { api, type Idea, type IdeaSummary } from '../../hooks/api';
+import { api, type Idea, type IdeaSummary, type Repo } from '../../hooks/api';
 
 vi.mock('../../hooks/api', () => ({
   api: {
@@ -29,6 +29,7 @@ vi.mock('../../hooks/api', () => ({
       createPlan: vi.fn(),
     },
     chat: { getConversation: vi.fn() },
+    repos: { list: vi.fn() },
   },
 }));
 
@@ -68,6 +69,7 @@ function summary(over: Partial<IdeaSummary> = {}): IdeaSummary {
     assessmentStale: false,
     userVerdict: null,
     researchState: 'idle',
+    repoId: null,
     createdAt: '2026-08-01T00:00:00Z',
     updatedAt: '2026-08-01T00:00:00Z',
     ...over,
@@ -85,6 +87,7 @@ function detail(over: Partial<Idea> = {}): Idea {
     userVerdict: null,
     userVerdictNote: null,
     researchState: 'idle',
+    repoId: null,
     createdAt: '2026-08-01T00:00:00Z',
     updatedAt: '2026-08-01T00:00:00Z',
     ...over,
@@ -114,7 +117,28 @@ beforeEach(() => {
   vi.mocked(api.ideas.listQuestions).mockResolvedValue([]);
   vi.mocked(api.ideas.listConversations).mockResolvedValue([]);
   vi.mocked(api.ideas.listPlans).mockResolvedValue([]);
+  vi.mocked(api.repos.list).mockResolvedValue([]);
 });
+
+function repo(over: Partial<Repo> = {}): Repo {
+  return {
+    id: 'r1',
+    slug: 'lunaschal',
+    name: 'Lunaschal',
+    remoteUrl: 'https://github.com/o/lunaschal.git',
+    branch: 'main',
+    cloneState: 'ready',
+    cloneError: null,
+    headSha: 'abc1234',
+    lastPulledAt: null,
+    graphBuiltAt: null,
+    graphNodeCount: null,
+    isDefault: true,
+    hasCheckout: true,
+    hasGraph: false,
+    ...over,
+  };
+}
 
 describe('Ideas', () => {
   it('lists ideas with their status and tags', async () => {
@@ -395,5 +419,84 @@ describe('sketches', () => {
       'two-panel layout'
     )) as HTMLImageElement;
     expect(img.getAttribute('src')).toBe('/api/paper/pages/p1/image?v=123');
+  });
+});
+
+describe('the repository switcher', () => {
+  it('is not shown when there is nothing to choose between', async () => {
+    // One repo, or none, means a control that can only be set one way.
+    vi.mocked(api.repos.list).mockResolvedValue([repo()]);
+    renderIt();
+    await screen.findByText('Habit tracking');
+    expect(screen.queryByLabelText('Repository')).toBeNull();
+  });
+
+  it('filters the list down to one repository', async () => {
+    vi.mocked(api.repos.list).mockResolvedValue([
+      repo({ id: 'r1', name: 'Lunaschal' }),
+      repo({ id: 'r2', name: 'Other', slug: 'other', isDefault: false }),
+    ]);
+    vi.mocked(api.ideas.list).mockResolvedValue([
+      summary({ id: 'i1', title: 'Habit tracking', repoId: 'r1' }),
+      summary({ id: 'i2', title: 'Other thing', repoId: 'r2' }),
+    ]);
+    renderIt();
+
+    const select = (await screen.findByLabelText(
+      'Repository'
+    )) as HTMLSelectElement;
+    expect(screen.getByText('Other thing')).toBeTruthy();
+
+    fireEvent.change(select, { target: { value: 'r1' } });
+    expect(screen.getByText('Habit tracking')).toBeTruthy();
+    expect(screen.queryByText('Other thing')).toBeNull();
+  });
+
+  it('files a new idea under the repository being viewed', async () => {
+    vi.mocked(api.repos.list).mockResolvedValue([
+      repo({ id: 'r1' }),
+      repo({ id: 'r2', name: 'Other', slug: 'other', isDefault: false }),
+    ]);
+    renderIt();
+
+    const select = (await screen.findByLabelText(
+      'Repository'
+    )) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'r2' } });
+
+    fireEvent.change(screen.getByPlaceholderText(/capture an idea/i), {
+      target: { value: 'a new idea' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.ideas.createFromVoice).toHaveBeenCalledWith(
+        'a new idea',
+        expect.any(String),
+        'r2'
+      )
+    );
+  });
+
+  it('lets the server pick the repo while viewing all of them', async () => {
+    vi.mocked(api.repos.list).mockResolvedValue([
+      repo({ id: 'r1' }),
+      repo({ id: 'r2', name: 'Other', slug: 'other', isDefault: false }),
+    ]);
+    renderIt();
+    await screen.findByLabelText('Repository');
+
+    fireEvent.change(screen.getByPlaceholderText(/capture an idea/i), {
+      target: { value: 'unfiled' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.ideas.createFromVoice).toHaveBeenCalledWith(
+        'unfiled',
+        expect.any(String),
+        undefined
+      )
+    );
   });
 });

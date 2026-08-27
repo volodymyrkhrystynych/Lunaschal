@@ -667,6 +667,8 @@ export interface AppSettings {
   websearchSearxngUrl: string;
   repoContextEnabled: boolean;
   repoContextHour: number;
+  /** Module notes the nightly pass writes per repo. 0 turns it off. */
+  codeWikiArticles: number;
   researchEnabled: boolean;
   researchSearchProvider: string;
   hasResearchSearchKey: boolean;
@@ -881,6 +883,8 @@ export interface IdeaSummary {
   assessmentStale: boolean;
   userVerdict: IdeaVerdict | null;
   researchState: string | null;
+  /** Which registered repository this idea is about; null for a plain product idea. */
+  repoId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -972,6 +976,31 @@ export interface IdeaPaperPage {
   paperTitle: string;
   position: number;
   imageUrl: string | null;
+}
+
+/**
+ * A repository the Ideas agent can read. Registered by git URL and cloned into
+ * ./data/repos/<slug>/ — Luna owns every checkout, so nothing here points at a
+ * working tree the user is editing.
+ */
+export interface Repo {
+  id: string;
+  slug: string;
+  name: string;
+  remoteUrl: string;
+  /** '' means the remote's default branch, resolved at clone time. */
+  branch: string;
+  cloneState: 'pending' | 'cloning' | 'ready' | 'error';
+  cloneError: string | null;
+  headSha: string | null;
+  lastPulledAt: string | null;
+  /** Null until a graphify graph has been built inside the clone. */
+  graphBuiltAt: string | null;
+  graphNodeCount: number | null;
+  isDefault: boolean;
+  /** Filesystem truth, not a column: the clone and the graph really being there. */
+  hasCheckout: boolean;
+  hasGraph: boolean;
 }
 
 /**
@@ -3143,6 +3172,20 @@ export const api = {
       ),
   },
 
+  repos: {
+    list: () => get<Repo[]>('/api/repos'),
+    get: (id: string) => get<Repo>(`/api/repos/${id}`),
+    create: (data: { remoteUrl: string; name?: string; branch?: string }) =>
+      post<Repo & { queued: boolean }>('/api/repos', data),
+    // Fetch + hard reset + graph refresh, on the research worker. 202 with
+    // {queued}, or 409 when the worker already has a job.
+    pull: (id: string) =>
+      post<{ queued: boolean }>(`/api/repos/${id}/pull`, {}),
+    makeDefault: (id: string) =>
+      post<{ success: boolean }>(`/api/repos/${id}/default`, {}),
+    remove: (id: string) => del<{ success: boolean }>(`/api/repos/${id}`),
+  },
+
   ideas: {
     list: () => get<IdeaSummary[]>('/api/ideas'),
     get: (id: string) => get<Idea>(`/api/ideas/${id}`),
@@ -3150,11 +3193,13 @@ export const api = {
       title?: string;
       rawContent?: string;
       tags?: string[];
+      // Omit to let the server stamp the default repo; '' detaches.
+      repoId?: string;
       // Optional client-supplied ULID — see api.journal.create.
       id?: string;
     }) => post<{ id: string }>('/api/ideas', data),
-    createFromVoice: (rawContent: string, id?: string) =>
-      post<{ id: string }>('/api/ideas/voice', { rawContent, id }),
+    createFromVoice: (rawContent: string, id?: string, repoId?: string) =>
+      post<{ id: string }>('/api/ideas/voice', { rawContent, id, repoId }),
     update: (
       id: string,
       data: {
@@ -3165,6 +3210,7 @@ export const api = {
         tags?: string[];
         userVerdict?: IdeaVerdict | null;
         userVerdictNote?: string;
+        repoId?: string | null;
       }
     ) => patch<{ success: boolean }>(`/api/ideas/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/ideas/${id}`),
