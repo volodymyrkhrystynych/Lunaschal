@@ -19,13 +19,14 @@ import { LlamaConfigSection } from './LlamaConfigSection';
 import { MemorySection } from './MemorySection';
 import { BackupSection } from './BackupSection';
 import { FilesSection } from './FilesSection';
+import { LogsPanel } from './LogsPanel';
 import { CollapsibleSection } from './CollapsibleSection';
 import { shouldAutoExpand } from '../../lib/backup';
 
 export function Settings() {
-  const [activeTab, setActiveTab] = useState<'general' | 'tags' | 'shortcuts'>(
-    'general'
-  );
+  const [activeTab, setActiveTab] = useState<
+    'general' | 'tags' | 'shortcuts' | 'logs'
+  >('general');
 
   const { data: settings, isLoading } = useQuery({
     queryKey: ['settings'],
@@ -53,7 +54,7 @@ export function Settings() {
     <div className="flex-1 overflow-y-auto p-4">
       <div className="flex items-center gap-4 mb-6">
         <div className="flex gap-1">
-          {(['general', 'tags', 'shortcuts'] as const).map(tab => (
+          {(['general', 'tags', 'shortcuts', 'logs'] as const).map(tab => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -67,7 +68,9 @@ export function Settings() {
                 ? 'General'
                 : tab === 'tags'
                   ? 'Tags'
-                  : 'Shortcuts'}
+                  : tab === 'shortcuts'
+                    ? 'Shortcuts'
+                    : 'Logs'}
             </button>
           ))}
         </div>
@@ -77,6 +80,8 @@ export function Settings() {
         <CuratedTagsSection />
       ) : activeTab === 'shortcuts' ? (
         <ShortcutSettings />
+      ) : activeTab === 'logs' ? (
+        <LogsPanel />
       ) : (
         <>
           <CollapsibleSection title="Display">
