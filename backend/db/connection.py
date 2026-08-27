@@ -794,6 +794,12 @@ def _ensure_research_settings(db: sqlite3.Connection) -> None:
         # Off by default: the research loop makes outbound web requests, which
         # is not something to start doing without being asked.
         db.execute('ALTER TABLE settings ADD COLUMN research_enabled INTEGER DEFAULT 0')
+    if 'code_wiki_articles' not in cols:
+        # Module notes written per nightly pass, per repo. 0 turns it off.
+        # Six because a full churn on a 25 tok/s local model is hours of GPU
+        # time that mostly rewrites articles which did not change; at this rate
+        # a repo's wiki fills in over a week or two and then tracks change.
+        db.execute('ALTER TABLE settings ADD COLUMN code_wiki_articles INTEGER DEFAULT 6')
     db.commit()
 
 

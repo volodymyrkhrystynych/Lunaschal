@@ -10,6 +10,7 @@ import { api } from '../../hooks/api';
 export function ResearchSection() {
   const queryClient = useQueryClient();
   const [hourInput, setHourInput] = useState('3');
+  const [articleInput, setArticleInput] = useState('6');
   const [searchTimeout, setSearchTimeout] = useState('120');
   const [deepTimeout, setDeepTimeout] = useState('600');
 
@@ -25,6 +26,7 @@ export function ResearchSection() {
   useEffect(() => {
     if (!settings) return;
     setHourInput(String(settings.repoContextHour ?? 3));
+    setArticleInput(String(settings.codeWikiArticles ?? 6));
     setSearchTimeout(String(settings.researchSearchTimeoutSeconds ?? 120));
     setDeepTimeout(String(settings.researchDeepTimeoutSeconds ?? 600));
   }, [settings]);
@@ -41,6 +43,12 @@ export function ResearchSection() {
   const saveHour = useMutation({
     mutationFn: (hour: number) =>
       api.settings.updateAI({ repoContextHour: hour }),
+    onSuccess: invalidateSettings,
+  });
+
+  const saveArticles = useMutation({
+    mutationFn: (count: number) =>
+      api.settings.updateAI({ codeWikiArticles: count }),
     onSuccess: invalidateSettings,
   });
 
@@ -86,9 +94,11 @@ export function ResearchSection() {
           Repo context
         </h3>
         <p className="text-xs text-[var(--color-text-muted)] mt-1">
-          A nightly scan of this codebase — routes, tables, views, settings — so
-          the Ideas agent can tell what is already built. The scan itself is
-          exact, not AI-generated; the model only summarizes what changed.
+          Every night each registered repository is pulled, its code graph
+          rebuilt, and its inventory rescanned — so the Ideas agent can tell
+          what is already built. The scan itself is exact, not AI-generated. The
+          model's only jobs are summarizing what changed and writing the module
+          notes below.
         </p>
       </div>
 
@@ -119,6 +129,31 @@ export function ResearchSection() {
         />
         <span className="text-xs text-[var(--color-text-muted)]">
           runs in a two-hour window from this hour
+        </span>
+      </label>
+
+      {/* A full churn of every module every night is hours of GPU time on a
+          local model, and most of it rewrites articles that did not change.
+          At a handful a night a repo's wiki fills in over a week or two and
+          then only tracks change. */}
+      <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
+        Module notes per night
+        <input
+          type="number"
+          min={0}
+          max={50}
+          value={articleInput}
+          onChange={e => setArticleInput(e.target.value)}
+          onBlur={() => {
+            const count = Number(articleInput);
+            if (Number.isInteger(count) && count >= 0 && count <= 50)
+              saveArticles.mutate(count);
+            else setArticleInput(String(settings?.codeWikiArticles ?? 6));
+          }}
+          className="w-16 rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-primary)]"
+        />
+        <span className="text-xs text-[var(--color-text-muted)]">
+          per repository — 0 to stop reading code at night
         </span>
       </label>
 

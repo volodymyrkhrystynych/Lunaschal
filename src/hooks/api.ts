@@ -667,6 +667,8 @@ export interface AppSettings {
   websearchSearxngUrl: string;
   repoContextEnabled: boolean;
   repoContextHour: number;
+  /** Module notes the nightly pass writes per repo. 0 turns it off. */
+  codeWikiArticles: number;
   researchEnabled: boolean;
   researchSearchProvider: string;
   hasResearchSearchKey: boolean;
