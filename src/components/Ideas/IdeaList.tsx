@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useShortcuts } from '../../shortcuts/ShortcutProvider';
 import { api, type IdeaSummary } from '../../hooks/api';
@@ -14,6 +14,12 @@ import {
   tagCounts,
   type IdeaFilter,
 } from '../../lib/ideas';
+import {
+  ALL_REPOS,
+  getStoredIdeaRepo,
+  resolveIdeaRepo,
+  setStoredIdeaRepo,
+} from '../../lib/ideaRepoPersistence';
 import { IdeaCapture } from './IdeaCapture';
 
 interface IdeaListProps {
@@ -29,13 +35,38 @@ export function IdeaList({
   selectedId,
   onSelect,
 }: IdeaListProps) {
-  const [filter, setFilter] = useState<IdeaFilter>({ status: 'all' });
+  // Read once, on mount: the stored id cannot be validated yet because the repo
+  // list has not loaded, so the effect below re-resolves it when it arrives.
+  const [filter, setFilter] = useState<IdeaFilter>(() => ({
+    status: 'all',
+    repoId: getStoredIdeaRepo() ?? ALL_REPOS,
+  }));
   const { level } = useShortcuts();
 
   const { data: repos } = useQuery({
     queryKey: ['repos'],
     queryFn: api.repos.list,
   });
+
+  // One-shot, the CollapsibleSection autoExpand pattern: validate the stored
+  // selection against what actually exists, then never touch it again. Running
+  // on every repos refetch would yank the filter out from under someone who had
+  // just changed it.
+  const resolved = useRef(false);
+  useEffect(() => {
+    if (!repos || resolved.current) return;
+    resolved.current = true;
+    const next = resolveIdeaRepo(
+      getStoredIdeaRepo(),
+      repos.map(r => r.id)
+    );
+    setFilter(f => (f.repoId === next ? f : { ...f, repoId: next }));
+  }, [repos]);
+
+  const selectRepo = (repoId: string) => {
+    setStoredIdeaRepo(repoId === ALL_REPOS ? null : repoId);
+    setFilter(f => ({ ...f, repoId }));
+  };
 
   const tags = tagCounts(ideas);
   const visible = filterIdeas(ideas, filter);
@@ -44,7 +75,7 @@ export function IdeaList({
   // repo — or none — it is a control that can only be set one way.
   const showRepoSwitcher = (repos?.length ?? 0) > 1;
   const captureRepoId =
-    filter.repoId && filter.repoId !== 'all' ? filter.repoId : undefined;
+    filter.repoId && filter.repoId !== ALL_REPOS ? filter.repoId : undefined;
 
   return (
     <>
@@ -53,14 +84,12 @@ export function IdeaList({
       {showRepoSwitcher && (
         <div className="px-3 py-2 border-b border-white/10 shrink-0">
           <select
-            value={filter.repoId ?? 'all'}
-            onChange={e =>
-              setFilter(f => ({ ...f, repoId: e.target.value as string }))
-            }
+            value={filter.repoId ?? ALL_REPOS}
+            onChange={e => selectRepo(e.target.value)}
             aria-label="Repository"
             className="w-full rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1 text-sm focus:outline-none focus:border-[var(--color-primary)]"
           >
-            <option value="all">All repositories</option>
+            <option value={ALL_REPOS}>All repositories</option>
             {repos?.map(repo => (
               <option key={repo.id} value={repo.id}>
                 {repo.name}

@@ -108,6 +108,10 @@ function renderIt() {
 beforeEach(() => {
   vi.clearAllMocks();
   recorderState.status = 'idle';
+  // The repo selection is persisted per device now, so it survives an unmount.
+  // Without this, a test that changes the dropdown silently sets the starting
+  // filter for the next one.
+  localStorage.clear();
   vi.mocked(api.ideas.list).mockResolvedValue([summary()]);
   vi.mocked(api.ideas.get).mockResolvedValue(detail());
   vi.mocked(api.ideas.listSketches).mockResolvedValue([]);
@@ -498,5 +502,89 @@ describe('the repository switcher', () => {
         undefined
       )
     );
+  });
+});
+
+describe('the repository selection persists', () => {
+  it('is restored after a reload', async () => {
+    // The app runs as an installed PWA; a backgrounded webview is re-executed
+    // from scratch on the next screen-on, wiping React state.
+    vi.mocked(api.repos.list).mockResolvedValue([
+      repo({ id: 'r1' }),
+      repo({ id: 'r2', name: 'Other', slug: 'other', isDefault: false }),
+    ]);
+    vi.mocked(api.ideas.list).mockResolvedValue([
+      summary({ id: 'i1', title: 'Habit tracking', repoId: 'r1' }),
+      summary({ id: 'i2', title: 'Other thing', repoId: 'r2' }),
+    ]);
+
+    const first = renderIt();
+    fireEvent.change(await screen.findByLabelText('Repository'), {
+      target: { value: 'r2' },
+    });
+    expect(screen.queryByText('Habit tracking')).toBeNull();
+    first.unmount();
+
+    renderIt();
+    const select = (await screen.findByLabelText(
+      'Repository'
+    )) as HTMLSelectElement;
+    expect(select.value).toBe('r2');
+    expect(screen.getByText('Other thing')).toBeTruthy();
+    expect(screen.queryByText('Habit tracking')).toBeNull();
+  });
+
+  it('still files new ideas under the remembered repo', async () => {
+    localStorage.setItem('lunaschal:ideaRepo', 'r2');
+    vi.mocked(api.repos.list).mockResolvedValue([
+      repo({ id: 'r1' }),
+      repo({ id: 'r2', name: 'Other', slug: 'other', isDefault: false }),
+    ]);
+    renderIt();
+    await screen.findByLabelText('Repository');
+
+    fireEvent.change(screen.getByPlaceholderText(/capture an idea/i), {
+      target: { value: 'a remembered idea' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+    await waitFor(() =>
+      expect(api.ideas.createFromVoice).toHaveBeenCalledWith(
+        'a remembered idea',
+        expect.any(String),
+        'r2'
+      )
+    );
+  });
+
+  it('falls back to all when the remembered repo was removed', async () => {
+    // Filtering to a repo that no longer exists leaves an empty list, and an
+    // empty Ideas tab is indistinguishable from one with no ideas.
+    localStorage.setItem('lunaschal:ideaRepo', 'deleted-repo');
+    vi.mocked(api.repos.list).mockResolvedValue([
+      repo({ id: 'r1' }),
+      repo({ id: 'r2', name: 'Other', slug: 'other', isDefault: false }),
+    ]);
+    renderIt();
+
+    const select = (await screen.findByLabelText(
+      'Repository'
+    )) as HTMLSelectElement;
+    expect(select.value).toBe('all');
+    expect(screen.getByText('Habit tracking')).toBeTruthy();
+  });
+
+  it('does not filter the list when the switcher is hidden', async () => {
+    // One repo means no switcher — but a selection stored while there were two
+    // must not go on silently hiding ideas with no control to undo it.
+    localStorage.setItem('lunaschal:ideaRepo', 'r2');
+    vi.mocked(api.repos.list).mockResolvedValue([repo({ id: 'r1' })]);
+    vi.mocked(api.ideas.list).mockResolvedValue([
+      summary({ id: 'i1', title: 'Habit tracking', repoId: 'r1' }),
+    ]);
+    renderIt();
+
+    expect(await screen.findByText('Habit tracking')).toBeTruthy();
+    expect(screen.queryByLabelText('Repository')).toBeNull();
   });
 });
