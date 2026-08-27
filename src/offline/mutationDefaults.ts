@@ -171,6 +171,8 @@ export interface IdeaCreateVars {
   title?: string;
   rawContent?: string;
   tags?: string[];
+  /** Omit to let the server stamp the registered default repository. */
+  repoId?: string;
 }
 export interface CalorieLogVars {
   id: string;
@@ -705,7 +707,7 @@ const ideaCreateCfg = (
   // name against the memory document. Queuing must not quietly downgrade that.
   mutationFn: vars =>
     vars.rawContent !== undefined
-      ? api.ideas.createFromVoice(vars.rawContent, vars.id)
+      ? api.ideas.createFromVoice(vars.rawContent, vars.id, vars.repoId)
       : api.ideas.create(vars),
   onMutate: vars => {
     const captured: IdeaSummary = {
@@ -724,6 +726,10 @@ const ideaCreateCfg = (
       assessmentStale: false,
       userVerdict: null,
       researchState: null,
+      // Null when the server will pick the default: the optimistic row cannot
+      // know which repo that is, and guessing would make the row jump between
+      // filters when the real one arrives.
+      repoId: vars.repoId ?? null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

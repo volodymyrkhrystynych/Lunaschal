@@ -28,6 +28,7 @@ function idea(over: Partial<IdeaSummary> = {}): IdeaSummary {
     assessmentStale: false,
     userVerdict: null,
     researchState: 'idle',
+    repoId: null,
     createdAt: '2026-08-01T00:00:00+00:00',
     updatedAt: '2026-08-01T00:00:00+00:00',
     ...over,
@@ -183,6 +184,38 @@ describe('filterIdeas', () => {
     expect(filterIdeas(ideas, { query: '  SEARCH ' }).map(i => i.id)).toEqual([
       '2',
     ]);
+  });
+
+  describe('by repository', () => {
+    const mixed = [
+      idea({ id: 'a', title: 'One', repoId: 'r1' }),
+      idea({ id: 'b', title: 'Two', repoId: 'r2' }),
+      // An idea belonging to no repo: a plain product thought, captured
+      // before any repository was registered.
+      idea({ id: 'c', title: 'Three', repoId: null }),
+    ];
+
+    it('shows only that repo when one is chosen', () => {
+      expect(filterIdeas(mixed, { repoId: 'r1' }).map(i => i.id)).toEqual([
+        'a',
+      ]);
+    });
+
+    it('shows everything, including repo-less ideas, for "all"', () => {
+      expect(filterIdeas(mixed, { repoId: 'all' })).toHaveLength(3);
+      expect(filterIdeas(mixed, {})).toHaveLength(3);
+    });
+
+    it('combines with the other filters', () => {
+      const rows = [
+        idea({ id: 'a', repoId: 'r1', status: 'ready' }),
+        idea({ id: 'b', repoId: 'r1', status: 'new' }),
+        idea({ id: 'c', repoId: 'r2', status: 'ready' }),
+      ];
+      expect(
+        filterIdeas(rows, { repoId: 'r1', status: 'ready' }).map(i => i.id)
+      ).toEqual(['a']);
+    });
   });
 
   it('combines filters', () => {

@@ -881,6 +881,8 @@ export interface IdeaSummary {
   assessmentStale: boolean;
   userVerdict: IdeaVerdict | null;
   researchState: string | null;
+  /** Which registered repository this idea is about; null for a plain product idea. */
+  repoId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -3189,11 +3191,13 @@ export const api = {
       title?: string;
       rawContent?: string;
       tags?: string[];
+      // Omit to let the server stamp the default repo; '' detaches.
+      repoId?: string;
       // Optional client-supplied ULID — see api.journal.create.
       id?: string;
     }) => post<{ id: string }>('/api/ideas', data),
-    createFromVoice: (rawContent: string, id?: string) =>
-      post<{ id: string }>('/api/ideas/voice', { rawContent, id }),
+    createFromVoice: (rawContent: string, id?: string, repoId?: string) =>
+      post<{ id: string }>('/api/ideas/voice', { rawContent, id, repoId }),
     update: (
       id: string,
       data: {
@@ -3204,6 +3208,7 @@ export const api = {
         tags?: string[];
         userVerdict?: IdeaVerdict | null;
         userVerdictNote?: string;
+        repoId?: string | null;
       }
     ) => patch<{ success: boolean }>(`/api/ideas/${id}`, data),
     remove: (id: string) => del<{ success: boolean }>(`/api/ideas/${id}`),

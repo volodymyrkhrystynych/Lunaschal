@@ -851,6 +851,11 @@ def _ensure_idea_assessment_columns(db: sqlite3.Connection) -> None:
         # When the background loop last researched this idea. Drives the
         # cooldown, so a quiet backlog doesn't get re-researched every tick.
         db.execute('ALTER TABLE ideas ADD COLUMN researched_at INTEGER')
+    if 'repo_id' not in cols:
+        # Which registered repository this idea is about. Nullable on purpose:
+        # an idea with no repo is a plain product thought and keeps working
+        # exactly as before, it just gets no code tools.
+        db.execute('ALTER TABLE ideas ADD COLUMN repo_id TEXT REFERENCES repos(id)')
     db.commit()
 
 
