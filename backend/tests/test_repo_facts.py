@@ -238,7 +238,7 @@ def test_build_facts_composes_every_section(client, root):
 
 
 def test_render_digest_is_pure_markdown(client, root):
-    digest = rf.render_digest(rf.build_facts(root, get_db()))
+    digest = rf.render_digest(rf.build_facts(root, get_db()), 'Lunaschal')
     assert digest.startswith('# Lunaschal repo inventory')
     assert 'POST /api/ideas/voice' in digest
     assert '**ideas**' in digest
@@ -255,4 +255,7 @@ def test_render_digest_surfaces_view_warnings():
 
 
 def test_render_digest_handles_an_empty_snapshot():
-    assert rf.render_digest({}).startswith('# Lunaschal repo inventory')
+    # Unnamed is a real case now — a repo row with a blank name — and must not
+    # be a crash or an empty string.
+    assert rf.render_digest({}).startswith('# Repo inventory')
+    assert rf.render_digest({}, 'Lunaschal').startswith('# Lunaschal repo inventory')

@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 # history is plenty to answer "what changed recently".
 KEEP_SNAPSHOTS = 30
 
+# The checkout this app runs from is not a registered repository and has no row
+# to take a name from.
+SELF_NAME = 'Lunaschal'
+
 
 def current_snapshot(repo_id: str | None = None) -> dict | None:
     """The newest snapshot for a repo, or None before its first scan.
@@ -79,7 +83,13 @@ def run_repo_snapshot(
     previous = _latest_row(repo_id)
     prev_sha = previous['git_sha'] if previous else None
 
-    facts = repo_facts.build_facts(root, db, since_sha=prev_sha)
+    # A registered clone has no live database of its own; its tables come from
+    # parsing its schema file, and the digest says so. Only this app's own
+    # checkout gets the exact PRAGMA reading.
+    facts = repo_facts.build_facts(
+        root, db if repo_id is None else None, since_sha=prev_sha,
+        live_db=repo_id is None,
+    )
     sha = (facts.get('git') or {}).get('sha')
 
     if not force and sha and prev_sha == sha:
@@ -100,7 +110,7 @@ def run_repo_snapshot(
             sha,
             (facts.get('git') or {}).get('branch'),
             repo_facts.facts_json(facts),
-            repo_facts.render_digest(facts),
+            repo_facts.render_digest(facts, _display_name(repo_id)),
             None,
             len(facts.get('routes') or []),
             len([t for t in facts.get('tables') or [] if not t.get('virtual')]),
@@ -144,6 +154,19 @@ def run_repo_snapshot(
         'warnings': warnings,
         'changeSummary': summary_md,
     }
+
+
+def _display_name(repo_id: str | None) -> str:
+    """What to head the digest with.
+
+    The app's own checkout keeps its name rather than becoming a generic
+    "Repo inventory" — the agent is often reading several of these, and an
+    untitled one is the one it cannot tell apart.
+    """
+    if repo_id is None:
+        return SELF_NAME
+    from backend.repos import registry
+    return (registry.get_repo(repo_id) or {}).get('name') or ''
 
 
 def _root_for(repo_id: str | None):
