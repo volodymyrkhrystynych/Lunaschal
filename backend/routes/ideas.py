@@ -592,6 +592,7 @@ def create_plan(idea_id):
     the user pressed the button."""
     from backend.ai import priority
     from backend.research import assess, discuss as ctx, plan as plan_mod
+    from backend.research import plan_files
     from backend.research.idea_text import display_title
     from backend.research.repo_job import current_snapshot
 
@@ -613,21 +614,33 @@ def create_plan(idea_id):
     ).fetchall()
     open_questions = [{'question': r['question']} for r in open_rows]
 
-    prompt = ctx.build_context(idea_id) + (
-        '\n\n# Your task\n\nWrite the implementation spec for this idea.'
-    )
+    # Files somebody actually opened while working on this idea. The model
+    # picks from these by number and the grammar bounds the choice, so a plan
+    # cannot send a coding agent to a path that does not exist.
+    repo = ctx.idea_repo(idea_id)
+    candidates = plan_files.gather_file_candidates(idea_id, (repo or {}).get('id'))
+
+    prompt = ctx.build_context(idea_id)
+    if candidates:
+        prompt += (
+            '\n\n# Candidate files (cite these by number in fileIndexes)\n\n'
+            + plan_files.render_candidates(candidates)
+        )
+    prompt += '\n\n# Your task\n\nWrite the implementation spec for this idea.'
+
     with priority.interactive('ideas.plan'):
-        spec = plan_mod.generate_spec(prompt)
+        spec = plan_mod.generate_spec(prompt, plan_mod.build_schema(len(candidates)))
     if spec is None:
         return jsonify({'error': 'The model returned no usable plan'}), 502
 
-    snapshot = current_snapshot()
+    snapshot = current_snapshot((repo or {}).get('id'))
     content = plan_mod.render_plan_markdown(
         display_title(idea),
         spec,
         evidence=evidence,
         answered=answered,
         open_questions=open_questions,
+        files=plan_files.resolve_indexes(spec.get('fileIndexes'), candidates),
     )
     saved = plan_mod.save_plan(idea_id, content, spec, (snapshot or {}).get('id'))
     db.execute(

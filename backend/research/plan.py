@@ -35,7 +35,9 @@ endpoint".
 - Technical considerations are where you put the things that would otherwise be \
 learned the hard way — concurrency, migration order, what breaks if this is \
 done naively.
-- Keep every list tight. A spec nobody reads is worse than a short one."""
+- Keep every list tight. A spec nobody reads is worse than a short one.
+
+When you are given a numbered list of candidate files, cite the ones a coding agent should open first **by their number, in fileIndexes**. Never write a path that is not in that list, and never put those numbers in the prose — the reader never sees the list, so a number in a sentence points at nothing."""
 
 _SCHEMA = {
     'type': 'object',
@@ -108,6 +110,31 @@ _SCHEMA = {
 }
 
 
+def build_schema(candidate_count: int) -> dict:
+    """The spec schema, with file citations bounded to the candidate list.
+
+    Same arrangement as backend/ai/idea_assessment.build_schema, for the same
+    reason: llama-server compiles this to a GBNF grammar, so "cite only files
+    that exist" is enforced *during decoding* rather than checked afterwards.
+
+    With no candidates the field is dropped entirely rather than offered as an
+    always-empty array — the prompt does not mention it either, so the model is
+    never asked to pick from nothing.
+    """
+    schema = {
+        'type': 'object',
+        'properties': dict(_SCHEMA['properties']),
+        'required': list(_SCHEMA['required']),
+    }
+    if candidate_count > 0:
+        schema['properties']['fileIndexes'] = {
+            'type': 'array',
+            'maxItems': 12,
+            'items': {'type': 'integer', 'minimum': 1, 'maximum': candidate_count},
+        }
+    return schema
+
+
 def _bullets(items, prefix='- '):
     return [f'{prefix}{item}' for item in items if item]
 
@@ -133,6 +160,7 @@ def render_plan_markdown(
     answered: list[dict] | None = None,
     open_questions: list[dict] | None = None,
     sources: list[dict] | None = None,
+    files: list[dict] | None = None,
 ) -> str:
     """Pure rendering. Missing sections are omitted, never rendered empty."""
     spec = spec or {}
@@ -183,6 +211,14 @@ def render_plan_markdown(
         out += [f"- `{f.get('file', '')}` — {f.get('purpose', '')}" for f in spec['frontend']]
         out.append('')
 
+    # Deterministic: paths resolved from indexes the grammar bounded, so every
+    # one of these is a file somebody actually opened. This is the section a
+    # coding agent starts from, which is exactly why it is not model prose.
+    if files:
+        out += ['## Files to start from', '']
+        out += [f"- `{f['file']}` — {f.get('why', '')}".rstrip(' —') for f in files]
+        out.append('')
+
     if spec.get('technicalConsiderations'):
         out += ['## Technical considerations', '']
         out += [f"- **{c['topic']}** — {c['note']}" for c in spec['technicalConsiderations']]
@@ -220,11 +256,12 @@ def render_plan_markdown(
     return '\n'.join(out).rstrip() + '\n'
 
 
-def generate_spec(prompt: str) -> dict | None:
+def generate_spec(prompt: str, schema: dict | None = None) -> dict | None:
     if not is_ai_configured():
         return None
     try:
-        return chat_json(prompt, system=SYSTEM_PROMPT, schema=_SCHEMA, max_tokens=MAX_TOKENS)
+        return chat_json(prompt, system=SYSTEM_PROMPT, schema=schema or _SCHEMA,
+                         max_tokens=MAX_TOKENS)
     except Exception as e:
         logger.warning('Plan generation failed: %s', e)
         return None

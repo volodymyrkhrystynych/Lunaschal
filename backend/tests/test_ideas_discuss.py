@@ -307,7 +307,7 @@ def test_a_phase_that_merely_starts_with_a_number_keeps_it():
 # --- Plan generation ---
 
 def test_create_plan_stores_a_version_and_advances_status(client, monkeypatch):
-    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt: FULL_SPEC)
+    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt, schema=None: FULL_SPEC)
     idea_id = _idea(client)
 
     r = client.post(f'/api/ideas/{idea_id}/plan')
@@ -319,7 +319,7 @@ def test_create_plan_stores_a_version_and_advances_status(client, monkeypatch):
 
 
 def test_regenerating_appends_a_version_and_keeps_the_old_one(client, monkeypatch):
-    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt: FULL_SPEC)
+    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt, schema=None: FULL_SPEC)
     idea_id = _idea(client)
     first = client.post(f'/api/ideas/{idea_id}/plan').get_json()
     second = client.post(f'/api/ideas/{idea_id}/plan').get_json()
@@ -332,7 +332,7 @@ def test_regenerating_appends_a_version_and_keeps_the_old_one(client, monkeypatc
 
 def test_plan_includes_the_deterministic_sections_even_with_thin_prose(client, monkeypatch):
     """Evidence and settled decisions come from rows, not from the model."""
-    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt: {'summary': 'Short.'})
+    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt, schema=None: {'summary': 'Short.'})
     idea_id = _idea(client)
     get_db().execute(
         "INSERT INTO idea_questions(id, idea_id, question, question_key, answer,"
@@ -348,7 +348,7 @@ def test_plan_includes_the_deterministic_sections_even_with_thin_prose(client, m
 
 
 def test_a_failed_generation_is_a_502_and_writes_nothing(client, monkeypatch):
-    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt: None)
+    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt, schema=None: None)
     idea_id = _idea(client)
     assert client.post(f'/api/ideas/{idea_id}/plan').status_code == 502
     assert client.get(f'/api/ideas/{idea_id}/plans').get_json() == []
@@ -387,7 +387,7 @@ def test_question_status_is_validated(client):
 
 
 def test_list_reports_the_stat_chips(client, monkeypatch):
-    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt: FULL_SPEC)
+    monkeypatch.setattr(plan_mod, 'generate_spec', lambda prompt, schema=None: FULL_SPEC)
     idea_id = _idea(client)
     client.post(f'/api/ideas/{idea_id}/plan')
     get_db().execute(
