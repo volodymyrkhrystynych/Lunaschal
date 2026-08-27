@@ -241,10 +241,17 @@ def build_toolbox(repo: dict | None):
     `code_tools` is handed back so the caller can ask what was actually read;
     it is per-run state and must not be shared between runs.
     """
-    from backend.research import agent, code
+    from backend.research import agent, code, web, wiki as wiki_mod
 
-    tools = list(web_and_wiki_tools())
+    repo_id = (repo or {}).get('id')
+    # Wiki tools are bound to the repo so a discussion sees this codebase's
+    # notes plus the unscoped research ones — never another repo's notes about
+    # a module that happens to share a name.
+    wiki_tools = wiki_mod.WikiTools(repo_id)
+
+    tools = web.TOOLS + wiki_mod.TOOLS
     dispatch = dict(agent._DISPATCH)
+    dispatch.update({t['function']['name']: wiki_tools for t in wiki_mod.TOOLS})
     code_tools = None
 
     root = repo_root_for(repo)
@@ -253,11 +260,6 @@ def build_toolbox(repo: dict | None):
         tools = code.tools_for(root) + tools
         dispatch.update(code.dispatch_for(code_tools, root))
     return tools, dispatch, code_tools
-
-
-def web_and_wiki_tools() -> list[dict]:
-    from backend.research import web, wiki as wiki_mod
-    return web.TOOLS + wiki_mod.TOOLS
 
 
 def repo_root_for(repo: dict | None):

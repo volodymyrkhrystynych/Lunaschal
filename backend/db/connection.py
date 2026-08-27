@@ -61,6 +61,9 @@ def build_update(
     )
 
 
+from backend.db.wiki_repo_migration import ensure_snapshot_repo, ensure_wiki_repo_scope
+
+
 def get_db() -> sqlite3.Connection:
     global _conn
     if _conn is None:
@@ -88,6 +91,10 @@ def init_db() -> None:
         db.commit()
     _init_fts(db)
     _init_recipes_fts(db)
+    # Before _init_wiki_fts, not after: the rebuild reassigns wiki_articles'
+    # rowids and DROP TABLE takes the FTS triggers with it, so the index has to
+    # be recreated on the new table. _init_wiki_fts does exactly that.
+    ensure_wiki_repo_scope(db)
     _init_wiki_fts(db)
     _init_fanfic_fts(db)
     _init_emails_fts(db)
@@ -110,6 +117,7 @@ def init_db() -> None:
     # After both column sets exist: it reads one and writes the other.
     _migrate_websearch_search_to_research(db)
     _ensure_idea_assessment_columns(db)
+    ensure_snapshot_repo(db)
     _ensure_conversation_idea_id(db)
     _reset_stale_idea_research(db)
     _ensure_email_settings(db)
