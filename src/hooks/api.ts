@@ -8,8 +8,16 @@ import {
 // The shape is defined next to the geometry that consumes it, so the payload
 // and the band math can't drift apart.
 import type { SleepDay } from '../lib/sleep';
+// Same reasoning: the log-entry shape lives next to the filtering logic that
+// consumes it, and the API client just re-exports it.
+import type {
+  ServerLogEntry,
+  ServerLogResponse,
+  ServerLogUnit,
+} from '../lib/serverLogs';
 
 export type { SleepDay };
+export type { ServerLogEntry, ServerLogResponse, ServerLogUnit };
 
 export interface JournalEntry {
   id: string;
@@ -3613,6 +3621,24 @@ export const api = {
       put<BackupConfig>('/api/backup/config', data),
     browse: (path: string) =>
       get<BackupBrowse>(`/api/backup/browse?path=${encodeURIComponent(path)}`),
+  },
+
+  logs: {
+    units: () => get<ServerLogUnit[]>('/api/logs/units'),
+    get: (p: {
+      unit: string;
+      lines: number;
+      since: string;
+      priority?: number;
+    }) => {
+      const q = new URLSearchParams({
+        unit: p.unit,
+        lines: String(p.lines),
+        since: p.since,
+      });
+      if (p.priority !== undefined) q.set('priority', String(p.priority));
+      return get<ServerLogResponse>(`/api/logs?${q}`);
+    },
   },
 
   tts: {
