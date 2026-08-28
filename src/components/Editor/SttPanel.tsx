@@ -176,7 +176,10 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   // writes to IndexedDB and uploads later — so it stays live offline. That
   // split is the whole point of using the mic as the offline indicator: what
   // goes flat is exactly what stopped working.
-  const buttonDisabled = unavailable('normal') || !recorder.canTranscribe;
+  // `canTranscribe` gates starting only: while this button holds the mic it
+  // is the Stop button, and going offline mid-recording used to disable it.
+  const buttonDisabled =
+    unavailable('normal') || (!recorder.canTranscribe && !inAppNormalActive);
 
   const buttonLabel = !inAppNormalActive
     ? effectiveStatus === 'recording' && isListenerControlling
@@ -195,7 +198,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const journalButtonDisabled =
     unavailable('journal') ||
     saveJournalFromVoice.isPending ||
-    !recorder.canTranscribe;
+    (!recorder.canTranscribe && !inAppJournalActive);
 
   const journalButtonLabel = inAppJournalActive
     ? status === 'recording'

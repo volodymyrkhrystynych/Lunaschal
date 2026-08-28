@@ -119,7 +119,8 @@ export function EventBlock({
           type="button"
           aria-label="Record for this event"
           data-testid="calendar-event-mic"
-          disabled={!recorder.canTranscribe}
+          // Offline gates starting, never stopping — see useRecorder.
+          disabled={recorder.status !== 'recording' && !recorder.canTranscribe}
           title={
             recorder.canTranscribe
               ? undefined

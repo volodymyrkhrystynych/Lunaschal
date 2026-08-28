@@ -129,7 +129,8 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
         <button
           type="button"
           onClick={() => (recording ? stop() : void start())}
-          disabled={transcribing || !canTranscribe}
+          // Gated only when idle, so a live recording can always be stopped.
+          disabled={!recording && (transcribing || !canTranscribe)}
           title={
             !canTranscribe
               ? 'Offline — dictation needs the server'

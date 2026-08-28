@@ -17,9 +17,19 @@ export interface FakeRecorderControls {
   /** End the recording the way iOS does when the page is suspended: the
    *  recorder simply goes inactive, and `onstop` never fires. */
   kill(): void;
-  /** End the microphone track, as an incoming call does. */
+  /** End the microphone track, as an incoming call does. Chrome gives up on
+   *  the recorder too, so `state` follows the track. */
   endTrack(): void;
+  /** End the microphone the way Safari does: the capture is gone, but `state`
+   *  goes on claiming 'recording' — so anything that trusts `state` decides
+   *  stop() is safe to call, and it throws. */
+  endTrackLeavingStaleState(): void;
+  /** End the microphone with no event at all — it can die between getUserMedia
+   *  resolving and the recorder being wired up, where nothing is listening. */
+  endTrackSilently(): void;
   state(): string;
+  trackStopCalls(): number;
+  recorderCount(): number;
   requestDataCalls(): number;
 }
 
@@ -27,10 +37,16 @@ export function installFakeMediaRecorder(
   mimeType = 'audio/webm;codecs=opus'
 ): FakeRecorderControls {
   let current: FakeMediaRecorder | null = null;
+  let made = 0;
   const track = {
     kind: 'audio',
+    // Tracked because it is the only signal that stays honest when a browser
+    // leaves MediaRecorder.state stale — which is what `captureEnded` reads.
+    readyState: 'live',
     onended: null as null | (() => void),
-    stop: vi.fn(),
+    stop: vi.fn(() => {
+      track.readyState = 'ended';
+    }),
   };
   const stream = {
     getTracks: () => [track],
@@ -45,12 +61,15 @@ export function installFakeMediaRecorder(
   class FakeMediaRecorder {
     state = 'inactive';
     mimeType = mimeType;
+    stream: unknown;
     ondataavailable: ((e: { data: Blob }) => void) | null = null;
     onstop: (() => void | Promise<void>) | null = null;
     onerror: (() => void) | null = null;
     requestDataCalls = 0;
 
-    constructor() {
+    constructor(source?: unknown) {
+      this.stream = source ?? stream;
+      made += 1;
       current = this;
     }
     static isTypeSupported(type: string) {
@@ -63,6 +82,14 @@ export function installFakeMediaRecorder(
       this.requestDataCalls++;
     }
     stop() {
+      // What every browser does when asked to stop something that is not
+      // recording, and the throw the app used to let escape its click handler.
+      if (this.state !== 'recording' || track.readyState === 'ended') {
+        throw new DOMException(
+          'The MediaRecorder is not recording',
+          'InvalidStateError'
+        );
+      }
       // `onstop` is fired by the control's `stop()` instead, so a test can await
       // the async work the handler kicks off.
       this.state = 'inactive';
@@ -80,8 +107,21 @@ export function installFakeMediaRecorder(
     kill: () => {
       if (current) current.state = 'inactive';
     },
-    endTrack: () => track.onended?.(),
+    endTrack: () => {
+      track.readyState = 'ended';
+      if (current) current.state = 'inactive';
+      track.onended?.();
+    },
+    endTrackLeavingStaleState: () => {
+      track.readyState = 'ended';
+      track.onended?.();
+    },
+    endTrackSilently: () => {
+      track.readyState = 'ended';
+    },
     state: () => current?.state ?? 'none',
+    trackStopCalls: () => track.stop.mock.calls.length,
+    recorderCount: () => made,
     requestDataCalls: () => current?.requestDataCalls ?? 0,
   };
 }

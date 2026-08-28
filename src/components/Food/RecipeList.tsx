@@ -473,7 +473,8 @@ export function RecipeList() {
             <button
               type="button"
               onClick={() => (dictating ? stopDictate() : void startDictate())}
-              disabled={transcribing || !canTranscribe}
+              // Gated only when idle, so a live recording can always be stopped.
+              disabled={!dictating && (transcribing || !canTranscribe)}
               title={
                 !canTranscribe
                   ? 'Offline — dictation needs the server'

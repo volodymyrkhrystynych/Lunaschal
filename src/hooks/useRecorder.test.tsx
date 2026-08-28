@@ -240,6 +240,125 @@ describe('useRecorder', () => {
     expect(onRecording.mock.calls[0][0].recovered).toBe(true);
   });
 
+  // The button that could not be turned off. A microphone can die under a
+  // recording for ordinary phone reasons — audio focus, a route change, a
+  // second capture — and Safari then leaves `MediaRecorder.state` claiming
+  // 'recording' over a capture that is gone. `stop()` trusted `state`, called
+  // through to `mr.stop()`, and got an InvalidStateError; because the reference
+  // was cleared on the *next* line, the throw escaped the click handler with
+  // the recorder still held and the status still 'recording'. Every later tap
+  // threw in the same place, so the control stayed red and inert until reload.
+  it('stops cleanly when the capture is gone but the recorder still claims to be recording', async () => {
+    const fake = installFakeMediaRecorder();
+    const onRecording = vi.fn();
+    const onNotice = vi.fn();
+    const { result } = renderHook(() =>
+      useRecorder(vi.fn(), undefined, { onRecording, onNotice })
+    );
+
+    await act(async () => {
+      await result.current.start('audio', { durable: true });
+    });
+    await act(async () => {
+      fake.emit(new Blob(['said out loud']));
+      fake.endTrackLeavingStaleState();
+    });
+
+    expect(fake.state()).toBe('recording'); // the lie the fix has to survive
+
+    await act(async () => {
+      result.current.stop();
+    });
+
+    expect(result.current.status).toBe('idle');
+    expect(onRecording).toHaveBeenCalledTimes(1);
+    expect(onRecording.mock.calls[0][0].recovered).toBe(true);
+    expect(
+      await (await assembleBlob(onRecording.mock.calls[0][0].id))!.text()
+    ).toBe('said out loud');
+  });
+
+  it('recovers for the next recording instead of needing a reload', async () => {
+    const fake = installFakeMediaRecorder();
+    const { result } = renderHook(() => useRecorder(vi.fn(), vi.fn()));
+
+    await act(async () => {
+      await result.current.start('audio');
+    });
+    await act(async () => {
+      fake.endTrackLeavingStaleState();
+    });
+    // Taps that used to throw, one after another, and move nothing.
+    await act(async () => {
+      result.current.stop();
+      result.current.stop();
+      result.current.stop();
+    });
+    expect(result.current.status).toBe('idle');
+
+    // The whole point: the mic works again without the page being reloaded.
+    await act(async () => {
+      await result.current.start('audio');
+    });
+    expect(result.current.status).toBe('recording');
+  });
+
+  // The microphone can also be gone before any of our handlers were attached —
+  // it dies between getUserMedia resolving and the recorder being wired up. No
+  // `onended` ever fires for that, so Stop is the first chance to notice.
+  it('recovers on Stop when the track died before any handler was attached', async () => {
+    const fake = installFakeMediaRecorder();
+    const { result } = renderHook(() => useRecorder(vi.fn(), vi.fn()));
+
+    await act(async () => {
+      await result.current.start('audio');
+    });
+    // Kill the capture without notifying anyone.
+    await act(async () => {
+      fake.endTrackSilently();
+    });
+
+    await act(async () => {
+      result.current.stop();
+    });
+    expect(result.current.status).toBe('idle');
+  });
+
+  // The permission prompt is a seconds-long window in which `status` is still
+  // 'idle', so every mic button still reads as "start" and stays enabled. A
+  // second tap there used to open a second recorder over a second
+  // getUserMedia: one mediaRef and one chunk buffer between the two, so Stop
+  // reached only the newer one while the older kept the microphone live with
+  // nothing left able to release it.
+  it('ignores a second start while the first is still waiting on the prompt', async () => {
+    const fake = installFakeMediaRecorder();
+    const { result } = renderHook(() => useRecorder(vi.fn(), vi.fn()));
+
+    await act(async () => {
+      const first = result.current.start('audio');
+      // The impatient second tap, while the prompt is still up.
+      const second = result.current.start('audio');
+      await Promise.all([first, second]);
+    });
+
+    expect(fake.recorderCount()).toBe(1);
+    expect(result.current.status).toBe('recording');
+
+    // And once it is recording, a stray tap cannot open another one either.
+    await act(async () => {
+      await result.current.start('audio');
+    });
+    expect(fake.recorderCount()).toBe(1);
+
+    // One recorder means Stop reaches all of it, and the mic is released.
+    await act(async () => {
+      result.current.stop();
+      await fake.stop();
+    });
+    expect(result.current.status).toBe('idle');
+    expect(fake.trackStopCalls()).toBeGreaterThan(0);
+  });
+
   // `mr.onstop` is assigned inside start(), so the callback it closes over is
   // the one from the render that began the recording. That was invisible while
   // every caller only did `setInput(prev => …)`; it stopped being invisible
