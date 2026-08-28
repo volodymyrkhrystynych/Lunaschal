@@ -4,20 +4,23 @@ import { api, type CalendarEvent } from '../../hooks/api';
 import { useIsMobile } from '@/hooks/useMediaQuery';
 import {
   buildMonthGrid,
+  EMPTY_REPEAT,
   eventTimeLabel,
   parseEventTags,
+  repeatDraftToPayload,
   repeatLabel,
   toLocalISO,
-  WEEKDAY_INITIALS,
   WEEKDAY_LABELS,
-  type RepeatFreq,
+  type RepeatDraft,
 } from '@/lib/calendar';
+import type { EventCategory } from '@/lib/calendarCategories';
 import { ulid } from '@/lib/ulid';
 import { useCalendarCreate } from '@/offline/mutationDefaults';
 import { localDayKey } from '@/lib/dates';
 // The shared splitter — Food's two views each grew a private copy of this and
 // a third would make the rule genuinely untraceable.
 import { parseTagsInput } from '@/lib/tags';
+import { CategoryTagPicker, RepeatFields } from './EventFormFields';
 import { EventDetails } from './EventDetails';
 import { DayView } from './DayView';
 import { SleepEditor } from './SleepEditor';
@@ -42,10 +45,11 @@ const EMPTY_NEW_EVENT = {
   // Comma-separated while it is being typed; `parseTagsInput` splits it on
   // submit and the backend owns normalization from there.
   tags: '',
-  repeatFreq: '' as '' | RepeatFreq,
-  repeatInterval: 1,
-  repeatByweekday: [] as number[],
-  repeatUntil: '',
+  repeat: EMPTY_REPEAT as RepeatDraft,
+  // The same grouping categories the edit modal offers. Left empty they are
+  // omitted from the payload entirely, so a new event still goes to the AI
+  // classifier — setting one by hand is what supersedes it.
+  categoryTags: [] as EventCategory[],
 };
 
 export function Calendar() {
@@ -169,13 +173,12 @@ export function Calendar() {
       endTime: newEvent.allDay ? undefined : newEvent.endTime || undefined,
       allDay: newEvent.allDay,
       tags: parseTagsInput(newEvent.tags),
-      repeatFreq: newEvent.repeatFreq || null,
-      repeatInterval: newEvent.repeatFreq ? newEvent.repeatInterval : null,
-      repeatByweekday:
-        newEvent.repeatFreq === 'weekly' && newEvent.repeatByweekday.length
-          ? newEvent.repeatByweekday
-          : null,
-      repeatUntil: newEvent.repeatUntil || null,
+      ...repeatDraftToPayload(newEvent.repeat),
+      // Omitted when nothing is checked: sending an empty list would stamp
+      // `classified_at` and permanently retire the event from the classifier.
+      ...(newEvent.categoryTags.length
+        ? { categoryTags: newEvent.categoryTags }
+        : {}),
     });
     // Closed here rather than on success: the write may be sitting in the
     // offline queue, and a form that stays open until the server answers is a
@@ -183,14 +186,6 @@ export function Calendar() {
     setNewEvent(EMPTY_NEW_EVENT);
     setShowNewEvent(false);
   };
-
-  const toggleWeekday = (day: number) =>
-    setNewEvent(prev => ({
-      ...prev,
-      repeatByweekday: prev.repeatByweekday.includes(day)
-        ? prev.repeatByweekday.filter(d => d !== day)
-        : [...prev.repeatByweekday, day].sort((a, b) => a - b),
-    }));
 
   const showingDayView = isMobile && mobileView === 'day';
 
@@ -568,107 +563,6 @@ export function Calendar() {
                           />
                         </div>
                       )}
-
-                      <div className="mb-2">
-                        <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-                          Repeats
-                          <select
-                            value={newEvent.repeatFreq}
-                            onChange={e =>
-                              setNewEvent({
-                                ...newEvent,
-                                repeatFreq: e.target.value as '' | RepeatFreq,
-                                // Seed weekly repeats with the selected day so a
-                                // bare "weekly" still means something.
-                                repeatByweekday:
-                                  e.target.value === 'weekly' &&
-                                  newEvent.repeatByweekday.length === 0
-                                    ? [
-                                        new Date(
-                                          selectedDate + 'T00:00:00'
-                                        ).getDay(),
-                                      ]
-                                    : newEvent.repeatByweekday,
-                              })
-                            }
-                            className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 pb-1 focus:outline-none"
-                          >
-                            <option value="">Never</option>
-                            <option value="daily">Daily</option>
-                            <option value="weekly">Weekly</option>
-                            <option value="monthly">Monthly</option>
-                            <option value="yearly">Yearly</option>
-                          </select>
-                        </label>
-
-                        {newEvent.repeatFreq && (
-                          <div className="mt-2 space-y-2">
-                            <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-                              Every
-                              <input
-                                type="number"
-                                min={1}
-                                value={newEvent.repeatInterval}
-                                onChange={e =>
-                                  setNewEvent({
-                                    ...newEvent,
-                                    repeatInterval: Math.max(
-                                      1,
-                                      Number(e.target.value) || 1
-                                    ),
-                                  })
-                                }
-                                className="w-14 bg-transparent text-[var(--color-text)] border-b border-white/10 focus:outline-none"
-                              />
-                              {newEvent.repeatFreq === 'daily'
-                                ? 'day(s)'
-                                : newEvent.repeatFreq === 'weekly'
-                                  ? 'week(s)'
-                                  : 'month(s)'}
-                            </label>
-
-                            {newEvent.repeatFreq === 'weekly' && (
-                              <div className="flex gap-1">
-                                {WEEKDAY_INITIALS.map((initial, day) => (
-                                  <button
-                                    key={day}
-                                    type="button"
-                                    aria-label={WEEKDAY_LABELS[day]}
-                                    aria-pressed={newEvent.repeatByweekday.includes(
-                                      day
-                                    )}
-                                    onClick={() => toggleWeekday(day)}
-                                    className={`w-7 h-7 rounded text-xs ${
-                                      newEvent.repeatByweekday.includes(day)
-                                        ? 'bg-[var(--color-primary)] text-white'
-                                        : 'bg-white/5 text-[var(--color-text-muted)] hover:bg-white/10'
-                                    }`}
-                                  >
-                                    {initial}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-
-                            <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-                              Until
-                              <input
-                                type="date"
-                                value={newEvent.repeatUntil}
-                                min={selectedDate}
-                                onChange={e =>
-                                  setNewEvent({
-                                    ...newEvent,
-                                    repeatUntil: e.target.value,
-                                  })
-                                }
-                                className="flex-1 bg-transparent text-[var(--color-text)] border-b border-white/10 focus:outline-none"
-                              />
-                            </label>
-                          </div>
-                        )}
-                      </div>
-
                       <textarea
                         value={newEvent.description}
                         onChange={e =>
@@ -687,7 +581,24 @@ export function Calendar() {
                           setNewEvent({ ...newEvent, tags: e.target.value })
                         }
                         placeholder="Tags (comma-separated)"
-                        className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
+                        className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] mb-2 focus:outline-none"
+                      />
+                      {/* Same fields, in the same order, as the edit modal —
+                          the two forms drifting apart is what this fixes. */}
+                      <div className="mb-2">
+                        <RepeatFields
+                          value={newEvent.repeat}
+                          onChange={repeat =>
+                            setNewEvent({ ...newEvent, repeat })
+                          }
+                          anchorDate={selectedDate}
+                        />
+                      </div>
+                      <CategoryTagPicker
+                        value={newEvent.categoryTags}
+                        onChange={categoryTags =>
+                          setNewEvent({ ...newEvent, categoryTags })
+                        }
                       />
                       <div className="flex justify-end gap-2 mt-2">
                         <button

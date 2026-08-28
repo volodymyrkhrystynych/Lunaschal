@@ -3,7 +3,10 @@ import {
   buildMonthGrid,
   parseEventTags,
   eventTimeLabel,
+  repeatDraftFromEvent,
+  repeatDraftToPayload,
   repeatLabel,
+  repeatUnitLabel,
   timeSpan,
   toLocalISO,
   weekdayCsvToArray,
@@ -187,5 +190,114 @@ describe('eventTimeLabel', () => {
     expect(eventTimeLabel({ time: '09:00', endTime: '17:00' })).toBe(
       '09:00\u201317:00'
     );
+  });
+});
+
+describe('repeatUnitLabel', () => {
+  it('counts years for a yearly rule', () => {
+    // The interval box used to read "month(s)" here, so a birthday set to
+    // repeat every year looked like it repeated every N months.
+    expect(repeatUnitLabel('yearly')).toBe('year(s)');
+  });
+
+  it('counts the matching unit for the other frequencies', () => {
+    expect(repeatUnitLabel('daily')).toBe('day(s)');
+    expect(repeatUnitLabel('weekly')).toBe('week(s)');
+    expect(repeatUnitLabel('monthly')).toBe('month(s)');
+  });
+});
+
+describe('repeatDraftFromEvent', () => {
+  it('reads a stored weekly rule back into the form shape', () => {
+    expect(
+      repeatDraftFromEvent({
+        repeatFreq: 'weekly',
+        repeatInterval: 2,
+        repeatByweekday: '1,3,5',
+        repeatUntil: '2026-12-31',
+      })
+    ).toEqual({
+      freq: 'weekly',
+      interval: 2,
+      byweekday: [1, 3, 5],
+      until: '2026-12-31',
+    });
+  });
+
+  it('turns a one-off into an empty draft rather than a half-filled one', () => {
+    expect(
+      repeatDraftFromEvent({
+        repeatFreq: null,
+        repeatInterval: null,
+        repeatByweekday: null,
+        repeatUntil: null,
+      })
+    ).toEqual({ freq: '', interval: 1, byweekday: [], until: '' });
+  });
+
+  it('falls back to an interval of 1 for a rule stored without one', () => {
+    // Rows predating repeat_interval carry NULL, and a 0 in the box is a rule
+    // the backend rejects.
+    expect(
+      repeatDraftFromEvent({ repeatFreq: 'monthly', repeatInterval: null })
+        .interval
+    ).toBe(1);
+  });
+
+  it('drops a frequency outside the closed vocabulary', () => {
+    expect(repeatDraftFromEvent({ repeatFreq: 'hourly' }).freq).toBe('');
+  });
+});
+
+describe('repeatDraftToPayload', () => {
+  it('clears every parameter when the rule is turned off', () => {
+    // Explicit nulls, not omissions: `repeatFreq: null` is what turns a series
+    // back into a one-off, and leaving the parameters behind would let a later
+    // re-enable inherit stale weekdays.
+    expect(
+      repeatDraftToPayload({
+        freq: '',
+        interval: 3,
+        byweekday: [1, 2],
+        until: '2026-12-31',
+      })
+    ).toEqual({
+      repeatFreq: null,
+      repeatInterval: null,
+      repeatByweekday: null,
+      repeatUntil: null,
+    });
+  });
+
+  it('sends the weekdays only for a weekly rule', () => {
+    const draft = { interval: 1, byweekday: [1, 3], until: '' };
+    expect(
+      repeatDraftToPayload({ ...draft, freq: 'weekly' }).repeatByweekday
+    ).toEqual([1, 3]);
+    expect(
+      repeatDraftToPayload({ ...draft, freq: 'monthly' }).repeatByweekday
+    ).toBeNull();
+  });
+
+  it('floors the interval at 1 so the backend never sees a 0', () => {
+    expect(
+      repeatDraftToPayload({
+        freq: 'yearly',
+        interval: 0,
+        byweekday: [],
+        until: '',
+      }).repeatInterval
+    ).toBe(1);
+  });
+
+  it('sends a blank end date as null, not an empty string', () => {
+    expect(
+      repeatDraftToPayload({
+        freq: 'daily',
+        interval: 1,
+        byweekday: [],
+        until: '',
+      }).repeatUntil
+    ).toBeNull();
   });
 });
