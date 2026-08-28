@@ -7,6 +7,8 @@ the resume download (which recomputes the path from ids rather than trusting
 the one stored in the row).
 """
 import json
+import base64
+import binascii
 import time
 
 from flask import Blueprint, jsonify, request, send_file
@@ -15,9 +17,9 @@ from ulid import ULID
 from backend.ai import job_match, priority
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.jobs import (
-    build, ingest, linker, profile as profile_mod, queue as queue_mod, render,
+    analytics, build, career_watch, company_research, cover_letter, ingest, interview, linker, outcomes, profile as profile_mod, queue as queue_mod, render, report, resume_review,
     resolve, resume_import, retention, sources, storage, sync, tailor,
-    triager, urlmatch,
+    triager, upskill, urlmatch, workday_watch, status as application_status,
 )
 
 bp = Blueprint('jobs', __name__, url_prefix='/api/jobs')
@@ -59,6 +61,18 @@ def update_profile():
     field_map = {
         'fullName': 'full_name', 'email': 'email', 'phone': 'phone',
         'location': 'location', 'headline': 'headline', 'summary': 'summary',
+        'workAuthorization': 'work_authorization',
+        'salaryExpectation': 'salary_expectation',
+        'noticePeriod': 'notice_period',
+        'availabilityDate': 'availability_date',
+        'relocationWillingness': 'relocation_willingness',
+        'securityClearance': 'security_clearance',
+        'eeoAnswers': 'eeo_answers',
+        'allowedLocations': 'allowed_locations',
+        'remoteOnly': 'remote_only',
+        'avoidClearanceRoles': 'avoid_clearance_roles',
+        'softSalaryFloor': 'soft_salary_floor',
+        'softPreferences': 'soft_preferences',
     }
     updates = {'updated_at': _now()}
     for camel, snake in field_map.items():
@@ -66,8 +80,24 @@ def update_profile():
             updates[snake] = body[camel] or ''
     if 'links' in body:
         updates['links'] = _json_or_none(body['links'])
+    if 'companyBlacklist' in body:
+        updates['company_blacklist'] = _json_or_none(body['companyBlacklist'])
     db = get_db()
     build_update(db, 'job_profile', updates, 'id=1')
+    preference_keys = {
+        'allowedLocations', 'remoteOnly', 'avoidClearanceRoles',
+        'softSalaryFloor', 'softPreferences', 'companyBlacklist',
+    }
+    if preference_keys.intersection(body):
+        # A hard gate or annotation changed, so cached verdicts no longer
+        # describe the current profile. Applications and dismissed rows have
+        # already left triage and are deliberately untouched.
+        db.execute(
+            "UPDATE jobs SET triage_state='pending', triage_reason='',"
+            " triage_fit='', triage_summary='', triage_flags=NULL,"
+            " triage_error=NULL WHERE dismissed=0 AND NOT EXISTS"
+            " (SELECT 1 FROM applications a WHERE a.job_id=jobs.id)"
+        )
     db.commit()
     return jsonify(profile_mod.load_profile(db))
 
@@ -494,6 +524,7 @@ def create_application():
         (application_id, job_id, 'draft', body.get('steer') or '',
          body.get('appliedEmail') or '', now, now),
     )
+    application_status.seed(db, application_id, at=now)
     db.commit()
     return jsonify({'id': application_id}), 201
 
@@ -531,13 +562,19 @@ def get_application(application_id):
         return jsonify({'error': 'Not found'}), 404
 
     result = row_to_dict(row)
-    result['resumes'] = [
-        row_to_dict(r) for r in db.execute(
-            'SELECT id, label, keywords, pdf_path, docx_path, purged_at, created_at'
-            ' FROM resume_versions WHERE application_id=? ORDER BY created_at DESC',
-            (application_id,),
-        ).fetchall()
-    ]
+    result['resumes'] = []
+    for resume_row in db.execute(
+        'SELECT id, label, content, html, keywords, review, pdf_path, docx_path,'
+        ' purged_at, created_at FROM resume_versions WHERE application_id=?'
+        ' ORDER BY created_at DESC', (application_id,),
+    ).fetchall():
+        item = row_to_dict(resume_row)
+        for field in ('content', 'review'):
+            try:
+                item[field] = json.loads(resume_row[field] or '{}')
+            except ValueError:
+                item[field] = {}
+        result['resumes'].append(item)
     result['emails'] = [
         row_to_dict(r) for r in db.execute(
             """
@@ -550,6 +587,27 @@ def get_application(application_id):
         ).fetchall()
     ]
     result['recordedAnswers'] = _recorded_answers(db, application_id)
+    result['fillRuns'] = []
+    for run_row in db.execute(
+        'SELECT id, page_url, page_title, fields, screenshot_path, created_at'
+        ' FROM application_fill_runs WHERE application_id=? ORDER BY created_at DESC',
+        (application_id,),
+    ).fetchall():
+        run = row_to_dict(run_row)
+        try:
+            run['fields'] = json.loads(run_row['fields'] or '[]')
+        except ValueError:
+            run['fields'] = []
+        run['screenshotUrl'] = (
+            f'/api/jobs/applications/{application_id}/fill-runs/{run_row["id"]}/screenshot'
+            if run_row['screenshot_path'] else None
+        )
+        result['fillRuns'].append(run)
+    result['statusEvents'] = [row_to_dict(r) for r in db.execute(
+        'SELECT status, source, source_id, occurred_at'
+        ' FROM application_status_events WHERE application_id=?'
+        ' ORDER BY occurred_at, id', (application_id,),
+    ).fetchall()]
     return jsonify(result)
 
 
@@ -569,18 +627,22 @@ def update_application(application_id):
                          ('notes', 'notes'), ('appliedEmail', 'applied_email')):
         if camel in body:
             updates[snake] = body[camel] or ''
+    if 'coverLetterRequired' in body:
+        updates['cover_letter_required'] = 1 if body['coverLetterRequired'] else 0
 
     new_status = body.get('status')
     if new_status is not None:
         if new_status not in APPLICATION_STATUSES:
             return jsonify({'error': 'Unknown status'}), 400
-        updates['status'] = new_status
         # Reaching a submitted state stamps applied_at if nothing else has —
         # it is the origin for retention and for every linkage window.
         if new_status in _SUBMITTED_STATUSES and not row['applied_at']:
             updates['applied_at'] = now
 
     build_update(db, 'applications', updates, 'id=?', (application_id,))
+    if new_status is not None:
+        application_status.record(db, application_id, new_status,
+                                  source='manual', at=now)
     db.commit()
 
     if new_status is not None:
@@ -605,13 +667,14 @@ def submit_application(application_id):
 
     now = _now()
     updates = {
-        'status': 'submitted',
         'applied_at': row['applied_at'] or now,
         'updated_at': now,
     }
     if body.get('appliedEmail'):
         updates['applied_email'] = body['appliedEmail']
     build_update(db, 'applications', updates, 'id=?', (application_id,))
+    application_status.record(db, application_id, 'submitted',
+                              source='submission', at=now)
     db.commit()
 
     retention.stamp_closed(db, application_id, 'submitted', now=now)
@@ -621,6 +684,87 @@ def submit_application(application_id):
     swept = linker.run_linkage_sweep(now=now)
 
     return jsonify({'success': True, 'linkage': swept})
+
+
+@bp.get('/outcomes/stale')
+def stale_applications():
+    try:
+        days = int(request.args.get('days', outcomes.DEFAULT_STALE_DAYS))
+    except ValueError:
+        return jsonify({'error': 'days must be a number'}), 400
+    return jsonify(outcomes.stale_applications(get_db(), days=days))
+
+
+@bp.post('/applications/<application_id>/draft-note')
+def draft_application_note(application_id):
+    body = _body()
+    kind = body.get('kind') or 'follow_up'
+    if kind not in ('follow_up', 'thank_you'):
+        return jsonify({'error': 'Unknown note kind'}), 400
+    if _application_row(get_db(), application_id) is None:
+        return jsonify({'error': 'Not found'}), 404
+    draft = outcomes.draft_note(
+        get_db(), application_id, kind=kind, context=body.get('context') or ''
+    )
+    if draft is None:
+        return jsonify({'error': 'Local AI is unavailable or produced no draft.'}), 503
+    return jsonify(draft)
+
+
+@bp.post('/applications/<application_id>/cover-letter')
+def generate_cover_letter(application_id):
+    row = get_db().execute(
+        'SELECT cover_letter_required FROM applications WHERE id=?',
+        (application_id,),
+    ).fetchone()
+    if row is None:
+        return jsonify({'error': 'Not found'}), 404
+    if not row['cover_letter_required']:
+        return jsonify({'error': 'This application is not marked as requiring a cover letter.'}), 409
+    letter = cover_letter.generate(
+        get_db(), application_id, steer=(_body().get('steer') or '').strip()
+    )
+    if letter is None:
+        return jsonify({'error': 'Local AI is unavailable or produced no letter.'}), 503
+    return jsonify({'coverLetter': letter})
+
+
+@bp.get('/applications/<application_id>/interview-prep')
+def get_interview_prep(application_id):
+    if _application_row(get_db(), application_id) is None:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'pack': interview.latest(get_db(), application_id)})
+
+
+@bp.post('/applications/<application_id>/interview-prep')
+def create_interview_prep(application_id):
+    if _application_row(get_db(), application_id) is None:
+        return jsonify({'error': 'Not found'}), 404
+    pack = interview.generate(
+        get_db(), application_id, notes=(_body().get('notes') or '').strip()
+    )
+    if pack is None:
+        return jsonify({'error': 'Local AI is unavailable or produced no prep pack.'}), 503
+    return jsonify(pack), 201
+
+
+@bp.get('/applications/<application_id>/research')
+def get_application_research(application_id):
+    if _application_row(get_db(), application_id) is None:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify({'research': company_research.latest(get_db(), application_id)})
+
+
+@bp.post('/applications/<application_id>/research')
+def research_application(application_id):
+    if _application_row(get_db(), application_id) is None:
+        return jsonify({'error': 'Not found'}), 404
+    result = company_research.research(
+        get_db(), application_id, interviewer=(_body().get('interviewer') or '')
+    )
+    if result is None:
+        return jsonify({'error': 'Local AI or configured web search is unavailable, or no verified pages were found.'}), 503
+    return jsonify(result), 201
 
 
 @bp.delete('/applications/<application_id>')
@@ -680,6 +824,10 @@ def get_resume(version_id):
         result['content'] = json.loads(row['content'] or '{}')
     except ValueError:
         result['content'] = {}
+    try:
+        result['review'] = json.loads(row['review'] or '{}')
+    except ValueError:
+        result['review'] = {}
     return jsonify(result)
 
 
@@ -733,10 +881,12 @@ def edit_resume(version_id):
     docx_path = storage.resume_path(application_id, version_id, 'docx')
     wrote_pdf = bool(pdf_path) and render.render_pdf(html, pdf_path)
     wrote_docx = bool(docx_path) and render.render_docx(loaded, content, docx_path)
+    review = resume_review.review(loaded, content,
+                                  pdf_path=pdf_path if wrote_pdf else None)
 
     db.execute(
-        'UPDATE resume_versions SET content=?, html=?, pdf_path=?, docx_path=? WHERE id=?',
-        (json.dumps(content), html,
+        'UPDATE resume_versions SET content=?, html=?, review=?, pdf_path=?, docx_path=? WHERE id=?',
+        (json.dumps(content), html, json.dumps(review),
          str(pdf_path) if wrote_pdf else None,
          str(docx_path) if wrote_docx else None, version_id),
     )
@@ -748,6 +898,7 @@ def edit_resume(version_id):
         'html': html,
         'pdfAvailable': wrote_pdf,
         'docxAvailable': wrote_docx,
+        'review': review,
     })
 
 
@@ -837,6 +988,9 @@ def answer_kit(application_id):
         steer = row['steer'] or ''
 
     loaded = profile_mod.load_profile(db)
+    # What was actually entered previously is FAQ memory. Explicit profile
+    # answers stay first, so a deliberate correction overrides older forms.
+    loaded['answers'] = list(loaded.get('answers') or []) + answers_mod.recorded_answer_bank(db)
     job = {
         'title': row['title'], 'company': row['company'],
         'description': row['description'],
@@ -948,6 +1102,52 @@ def record_answers(application_id):
     return jsonify({'written': written, 'answers': _recorded_answers(db, application_id)})
 
 
+@bp.post('/applications/<application_id>/fill-runs')
+def record_fill_run(application_id):
+    db = get_db()
+    if _application_row(db, application_id) is None:
+        return jsonify({'error': 'Not found'}), 404
+    body = _body(); fields = body.get('fields')
+    if not isinstance(fields, list):
+        return jsonify({'error': 'fields must be a list'}), 400
+    run_id = str(ULID()); screenshot_path = None
+    encoded = body.get('screenshotBase64') or ''
+    if encoded:
+        try:
+            raw = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError):
+            return jsonify({'error': 'Invalid screenshot data'}), 400
+        if len(raw) > 5 * 1024 * 1024:
+            return jsonify({'error': 'Screenshot is larger than 5 MB'}), 413
+        if not raw.startswith(b'\x89PNG\r\n\x1a\n'):
+            return jsonify({'error': 'Screenshot must be PNG'}), 400
+        screenshot_path = storage.fill_run_screenshot_path(application_id, run_id)
+        if screenshot_path:
+            screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+            screenshot_path.write_bytes(raw)
+    now = _now()
+    db.execute(
+        'INSERT INTO application_fill_runs (id, application_id, page_url, page_title, fields, screenshot_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (run_id, application_id, str(body.get('pageUrl') or '')[:2000],
+         str(body.get('pageTitle') or '')[:500], json.dumps(fields[:200]),
+         str(screenshot_path) if screenshot_path else None, now),
+    )
+    db.commit()
+    return jsonify({'id': run_id, 'screenshot': bool(screenshot_path)}), 201
+
+
+@bp.get('/applications/<application_id>/fill-runs/<run_id>/screenshot')
+def fill_run_screenshot(application_id, run_id):
+    row = get_db().execute(
+        'SELECT 1 FROM application_fill_runs WHERE id=? AND application_id=? AND screenshot_path IS NOT NULL',
+        (run_id, application_id),
+    ).fetchone()
+    path = storage.fill_run_screenshot_path(application_id, run_id)
+    if row is None or path is None or not path.is_file():
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(path, mimetype='image/png', conditional=True)
+
+
 @bp.delete('/applications/<application_id>/recorded-answers/<answer_id>')
 def delete_recorded_answer(application_id, answer_id):
     db = get_db()
@@ -1002,8 +1202,40 @@ def create_link():
         (email_id, now),
     )
     db.commit()
-    status = linker.apply_email_status(db, application_id, email['job_status'], now=now)
+    status = linker.apply_email_status(db, application_id, email['job_status'],
+                                       now=now, source_id=email_id)
     return jsonify({'success': True, 'statusChange': status})
+
+
+@bp.get('/linkage/status-proposals')
+def list_status_proposals():
+    return jsonify(linker.status_proposals(get_db()))
+
+
+@bp.post('/linkage/status-proposals/apply')
+def apply_status_proposals():
+    selections = _body().get('proposals')
+    if not isinstance(selections, list):
+        return jsonify({'error': 'proposals must be a list'}), 400
+    available = {(p['applicationId'], p['emailId']): p
+                 for p in linker.status_proposals(get_db())}
+    applied = []
+    for item in selections[:200]:
+        if not isinstance(item, dict):
+            continue
+        key = (item.get('applicationId'), item.get('emailId'))
+        proposal = available.get(key)
+        if not proposal:
+            continue
+        row = get_db().execute('SELECT job_status FROM emails WHERE id=?',
+                               (key[1],)).fetchone()
+        changed = linker.apply_email_status(
+            get_db(), key[0], row['job_status'], now=_now(), source_id=key[1]
+        ) if row else None
+        if changed:
+            applied.append({'applicationId': key[0], 'emailId': key[1],
+                            'status': changed})
+    return jsonify({'applied': applied})
 
 
 @bp.delete('/linkage/link')
@@ -1061,7 +1293,34 @@ def stats():
         'active': [row_to_dict(r) for r in active],
         'unlinkedEmails': unlinked['c'] if unlinked else 0,
         'purgingSoon': upcoming['c'] if upcoming else 0,
+        'funnel': analytics.funnel_metrics(db),
+        'weekly': analytics.weekly_activity(db),
+        'sources': analytics.source_conversion(db),
+        'skills': analytics.skill_frequency(db),
     })
+
+
+@bp.post('/upskill')
+def upskill_plan():
+    body = _body()
+    job_ids = body.get('jobIds')
+    if job_ids is not None and not isinstance(job_ids, list):
+        return jsonify({'error': 'jobIds must be a list'}), 400
+    plan = upskill.heatmap(
+        get_db(), job_ids=job_ids, days=int(body.get('days') or 90),
+        limit=int(body.get('limit') or 20),
+    )
+    if body.get('includeResources'):
+        plan = upskill.enrich(plan)
+    return jsonify(plan)
+
+
+@bp.get('/report.html')
+def offline_report():
+    return report.render(get_db()), 200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Disposition': 'attachment; filename="lunaschal-jobs-report.html"',
+    }
 
 
 @bp.post('/retention/sweep')
@@ -1162,6 +1421,80 @@ def delete_search(search_id):
     db = get_db()
     db.execute('DELETE FROM job_searches WHERE id=?', (search_id,))
     db.commit()
+    return jsonify({'ok': True})
+
+
+@bp.get('/career-watches')
+def list_career_watches():
+    rows = get_db().execute(
+        'SELECT * FROM career_page_watches ORDER BY label, created_at'
+    ).fetchall()
+    return jsonify([row_to_dict(row) for row in rows])
+
+
+@bp.post('/career-watches')
+def create_career_watch():
+    body = _body()
+    url = (body.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'url is required'}), 400
+    try:
+        watch = career_watch.create(
+            get_db(), url, body.get('label') or '',
+            int(body.get('intervalHours') or 24),
+        )
+    except ingest.UnsafeUrl as exc:
+        return jsonify({'error': f'That URL is not reachable from here: {exc}'}), 400
+    except ingest.FetchFailed as exc:
+        return jsonify({'error': str(exc)}), 502
+    return jsonify(watch), 201
+
+
+@bp.post('/career-watches/<watch_id>/run')
+def run_career_watch(watch_id):
+    try:
+        return jsonify(career_watch.run(get_db(), watch_id))
+    except LookupError:
+        return jsonify({'error': 'Not found'}), 404
+
+
+@bp.delete('/career-watches/<watch_id>')
+def delete_career_watch(watch_id):
+    cursor = get_db().execute('DELETE FROM career_page_watches WHERE id=?',
+                              (watch_id,))
+    get_db().commit()
+    return (jsonify({'ok': True}) if cursor.rowcount else
+            (jsonify({'error': 'Not found'}), 404))
+
+
+@bp.get('/workday-boards')
+def list_workday_boards():
+    return jsonify([row_to_dict(row) for row in get_db().execute(
+        'SELECT * FROM workday_boards ORDER BY label, created_at').fetchall()])
+
+
+@bp.post('/workday-boards')
+def create_workday_board():
+    body = _body(); url = (body.get('url') or '').strip()
+    if not url: return jsonify({'error': 'url is required'}), 400
+    try:
+        result = workday_watch.create(get_db(), url, body.get('label') or '')
+    except sources.SourceError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(result), 201
+
+
+@bp.post('/workday-boards/<board_id>/run')
+def run_workday_board(board_id):
+    try: return jsonify(workday_watch.run(get_db(), board_id))
+    except LookupError: return jsonify({'error': 'Not found'}), 404
+
+
+@bp.delete('/workday-boards/<board_id>')
+def delete_workday_board(board_id):
+    cursor = get_db().execute('DELETE FROM workday_boards WHERE id=?', (board_id,))
+    get_db().commit()
+    if not cursor.rowcount: return jsonify({'error': 'Not found'}), 404
     return jsonify({'ok': True})
 
 
@@ -1383,6 +1716,7 @@ def queue_job(job_id):
             ' created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
             (application_id, job_id, 'draft', steer, now, now, now),
         )
+        application_status.seed(db, application_id, at=now)
     else:
         application_id = existing['id']
         # Re-queueing is how you retry a failure, so the error is cleared here

@@ -74,7 +74,7 @@ def status_of(db, application_id):
 
 # --- the headline scenario ------------------------------------------------
 
-def test_ats_rejection_links_and_advances_status(client, jobs_root):
+def test_ats_rejection_links_and_proposes_status(client, jobs_root):
     db = get_db()
     account_id = make_account(db)
     application_id = make_application(db)
@@ -83,7 +83,8 @@ def test_ats_rejection_links_and_advances_status(client, jobs_root):
 
     result = linker.run_linkage_sweep(now=NOW)
     assert result == {'scanned': 1, 'linked': 1}
-    assert status_of(db, application_id) == 'rejected'
+    assert status_of(db, application_id) == 'submitted'
+    assert linker.status_proposals(db)[0]['proposedStatus'] == 'rejected'
 
     link = db.execute('SELECT * FROM job_email_links').fetchone()
     assert link['application_id'] == application_id
@@ -100,6 +101,9 @@ def test_a_stale_confirmation_cannot_demote_a_rejection(client, jobs_root):
                sender_email='no-reply@greenhouse.io', job_status='rejection',
                received_at=NOW)
     linker.run_linkage_sweep(now=NOW)
+    proposal = linker.status_proposals(db)[0]
+    linker.apply_email_status(db, application_id, 'rejection', now=NOW,
+                              source_id=proposal['emailId'])
     assert status_of(db, application_id) == 'rejected'
 
     make_email(db, account_id, subject='We received your Acme application',
@@ -117,6 +121,9 @@ def test_rejection_stamps_closed_at_and_a_purge_date(client, jobs_root):
                job_status='rejection')
 
     linker.run_linkage_sweep(now=NOW)
+    proposal = linker.status_proposals(db)[0]
+    linker.apply_email_status(db, application_id, 'rejection', now=NOW,
+                              source_id=proposal['emailId'])
     row = db.execute('SELECT closed_at, purge_after FROM applications WHERE id=?',
                      (application_id,)).fetchone()
     assert row['closed_at'] == NOW
@@ -174,7 +181,8 @@ def test_a_new_application_reopens_the_no_match_verdicts(client, jobs_root):
 
     link = db.execute('SELECT * FROM job_email_links WHERE email_id=?', (email_id,)).fetchone()
     assert link['application_id'] == application_id
-    assert status_of(db, application_id) == 'acknowledged'
+    assert status_of(db, application_id) == 'submitted'
+    assert linker.status_proposals(db)[0]['proposedStatus'] == 'acknowledged'
 
 
 def test_rescan_keeps_confirmed_matches(client, jobs_root):

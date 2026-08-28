@@ -17,7 +17,7 @@ import time
 from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
-from backend.jobs import linkage, retention
+from backend.jobs import linkage, retention, status as application_status
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ def link(db, application_id: str, email_id: str, confidence: float,
 
 
 def apply_email_status(db, application_id: str, job_status: str | None,
-                       now: int | None = None) -> str | None:
+                       now: int | None = None, source_id: str | None = None) -> str | None:
     """Advance the application's status from a linked email. Returns the new
     status, or None when nothing changed."""
     row = db.execute(
@@ -106,10 +106,8 @@ def apply_email_status(db, application_id: str, job_status: str | None,
         return None
 
     now = int(time.time()) if now is None else now
-    db.execute(
-        'UPDATE applications SET status=?, updated_at=? WHERE id=?',
-        (new_status, now, application_id),
-    )
+    application_status.record(db, application_id, new_status,
+                              source='email', source_id=source_id, at=now)
     db.commit()
     # Stamps closed_at and recomputes purge_after: a rejection is what starts
     # the shorter retention clock.
@@ -136,9 +134,8 @@ def scan_email(db, email_row, applications: list[linkage.ApplicationFacts],
         link(db, top.application_id, email_row['id'], top.score, 'auto', now=now)
         result['linked'] = True
         result['applicationId'] = top.application_id
-        result['statusChange'] = apply_email_status(
-            db, top.application_id, email_row['job_status'], now=now
-        )
+        # Linking is automatic when the evidence is decisive; changing the
+        # application stage is a separate, confirmation-gated proposal.
 
     db.execute(
         'INSERT OR REPLACE INTO job_email_scans (email_id, scanned_at, matched)'
@@ -147,6 +144,35 @@ def scan_email(db, email_row, applications: list[linkage.ApplicationFacts],
     )
     db.commit()
     return result
+
+
+def status_proposals(db) -> list[dict]:
+    """Forward-only stage changes implied by linked mail, with source cited."""
+    rows = db.execute(
+        """SELECT l.application_id, l.email_id, e.job_status, e.subject,
+                  e.sender_email, e.received_at, a.status current_status,
+                  j.company, j.title
+           FROM job_email_links l JOIN emails e ON e.id=l.email_id
+           JOIN applications a ON a.id=l.application_id
+           JOIN jobs j ON j.id=a.job_id
+           WHERE e.job_status IS NOT NULL
+             AND NOT EXISTS (
+               SELECT 1 FROM application_status_events se
+               WHERE se.source='email' AND se.source_id=e.id
+             ) ORDER BY e.received_at"""
+    ).fetchall()
+    proposals = []
+    for row in rows:
+        proposed = linkage.advance_status(row['current_status'], row['job_status'])
+        if proposed:
+            proposals.append({
+                'applicationId': row['application_id'], 'emailId': row['email_id'],
+                'currentStatus': row['current_status'], 'proposedStatus': proposed,
+                'company': row['company'], 'title': row['title'],
+                'source': {'subject': row['subject'], 'senderEmail': row['sender_email'],
+                           'receivedAt': row['received_at'], 'jobStatus': row['job_status']},
+            })
+    return proposals
 
 
 def run_linkage_sweep(now: int | None = None, limit: int = SWEEP_BATCH) -> dict:

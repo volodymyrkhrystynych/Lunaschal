@@ -1319,6 +1319,19 @@ CREATE TABLE IF NOT EXISTS job_profile (
     -- The default professional summary. Tailoring rewrites it per application
     -- and stores the rewrite on resume_versions; this row is never overwritten.
     summary TEXT NOT NULL DEFAULT '',
+    work_authorization TEXT NOT NULL DEFAULT '',
+    salary_expectation TEXT NOT NULL DEFAULT '',
+    notice_period TEXT NOT NULL DEFAULT '',
+    availability_date TEXT NOT NULL DEFAULT '',
+    relocation_willingness TEXT NOT NULL DEFAULT '',
+    security_clearance TEXT NOT NULL DEFAULT '',
+    eeo_answers TEXT NOT NULL DEFAULT '',
+    allowed_locations TEXT NOT NULL DEFAULT '',
+    remote_only INTEGER NOT NULL DEFAULT 0,
+    avoid_clearance_roles INTEGER NOT NULL DEFAULT 0,
+    soft_salary_floor REAL,
+    soft_preferences TEXT NOT NULL DEFAULT '',
+    company_blacklist TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -1446,6 +1459,7 @@ CREATE TABLE IF NOT EXISTS applications (
     -- Persisted so the second tap can fill again without re-recording.
     steer TEXT NOT NULL DEFAULT '',
     cover_letter TEXT NOT NULL DEFAULT '',
+    cover_letter_required INTEGER NOT NULL DEFAULT 0,
     notes TEXT NOT NULL DEFAULT '',
     -- Which address you applied from; the strongest linkage signal there is,
     -- because replies come back to it.
@@ -1476,6 +1490,49 @@ CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_applications_purge
     ON applications(purge_after) WHERE purged_at IS NULL;
 
+CREATE TABLE IF NOT EXISTS application_status_events (
+    id TEXT PRIMARY KEY,
+    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'manual',
+    source_id TEXT,
+    occurred_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_application_status_events_app
+    ON application_status_events(application_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_application_status_events_stage
+    ON application_status_events(status, occurred_at);
+
+CREATE TABLE IF NOT EXISTS interview_prep_packs (
+    id TEXT PRIMARY KEY,
+    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_interview_prep_application
+    ON interview_prep_packs(application_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS application_research (
+    id TEXT PRIMARY KEY,
+    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    content TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_application_research_app
+    ON application_research(application_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS application_fill_runs (
+    id TEXT PRIMARY KEY,
+    application_id TEXT NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    page_url TEXT NOT NULL DEFAULT '',
+    page_title TEXT NOT NULL DEFAULT '',
+    fields TEXT NOT NULL DEFAULT '[]',
+    screenshot_path TEXT,
+    created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_application_fill_runs_app
+    ON application_fill_runs(application_id, created_at DESC);
+
 -- `content` is the structured tailoring result and is kept forever — it is a
 -- few kilobytes and it is the answer to "what exactly did I send them?". Only
 -- the rendered binaries are purged, so history survives retention.
@@ -1485,6 +1542,7 @@ CREATE TABLE IF NOT EXISTS resume_versions (
     label TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '{}',
     keywords TEXT,
+    review TEXT,
     html TEXT NOT NULL DEFAULT '',
     pdf_path TEXT,
     docx_path TEXT,
@@ -1571,3 +1629,25 @@ CREATE TABLE IF NOT EXISTS job_searches (
 
 CREATE INDEX IF NOT EXISTS idx_job_searches_due
     ON job_searches(last_run_at) WHERE enabled = 1;
+
+CREATE TABLE IF NOT EXISTS career_page_watches (
+    id TEXT PRIMARY KEY,
+    url TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    known_urls TEXT NOT NULL DEFAULT '[]',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    interval_hours INTEGER NOT NULL DEFAULT 24,
+    last_run_at INTEGER,
+    last_count INTEGER,
+    last_error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workday_boards (
+    id TEXT PRIMARY KEY, url TEXT NOT NULL, label TEXT NOT NULL DEFAULT '',
+    params TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+    interval_hours INTEGER NOT NULL DEFAULT 24, last_run_at INTEGER,
+    last_count INTEGER, last_error TEXT, created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);

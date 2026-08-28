@@ -24,3 +24,10 @@ def resume_path(application_id: str, version_id: str, ext: str) -> Path | None:
     if d is None or not is_safe_name(version_id):
         return None
     return d / f'{version_id}.{ext}'
+
+
+def fill_run_screenshot_path(application_id: str, run_id: str) -> Path | None:
+    d = application_dir(application_id)
+    if d is None or not is_safe_name(run_id):
+        return None
+    return d / f'fill-run-{run_id}.png'

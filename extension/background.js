@@ -271,6 +271,29 @@ const handlers = {
     return { written: result.written };
   },
 
+  async recordFillRun({ tabId, windowId, url, pageTitle, fields }) {
+    const applicationId = await applicationForTab(tabId, url);
+    if (!applicationId) return { recorded: false };
+    let screenshotBase64 = '';
+    try {
+      const dataUrl = await chrome.tabs.captureVisibleTab(windowId, {
+        format: 'png',
+      });
+      screenshotBase64 = dataUrl.split(',', 2)[1] || '';
+    } catch {
+      // The page-state record is still valuable when capture permission has
+      // expired or the tab is no longer visible.
+    }
+    const result = await api(
+      `/api/jobs/applications/${applicationId}/fill-runs`,
+      {
+        method: 'POST',
+        body: { pageUrl: url, pageTitle, fields, screenshotBase64 },
+      }
+    );
+    return { recorded: true, runId: result.id, screenshot: result.screenshot };
+  },
+
   async resume({ tabId, url, ext }) {
     const applicationId = await applicationForTab(tabId, url);
     if (!applicationId) {
@@ -319,8 +342,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // tab it is acting for.
   const tabId = message.tabId ?? sender.tab?.id ?? null;
   const url = message.url ?? sender.tab?.url ?? null;
+  const windowId = message.windowId ?? sender.tab?.windowId ?? null;
 
-  handler({ ...message, tabId, url })
+  handler({ ...message, tabId, windowId, url })
     .then(result => sendResponse({ ok: true, ...result }))
     .catch(error =>
       sendResponse({ ok: false, error: String(error.message || error) })

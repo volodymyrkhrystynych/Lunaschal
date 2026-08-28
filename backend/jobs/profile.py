@@ -28,6 +28,9 @@ def load_profile(db) -> dict:
     row = db.execute('SELECT * FROM job_profile WHERE id=1').fetchone()
     profile = row_to_dict(row) if row else {}
     profile['links'] = _json_list(profile.get('links'))
+    profile['companyBlacklist'] = _json_list(profile.get('companyBlacklist'))
+    profile['remoteOnly'] = bool(profile.get('remoteOnly'))
+    profile['avoidClearanceRoles'] = bool(profile.get('avoidClearanceRoles'))
 
     roles = []
     for role_row in db.execute('SELECT * FROM profile_roles ORDER BY ord, created_at').fetchall():

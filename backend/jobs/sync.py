@@ -41,6 +41,33 @@ INTER_REQUEST_DELAY = 1.0
 DEFAULT_INTERVAL_HOURS = 24
 
 
+def matches_hunt(job: dict, params: dict) -> bool:
+    """Apply source-independent saved-hunt filters before a posting is stored."""
+    title = (job.get('title') or '').lower()
+    location = (job.get('location') or '').lower()
+    seniority = (params.get('seniority') or '').strip().lower()
+    title_terms = params.get('titleTerms') or []
+    if isinstance(title_terms, str):
+        title_terms = [title_terms]
+    if title_terms and not any(str(term).lower() in title for term in title_terms if term):
+        return False
+    wanted_location = (params.get('locationFilter') or '').strip().lower()
+    if wanted_location and wanted_location not in location:
+        return False
+    if params.get('remoteOnly') and not job.get('remote'):
+        return False
+    if seniority and seniority not in title:
+        return False
+    try:
+        floor = float(params.get('salaryFloor')) if params.get('salaryFloor') not in (None, '') else None
+    except (TypeError, ValueError):
+        floor = None
+    salary_max = job.get('salaryMax')
+    if floor is not None and (salary_max is None or float(salary_max) < floor):
+        return False
+    return True
+
+
 def _now() -> int:
     return int(time.time())
 
@@ -200,6 +227,8 @@ def sync_search(db, search: dict) -> dict:
     }
 
     for job in fetched.jobs:
+        if not matches_hunt(job, params):
+            continue
         job_id = upsert_job(db, kind, job, loaded_profile)
         if job_id is None:
             continue

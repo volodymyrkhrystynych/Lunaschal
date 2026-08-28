@@ -29,7 +29,7 @@ import threading
 import time
 from datetime import datetime
 
-from backend.jobs import linker, queue, retention, sync, triager
+from backend.jobs import career_watch, linker, queue, retention, sync, triager, workday_watch
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def tick(now: datetime | None = None, last_purge_date=None):
     `run_title_sweep` is.
     """
     now = now or datetime.now()
-    results = {'linkage': None, 'sync': None, 'gated': None, 'triaged': None,
+    results = {'linkage': None, 'sync': None, 'careerWatch': None, 'workday': None, 'gated': None, 'triaged': None,
                'queued': None, 'purge': None}
 
     results['linkage'] = linker.run_linkage_sweep()
@@ -58,6 +58,16 @@ def tick(now: datetime | None = None, last_purge_date=None):
         results['sync'] = sync.run_sync_sweep()
     except Exception as e:
         logger.warning('Job sync sweep failed: %s', e)
+    try:
+        from backend.db.connection import get_db
+        results['careerWatch'] = career_watch.run_due(get_db())
+    except Exception as e:
+        logger.warning('Career-page watch sweep failed: %s', e)
+    try:
+        from backend.db.connection import get_db
+        results['workday'] = workday_watch.run_due(get_db())
+    except Exception as e:
+        logger.warning('Workday board sweep failed: %s', e)
 
     # The title gate is pure string work over pending rows, so it runs every
     # tick beside linkage and sync. Only the model half below asks the gate.
