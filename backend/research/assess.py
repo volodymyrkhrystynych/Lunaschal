@@ -96,6 +96,36 @@ def clamp(result: dict, evidence: list[dict], has_snapshot: bool) -> dict:
     }
 
 
+# Choices the UI already provides as its own last option. A model that adds
+# one anyway would give the decision two "write your own" rows, one of which
+# does nothing. Spelled the way the key below normalizes them: casefolded,
+# punctuation stripped.
+_ESCAPE_HATCHES = {
+    'other', 'others', 'something else', 'anything else', 'none of these',
+    'none of the above', 'write your own', 'custom', 'other specify',
+    'other please specify',
+}
+
+
+def normalize_options(options) -> list[str]:
+    """Trim, drop blanks and near-duplicates, and drop the model's own
+    "something else" — the decision UI owns that choice."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for option in options or []:
+        if not isinstance(option, str):
+            continue
+        text = option.strip()
+        if not text:
+            continue
+        key = ' '.join(re.sub(r'[^\w\s]', '', text.casefold()).split())
+        if not key or key in seen or key in _ESCAPE_HATCHES:
+            continue
+        seen.add(key)
+        out.append(text)
+    return out
+
+
 def _sync_questions(db, idea_id: str, questions, now: int) -> None:
     """Upsert open questions by key; never touch an answered one."""
     existing = {
@@ -114,8 +144,8 @@ def _sync_questions(db, idea_id: str, questions, now: int) -> None:
         key = question_key(text)
         if not key:
             continue
-        options = item.get('options') or []
-        options_json = json.dumps([o for o in options if isinstance(o, str)]) or None
+        options = normalize_options(item.get('options'))
+        options_json = json.dumps(options) if options else None
         row = existing.get(key)
         if row is None:
             db.execute(

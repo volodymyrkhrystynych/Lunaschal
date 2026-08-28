@@ -52,20 +52,15 @@ export function IdeaAssessment({ ideaId, userVerdict }: IdeaAssessmentProps) {
     onSuccess: invalidate,
   });
 
-  const answer = useMutation({
-    mutationFn: ({ id, text }: { id: string; text: string }) =>
-      api.ideas.answerQuestion(id, { answer: text }),
-    onSuccess: invalidate,
-  });
-
   const impl = resolveImplementation({
     userVerdict,
     verdict: assessment?.verdict ?? null,
     confidence: assessment?.confidence ?? null,
     assessmentStale: assessment?.stale ?? false,
   });
-  const open = (questions ?? []).filter(q => q.status === 'open');
-  const answered = (questions ?? []).filter(q => q.status === 'answered');
+  // Answering them belongs to IdeaDecisions, directly below; this is only the
+  // pointer that a "Check the repo" run turned some up.
+  const open = (questions ?? []).filter(q => q.status === 'open').length;
 
   return (
     <div className="mx-4 my-4 border-t border-white/10 pt-4">
@@ -139,56 +134,10 @@ export function IdeaAssessment({ ideaId, userVerdict }: IdeaAssessmentProps) {
         ))}
       </div>
 
-      {open.length > 0 && (
-        <div className="mb-2">
-          <h4 className="text-xs font-medium text-[var(--color-text)] mb-1">
-            Needs a decision ({open.length})
-          </h4>
-          <ul className="space-y-2">
-            {open.map(question => (
-              <li key={question.id}>
-                <p className="text-xs text-[var(--color-text)]">
-                  {question.question}
-                </p>
-                {question.why && (
-                  <p className="text-xs text-[var(--color-text-muted)]">
-                    {question.why}
-                  </p>
-                )}
-                <input
-                  defaultValue=""
-                  placeholder={
-                    question.options.length
-                      ? question.options.join(' / ')
-                      : 'Your answer…'
-                  }
-                  aria-label={`Answer: ${question.question}`}
-                  onBlur={e => {
-                    const text = e.target.value.trim();
-                    if (text) answer.mutate({ id: question.id, text });
-                  }}
-                  className="w-full mt-1 bg-transparent text-xs text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border-b border-white/10 focus:outline-none focus:border-[var(--color-primary)]"
-                />
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {answered.length > 0 && (
-        <details className="text-xs text-[var(--color-text-muted)]">
-          <summary className="cursor-pointer">
-            {answered.length} decision{answered.length === 1 ? '' : 's'} made
-          </summary>
-          <ul className="mt-1 space-y-0.5">
-            {answered.map(q => (
-              <li key={q.id}>
-                · {q.question} →{' '}
-                <span className="text-[var(--color-text)]">{q.answer}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
+      {open > 0 && (
+        <p className="text-xs text-amber-300">
+          {open} open decision{open === 1 ? '' : 's'} below.
+        </p>
       )}
     </div>
   );

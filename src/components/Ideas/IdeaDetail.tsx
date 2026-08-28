@@ -1,73 +1,144 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type IdeaStatus } from '../../hooks/api';
+import { api, type Idea, type IdeaStatus } from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { IDEA_STATUSES, statusClasses } from '../../lib/ideas';
+import {
+  changedFields,
+  isDirty,
+  mergeServerIdea,
+  saveClasses,
+  saveLabel,
+  saveState,
+  serverDraft,
+  type IdeaDraft,
+} from '../../lib/ideaSave';
 import { SketchStrip } from './SketchStrip';
 import { IdeaAssessment } from './IdeaAssessment';
+import { IdeaDecisions } from './IdeaDecisions';
 import { IdeaDiscussion } from './IdeaDiscussion';
 import { IdeaPlan } from './IdeaPlan';
 
 const SAVE_DEBOUNCE_MS = 1500;
 
+/**
+ * How often to re-ask for an idea that has no title yet. Capture kicks off a
+ * background pass that names it (backend/ai/idea_title.py), and on a local
+ * model that is tens of seconds — long enough that the pane would otherwise
+ * show "Untitled idea" until something else happened to refetch.
+ */
+const TITLE_POLL_MS = 4000;
+/**
+ * ...but only while the idea is new enough for that pass to still be running.
+ * With no AI configured the title never arrives, and a poll with no end is a
+ * request every four seconds forever.
+ */
+const TITLE_POLL_WINDOW_MS = 3 * 60 * 1000;
+
+const TABS = [
+  { id: 'idea', label: 'Idea' },
+  { id: 'decisions', label: 'Decisions' },
+  { id: 'discuss', label: 'Discuss' },
+  { id: 'plan', label: 'Plan' },
+] as const;
+
+type TabId = (typeof TABS)[number]['id'];
+
 interface IdeaDetailProps {
   ideaId: string;
 }
 
+const EMPTY: IdeaDraft = { title: '', body: '' };
+
 export function IdeaDetail({ ideaId }: IdeaDetailProps) {
   const queryClient = useQueryClient();
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'unsaved'>(
-    'saved'
-  );
+  const [tab, setTab] = useState<TabId>('idea');
+  const [draft, setDraft] = useState<IdeaDraft>(EMPTY);
+  const [failed, setFailed] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
-  // Guards the first hydration so a background refetch can't clobber typing.
-  const loadedRef = useRef<string>('');
+
+  // The last text known to be on the server. Kept apart from the query cache
+  // on purpose — see the note at the top of src/lib/ideaSave.ts.
+  const baseline = useRef<IdeaDraft>(EMPTY);
+  const hydrated = useRef<string>('');
+  // What is on screen right now, readable from effects and timers that fire
+  // after the render that scheduled them.
+  const draftRef = useRef<IdeaDraft>(draft);
+  draftRef.current = draft;
 
   const { data: idea, isLoading } = useQuery({
     queryKey: ['ideas', ideaId],
     queryFn: () => api.ideas.get(ideaId),
+    refetchInterval: query => {
+      const row = query.state.data as Idea | undefined;
+      if (!row || row.title.trim()) return false;
+      const age = Date.now() - new Date(row.createdAt).getTime();
+      return age >= 0 && age < TITLE_POLL_WINDOW_MS ? TITLE_POLL_MS : false;
+    },
   });
-
-  useEffect(() => {
-    if (idea && loadedRef.current !== idea.id) {
-      loadedRef.current = idea.id;
-      setTitle(idea.title);
-      // Show the polished text once it exists, otherwise what was captured.
-      setBody(idea.content || idea.rawContent);
-      setSaveStatus('saved');
-    }
-  }, [idea]);
 
   const save = useMutation({
-    mutationFn: (data: {
-      title?: string;
-      content?: string;
-      status?: IdeaStatus;
-    }) => api.ideas.update(ideaId, data),
-    onSuccess: () => {
-      setSaveStatus('saved');
+    mutationFn: (data: { title?: string; content?: string }) =>
+      api.ideas.update(ideaId, data).then(() => data),
+    onSuccess: sent => {
+      // Advance only what was actually accepted: anything typed while the
+      // request was in flight is still unsaved, and must stay that way.
+      baseline.current = {
+        title: sent.title ?? baseline.current.title,
+        body: sent.content ?? baseline.current.body,
+      };
+      setFailed(false);
       queryClient.invalidateQueries({ queryKey: ['ideas'] });
     },
-    onError: () => setSaveStatus('unsaved'),
+    onError: () => setFailed(true),
   });
 
-  // Debounced autosave, matching the chapter/note editors.
+  // Hydrate on first load, then fold later fetches in field by field: an
+  // untouched field adopts the server's value (this is how the generated title
+  // lands in the box), an edited one is left alone.
   useEffect(() => {
-    if (!idea || loadedRef.current !== idea.id) return;
-    if (title === idea.title && body === (idea.content || idea.rawContent))
+    if (!idea) return;
+    if (hydrated.current !== idea.id) {
+      hydrated.current = idea.id;
+      baseline.current = serverDraft(idea);
+      setDraft(baseline.current);
+      setFailed(false);
       return;
-    setSaveStatus('saving');
-    const timer = setTimeout(() => {
-      save.mutate({ title, content: body });
-    }, SAVE_DEBOUNCE_MS);
+    }
+    const merged = mergeServerIdea(draftRef.current, baseline.current, idea);
+    baseline.current = merged.baseline;
+    if (isDirty(merged.draft, draftRef.current)) setDraft(merged.draft);
+  }, [idea]);
+
+  const dirty = isDirty(draft, baseline.current);
+  const state = saveState({ dirty, inFlight: save.isPending, failed });
+
+  // `mutate` is stable across renders; capturing it keeps `flush` stable too,
+  // which is what makes the unmount effect below fire only on unmount.
+  const mutateRef = useRef(save.mutate);
+  mutateRef.current = save.mutate;
+
+  const flush = useCallback(() => {
+    const fields = changedFields(draftRef.current, baseline.current);
+    if (Object.keys(fields).length === 0) return;
+    mutateRef.current(fields);
+  }, []);
+
+  // Save on change, and only on change: with nothing edited there is no timer,
+  // so an idle pane makes no requests at all.
+  useEffect(() => {
+    if (!dirty || save.isPending) return;
+    const timer = setTimeout(flush, SAVE_DEBOUNCE_MS);
     return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [title, body, idea?.id]);
+  }, [draft, dirty, save.isPending, flush]);
+
+  // Switching ideas unmounts this pane (it is keyed by id), which used to drop
+  // whatever was still inside the debounce window.
+  useEffect(() => () => flush(), [flush]);
 
   useShortcutScope(2, {
     drillIn: () => {
+      setTab('idea');
       bodyRef.current?.focus();
       return true;
     },
@@ -77,6 +148,22 @@ export function IdeaDetail({ ideaId }: IdeaDetailProps) {
     mutationFn: () => api.ideas.remove(ideaId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['ideas'] }),
   });
+
+  const setStatus = useMutation({
+    mutationFn: (status: IdeaStatus) => api.ideas.update(ideaId, { status }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['ideas'] });
+      queryClient.invalidateQueries({ queryKey: ['ideas', ideaId] });
+    },
+  });
+
+  const { data: questions } = useQuery({
+    queryKey: ['ideas', ideaId, 'questions'],
+    queryFn: () => api.ideas.listQuestions(ideaId),
+  });
+  const openDecisions = (questions ?? []).filter(
+    q => q.status === 'open'
+  ).length;
 
   if (isLoading) {
     return (
@@ -94,29 +181,55 @@ export function IdeaDetail({ ideaId }: IdeaDetailProps) {
   }
 
   return (
-    <div className="flex-1 flex flex-col overflow-y-auto">
-      <div className="flex items-center gap-2 px-4 pt-4">
+    <div
+      className="flex-1 flex flex-col overflow-hidden"
+      onKeyDown={e => {
+        // Ctrl/Cmd+S, because "when is it actually saved" deserves an answer
+        // you can force rather than wait for.
+        if (e.key === 's' && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          flush();
+        }
+      }}
+    >
+      <div className="flex items-center gap-2 px-4 pt-4 shrink-0">
         <input
-          value={title}
-          onChange={e => setTitle(e.target.value)}
+          value={draft.title}
+          onChange={e => setDraft(d => ({ ...d, title: e.target.value }))}
+          onBlur={flush}
           placeholder="Untitled idea"
+          aria-label="Idea title"
           className="flex-1 bg-transparent text-lg font-medium text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none"
         />
         {/* Fixed-width slot: a status that renders nothing when idle would
-            reflow the header on every autosave (the Paper toolbar lesson). */}
-        <span className="w-16 shrink-0 text-right text-xs text-[var(--color-text-muted)]">
-          {saveStatus === 'saving'
-            ? 'Saving…'
-            : saveStatus === 'unsaved'
-              ? 'Unsaved'
-              : 'Saved'}
-        </span>
+            reflow the header on every save (the Paper toolbar lesson). It is a
+            button because two of the four states are things you can act on —
+            an unsaved draft can be pushed now, a failed one retried. */}
+        <button
+          type="button"
+          onClick={flush}
+          disabled={!dirty || save.isPending}
+          title={
+            state === 'saved'
+              ? 'Everything here is on the server'
+              : state === 'saving'
+                ? 'Sending to the server'
+                : state === 'error'
+                  ? 'The last save failed — click to try again'
+                  : 'Only in this browser — click to save now'
+          }
+          aria-label={`Save state: ${saveLabel(state)}`}
+          className={`w-24 shrink-0 text-right text-xs disabled:cursor-default ${saveClasses(state)}`}
+        >
+          {state === 'dirty' || state === 'error' ? '● ' : ''}
+          {saveLabel(state)}
+        </button>
       </div>
 
-      <div className="flex items-center gap-2 px-4 py-2">
+      <div className="flex items-center gap-2 px-4 py-2 shrink-0">
         <select
           value={idea.status}
-          onChange={e => save.mutate({ status: e.target.value as IdeaStatus })}
+          onChange={e => setStatus.mutate(e.target.value as IdeaStatus)}
           aria-label="Status"
           className={`rounded px-1.5 py-0.5 text-xs ${statusClasses(idea.status)} bg-[var(--color-surface)] focus:outline-none`}
         >
@@ -142,28 +255,81 @@ export function IdeaDetail({ ideaId }: IdeaDetailProps) {
         </button>
       </div>
 
-      <textarea
-        ref={bodyRef}
-        data-idea-editor
-        value={body}
-        onChange={e => setBody(e.target.value)}
-        placeholder="What's the idea?"
-        className="mx-4 min-h-48 flex-1 resize-none rounded bg-[var(--color-bg)] border border-white/10 p-3 text-sm leading-relaxed text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
-      />
+      {/* Tabs rather than one long scroll: the discussion is a chat, and a chat
+          needs the whole pane — a composer buried under the plan is not one. */}
+      <div
+        role="tablist"
+        aria-label="Idea sections"
+        className="flex gap-1 px-3 border-b border-white/10 shrink-0"
+      >
+        {TABS.map(t => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-3 py-1.5 text-sm border-b-2 -mb-px ${
+              tab === t.id
+                ? 'border-[var(--color-primary)] text-[var(--color-primary)]'
+                : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+            }`}
+          >
+            {t.label}
+            {t.id === 'decisions' && openDecisions > 0 && (
+              <span className="ml-1.5 px-1.5 py-0.5 rounded text-xs bg-amber-500/20 text-amber-300">
+                {openDecisions}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
 
-      {/* Once the polish step exists, `content` diverges from what was spoken;
-          keeping the transcript visible is the journal's raw_content contract. */}
-      {idea.content && idea.rawContent && idea.content !== idea.rawContent && (
-        <details className="mx-4 mt-3 text-xs text-[var(--color-text-muted)]">
-          <summary className="cursor-pointer">As captured</summary>
-          <p className="mt-1 whitespace-pre-wrap">{idea.rawContent}</p>
-        </details>
+      {tab === 'idea' && (
+        <div className="flex-1 flex flex-col overflow-y-auto">
+          <textarea
+            ref={bodyRef}
+            data-idea-editor
+            value={draft.body}
+            onChange={e => setDraft(d => ({ ...d, body: e.target.value }))}
+            onBlur={flush}
+            placeholder="What's the idea?"
+            aria-label="Idea body"
+            className="mx-4 mt-4 min-h-48 flex-1 resize-none rounded bg-[var(--color-bg)] border border-white/10 p-3 text-sm leading-relaxed text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
+          />
+
+          {/* Once the polish step exists, `content` diverges from what was
+              spoken; keeping the transcript visible is the journal's
+              raw_content contract. */}
+          {idea.content &&
+            idea.rawContent &&
+            idea.content !== idea.rawContent && (
+              <details className="mx-4 mt-3 text-xs text-[var(--color-text-muted)]">
+                <summary className="cursor-pointer">As captured</summary>
+                <p className="mt-1 whitespace-pre-wrap">{idea.rawContent}</p>
+              </details>
+            )}
+
+          <SketchStrip ideaId={ideaId} />
+        </div>
       )}
 
-      <SketchStrip ideaId={ideaId} />
-      <IdeaAssessment ideaId={ideaId} userVerdict={idea.userVerdict} />
-      <IdeaDiscussion ideaId={ideaId} />
-      <IdeaPlan ideaId={ideaId} />
+      {tab === 'decisions' && (
+        <div className="flex-1 overflow-y-auto">
+          <IdeaAssessment ideaId={ideaId} userVerdict={idea.userVerdict} />
+          <IdeaDecisions ideaId={ideaId} />
+        </div>
+      )}
+
+      {/* Mounted only on its own tab, so the chat owns the full height and its
+          scroll position is its own. */}
+      {tab === 'discuss' && <IdeaDiscussion ideaId={ideaId} />}
+
+      {tab === 'plan' && (
+        <div className="flex-1 overflow-y-auto">
+          <IdeaPlan ideaId={ideaId} />
+        </div>
+      )}
     </div>
   );
 }

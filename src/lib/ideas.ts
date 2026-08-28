@@ -194,6 +194,72 @@ export function needsDecisions(idea: { openQuestionCount?: number }): boolean {
   return (idea.openQuestionCount ?? 0) > 0;
 }
 
+/**
+ * The sentinel for the write-your-own row. Not prose, so it cannot collide
+ * with an option the model wrote, and unlike a value with a leading space it
+ * survives a round-trip through a DOM attribute.
+ */
+export const OTHER_CHOICE = '__other__';
+
+export interface DecisionChoice {
+  /** The answer this row submits — or OTHER_CHOICE, which submits the note. */
+  value: string;
+  label: string;
+  /** True for the last row, which reveals a text field instead of answering. */
+  isOther: boolean;
+}
+
+/**
+ * A decision as radio rows: the agent's options, then a write-your-own.
+ *
+ * The last row is always present, and always last, which is the whole shape of
+ * the control — the agent proposes the forks it can see, and the answer it did
+ * not think of has to be reachable without leaving the list. A question that
+ * arrived with no usable options degrades to just that row, which is exactly
+ * the free-text field this used to be.
+ */
+export function decisionChoices(options: string[]): DecisionChoice[] {
+  const seen = new Set<string>();
+  const rows: DecisionChoice[] = [];
+  for (const option of options) {
+    const text = (option ?? '').trim();
+    if (!text) continue;
+    const key = text.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rows.push({ value: text, label: text, isOther: false });
+  }
+  rows.push({
+    value: OTHER_CHOICE,
+    label: 'Something else…',
+    isOther: true,
+  });
+  return rows;
+}
+
+/**
+ * Which row a previously given answer sits on. An answer that matches an option
+ * selects it; anything else was written by hand, so it belongs in the note.
+ * Reopening a decision should show what was decided, not a blank form.
+ */
+export function selectedChoice(
+  options: string[],
+  answer: string | null | undefined
+): { value: string; note: string } {
+  const text = (answer ?? '').trim();
+  if (!text) return { value: '', note: '' };
+  const match = options.find(o => o.trim() === text);
+  if (match) return { value: match, note: '' };
+  return { value: OTHER_CHOICE, note: text };
+}
+
+/** The text a decision would submit, or '' when it isn't answerable yet. */
+export function decisionAnswer(choice: string, note: string): string {
+  if (!choice) return '';
+  if (choice === OTHER_CHOICE) return note.trim();
+  return choice;
+}
+
 export const EFFORT_LABELS: Record<string, string> = {
   s: 'Small',
   m: 'Medium',
