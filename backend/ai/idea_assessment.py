@@ -39,6 +39,11 @@ Never treat a roadmap entry as evidence of implementation.
 - openQuestions are decisions only the app's owner can make — genuine forks \
 where two reasonable answers lead to different work. Do not pad the list; an \
 idea with an obvious shape has none.
+- Every open question must carry two to four options: the concrete answers \
+you would actually pick between, each a short phrase naming the choice rather \
+than describing it. They are offered to the owner as a multiple choice, so \
+they must be mutually exclusive, and none of them may be "something else" — \
+the owner is always free to write their own answer instead.
 - confidence is how sure you are of the verdict, 0 to 1. Be honest and low when \
 the evidence is thin."""
 
@@ -57,9 +62,18 @@ SCHEMA_TEMPLATE = {
                 'properties': {
                     'question': {'type': 'string'},
                     'why': {'type': 'string'},
-                    'options': {'type': 'array', 'maxItems': 4, 'items': {'type': 'string'}},
+                    # Required, and at least two: a "decision" the UI can only
+                    # render as a blank text field is a question, not a fork.
+                    # llama-server compiles minItems into the grammar, so the
+                    # options exist by the time the JSON is parseable.
+                    'options': {
+                        'type': 'array',
+                        'minItems': 2,
+                        'maxItems': 4,
+                        'items': {'type': 'string'},
+                    },
                 },
-                'required': ['question'],
+                'required': ['question', 'options'],
             },
         },
         'effort': {'type': 'string', 'enum': ['s', 'm', 'l']},

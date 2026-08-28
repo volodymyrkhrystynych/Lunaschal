@@ -335,3 +335,65 @@ def test_question_key_normalizes_wording():
 
 def test_run_assessment_on_a_missing_idea(client):
     assert assess.run_assessment('nope') is None
+
+
+# --- Decision options (pure) ---
+#
+# A decision is rendered as a multiple choice with a write-your-own last row,
+# so what reaches the UI has to be a real, mutually exclusive list.
+
+def test_options_are_trimmed_and_blanks_dropped():
+    assert assess.normalize_options(['  Paper  ', '', '   ', 'A new table']) == [
+        'Paper', 'A new table'
+    ]
+
+
+def test_options_deduplicate_ignoring_case_and_punctuation():
+    assert assess.normalize_options(['Paper pages', 'paper pages!', 'PAPER  PAGES']) == [
+        'Paper pages'
+    ]
+
+
+def test_the_models_own_escape_hatch_is_dropped():
+    # The UI's last choice is already "Something else"; two of them means one
+    # that does nothing.
+    assert assess.normalize_options(['Paper', 'A new table', 'Other']) == [
+        'Paper', 'A new table'
+    ]
+    assert assess.normalize_options(['Paper', 'Something else']) == ['Paper']
+    assert assess.normalize_options(['Paper', 'Other (please specify)']) == ['Paper']
+
+
+def test_non_strings_are_not_options():
+    assert assess.normalize_options(['Paper', 3, None, {'a': 1}]) == ['Paper']
+    assert assess.normalize_options(None) == []
+
+
+def test_stored_options_survive_the_round_trip(client, snapshot, monkeypatch):
+    import backend.research.assess as mod
+    monkeypatch.setattr(mod, 'assess_idea', lambda *a, **k: {
+        'verdict': 'no', 'confidence': 0.3, 'rationale': 'r', 'evidenceIndexes': [],
+        'openQuestions': [{'question': 'Where should sketches live?',
+                           'options': ['Paper', ' Paper ', 'A new table', 'Other']}],
+    })
+    idea_id = _idea(client)
+    mod.run_assessment(idea_id)
+
+    question = client.get(f'/api/ideas/{idea_id}/questions').get_json()[0]
+    assert question['options'] == ['Paper', 'A new table']
+
+
+def test_a_question_with_no_usable_options_still_reaches_the_user(client, snapshot, monkeypatch):
+    """A free-text decision is worse than a multiple choice, but far better
+    than a decision that is silently dropped."""
+    import backend.research.assess as mod
+    monkeypatch.setattr(mod, 'assess_idea', lambda *a, **k: {
+        'verdict': 'no', 'confidence': 0.3, 'rationale': 'r', 'evidenceIndexes': [],
+        'openQuestions': [{'question': 'Where should sketches live?', 'options': ['Other']}],
+    })
+    idea_id = _idea(client)
+    mod.run_assessment(idea_id)
+
+    question = client.get(f'/api/ideas/{idea_id}/questions').get_json()[0]
+    assert question['options'] == []
+    assert question['status'] == 'open'

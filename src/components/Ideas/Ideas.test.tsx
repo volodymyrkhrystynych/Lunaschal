@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Ideas } from './index';
@@ -103,6 +103,26 @@ function renderIt() {
       <Ideas />
     </QueryClientProvider>
   );
+}
+
+/** Open an idea and move to one of its tabs. The Decisions tab carries a
+ *  count badge, so tabs are matched by prefix rather than exact name. */
+async function openIdea(tab?: 'Idea' | 'Decisions' | 'Discuss' | 'Plan') {
+  fireEvent.click(await screen.findByText('Habit tracking'));
+  await screen.findByLabelText('Idea title');
+  if (tab) {
+    fireEvent.click(
+      await screen.findByRole('tab', { name: new RegExp(`^${tab}`) })
+    );
+  }
+}
+
+/** `openIdea` for the tests that run on fake timers — findBy* never settles
+ *  there, so each await is an explicit tick instead. */
+async function openIdeaWithFakeTimers(label = 'Habit tracking') {
+  await vi.advanceTimersByTimeAsync(20);
+  fireEvent.click(screen.getByText(label));
+  await vi.advanceTimersByTimeAsync(20);
 }
 
 beforeEach(() => {
@@ -303,7 +323,7 @@ describe('assessment pane', () => {
       assessedAt: '2026-08-01T00:00:00Z',
     });
     renderIt();
-    fireEvent.click(await screen.findByText('Habit tracking'));
+    await openIdea('Decisions');
     fireEvent.click(
       await screen.findByRole('button', { name: 'Check the repo' })
     );
@@ -317,7 +337,7 @@ describe('assessment pane', () => {
 
   it('lets the user override the verdict', async () => {
     renderIt();
-    fireEvent.click(await screen.findByText('Habit tracking'));
+    await openIdea('Decisions');
     fireEvent.click(await screen.findByRole('button', { name: 'Built' }));
     await waitFor(() =>
       expect(api.ideas.update).toHaveBeenCalledWith('i1', {
@@ -325,40 +345,138 @@ describe('assessment pane', () => {
       })
     );
   });
+});
 
-  it('surfaces open decisions and records an answer', async () => {
-    vi.mocked(api.ideas.listQuestions).mockResolvedValue([
-      {
-        id: 'q1',
-        ideaId: 'i1',
-        question: 'Where should sketches live?',
-        why: 'storage',
-        options: ['Paper', 'new table'],
-        answer: null,
-        status: 'open',
-        answeredAt: null,
-        createdAt: '2026-08-01T00:00:00Z',
-      },
-    ]);
+describe('decisions', () => {
+  const question = (over = {}) => ({
+    id: 'q1',
+    ideaId: 'i1',
+    question: 'Where should sketches live?',
+    why: 'storage',
+    options: ['Paper pages', 'A new table'],
+    answer: null,
+    status: 'open' as const,
+    answeredAt: null,
+    createdAt: '2026-08-01T00:00:00Z',
+    ...over,
+  });
+
+  beforeEach(() => {
     vi.mocked(api.ideas.answerQuestion).mockResolvedValue({ success: true });
-    renderIt();
-    fireEvent.click(await screen.findByText('Habit tracking'));
+  });
 
-    expect(await screen.findByText('Needs a decision (1)')).toBeTruthy();
-    const field = screen.getByLabelText('Answer: Where should sketches live?');
-    fireEvent.blur(field, { target: { value: 'Paper pages' } });
+  it('counts the open ones on the tab, so they are visible from the Idea tab', async () => {
+    vi.mocked(api.ideas.listQuestions).mockResolvedValue([question()]);
+    renderIt();
+    await openIdea();
+    expect(
+      await screen.findByRole('tab', { name: /Decisions\s*1/ })
+    ).toBeTruthy();
+  });
+
+  it("offers the agent's options as a multiple choice", async () => {
+    vi.mocked(api.ideas.listQuestions).mockResolvedValue([question()]);
+    renderIt();
+    await openIdea('Decisions');
+
+    expect(await screen.findByText('Where should sketches live?')).toBeTruthy();
+    // The options are real, selectable rows now — they used to be crammed into
+    // a placeholder, which asked the user to retype what was on screen.
+    expect(screen.getByRole('radio', { name: 'Paper pages' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: 'A new table' })).toBeTruthy();
+  });
+
+  it('records the chosen option verbatim', async () => {
+    vi.mocked(api.ideas.listQuestions).mockResolvedValue([question()]);
+    renderIt();
+    await openIdea('Decisions');
+
+    fireEvent.click(await screen.findByRole('radio', { name: 'Paper pages' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Decide' }));
     await waitFor(() =>
       expect(api.ideas.answerQuestion).toHaveBeenCalledWith('q1', {
         answer: 'Paper pages',
       })
     );
   });
+
+  it('always offers a write-your-own row, last', async () => {
+    vi.mocked(api.ideas.listQuestions).mockResolvedValue([question()]);
+    renderIt();
+    await openIdea('Decisions');
+
+    const rows = await screen.findAllByRole('radio');
+    expect(rows).toHaveLength(3);
+    expect(rows[2]!.getAttribute('value')).toBe('__other__');
+
+    fireEvent.click(rows[2]!);
+    fireEvent.change(
+      screen.getByLabelText('Answer: Where should sketches live?'),
+      { target: { value: 'Both, keyed by page id' } }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Decide' }));
+    await waitFor(() =>
+      expect(api.ideas.answerQuestion).toHaveBeenCalledWith('q1', {
+        answer: 'Both, keyed by page id',
+      })
+    );
+  });
+
+  it('dictates into the write-in box rather than submitting it', async () => {
+    vi.mocked(api.ideas.listQuestions).mockResolvedValue([question()]);
+    renderIt();
+    await openIdea('Decisions');
+
+    fireEvent.click((await screen.findAllByRole('radio'))[2]!);
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Dictate your answer' })
+    );
+
+    expect(await screen.findByDisplayValue('a spoken idea')).toBeTruthy();
+    // A decision is committed once and read by the planner afterwards, so a
+    // misheard word gets a chance to be fixed.
+    expect(api.ideas.answerQuestion).not.toHaveBeenCalled();
+  });
+
+  it('degrades to the write-in row when the agent proposed nothing', async () => {
+    vi.mocked(api.ideas.listQuestions).mockResolvedValue([
+      question({ options: [] }),
+    ]);
+    renderIt();
+    await openIdea('Decisions');
+
+    const rows = await screen.findAllByRole('radio');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.getAttribute('value')).toBe('__other__');
+  });
+
+  it('reopens a settled decision showing what was decided', async () => {
+    vi.mocked(api.ideas.listQuestions).mockResolvedValue([
+      question({
+        status: 'answered',
+        answer: 'A new table',
+        answeredAt: '2026-08-02T00:00:00Z',
+      }),
+    ]);
+    renderIt();
+    await openIdea('Decisions');
+
+    fireEvent.click(await screen.findByText('1 decision made'));
+    const chosen = screen.getByRole('radio', {
+      name: 'A new table',
+    }) as HTMLInputElement;
+    expect(chosen.checked).toBe(true);
+    // Nothing to update until it actually changes.
+    expect(
+      screen.getByRole('button', { name: 'Update' }).hasAttribute('disabled')
+    ).toBe(true);
+  });
 });
 
 describe('plan pane', () => {
   it('offers to create a plan when there is none', async () => {
     renderIt();
-    fireEvent.click(await screen.findByText('Habit tracking'));
+    await openIdea('Plan');
     expect(
       await screen.findByRole('button', { name: 'Create plan' })
     ).toBeTruthy();
@@ -385,12 +503,374 @@ describe('plan pane', () => {
       updatedAt: '2026-08-01T00:00:00Z',
     });
     renderIt();
-    fireEvent.click(await screen.findByText('Habit tracking'));
+    await openIdea('Plan');
 
     expect(
       await screen.findByRole('button', { name: 'Copy markdown' })
     ).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Regenerate' })).toBeTruthy();
+  });
+});
+
+describe('saving', () => {
+  it('sits idle when nothing has been touched', async () => {
+    renderIt();
+    await openIdea();
+    // The old pane compared the draft against the query cache and lost that
+    // race on the first render, leaving "Saving…" up with nothing in flight.
+    expect(await screen.findByLabelText('Save state: Saved')).toBeTruthy();
+    await new Promise(r => setTimeout(r, 50));
+    expect(api.ideas.update).not.toHaveBeenCalled();
+  });
+
+  it('says the text is local only until the server has it', async () => {
+    vi.useFakeTimers();
+    try {
+      renderIt();
+      await openIdeaWithFakeTimers();
+
+      fireEvent.change(screen.getByLabelText('Idea body'), {
+        target: { value: 'a habit grid, on the month view too' },
+      });
+      // Edited but not yet sent — this exists in the browser and nowhere else.
+      expect(screen.getByLabelText('Save state: Unsaved')).toBeTruthy();
+      expect(api.ideas.update).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(api.ideas.update).toHaveBeenCalledWith('i1', {
+        content: 'a habit grid, on the month view too',
+      });
+      await vi.advanceTimersByTimeAsync(50);
+      expect(screen.getByLabelText('Save state: Saved')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends only the field that changed', async () => {
+    vi.useFakeTimers();
+    try {
+      renderIt();
+      await openIdeaWithFakeTimers();
+
+      fireEvent.change(screen.getByLabelText('Idea title'), {
+        target: { value: 'Habit grid' },
+      });
+      await vi.advanceTimersByTimeAsync(1600);
+      expect(api.ideas.update).toHaveBeenCalledWith('i1', {
+        title: 'Habit grid',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('can be forced rather than waited for', async () => {
+    renderIt();
+    await openIdea();
+    fireEvent.change(screen.getByLabelText('Idea body'), {
+      target: { value: 'now please' },
+    });
+    fireEvent.click(screen.getByLabelText('Save state: Unsaved'));
+    await waitFor(() =>
+      expect(api.ideas.update).toHaveBeenCalledWith('i1', {
+        content: 'now please',
+      })
+    );
+  });
+
+  it('says so, and keeps the draft, when a save fails', async () => {
+    vi.mocked(api.ideas.update).mockRejectedValue(new Error('offline'));
+    renderIt();
+    await openIdea();
+    fireEvent.change(screen.getByLabelText('Idea body'), {
+      target: { value: 'a change worth keeping' },
+    });
+    fireEvent.click(screen.getByLabelText('Save state: Unsaved'));
+
+    expect(
+      await screen.findByLabelText('Save state: Save failed')
+    ).toBeTruthy();
+    expect(screen.getByDisplayValue('a change worth keeping')).toBeTruthy();
+  });
+
+  it('does not lose an edit when another idea is opened', async () => {
+    vi.mocked(api.ideas.list).mockResolvedValue([
+      summary({ id: 'i1', title: 'Habit tracking' }),
+      summary({ id: 'i2', title: 'Encrypted backups' }),
+    ]);
+    renderIt();
+    await openIdea();
+    fireEvent.change(screen.getByLabelText('Idea body'), {
+      target: { value: 'mid-debounce' },
+    });
+    // Switching ideas unmounts the pane, which used to drop whatever was still
+    // inside the debounce window.
+    fireEvent.click(screen.getByText('Encrypted backups'));
+    await waitFor(() =>
+      expect(api.ideas.update).toHaveBeenCalledWith('i1', {
+        content: 'mid-debounce',
+      })
+    );
+  });
+
+  it('changing the status does not look like an unsaved edit', async () => {
+    renderIt();
+    await openIdea();
+    fireEvent.change(screen.getByLabelText('Status'), {
+      target: { value: 'ready' },
+    });
+    await waitFor(() =>
+      expect(api.ideas.update).toHaveBeenCalledWith('i1', { status: 'ready' })
+    );
+    expect(screen.getByLabelText('Save state: Saved')).toBeTruthy();
+  });
+});
+
+describe('the generated title', () => {
+  // Capture leaves `title` empty and names the idea seconds later
+  // (backend/ai/idea_title.py), so an untitled idea is re-asked for — briefly.
+  // Both the list row and the pane show the fallback in the meantime.
+  const untitled = (over = {}) => summary({ id: 'i1', title: '', ...over });
+
+  beforeEach(() => {
+    vi.mocked(api.ideas.list).mockResolvedValue([untitled()]);
+  });
+
+  it('appears in the box when the background pass writes it', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(api.ideas.get)
+        .mockResolvedValueOnce(
+          detail({ title: '', createdAt: new Date().toISOString() })
+        )
+        .mockResolvedValue(
+          detail({
+            title: 'Habit grid in the day view',
+            createdAt: new Date().toISOString(),
+          })
+        );
+
+      renderIt();
+      await openIdeaWithFakeTimers('Untitled idea');
+      expect(
+        (screen.getByLabelText('Idea title') as HTMLInputElement).value
+      ).toBe('');
+
+      await vi.advanceTimersByTimeAsync(4500);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(
+        (screen.getByLabelText('Idea title') as HTMLInputElement).value
+      ).toBe('Habit grid in the day view');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never overwrites a title being typed', async () => {
+    vi.useFakeTimers();
+    try {
+      // A real row rather than a fixed reply, because what this is testing is
+      // the interaction of two writers. The server's own guard is the
+      // `AND (title IS NULL OR title='')` in _enrich_idea_bg: a hand-typed
+      // name is never replaced by the model's.
+      let row = detail({ title: '', createdAt: new Date().toISOString() });
+      vi.mocked(api.ideas.get).mockImplementation(async () => row);
+      vi.mocked(api.ideas.update).mockImplementation(async (_id, data) => {
+        row = { ...row, ...(data as Partial<Idea>) };
+        return { success: true };
+      });
+      // The naming pass finishes a couple of seconds in, and finds a title.
+      setTimeout(() => {
+        if (!row.title) row = { ...row, title: 'Named by the model' };
+      }, 2500);
+
+      renderIt();
+      await openIdeaWithFakeTimers('Untitled idea');
+      fireEvent.change(screen.getByLabelText('Idea title'), {
+        target: { value: 'My own name' },
+      });
+
+      await vi.advanceTimersByTimeAsync(6000);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(
+        (screen.getByLabelText('Idea title') as HTMLInputElement).value
+      ).toBe('My own name');
+      expect(row.title).toBe('My own name');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops asking once an idea is old enough to have been named', async () => {
+    // With no AI configured the title never arrives, and a poll with no end is
+    // a request every few seconds forever.
+    vi.useFakeTimers();
+    try {
+      vi.mocked(api.ideas.get).mockResolvedValue(
+        detail({ title: '', createdAt: '2026-01-01T00:00:00Z' })
+      );
+
+      renderIt();
+      await openIdeaWithFakeTimers('Untitled idea');
+      const calls = vi.mocked(api.ideas.get).mock.calls.length;
+      expect(calls).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(vi.mocked(api.ideas.get).mock.calls.length).toBe(calls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('the discussion tab', () => {
+  const conversation = (over = {}) => ({
+    id: 'c1',
+    title: null,
+    createdAt: '2026-08-01T00:00:00Z',
+    updatedAt: '2026-08-01T00:00:00Z',
+    ...over,
+  });
+
+  /** The SSE stream the discuss endpoint answers with. */
+  function streamReply(chunks: string[]) {
+    const encoder = new TextEncoder();
+    const body = chunks.map(c => `data: ${c}\n\n`).concat('data: [DONE]\n\n');
+    let i = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        body: {
+          getReader: () => ({
+            read: async () =>
+              i < body.length
+                ? { done: false, value: encoder.encode(body[i++]!) }
+                : { done: true, value: undefined },
+            releaseLock: () => undefined,
+          }),
+        },
+      }))
+    );
+  }
+
+  beforeEach(() => {
+    vi.mocked(api.ideas.listConversations).mockResolvedValue([
+      conversation() as never,
+    ]);
+    vi.mocked(api.chat.getConversation).mockResolvedValue({
+      ...conversation(),
+      messages: [],
+    } as never);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('is a chat with its own composer rather than a section of the page', async () => {
+    renderIt();
+    await openIdea('Discuss');
+    expect(
+      await screen.findByPlaceholderText(/Ask about this idea/)
+    ).toBeTruthy();
+    // The Idea tab's editor is not underneath it competing for the pane.
+    expect(screen.queryByLabelText('Idea body')).toBeNull();
+  });
+
+  it('has the microphone every other chat has', async () => {
+    renderIt();
+    await openIdea('Discuss');
+    expect(
+      await screen.findByRole('button', { name: 'Speak to send' })
+    ).toBeTruthy();
+  });
+
+  it('sends what was dictated, the way the Chat tab does', async () => {
+    streamReply([JSON.stringify({ content: 'Here is what I found.' })]);
+    renderIt();
+    await openIdea('Discuss');
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'Speak to send' })
+    );
+
+    await waitFor(() =>
+      expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+        '/api/ideas/i1/discuss',
+        expect.objectContaining({ method: 'POST' })
+      )
+    );
+    const body = JSON.parse(
+      (vi.mocked(fetch).mock.calls[0]![1] as RequestInit).body as string
+    );
+    expect(body.message).toBe('a spoken idea');
+    expect(body.conversationId).toBe('c1');
+  });
+
+  it('sends anything already typed along with the transcript', async () => {
+    streamReply([JSON.stringify({ content: 'ok' })]);
+    renderIt();
+    await openIdea('Discuss');
+
+    fireEvent.change(
+      await screen.findByPlaceholderText(/Ask about this idea/),
+      {
+        target: { value: 'about the day view:' },
+      }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Speak to send' }));
+
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalled());
+    const body = JSON.parse(
+      (vi.mocked(fetch).mock.calls[0]![1] as RequestInit).body as string
+    );
+    expect(body.message).toBe('about the day view: a spoken idea');
+  });
+
+  it('starts a conversation on the first question', async () => {
+    vi.mocked(api.ideas.listConversations).mockResolvedValue([]);
+    vi.mocked(api.ideas.createConversation).mockResolvedValue({ id: 'c9' });
+    streamReply([JSON.stringify({ content: 'ok' })]);
+    renderIt();
+    await openIdea('Discuss');
+
+    fireEvent.change(
+      await screen.findByPlaceholderText(/Ask about this idea/),
+      {
+        target: { value: 'has anyone built this?' },
+      }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() =>
+      expect(api.ideas.createConversation).toHaveBeenCalledWith('i1')
+    );
+    const body = JSON.parse(
+      (vi.mocked(fetch).mock.calls[0]![1] as RequestInit).body as string
+    );
+    expect(body.conversationId).toBe('c9');
+  });
+
+  it('keeps the question when the stream fails outright', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ body: null }))
+    );
+    renderIt();
+    await openIdea('Discuss');
+
+    fireEvent.change(
+      await screen.findByPlaceholderText(/Ask about this idea/),
+      {
+        target: { value: 'does this already exist?' },
+      }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(
+      await screen.findByDisplayValue('does this already exist?')
+    ).toBeTruthy();
   });
 });
 

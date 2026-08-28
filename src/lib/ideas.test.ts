@@ -1,13 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import {
+  decisionAnswer,
+  decisionChoices,
   displayTitle,
   filterIdeas,
   implementationLabel,
   needsDecisions,
   parseTags,
   resolveImplementation,
+  selectedChoice,
   statusLabel,
   tagCounts,
+  OTHER_CHOICE,
 } from './ideas';
 import type { IdeaSummary } from '../hooks/api';
 
@@ -248,5 +252,69 @@ describe('statusLabel', () => {
   it('labels every status', () => {
     expect(statusLabel('new')).toBe('New');
     expect(statusLabel('shipped')).toBe('Shipped');
+  });
+});
+
+describe('decisionChoices', () => {
+  it("keeps the agent's options in order and appends the write-in", () => {
+    const rows = decisionChoices(['Paper pages', 'A new table']);
+    expect(rows.map(r => r.value)).toEqual([
+      'Paper pages',
+      'A new table',
+      OTHER_CHOICE,
+    ]);
+    expect(rows[2]!.isOther).toBe(true);
+  });
+
+  it('always offers the write-in, even with nothing proposed', () => {
+    // A decision the agent could not enumerate is still a decision; degrading
+    // to a bare text field is exactly what this used to be.
+    const rows = decisionChoices([]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.isOther).toBe(true);
+  });
+
+  it('drops blanks and case-insensitive duplicates', () => {
+    expect(
+      decisionChoices(['Paper', '  ', 'paper', ' Paper ']).map(r => r.value)
+    ).toEqual(['Paper', OTHER_CHOICE]);
+  });
+});
+
+describe('selectedChoice', () => {
+  it('has nothing selected before a decision is made', () => {
+    expect(selectedChoice(['Paper', 'Table'], null)).toEqual({
+      value: '',
+      note: '',
+    });
+  });
+
+  it('selects the option that was chosen', () => {
+    expect(selectedChoice(['Paper', 'Table'], 'Table')).toEqual({
+      value: 'Table',
+      note: '',
+    });
+  });
+
+  it('puts a hand-written answer back in the write-in box', () => {
+    // Reopening a settled decision should show what was decided, not a blank.
+    expect(
+      selectedChoice(['Paper', 'Table'], 'Both, keyed by page id')
+    ).toEqual({ value: OTHER_CHOICE, note: 'Both, keyed by page id' });
+  });
+});
+
+describe('decisionAnswer', () => {
+  it('is the option itself when one is picked', () => {
+    expect(decisionAnswer('Paper', 'ignored')).toBe('Paper');
+  });
+
+  it('is the trimmed note when the write-in row is picked', () => {
+    expect(decisionAnswer(OTHER_CHOICE, '  Both  ')).toBe('Both');
+  });
+
+  it('is empty — so nothing can be submitted — until something is chosen', () => {
+    expect(decisionAnswer('', 'typed but unselected')).toBe('');
+    expect(decisionAnswer(OTHER_CHOICE, '   ')).toBe('');
   });
 });

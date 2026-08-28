@@ -118,6 +118,11 @@ def create_idea():
          _resolve_repo_id(body.get('repoId')), now, now),
     )
     db.commit()
+    # Typed capture gets a name but not a polish pass: `content` is the AI's
+    # cleanup of a *transcript*, and rewriting what someone typed by hand is
+    # not the same contract.
+    if not title and raw_content.strip():
+        _enrich_idea_bg(id, raw_content, polish=False)
     return jsonify({'id': id}), 201
 
 
@@ -170,23 +175,48 @@ def delete_idea(idea_id):
     return jsonify({'success': True})
 
 
-def _polish_idea_bg(idea_id: str, raw_content: str) -> None:
-    """Background counterpart to journal.py's `_polish_bg`: fills in `content`
-    from `raw_content` once, using the standing memory document to fix a name
-    speech-to-text mangled. Silently does nothing on failure or a no-op
-    result — there is no button to report a failure to, and the detail pane
-    already falls back to `raw_content` while `content` is unset."""
+def _enrich_idea_bg(idea_id: str, raw_content: str, *, polish: bool = True) -> None:
+    """Background counterpart to journal.py's `_polish_bg`, doing two passes on
+    a freshly captured idea: fill in `content` from `raw_content`, then name it.
+
+    One job rather than two, and sequential inside it, because both are model
+    calls against the same two llama slots — and because the title is written
+    from the *polished* text when there is one, so a name isn't derived from a
+    transcript the polish pass just corrected.
+
+    Silently does nothing on failure or a no-op result: there is no button to
+    report a failure to, and both fields already have a fallback (the detail
+    pane shows `raw_content` while `content` is unset, and `display_title` /
+    `displayTitle` clip the first line while `title` is empty).
+    """
     from backend.ai.idea_polish import polish_idea
+    from backend.ai.idea_title import generate_idea_title
     from backend.memory import get_memory
 
     def _run():
-        polished = polish_idea(raw_content, memory=get_memory())
-        if not polished or polished == raw_content:
+        memory = get_memory()
+        text = raw_content
+        if polish:
+            polished = polish_idea(raw_content, memory=memory)
+            if polished and polished != raw_content:
+                text = polished
+                db = get_db()
+                db.execute(
+                    'UPDATE ideas SET content=?, updated_at=? WHERE id=?',
+                    (text, int(time.time()), idea_id),
+                )
+                db.commit()
+
+        title = generate_idea_title(text, memory=memory)
+        if not title:
             return
+        # Guarded: the user may well have typed a title into the detail pane
+        # in the seconds this took, and their name beats the model's.
         db = get_db()
         db.execute(
-            'UPDATE ideas SET content=?, updated_at=? WHERE id=?',
-            (polished, int(time.time()), idea_id),
+            "UPDATE ideas SET title=?, updated_at=? WHERE id=?"
+            " AND (title IS NULL OR title='')",
+            (title, int(time.time()), idea_id),
         )
         db.commit()
     run_bg(_run)
@@ -213,7 +243,7 @@ def create_from_voice():
         (id, '', raw_content, '', 'new', _resolve_repo_id(body.get('repoId')), now, now),
     )
     db.commit()
-    _polish_idea_bg(id, raw_content)
+    _enrich_idea_bg(id, raw_content)
     return jsonify({'id': id}), 201
 
 

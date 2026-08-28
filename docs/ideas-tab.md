@@ -535,6 +535,89 @@ pass. Nothing is generated — with no candidates the schema drops the field and
 the prompt does not mention it, so the plan simply has no file list. That is
 honest, and better than a guessed one.
 
+## The detail pane, second pass
+
+Four complaints from using the tab in anger, and what each one turned out to be.
+
+### An idea names itself
+
+`title` was left empty by capture and nothing ever filled it in. Both sides papered over that with
+a clipped first line (`displayTitle`, `idea_text.display_title`), which is a safety net and not a
+name — a backlog of "so I was thinking it would be nice if the day view had" is unreadable.
+
+`backend/ai/idea_title.py` is the counterpart to `idea_polish.py`: same graceful degrade, same
+memory-document context, a `{title}` schema so the grammar bounds the shape. It runs inside
+`_enrich_idea_bg` **after** the polish and over its output, because naming an idea from the
+transcript would bake in the mishearing the polish just corrected. Two decisions worth keeping:
+
+- **The write is guarded** — `AND (title IS NULL OR title='')`. The pass takes tens of seconds on a
+  local model, which is long enough for the detail pane to have saved a hand-typed name, and a
+  human's name beats the model's.
+- **Typed capture is named but not polished.** `content` is the AI's cleanup of a transcript;
+  rewriting what somebody typed by hand is a different contract, and not one anybody asked for.
+
+The pane re-asks for an untitled idea every 4 s for its first three minutes. The window is the
+whole point: with no model configured the title never arrives, and a poll with no end condition is
+a request every four seconds forever.
+
+### The discussion is a chat, so it is a chat
+
+It was a section at the bottom of the detail scroll. That had three consequences, and they were all
+the same consequence: the composer moved down the page as the answer streamed in, the transcript
+competed with the editor for the pane, and it was the only chat in the app you could not talk to.
+
+The pane is now four tabs — Idea, Decisions, Discuss, Plan — and `IdeaDiscussion` owns its own when
+it is showing: a scrolling transcript, a composer pinned to the bottom, a microphone, and more than
+one thread per idea. Dictation **sends**, matching the Chat tab and the Writing discussion rather
+than the capture box: the box-and-a-second-click step exists to catch a misheard proper noun, and
+in a chat the cheap correction is sending another message. A decision's write-in box keeps the
+appending behaviour, because a decision is committed once and read by the planner afterwards.
+
+### "Saving…" that never stopped
+
+The editor compared the draft against the query cache and called any difference dirty. Two things
+went wrong, and both were visible:
+
+- On the render where the fetched idea first arrives, the hydration effect has set state but the
+  autosave effect still closes over the old, empty fields. It declared a difference, flipped to
+  "Saving…", and scheduled a save of an empty title. The next render matched — and returned early
+  _before_ clearing the flag. The pane then sat on "Saving…" forever with nothing in flight.
+- The server legitimately changes the row underneath: the naming pass writes `title` seconds after
+  capture. Against the cache, that reads as the user having unsaved work.
+
+So the editor tracks a **baseline** — the last text known to be on the server — separately from the
+cache, and `src/lib/ideaSave.ts` holds the state machine and the merge as pure functions. `dirty`
+is now a fact about what was typed; `saving` means a request is genuinely in flight; `Unsaved`
+says out loud that this exists in the browser and nowhere else. An idle pane makes no requests at
+all, because with nothing edited there is no timer.
+
+The merge is per field. An untouched field adopts whatever the server now says — this is how the
+generated title lands in the box without a reload — and an edited one is left alone. The baseline
+of an edited field advances anyway, or a background write to the _other_ field would keep
+re-reporting as a local change nobody made. A pending save flushes on blur, on Ctrl/Cmd+S, on
+clicking the indicator, and on unmount; switching ideas used to drop whatever was inside the
+debounce window.
+
+### Decisions are multiple choice
+
+`idea_questions.options` had been stored since the assessment was built and rendered as a
+`join(' / ')` **placeholder** on a bare text input — which asked the user to retype an answer that
+was already on screen, and gave the model's suggestions no more standing than grey hint text.
+
+They are radio rows now, with a "Something else…" row always last, always present, and revealing a
+textarea with its own microphone. The plan-mode shape, and the reason for it: the agent proposes
+the forks it can see, and the answer it did not think of has to be reachable without leaving the
+list.
+
+Two supporting changes on the model side. `options` is now **required with `minItems: 2`** — a
+"decision" the UI can only render as a blank field is a question, not a fork, and llama-server
+compiles the bound into the grammar so the options exist by the time the JSON parses. And
+`assess.normalize_options` trims, dedupes case-insensitively, and drops the model's own
+"Other" / "Something else" / "None of the above": the UI already owns that row, and two of them
+means one that does nothing. A question that still arrives with no usable options is **not**
+dropped — it degrades to the write-in row alone, which is exactly the free-text field this used to
+be.
+
 ## Open questions carried forward
 
 - **One page per pass is still thin.** Reading is now reliable but shallow: the model opens a
@@ -594,5 +677,12 @@ Then the rebuild around reading code, on `feat/multi-repo-ideas-agent`:
 9. **Generic repo scanning** — `repo_scan.py`, the schema-file fallback
 10. **The nightly pass** — `code_wiki.py`, pull/graph/scan/write
 11. **Plans that name real files** — `plan_files.py`
+
+Then the detail pane's second pass, on `feat/ideas-tab-overhaul`:
+
+12. **An idea names itself** — `backend/ai/idea_title.py`, `_enrich_idea_bg`
+13. **Four tabs, and the discussion as a real chat** — `IdeaDetail.tsx`, `IdeaDiscussion.tsx`
+14. **A save state that means something** — `src/lib/ideaSave.ts`
+15. **Decisions as multiple choice** — `IdeaDecisions.tsx`, `assess.normalize_options`
 
 Each phase landed with its own tests and was verified independently before the next.
