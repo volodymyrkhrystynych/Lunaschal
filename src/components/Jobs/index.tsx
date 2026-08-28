@@ -7,9 +7,90 @@ import { ApplicationDetail } from './ApplicationDetail';
 import { Feed } from './Feed';
 import { ProfileEditor } from './ProfileEditor';
 
-type Tab = 'feed' | 'pipeline' | 'profile' | 'inbox';
+type Tab = 'feed' | 'pipeline' | 'upskill' | 'profile' | 'inbox';
+
+function Upskill() {
+  const local = useMutation({ mutationFn: () => api.jobs.upskill(false) });
+  const enriched = useMutation({ mutationFn: () => api.jobs.upskill(true) });
+  const plan = enriched.data ?? local.data;
+  return (
+    <div className="flex-1 overflow-y-auto space-y-3">
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={() => local.mutate()}
+          disabled={local.isPending}
+          className="min-h-[44px] px-4 rounded border border-white/20 bg-white/5"
+        >
+          Analyze recent postings
+        </button>
+        {plan?.resourcesAvailable && (
+          <button
+            type="button"
+            onClick={() => enriched.mutate()}
+            disabled={enriched.isPending}
+            className="min-h-[44px] px-4 rounded border border-white/20 bg-white/5"
+          >
+            Add learning resources
+          </button>
+        )}
+      </div>
+      {(local.isError || enriched.isError) && (
+        <p className="text-sm text-red-400">
+          {((local.error || enriched.error) as Error).message}
+        </p>
+      )}
+      {plan && (
+        <>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Missing skills across {plan.postings} recent postings. Time
+            estimates are rough orientation ranges.
+          </p>
+          {plan.skills.map(skill => (
+            <div
+              key={skill.term}
+              className="rounded border border-white/10 bg-[var(--color-surface)] p-3"
+            >
+              <div className="flex justify-between gap-2">
+                <p className="text-sm font-medium capitalize">{skill.term}</p>
+                <span className="text-xs">
+                  {skill.postings}/{skill.ofPostings} postings · ~
+                  {skill.estimatedHours}h
+                </span>
+              </div>
+              <div className="h-1.5 bg-white/10 rounded mt-2">
+                <div
+                  className="h-full bg-[var(--color-primary)] rounded"
+                  style={{ width: `${Math.max(3, skill.centrality * 100)}%` }}
+                />
+              </div>
+              {skill.examples.length > 0 && (
+                <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                  Seen at{' '}
+                  {skill.examples.map(x => x.company || x.title).join(', ')}
+                </p>
+              )}
+              {skill.resources.map(resource => (
+                <a
+                  key={resource.url}
+                  href={resource.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="block text-xs text-[var(--color-primary)] mt-1 hover:underline"
+                >
+                  {resource.title} ↗
+                </a>
+              ))}
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
 
 function Pipeline({ onOpen }: { onOpen: (applicationId: string) => void }) {
+  const queryClient = useQueryClient();
   const { data: applications } = useQuery({
     queryKey: ['jobs', 'applications'],
     queryFn: () => api.jobs.applications.list(),
@@ -17,6 +98,15 @@ function Pipeline({ onOpen }: { onOpen: (applicationId: string) => void }) {
   const { data: stats } = useQuery({
     queryKey: ['jobs', 'stats'],
     queryFn: api.jobs.stats,
+  });
+  const { data: stale } = useQuery({
+    queryKey: ['jobs', 'stale', 10],
+    queryFn: () => api.jobs.stale(10),
+  });
+  const markGhosted = useMutation({
+    mutationFn: (id: string) =>
+      api.jobs.applications.update(id, { status: 'ghosted' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
   });
 
   const groups = groupByStatus(applications ?? []);
@@ -84,28 +174,125 @@ function Pipeline({ onOpen }: { onOpen: (applicationId: string) => void }) {
         </div>
       )}
 
-      {stats && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {(
-            [
-              ['Sent', stats.counts.submitted + stats.counts.acknowledged],
-              ['Interviews', stats.counts.interview],
-              ['Offers', stats.counts.offer],
-              ['Rejected', stats.counts.rejected],
-            ] as const
-          ).map(([label, value]) => (
+      {stale && stale.length > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+          <h3 className="text-xs uppercase tracking-wide text-amber-300">
+            Waiting 10+ days ({stale.length})
+          </h3>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Open one to draft a follow-up. Marking ghosted is always your
+            decision.
+          </p>
+          {stale.map(application => (
             <div
-              key={label}
-              className="p-3 rounded-lg border border-white/10 bg-[var(--color-surface)]"
+              key={application.id}
+              className="flex items-center gap-2 rounded border border-white/10 bg-[var(--color-surface)]"
             >
-              <p className="text-2xl font-semibold text-[var(--color-text)]">
-                {value}
-              </p>
-              <p className="text-xs text-[var(--color-text-muted)]">{label}</p>
+              <button
+                type="button"
+                onClick={() => onOpen(application.id)}
+                className="flex-1 min-w-0 text-left p-3 min-h-[44px]"
+              >
+                <span className="block text-sm truncate">
+                  {application.title} · {application.company}
+                </span>
+                <span className="block text-xs text-[var(--color-text-muted)]">
+                  {application.daysWaiting} days without a linked reply
+                </span>
+              </button>
+              {application.status !== 'ghosted' && (
+                <button
+                  type="button"
+                  onClick={() => markGhosted.mutate(application.id)}
+                  className="shrink-0 min-h-[44px] px-3 text-xs text-[var(--color-text-muted)] hover:text-amber-300"
+                >
+                  Mark ghosted
+                </button>
+              )}
             </div>
           ))}
         </div>
       )}
+
+      {stats && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {(
+              [
+                ['Sent', stats.counts.submitted + stats.counts.acknowledged],
+                ['Interviews', stats.counts.interview],
+                ['Offers', stats.counts.offer],
+                ['Rejected', stats.counts.rejected],
+              ] as const
+            ).map(([label, value]) => (
+              <div
+                key={label}
+                className="p-3 rounded-lg border border-white/10 bg-[var(--color-surface)]"
+              >
+                <p className="text-2xl font-semibold text-[var(--color-text)]">
+                  {value}
+                </p>
+                <p className="text-xs text-[var(--color-text-muted)]">
+                  {label}
+                </p>
+              </div>
+            ))}
+          </div>
+          <div className="rounded-lg border border-white/10 bg-[var(--color-surface)] p-3">
+            <p className="text-xs uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
+              This week
+            </p>
+            <p className="text-sm text-[var(--color-text)]">
+              {stats.weekly.triaged} triaged · {stats.weekly.queued} queued ·{' '}
+              {stats.weekly.sent} sent · {stats.weekly.replies} replies
+            </p>
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              Response rate {Math.round(stats.funnel.responseRate * 100)}%
+              {stats.funnel.averageResponseDays !== null &&
+                ` · ${stats.funnel.averageResponseDays} days on average`}
+            </p>
+          </div>
+          {stats.skills.length > 0 && (
+            <div className="rounded-lg border border-white/10 bg-[var(--color-surface)] p-3">
+              <p className="text-xs uppercase tracking-wide text-[var(--color-text-muted)] mb-2">
+                Skills in recent postings
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {stats.skills.map(skill => (
+                  <span
+                    key={skill.term}
+                    className="text-xs px-2 py-1 rounded border border-white/10"
+                  >
+                    {skill.term} · {skill.postings}/{skill.ofPostings}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {stats.sources.length > 1 && (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {stats.sources.map(source => (
+                <div
+                  key={source.source}
+                  className="p-2 rounded border border-white/10 text-xs"
+                >
+                  <span className="capitalize">{source.source}</span> ·{' '}
+                  {source.sent} sent · {Math.round(source.responseRate * 100)}%
+                  response
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <a
+        href="/api/jobs/report.html"
+        download
+        className="inline-flex min-h-[44px] items-center px-3 rounded border border-white/20 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+      >
+        Download offline HTML report
+      </a>
 
       {groups.length === 0 ? (
         <p className="text-sm text-[var(--color-text-muted)]">
@@ -148,6 +335,10 @@ function Inbox() {
     queryKey: ['jobs', 'unlinked'],
     queryFn: api.jobs.linkage.unlinked,
   });
+  const { data: proposals } = useQuery({
+    queryKey: ['jobs', 'status-proposals'],
+    queryFn: api.jobs.linkage.statusProposals,
+  });
 
   const link = useMutation({
     mutationFn: ({
@@ -159,8 +350,13 @@ function Inbox() {
     }) => api.jobs.linkage.link(applicationId, emailId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
   });
+  const applyProposal = useMutation({
+    mutationFn: (items: { applicationId: string; emailId: string }[]) =>
+      api.jobs.linkage.applyStatusProposals(items),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
+  });
 
-  if (!unlinked?.length) {
+  if (!unlinked?.length && !proposals?.length) {
     return (
       <p className="text-sm text-[var(--color-text-muted)]">
         Every job email has found its application.
@@ -170,52 +366,108 @@ function Inbox() {
 
   return (
     <div className="flex-1 overflow-y-auto min-w-0 space-y-2">
-      <p className="text-xs text-[var(--color-text-muted)]">
-        These job emails matched nothing confidently. Linking one also advances
-        its application’s status.
-      </p>
-      {unlinked.map(email => (
-        <div
-          key={email.id}
-          className="rounded-lg border border-white/10 bg-[var(--color-surface)] p-3"
-        >
-          <p className="text-sm text-[var(--color-text)] truncate">
-            {email.subject || '(no subject)'}
-          </p>
-          <p className="text-xs text-[var(--color-text-muted)] mb-2">
-            {email.senderEmail} ·{' '}
-            {new Date(email.receivedAt).toLocaleDateString()}
-          </p>
-          {email.suggestions.length === 0 ? (
-            <p className="text-xs text-[var(--color-text-muted)]">
-              No plausible application.
+      {proposals && proposals.length > 0 && (
+        <div className="rounded-lg border border-[var(--color-primary)]/30 p-3 space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium">
+              Proposed status updates ({proposals.length})
             </p>
-          ) : (
-            <div className="space-y-1">
-              {email.suggestions.map(suggestion => (
-                <button
-                  key={suggestion.applicationId}
-                  type="button"
-                  onClick={() =>
-                    link.mutate({
-                      applicationId: suggestion.applicationId,
-                      emailId: email.id,
-                    })
-                  }
-                  className="w-full text-left min-h-[44px] px-3 py-2 rounded border border-white/20 bg-white/5 hover:bg-white/10"
-                >
-                  <span className="text-sm text-[var(--color-text)]">
-                    {suggestion.title} · {suggestion.company}
-                  </span>
-                  <span className="block text-xs text-[var(--color-text-muted)]">
-                    {suggestion.reasons.join('; ')}
-                  </span>
-                </button>
-              ))}
+            <button
+              type="button"
+              onClick={() =>
+                applyProposal.mutate(
+                  proposals.map(p => ({
+                    applicationId: p.applicationId,
+                    emailId: p.emailId,
+                  }))
+                )
+              }
+              className="min-h-[36px] px-3 rounded text-xs border border-white/20"
+            >
+              Apply all
+            </button>
+          </div>
+          {proposals.map(proposal => (
+            <div
+              key={proposal.emailId}
+              className="rounded border border-white/10 p-2"
+            >
+              <p className="text-sm">
+                {proposal.title} · {proposal.company}
+              </p>
+              <p className="text-xs text-[var(--color-text-muted)]">
+                {proposal.currentStatus} → {proposal.proposedStatus} ·{' '}
+                {proposal.source.subject || '(no subject)'} ·{' '}
+                {proposal.source.senderEmail}
+              </p>
+              <button
+                type="button"
+                onClick={() =>
+                  applyProposal.mutate([
+                    {
+                      applicationId: proposal.applicationId,
+                      emailId: proposal.emailId,
+                    },
+                  ])
+                }
+                className="min-h-[36px] px-2 mt-1 rounded text-xs border border-white/20"
+              >
+                Confirm update
+              </button>
             </div>
-          )}
+          ))}
         </div>
-      ))}
+      )}
+      {Boolean(unlinked?.length) && (
+        <>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            These job emails matched nothing confidently. Linking identifies the
+            application; any status change is proposed above for confirmation.
+          </p>
+          {(unlinked ?? []).map(email => (
+            <div
+              key={email.id}
+              className="rounded-lg border border-white/10 bg-[var(--color-surface)] p-3"
+            >
+              <p className="text-sm text-[var(--color-text)] truncate">
+                {email.subject || '(no subject)'}
+              </p>
+              <p className="text-xs text-[var(--color-text-muted)] mb-2">
+                {email.senderEmail} ·{' '}
+                {new Date(email.receivedAt).toLocaleDateString()}
+              </p>
+              {email.suggestions.length === 0 ? (
+                <p className="text-xs text-[var(--color-text-muted)]">
+                  No plausible application.
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {email.suggestions.map(suggestion => (
+                    <button
+                      key={suggestion.applicationId}
+                      type="button"
+                      onClick={() =>
+                        link.mutate({
+                          applicationId: suggestion.applicationId,
+                          emailId: email.id,
+                        })
+                      }
+                      className="w-full text-left min-h-[44px] px-3 py-2 rounded border border-white/20 bg-white/5 hover:bg-white/10"
+                    >
+                      <span className="text-sm text-[var(--color-text)]">
+                        {suggestion.title} · {suggestion.company}
+                      </span>
+                      <span className="block text-xs text-[var(--color-text-muted)]">
+                        {suggestion.reasons.join('; ')}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }
@@ -240,6 +492,7 @@ export function Jobs() {
   const tabs: [Tab, string][] = [
     ['feed', 'Feed'],
     ['pipeline', 'Pipeline'],
+    ['upskill', 'Upskill'],
     ['profile', 'Profile'],
     [
       'inbox',
@@ -278,6 +531,7 @@ export function Jobs() {
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
             {tab === 'feed' && <Feed />}
             {tab === 'pipeline' && <Pipeline onOpen={open} />}
+            {tab === 'upskill' && <Upskill />}
             {tab === 'profile' && <ProfileEditor />}
             {tab === 'inbox' && <Inbox />}
           </div>

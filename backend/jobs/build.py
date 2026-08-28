@@ -19,7 +19,7 @@ import time
 
 from ulid import ULID
 
-from backend.jobs import profile as profile_mod, render, storage, tailor
+from backend.jobs import draft_review, profile as profile_mod, render, resume_review, status as application_status, storage, tailor
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,7 @@ def build_resume_version(db, application_id: str, steer: str | None = None) -> d
         raise TailoringUnavailable(
             'The local model is unavailable, so the resume was not tailored.'
         )
+    content = draft_review.review_once(loaded, job, content)
 
     version_id = str(ULID())
     html = render.render_html(loaded, content, job)
@@ -93,22 +94,24 @@ def build_resume_version(db, application_id: str, steer: str | None = None) -> d
     docx_path = storage.resume_path(application_id, version_id, 'docx')
     wrote_pdf = bool(pdf_path) and render.render_pdf(html, pdf_path)
     wrote_docx = bool(docx_path) and render.render_docx(loaded, content, docx_path)
+    review = resume_review.review(
+        loaded, content, pdf_path=pdf_path if wrote_pdf else None
+    )
 
     stored_at = int(time.time())
     db.execute(
-        'INSERT INTO resume_versions (id, application_id, label, content, keywords,'
-        ' html, pdf_path, docx_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO resume_versions (id, application_id, label, content, keywords, review,'
+        ' html, pdf_path, docx_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (version_id, application_id, (row['title'] or 'Resume')[:80],
-         json.dumps(content), json.dumps(content.get('keywords') or {}), html,
+         json.dumps(content), json.dumps(content.get('keywords') or {}), json.dumps(review), html,
          str(pdf_path) if wrote_pdf else None,
          str(docx_path) if wrote_docx else None, stored_at),
     )
     if row['status'] == 'draft':
-        db.execute(
-            "UPDATE applications SET status='ready', queue_error=NULL, updated_at=? "
-            'WHERE id=?',
-            (stored_at, application_id),
-        )
+        application_status.record(db, application_id, 'ready',
+                                  source='resume_ready', at=stored_at)
+        db.execute('UPDATE applications SET queue_error=NULL WHERE id=?',
+                   (application_id,))
     db.commit()
 
     return {
@@ -117,4 +120,5 @@ def build_resume_version(db, application_id: str, steer: str | None = None) -> d
         'html': html,
         'pdfAvailable': wrote_pdf,
         'docxAvailable': wrote_docx,
+        'review': review,
     }

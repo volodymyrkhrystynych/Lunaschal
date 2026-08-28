@@ -20,7 +20,7 @@ TIMESTAMP_COLS = frozenset({
     # goes through row_to_dict today — and ISO is the right shape there too if
     # it ever does, so this is a widening rather than a special case.
     'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
-    'scanned_at', 'queued_at', 'last_run_at', 'triage_at',
+    'scanned_at', 'queued_at', 'last_run_at', 'triage_at', 'occurred_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -978,12 +978,37 @@ def _ensure_job_settings(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE settings ADD COLUMN adzuna_app_key TEXT DEFAULT ''")
     db.commit()
 
+    profile_cols = {r[1] for r in db.execute('PRAGMA table_info(job_profile)')}
+    for field in (
+        'work_authorization', 'salary_expectation', 'notice_period',
+        'availability_date', 'relocation_willingness', 'security_clearance',
+        'eeo_answers',
+        'allowed_locations', 'soft_preferences', 'company_blacklist',
+    ):
+        if field not in profile_cols:
+            db.execute(
+                f"ALTER TABLE job_profile ADD COLUMN {field} TEXT NOT NULL DEFAULT ''"
+            )
+    for field in ('remote_only', 'avoid_clearance_roles'):
+        if field not in profile_cols:
+            db.execute(f'ALTER TABLE job_profile ADD COLUMN {field} INTEGER NOT NULL DEFAULT 0')
+    if 'soft_salary_floor' not in profile_cols:
+        db.execute('ALTER TABLE job_profile ADD COLUMN soft_salary_floor REAL')
+    db.commit()
+
     app_cols = {r[1] for r in db.execute('PRAGMA table_info(applications)')}
     if 'queued_at' not in app_cols:
         db.execute('ALTER TABLE applications ADD COLUMN queued_at INTEGER')
     if 'queue_error' not in app_cols:
         db.execute('ALTER TABLE applications ADD COLUMN queue_error TEXT')
+    if 'cover_letter_required' not in app_cols:
+        db.execute('ALTER TABLE applications ADD COLUMN cover_letter_required INTEGER NOT NULL DEFAULT 0')
     db.commit()
+
+    resume_cols = {r[1] for r in db.execute('PRAGMA table_info(resume_versions)')}
+    if 'review' not in resume_cols:
+        db.execute('ALTER TABLE resume_versions ADD COLUMN review TEXT')
+        db.commit()
 
     # The profile is read on every tailoring call and edited field by field, so
     # it is far simpler for it to always exist than for every caller to handle
@@ -992,6 +1017,18 @@ def _ensure_job_settings(db: sqlite3.Connection) -> None:
     db.execute(
         'INSERT OR IGNORE INTO job_profile (id, created_at, updated_at) VALUES (1, ?, ?)',
         (now, now),
+    )
+    # Older applications predate event history. Preserve their current known
+    # stage with an explicitly approximate migration event rather than making
+    # them disappear from conversion counts.
+    db.execute(
+        """INSERT INTO application_status_events
+           (id, application_id, status, source, occurred_at)
+           SELECT lower(hex(randomblob(16))), a.id, a.status, 'migration',
+                  COALESCE(a.closed_at, a.applied_at, a.updated_at, a.created_at)
+           FROM applications a
+           WHERE NOT EXISTS (SELECT 1 FROM application_status_events e
+                             WHERE e.application_id=a.id)"""
     )
     db.commit()
 

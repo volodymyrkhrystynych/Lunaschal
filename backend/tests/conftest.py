@@ -103,11 +103,14 @@ def client(isolated_db):
         from backend.delegate import runs
         from backend.research import worker
         from backend.journal import voice_drafts
+        from backend.jobs import queue as job_queue, triager as job_triager
         worker.cancel()
         worker.wait_idle(timeout=15.0)
         background.wait_idle(timeout=15.0)
         runs.wait_idle(timeout=15.0)
         voice_drafts.wait_idle(timeout=15.0)
+        job_queue.wait_idle(timeout=15.0)
+        job_triager.wait_idle(timeout=15.0)
         if connection._conn is not None:
             connection._conn.close()
             connection._conn = None

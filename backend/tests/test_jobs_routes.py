@@ -74,6 +74,23 @@ def test_profile_round_trips(client, profile):
     assert loaded['skills'][0]['name'] == 'Python'
 
 
+def test_screening_defaults_round_trip(client):
+    body = {
+        'workAuthorization': 'Canadian citizen',
+        'salaryExpectation': '$140k–160k CAD',
+        'noticePeriod': 'Two weeks',
+        'availabilityDate': '2026-09-15',
+        'relocationWillingness': 'Toronto or Montreal',
+        'securityClearance': 'Reliability Status',
+        'eeoAnswers': 'Prefer not to answer',
+    }
+    response = client.patch('/api/jobs/profile', json=body)
+    assert response.status_code == 200
+    profile = response.get_json()['profile']
+    for key, value in body.items():
+        assert profile[key] == value
+
+
 def test_profile_exists_before_anything_is_written(client):
     """The migration seeds row 1, so no caller has to handle its absence."""
     assert client.get('/api/jobs/profile').get_json()['profile']['id'] == 1
@@ -123,6 +140,22 @@ def test_one_application_per_job(client, job):
     assert second.status_code == 200
     assert second.get_json()['existing'] is True
     assert second.get_json()['id'] == first.get_json()['id']
+
+
+def test_application_status_history_records_real_transitions_once(client, job):
+    application_id = client.post(
+        '/api/jobs/applications', json={'jobId': job['id']}
+    ).get_json()['id']
+    client.patch(f'/api/jobs/applications/{application_id}', json={'status': 'ready'})
+    client.patch(f'/api/jobs/applications/{application_id}', json={'status': 'ready'})
+    client.post(f'/api/jobs/applications/{application_id}/submit', json={})
+    detail = client.get(f'/api/jobs/applications/{application_id}').get_json()
+    assert [event['status'] for event in detail['statusEvents']] == [
+        'draft', 'ready', 'submitted',
+    ]
+    assert [event['source'] for event in detail['statusEvents']] == [
+        'created', 'manual', 'submission',
+    ]
 
 
 def test_application_needs_a_real_job(client):

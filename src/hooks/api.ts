@@ -1246,6 +1246,19 @@ export interface JobProfileContact {
   links: ProfileLink[];
   headline: string;
   summary: string;
+  workAuthorization: string;
+  salaryExpectation: string;
+  noticePeriod: string;
+  availabilityDate: string;
+  relocationWillingness: string;
+  securityClearance: string;
+  eeoAnswers: string;
+  allowedLocations: string;
+  remoteOnly: boolean;
+  avoidClearanceRoles: boolean;
+  softSalaryFloor: number | null;
+  softPreferences: string;
+  companyBlacklist: string[];
 }
 
 export interface ProfileBullet {
@@ -1468,6 +1481,19 @@ export interface JobSearch {
   lastCount: number | null;
   lastError: string | null;
 }
+export interface CareerPageWatch {
+  id: string;
+  url: string;
+  label: string;
+  enabled: boolean;
+  intervalHours: number;
+  lastRunAt: string | null;
+  lastCount: number | null;
+  lastError: string | null;
+}
+export interface WorkdayBoard extends CareerPageWatch {
+  params: string;
+}
 
 /** Named for the module because `SyncResult` is already the newspapers one. */
 export interface JobSyncResult {
@@ -1499,6 +1525,7 @@ export interface JobApplication {
   status: ApplicationStatus;
   steer: string;
   coverLetter: string;
+  coverLetterRequired: boolean;
   notes: string;
   appliedEmail: string;
   appliedAt: string | null;
@@ -1542,6 +1569,8 @@ export interface TailoredContent {
   selectedBullets: TailoredBullet[];
   emphasis: string[];
   keywords: KeywordReport;
+  /** Issues found by the single bounded reviewer pass before this revision. */
+  draftReview?: string[];
 }
 
 export interface ResumeVersion {
@@ -1554,6 +1583,22 @@ export interface ResumeVersion {
   docxPath: string | null;
   purgedAt: string | null;
   createdAt: string;
+  review: ResumeReview;
+}
+
+export interface ResumeReview {
+  pdfChecked: boolean;
+  parseable: boolean | null;
+  contactChecks: Record<string, boolean>;
+  readingOrder: boolean | null;
+  keywordChecks: { expected: string[]; extracted: string[]; coverage: number };
+  metrics: {
+    bulletCount: number;
+    actionVerbDensity: number;
+    quantifiedImpactDensity: number;
+    sectionSanity: boolean | null;
+  };
+  issues: string[];
 }
 
 export interface TailorResult {
@@ -1563,6 +1608,7 @@ export interface TailorResult {
   pdfAvailable: boolean;
   docxAvailable: boolean;
   renderers: { pdf: boolean; docx: boolean };
+  review: ResumeReview;
 }
 
 export interface LinkedEmail {
@@ -1581,6 +1627,81 @@ export interface JobApplicationDetail extends JobApplication {
   resumes: ResumeVersion[];
   emails: LinkedEmail[];
   recordedAnswers: RecordedAnswer[];
+  statusEvents: {
+    status: ApplicationStatus;
+    source: string;
+    sourceId: string | null;
+    occurredAt: string;
+  }[];
+  fillRuns: {
+    id: string;
+    pageUrl: string;
+    pageTitle: string;
+    fields: { label: string; answer: string; source: string }[];
+    screenshotUrl: string | null;
+    createdAt: string;
+  }[];
+}
+
+export interface ApplicationNoteDraft {
+  kind: 'follow_up' | 'thank_you';
+  subject: string;
+  body: string;
+}
+
+export interface InterviewPrepPack {
+  id: string;
+  roleSummary: string;
+  openingPitch: string;
+  notes: string;
+  questions: {
+    question: string;
+    kind: 'behavioral' | 'technical' | 'role';
+    whyAsked: string;
+    storyBulletIds: string[];
+    stories: { id: string; company: string; title: string; text: string }[];
+    gap: string;
+    bridge: string;
+  }[];
+  questionsForThem: string[];
+  watchouts: string[];
+  createdAt: string;
+}
+export interface ApplicationResearch {
+  id: string;
+  interviewer: string;
+  facts: {
+    claim: string;
+    sourceIndexes: number[];
+    sources: { title: string; url: string }[];
+  }[];
+  interviewAngles: string[];
+  sources: { title: string; url: string }[];
+  createdAt: string;
+}
+
+export interface StaleApplication {
+  id: string;
+  status: ApplicationStatus;
+  appliedAt: string;
+  company: string;
+  title: string;
+  jobUrl: string;
+  daysWaiting: number;
+}
+export interface JobStatusProposal {
+  applicationId: string;
+  emailId: string;
+  currentStatus: ApplicationStatus;
+  proposedStatus: ApplicationStatus;
+  company: string;
+  title: string;
+  source: {
+    subject: string | null;
+    senderEmail: string | null;
+    receivedAt: string;
+    jobStatus: JobApplicationStatus;
+  };
 }
 
 /**
@@ -1651,6 +1772,42 @@ export interface JobStats {
   }[];
   unlinkedEmails: number;
   purgingSoon: number;
+  funnel: {
+    sent: number;
+    responded: number;
+    responseRate: number;
+    averageResponseDays: number | null;
+  };
+  weekly: { triaged: number; queued: number; sent: number; replies: number };
+  sources: {
+    source: string;
+    applications: number;
+    sent: number;
+    responded: number;
+    responseRate: number;
+  }[];
+  skills: { term: string; postings: number; ofPostings: number }[];
+}
+export interface UpskillPlan {
+  postings: number;
+  generatedAt: string;
+  resourcesAvailable: boolean;
+  resourceError?: string;
+  skills: {
+    term: string;
+    postings: number;
+    ofPostings: number;
+    mentions: number;
+    centrality: number;
+    estimatedHours: number;
+    examples: { id: string; title: string; company: string }[];
+    resources: {
+      title: string;
+      url: string;
+      snippet: string;
+      verifiedBy: string;
+    }[];
+  }[];
 }
 
 export interface EmailStats {
@@ -3771,9 +3928,15 @@ export const api = {
           steer?: string;
           notes?: string;
           coverLetter?: string;
+          coverLetterRequired?: boolean;
           appliedEmail?: string;
         }
       ) => patch<{ success: boolean }>(`/api/jobs/applications/${id}`, data),
+      generateCoverLetter: (id: string, steer = '') =>
+        post<{ coverLetter: string }>(
+          `/api/jobs/applications/${id}/cover-letter`,
+          { steer }
+        ),
       submit: (id: string, appliedEmail?: string) =>
         post<{
           success: boolean;
@@ -3788,6 +3951,32 @@ export const api = {
           `/api/jobs/applications/${id}/answers`,
           { questions, steer }
         ),
+      draftNote: (id: string, kind: 'follow_up' | 'thank_you', context = '') =>
+        post<ApplicationNoteDraft>(`/api/jobs/applications/${id}/draft-note`, {
+          kind,
+          context,
+        }),
+      interviewPrep: {
+        get: (id: string) =>
+          get<{ pack: InterviewPrepPack | null }>(
+            `/api/jobs/applications/${id}/interview-prep`
+          ),
+        generate: (id: string, notes = '') =>
+          post<InterviewPrepPack>(
+            `/api/jobs/applications/${id}/interview-prep`,
+            { notes }
+          ),
+      },
+      research: {
+        get: (id: string) =>
+          get<{ research: ApplicationResearch | null }>(
+            `/api/jobs/applications/${id}/research`
+          ),
+        generate: (id: string, interviewer = '') =>
+          post<ApplicationResearch>(`/api/jobs/applications/${id}/research`, {
+            interviewer,
+          }),
+      },
 
       /** Which application, if any, is the posting at `url`. Answers with
        * null rather than a guess when nothing or several match. */
@@ -3854,6 +4043,18 @@ export const api = {
           applicationId,
           emailId,
         }),
+      statusProposals: () =>
+        get<JobStatusProposal[]>('/api/jobs/linkage/status-proposals'),
+      applyStatusProposals: (
+        proposals: { applicationId: string; emailId: string }[]
+      ) =>
+        post<{
+          applied: {
+            applicationId: string;
+            emailId: string;
+            status: ApplicationStatus;
+          }[];
+        }>('/api/jobs/linkage/status-proposals/apply', { proposals }),
     },
 
     searches: {
@@ -3878,6 +4079,28 @@ export const api = {
       /** Careers page URL → the board behind it, verified. Creates nothing. */
       resolve: (url: string) =>
         post<CompanyResolution>('/api/jobs/searches/resolve', { url }),
+    },
+    careerWatches: {
+      list: () => get<CareerPageWatch[]>('/api/jobs/career-watches'),
+      create: (url: string, label = '') =>
+        post<CareerPageWatch>('/api/jobs/career-watches', { url, label }),
+      run: (id: string) =>
+        post<{ new: number; added: number }>(
+          `/api/jobs/career-watches/${id}/run`
+        ),
+      remove: (id: string) =>
+        del<{ ok: boolean }>(`/api/jobs/career-watches/${id}`),
+    },
+    workdayBoards: {
+      list: () => get<WorkdayBoard[]>('/api/jobs/workday-boards'),
+      create: (url: string, label = '') =>
+        post<WorkdayBoard>('/api/jobs/workday-boards', { url, label }),
+      run: (id: string) =>
+        post<{ added: number; updated: number; count: number }>(
+          `/api/jobs/workday-boards/${id}/run`
+        ),
+      remove: (id: string) =>
+        del<{ ok: boolean }>(`/api/jobs/workday-boards/${id}`),
     },
 
     sync: () =>
@@ -3921,5 +4144,9 @@ export const api = {
       ),
 
     stats: () => get<JobStats>('/api/jobs/stats'),
+    stale: (days = 10) =>
+      get<StaleApplication[]>(`/api/jobs/outcomes/stale?days=${days}`),
+    upskill: (includeResources = false) =>
+      post<UpskillPlan>('/api/jobs/upskill', { includeResources }),
   },
 };

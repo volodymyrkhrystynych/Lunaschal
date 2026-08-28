@@ -9,6 +9,33 @@ import requests
 
 from backend.jobs import ingest
 
+
+def test_json_ld_job_posting_is_extracted_without_a_model(monkeypatch):
+    page = '''<html><script type="application/ld+json">{
+      "@type":"JobPosting","title":"Platform Engineer",
+      "hiringOrganization":{"name":"Acme"},
+      "jobLocationType":"TELECOMMUTE",
+      "description":"<p>Build Kubernetes platforms.</p>"
+    }</script><body>fallback page</body></html>'''
+    monkeypatch.setattr(ingest, 'fetch_html', lambda url: (page, url))
+    monkeypatch.setattr(ingest, 'extract_job', lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError('structured data must avoid the model')))
+    result = ingest.ingest_url('https://example.com/job')
+    assert result['title'] == 'Platform Engineer'
+    assert result['company'] == 'Acme'
+    assert result['remote'] is True
+    assert 'Kubernetes' in result['description']
+
+
+def test_css_description_is_the_second_tier(monkeypatch):
+    page = '<html><main><h1>Backend Engineer</h1><div class="job-description">Build APIs.</div></main></html>'
+    monkeypatch.setattr(ingest, 'fetch_html', lambda url: (page, url))
+    monkeypatch.setattr(ingest, 'extract_job', lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError('CSS extraction must avoid the model')))
+    result = ingest.ingest_url('https://example.com/job')
+    assert result['title'] == 'Backend Engineer'
+    assert result['description'] == 'Build APIs.'
+
 HTML = """
 <html><head><title>Backend Engineer at Acme</title></head>
 <body><h1>Backend Engineer</h1><p>We use Python and Kubernetes.</p></body></html>

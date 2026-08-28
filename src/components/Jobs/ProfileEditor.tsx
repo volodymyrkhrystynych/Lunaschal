@@ -224,6 +224,108 @@ export function ProfileEditor() {
       </section>
 
       <section className="space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-[var(--color-text)]">
+            Job preferences
+          </h3>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Hard gates filter before AI. Soft preferences only add a warning.
+            Companies from completed roles are excluded automatically.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field
+            label="Allowed locations (comma-separated)"
+            value={profile.allowedLocations}
+            onCommit={v => patchContact.mutate({ allowedLocations: v })}
+          />
+          <Field
+            label="Explicit company blacklist (comma-separated)"
+            value={profile.companyBlacklist.join(', ')}
+            onCommit={v =>
+              patchContact.mutate({
+                companyBlacklist: v
+                  .split(',')
+                  .map(x => x.trim())
+                  .filter(Boolean),
+              })
+            }
+          />
+          <Field
+            label="Preferred salary floor"
+            value={profile.softSalaryFloor?.toString() ?? ''}
+            onCommit={v =>
+              patchContact.mutate({ softSalaryFloor: v ? Number(v) : null })
+            }
+          />
+          <Field
+            label="Soft preferences (comma-separated)"
+            value={profile.softPreferences}
+            onCommit={v => patchContact.mutate({ softPreferences: v })}
+          />
+        </div>
+        <div className="flex flex-wrap gap-4 text-sm">
+          <label className="flex items-center gap-2 min-h-[44px]">
+            <input
+              type="checkbox"
+              checked={profile.remoteOnly}
+              onChange={e =>
+                patchContact.mutate({ remoteOnly: e.target.checked })
+              }
+            />
+            Remote roles only
+          </label>
+          <label className="flex items-center gap-2 min-h-[44px]">
+            <input
+              type="checkbox"
+              checked={profile.avoidClearanceRoles}
+              onChange={e =>
+                patchContact.mutate({ avoidClearanceRoles: e.target.checked })
+              }
+            />
+            Exclude clearance-required roles
+          </label>
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-[var(--color-text)]">
+            Screening defaults
+          </h3>
+          <p className="text-xs text-[var(--color-text-muted)]">
+            Reused verbatim for common application questions, without a model
+            call.
+          </p>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          {(
+            [
+              ['Work authorization', 'workAuthorization'],
+              ['Salary expectation', 'salaryExpectation'],
+              ['Notice period', 'noticePeriod'],
+              ['Availability date', 'availabilityDate'],
+              ['Relocation willingness', 'relocationWillingness'],
+              ['Security clearance', 'securityClearance'],
+            ] as const
+          ).map(([label, key]) => (
+            <Field
+              key={key}
+              label={label}
+              value={profile[key]}
+              onCommit={v => patchContact.mutate({ [key]: v })}
+            />
+          ))}
+        </div>
+        <Field
+          label="Self-identification / EEO answers"
+          value={profile.eeoAnswers}
+          multiline
+          onCommit={v => patchContact.mutate({ eeoAnswers: v })}
+        />
+      </section>
+
+      <section className="space-y-3">
         <h3 className="text-sm font-semibold text-[var(--color-text)]">
           Experience
         </h3>

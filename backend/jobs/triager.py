@@ -85,7 +85,7 @@ def run_gate_sweep(db=None) -> dict:
     restored and one the model already judged is never revisited.
     """
     from backend.db.connection import get_db
-    from backend.jobs import triage
+    from backend.jobs import preferences, profile as profile_mod, triage
 
     db = db if db is not None else get_db()
     if not is_enabled(db):
@@ -97,22 +97,26 @@ def run_gate_sweep(db=None) -> dict:
     # what they *are* missing. No description check, though: judging a title is
     # exactly what this layer is for.
     rows = db.execute(
-        'SELECT id, title FROM jobs WHERE triage_state=? AND dismissed=0'
+        'SELECT * FROM jobs WHERE triage_state=? AND dismissed=0'
         ' AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id = jobs.id)'
         ' LIMIT ?',
         (STATE_PENDING, GATE_BATCH),
     ).fetchall()
 
+    loaded = profile_mod.load_profile(db)
     rejected = 0
     now = _now()
     for row in rows:
         result = triage.gate(row['title'])
-        if result.keep:
+        preference_reason = preferences.hard_gate(dict(row), loaded)
+        if result.keep and not preference_reason:
             continue
         db.execute(
             'UPDATE jobs SET triage_state=?, triage_reason=?, triage_at=?,'
             ' updated_at=? WHERE id=?',
-            (STATE_REJECTED, f'title: {result.reason}', now, now, row['id']),
+            (STATE_REJECTED,
+             f'profile: {preference_reason}' if preference_reason else f'title: {result.reason}',
+             now, now, row['id']),
         )
         rejected += 1
     db.commit()
@@ -238,7 +242,7 @@ def process_one(job_id: str) -> dict:
     """
     from backend.ai import job_triage
     from backend.db.connection import get_db
-    from backend.jobs import keywords, profile as profile_mod, triage
+    from backend.jobs import keywords, preferences, profile as profile_mod, triage
 
     db = get_db()
     row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -259,10 +263,17 @@ def process_one(job_id: str) -> dict:
         db.commit()
         return {'ok': True, 'state': STATE_REJECTED, 'error': None}
 
+    loaded = profile_mod.load_profile(db)
+    preference_reason = preferences.hard_gate(job, loaded)
+    if preference_reason:
+        _store(db, job_id, {'relevant': False,
+                            'reason': f'profile: {preference_reason}',
+                            'fit': '', 'summary': '', 'flags': []})
+        return {'ok': True, 'state': STATE_REJECTED, 'error': None}
+
     try:
         job = _fill_snippet_body(db, job)
 
-        loaded = profile_mod.load_profile(db)
         profile_summary = profile_mod.profile_text(loaded)
         facts = triage.posting_facts(
             job.get('title') or '', job.get('description') or ''
@@ -275,6 +286,8 @@ def process_one(job_id: str) -> dict:
 
         # Everything above is DB work; nothing is left open across the call.
         verdict = job_triage.triage_posting(job, profile_summary, facts, report)
+        if verdict is not None and verdict.get('relevant'):
+            verdict['flags'] = (verdict.get('flags') or []) + preferences.soft_flags(job, loaded)
     except Exception as e:
         logger.warning('Triage failed for %s: %s', job_id, e)
         _record_error(db, job_id, str(e))

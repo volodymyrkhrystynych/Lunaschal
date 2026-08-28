@@ -23,6 +23,14 @@ export function SourcesPanel() {
     queryKey: ['jobs', 'searches'],
     queryFn: api.jobs.searches.list,
   });
+  const { data: watches } = useQuery({
+    queryKey: ['jobs', 'career-watches'],
+    queryFn: api.jobs.careerWatches.list,
+  });
+  const { data: workdayBoards } = useQuery({
+    queryKey: ['jobs', 'workday-boards'],
+    queryFn: api.jobs.workdayBoards.list,
+  });
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['jobs'] });
@@ -33,8 +41,14 @@ export function SourcesPanel() {
     onSuccess: invalidate,
   });
 
-  const count = searches?.length ?? 0;
-  const broken = (searches ?? []).filter(s => s.lastError).length;
+  const count =
+    (searches?.length ?? 0) +
+    (watches?.length ?? 0) +
+    (workdayBoards?.length ?? 0);
+  const broken =
+    (searches ?? []).filter(s => s.lastError).length +
+    (watches ?? []).filter(s => s.lastError).length +
+    (workdayBoards ?? []).filter(s => s.lastError).length;
 
   return (
     <div className="rounded-lg border border-white/10 bg-[var(--color-surface)]">
@@ -68,6 +82,22 @@ export function SourcesPanel() {
             <SearchRow key={search.id} search={search} onChanged={invalidate} />
           ))}
 
+          {(watches ?? []).map(watch => (
+            <CareerWatchRow
+              key={watch.id}
+              watch={watch}
+              onChanged={invalidate}
+            />
+          ))}
+
+          {(workdayBoards ?? []).map(board => (
+            <WorkdayBoardRow
+              key={board.id}
+              board={board}
+              onChanged={invalidate}
+            />
+          ))}
+
           <AddSearch onAdded={invalidate} />
 
           {count > 0 && (
@@ -82,6 +112,96 @@ export function SourcesPanel() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function WorkdayBoardRow({
+  board,
+  onChanged,
+}: {
+  board: import('@/hooks/api').WorkdayBoard;
+  onChanged: () => void;
+}) {
+  const run = useMutation({
+    mutationFn: () => api.jobs.workdayBoards.run(board.id),
+    onSuccess: onChanged,
+  });
+  const remove = useMutation({
+    mutationFn: () => api.jobs.workdayBoards.remove(board.id),
+    onSuccess: onChanged,
+  });
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <div className="flex-1 min-w-0">
+        <p className="truncate">{board.label || board.url} · Workday API</p>
+        <p
+          className={
+            board.lastError ? 'text-red-400' : 'text-[var(--color-text-muted)]'
+          }
+        >
+          {board.lastError || `${board.lastCount ?? 0} jobs synced`}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => run.mutate()}
+        className="min-h-[36px] px-2 rounded border border-white/20"
+      >
+        Run
+      </button>
+      <button
+        type="button"
+        onClick={() => remove.mutate()}
+        className="min-h-[36px] px-2 text-red-400"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+function CareerWatchRow({
+  watch,
+  onChanged,
+}: {
+  watch: import('@/hooks/api').CareerPageWatch;
+  onChanged: () => void;
+}) {
+  const run = useMutation({
+    mutationFn: () => api.jobs.careerWatches.run(watch.id),
+    onSuccess: onChanged,
+  });
+  const remove = useMutation({
+    mutationFn: () => api.jobs.careerWatches.remove(watch.id),
+    onSuccess: onChanged,
+  });
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <div className="flex-1 min-w-0">
+        <p className="truncate">{watch.label || watch.url} · career page</p>
+        <p
+          className={
+            watch.lastError ? 'text-red-400' : 'text-[var(--color-text-muted)]'
+          }
+        >
+          {watch.lastError || `${watch.lastCount ?? 0} links watched`}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => run.mutate()}
+        className="min-h-[36px] px-2 rounded border border-white/20"
+      >
+        Run
+      </button>
+      <button
+        type="button"
+        onClick={() => remove.mutate()}
+        className="min-h-[36px] px-2 text-red-400"
+      >
+        ×
+      </button>
     </div>
   );
 }
@@ -192,6 +312,27 @@ function AddSearch({ onAdded }: { onAdded: () => void }) {
       onAdded();
     },
   });
+  const watch = useMutation({
+    mutationFn: () =>
+      api.jobs.careerWatches.create(url.trim(), found?.company || ''),
+    onSuccess: () => {
+      setUrl('');
+      resolve.reset();
+      onAdded();
+    },
+  });
+  const addWorkday = useMutation({
+    mutationFn: () =>
+      api.jobs.workdayBoards.create(
+        found?.url || url.trim(),
+        found?.company || ''
+      ),
+    onSuccess: () => {
+      setUrl('');
+      resolve.reset();
+      onAdded();
+    },
+  });
 
   const found = resolve.data;
 
@@ -265,6 +406,22 @@ function AddSearch({ onAdded }: { onAdded: () => void }) {
               Open their careers page ↗
             </a>
           )}
+          <button
+            type="button"
+            onClick={() =>
+              found.detected === 'Workday'
+                ? addWorkday.mutate()
+                : watch.mutate()
+            }
+            disabled={watch.isPending || addWorkday.isPending}
+            className="block min-h-[36px] px-3 mt-2 rounded text-xs border border-white/20 bg-white/5"
+          >
+            {watch.isPending || addWorkday.isPending
+              ? 'Registering…'
+              : found.detected === 'Workday'
+                ? 'Sync this Workday board'
+                : 'Watch this page for new job links'}
+          </button>
         </div>
       )}
 
@@ -287,12 +444,30 @@ function ManualSearch({ onAdded }: { onAdded: () => void }) {
   const [slug, setSlug] = useState('');
   const [what, setWhat] = useState('');
   const [where, setWhere] = useState('');
+  const [titleTerms, setTitleTerms] = useState('');
+  const [seniority, setSeniority] = useState('');
+  const [salaryFloor, setSalaryFloor] = useState('');
+  const [remoteOnly, setRemoteOnly] = useState(false);
 
   const create = useMutation({
     mutationFn: () =>
       api.jobs.searches.create({
         kind,
-        params: sourceNeedsSlug(kind) ? { slug: slug.trim() } : { what, where },
+        label: titleTerms.trim() || what.trim() || undefined,
+        params: {
+          ...(sourceNeedsSlug(kind) ? { slug: slug.trim() } : { what, where }),
+          ...(titleTerms.trim()
+            ? {
+                titleTerms: titleTerms
+                  .split(',')
+                  .map(s => s.trim())
+                  .filter(Boolean),
+              }
+            : {}),
+          ...(seniority ? { seniority } : {}),
+          ...(salaryFloor ? { salaryFloor: Number(salaryFloor) } : {}),
+          ...(remoteOnly ? { remoteOnly: true } : {}),
+        },
       }),
     onSuccess: () => {
       setSlug('');
@@ -352,6 +527,45 @@ function ManualSearch({ onAdded }: { onAdded: () => void }) {
           </p>
         </>
       )}
+
+      <p className="text-xs text-[var(--color-text-muted)]">
+        Optional hunt filters
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <input
+          value={titleTerms}
+          onChange={e => setTitleTerms(e.target.value)}
+          placeholder="Titles, comma-separated"
+          className="min-h-[40px] p-2 rounded bg-[var(--color-bg)] border border-white/10 text-xs"
+        />
+        <select
+          value={seniority}
+          onChange={e => setSeniority(e.target.value)}
+          className="min-h-[40px] p-2 rounded bg-[var(--color-bg)] border border-white/10 text-xs"
+        >
+          <option value="">Any seniority</option>
+          <option value="junior">Junior</option>
+          <option value="senior">Senior</option>
+          <option value="staff">Staff</option>
+          <option value="principal">Principal</option>
+        </select>
+        <input
+          type="number"
+          min="0"
+          value={salaryFloor}
+          onChange={e => setSalaryFloor(e.target.value)}
+          placeholder="Salary floor"
+          className="min-h-[40px] p-2 rounded bg-[var(--color-bg)] border border-white/10 text-xs"
+        />
+        <label className="min-h-[40px] flex items-center gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={remoteOnly}
+            onChange={e => setRemoteOnly(e.target.checked)}
+          />{' '}
+          Remote only
+        </label>
+      </div>
 
       {create.isError && (
         <p className="text-xs text-red-400">

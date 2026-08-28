@@ -327,6 +327,52 @@
       }
     });
 
+    // Some ATSes reveal follow-up questions only after a select, checkbox, or
+    // radio answer fires its change handlers. Re-scan a bounded number of
+    // times, answering only controls that were not present in an earlier
+    // round. Boundedness prevents a page that constantly remounts controls
+    // from turning one click into an infinite fill loop.
+    const seenElements = new Set(found.map(field => field.element));
+    for (let round = 0; round < 3; round += 1) {
+      await new Promise(resolve => setTimeout(resolve, 150));
+      const revealed = collectFields(document).filter(
+        field => !seenElements.has(field.element)
+      );
+      if (!revealed.length) break;
+      revealed.forEach(field => seenElements.add(field.element));
+
+      for (let start = 0; start < revealed.length; start += CHUNK) {
+        const batch = revealed.slice(start, start + CHUNK);
+        let response;
+        try {
+          response = await send('answerQuestions', {
+            questions: batch.map(field => ({
+              label: field.label,
+              type: field.type,
+              options: field.options,
+            })),
+          });
+        } catch (error) {
+          render({ title: 'Lunaschal', error: error.message });
+          return;
+        }
+        const nextAnswers = response.answers || [];
+        nextAnswers.forEach((answer, index) => {
+          const field = batch[index];
+          if (!field || answer.source === 'unanswered') return;
+          if (fillOne(field, answer.answer)) {
+            filled.push({
+              label: field.label,
+              answer: answer.answer,
+              source: answer.source,
+            });
+          }
+        });
+        found.push(...batch);
+        answers.push(...nextAnswers);
+      }
+    }
+
     render({
       title: `Filled ${filled.length} of ${found.length}`,
       items: answers.map((a, i) => ({
@@ -362,6 +408,14 @@
     // Record immediately as well as on the button: intercepting a submit is
     // unreliable on SPA forms, many of which never fire one.
     recordFilled(filled).catch(() => {});
+    send('recordFillRun', {
+      pageTitle: document.title,
+      fields: found.map((field, index) => ({
+        label: field.label,
+        answer: currentValue(field) ?? answers[index]?.answer ?? '',
+        source: answers[index]?.source ?? 'unanswered',
+      })),
+    }).catch(() => {});
   }
 
   function currentValue(field) {
