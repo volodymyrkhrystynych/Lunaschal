@@ -1,15 +1,23 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
-import { eventTimeLabel, parseEventTags, repeatLabel } from '@/lib/calendar';
+import {
+  EMPTY_REPEAT,
+  eventTimeLabel,
+  parseEventTags,
+  repeatDraftFromEvent,
+  repeatDraftToPayload,
+  repeatLabel,
+  type RepeatDraft,
+} from '@/lib/calendar';
 import { parseTagsInput } from '@/lib/tags';
 import {
   CATEGORY_LABELS,
   CATEGORY_COLORS,
-  EVENT_CATEGORIES,
   parseCategoryTags,
   type EventCategory,
 } from '@/lib/calendarCategories';
+import { CategoryTagPicker, RepeatFields } from './EventFormFields';
 
 export function EventDetails({
   eventId,
@@ -41,6 +49,10 @@ export function EventDetails({
     // its time window — normally AI-assigned from a transcribed description,
     // editable here so grouping doesn't have to wait on that.
     categoryTags: [] as EventCategory[],
+    // The recurrence rule, editable here as well as at creation. Without it a
+    // mistyped repeat could only be corrected by deleting the series and
+    // typing the whole event again.
+    repeat: EMPTY_REPEAT as RepeatDraft,
   });
 
   const { data: event, isLoading } = useQuery({
@@ -127,6 +139,7 @@ export function EventDetails({
         allDay: draft.allDay,
         tags: parseTagsInput(draft.tags),
         categoryTags: draft.categoryTags,
+        ...repeatDraftToPayload(draft.repeat),
       };
       // The two endpoints return different shapes; the caller only cares that
       // the write landed.
@@ -172,6 +185,7 @@ export function EventDetails({
       allDay: !!event.allDay,
       tags: parseEventTags(event.tags).join(', '),
       categoryTags: parseCategoryTags(event.categoryTags),
+      repeat: repeatDraftFromEvent(event),
     });
     setMode('edit');
   };
@@ -275,41 +289,15 @@ export function EventDetails({
               placeholder="Tags (comma-separated)"
               className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] border-b border-white/10 pb-2 focus:outline-none"
             />
-            <div>
-              <div className="text-xs text-[var(--color-text-muted)] mb-1">
-                Groups journal entries in the Journal feed
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {EVENT_CATEGORIES.map(category => {
-                  const checked = draft.categoryTags.includes(category);
-                  return (
-                    <label
-                      key={category}
-                      className="flex items-center gap-1 text-xs px-2 py-1 rounded"
-                      style={{
-                        color: checked ? CATEGORY_COLORS[category] : undefined,
-                        border: `1px solid ${checked ? CATEGORY_COLORS[category] : 'rgba(255,255,255,0.1)'}`,
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={e =>
-                          setDraft({
-                            ...draft,
-                            categoryTags: e.target.checked
-                              ? [...draft.categoryTags, category]
-                              : draft.categoryTags.filter(c => c !== category),
-                          })
-                        }
-                        className="w-3 h-3"
-                      />
-                      {CATEGORY_LABELS[category]}
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
+            <RepeatFields
+              value={draft.repeat}
+              onChange={repeat => setDraft({ ...draft, repeat })}
+              anchorDate={shownDate}
+            />
+            <CategoryTagPicker
+              value={draft.categoryTags}
+              onChange={categoryTags => setDraft({ ...draft, categoryTags })}
+            />
           </div>
         ) : (
           event.description && (

@@ -538,4 +538,168 @@ describe('manual category tags', () => {
     fireEvent.click(await screen.findByText(/Dentist/));
     expect(await screen.findByText('Leisure')).toBeTruthy();
   });
+
+  it('offers the same categories on the create form', async () => {
+    const { container } = renderCalendar();
+    const cells = await waitFor(() => {
+      const found = container.querySelectorAll('[data-testid="month-cell"]');
+      expect(found).toHaveLength(42);
+      return found;
+    });
+    fireEvent.click(cells[3]); // 2026-02-04
+    fireEvent.click(screen.getByText('+ Add'));
+    fireEvent.change(screen.getByPlaceholderText('Event title'), {
+      target: { value: 'Gym' },
+    });
+    fireEvent.click(screen.getByLabelText('Exercise'));
+    fireEvent.click(screen.getByText('Save'));
+
+    await waitFor(() => expect(api.calendar.create).toHaveBeenCalled());
+    expect(vi.mocked(api.calendar.create).mock.calls[0][0]).toEqual(
+      expect.objectContaining({ title: 'Gym', categoryTags: ['exercise'] })
+    );
+  });
+
+  it('omits categoryTags entirely when none are checked, leaving the event to the classifier', async () => {
+    // Sending an empty list stamps `classified_at` server-side, which would
+    // retire every hand-created event from the AI classifier for good.
+    const { container } = renderCalendar();
+    const cells = await waitFor(() => {
+      const found = container.querySelectorAll('[data-testid="month-cell"]');
+      expect(found).toHaveLength(42);
+      return found;
+    });
+    fireEvent.click(cells[3]);
+    fireEvent.click(screen.getByText('+ Add'));
+    fireEvent.change(screen.getByPlaceholderText('Event title'), {
+      target: { value: 'Dentist' },
+    });
+    fireEvent.click(screen.getByText('Save'));
+
+    await waitFor(() => expect(api.calendar.create).toHaveBeenCalled());
+    expect(vi.mocked(api.calendar.create).mock.calls[0][0]).not.toHaveProperty(
+      'categoryTags'
+    );
+  });
+});
+
+// The create form could set a repeat rule and the edit modal could not, so a
+// mistyped recurrence could only be fixed by deleting the series and typing
+// the whole event again.
+describe('editing the repeat rule', () => {
+  it('opens the edit form with the stored rule already filled in', async () => {
+    await openRecurringEvent();
+    fireEvent.click(await screen.findByText('Edit'));
+
+    expect((screen.getByLabelText('Repeats') as HTMLSelectElement).value).toBe(
+      'weekly'
+    );
+    expect(
+      (screen.getByLabelText('Repeat interval') as HTMLInputElement).value
+    ).toBe('1');
+    for (const day of ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']) {
+      expect(screen.getByLabelText(day).getAttribute('aria-pressed')).toBe(
+        'true'
+      );
+    }
+    expect(screen.getByLabelText('Sat').getAttribute('aria-pressed')).toBe(
+      'false'
+    );
+  });
+
+  it('counts years, not months, for a yearly rule', async () => {
+    // What the interval box says it is counting is the only thing telling the
+    // two apart, and it used to say "month(s)" for both.
+    vi.mocked(api.calendar.listByRange).mockResolvedValue([
+      event({ title: 'Birthday', date: '2026-02-04' }),
+    ]);
+    vi.mocked(api.calendar.get).mockResolvedValue(
+      event({ title: 'Birthday', repeatFreq: 'yearly', repeatInterval: 2 })
+    );
+    renderCalendar();
+    fireEvent.click(await screen.findByText(/Birthday/));
+    fireEvent.click(await screen.findByText('Edit'));
+
+    const unit = screen
+      .getByLabelText('Repeat interval')
+      .closest('label')?.textContent;
+    expect(unit).toContain('year(s)');
+    expect(unit).not.toContain('month(s)');
+  });
+
+  it('sends the edited rule with the rest of the change', async () => {
+    await openRecurringEvent();
+    fireEvent.click(await screen.findByText('Edit'));
+    fireEvent.change(screen.getByLabelText('Repeat interval'), {
+      target: { value: '2' },
+    });
+    fireEvent.click(screen.getByLabelText('Fri')); // drop Friday
+    fireEvent.change(screen.getByLabelText('Repeat until'), {
+      target: { value: '2026-12-31' },
+    });
+    fireEvent.click(screen.getByText('Save'));
+    // A recurring event still asks which occurrences the change covers.
+    fireEvent.click(await screen.findByText('This and future'));
+
+    await waitFor(() =>
+      expect(api.calendar.updateFrom).toHaveBeenCalledWith(
+        'e1',
+        '2026-02-04',
+        expect.objectContaining({
+          repeatFreq: 'weekly',
+          repeatInterval: 2,
+          repeatByweekday: [1, 2, 3, 4],
+          repeatUntil: '2026-12-31',
+        })
+      )
+    );
+  });
+
+  it('turns a series back into a one-off by clearing every repeat column', async () => {
+    await openRecurringEvent();
+    fireEvent.click(await screen.findByText('Edit'));
+    fireEvent.change(screen.getByLabelText('Repeats'), {
+      target: { value: '' },
+    });
+    fireEvent.click(screen.getByText('Save'));
+    fireEvent.click(await screen.findByText('All events'));
+
+    await waitFor(() =>
+      expect(api.calendar.update).toHaveBeenCalledWith(
+        'e1',
+        expect.objectContaining({
+          repeatFreq: null,
+          repeatInterval: null,
+          repeatByweekday: null,
+          repeatUntil: null,
+        })
+      )
+    );
+  });
+
+  it('adds a rule to a one-off, seeding the weekday from the day being edited', async () => {
+    vi.mocked(api.calendar.listByRange).mockResolvedValue([
+      event({ title: 'Dentist', date: '2026-02-04' }),
+    ]);
+    vi.mocked(api.calendar.get).mockResolvedValue(event({ title: 'Dentist' }));
+    renderCalendar();
+    fireEvent.click(await screen.findByText(/Dentist/));
+    fireEvent.click(await screen.findByText('Edit'));
+    fireEvent.change(screen.getByLabelText('Repeats'), {
+      target: { value: 'weekly' },
+    });
+    fireEvent.click(screen.getByText('Save'));
+
+    // No scope question: a one-off has no other occurrences to disagree about.
+    await waitFor(() =>
+      expect(api.calendar.update).toHaveBeenCalledWith(
+        'e1',
+        expect.objectContaining({
+          repeatFreq: 'weekly',
+          repeatInterval: 1,
+          repeatByweekday: [3], // 2026-02-04 is a Wednesday
+        })
+      )
+    );
+  });
 });

@@ -2684,6 +2684,10 @@ export const api = {
         allDay?: boolean;
         tags?: string[];
         journalId?: string;
+        // Grouping categories set by hand at creation. Sending the key at all
+        // stamps `classified_at`, which retires the event from the AI
+        // classifier — so the form omits it unless something is checked.
+        categoryTags?: string[];
         // Optional client-supplied ULID so an offline-queued create replays
         // idempotently (server does INSERT OR IGNORE on this id).
         id?: string;

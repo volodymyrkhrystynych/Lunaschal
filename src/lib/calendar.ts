@@ -124,3 +124,85 @@ export function eventTimeLabel(event: {
   if (event.allDay) return 'All day';
   return timeSpan(event.time, event.endTime);
 }
+
+// The recurrence rule in the shape the two forms edit it.
+//
+// The create form and the edit modal both hold the rule like this and hand it
+// to the same <RepeatFields>, so a control added to one is a control added to
+// both. The stored row keeps its weekdays as a CSV string and every field
+// nullable; a draft keeps them as an array and never null, because a cleared
+// <select> is '' and not null. The two functions below are the edges of that
+// conversion.
+export interface RepeatDraft {
+  freq: '' | RepeatFreq;
+  interval: number;
+  byweekday: number[];
+  until: string;
+}
+
+export const EMPTY_REPEAT: RepeatDraft = {
+  freq: '',
+  interval: 1,
+  byweekday: [],
+  until: '',
+};
+
+// The noun the "Every N ___" box counts. Yearly used to fall through to the
+// monthly label here, so a rule repeating every N years read "every N months".
+export function repeatUnitLabel(freq: '' | RepeatFreq): string {
+  switch (freq) {
+    case 'daily':
+      return 'day(s)';
+    case 'weekly':
+      return 'week(s)';
+    case 'yearly':
+      return 'year(s)';
+    default:
+      return 'month(s)';
+  }
+}
+
+export function repeatDraftFromEvent(event: {
+  repeatFreq?: RepeatFreq | string | null;
+  repeatInterval?: number | null;
+  repeatByweekday?: string | null;
+  repeatUntil?: string | null;
+}): RepeatDraft {
+  const freq = event.repeatFreq;
+  const known = (['daily', 'weekly', 'monthly', 'yearly'] as const).find(
+    f => f === freq
+  );
+  return {
+    freq: known ?? '',
+    interval:
+      event.repeatInterval && event.repeatInterval > 0
+        ? event.repeatInterval
+        : 1,
+    byweekday: weekdayCsvToArray(event.repeatByweekday),
+    until: event.repeatUntil ?? '',
+  };
+}
+
+// The four columns as the API takes them. Explicit nulls rather than omitted
+// keys: `repeatFreq: null` is what turns a series back into a one-off, and the
+// parameters have to be cleared alongside it or a later re-enable inherits
+// stale weekdays. Weekdays only mean anything for a weekly rule.
+export function repeatDraftToPayload(draft: RepeatDraft) {
+  if (!draft.freq) {
+    return {
+      repeatFreq: null,
+      repeatInterval: null,
+      repeatByweekday: null,
+      repeatUntil: null,
+    };
+  }
+  return {
+    repeatFreq: draft.freq,
+    repeatInterval: Math.max(1, Math.floor(draft.interval) || 1),
+    repeatByweekday:
+      draft.freq === 'weekly' && draft.byweekday.length
+        ? draft.byweekday
+        : null,
+    repeatUntil: draft.until || null,
+  };
+}
