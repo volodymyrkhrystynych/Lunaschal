@@ -101,6 +101,9 @@ export function useRecorder(
   const recoveredRef = useRef(false);
   const wakeRef = useRef<WakeLockSentinelish | null>(null);
   const mountedRef = useRef(true);
+  // Held for the whole of `start()`, including the await on the permission
+  // prompt — which is the window a second tap used to slip through.
+  const startingRef = useRef(false);
 
   // Callbacks are read through a ref so the lifecycle listeners below can be
   // installed once and still see the current ones.
@@ -160,6 +163,49 @@ export function useRecorder(
     streamRef.current = null;
   };
 
+  /**
+   * Whether this recorder's microphone is already gone — in which case `stop()`
+   * will throw rather than work, and `onstop` is never coming.
+   *
+   * `mr.state` alone is not enough to know that: Safari leaves it at
+   * 'recording' after the capture ends, so the guard that trusted it fell
+   * through to a `stop()` that threw `InvalidStateError`. The track is the only
+   * honest signal.
+   */
+  const captureEnded = (mr: MediaRecorder): boolean => {
+    if (mr.state === 'inactive') return true;
+    const tracks = (mr.stream ?? streamRef.current)?.getAudioTracks?.() ?? [];
+    return tracks.length > 0 && tracks.every(t => t.readyState === 'ended');
+  };
+
+  /**
+   * Which recorder has already been closed out. A dying microphone fires both
+   * our own `onended` handler and MediaRecorder's `onstop`, so without this the
+   * second of the two finalizes the recording again and delivers it twice.
+   */
+  const settledRef = useRef<MediaRecorder | null>(null);
+
+  /** Close out a recording MediaRecorder will not close for us. */
+  const finishByHand = (mr: MediaRecorder) => {
+    if (settledRef.current === mr) return;
+    settledRef.current = mr;
+    mediaRef.current = null;
+    releaseStream();
+    releaseWakeLock();
+    const recording = recordingRef.current;
+    recordingRef.current = null;
+    if (recording) {
+      void finalizeRecording(recording.id, { recovered: true }).then(
+        finalized => {
+          if (finalized) return handleFinishedRecording(finalized);
+          setStatusIfMounted('idle');
+        }
+      );
+    } else {
+      setStatusIfMounted('idle');
+    }
+  };
+
   const handleFinishedRecording = async (rec: StoredRecording) => {
     setStatusIfMounted('saving');
     try {
@@ -209,6 +255,13 @@ export function useRecorder(
     mode: RecorderMode = 'transcribe',
     opts: { durable?: boolean } = {}
   ) => {
+    // A second tap while the first start is still waiting on the permission
+    // prompt used to open a second recorder over a second getUserMedia: one
+    // `mediaRef` and one `chunksRef` between them, so Stop reached only the
+    // newer one and the older kept the microphone live with nothing able to
+    // release it. On iOS it is worse than a leak — a second capture ends the
+    // first outright, which is what killed the track that wedged the button.
+    if (startingRef.current || mediaRef.current) return;
     setError('');
     if (mode === 'transcribe' && !canTranscribeRef.current) {
       setError('Dictation needs the server — the mic is back when you are.');
@@ -226,6 +279,7 @@ export function useRecorder(
       );
       return;
     }
+    startingRef.current = true;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -237,14 +291,18 @@ export function useRecorder(
       );
       const mimeType = mr.mimeType || preferred || 'audio/webm';
 
+      // Claimed before anything below can await. The microphone can end at any
+      // point during setup, and `t.onended` decides whether the event is still
+      // relevant by comparing against this ref — so while it was assigned only
+      // after `mr.start()`, a track dying mid-setup compared against `null`,
+      // took the early return, and left the UI showing a live recording on a
+      // dead microphone with no notice and no error.
+      mediaRef.current = mr;
+
+      // Assigned after the store call below, but the handlers that close over
+      // it have to be attached before it: during that await the recorder had no
+      // `onended` listener at all, so a track ending there was lost outright.
       let recording: StoredRecording | null = null;
-      if (durable) {
-        // Created before the first chunk so there is somewhere to put it.
-        const storedMode: RecordingMode =
-          mode === 'audio' ? 'audio' : 'transcribe';
-        recording = await beginRecording(storedMode, mimeType);
-      }
-      recordingRef.current = recording;
 
       mr.ondataavailable = e => {
         if (e.data.size === 0) return;
@@ -286,6 +344,10 @@ export function useRecorder(
       });
 
       mr.onstop = async () => {
+        // May have been closed out already by `finishByHand` — a track that
+        // ends takes both routes here.
+        if (settledRef.current === mr) return;
+        settledRef.current = mr;
         releaseStream();
         releaseWakeLock();
         mediaRef.current = null;
@@ -305,45 +367,62 @@ export function useRecorder(
         );
       };
 
+      if (durable) {
+        // Created before the first chunk so there is somewhere to put it.
+        const storedMode: RecordingMode =
+          mode === 'audio' ? 'audio' : 'transcribe';
+        recording = await beginRecording(storedMode, mimeType);
+      }
+
+      // The microphone can die while that write is in flight, in which case the
+      // handlers above have already closed this recording out. Starting anyway
+      // would put the button back to red over a dead capture.
+      if (mediaRef.current !== mr) {
+        if (recording)
+          void finalizeRecording(recording.id, { recovered: true });
+        return;
+      }
+      recordingRef.current = recording;
+
       // A timeslice is what makes any of this possible: without one,
       // ondataavailable fires exactly once, at stop, and everything before that
       // is unreachable inside the browser.
       mr.start(CHUNK_MS);
-      mediaRef.current = mr;
       setStatus('recording');
       if (durable) void acquireWakeLock();
     } catch (err) {
+      // The ref is claimed early now, so a failure after that point has to give
+      // it back or the guard at the top would refuse every later attempt.
+      mediaRef.current = null;
       releaseStream();
       setError(err instanceof Error ? err.message : 'Microphone access denied');
       setStatus('idle');
+    } finally {
+      startingRef.current = false;
     }
   };
 
   const stop = () => {
     const mr = mediaRef.current;
     if (!mr) return;
-    if (mr.state === 'inactive') {
+    if (captureEnded(mr)) {
       // Already dead — the OS got there first. onstop won't fire, so finish by
       // hand rather than leaving the recording open forever.
-      mediaRef.current = null;
-      releaseStream();
-      releaseWakeLock();
-      const recording = recordingRef.current;
-      recordingRef.current = null;
-      if (recording) {
-        void finalizeRecording(recording.id, { recovered: true }).then(
-          finalized => {
-            if (finalized) return handleFinishedRecording(finalized);
-            setStatusIfMounted('idle');
-          }
-        );
-      } else {
-        setStatusIfMounted('idle');
-      }
+      finishByHand(mr);
       return;
     }
-    mr.stop();
+    // The reference is dropped *before* the call, and the call itself is
+    // guarded. `mr.stop()` throws InvalidStateError on a recorder that is no
+    // longer capturing, and Safari reports a stale `state` that says it still
+    // is — so the throw escaped the click handler with the ref still set and
+    // the status still 'recording', and every later tap threw in the same
+    // place. Nothing moved, and only a reload got the button back.
     mediaRef.current = null;
+    try {
+      mr.stop();
+    } catch {
+      finishByHand(mr);
+    }
   };
 
   // The lifecycle handlers. Each of these was previously a silent, total loss.
@@ -365,8 +444,10 @@ export function useRecorder(
       }
       // Back in the foreground. iOS routinely kills the recorder while the page
       // is suspended, and the UI used to come back showing 'recording' as if
-      // nothing had happened.
-      if (mr.state === 'inactive') {
+      // nothing had happened. Asked through `captureEnded` rather than `state`
+      // for the same reason `stop()` does: a suspended iOS page comes back with
+      // a dead microphone and a recorder still claiming to be recording.
+      if (captureEnded(mr)) {
         recoveredRef.current = true;
         optionsRef.current.onNotice?.(
           'The recording ended while the screen was off — everything up to that point is saved.'

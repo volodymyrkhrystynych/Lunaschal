@@ -74,8 +74,11 @@ export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
         <button
           type="button"
           onClick={toggleRecording}
+          // Gated only when idle: these say whether dictation can start, and
+          // while recording this button is the only way to stop.
           disabled={
-            recorder.status === 'transcribing' || !recorder.canTranscribe
+            recorder.status === 'transcribing' ||
+            (recorder.status === 'idle' && !recorder.canTranscribe)
           }
           title={
             recorder.canTranscribe

@@ -1056,11 +1056,15 @@ export function ChatPanel() {
           </button>
           <button
             onClick={toggleRecording}
+            // Gated only when idle: every condition here is about whether a
+            // new dictation may start, and while one is running this button
+            // is the only way to stop it.
             disabled={
-              !isConfigured ||
-              isStreaming ||
-              isTranscribing ||
-              !recorder.canTranscribe
+              !isRecording &&
+              (!isConfigured ||
+                isStreaming ||
+                isTranscribing ||
+                !recorder.canTranscribe)
             }
             title={
               !recorder.canTranscribe

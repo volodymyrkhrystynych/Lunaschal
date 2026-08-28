@@ -266,7 +266,12 @@ export function IdeaDiscussion({ ideaId }: IdeaDiscussionProps) {
           <button
             type="button"
             onClick={() => (recording ? recorder.stop() : recorder.start())}
-            disabled={busy || transcribing || !recorder.canTranscribe}
+            // Gated only when idle: these conditions are about whether
+            // dictation can *start*, and applying them to a live recording
+            // disables the only control that can stop it.
+            disabled={
+              !recording && (busy || transcribing || !recorder.canTranscribe)
+            }
             title={
               !recorder.canTranscribe
                 ? 'Offline — dictation needs the server'
