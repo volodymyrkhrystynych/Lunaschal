@@ -61,7 +61,7 @@ export interface RecorderOptions {
   /**
    * Called once the audio is safely stored. Whatever this does — upload,
    * transcribe, queue for later — the recording stays on the device until it
-   * deletes it. See src/offline/recordingQueue.ts for the two policies.
+   * deletes it. See src/offline/recordingQueue.ts for the upload policy.
    */
   onRecording?: (rec: StoredRecording) => void | Promise<void>;
   /** Something the user should know that isn't an error (e.g. a screen lock
@@ -263,7 +263,8 @@ export function useRecorder(
     // first outright, which is what killed the track that wedged the button.
     if (startingRef.current || mediaRef.current) return;
     setError('');
-    if (mode === 'transcribe' && !canTranscribeRef.current) {
+    const durable = opts.durable ?? optionsRef.current.durable ?? false;
+    if (mode === 'transcribe' && !durable && !canTranscribeRef.current) {
       setError('Dictation needs the server — the mic is back when you are.');
       return;
     }
@@ -272,7 +273,6 @@ export function useRecorder(
     // Per-start, because SttPanel drives three buttons off one recorder and only
     // the two journal ones are worth persisting; the third is dictation into a
     // text field, where a lost take is retyped, not lost.
-    const durable = opts.durable ?? optionsRef.current.durable ?? false;
     if (!navigator.mediaDevices?.getUserMedia) {
       setError(
         'Microphone access requires HTTPS on this device — reload the page over the https:// URL.'

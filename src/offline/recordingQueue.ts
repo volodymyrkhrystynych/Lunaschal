@@ -1,9 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { api } from '../hooks/api';
 import { MUTATION_KEYS, type JournalRecordingVars } from './mutationDefaults';
 import {
-  assembleBlob,
-  deleteRecording,
   finalizeRecording,
   listRecordings,
   type StoredRecording,
@@ -55,42 +52,18 @@ function alreadyQueued(qc: QueryClient, id: string): boolean {
 /**
  * The one policy for a finished journal recording.
  *
- * - `audio` mode: the clip *is* the entry, so queue the upload.
- * - `transcribe` mode: the words are what was wanted, so try speech-to-text
- *   first and drop the audio once the text is saved. **If that fails the audio
- *   is not discarded** — it becomes an audio journal entry instead, and the
- *   attachment's own Transcribe button can recover the words later. Losing the
- *   words is recoverable; losing the recording is not.
+ * Both modes upload the clip as a journal attachment. The upload passes the
+ * stored recording's mode so the server can stop there (`audio`) or also
+ * transcribe it into the entry body (`transcribe`). Keeping one durable path
+ * means a Journal recording does not become disposable merely because it is
+ * destined for text too.
  */
 export async function handleFinishedRecording(
   qc: QueryClient,
   rec: StoredRecording,
-  opts: { onTranscript?: (text: string) => void; name?: string } = {}
+  opts: { name?: string } = {}
 ): Promise<void> {
-  if (rec.mode === 'audio') {
-    await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME);
-    return;
-  }
-
-  const blob = await assembleBlob(rec.id);
-  if (!blob || blob.size === 0) {
-    await deleteRecording(rec.id);
-    throw new Error('That recording was empty.');
-  }
-
-  try {
-    const { text } = await api.stt.transcribe(blob);
-    // The transcript is the deliverable and it is in hand; the audio was only
-    // ever a means to it.
-    await deleteRecording(rec.id);
-    if (text) opts.onTranscript?.(text);
-  } catch (e) {
-    await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME);
-    const why = e instanceof Error ? e.message : 'Transcription failed';
-    throw new Error(
-      `${why} — the audio was kept and saved as a journal entry instead.`
-    );
-  }
+  await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME);
 }
 
 /**

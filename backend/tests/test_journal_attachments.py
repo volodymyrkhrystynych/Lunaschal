@@ -530,7 +530,8 @@ def test_running_descriptions_are_reset_at_startup(client, entry_id, monkeypatch
 # is that a rejected file leaves no empty entry behind.
 
 def _record(client, *, filename='recording.webm', data=b'\x00' * 2048,
-            mime='audio/webm', name=None, id=None, attachment_id=None):
+            mime='audio/webm', name=None, id=None, attachment_id=None,
+            transcribe=False):
     form = {'file': (io.BytesIO(data), filename, mime)}
     if name is not None:
         form['name'] = name
@@ -538,6 +539,8 @@ def _record(client, *, filename='recording.webm', data=b'\x00' * 2048,
         form['id'] = id
     if attachment_id is not None:
         form['attachmentId'] = attachment_id
+    if transcribe:
+        form['transcribe'] = 'true'
     return client.post(
         '/api/journal/recordings', data=form, content_type='multipart/form-data'
     )
@@ -571,6 +574,25 @@ def test_recording_generates_no_metadata(client, monkeypatch):
     monkeypatch.setattr(journal_routes, '_polish_bg', lambda *a, **k: called.append(a))
     _record(client)
     assert called == []
+
+
+def test_journal_recording_keeps_audio_and_transcribes_into_entry(client, monkeypatch):
+    jobs = _run_pending_bg(monkeypatch)
+    monkeypatch.setattr(journal_routes, '_do_attachment_audio',
+                        lambda _path: 'A thought worth keeping.')
+    monkeypatch.setattr(journal_routes, '_polish_bg', lambda *a: None)
+    monkeypatch.setattr(journal_routes, '_generate_metadata_bg', lambda *a: None)
+
+    body = _record(client, transcribe=True).get_json()
+    entry = client.get(f"/api/journal/{body['id']}").get_json()
+    assert entry['content'] == ''
+    assert entry['attachments'][0]['transcriptStatus'] == 'running'
+
+    jobs[0]()
+    entry = client.get(f"/api/journal/{body['id']}").get_json()
+    assert entry['content'] == 'A thought worth keeping.'
+    assert entry['rawContent'] == 'A thought worth keeping.'
+    assert entry['attachments'][0]['transcript'] == 'A thought worth keeping.'
 
 
 def test_recording_needs_a_file(client):

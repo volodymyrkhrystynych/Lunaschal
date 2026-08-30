@@ -29,18 +29,8 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const recordModeRef = useRef<RecordMode>('normal');
   const queryClient = useQueryClient();
 
-  const saveJournalFromVoice = useMutation({
-    mutationFn: (text: string) => api.journal.createFromVoice(text),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['journal'] }),
-    onError: err =>
-      setError(
-        err instanceof Error ? err.message : 'Failed to save journal entry'
-      ),
-  });
-
   const deliverTranscript = (text: string) => {
-    if (recordModeRef.current === 'journal') saveJournalFromVoice.mutate(text);
-    else onTranscribed(text);
+    onTranscribed(text);
   };
 
   // Errors deliberately propagate out of here: the recorder surfaces them on
@@ -49,10 +39,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   // device until the server confirms it.
   const recorder = useRecorder(deliverTranscript, undefined, {
     onNotice: setNotice,
-    onRecording: rec =>
-      handleFinishedRecording(queryClient, rec, {
-        onTranscript: deliverTranscript,
-      }),
+    onRecording: rec => handleFinishedRecording(queryClient, rec),
   });
   const status = recorder.status;
 
@@ -172,10 +159,9 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
   const unavailable = (mode: RecordMode) =>
     busyElsewhere(mode) || settling(mode);
 
-  // The two transcribing buttons need the server; the audio one does not — it
-  // writes to IndexedDB and uploads later — so it stays live offline. That
-  // split is the whole point of using the mic as the offline indicator: what
-  // goes flat is exactly what stopped working.
+  // Plain dictation needs the server. Both journal buttons write to IndexedDB
+  // and upload later, so they stay live offline; Journal transcription is
+  // queued by the server after the audio lands.
   // `canTranscribe` gates starting only: while this button holds the mic it
   // is the Stop button, and going offline mid-recording used to disable it.
   const buttonDisabled =
@@ -195,18 +181,13 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
       ? 'Stop'
       : 'Transcribing…';
 
-  const journalButtonDisabled =
-    unavailable('journal') ||
-    saveJournalFromVoice.isPending ||
-    (!recorder.canTranscribe && !inAppJournalActive);
+  const journalButtonDisabled = unavailable('journal');
 
   const journalButtonLabel = inAppJournalActive
     ? status === 'recording'
       ? 'Stop'
-      : 'Transcribing…'
-    : saveJournalFromVoice.isPending
-      ? 'Saving…'
-      : 'Journal';
+      : 'Saving…'
+    : 'Journal';
 
   const audioButtonDisabled = unavailable('audio');
 
@@ -379,9 +360,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           }
           disabled={journalButtonDisabled}
           title={
-            recorder.canTranscribe
-              ? 'Record → transcribe → save as a journal entry (same as the journal voice shortcut)'
-              : 'Offline — dictation needs the server. The audio button still works.'
+            'Record → save the audio to the journal → transcribe it into the entry'
           }
           className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
             inAppJournalActive && status === 'recording'
@@ -393,7 +372,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
             className={`w-2 h-2 rounded-full ${
               inAppJournalActive && status === 'recording'
                 ? 'bg-white animate-pulse'
-                : inAppJournalActive && status === 'transcribing'
+                : inAppJournalActive && status === 'saving'
                   ? 'bg-yellow-400'
                   : 'bg-[var(--color-text-muted)]'
             }`}
