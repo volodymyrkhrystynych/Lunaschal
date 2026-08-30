@@ -555,6 +555,7 @@ CREATE TABLE IF NOT EXISTS fics (
     last_checked_at INTEGER,
     rating INTEGER CHECK(rating BETWEEN 1 AND 5),
     review TEXT,
+    last_opened_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -577,6 +578,7 @@ CREATE TABLE IF NOT EXISTS fic_chapters (
     posted_at INTEGER,
     edited_at INTEGER,
     created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
     UNIQUE(fic_id, source_post_id)
 );
 

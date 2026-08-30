@@ -15,10 +15,14 @@ bp = Blueprint('fanfic', __name__, url_prefix='/api/fanfic')
 _LIST_COLS = (
     'id, title, author, source_type, source_url, site, cover_path, word_count,'
     ' chapter_count, download_status, download_error, update_pending, deep_pending,'
-    ' last_read_chapter_id, last_checked_at, rating, created_at, updated_at'
+    ' last_read_chapter_id, last_checked_at, last_opened_at, rating, review,'
+    ' description, created_at, updated_at'
 )
 
-_CHAPTER_LIST_COLS = 'c.id, c.fic_id, c.position, c.title, c.category, c.word_count, c.posted_at'
+_CHAPTER_LIST_COLS = (
+    'c.id, c.fic_id, c.position, c.title, c.category, c.word_count, c.posted_at,'
+    ' c.created_at, c.updated_at'
+)
 
 # Newest forum activity first: latest threadmark's forum post date, falling
 # back to import time for chapters without one (epub/docx uploads), then to
@@ -31,13 +35,8 @@ _LATEST_ACTIVITY_ORDER = (
     ') DESC'
 )
 
-# The "All" view groups fics by folder order (a fic in several folders counts
-# under its earliest-positioned one); fics in no folder sort last.
-_FOLDER_GROUP_ORDER = (
-    '(SELECT MIN(f.position) FROM fic_folder_items i'
-    ' JOIN fic_folders f ON f.id = i.folder_id'
-    ' WHERE i.fic_id = fics.id) ASC NULLS LAST'
-)
+_UPDATED_ORDER = 'fics.updated_at DESC, fics.created_at DESC'
+_OPENED_ORDER = 'fics.last_opened_at DESC NULLS LAST, fics.updated_at DESC'
 
 
 def _attach_progress(dicts: list[dict]) -> list[dict]:
@@ -100,14 +99,16 @@ def list_fics():
                      ' WHERE name=? AND fic_id=fics.id)')
         params.append(tag)
     where_sql = f" WHERE {' AND '.join(where)}" if where else ''
-    # Inside a single folder (or the unsorted view) grouping is meaningless —
-    # plain recency there; the "Recent" pill explicitly asks for the same;
-    # everywhere else group by folder order first.
+    # All and folder views follow metadata/content updates. Recent is reading
+    # history, deliberately independent of forum publication dates.
     sort = request.args.get('sort')
-    if folder_id or sort == 'recent':
+    if sort == 'recent':
+        order = _OPENED_ORDER
+    elif folder_id:
+        # Preserve the existing ordering inside Unsorted and named folders.
         order = _LATEST_ACTIVITY_ORDER
     else:
-        order = f'{_FOLDER_GROUP_ORDER}, {_LATEST_ACTIVITY_ORDER}'
+        order = _UPDATED_ORDER
     rows = get_db().execute(
         f'SELECT {_LIST_COLS} FROM fics{where_sql}'
         f' ORDER BY {order} LIMIT ? OFFSET ?',
@@ -419,6 +420,19 @@ def get_fic(fic_id):
     return jsonify(_attach_library_meta(_attach_progress([row_to_dict(row)]))[0])
 
 
+@bp.post('/<fic_id>/opened')
+def mark_fic_opened(fic_id):
+    db = get_db()
+    cur = db.execute(
+        'UPDATE fics SET last_opened_at=? WHERE id=?',
+        (int(time.time()), fic_id),
+    )
+    if cur.rowcount == 0:
+        return jsonify({'error': 'Not found'}), 404
+    db.commit()
+    return jsonify({'success': True})
+
+
 @bp.delete('/<fic_id>')
 def delete_fic(fic_id):
     download.cancel_progress(fic_id)
@@ -663,9 +677,9 @@ def _insert_book(book, fic_id: str) -> str:
         total_words += words
         db.execute(
             'INSERT INTO fic_chapters(id, fic_id, position, title, category,'
-            ' content_html, content_text, word_count, created_at)'
-            ' VALUES (?,?,?,?,?,?,?,?,?)',
-            (str(ULID()), fic_id, position, title, 'chapters', html, text, words, now),
+            ' content_html, content_text, word_count, created_at, updated_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?,?)',
+            (str(ULID()), fic_id, position, title, 'chapters', html, text, words, now, now),
         )
     db.execute(
         'UPDATE fics SET title=?, author=?, description=?, cover_path=?,'
@@ -755,7 +769,7 @@ def save_reading_progress(fic_id):
             return jsonify({'error': 'Chapter not found in this fic'}), 404
     now = int(time.time())
     db.execute(
-        'UPDATE fics SET last_read_chapter_id=?, updated_at=? WHERE id=?',
+        'UPDATE fics SET last_read_chapter_id=?, last_opened_at=? WHERE id=?',
         (chapter_id, now, fic_id),
     )
     if chapter_id:

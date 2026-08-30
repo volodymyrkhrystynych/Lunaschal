@@ -57,6 +57,12 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const queryClient = useQueryClient();
   const { setLevel, level } = useShortcuts();
 
+  useEffect(() => {
+    api.fanfic.markOpened(ficId).catch(() => {
+      // Reading remains available if this best-effort history write fails.
+    });
+  }, [ficId]);
+
   // Speak the commentary instead of typing it — and it saves itself, the same
   // as dictation in Chat and the writing discussions. Reacting to a chapter is
   // the case that most wants to stay hands-free: you are mid-read, not looking
@@ -647,8 +653,18 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                       <h2 className="text-xl font-bold text-[var(--color-text)] mb-1 break-words">
                         {chapter.title}
                       </h2>
-                      <div className="text-sm text-[var(--color-text-muted)] mb-6 flex gap-3">
+                      <div className="text-sm text-[var(--color-text-muted)] mb-6 flex flex-wrap gap-3">
                         <span>{chapter.wordCount} words</span>
+                        {chapter.createdAt && (
+                          <span>
+                            created {formatChapterDate(chapter.createdAt)}
+                          </span>
+                        )}
+                        {chapter.updatedAt && (
+                          <span>
+                            updated {formatChapterDate(chapter.updatedAt)}
+                          </span>
+                        )}
                         {fontSize !== getStoredFontSize() && (
                           <span>{fontSize}px</span>
                         )}
@@ -795,4 +811,12 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
       )}
     </>
   );
+}
+
+function formatChapterDate(date: string) {
+  return new Intl.DateTimeFormat('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(new Date(date));
 }

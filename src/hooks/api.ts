@@ -28,8 +28,8 @@ export interface JournalEntry {
   curatedTags: string[];
   ficRefs?: FicRef[];
   attachments?: JournalAttachment[];
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface JournalAttachment {
@@ -121,6 +121,7 @@ export interface Fic {
   lastCheckedAt: string | null;
   rating: number | null;
   review?: string | null;
+  lastOpenedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   downloadProgress?: FicDownloadProgress;
@@ -169,6 +170,8 @@ export interface FicChapterSummary {
   category: string;
   wordCount: number;
   postedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
   isRead: boolean;
 }
 
@@ -176,7 +179,6 @@ export interface FicChapter extends FicChapterSummary {
   contentHtml: string;
   contentText: string;
   sourceUrl: string | null;
-  createdAt: string;
 }
 
 export interface WatchedScanProgress {
@@ -2777,6 +2779,8 @@ export const api = {
     search: (query: string) =>
       get<Fic[]>(`/api/fanfic/search?query=${encodeURIComponent(query)}`),
     get: (id: string) => get<Fic>(`/api/fanfic/${id}`),
+    markOpened: (id: string) =>
+      post<{ success: boolean }>(`/api/fanfic/${id}/opened`, {}),
     delete: (id: string) => del<{ success: boolean }>(`/api/fanfic/${id}`),
     chapters: (ficId: string) =>
       get<FicChapterSummary[]>(`/api/fanfic/${ficId}/chapters`),

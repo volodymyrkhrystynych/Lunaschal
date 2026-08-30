@@ -27,7 +27,7 @@ const { CHAPTERS, FIC } = vi.hoisted(() => {
     sourceType: 'xenforo',
     sourceUrl: null,
     site: null,
-    description: null,
+    description: 'A test summary.',
     coverPath: null,
     wordCount: 100,
     chapterCount: 1,
@@ -36,6 +36,7 @@ const { CHAPTERS, FIC } = vi.hoisted(() => {
     lastReadChapterId: null,
     lastCheckedAt: null,
     rating: null,
+    review: 'A test review.',
     createdAt: '2024-01-02T03:04:05Z',
     updatedAt: '2024-01-02T03:04:05Z',
   };
@@ -46,6 +47,7 @@ vi.mock('../../hooks/api', () => ({
   api: {
     fanfic: {
       get: vi.fn().mockResolvedValue(FIC),
+      markOpened: vi.fn().mockResolvedValue({ success: true }),
       list: vi.fn().mockResolvedValue([FIC]),
       folders: vi.fn().mockResolvedValue([]),
       chapters: vi.fn().mockResolvedValue(CHAPTERS),
@@ -161,6 +163,30 @@ describe('Library infinite scroll', () => {
     expect(api.fanfic.list).toHaveBeenLastCalledWith(
       expect.objectContaining({ limit: 50, offset: 50 })
     );
+  });
+});
+
+describe('Library views and expandable details', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.scrollTo = vi.fn();
+  });
+
+  it('keeps summary and review collapsed until Details is expanded', async () => {
+    renderFanfic();
+    expect(screen.queryByText('A test summary.')).toBeNull();
+    fireEvent.click(await screen.findByRole('button', { name: /Details/ }));
+    expect(screen.getByText('A test summary.')).toBeTruthy();
+    expect(screen.getByText('A test review.')).toBeTruthy();
+  });
+
+  it('offers Library and Folders as separate views', async () => {
+    renderFanfic();
+    const folders = await screen.findByRole('tab', { name: 'Folders' });
+    fireEvent.click(folders);
+    expect(folders.getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByText(/Choose a folder/)).toBeTruthy();
   });
 });
 
