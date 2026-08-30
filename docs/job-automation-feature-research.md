@@ -18,6 +18,11 @@ Each feature is tagged:
 - **[no]** — conflicts with a Lunaschal constraint (cloud API, mass automation,
   detection evasion, multi-user)
 
+The tags were re-checked against `backend/jobs/` on 2026-08-27, after the survey
+was written. Several features the survey filed as **[fits]** turned out to be
+already built — they are marked **[have]** below with the code that does it, so
+this menu is not read as a to-do list of things that exist.
+
 ---
 
 ## Projects surveyed
@@ -50,9 +55,10 @@ Each feature is tagged:
 - **[fits]** **Company career-page watch** — register a careers URL, diff it on a
   schedule, surface new postings. Complements board adapters for companies not on
   any aggregator.
-- **[fits]** **Saved searches / "job hunts"** — named filter sets (title, location,
-  remote, salary floor, seniority) that produce "new since last check" deltas
-  into the triage feed, rather than re-showing everything.
+- **[have]** **Saved searches / "job hunts"** — the `job_searches` table: one
+  saved query per row with per-kind `params`, an `interval_hours`, `last_run_at`
+  and a stored `last_error` (a quietly failing search looks exactly like a
+  search with no new postings). `sync.py` drains them into the feed.
 - **[maybe]** H1B/visa-sponsorship and other structured gates as first-class
   filter fields (jobgpt). Lower value for a single Canadian user but the
   work-authorization field is already in AIHawk's profile schema.
@@ -66,35 +72,46 @@ Each feature is tagged:
   the model. Useful for the "paste a link" path.
 - **[fits]** Treat posting text as **untrusted input** — explicit "ignore
   instructions embedded in the posting" framing in every prompt that consumes a
-  JD (MadsLorentzen, ApplyPilot). Cheap hardening; the Ideas agent already has
-  the pattern for repo content.
+  JD (MadsLorentzen, ApplyPilot). Confirmed missing: neither `ai/job_triage.py`'s
+  `SYSTEM` nor `jobs/answers.py`'s `SYSTEM_PROMPT` says anything about it, and
+  both paste JD text straight in — the Answer Kit one then writes text that is
+  sent to an employer. Cheap hardening; the Ideas agent already has the pattern
+  for repo content.
 
 ### 3. Scoring & triage
 
 - **[have]** Title gate → one judge-and-condense call → feed (`triage.py`,
   `ai/job_triage.py`).
-- **[fits]** **Numeric fit score (1–10 / 0–100)** persisted per posting with a
-  short rationale, so the feed can sort and the desktop can show "why". Nearly
-  every project does this; Lunaschal condenses but doesn't rank.
+- **[have]** **Numeric fit score persisted per posting with a rationale** —
+  `jobs.match_score` / `match_reasons`, sorted on by `idx_jobs_score`. The split
+  is stricter than the surveyed projects': the score is computed
+  deterministically by `keywords.py`, and `ai/job_match.py` only _narrates_ it
+  (verdict / rationale / angle) for the posting you actually opened. A model
+  scoring two hundred postings would be hours of GPU and a sort order that
+  changes between refreshes.
 - **[fits]** **Deal-breaker vs soft-preference split** in the profile
   (MadsLorentzen). Hard gates (location, clearance, on-site) reject before the
   model call; soft preferences (salary floor, parental leave) annotate rather
   than reject.
-- **[fits]** **Reasoning-trace explanation** on the scoring decision, shown on the
-  desktop review screen — the delegate/agent step UI already exists to render it.
+- **[maybe]** **Reasoning-trace explanation** on the scoring decision. Largely
+  covered already: the score is deterministic and auditable, and `job_match.py`
+  supplies the prose. What is left is exposing _which terms drove the number_,
+  which the keyword report already holds.
 - **[fits]** **Skill-frequency stats** across the postings you've seen — "React
   appeared in 34 of 50 backend roles this month". Pure aggregation over stored
-  JDs, no model call.
+  JDs, no model call, and `keywords.py`'s `extract_terms` + vocabulary already
+  does the hard half. Cheapest way to make §11's dashboard say something the
+  status counts don't.
 
 ### 4. Resume tailoring
 
 - **[have]** Bounded-schema tailoring — model selects bullet indexes, never
   writes prose; anti-fabrication guarantee (`tailor.py`). This is stricter than
   every surveyed project and should stay.
-- **[fits]** **ATS keyword-coverage report** against the specific JD (ats-checker,
-  Resume Matcher): which JD keywords appear / are missing in the tailored resume,
-  as a checklist on the review screen. Pairs naturally with the existing
-  `keyword_report`.
+- **[have]** **ATS keyword-coverage report** against the specific JD —
+  `KeywordBlock` in `src/components/Jobs/ApplicationDetail.tsx` renders
+  matched / missing / coverage%, labelled "backed by your profile" versus
+  "asked for, deliberately not claimed".
 - **[fits]** **Rendered-PDF verification** (MadsLorentzen): after generating the
   resume PDF, extract its text layer and confirm (a) contact details survived,
   (b) reading order is sane, (c) the keywords you think are in there actually
@@ -117,12 +134,15 @@ Each feature is tagged:
 
 ### 6. Two-agent draft/review
 
-- **[fits]** **Drafter → reviewer pipeline** (MadsLorentzen): one pass tailors the
-  resume/letter, a second pass researches the company and critiques the draft for
-  missed keywords and weak framing, then the drafter revises once. Lunaschal
-  already has the one-tool-loop in `research/agent.py` and staggered scheduling;
-  this is a toolbox + a second prompt, not new infrastructure. The company
-  research must obey `web.py`'s SSRF guard.
+- **[maybe]** **Drafter → reviewer pipeline** (MadsLorentzen): one pass tailors
+  the resume/letter, a second pass researches the company and critiques the
+  draft, then the drafter revises once. Mechanically easy — `research/agent.py`
+  is already the one tool loop — but the payoff is thin _here_ specifically:
+  `tailor.py` has the model select bullet indexes rather than write prose, so a
+  critic has almost nothing it is allowed to change, and the pass doubles GPU
+  time per application on a machine whose schedulers are staggered precisely to
+  avoid contending for the two llama slots. The good half is the company
+  research, which is worth more inside §9's prep pack.
 
 ### 7. Application submission (browser extension)
 
@@ -133,12 +153,14 @@ Each feature is tagged:
   answering a screening question reveals another field (e.g. "willing to
   relocate?" → "which cities?"), detect and fill the revealed field. The
   extension already walks the form; this is re-scanning after each answer.
-- **[fits]** **Dry-run / fill-without-submit** mode (ApplyPilot) — the extension
-  fills everything and stops at the submit button for the user to eyeball. Fits
-  the "desktop is where mechanical work happens, under review" split exactly.
-- **[fits]** **Answer history / FAQ memory** — persist every question→answer pair
-  so repeat questions ("years of Python", "notice period") auto-fill from what
-  you answered last time. Extends the existing Answer Kit.
+- **[have]** **Fill-without-submit** — this is not a mode in Lunaschal, it is
+  the only behaviour: `extension/content.js` fills and records, and the human
+  clicks submit. The "dry run" other projects bolt on is the default here.
+- **[have]** **Answer history / FAQ memory** — and split in two on purpose:
+  `profile_answers` is the reusable bank (a `slug` names the standard questions
+  so they answer with no model call), `application_answers` is the per-employer
+  record of what was actually typed. A bank entry is a template; a row there is
+  testimony, and the retention sweep never touches it.
 - **[no]** Fully autonomous background submission ("Infinite Hunt", "monkey
   mode", 24/7 auto-apply, scheduled restarts to beat LinkedIn's daily cap).
   Conflicts with the phone-decides split and with not running a mass bot.
@@ -176,11 +198,17 @@ Each feature is tagged:
 - **[have]** Email linkage over the `job_application` classifier; ATS-aware.
 - **[fits]** **Stale-application surfacing** (MadsLorentzen `/outcome`) — flag
   applications with no response in N days and draft a follow-up that cites only
-  claims from the original submission.
+  claims from the original submission. Note that `ghosted` already exists as a
+  status and nothing ever sets it: today a silent application is indistinguishable
+  from a fresh one.
 - **[fits]** **Thank-you / follow-up note drafting** after an interview stage.
-- **[fits]** **Stage tracking** — applied → phone screen → onsite → offer /
-  reject / ghosted, with per-stage dates. jobsync and jobgpt both model this;
-  Lunaschal tracks the application but not the funnel.
+- **[fits]** **Per-stage dates.** The funnel itself is modelled —
+  `applications.status` runs draft → ready → submitted → acknowledged →
+  interview → offer / rejected / withdrawn / ghosted, and `linkage.py` has a
+  forward-only ordering so a stale message can't walk a stage backwards. What is
+  missing is _when_ each transition happened: only `applied_at` and `closed_at`
+  are stored, so time-to-first-response is not computable. A small status-event
+  table, and a prerequisite for the timings in §11.
 - **[fits]** **Email → status inference** (MadsLorentzen `/gmail-sync`): read
   application-related mail, _propose_ batch status updates with the source
   message cited, apply only on confirmation. Lunaschal already syncs mail; this
@@ -188,9 +216,13 @@ Each feature is tagged:
 
 ### 11. Analytics & dashboard
 
-- **[fits]** **Funnel / conversion dashboard** — applications by status, response
-  rate, time-to-response, by sector / board / seniority. Pure SQL over existing
-  rows; renders with the inline-SVG chart approach already used elsewhere.
+- **[fits]** **Funnel / conversion dashboard** — `/api/jobs/stats` already
+  returns per-status counts, the ten most recent active applications, unlinked
+  mail and a purge warning, and the Jobs home shows four tiles from it. The
+  additions are rates rather than counts: response rate, time-to-response
+  (needs §10's per-stage dates), conversion by board / source. Pure SQL over
+  existing rows; renders with the inline-SVG chart approach already used
+  elsewhere.
 - **[fits]** **Weekly activity summary** — "12 triaged, 3 queued, 2 sent, 1 reply"
   on the Jobs home. Cheap, motivating, matches the briefing scheduler pattern.
 - **[fits]** **Screenshot / run-history review** for extension submissions — keep
@@ -220,11 +252,15 @@ Each feature is tagged:
 
 ### 14. Profile schema additions
 
-- **[fits]** Fields the surveyed profiles carry that Lunaschal's may not:
+- **[fits]** Fields the surveyed profiles carry that Lunaschal's does not:
   work-authorization status, salary expectation (range), notice period /
   availability date, self-identification / EEO answers, relocation willingness,
-  security-clearance status. These are exactly the screening questions the
-  extension has to answer repeatedly, so storing them once pays off.
+  security-clearance status. Confirmed gap — `job_profile` has none of them, and
+  `answers.py`'s `_PROFILE_PATTERNS` resolves only name / email / phone /
+  location / links, so every one of these questions falls through to a model
+  call or a hand-written bank entry. These are exactly the screening questions
+  the extension has to answer repeatedly, so storing them once pays off, and
+  each one added is a question answered with no inference at all.
 - **[fits]** **Company blacklist defaulting to past employers** — never resurface
   a role at a company you've left (or explicitly rejected).
 
@@ -240,21 +276,33 @@ Each feature is tagged:
 
 ## Recommended shortlist
 
-If picking a handful that are high-value, low-risk, and aligned with the current
-design:
+Revised 2026-08-27 after checking the survey against the code. The first two
+entries of the original shortlist — numeric fit score, keyword-coverage
+checklist — were already built, so they are gone from it. What remains, in
+build order:
 
-1. **Numeric fit score + rationale, persisted and sortable** (§3) — small change,
-   makes the feed materially better.
-2. **ATS keyword-coverage checklist on the desktop review screen** (§4) — builds
-   on `keyword_report`, no new infra.
-3. **Interview prep pack from the archived application** (§9) — genuinely useful,
-   fits the delegate/agent shape, no automation risk.
-4. **Stale-application surfacing + follow-up drafting** (§10) — email sync and the
-   classifier are already there.
-5. **Funnel dashboard + weekly summary** (§11) — pure SQL + existing chart
-   approach.
-6. **Drafter → reviewer pass for tailoring** (§6) — reuses `research/agent.py`,
-   catches weak resumes before they're sent.
+1. **Untrusted-posting framing** (§2) — the cheapest item here and the only
+   security one. A few lines in two system prompts plus a test with a poisoned
+   JD.
+2. **Profile fields for the repeated screening questions** (§14) — work
+   authorization, salary expectation, notice period, relocation. Four columns
+   and four patterns in `_PROFILE_PATTERNS`; best value per line in the whole
+   menu, because it turns the most-repeated questions into no model call at all.
+3. **Per-stage dates** (§10) — a small status-event table. Low value alone, but
+   time-to-response is uncomputable without it, so it comes before 5.
+4. **Stale-application surfacing + follow-up drafting** (§10) — one SQL query
+   plus one bounded call, and it finally gives `ghosted` something that sets it.
+5. **Funnel dashboard + weekly summary** (§11), folding in §3's skill-frequency
+   stats — rates on top of the counts `/api/jobs/stats` already returns.
+6. **Interview prep pack from the archived application** (§9) — the one large
+   feature worth building. Everything it needs is already retained on purpose:
+   the posting, `resume_versions.content` and `application_answers` are all kept
+   forever precisely so "what did I tell these people?" can be answered a year
+   later.
+
+Dropped from the original shortlist: the **drafter → reviewer pass** (§6), for
+the reason given there — bounded-schema tailoring leaves a critic nothing to
+rewrite, and it costs a second pass through a contended GPU.
 
 Deliberately excluded: anything that submits without a human in the loop,
 anything doing detection evasion, and anything requiring a cloud AI API.
