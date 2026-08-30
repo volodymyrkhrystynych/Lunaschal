@@ -32,6 +32,46 @@ A dedicated email view inside Lunaschal that pulls messages out of cloud provide
 
 One connected account per provider slot (max 3 total) — reconnecting a provider with a different address is rejected until the existing one is disconnected.
 
+### Gmail OAuth for personal accounts
+
+Personal Gmail accounts cannot use an **Internal** Google OAuth app; that audience
+type is limited to Google Workspace organizations. Configure the app as
+**External** instead.
+
+Do not leave the OAuth app in **Testing** for a permanent connection. Because
+Lunaschal requests the restricted `gmail.readonly` scope, Google expires a test
+app's refresh token after seven days. Sync then stops with an error such as
+`400 invalid_grant: Token has been expired or revoked`. Move the app to
+**In production**, then disconnect and reconnect Gmail once to issue a new
+refresh token.
+
+Publishing an external app requires completing its branding, including a public
+application homepage and privacy policy. Those pages must use a domain you own
+and can authorize in Google Cloud. The Tailscale hostname used to reach
+Lunaschal (for example, `host.tailnet.ts.net`) is still valid in the exact OAuth
+redirect URI, but it is not a suitable app domain because the registrable
+`ts.net` domain belongs to Tailscale. A typical configuration is:
+
+- App name: `Lunaschal`
+- User support and developer contact: the account owner's email address
+- Homepage: `https://<owned-domain>/lunaschal/`
+- Privacy policy: `https://<owned-domain>/lunaschal/privacy/`
+- Authorized domain: `<owned-domain>`
+- Authorized redirect URI:
+  `https://<tailscale-host>:5000/api/email/oauth/callback`
+
+For a private, self-hosted installation, the privacy policy should explain that
+Gmail data is read into the owner's local Lunaschal server, is not sold or used
+for advertising, and can be disconnected through Lunaschal or revoked from the
+Google account. A personal app may still display Google's unverified-app warning;
+publishing status and Google verification are separate concerns.
+
+The generic IMAP connector with a Google app password avoids OAuth publishing,
+but switching an already-synced Gmail account to the current IMAP provider is
+not a drop-in migration: it creates a separate account row and re-imports the
+mailbox, producing duplicate local messages. Add a migration path before using
+that option for an existing Gmail mirror.
+
 ## Data model (as implemented)
 
 Simpler than originally proposed below — no separate threads/labels tables; `backend/db/schema.sql`:
