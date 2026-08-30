@@ -1064,3 +1064,115 @@ describe('message times', () => {
     ]);
   });
 });
+
+/** The Chat tab's to-do bar is a query of its own, so a to-do the delegate
+ * writes mid-reply (backend/delegate/tools.py's `_add_todos` — an immediate
+ * write, no confirm card) is invisible to it until something invalidates it.
+ * It used to be nothing: the bar only refetched on a remount, i.e. after
+ * leaving the tab and coming back. */
+describe('to-dos the agent adds show up without a tab switch', () => {
+  /** Wait for one more `chatTodos.list` call than have already happened —
+   * the mock's history accumulates across this file's tests. */
+  const nextTodoFetch = async () => {
+    const before = vi.mocked(api.chatTodos.list).mock.calls.length;
+    await waitFor(
+      () =>
+        expect(vi.mocked(api.chatTodos.list).mock.calls.length).toBeGreaterThan(
+          before
+        ),
+      { timeout: 4000 }
+    );
+  };
+
+  const send = async () => {
+    const input = await screen.findByPlaceholderText('Type a message...');
+    fireEvent.change(input, {
+      target: { value: 'remind me to water the plants' },
+    });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
+  };
+
+  it('refetches the bar the moment the add_todos step arrives', async () => {
+    const stream = openStream('m-assistant');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderChat();
+    await screen.findByPlaceholderText('Type a message...');
+    await waitFor(() => expect(api.chatTodos.list).toHaveBeenCalled());
+    await send();
+
+    const before = vi.mocked(api.chatTodos.list).mock.calls.length;
+    // A step that stages a card writes nothing to the bar, so it must not
+    // send it looking.
+    stream.pushEvent({ tool: 'propose_calendar_event', ok: true, arg: 'x' });
+    stream.pushEvent({
+      tool: 'add_todos',
+      ok: true,
+      arg: 'Water the plants',
+    });
+    await nextTodoFetch();
+    expect(vi.mocked(api.chatTodos.list).mock.calls.length).toBe(before + 1);
+
+    stream.push('Added.');
+    stream.close();
+  });
+
+  it('refetches it after a dropped stream, from the saved steps', async () => {
+    // The run outlives this connection (backend/delegate/runs.py), so a drop
+    // means the step reaches this tab only through the `today` poll.
+    const stream = openStream('m-assistant');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+    const row = (status: string, metadata: string | null) => ({
+      id: 'c1',
+      messages: [
+        {
+          id: 'm-user',
+          role: 'user',
+          content: 'remind me to water the plants',
+          metadata: null,
+          status: 'done',
+          createdAt: '2026-01-01T08:00:00.000Z',
+        },
+        {
+          id: 'm-assistant',
+          role: 'assistant',
+          content: 'Added.',
+          metadata,
+          status,
+          createdAt: '2026-01-01T08:00:01.000Z',
+        },
+      ],
+    });
+    // Still running server-side, so the `today` query keeps polling.
+    let current: object = row('streaming', null);
+    vi.mocked(api.chat.today)
+      .mockResolvedValueOnce(null)
+      .mockImplementation(async () => current as never);
+
+    renderChat();
+    await screen.findByPlaceholderText('Type a message...');
+    await waitFor(() => expect(api.chatTodos.list).toHaveBeenCalled());
+    await send();
+    // The connection dies before the step frame is ever sent.
+    stream.fail(new Error('Load failed'));
+    await screen.findByText('Added.');
+
+    const before = vi.mocked(api.chatTodos.list).mock.calls.length;
+    // The run finishes on its own and checkpoints the write onto the row.
+    current = row(
+      'done',
+      JSON.stringify({
+        steps: [{ tool: 'add_todos', ok: true, arg: 'Water the plants' }],
+        sources: [],
+      })
+    );
+    await waitFor(
+      () =>
+        expect(vi.mocked(api.chatTodos.list).mock.calls.length).toBeGreaterThan(
+          before
+        ),
+      { timeout: 4000 }
+    );
+  });
+});

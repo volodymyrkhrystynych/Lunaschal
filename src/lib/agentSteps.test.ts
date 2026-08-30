@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stepLabel, parseAgentMeta } from './agentSteps';
+import { stepLabel, parseAgentMeta, countChatTodoWrites } from './agentSteps';
 
 describe('stepLabel', () => {
   it('describes a successful search with its result count', () => {
@@ -311,5 +311,30 @@ describe('parseAgentMeta', () => {
     expect(parseAgentMeta(JSON.stringify({ truncated: true })).truncated).toBe(
       true
     );
+  });
+});
+
+describe('countChatTodoWrites', () => {
+  it('counts the add_todos calls that actually wrote rows', () => {
+    expect(
+      countChatTodoWrites([
+        { tool: 'web_search', ok: true },
+        { tool: 'add_todos', ok: true, arg: 'Water the plants' },
+        { tool: 'add_todos', ok: true, arg: 'Call the dentist' },
+      ])
+    ).toBe(2);
+  });
+
+  // A refused call wrote nothing — counting it would refetch the bar for a
+  // to-do that does not exist, and worse, make a later real write look like
+  // no change at all.
+  it('ignores a refused add_todos and every other tool', () => {
+    expect(
+      countChatTodoWrites([
+        { tool: 'add_todos', ok: false, error: 'nothing new to add' },
+        { tool: 'propose_calendar_event', ok: true },
+        {},
+      ])
+    ).toBe(0);
   });
 });

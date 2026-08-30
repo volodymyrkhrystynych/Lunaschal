@@ -13,6 +13,7 @@ import { readSSE } from '@/lib/sse';
 import { isAtBottom } from '@/lib/chatScroll';
 import { formatMessageTime } from '@/lib/chatTime';
 import {
+  countChatTodoWrites,
   parseAgentMeta,
   parseDelegateProposals,
   type AgentStep,
@@ -99,6 +100,38 @@ export function ChatPanel() {
 
   const invalidateToday = () =>
     queryClient.invalidateQueries({ queryKey: ['chat', 'today', 'chat'] });
+
+  const invalidateChatTodos = () =>
+    queryClient.invalidateQueries({ queryKey: ['chatTodos'] });
+
+  // How many to-do writes each assistant message has already been credited
+  // with. The stream above invalidates the bar the instant an `add_todos` step
+  // arrives, but the reply runs on a background thread (backend/delegate/
+  // runs.py) that outlives this connection: after a dropped stream or a reload
+  // the steps reach this tab only through the `today` poll, so the same write
+  // has to be noticed from the persisted metadata too. Seeded on first sight
+  // without firing — messages already on screen were counted before the bar's
+  // own query fetched.
+  const chatTodoWritesRef = useRef<Map<string, number> | null>(null);
+
+  useEffect(() => {
+    const messages = conversation?.messages;
+    if (!messages) return;
+    const seen = chatTodoWritesRef.current;
+    const counts = new Map<string, number>();
+    let grew = false;
+    for (const message of messages) {
+      if (message.role !== 'assistant') continue;
+      const writes = countChatTodoWrites(
+        parseAgentMeta(message.metadata).steps
+      );
+      if (!writes) continue;
+      counts.set(message.id, writes);
+      if (seen && writes > (seen.get(message.id) ?? 0)) grew = true;
+    }
+    chatTodoWritesRef.current = counts;
+    if (grew) invalidateChatTodos();
+  }, [conversation]);
 
   const createConversation = useMutation({
     mutationFn: () => api.chat.createConversation(),
@@ -430,6 +463,11 @@ export function ChatPanel() {
           // reads as progress rather than a spinner.
           if (parsed.tool) {
             setLiveSteps(steps => [...steps, parsed as AgentStep]);
+            // `add_todos` writes rows the moment it runs, and the bar below is
+            // a separate query that would otherwise only refetch on a remount
+            // — i.e. after leaving the tab and coming back.
+            if (countChatTodoWrites([parsed as AgentStep]))
+              invalidateChatTodos();
           }
           if (parsed.thinking) {
             setStreamingReasoning(reasoning => reasoning + parsed.thinking);
