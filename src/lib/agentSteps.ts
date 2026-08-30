@@ -84,6 +84,17 @@ export function parseDelegateProposals(
   }
 }
 
+// Steps that wrote straight into the Chat tab's to-do bar (backend/delegate/
+// tools.py's `_add_todos` — an immediate write, no confirm card). ChatPanel
+// counts these to know when to invalidate the bar's query: without it a to-do
+// the agent added mid-reply sat invisible until the tab was left and re-entered,
+// since nothing else in a reply touches `chat_todos`. A refused call
+// (`ok: false`) wrote nothing and is deliberately not counted.
+export function countChatTodoWrites(steps: AgentStep[]): number {
+  return steps.filter(step => step.tool === 'add_todos' && step.ok === true)
+    .length;
+}
+
 // Full noun phrases, article included — "flashcards" is plural and reads wrong
 // behind a hardcoded "a".
 const PROPOSAL_LABELS: Record<string, string> = {
