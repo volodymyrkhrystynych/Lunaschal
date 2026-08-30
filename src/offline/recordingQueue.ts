@@ -26,14 +26,15 @@ const DEFAULT_NAME = 'Recording';
 export function enqueueRecordingUpload(
   qc: QueryClient,
   id: string,
-  name?: string
+  name?: string,
+  entryId?: string
 ): Promise<unknown> {
   const mutation = qc
     .getMutationCache()
     .build<unknown, Error, JournalRecordingVars, unknown>(qc, {
       mutationKey: MUTATION_KEYS.journalRecording,
     });
-  return mutation.execute({ id, name });
+  return mutation.execute({ id, name, entryId });
 }
 
 /** True if this recording already has a live or paused upload in flight. */
@@ -64,6 +65,33 @@ export async function handleFinishedRecording(
   opts: { name?: string } = {}
 ): Promise<void> {
   await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME);
+}
+
+/**
+ * The same policy, aimed at an entry that already exists.
+ *
+ * The Journal's Transcribe button records while an entry is open for editing,
+ * so the clip belongs on *that* entry rather than on a new one of its own. It
+ * goes through the identical durable queue — same mutation, same idempotency,
+ * same "never let go of the audio until the server confirms it" — because
+ * `POST /api/journal/recordings` does `INSERT OR IGNORE` on the entry: handed
+ * an id that already exists, it skips the insert and attaches the file to what
+ * is there.
+ *
+ * The transcript is not the server's job here. It was already fetched in the
+ * browser and appended to the draft the user is looking at
+ * (`deliverTranscript`), so the stored recording's mode is `audio` and the
+ * upload carries `transcribe=false` — a second server-side pass would burn
+ * another CPU transcription and write the text into the entry body underneath
+ * an open editor.
+ */
+export async function attachRecordingToEntry(
+  qc: QueryClient,
+  rec: StoredRecording,
+  entryId: string,
+  opts: { name?: string } = {}
+): Promise<void> {
+  await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME, entryId);
 }
 
 /**

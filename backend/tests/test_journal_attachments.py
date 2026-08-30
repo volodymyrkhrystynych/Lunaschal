@@ -744,6 +744,45 @@ def test_an_empty_recording_leaves_no_entry_behind(client):
     assert len(client.get('/api/journal?limit=100').get_json()) == before
 
 
+# --- recording onto an entry that already exists -----------------------------
+#
+# The Journal's Transcribe button records while an entry is open for editing, so
+# the clip belongs on that entry. The client reuses this route rather than the
+# plain attachment upload because this is the durable, replayable one — and
+# `INSERT OR IGNORE` on the entry is what lets an existing id mean "attach to
+# this" instead of "make a new one".
+
+def test_a_recording_can_be_attached_to_an_existing_entry(client, entry_id):
+    before = len(client.get('/api/journal?limit=100').get_json())
+
+    r = _record(client, id=entry_id, attachment_id=str(ULID()), name='Note')
+    assert r.status_code == 201
+    assert r.get_json()['id'] == entry_id
+
+    # Attached, not duplicated.
+    assert len(client.get('/api/journal?limit=100').get_json()) == before
+    attachments = client.get(f'/api/journal/{entry_id}/attachments').get_json()
+    assert [a['kind'] for a in attachments] == ['audio']
+    assert attachments[0]['name'] == 'Note'
+
+
+def test_attaching_to_an_existing_entry_does_not_touch_its_content(client, entry_id):
+    """The editor has an unsaved draft open. Writing the entry body from under
+    it would be lost the moment the user pressed Save."""
+    _record(client, id=entry_id, attachment_id=str(ULID()))
+
+    entry = client.get(f'/api/journal/{entry_id}').get_json()
+    assert entry['content'] == 'A day.'
+
+
+def test_a_failed_attach_leaves_the_existing_entry_alone(client, entry_id):
+    """The rollback deletes only an entry the request itself created."""
+    r = _record(client, id=entry_id, attachment_id=str(ULID()), data=b'')
+    assert r.status_code == 400
+
+    assert client.get(f'/api/journal/{entry_id}').status_code == 200
+
+
 # --- replaying a recording upload -------------------------------------------
 #
 # The phone keeps a recording in IndexedDB until the server confirms it landed,

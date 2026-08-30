@@ -11,7 +11,11 @@ import {
   useJournalCreate,
   useJournalUpdate,
 } from '../offline/mutationDefaults';
-import { handleFinishedRecording } from '../offline/recordingQueue';
+import {
+  attachRecordingToEntry,
+  handleFinishedRecording,
+} from '../offline/recordingQueue';
+import { assembleBlob, deleteRecording } from '../offline/recordingStore';
 import { buildFeed, type FeedItem } from '../lib/journalFeed';
 import { computeEventGroupSpans } from '../lib/journalEventGroups';
 import { eventTimeLabel } from '../lib/calendar';
@@ -28,6 +32,7 @@ import {
   defaultNameFor,
   filesFromTransfer,
   isVoiceOnlyEntry,
+  recordingFilename,
   rejectedFilesMessage,
 } from '../lib/journalAttachments';
 import { AttachmentButtons } from './AttachmentButtons';
@@ -53,6 +58,19 @@ interface JournalProps {
 }
 
 const JOURNAL_PAGE_SIZE = 50;
+
+/**
+ * A file waiting in the compose box for the entry it belongs to to exist.
+ *
+ * `recordingId` is set only for a clip recorded here. It is the id of the copy
+ * still sitting in IndexedDB: the audio is not let go of until the upload after
+ * Save confirms it landed, so a tab that dies between the two leaves the
+ * recording recoverable (`resumeStoredRecordings`) rather than gone.
+ */
+interface StagedFile {
+  file: File;
+  recordingId?: string;
+}
 
 // Long enough to swallow a burst of typing, short enough that a pause feels
 // like a search rather than a delay.
@@ -92,17 +110,32 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   // device until something confirms it landed. If transcription fails it is
   // saved as an audio entry rather than dropped (see recordingQueue).
   const [recorderNotice, setRecorderNotice] = useState('');
+  // The entry id is read through a ref, not closed over: `onRecording` is
+  // installed once and fires minutes later, and by then `editingId` may have
+  // moved on — the audio has to land on the entry that was open when Record was
+  // pressed, not whichever one is open when it finishes uploading.
+  const editingIdRef = useRef<string | null>(null);
+  editingIdRef.current = editingId;
   const editRecorder = useRecorder(
     text => setEditContent(prev => (prev ? `${prev}\n${text}` : text)),
     undefined,
     {
       durable: true,
+      // Both halves: the text comes back here and is appended to the textarea
+      // so it can be corrected before Save, and the clip itself is kept as an
+      // attachment on the entry rather than being thrown away once it has been
+      // read. See the button's own comment.
+      deliverTranscript: true,
       onNotice: setRecorderNotice,
-      onRecording: rec =>
-        handleFinishedRecording(queryClient, rec, {
-          onTranscript: text =>
-            setEditContent(prev => (prev ? `${prev}\n${text}` : text)),
-        }),
+      onRecording: rec => {
+        const entryId = editingIdRef.current;
+        // No entry to hang it on (the editor was closed mid-recording): fall
+        // back to the standing policy, which is a recording entry of its own.
+        // Never drop the audio.
+        return entryId
+          ? attachRecordingToEntry(queryClient, rec, entryId)
+          : handleFinishedRecording(queryClient, rec);
+      },
     }
   );
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
@@ -286,7 +319,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   const createEntry = useJournalCreate();
   const updateEntry = useJournalUpdate();
 
-  const submitNewEntry = (content: string, staged: File[]) => {
+  const submitNewEntry = (content: string, staged: StagedFile[]) => {
     const id = ulid();
     createEntry.mutate(
       {
@@ -313,14 +346,18 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   // Deliberately fire-and-forget with its own error surface: the entry is
   // already saved by this point, so a failed upload must not look like a failed
   // save. Sequential so the server's `position` matches the paste order.
-  const uploadStagedFiles = async (entryId: string, files: File[]) => {
+  const uploadStagedFiles = async (entryId: string, files: StagedFile[]) => {
     try {
-      for (const file of files) {
+      for (const staged of files) {
         await api.journal.attachments.upload(
           entryId,
-          file,
-          defaultNameFor(file.name)
+          staged.file,
+          defaultNameFor(staged.file.name)
         );
+        // Confirmed on the server. This is the only place a *staged* recording's
+        // audio may be let go of — the composer holds the IndexedDB copy until
+        // exactly here, so a tab that dies before Save leaves it recoverable.
+        if (staged.recordingId) await deleteRecording(staged.recordingId);
       }
     } catch (e) {
       setStagedUploadError(
@@ -623,26 +660,32 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
               <p className="mt-2 text-xs text-amber-300">{recorderNotice}</p>
             )}
             <div className="flex items-center gap-2 mt-2">
+              {/* `start('audio')` even though this button transcribes: the
+                  stored mode is what decides whether the *server* transcribes
+                  the upload too, and it must not — the text is fetched here and
+                  put in the textarea above so it can be corrected before Save.
+                  The clip is kept regardless; transcribing it is no longer a
+                  reason to throw it away. */}
               <button
                 type="button"
                 onClick={() => {
                   if (editRecorder.status === 'recording') editRecorder.stop();
                   else if (editRecorder.status === 'idle')
-                    void editRecorder.start();
+                    void editRecorder.start('audio');
                 }}
                 disabled={
                   editRecorder.status === 'transcribing' ||
-                  !editRecorder.canTranscribe
+                  editRecorder.status === 'saving'
                 }
                 title={
                   editRecorder.canTranscribe
-                    ? undefined
-                    : 'Offline — dictation needs the server'
+                    ? 'Record — the audio is attached to this entry and transcribed into it'
+                    : 'Offline — the recording is kept and uploaded later, but there is no transcript until the server is back'
                 }
                 aria-label={
                   editRecorder.status === 'recording'
                     ? 'Stop recording'
-                    : 'Dictate into this entry'
+                    : 'Transcribe into this entry'
                 }
                 className={`px-2 py-1 rounded text-sm ${
                   editRecorder.status === 'recording'
@@ -654,7 +697,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                   ? '■ Stop'
                   : editRecorder.status === 'transcribing'
                     ? 'Transcribing…'
-                    : '● Record'}
+                    : editRecorder.status === 'saving'
+                      ? 'Saving…'
+                      : '● Transcribe'}
               </button>
               <button
                 onClick={() => setEditingId(null)}
@@ -918,14 +963,46 @@ function NewEntryComposer({
   onSubmit,
   onCancel,
 }: {
-  onSubmit: (content: string, files: File[]) => void;
+  onSubmit: (content: string, files: StagedFile[]) => void;
   onCancel: () => void;
 }) {
   const [content, setContent] = useState('');
-  // Files picked, pasted or dropped here, held until the entry they belong to
-  // exists server-side.
-  const [files, setFiles] = useState<File[]>([]);
+  // Files picked, pasted, dropped or recorded here, held until the entry they
+  // belong to exists server-side.
+  const [files, setFiles] = useState<StagedFile[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [recorderNotice, setRecorderNotice] = useState('');
+
+  // The composer's Transcribe button. Same two halves as the one in edit mode:
+  // the text is appended to the draft below, and the clip is kept.
+  //
+  // It can only be *staged*, not uploaded, because the entry it belongs to does
+  // not exist yet — which is also why the transcript has to come back to the
+  // browser rather than being written server-side. The stored recording stays
+  // in IndexedDB until the upload after Save confirms it landed; see
+  // `uploadStagedFiles`.
+  const recorder = useRecorder(
+    text => setContent(prev => (prev ? `${prev}\n${text}` : text)),
+    undefined,
+    {
+      durable: true,
+      deliverTranscript: true,
+      onNotice: setRecorderNotice,
+      onRecording: async rec => {
+        const blob = await assembleBlob(rec.id);
+        if (!blob || blob.size === 0) return;
+        const name = recordingFilename(rec.mimeType);
+        setError(null);
+        setFiles(current => [
+          ...current,
+          {
+            file: new File([blob], name, { type: rec.mimeType }),
+            recordingId: rec.id,
+          },
+        ]);
+      },
+    }
+  );
 
   const stage = (transfer: DataTransfer | null, e: React.SyntheticEvent) => {
     const { accepted, rejected } = filesFromTransfer(transfer);
@@ -937,12 +1014,12 @@ function NewEntryComposer({
     }
     e.preventDefault();
     setError(null);
-    setFiles(current => [...current, ...accepted]);
+    setFiles(current => [...current, ...accepted.map(file => ({ file }))]);
   };
 
   const submit = () => {
     // A photo with no words is a real entry — and the one that most needs its
-    // title generated from a caption.
+    // title generated from a caption. So is a recording with no words typed.
     if (!content.trim() && files.length === 0) return;
     onSubmit(content, files);
     setContent('');
@@ -983,9 +1060,51 @@ function NewEntryComposer({
         idPrefix="journal-new-entry"
         onFiles={picked => {
           setError(null);
-          setFiles(current => [...current, ...picked]);
+          setFiles(current => [...current, ...picked.map(file => ({ file }))]);
         }}
+        extra={
+          <button
+            type="button"
+            onClick={() => {
+              if (recorder.status === 'recording') recorder.stop();
+              else if (recorder.status === 'idle') void recorder.start('audio');
+            }}
+            disabled={
+              recorder.status === 'transcribing' || recorder.status === 'saving'
+            }
+            data-testid="journal-new-entry-transcribe"
+            title={
+              recorder.canTranscribe
+                ? 'Record — the audio is attached to the entry and transcribed into it'
+                : 'Offline — the recording is kept and attached on save, but there is no transcript until the server is back'
+            }
+            aria-label={
+              recorder.status === 'recording'
+                ? 'Stop recording'
+                : 'Transcribe into this entry'
+            }
+            className={`px-2 py-1 text-xs rounded border ${
+              recorder.status === 'recording'
+                ? 'border-red-500/40 bg-red-500/25 text-red-300'
+                : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20'
+            } disabled:opacity-50`}
+          >
+            {recorder.status === 'recording'
+              ? '■ Stop'
+              : recorder.status === 'transcribing'
+                ? 'Transcribing…'
+                : recorder.status === 'saving'
+                  ? 'Saving…'
+                  : '● Transcribe'}
+          </button>
+        }
       />
+      {recorder.error && (
+        <p className="mt-2 text-xs text-red-400">{recorder.error}</p>
+      )}
+      {!recorder.error && recorderNotice && (
+        <p className="mt-2 text-xs text-amber-300">{recorderNotice}</p>
+      )}
       {error && (
         <div className="mt-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
           {error}
@@ -993,17 +1112,23 @@ function NewEntryComposer({
       )}
       {files.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mt-2">
-          {files.map((f, i) => (
+          {files.map((s, i) => (
             <span
-              key={`${f.name}:${i}`}
+              key={`${s.file.name}:${i}`}
               className="flex items-center gap-1 px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] bg-white/5"
             >
-              {f.name || 'attachment'}
+              {s.file.name || 'attachment'}
               <button
-                onClick={() =>
-                  setFiles(current => current.filter((_, index) => index !== i))
-                }
-                aria-label={`Remove ${f.name || 'attachment'}`}
+                onClick={() => {
+                  // Discarding a staged recording is one of the two places the
+                  // audio may be let go of without the server having seen it —
+                  // the user said to.
+                  if (s.recordingId) void deleteRecording(s.recordingId);
+                  setFiles(current =>
+                    current.filter((_, index) => index !== i)
+                  );
+                }}
+                aria-label={`Remove ${s.file.name || 'attachment'}`}
                 className="text-red-400 hover:text-red-300"
               >
                 ×
@@ -1018,6 +1143,11 @@ function NewEntryComposer({
       <div className="flex justify-end gap-2 mt-2">
         <button
           onClick={() => {
+            // Cancelling is an explicit discard, so the stored audio goes with
+            // it rather than being rescued into an entry of its own later.
+            for (const st of files) {
+              if (st.recordingId) void deleteRecording(st.recordingId);
+            }
             setFiles([]);
             onCancel();
           }}

@@ -118,6 +118,17 @@ export interface JournalUpdateVars {
 export interface JournalRecordingVars {
   id: string;
   name?: string;
+  /**
+   * Attach to this entry instead of creating one. Omitted by the bottom bar's
+   * buttons, where the recording *is* the entry; set by the Journal's Transcribe
+   * button, which records while an entry is already open.
+   *
+   * An id, not the entry object — these vars are structured-cloned into the
+   * persisted cache on every unrelated write and a paused upload has to be
+   * replayable from them alone after a reload, which is the same reason the
+   * audio itself is not here.
+   */
+  entryId?: string;
 }
 export type TodoCreateVars = TodoPayload & { title: string; id: string };
 export interface TodoUpdateVars {
@@ -423,7 +434,10 @@ const journalRecordingCfg = (
       // The recording id is used for both the entry and the attachment, which
       // is what makes a replay a no-op server-side.
       const res = await api.journal.createRecording(blob, {
-        id: vars.id,
+        // `entryId` when the clip belongs to an entry that already exists; the
+        // recording's own id otherwise, which is what makes a fresh recording
+        // entry and its attachment share one id and a replay a no-op.
+        id: vars.entryId ?? vars.id,
         attachmentId: vars.id,
         name: vars.name,
         transcribe: rec.mode === 'transcribe',
@@ -441,6 +455,10 @@ const journalRecordingCfg = (
     }
   },
   onMutate: vars => {
+    // Nothing to insert when the clip is being attached to an entry that is
+    // already in the feed — an optimistic row here would show a duplicate of
+    // the entry the user is looking at, then vanish on the next refetch.
+    if (vars.entryId) return;
     // The entry appears in the feed the moment recording stops, even offline —
     // "I recorded it and the journal is empty" was half the reported bug.
     const nowIso = new Date().toISOString();

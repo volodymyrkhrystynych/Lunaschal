@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useOnline } from '../offline/useOnline';
 import {
   appendChunk,
+  assembleBlob,
   beginRecording,
   finalizeRecording,
   type RecordingMode,
@@ -64,6 +65,24 @@ export interface RecorderOptions {
    * deletes it. See src/offline/recordingQueue.ts for the upload policy.
    */
   onRecording?: (rec: StoredRecording) => void | Promise<void>;
+  /**
+   * Also send the finished audio through speech-to-text and hand the text to
+   * `onTranscript`, even though this is a `durable` recording.
+   *
+   * Durable mode otherwise delivers only the stored recording, on the
+   * assumption that whatever transcription is wanted happens server-side after
+   * the upload (that is what the bottom bar's Journal button does). The
+   * Journal's own Transcribe buttons need both halves and need the text *here*:
+   * it is appended to the textarea the user is mid-edit in, so they can correct
+   * it before saving — and in the new-entry composer there is no server-side
+   * entry yet for a server-side transcript to be written into.
+   *
+   * Pair it with `start('audio')`, not `start('transcribe')`. The stored mode is
+   * what tells the server whether to transcribe the upload as well, and having
+   * both ends transcribe the same clip would cost a second CPU pass and write
+   * the text into the entry body behind the draft.
+   */
+  deliverTranscript?: boolean;
   /** Something the user should know that isn't an error (e.g. a screen lock
    *  ended the recording early). */
   onNotice?: (message: string) => void;
@@ -207,6 +226,22 @@ export function useRecorder(
   };
 
   const handleFinishedRecording = async (rec: StoredRecording) => {
+    // Transcript first, audio second — the text is what the user is waiting to
+    // see in the textarea, and the audio is already on disk either way, so
+    // nothing is at risk by making it wait its turn. A transcription failure
+    // must not skip the audio step: losing the recording because Whisper was
+    // unavailable is the exact trade this whole durable path exists to refuse.
+    if (optionsRef.current.deliverTranscript) {
+      setStatusIfMounted('transcribing');
+      try {
+        const blob = await assembleBlob(rec.id);
+        if (blob && blob.size > 0) await transcribeBlob(blob);
+      } catch (err) {
+        setErrorIfMounted(
+          err instanceof Error ? err.message : 'Transcription failed'
+        );
+      }
+    }
     setStatusIfMounted('saving');
     try {
       await optionsRef.current.onRecording?.(rec);
@@ -215,6 +250,16 @@ export function useRecorder(
     } finally {
       setStatusIfMounted('idle');
     }
+  };
+
+  /** POST the audio to speech-to-text and deliver whatever came back. */
+  const transcribeBlob = async (blob: Blob) => {
+    const fd = new FormData();
+    fd.append('audio', blob, 'recording.webm');
+    const r = await fetch('/api/transcribe', { method: 'POST', body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Transcription failed');
+    if (data.text) deliverRef.current.onTranscript(data.text);
   };
 
   const handleFinishedBlob = async (blob: Blob) => {
@@ -233,15 +278,7 @@ export function useRecorder(
 
     setStatusIfMounted('transcribing');
     try {
-      const fd = new FormData();
-      fd.append('audio', blob, 'recording.webm');
-      const r = await fetch('/api/transcribe', {
-        method: 'POST',
-        body: fd,
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || 'Transcription failed');
-      if (data.text) deliverRef.current.onTranscript(data.text);
+      await transcribeBlob(blob);
     } catch (err) {
       setErrorIfMounted(
         err instanceof Error ? err.message : 'Transcription failed'

@@ -477,6 +477,105 @@ describe('useRecorder', () => {
     expect(rec.mode).toBe('transcribe');
     expect(await (await assembleBlob(rec.id))!.text()).toBe('journal thought');
   });
+
+  describe('deliverTranscript', () => {
+    // The Journal's Transcribe buttons: keep the audio *and* get the text back
+    // here, because it goes into the textarea the user is mid-edit in.
+    it('transcribes the stored audio and hands over the recording too', async () => {
+      const fake = installFakeMediaRecorder();
+      const onTranscript = vi.fn();
+      const onRecording = vi.fn();
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ text: 'what I said' }),
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { result } = renderHook(() =>
+        useRecorder(onTranscript, undefined, {
+          durable: true,
+          deliverTranscript: true,
+          onRecording,
+        })
+      );
+
+      await act(async () => {
+        await result.current.start('audio', { durable: true });
+      });
+      await act(async () => {
+        fake.emit(new Blob(['spoken words']));
+        result.current.stop();
+        await fake.stop();
+      });
+
+      expect(onTranscript).toHaveBeenCalledWith('what I said');
+      expect(onRecording).toHaveBeenCalledTimes(1);
+      // `start('audio')`, so the stored mode tells the server not to transcribe
+      // it a second time server-side.
+      expect(onRecording.mock.calls[0][0].mode).toBe('audio');
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/transcribe',
+        expect.objectContaining({ method: 'POST' })
+      );
+    });
+
+    it('still keeps the audio when transcription fails', async () => {
+      // The trade this whole durable path exists to refuse: a recording must
+      // not be lost because speech-to-text was down.
+      const fake = installFakeMediaRecorder();
+      const onRecording = vi.fn();
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({
+          ok: false,
+          json: async () => ({ error: 'Whisper is not loaded' }),
+        }))
+      );
+
+      const { result } = renderHook(() =>
+        useRecorder(vi.fn(), undefined, {
+          durable: true,
+          deliverTranscript: true,
+          onRecording,
+        })
+      );
+
+      await act(async () => {
+        await result.current.start('audio', { durable: true });
+      });
+      await act(async () => {
+        fake.emit(new Blob(['spoken words']));
+        result.current.stop();
+        await fake.stop();
+      });
+
+      expect(result.current.error).toBe('Whisper is not loaded');
+      expect(onRecording).toHaveBeenCalledTimes(1);
+    });
+
+    it('is off by default, so the bottom bar still transcribes server-side', async () => {
+      const fake = installFakeMediaRecorder();
+      const fetchMock = vi.fn();
+      vi.stubGlobal('fetch', fetchMock);
+      const onRecording = vi.fn();
+
+      const { result } = renderHook(() =>
+        useRecorder(vi.fn(), undefined, { durable: true, onRecording })
+      );
+
+      await act(async () => {
+        await result.current.start('transcribe', { durable: true });
+      });
+      await act(async () => {
+        fake.emit(new Blob(['spoken words']));
+        result.current.stop();
+        await fake.stop();
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(onRecording).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 function setVisibility(state: 'hidden' | 'visible') {
