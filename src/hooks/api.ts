@@ -2431,13 +2431,19 @@ export const api = {
     // second entry and a second copy of the file.
     createRecording: (
       audio: Blob,
-      opts: { id?: string; attachmentId?: string; name?: string } = {}
+      opts: {
+        id?: string;
+        attachmentId?: string;
+        name?: string;
+        transcribe?: boolean;
+      } = {}
     ) => {
       const form = new FormData();
       form.append('file', audio, recordingFilename(audio.type));
       if (opts.name?.trim()) form.append('name', opts.name.trim());
       if (opts.id) form.append('id', opts.id);
       if (opts.attachmentId) form.append('attachmentId', opts.attachmentId);
+      if (opts.transcribe) form.append('transcribe', 'true');
       return upload<{ id: string; attachment: JournalAttachment }>(
         '/api/journal/recordings',
         form

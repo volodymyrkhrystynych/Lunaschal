@@ -459,6 +459,24 @@ describe('useRecorder', () => {
     const [rec] = await listRecordings();
     expect(await (await assembleBlob(rec.id))!.text()).toBe('spoken offline');
   });
+
+  it('records a durable journal transcription offline for later upload', async () => {
+    const fake = installFakeMediaRecorder();
+    onlineManager.setOnline(false);
+    const { result } = renderHook(() => useRecorder(vi.fn(), undefined, {}));
+
+    await act(async () => {
+      await result.current.start('transcribe', { durable: true });
+    });
+    await act(async () => {
+      fake.emit(new Blob(['journal thought']));
+    });
+
+    expect(result.current.status).toBe('recording');
+    const [rec] = await listRecordings();
+    expect(rec.mode).toBe('transcribe');
+    expect(await (await assembleBlob(rec.id))!.text()).toBe('journal thought');
+  });
 });
 
 function setVisibility(state: 'hidden' | 'visible') {

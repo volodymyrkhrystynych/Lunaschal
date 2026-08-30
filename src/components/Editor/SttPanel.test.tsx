@@ -23,8 +23,8 @@ vi.mock('../../hooks/useRecorder', () => ({
     // straight to onRecording and nothing is ever handed to onTranscript.
     start: vi.fn(async (mode?: string, opts?: { durable?: boolean }) => {
       durableStarts.push({ mode, durable: opts?.durable });
-      if (mode === 'audio')
-        await options?.onRecording?.({ id: 'rec-1', mode: 'audio' });
+      if (mode === 'audio' || mode === 'transcribe')
+        await options?.onRecording?.({ id: 'rec-1', mode });
       else onTranscript('hello from the journal button');
     }),
     stop: vi.fn(),
@@ -81,7 +81,7 @@ describe('SttPanel', () => {
     durableStarts.length = 0;
   });
 
-  it('routes the Journal button transcript to the journal API, not the editor callback', async () => {
+  it('hands the Journal recording to the durable upload queue', async () => {
     const onTranscribed = vi.fn();
     renderWithProviders(
       <SttPanel onTranscribed={onTranscribed} onMeetingUploaded={() => {}} />
@@ -90,10 +90,13 @@ describe('SttPanel', () => {
     fireEvent.click(await screen.findByText('Journal'));
 
     await waitFor(() =>
-      expect(api.journal.createFromVoice).toHaveBeenCalledWith(
-        'hello from the journal button'
-      )
+      expect(handleFinishedRecording).toHaveBeenCalledTimes(1)
     );
+    expect(handleFinishedRecording.mock.calls[0][1]).toMatchObject({
+      id: 'rec-1',
+      mode: 'transcribe',
+    });
+    expect(api.journal.createFromVoice).not.toHaveBeenCalled();
     expect(onTranscribed).not.toHaveBeenCalled();
   });
 

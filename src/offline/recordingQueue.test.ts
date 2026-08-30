@@ -15,7 +15,6 @@ vi.mock('idb-keyval', () => ({
 }));
 
 const createRecording = vi.fn();
-const transcribe = vi.fn();
 vi.mock('../hooks/api', async () => {
   const actual =
     await vi.importActual<typeof import('../hooks/api')>('../hooks/api');
@@ -23,7 +22,6 @@ vi.mock('../hooks/api', async () => {
     ...actual,
     api: {
       journal: { createRecording: (...a: unknown[]) => createRecording(...a) },
-      stt: { transcribe: (...a: unknown[]) => transcribe(...a) },
     },
   };
 });
@@ -75,7 +73,6 @@ async function storedRecording(mode: 'audio' | 'transcribe' = 'audio') {
 beforeEach(() => {
   idb.clear();
   createRecording.mockReset();
-  transcribe.mockReset();
 });
 
 describe('uploading a stored recording', () => {
@@ -139,32 +136,22 @@ describe('what happens to a finished recording', () => {
     await handleFinishedRecording(client(), rec);
 
     expect(createRecording).toHaveBeenCalledTimes(1);
-    expect(transcribe).not.toHaveBeenCalled();
+    expect(createRecording.mock.calls[0][1]).toMatchObject({
+      transcribe: false,
+    });
   });
 
-  it('transcribes a dictation and drops the audio once the text is in hand', async () => {
+  it('uploads a journal recording and asks the server to transcribe it', async () => {
     const rec = await storedRecording('transcribe');
-    transcribe.mockResolvedValue({ text: 'a thought' });
-    const onTranscript = vi.fn();
-
-    await handleFinishedRecording(client(), rec, { onTranscript });
-
-    expect(onTranscript).toHaveBeenCalledWith('a thought');
-    expect(createRecording).not.toHaveBeenCalled();
-    expect(await listRecordings()).toEqual([]);
-  });
-
-  it('saves the audio as an entry when transcription fails', async () => {
-    const rec = await storedRecording('transcribe');
-    transcribe.mockRejectedValue(new Error('speech-to-text is offline'));
     createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
 
-    // Losing the words is recoverable — the attachment has its own Transcribe
-    // button. Losing the recording is not.
-    await expect(handleFinishedRecording(client(), rec)).rejects.toThrow(
-      /saved as a journal entry instead/
-    );
+    await handleFinishedRecording(client(), rec);
+
     expect(createRecording).toHaveBeenCalledTimes(1);
+    expect(createRecording.mock.calls[0][1]).toMatchObject({
+      transcribe: true,
+    });
+    expect(await listRecordings()).toEqual([]);
   });
 });
 

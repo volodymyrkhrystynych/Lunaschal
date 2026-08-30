@@ -642,14 +642,12 @@ def _client_id(value: str | None) -> str | None:
 
 @bp.post('/recordings')
 def create_recording_entry():
-    """Save a recording as a journal entry *without* transcribing it.
+    """Save a recording as a journal entry, optionally transcribing it.
 
-    The bottom bar's Record button. The clip is the entry — there is no body
-    text to write, so the row is created with an empty `content` and the audio
-    hangs off it as an attachment. Nothing goes to speech-to-text and no
-    metadata is generated: an empty body would only produce an invented title.
-    The attachment's own Transcribe button is still there if the words are
-    wanted later.
+    Both bottom-bar journal buttons finish here. Record leaves the entry body
+    empty; Journal passes `transcribe=true`, which queues the stored attachment
+    for transcription into the entry body. Uploading first means the original
+    recording survives either path and any later transcription failure.
 
     Entry and attachment are created in one request so a failed upload can't
     leave an empty entry behind — the entry row is removed if the file is
@@ -672,10 +670,15 @@ def create_recording_entry():
         return jsonify({'error': str(e)}), 400
 
     db = get_db()
+    transcribe = request.form.get('transcribe', '').lower() in ('1', 'true', 'yes')
 
     if attachment_id:
         existing = _load_attachment(attachment_id)
         if existing is not None:
+            if transcribe:
+                _queue_attachment_transcription(
+                    existing, into_entry=True, skip_completed=True
+                )
             # Already stored. Answer as if we'd just saved it so the client
             # clears its local copy — the whole point of the retry loop.
             return jsonify(
@@ -718,6 +721,8 @@ def create_recording_entry():
         return jsonify({'error': message}), status
 
     _notify_subscribers(entry_id)
+    if transcribe:
+        _queue_attachment_transcription(_load_attachment(attachment['id']), into_entry=True)
     return jsonify({'id': entry_id, 'attachment': attachment}), 201
 
 
@@ -776,23 +781,33 @@ def transcribe_attachment(attachment_id):
     Returns 202 immediately; the result arrives on the row and is pushed to the
     client through the /events stream.
     """
-    db = get_db()
     row = _load_attachment(attachment_id)
     if not row:
         return jsonify({'error': 'Not found'}), 404
     if row['transcript_status'] == 'running':
         return jsonify({'error': 'Already running'}), 409
+    _queue_attachment_transcription(row)
+    return jsonify(_attachment_dict(_load_attachment(attachment_id))), 202
 
+
+def _queue_attachment_transcription(
+    row, *, into_entry: bool = False, skip_completed: bool = False
+) -> None:
+    """Queue one attachment once; upload replays may safely call this again."""
+    if row['transcript_status'] == 'running' or (
+        skip_completed and row['transcript_status'] == 'done'
+    ):
+        return
+    db = get_db()
     db.execute(
         "UPDATE journal_attachments SET transcript_status='running', transcript_error=NULL"
         ' WHERE id=?',
-        (attachment_id,),
+        (row['id'],),
     )
     db.commit()
     _notify_subscribers(row['entry_id'])
-    _transcribe_attachment_bg(attachment_id, row['entry_id'], row['kind'],
-                              row['path'], row['name'])
-    return jsonify(_attachment_dict(_load_attachment(attachment_id))), 202
+    _transcribe_attachment_bg(row['id'], row['entry_id'], row['kind'],
+                              row['path'], row['name'], into_entry=into_entry)
 
 
 @bp.post('/attachments/<attachment_id>/describe-audio')
@@ -900,7 +915,8 @@ def _do_attachment_caption(path: str, name: str) -> str:
 
 
 def _transcribe_attachment_bg(
-    attachment_id: str, entry_id: str, kind: str, path: str, name: str
+    attachment_id: str, entry_id: str, kind: str, path: str, name: str,
+    *, into_entry: bool = False,
 ) -> None:
     def _run():
         try:
@@ -921,8 +937,16 @@ def _transcribe_attachment_bg(
             if text is not None:
                 updates['transcript'] = text
             build_update(db, 'journal_attachments', updates, 'id=?', (attachment_id,))
+            if text is not None and into_entry:
+                db.execute(
+                    'UPDATE journal_entries SET content=?, raw_content=?, updated_at=? WHERE id=?',
+                    (text, text, int(time.time()), entry_id),
+                )
             db.commit()
             _notify_subscribers(entry_id)
+            if text is not None and into_entry:
+                _polish_bg(entry_id, text)
+                _generate_metadata_bg(entry_id, text)
         except Exception as e:
             print(f'Failed to record transcription result for {attachment_id}: {e}')
     run_bg(_run)
@@ -1010,5 +1034,3 @@ def _generate_metadata_bg(journal_id: str, content: str) -> None:
         except Exception as e:
             print(f'Background metadata generation failed for {journal_id}: {e}')
     run_bg(_run)
-
-

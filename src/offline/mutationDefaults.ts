@@ -417,6 +417,7 @@ const journalRecordingCfg = (
         id: vars.id,
         attachmentId: vars.id,
         name: vars.name,
+        transcribe: rec.mode === 'transcribe',
       });
       // Confirmed stored. This is the only place the audio may be let go of.
       await deleteRecording(vars.id);
