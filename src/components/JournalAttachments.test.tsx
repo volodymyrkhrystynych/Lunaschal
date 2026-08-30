@@ -154,7 +154,10 @@ describe('JournalAttachments', () => {
   });
 
   describe('picture sharing', () => {
-    afterEach(() => vi.unstubAllGlobals());
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      delete (window as Window & { pywebview?: unknown }).pywebview;
+    });
 
     it('shares the picture as a file through the native share sheet', async () => {
       const share = vi.fn().mockResolvedValue(undefined);
@@ -180,13 +183,48 @@ describe('JournalAttachments', () => {
       expect(canShare).toHaveBeenCalledWith(shared);
     });
 
-    it('explains when the browser cannot share files', async () => {
+    it('copies the picture through the desktop bridge without Web Share', async () => {
+      const copyImage = vi.fn().mockResolvedValue({ ok: true });
       vi.stubGlobal('navigator', { ...navigator });
+      Object.defineProperty(window, 'pywebview', {
+        configurable: true,
+        value: { api: { copy_image: copyImage } },
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          blob: async () => new Blob(['picture'], { type: 'image/png' }),
+        })
+      );
       renderIt([attachment({ kind: 'image' })], false);
 
       fireEvent.click(screen.getByRole('button', { name: 'Share' }));
 
-      expect(await screen.findByText(/Sharing is not supported/)).toBeTruthy();
+      expect(
+        await screen.findByText(/Picture copied to clipboard/)
+      ).toBeTruthy();
+      expect(copyImage).toHaveBeenCalledWith(
+        expect.stringMatching(/^data:image\/png;base64,/)
+      );
+    });
+
+    it('explains when neither browser nor desktop sharing is available', async () => {
+      vi.stubGlobal('navigator', { ...navigator });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          blob: async () => new Blob(['picture'], { type: 'image/png' }),
+        })
+      );
+      renderIt([attachment({ kind: 'image' })], false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+
+      expect(
+        await screen.findByText(/Sharing pictures is not supported/)
+      ).toBeTruthy();
     });
 
     it('reports a picture that could not be loaded', async () => {

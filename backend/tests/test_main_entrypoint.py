@@ -2,6 +2,8 @@
 --dev / --server-url. start-node.sh relies on --dev --server-url together
 taking priority over --server-url alone — this locks in that priority order."""
 import os
+import sys
+from types import SimpleNamespace
 
 import main
 
@@ -50,7 +52,8 @@ def test_webview_launches_non_private_with_a_persistent_profile(tmp_path, monkey
 
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
     monkeypatch.setattr(main.sys, 'argv', ['main.py', '--server-url', 'https://x.ts.net:5000'])
-    monkeypatch.setattr(webview, 'create_window', lambda *a, **k: None)
+    window_options = {}
+    monkeypatch.setattr(webview, 'create_window', lambda *a, **k: window_options.update(k))
     captured = {}
     monkeypatch.setattr(webview, 'start', lambda **kwargs: captured.update(kwargs))
 
@@ -59,6 +62,34 @@ def test_webview_launches_non_private_with_a_persistent_profile(tmp_path, monkey
     assert captured['private_mode'] is False
     assert captured['storage_path']
     assert os.path.isdir(captured['storage_path'])
+    assert isinstance(window_options['js_api'], main._DesktopApi)
+
+
+def test_desktop_api_copies_a_valid_image_to_the_qt_clipboard(monkeypatch):
+    copied = []
+    image = SimpleNamespace(isNull=lambda: False)
+    qimage = SimpleNamespace(fromData=lambda data: (copied.append(data), image)[1])
+    clipboard = SimpleNamespace(setImage=lambda value: copied.append(value))
+    app = SimpleNamespace(clipboard=lambda: clipboard)
+    monkeypatch.setitem(sys.modules, 'qtpy.QtGui', SimpleNamespace(QImage=qimage))
+    monkeypatch.setitem(
+        sys.modules,
+        'qtpy.QtWidgets',
+        SimpleNamespace(QApplication=SimpleNamespace(instance=lambda: app)),
+    )
+
+    result = main._DesktopApi().copy_image(
+        'data:image/png;base64,iVBORw0KGgo='
+    )
+
+    assert result == {'ok': True}
+    assert copied == [b'\x89PNG\r\n\x1a\n', image]
+
+
+def test_desktop_api_rejects_non_image_data_urls():
+    result = main._DesktopApi().copy_image('data:text/plain;base64,aGVsbG8=')
+    assert result['ok'] is False
+    assert 'image' in result['error']
 
 
 def test_headless_serves_flask_and_never_opens_a_window(monkeypatch):
