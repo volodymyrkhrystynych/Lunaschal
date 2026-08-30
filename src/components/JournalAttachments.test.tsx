@@ -65,7 +65,10 @@ function renderIt(
   );
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  localStorage.clear();
+});
 
 describe('JournalAttachments', () => {
   it('summarizes the attachment list', () => {
@@ -182,6 +185,33 @@ describe('JournalAttachments', () => {
   it('shows no map link for an image with no GPS EXIF', () => {
     renderIt([attachment({ kind: 'image', name: 'The sink' })]);
     expect(screen.queryByRole('link', { name: /map/ })).toBeNull();
+  });
+
+  it('shows a new image description once, then minimizes it on later loads', () => {
+    const picture = attachment({
+      kind: 'image',
+      description: 'A long description of the kitchen and everything in it.',
+      descriptionStatus: 'done',
+    });
+
+    const first = renderIt([picture], false);
+    const firstDescription = screen
+      .getByText('Image description')
+      .closest('details');
+    expect(firstDescription?.open).toBe(true);
+    expect(localStorage.getItem('journal-image-description-seen:a1')).toBe(
+      'true'
+    );
+    first.unmount();
+
+    renderIt([picture], false);
+    const laterDescription = screen
+      .getByText('Image description')
+      .closest('details');
+    expect(laterDescription?.open).toBe(false);
+
+    fireEvent.click(screen.getByText('Image description'));
+    expect(laterDescription?.open).toBe(true);
   });
 
   describe('picture sharing', () => {

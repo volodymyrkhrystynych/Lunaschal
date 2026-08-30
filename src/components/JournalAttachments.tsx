@@ -310,6 +310,48 @@ const KIND_ICONS: Record<JournalAttachment['kind'], string> = {
   file: '📎',
 };
 
+const DESCRIPTION_SEEN_KEY_PREFIX = 'journal-image-description-seen:';
+
+function ImageDescription({
+  attachmentId,
+  children,
+}: {
+  attachmentId: string;
+  children: string;
+}) {
+  const storageKey = `${DESCRIPTION_SEEN_KEY_PREFIX}${attachmentId}`;
+  const [isOpen, setIsOpen] = useState(() => {
+    try {
+      return localStorage.getItem(storageKey) !== 'true';
+    } catch {
+      // Storage can be unavailable in private/restricted browser contexts. In
+      // that case, prefer showing the description instead of hiding new text.
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(storageKey, 'true');
+    } catch {
+      // Persistence is a convenience; the description remains usable without it.
+    }
+  }, [storageKey]);
+
+  return (
+    <details
+      open={isOpen}
+      onToggle={event => setIsOpen(event.currentTarget.open)}
+      className="bg-white/5 rounded text-sm text-[var(--color-text-muted)]"
+    >
+      <summary className="cursor-pointer select-none px-3 py-2">
+        Image description
+      </summary>
+      <div className="px-3 pb-2 whitespace-pre-wrap italic">{children}</div>
+    </details>
+  );
+}
+
 function AttachmentRow({
   attachment: a,
   editable,
@@ -577,7 +619,11 @@ function AttachmentRow({
         </div>
       )}
 
-      {a.description && (
+      {a.description && a.kind === 'image' && (
+        <ImageDescription attachmentId={a.id}>{a.description}</ImageDescription>
+      )}
+
+      {a.description && a.kind !== 'image' && (
         <div className="px-3 py-2 bg-white/5 rounded text-sm text-[var(--color-text-muted)] whitespace-pre-wrap italic">
           {a.description}
         </div>
