@@ -310,16 +310,20 @@ const KIND_ICONS: Record<JournalAttachment['kind'], string> = {
   file: '📎',
 };
 
-const DESCRIPTION_SEEN_KEY_PREFIX = 'journal-image-description-seen:';
+const DESCRIPTION_SEEN_KEY_PREFIX = 'journal-attachment-description-seen:';
 
-function ImageDescription({
+function AttachmentDescription({
   attachmentId,
+  descriptionKind,
+  label,
   children,
 }: {
   attachmentId: string;
+  descriptionKind: 'image' | 'recording';
+  label: string;
   children: string;
 }) {
-  const storageKey = `${DESCRIPTION_SEEN_KEY_PREFIX}${attachmentId}`;
+  const storageKey = `${DESCRIPTION_SEEN_KEY_PREFIX}${attachmentId}:${descriptionKind}`;
   const [isOpen, setIsOpen] = useState(() => {
     try {
       return localStorage.getItem(storageKey) !== 'true';
@@ -345,7 +349,7 @@ function ImageDescription({
       className="bg-white/5 rounded text-sm text-[var(--color-text-muted)]"
     >
       <summary className="cursor-pointer select-none px-3 py-2">
-        Image description
+        {label}
       </summary>
       <div className="px-3 pb-2 whitespace-pre-wrap italic">{children}</div>
     </details>
@@ -607,7 +611,17 @@ function AttachmentRow({
         </div>
       )}
 
-      {a.transcript && (
+      {a.transcript && a.kind === 'image' && (
+        <AttachmentDescription
+          attachmentId={a.id}
+          descriptionKind="image"
+          label="Image description"
+        >
+          {a.transcript}
+        </AttachmentDescription>
+      )}
+
+      {a.transcript && a.kind !== 'image' && (
         <div className="px-3 py-2 bg-white/5 rounded text-sm text-[var(--color-text-muted)] whitespace-pre-wrap italic">
           {a.transcript}
         </div>
@@ -619,14 +633,14 @@ function AttachmentRow({
         </div>
       )}
 
-      {a.description && a.kind === 'image' && (
-        <ImageDescription attachmentId={a.id}>{a.description}</ImageDescription>
-      )}
-
       {a.description && a.kind !== 'image' && (
-        <div className="px-3 py-2 bg-white/5 rounded text-sm text-[var(--color-text-muted)] whitespace-pre-wrap italic">
+        <AttachmentDescription
+          attachmentId={a.id}
+          descriptionKind="recording"
+          label="Recording description"
+        >
           {a.description}
-        </div>
+        </AttachmentDescription>
       )}
     </div>
   );

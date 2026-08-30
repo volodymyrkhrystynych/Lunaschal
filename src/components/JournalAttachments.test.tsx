@@ -190,8 +190,8 @@ describe('JournalAttachments', () => {
   it('shows a new image description once, then minimizes it on later loads', () => {
     const picture = attachment({
       kind: 'image',
-      description: 'A long description of the kitchen and everything in it.',
-      descriptionStatus: 'done',
+      transcript: 'A long description of the kitchen and everything in it.',
+      transcriptStatus: 'done',
     });
 
     const first = renderIt([picture], false);
@@ -199,9 +199,9 @@ describe('JournalAttachments', () => {
       .getByText('Image description')
       .closest('details');
     expect(firstDescription?.open).toBe(true);
-    expect(localStorage.getItem('journal-image-description-seen:a1')).toBe(
-      'true'
-    );
+    expect(
+      localStorage.getItem('journal-attachment-description-seen:a1:image')
+    ).toBe('true');
     first.unmount();
 
     renderIt([picture], false);
@@ -211,6 +211,32 @@ describe('JournalAttachments', () => {
     expect(laterDescription?.open).toBe(false);
 
     fireEvent.click(screen.getByText('Image description'));
+    expect(laterDescription?.open).toBe(true);
+  });
+
+  it('shows a new recording description once, then minimizes it on later loads', () => {
+    const recording = attachment({
+      description: 'Footsteps, traffic, and a dog barking in the distance.',
+      descriptionStatus: 'done',
+    });
+
+    const first = renderIt([recording], false);
+    const firstDescription = screen
+      .getByText('Recording description')
+      .closest('details');
+    expect(firstDescription?.open).toBe(true);
+    expect(
+      localStorage.getItem('journal-attachment-description-seen:a1:recording')
+    ).toBe('true');
+    first.unmount();
+
+    renderIt([recording], false);
+    const laterDescription = screen
+      .getByText('Recording description')
+      .closest('details');
+    expect(laterDescription?.open).toBe(false);
+
+    fireEvent.click(screen.getByText('Recording description'));
     expect(laterDescription?.open).toBe(true);
   });
 
