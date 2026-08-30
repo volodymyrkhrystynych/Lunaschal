@@ -73,6 +73,61 @@ def test_metadata_parses_and_caps_tags(monkeypatch):
     assert result == {'title': 'A title', 'tags': ['work', 'health', 'family']}
 
 
+def _capture_metadata_prompt(monkeypatch):
+    captured = {}
+
+    def fake_chat_json(prompt, system=None, **kwargs):
+        captured['prompt'] = prompt
+        return {'title': 'A title', 'tags': ['memory']}
+
+    monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(journal, 'chat_json', fake_chat_json)
+    return captured
+
+
+def test_metadata_sees_the_photo_captions(monkeypatch):
+    """The point of the whole change. "Look at this" plus a photo used to title
+    an entry about nothing, because nothing about the picture reached this call.
+    """
+    captured = _capture_metadata_prompt(monkeypatch)
+
+    journal.generate_journal_metadata(
+        'Look at this.',
+        'Photo: A grey brick building numbered 28 beside a sign reading ADV METAL.',
+    )
+
+    assert 'Look at this.' in captured['prompt']
+    assert 'ADV METAL' in captured['prompt']
+
+
+def test_metadata_without_context_sends_the_content_alone(monkeypatch):
+    """No stray heading when there are no photos — every existing entry goes
+    through this path."""
+    captured = _capture_metadata_prompt(monkeypatch)
+
+    journal.generate_journal_metadata('A quiet day.')
+
+    assert captured['prompt'] == 'A quiet day.'
+
+
+def test_a_photo_only_entry_still_gets_a_title(monkeypatch):
+    """Empty text used to short-circuit before the model was asked. A photo with
+    no words is a real entry, and it is exactly the one that needs a title."""
+    captured = _capture_metadata_prompt(monkeypatch)
+
+    result = journal.generate_journal_metadata('', 'Photo: A cat asleep on a radiator.')
+
+    assert result['title'] == 'A title'
+    assert 'radiator' in captured['prompt']
+
+
+def test_an_entirely_empty_entry_asks_nothing(monkeypatch):
+    captured = _capture_metadata_prompt(monkeypatch)
+
+    assert journal.generate_journal_metadata('   ', '  ') == {}
+    assert 'prompt' not in captured
+
+
 def test_classify_reads_yes_no_from_chat_text(monkeypatch):
     captured = {}
 

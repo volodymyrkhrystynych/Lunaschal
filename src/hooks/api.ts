@@ -35,8 +35,14 @@ export interface JournalEntry {
 export interface JournalAttachment {
   id: string;
   entryId: string;
-  kind: 'audio' | 'video' | 'image';
-  /** The user's label — what this recording, video or photo is about. */
+  /**
+   * `file` is the catch-all behind the composer's attach-a-file button: an
+   * attachment the media tables didn't claim. It is stored and offered for
+   * download and nothing else — no player, no thumbnail, and no model ever
+   * reads it.
+   */
+  kind: 'audio' | 'video' | 'image' | 'file';
+  /** The user's label — what this recording, video, photo or file is about. */
   name: string;
   url: string;
   mime: string | null;
@@ -2417,6 +2423,14 @@ export const api = {
       // Optional client-supplied ULID so an offline-queued create replays
       // idempotently (server does INSERT OR IGNORE on this id).
       id?: string;
+      /**
+       * How many files are about to be uploaded against this id. Attachments
+       * can only be sent after the entry exists, so without this the title is
+       * generated from the text alone, before any photo has been captioned —
+       * which is why a photo never influenced a title. Given it, the server's
+       * metadata job waits for them (capped) and titles from both.
+       */
+      pendingAttachments?: number;
     }) => post<{ id: string }>('/api/journal', data),
     // Mirrors the STT_JOURNAL_KEY voice shortcut (stt/listener.py): save the
     // raw transcript immediately, polish it in the background.

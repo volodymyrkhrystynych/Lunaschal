@@ -1,10 +1,12 @@
-"""On-disk storage for journal entry attachments (audio clips, video and photos).
+"""On-disk storage for journal entry attachments (audio clips, video, photos, and
+anything else).
 
 Files live beside the DB under ./data/journal/<attachment_id>/, using the same
 IdScopedStorage layout as the fanfic/meetings/lifestyle/food media roots — one
 directory per attachment, so deleting one is an rmtree of a directory whose name
 we control rather than an unlink of a path read back out of the database.
 """
+import re
 from pathlib import Path
 
 from backend.storage import IdScopedStorage, is_safe_name
@@ -56,6 +58,19 @@ _MIME_EXT = {
     'video/3gpp': '3gp',
 }
 
+# What a stored extension is allowed to look like once we stop recognising it.
+# The file lands at `<root>/<attachment_id>/attachment.<ext>`, so the only job
+# here is that `ext` cannot introduce a path segment, a separator or a dot — the
+# attachment id is already checked by `is_safe_name`. Letters and digits, capped:
+# a hostile or merely silly filename ("report.tar.gz.exe.…") must not become a
+# hostile path.
+_SAFE_EXT = re.compile(r'^[a-z0-9]{1,12}$')
+
+# What an attachment with no usable extension is stored as. Not '' — a bare
+# `attachment` with no suffix is harder to identify later, and the browser needs
+# something to hand the OS on download.
+_DEFAULT_EXT = 'bin'
+
 _storage = IdScopedStorage('JOURNAL_ROOT', './data/journal')
 
 journal_root = _storage.root
@@ -86,9 +101,30 @@ def kind_for_ext(ext: str) -> str | None:
     return _kind_from_ext(ext)
 
 
-def resolve_upload(mime: str | None, filename: str | None) -> tuple[str, str] | None:
-    """Map an upload to the (extension, kind) it will be stored as, or None if
-    it is not a media type we accept.
+def safe_ext(filename: str | None) -> str:
+    """The extension an unrecognised upload is stored under.
+
+    Deliberately not `Path(filename).suffix` verbatim: this string is
+    interpolated into a path, and a filename is attacker-controlled in the sense
+    that matters (it comes off the wire). Anything that isn't a short
+    alphanumeric token becomes `bin`.
+    """
+    if filename and '.' in filename:
+        ext = filename.rsplit('.', 1)[1].strip().lower()
+        if _SAFE_EXT.match(ext):
+            return ext
+    return _DEFAULT_EXT
+
+
+def resolve_upload(mime: str | None, filename: str | None) -> tuple[str, str]:
+    """Map an upload to the (extension, kind) it will be stored as.
+
+    Never returns None any more: an upload we cannot place in the audio/video/
+    image tables is stored as `kind='file'` under a sanitized extension, because
+    the composer's third button offers "attach a file" without qualification and
+    a PDF bouncing off a 400 is not an answer. The media tables keep their
+    meaning — they are still what decides audio vs video vs image, and only
+    those three kinds are ever sent to a model.
 
     The mime type wins over the filename: a browser file input and a paste both
     report it reliably, and for the mp4/webm containers it is the only thing
@@ -108,17 +144,19 @@ def resolve_upload(mime: str | None, filename: str | None) -> tuple[str, str] | 
         kind = _kind_from_ext(ext)
         if kind:
             return ext, kind
-    return None
+    return safe_ext(filename), 'file'
 
 
-def resolve_ext(mime: str | None, filename: str | None) -> str | None:
-    resolved = resolve_upload(mime, filename)
-    return resolved[0] if resolved else None
+def resolve_ext(mime: str | None, filename: str | None) -> str:
+    return resolve_upload(mime, filename)[0]
 
 
 def attachment_path(attachment_id: str, ext: str) -> Path | None:
     d = attachment_dir(attachment_id)
     ext = ext.lower().lstrip('.')
-    if d is None or not is_safe_name(attachment_id) or not _kind_from_ext(ext):
+    # Gated on the *shape* of the extension, not on it naming a known media
+    # type: `kind='file'` attachments are stored under whatever `safe_ext` let
+    # through, and `_SAFE_EXT` is the check that keeps that out of the path.
+    if d is None or not is_safe_name(attachment_id) or not _SAFE_EXT.match(ext):
         return None
     return d / f'attachment.{ext}'

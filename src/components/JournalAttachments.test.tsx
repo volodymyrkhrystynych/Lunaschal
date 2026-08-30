@@ -79,14 +79,14 @@ describe('JournalAttachments', () => {
 
   it('offers add buttons only while editing', () => {
     const { unmount } = renderIt([attachment()], true);
-    expect(screen.getByText('Add audio or video')).toBeTruthy();
-    expect(screen.getByText('Add photo')).toBeTruthy();
+    expect(screen.getByText(/Photo$/)).toBeTruthy();
+    expect(screen.getByText(/File$/)).toBeTruthy();
     expect(screen.getByText('Paste')).toBeTruthy();
     unmount();
 
     renderIt([attachment()], false);
-    expect(screen.queryByText('Add audio or video')).toBeNull();
-    expect(screen.queryByText('Add photo')).toBeNull();
+    expect(screen.queryByText(/Photo$/)).toBeNull();
+    expect(screen.queryByText(/File$/)).toBeNull();
     expect(screen.queryByText('Paste')).toBeNull();
   });
 
@@ -95,7 +95,7 @@ describe('JournalAttachments', () => {
     const { container } = renderIt([]);
 
     const input = container.querySelector<HTMLInputElement>(
-      '[data-testid="journal-audio-input"]'
+      '[data-testid="journal-file-input"]'
     )!;
     const file = new File(['x'], 'voice-memo-004.m4a', { type: 'audio/mp4' });
     fireEvent.change(input, { target: { files: [file] } });
@@ -200,19 +200,37 @@ describe('JournalAttachments', () => {
       ).toEqual([first, second]);
     });
 
+    it('takes a pasted document now that the backend stores one', async () => {
+      // This used to assert a refusal. The attach-a-file button promises any
+      // file; a paste of the same file has to mean the same thing.
+      vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
+      const { container } = renderIt([]);
+      const zone = container.querySelector(
+        '[data-testid="journal-attachment-dropzone"]'
+      )!;
+      const doc = new File(['x'], 'notes.pdf', { type: 'application/pdf' });
+
+      fireEvent.paste(zone, pasteEvent([doc]));
+
+      await waitFor(() =>
+        expect(api.journal.attachments.upload).toHaveBeenCalledWith(
+          'e1',
+          doc,
+          'notes'
+        )
+      );
+    });
+
     it('says why a paste it cannot take was ignored', async () => {
       const { container } = renderIt([]);
       const zone = container.querySelector(
         '[data-testid="journal-attachment-dropzone"]'
       )!;
 
-      fireEvent.paste(
-        zone,
-        pasteEvent([new File(['x'], 'notes.pdf', { type: 'application/pdf' })])
-      );
+      fireEvent.paste(zone, pasteEvent([new File([], '', { type: '' })]));
 
       // Silence here is what made the earlier version feel broken.
-      expect(await screen.findByText(/Can't attach notes\.pdf/)).toBeTruthy();
+      expect(await screen.findByText(/Can't attach/)).toBeTruthy();
       expect(api.journal.attachments.upload).not.toHaveBeenCalled();
     });
 

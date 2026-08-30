@@ -376,12 +376,12 @@ describe('Journal new-entry attachments', () => {
     expect(uploadMock).not.toHaveBeenCalled();
   });
 
-  it('offers Add audio/photo buttons in the compose box, staging a picked file', async () => {
+  it('offers a photo and a file button in the compose box, staging a picked file', async () => {
     renderJournal();
     fireEvent.click(await screen.findByText('+ New Entry'));
 
-    expect(screen.getByText('Add audio or video')).toBeTruthy();
-    expect(screen.getByText('Add photo')).toBeTruthy();
+    expect(screen.getByText(/Photo$/)).toBeTruthy();
+    expect(screen.getByText(/File$/)).toBeTruthy();
 
     const photo = new File(['x'], 'fence.png', { type: 'image/png' });
     const input = screen.getByTestId(
@@ -392,6 +392,109 @@ describe('Journal new-entry attachments', () => {
     // Staged the same way a paste would be — nothing uploads until save.
     expect(screen.getByText('fence.png')).toBeTruthy();
     expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('takes several photos at once, unlike the single-file buttons it replaced', async () => {
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+
+    const input = screen.getByTestId(
+      'journal-new-entry-image-input'
+    ) as HTMLInputElement;
+    expect(input.multiple).toBe(true);
+
+    fireEvent.change(input, {
+      target: {
+        files: [
+          new File(['x'], 'one.png', { type: 'image/png' }),
+          new File(['x'], 'two.png', { type: 'image/png' }),
+        ],
+      },
+    });
+
+    expect(screen.getByText('one.png')).toBeTruthy();
+    expect(screen.getByText('two.png')).toBeTruthy();
+  });
+
+  it('the file button accepts anything', async () => {
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+
+    const input = screen.getByTestId(
+      'journal-new-entry-file-input'
+    ) as HTMLInputElement;
+    // No `accept`: the backend stores what the media tables don't claim as
+    // kind='file' rather than refusing it.
+    expect(input.getAttribute('accept')).toBeNull();
+
+    fireEvent.change(input, {
+      target: {
+        files: [new File(['x'], 'taxes.pdf', { type: 'application/pdf' })],
+      },
+    });
+    expect(screen.getByText('taxes.pdf')).toBeTruthy();
+  });
+
+  it('hides the camera button on a device with a mouse', async () => {
+    // `capture` opens the camera on a phone and is ignored everywhere else, so
+    // on a desktop the button would be a second file dialog with a camera icon.
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+
+    expect(screen.queryByText(/Take a photo/)).toBeNull();
+    expect(screen.queryByTestId('journal-new-entry-camera-input')).toBeNull();
+  });
+
+  it('offers the camera on a touch device', async () => {
+    vi.stubGlobal('matchMedia', (q: string) => ({
+      matches: q === '(pointer: coarse)',
+      media: q,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    try {
+      renderJournal();
+      fireEvent.click(await screen.findByText('+ New Entry'));
+
+      expect(screen.getByText(/Take a photo/)).toBeTruthy();
+      const camera = screen.getByTestId(
+        'journal-new-entry-camera-input'
+      ) as HTMLInputElement;
+      expect(camera.getAttribute('capture')).toBe('environment');
+      expect(camera.accept).toBe('image/*');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('tells the server how many attachments are coming, so the title waits', async () => {
+    // Attachments can only be uploaded once the entry exists. Without this the
+    // title is generated from the text alone, before any photo is captioned —
+    // which is why a photo never influenced a title.
+    const textarea = await composeWith([
+      new File(['x'], 'fence.png', { type: 'image/png' }),
+    ]);
+    fireEvent.change(textarea, { target: { value: 'look at this' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({ pendingAttachments: 1 })
+      )
+    );
+  });
+
+  it('saves a photo-only entry, which has no words to title it from', async () => {
+    const textarea = await composeWith([
+      new File(['x'], 'fence.png', { type: 'image/png' }),
+    ]);
+    // No text typed at all.
+    const save = screen.getByText('Save') as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+
+    await waitFor(() => expect(createMock).toHaveBeenCalled());
+    expect(textarea).toBeTruthy();
   });
 
   it('reports a failed attachment upload without implying the entry was lost', async () => {

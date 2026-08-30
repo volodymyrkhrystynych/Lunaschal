@@ -123,10 +123,13 @@ def create_draft(draft_id: str, file) -> tuple[dict | None, tuple[str, int] | No
     if existing is not None:
         return _draft_dict(existing), None
 
-    resolved = attachment_storage.resolve_upload(file.mimetype, file.filename)
-    if resolved is None or resolved[1] != 'audio':
+    # `resolve_upload` never refuses any more — anything it doesn't recognise is
+    # stored as `kind='file'` for the composer's attach-a-file button. A voice
+    # draft is not that: this endpoint takes speech and nothing else, so the
+    # kind is checked here rather than relied on to be None.
+    ext, kind = attachment_storage.resolve_upload(file.mimetype, file.filename)
+    if kind != 'audio':
         return None, ('Unsupported file type — audio only', 400)
-    ext, _kind = resolved
 
     path = _draft_path(draft_id, ext)
     if path is None:

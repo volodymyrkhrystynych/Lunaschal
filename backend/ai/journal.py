@@ -115,7 +115,12 @@ _METADATA_SYSTEM = (
     '- "title": a concise 4-8 word title capturing the main theme\n'
     '- "tags": an array of 1-3 tags chosen ONLY from this exact list:\n'
     f"  {', '.join(JOURNAL_TAGS)}\n"
-    'Example: {"title": "Productive morning coding session", "tags": ["work", "coding"]}'
+    'Example: {"title": "Productive morning coding session", "tags": ["work", "coding"]}\n'
+    'An entry may be followed by descriptions of the photos attached to it. '
+    'Those describe the same moment, so use them — especially when the written '
+    'entry is short or says nothing about what it is about. The title still '
+    "names the entry, not the photograph: prefer the writer's own words where "
+    'there are any.'
 )
 
 # The enum turns "chosen ONLY from this exact list" from a prompt request into a
@@ -134,13 +139,27 @@ _METADATA_SCHEMA = {
 }
 
 
-def generate_journal_metadata(content: str) -> dict:
-    if not content.strip():
+def generate_journal_metadata(content: str, context: str | None = None) -> dict:
+    """Title and tags for one entry.
+
+    `context` carries the captions of the entry's photo attachments (see
+    `backend/routes/journal.py`'s `_metadata_context`), appended the way
+    `polish_journal_entry` appends its own. It matters most for the entries that
+    need a title most: "look at this" plus a photo used to produce a title about
+    nothing, because nothing about the picture had ever reached this call.
+
+    An entry with no text at all still generates when there is context — a
+    photo-only entry is a real thing to write.
+    """
+    if not content.strip() and not (context or '').strip():
         return {}
     try:
         if not is_ai_configured():
             return {}
-        data = chat_json(content, system=_METADATA_SYSTEM, schema=_METADATA_SCHEMA)
+        prompt = content
+        if context:
+            prompt = f'{content}\n\n---\nAttached photos:\n{context}'.lstrip()
+        data = chat_json(prompt, system=_METADATA_SYSTEM, schema=_METADATA_SCHEMA)
         # normalize_tags dedupes, which the grammar makes necessary: constrained to
         # a short enum the model will happily emit ["problem", "problem"] to fill
         # the array, and nothing downstream would have caught it.

@@ -1,11 +1,10 @@
 """Image re-encoding shared by the features that accept photo uploads.
 
-HEIC is what an iPhone actually produces, and almost nothing else reads it:
-browsers won't render it, and `backend/ai/images.py` refuses to send one to the
-vision model (its `_EXT_MIME` deliberately omits heic/heif, because llama.cpp's
-projector would receive garbage bytes). Transcoding at the upload boundary is
-what keeps both of those true downstream instead of every consumer having to
-know about it.
+HEIC is what an iPhone actually produces, and almost nothing else reads it —
+browsers won't render it. Transcoding at the upload boundary is what keeps that
+one consumer's problem from becoming every consumer's. (`backend/ai/images.py`
+no longer needs it: it re-encodes every image on the way to the model anyway,
+and imports this module for the HEIF opener registered below.)
 
 This lived in `backend/routes/food.py` until chat attachments needed the same
 guarantee.

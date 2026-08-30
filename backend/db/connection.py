@@ -141,6 +141,10 @@ def init_db() -> None:
     # After all four alias columns exist: it clears the ones naming presets that
     # llama/presets.ini no longer defines.
     _migrate_gemma_aliases_to_qwen36(db)
+    # After it, and separately latched: it repairs the rows that one was meant
+    # to fix and left behind, and points vision at the projector [qwen36] has
+    # since grown.
+    _repoint_vision_at_qwen36(db)
     _ensure_attachment_description_columns(db)
     _ensure_journal_attachment_location(db)
     _ensure_todo_completed_at(db)
@@ -1213,16 +1217,17 @@ def _ensure_llm_generation_settings(db: sqlite3.Connection) -> None:
 def _ensure_llama_chat_vision(db: sqlite3.Connection) -> None:
     """Whether the *chat* model can be sent an image directly.
 
-    Separate from `llama_vision_model`, which names a different model for
-    one-shot captioning. This is a property of the chat preset: Qwen3.6 35B A3B
-    is a vision-language model (its GGUF carries mRoPE's four rope sections and
-    the `image-text-to-text` tag), but `llama/presets.ini` ships with no `mmproj`
-    on `[qwen36]` because the projector has to be downloaded and there is only
-    ~878 MiB of VRAM headroom to load it into.
+    Separate from `llama_vision_model`, which names the model used for one-shot
+    captioning — they can now be the same model, but they need not be. This is a
+    property of the chat preset: Qwen3.6 35B A3B is a vision-language model (its
+    GGUF carries mRoPE's four rope sections and the `image-text-to-text` tag),
+    and `[qwen36]` now sets an `mmproj` with `mmproj-offload = false`, so the
+    projector sits in RAM rather than in the ~878 MiB of VRAM headroom.
 
-    Defaults to **0** for that reason: turning it on without a projector
-    configured would send images to a model that cannot decode them. Ticking it
-    is the deliberate act that follows a preset that actually loaded.
+    Defaults to **0** because when the column was added no projector was
+    configured and turning it on would have sent images to a model that could
+    not decode them. It is safe to tick now; the default stays 0 so an upgrade
+    changes no behaviour on its own.
     """
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'llama_chat_vision' not in cols:
@@ -1231,11 +1236,12 @@ def _ensure_llama_chat_vision(db: sqlite3.Connection) -> None:
 
 
 def _ensure_llama_vision_model(db: sqlite3.Connection) -> None:
-    """Router alias for image captioning (journal photo attachments). Left NULL,
-    which means captioning is off: the chat preset sets `mmproj-auto = false`
-    and takes text only, so images go to a separate model that is a separate
-    download. Defaulting this to anything would just produce a button that
-    always errors. See backend/ai/images.py."""
+    """Router alias for image captioning (journal photo attachments). Added
+    NULL, meaning captioning is off, because at the time `[qwen36]` carried no
+    projector and the only alternative was a separate multi-gigabyte download —
+    defaulting this to anything would just produce a button that always errors.
+    `[qwen36]` ships an `mmproj` now, and `_repoint_vision_at_qwen36` moves a
+    dead alias onto it. See backend/ai/images.py."""
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'llama_vision_model' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN llama_vision_model TEXT')
@@ -1253,6 +1259,20 @@ def _ensure_llama_audio_model(db: sqlite3.Connection) -> None:
     if 'llama_audio_model' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN llama_audio_model TEXT')
         db.commit()
+
+
+# The aliases `llama/presets.ini` used to define and no longer does. Listed
+# exactly, not matched as a `gemma4%` prefix: `gemma4-12b-omni` is also a gemma4
+# alias and is the one that survives the swap, so a prefix would turn the
+# multimodal settings off the first time they were set. Shared by the two
+# migrations below so the two lists cannot drift apart.
+_RETIRED_ALIASES = (
+    'gemma4',
+    'gemma4-medium',
+    'gemma4-max',
+    'gemma4-e4b-audio',
+    'gemma4-vision',
+)
 
 
 def _migrate_gemma_aliases_to_qwen36(db: sqlite3.Connection) -> None:
@@ -1294,16 +1314,64 @@ def _migrate_gemma_aliases_to_qwen36(db: sqlite3.Connection) -> None:
     db.execute(
         'ALTER TABLE settings ADD COLUMN qwen36_aliases_migrated INTEGER NOT NULL DEFAULT 0'
     )
-    # Listed exactly, not matched as a `gemma4%` prefix: `gemma4-12b-omni` is
-    # also a gemma4 alias and is the one that survives the swap, so a prefix
-    # would turn the multimodal toggle off the first time it was ticked.
+    placeholders = ','.join('?' * len(_RETIRED_ALIASES))
     for col in ('llama_model', 'briefing_model', 'llama_vision_model', 'llama_audio_model'):
         if col in cols:
             db.execute(
-                f'UPDATE settings SET {col} = NULL WHERE {col} IN'
-                " ('gemma4', 'gemma4-medium', 'gemma4-max', 'gemma4-e4b-audio', 'gemma4-vision')"
+                f'UPDATE settings SET {col} = NULL WHERE {col} IN ({placeholders})',
+                _RETIRED_ALIASES,
             )
     db.execute('UPDATE settings SET qwen36_aliases_migrated=1')
+    db.commit()
+
+
+def _repoint_vision_at_qwen36(db: sqlite3.Connection) -> None:
+    """Move a dead vision alias onto `qwen36`, and clear a dead audio one.
+
+    `_migrate_gemma_aliases_to_qwen36` above was supposed to have nulled these,
+    and on this developer's DB it did not: the marker column it latches on is
+    present while `llama_vision_model` still reads `gemma4-vision` and
+    `llama_audio_model` still reads `gemma4-e4b-audio`. Whatever the sequence
+    was — an earlier build of that migration running before
+    `_ensure_llama_vision_model` had added the column, so `col in cols` was
+    false and only the marker got written — the shape of the bug is the point:
+    **a latched migration that did not do its job cannot notice.** So this is a
+    second one with its own marker rather than an edit to the first.
+
+    It also does more than reset. `[qwen36]` now carries
+    `Qwen3.6-35B-A3B-mmproj-F16.gguf` with `mmproj-offload = false`, so the
+    projector lives in RAM and costs the card nothing; `/v1/models` reports the
+    alias as `input_modalities: ["text", "image"]`. The weights are already on
+    disk and already loaded, which is exactly the condition the first migration
+    said was missing when it argued NULL was the right resting state. Captioning
+    that has never once worked is worth more turned on than left off.
+
+    `llama_audio_model` gets no such treatment and is nulled: Gemma's projector
+    is still the only one reporting `has_audio_encoder`, that model is a
+    separate ~7.4 GB download, and pointing audio description at `qwen36` would
+    hand it a model that cannot hear.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'vision_repointed_at_qwen36' in cols:
+        return
+    db.execute(
+        'ALTER TABLE settings ADD COLUMN vision_repointed_at_qwen36'
+        ' INTEGER NOT NULL DEFAULT 0'
+    )
+    placeholders = ','.join('?' * len(_RETIRED_ALIASES))
+    if 'llama_vision_model' in cols:
+        db.execute(
+            'UPDATE settings SET llama_vision_model = ? WHERE llama_vision_model IN'
+            f' ({placeholders})',
+            ('qwen36', *_RETIRED_ALIASES),
+        )
+    if 'llama_audio_model' in cols:
+        db.execute(
+            f'UPDATE settings SET llama_audio_model = NULL WHERE llama_audio_model IN'
+            f' ({placeholders})',
+            _RETIRED_ALIASES,
+        )
+    db.execute('UPDATE settings SET vision_repointed_at_qwen36=1')
     db.commit()
 
 

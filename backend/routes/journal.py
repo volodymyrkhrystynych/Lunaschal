@@ -165,12 +165,18 @@ def create_journal_entry(
     tags=None,
     entry_id: str | None = None,
     polish: bool = False,
+    pending_attachments: int = 0,
 ) -> str | None:
     """Inserts a journal entry and kicks off background metadata generation
     (and, if `polish` and `raw_content` is set, background polish — the STT
     dictation path). `entry_id` lets a caller supply its own id for an
     idempotent replay (e.g. an offline-queued create, or a scheduler's
     catch-up promotion); a collision is a no-op and returns None.
+
+    `pending_attachments` is how many files the client is about to upload
+    against this id. Attachments necessarily arrive *after* the entry — they
+    need its id — so without this the title would always be generated from the
+    text alone, before any photo had been captioned. Given it, metadata waits.
     """
     id = entry_id or str(ULID())
     cur = get_db().execute(
@@ -184,7 +190,7 @@ def create_journal_entry(
     if polish and raw_content:
         _polish_bg(id, raw_content)
     if not title or not tags:
-        _generate_metadata_bg(id, content)
+        _generate_metadata_bg(id, content, expect_attachments=pending_attachments)
     return id
 
 
@@ -210,9 +216,18 @@ def create_entry():
     # idempotently: create_journal_entry's INSERT OR IGNORE makes a duplicate
     # a no-op, and a None return means we've already saved this entry.
     id = body.get('id') or str(ULID())
+    try:
+        pending = int(body.get('pendingAttachments') or 0)
+    except (TypeError, ValueError):
+        pending = 0
+    # Clamped: this only ever delays a title, but an unbounded value from the
+    # wire would park a thread on a condition that can never become true until
+    # the cap ran out.
+    pending = max(0, min(pending, 20))
     create_journal_entry(
         content, raw_content, now,
         title=title, tags=tags, entry_id=id, polish=True,
+        pending_attachments=pending,
     )
     return jsonify({'id': id}), 201
 
@@ -446,15 +461,23 @@ MAX_AUDIO_BYTES = 100 * 1024 * 1024
 MAX_IMAGE_BYTES = 25 * 1024 * 1024
 MAX_VIDEO_BYTES = 1024 * 1024 * 1024
 
+# A `file` attachment is anything the media tables didn't claim. The cap sits
+# between audio and video: generous enough for a PDF, a zip or a spreadsheet,
+# not so generous that a mis-picked disk image fills ./data.
+MAX_FILE_BYTES = 250 * 1024 * 1024
+
 _MAX_BYTES_BY_KIND = {
     'audio': MAX_AUDIO_BYTES,
     'image': MAX_IMAGE_BYTES,
     'video': MAX_VIDEO_BYTES,
+    'file': MAX_FILE_BYTES,
 }
 
-_UNSUPPORTED_TYPE = 'Unsupported file type — audio, video or images only'
+_UNSUPPORTED_TYPE = 'Unsupported file type'
 
-_DEFAULT_NAMES = {'audio': 'Audio', 'video': 'Video', 'image': 'Photo'}
+_DEFAULT_NAMES = {
+    'audio': 'Audio', 'video': 'Video', 'image': 'Photo', 'file': 'File',
+}
 
 _ATTACHMENT_COLS = (
     'id, entry_id, kind, name, path, mime, size, position,'
@@ -510,7 +533,8 @@ def list_attachments(id):
 
 
 def _store_attachment(
-    entry_id: str, file, name: str | None, attachment_id: str | None = None
+    entry_id: str, file, name: str | None, attachment_id: str | None = None,
+    *, media_only: bool = False,
 ):
     """Save one uploaded file as an attachment of `entry_id`.
 
@@ -518,6 +542,11 @@ def _store_attachment(
     on a rejected upload. Split out of the upload route so the one-shot
     recording route below can reuse it — the two differ only in where the entry
     comes from, not in how a file becomes an attachment.
+
+    `media_only` refuses the `file` catch-all kind. The composer's attach-a-file
+    button wants that catch-all; the recording route does not — a `text/plain`
+    arriving there means the phone sent the wrong blob, and storing it as a
+    curiosity would hide a bug behind a 201.
 
     `attachment_id` lets a caller supply the id instead of minting one. Only the
     recording route does: a phone holds its audio until the upload is confirmed,
@@ -528,10 +557,9 @@ def _store_attachment(
     # app arrives as a File with an empty name, and rejecting it here turned a
     # working drag-and-drop into "file is required". A nameless upload is fine —
     # the mime type carries the extension and _DEFAULT_NAMES carries the label.
-    resolved = storage.resolve_upload(file.mimetype, file.filename)
-    if resolved is None:
-        return None, (_UNSUPPORTED_TYPE, 400)
-    ext, kind = resolved
+    ext, kind = storage.resolve_upload(file.mimetype, file.filename)
+    if media_only and kind == 'file':
+        return None, (_UNSUPPORTED_TYPE + ' — audio, video or images only', 400)
 
     # The user's label for the attachment. Falling back to the filename keeps a
     # list of attachments readable even when someone skips naming them.
@@ -571,6 +599,15 @@ def _store_attachment(
     auto_describe = kind in ('audio', 'video') and is_audio_configured()
     description_status = 'running' if auto_describe else 'idle'
 
+    # A photo's caption now fires on upload too, on the same terms, because the
+    # entry's *title* is generated from it (see `_generate_metadata_bg`). Waiting
+    # for someone to press Transcribe means the title never sees the picture,
+    # which was the whole complaint. Audio/video transcription stays opt-in: it
+    # is minutes of Whisper, not one vision call.
+    from backend.ai.images import is_vision_configured
+    auto_caption = kind == 'image' and is_vision_configured()
+    transcript_status = 'running' if auto_caption else 'idle'
+
     db = get_db()
     position = db.execute(
         'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM journal_attachments'
@@ -586,9 +623,10 @@ def _store_attachment(
             'INSERT OR IGNORE INTO journal_attachments'
             '(id, entry_id, kind, name, path, mime, size, position,'
             ' transcript_status, description_status, latitude, longitude, created_at)'
-            " VALUES (?,?,?,?,?,?,?,?,'idle',?,?,?,?)",
+            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (attachment_id, entry_id, kind, name, str(path), file.mimetype or None,
-             size, position, description_status, latitude, longitude, int(time.time())),
+             size, position, transcript_status, description_status,
+             latitude, longitude, int(time.time())),
         )
         db.commit()
     except Exception:
@@ -601,6 +639,8 @@ def _store_attachment(
     _notify_subscribers(entry_id)
     if auto_describe:
         _describe_attachment_bg(attachment_id, entry_id, str(path), name)
+    if auto_caption:
+        _transcribe_attachment_bg(attachment_id, entry_id, kind, str(path), name)
     return _attachment_dict(_load_attachment(attachment_id)), None
 
 
@@ -707,7 +747,8 @@ def create_recording_entry():
 
     try:
         attachment, failure = _store_attachment(
-            entry_id, file, request.form.get('name') or 'Recording', attachment_id
+            entry_id, file, request.form.get('name') or 'Recording', attachment_id,
+            media_only=True,
         )
     except Exception:
         _rollback_entry()
@@ -780,6 +821,11 @@ def transcribe_attachment(attachment_id):
     row = _load_attachment(attachment_id)
     if not row:
         return jsonify({'error': 'Not found'}), 404
+    # `file` is the catch-all kind behind the composer's attach-a-file button.
+    # There is no model that reads an arbitrary blob, and queueing one would
+    # park the row in 'running' until it errored.
+    if row['kind'] == 'file':
+        return jsonify({'error': 'This attachment type cannot be transcribed'}), 400
     if row['transcript_status'] == 'running':
         return jsonify({'error': 'Already running'}), 409
 
@@ -990,10 +1036,60 @@ def retry_voice_draft(id):
     return jsonify({'success': True})
 
 
-def _generate_metadata_bg(journal_id: str, content: str) -> None:
+# How long the title waits for a photo to be captioned before giving up and
+# titling the text alone. Generous on purpose: one full-res photo through a
+# CPU-resident projector was measured at 55-113 s, and several attachments queue
+# behind each other on one background worker. The cap exists for the case that
+# never resolves — an upload that failed after the entry was created, or a tab
+# closed between the two requests — not as a latency budget.
+_METADATA_WAIT_SECONDS = 300.0
+_METADATA_POLL_SECONDS = 2.0
+
+
+def _metadata_context(entry_id: str) -> str | None:
+    """Captions of the entry's photos, for the title/tags call.
+
+    Images only. Audio and video have their own description column and their own
+    consumer (`_attachment_polish_context`); a transcript of speech is already
+    the entry's text in the dictation path, and feeding it back in would title
+    the entry from a duplicate of itself.
+    """
+    rows = get_db().execute(
+        'SELECT name, transcript FROM journal_attachments'
+        " WHERE entry_id=? AND kind='image'"
+        " AND transcript_status='done' AND transcript IS NOT NULL"
+        ' ORDER BY position',
+        (entry_id,),
+    ).fetchall()
+    if not rows:
+        return None
+    return '\n'.join(f"{r['name']}: {r['transcript']}" for r in rows)
+
+
+def _attachments_settled(entry_id: str, expected: int) -> bool:
+    """True once every attachment the client said it would upload has arrived
+    and none is still being captioned.
+
+    Both halves are needed. Counting rows alone races the upload requests, which
+    the composer sends one at a time after the create; checking statuses alone
+    would look settled at the instant the entry exists, before any of them is
+    there.
+    """
+    rows = get_db().execute(
+        'SELECT transcript_status FROM journal_attachments WHERE entry_id=?',
+        (entry_id,),
+    ).fetchall()
+    if len(rows) < expected:
+        return False
+    return not any(r['transcript_status'] == 'running' for r in rows)
+
+
+def _generate_metadata_bg(
+    journal_id: str, content: str, *, expect_attachments: int = 0
+) -> None:
     def _run():
         try:
-            meta = generate_journal_metadata(content)
+            meta = generate_journal_metadata(content, _metadata_context(journal_id))
             if not meta:
                 return
             updates: dict = {}
@@ -1009,6 +1105,30 @@ def _generate_metadata_bg(journal_id: str, content: str) -> None:
             _notify_subscribers(journal_id)
         except Exception as e:
             print(f'Background metadata generation failed for {journal_id}: {e}')
-    run_bg(_run)
+
+    if expect_attachments <= 0:
+        run_bg(_run)
+        return
+
+    def _wait_then_run():
+        deadline = time.monotonic() + _METADATA_WAIT_SECONDS
+        while time.monotonic() < deadline:
+            try:
+                if _attachments_settled(journal_id, expect_attachments):
+                    break
+            except Exception as e:
+                print(f'Metadata wait failed for {journal_id}: {e}')
+                break
+            time.sleep(_METADATA_POLL_SECONDS)
+        run_bg(_run)
+
+    # A plain daemon thread, deliberately NOT `run_bg`. That queue has a single
+    # worker shared with the captioning jobs this is waiting for, so a job that
+    # blocked on them would head-of-line block the very work that unblocks it —
+    # a guaranteed deadlock until the cap expired. Nothing here touches a model;
+    # it sleeps and reads one indexed row set.
+    threading.Thread(
+        target=_wait_then_run, daemon=True, name=f'journal-meta-{journal_id[:8]}'
+    ).start()
 
 

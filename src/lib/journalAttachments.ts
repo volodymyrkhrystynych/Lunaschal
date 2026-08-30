@@ -14,12 +14,25 @@ const MEDIA_EXT_RE =
   /\.(m4a|mp3|wav|ogg|oga|opus|webm|flac|aac|mp4|mov|m4v|mkv|avi|3gp|jpe?g|png|webp|heic|heif|gif)$/i;
 
 /**
- * Which pasted/dropped files we will try to upload. Deliberately permissive —
- * the backend does the real check (backend/journal/storage.py) and it knows the
- * accepted extensions; the point here is only to ignore the text/html flavour
- * that rides along with every clipboard payload rather than to second-guess it.
+ * Which pasted/dropped files we will try to upload — now all of them.
+ *
+ * The backend stores an upload it can't place in the audio/video/image tables
+ * as `kind='file'` rather than refusing it, so there is nothing left for this to
+ * usefully reject: dropping a PDF on an entry attaches the PDF. What remains is
+ * the reason this function existed, which was never really the media check —
+ * `filesFromTransfer` has to ignore the text/plain and text/html flavours that
+ * ride along with every clipboard payload, and those arrive as items, not files.
+ *
+ * Kept as a named predicate (rather than deleted) because `rejectedFilesMessage`
+ * and its tests are the paired half, and because a future rule about what is
+ * genuinely unattachable has an obvious home.
  */
 export function isAttachableFile(file: File): boolean {
+  return file.size > 0 || !!file.type || !!file.name;
+}
+
+/** Audio, video or an image — the kinds anything downstream will read. */
+export function isMediaFile(file: File): boolean {
   const type = (file.type || '').toLowerCase();
   if (
     type.startsWith('audio/') ||
@@ -113,7 +126,7 @@ export function rejectedFilesMessage(rejected: File[]): string | null {
     .map(f => f.name || f.type || 'unknown')
     .slice(0, 3)
     .join(', ');
-  return `Can't attach ${described} — audio, video and images only.`;
+  return `Can't attach ${described} — it is empty.`;
 }
 
 export function formatBytes(bytes: number | null | undefined): string {
@@ -184,6 +197,7 @@ const KIND_NOUNS: Record<JournalAttachment['kind'], [string, string]> = {
   audio: ['recording', 'recordings'],
   video: ['video', 'videos'],
   image: ['photo', 'photos'],
+  file: ['file', 'files'],
 };
 
 /**
@@ -197,7 +211,7 @@ export function summarizeAttachments(
   const list = attachments ?? [];
   if (list.length === 0) return 'No attachments';
   const parts: string[] = [];
-  for (const kind of ['audio', 'video', 'image'] as const) {
+  for (const kind of ['audio', 'video', 'image', 'file'] as const) {
     const n = list.filter(a => a.kind === kind).length;
     if (n) parts.push(`${n} ${KIND_NOUNS[kind][n === 1 ? 0 : 1]}`);
   }

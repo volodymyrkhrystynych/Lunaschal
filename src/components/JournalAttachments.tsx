@@ -1,12 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { type JournalAttachment, api } from '../hooks/api';
 import { useAttachmentUpload } from '../hooks/useAttachmentUpload';
 import { ImageLightbox, useLightbox } from './ImageLightbox';
 import { mapLink } from '../lib/food';
+import { AttachmentButtons } from './AttachmentButtons';
 import {
-  ACCEPT_AUDIO,
-  ACCEPT_IMAGE,
   canDescribeAudio,
   canTranscribe,
   describeAudioLabel,
@@ -36,7 +35,13 @@ import {
  * can be pasted straight into the editor rather than saved to Files first and
  * picked back out.
  */
-export function JournalAttachments({
+/**
+ * memo'd: this is mounted once per entry in the feed (twice over — the edit and
+ * read branches), and re-rendering it re-runs summarizeAttachments and rebuilds
+ * every <audio>/<video>/<img> element in the entry. Its props are stable data
+ * from the query cache, so it re-renders when they actually change.
+ */
+export const JournalAttachments = memo(function JournalAttachments({
   entryId,
   attachments,
   editable,
@@ -50,8 +55,6 @@ export function JournalAttachments({
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
-  const audioInputRef = useRef<HTMLInputElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const list = attachments ?? [];
 
   const invalidate = () =>
@@ -105,14 +108,6 @@ export function JournalAttachments({
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, entryId]);
-
-  const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    // Reset first: picking the same file twice in a row otherwise fires no
-    // change event, which reads as "the button stopped working".
-    e.target.value = '';
-    if (files.length) uploadFiles(files);
-  };
 
   // Paste and drop are the whole point of this being a wrapper: on a phone or an
   // iPad, a voice memo or clip is copied from its own app, and making the user
@@ -232,57 +227,32 @@ export function JournalAttachments({
           {others.map(attachmentRow)}
 
           {editable && (
-            <div className="flex items-center gap-2 pt-1">
-              <input
-                ref={audioInputRef}
-                type="file"
-                accept={ACCEPT_AUDIO}
-                onChange={pick}
-                className="hidden"
-                data-testid="journal-audio-input"
-              />
-              <input
-                ref={imageInputRef}
-                type="file"
-                accept={ACCEPT_IMAGE}
-                onChange={pick}
-                className="hidden"
-                data-testid="journal-image-input"
-              />
-              <button
-                type="button"
-                onClick={() => audioInputRef.current?.click()}
-                disabled={isUploading}
-                className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
-              >
-                Add audio or video
-              </button>
-              <button
-                type="button"
-                onClick={() => imageInputRef.current?.click()}
-                disabled={isUploading}
-                className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
-              >
-                Add photo
-              </button>
-              <button
-                type="button"
-                onClick={pasteFromClipboard}
-                disabled={isUploading}
-                className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
-              >
-                Paste
-              </button>
-              {isUploading ? (
-                <span className="text-xs text-[var(--color-text-muted)]">
-                  Uploading…
-                </span>
-              ) : (
-                <span className="text-xs text-[var(--color-text-muted)]">
-                  …or drop a file anywhere in this entry
-                </span>
-              )}
-            </div>
+            <AttachmentButtons
+              idPrefix="journal"
+              disabled={isUploading}
+              onFiles={uploadFiles}
+              extra={
+                <>
+                  <button
+                    type="button"
+                    onClick={pasteFromClipboard}
+                    disabled={isUploading}
+                    className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
+                  >
+                    Paste
+                  </button>
+                  {isUploading ? (
+                    <span className="text-xs text-[var(--color-text-muted)]">
+                      Uploading…
+                    </span>
+                  ) : (
+                    <span className="text-xs text-[var(--color-text-muted)]">
+                      …or drop a file anywhere in this entry
+                    </span>
+                  )}
+                </>
+              }
+            />
           )}
         </div>
       </div>
@@ -310,12 +280,13 @@ export function JournalAttachments({
       {body}
     </div>
   );
-}
+});
 
 const KIND_ICONS: Record<JournalAttachment['kind'], string> = {
   audio: '🎙️',
   video: '🎬',
   image: '📷',
+  file: '📎',
 };
 
 function AttachmentRow({
@@ -422,14 +393,18 @@ function AttachmentRow({
       )}
 
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={onTranscribe}
-          disabled={!canTranscribe(a)}
-          className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
-        >
-          {transcribeLabel(a)}
-        </button>
+        {/* No model reads an arbitrary blob, and the route refuses one — so a
+            `file` gets no Transcribe button rather than one that 400s. */}
+        {a.kind !== 'file' && (
+          <button
+            type="button"
+            onClick={onTranscribe}
+            disabled={!canTranscribe(a)}
+            className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 disabled:opacity-50"
+          >
+            {transcribeLabel(a)}
+          </button>
+        )}
         {(a.kind === 'audio' || a.kind === 'video') && (
           <button
             type="button"
