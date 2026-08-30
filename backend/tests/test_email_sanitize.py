@@ -61,6 +61,16 @@ def test_javascript_and_data_image_urls_are_dropped_not_deferred():
     assert images == []
 
 
+def test_known_cid_image_is_rewritten_but_unknown_cid_is_dropped():
+    html, images = sanitize_email_html(
+        '<img src="cid:Logo@One"><img src="cid:missing">',
+        {'logo@one': '/api/email/images/abc123'},
+    )
+    assert 'data-src="/api/email/images/abc123"' in html
+    assert 'cid:' not in html
+    assert images == []
+
+
 def test_style_blocks_are_dropped_with_their_content():
     """An email's <head> stylesheet is often larger than its prose; letting
     the tag through as text would dump CSS into the reader."""
@@ -71,14 +81,27 @@ def test_style_blocks_are_dropped_with_their_content():
     assert 'Body' in html
 
 
-def test_style_attributes_are_stripped():
-    """nh3 does not parse CSS, so a permitted style attribute would pass
-    url(...) through untouched — the same tracking fetch in another hat."""
+def test_safe_inline_styles_survive_but_css_urls_and_positioning_do_not():
     html, _ = sanitize_email_html(
-        '<p style="background:url(https://track.example/p.gif)">Hi</p>'
+        '<p style="color: #123456; padding: 12px; position: fixed; '
+        'background:url(https://track.example/p.gif); '
+        'background-image:url(https://track.example/p2.gif)">Hi</p>'
     )
+    assert 'color:#123456' in html
+    assert 'padding:12px' in html
     assert 'track.example' not in html
-    assert 'style=' not in html
+    assert 'position' not in html
+
+
+def test_legacy_email_table_formatting_survives():
+    html, _ = sanitize_email_html(
+        '<table width="600" cellpadding="10" bgcolor="#ffffff">'
+        '<tr><td align="center" valign="top">Hi</td></tr></table>'
+    )
+    assert 'width="600"' in html
+    assert 'cellpadding="10"' in html
+    assert 'bgcolor="#ffffff"' in html
+    assert 'align="center"' in html
 
 
 def test_links_survive_with_rel_and_are_not_localized():

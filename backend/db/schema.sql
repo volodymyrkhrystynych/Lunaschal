@@ -1266,10 +1266,9 @@ CREATE INDEX IF NOT EXISTS idx_emails_received ON emails(received_at DESC);
 CREATE INDEX IF NOT EXISTS idx_emails_category ON emails(category);
 CREATE INDEX IF NOT EXISTS idx_emails_job_status ON emails(job_status) WHERE job_status IS NOT NULL;
 
--- One row per distinct image URL seen in email HTML. Keyed by a hash of the
--- URL rather than a ULID because backend/email/sanitize.py has to name the
--- local path at import time, before anything is fetched — the key must be
--- derivable from the URL alone.
+-- One row per distinct image source seen in email HTML. Remote images are
+-- keyed by a hash of their URL; inline MIME images use a hash of message id +
+-- Content-ID. Both forms give sanitize.py a stable local route.
 --
 -- The bytes live on disk under content_hash (backend/email/media.py), never
 -- here: identical logos across thousands of messages converge on one file,

@@ -275,6 +275,48 @@ def test_html_is_stored_sanitized_and_images_are_queued(client, monkeypatch, acc
     ]
 
 
+def test_gmail_cid_image_is_downloaded_stored_and_rewritten(
+    client, monkeypatch, account_row, tmp_path
+):
+    import base64
+
+    monkeypatch.setenv('EMAIL_MEDIA_ROOT', str(tmp_path))
+    html = '<p>Logo<img src="cid:logo@linkedin"></p>'
+    raw = _html_message('g1', html)
+    raw['payload']['mimeType'] = 'multipart/related'
+    raw['payload']['body'] = {}
+    raw['payload']['parts'] = [
+        {
+            'mimeType': 'text/html',
+            'headers': [],
+            'body': {'data': base64.urlsafe_b64encode(html.encode()).decode()},
+        },
+        {
+            'mimeType': 'image/png',
+            'headers': [{'name': 'Content-ID', 'value': '<logo@linkedin>'}],
+            'body': {'attachmentId': 'att-1'},
+        },
+    ]
+    monkeypatch.setattr(gmail_client, 'get_profile', lambda _t: {'historyId': '9'})
+    monkeypatch.setattr(
+        gmail_client, 'list_all_message_ids',
+        lambda _t, p=None: {'messages': [{'id': 'g1'}]},
+    )
+    monkeypatch.setattr(gmail_client, 'get_message', lambda _t, _gid: raw)
+    monkeypatch.setattr(gmail_client, 'get_attachment', lambda *_args: b'png bytes')
+
+    sync.sync_account(account_row)
+
+    row = get_db().execute('SELECT body_html FROM emails').fetchone()
+    assert 'cid:' not in row['body_html']
+    assert '/api/email/images/' in row['body_html']
+    image = get_db().execute("SELECT * FROM email_images WHERE url='cid:logo@linkedin'").fetchone()
+    assert image['status'] == 'stored'
+    assert image['content_type'] == 'image/png'
+    assert (tmp_path / image['content_hash'][:2] / image['content_hash'][2:4]
+            / f"{image['content_hash']}.png").read_bytes() == b'png bytes'
+
+
 def test_plain_text_mail_stores_empty_html(client, monkeypatch, account_row):
     monkeypatch.setattr(gmail_client, 'get_profile', lambda t: {'historyId': '9'})
     monkeypatch.setattr(

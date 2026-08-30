@@ -15,7 +15,9 @@ describe('EmailBody', () => {
     const { container } = render(
       <EmailBody html="<p>Hello <strong>world</strong></p>" text="" />
     );
-    expect(container.querySelector('strong')?.textContent).toBe('world');
+    expect(container.querySelector('iframe')?.getAttribute('srcdoc')).toContain(
+      '<strong>world</strong>'
+    );
   });
 
   it('does not load images until asked', () => {
@@ -25,9 +27,13 @@ describe('EmailBody', () => {
         text=""
       />
     );
-    const img = container.querySelector('img')!;
     // The whole privacy claim: opening an email issues no image request.
-    expect(img.getAttribute('src')).toBeNull();
+    expect(container.querySelector('iframe')?.getAttribute('srcdoc')).toContain(
+      'data-src="/api/email/images/abc"'
+    );
+    expect(
+      container.querySelector('iframe')?.getAttribute('srcdoc')
+    ).not.toContain('<img src="/api/email/images/abc"');
     expect(screen.getByText(/1 image not shown/)).toBeTruthy();
   });
 
@@ -38,8 +44,8 @@ describe('EmailBody', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Load images' }));
 
-    expect(container.querySelector('img')!.getAttribute('src')).toBe(
-      '/api/email/images/abc'
+    expect(container.querySelector('iframe')?.getAttribute('srcdoc')).toContain(
+      'src="/api/email/images/abc"'
     );
   });
 
@@ -55,7 +61,12 @@ describe('EmailBody', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Load images' }));
 
-    expect(container.querySelector('img')!.getAttribute('src')).toBeNull();
+    expect(container.querySelector('iframe')?.getAttribute('srcdoc')).toContain(
+      'data-src="https://track.example/pixel.gif"'
+    );
+    expect(
+      container.querySelector('iframe')?.getAttribute('srcdoc')
+    ).not.toContain('<img src="https://track.example/pixel.gif"');
   });
 
   it('resets to images-hidden when a different email is shown', () => {

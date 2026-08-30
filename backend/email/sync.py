@@ -25,7 +25,7 @@ from ulid import ULID
 
 from backend.ai.background import run_bg
 from backend.db.connection import get_db
-from backend.email import gmail_client, imap_client, images, outlook_client
+from backend.email import gmail_client, imap_client, images, media, outlook_client
 from backend.email.sanitize import sanitize_email_html
 
 # One sync per account at a time. The scheduler treats an account as due for
@@ -83,6 +83,36 @@ def _get_outlook_oauth_settings(db) -> dict | None:
     return dict(row) if row else None
 
 
+def _store_inline_images(db, provider_message_id: str, parsed: dict) -> dict[str, str]:
+    """Store Gmail Content-ID parts and return cid -> local URL."""
+    local = {}
+    if parsed.get('inlineImages') and not media.is_available():
+        # Unlike remote URLs, Gmail attachment bytes cannot be queued without
+        # storing a second binary copy in SQLite. Retry the message next sync
+        # once the configured media disk is back instead of losing its CID
+        # references forever.
+        raise RuntimeError('Email media store is unavailable')
+    now = int(time.time())
+    for item in parsed.get('inlineImages') or []:
+        data = item.get('data')
+        cid = item.get('cid')
+        if not cid or not data:
+            continue
+        if len(data) > media.MAX_IMAGE_BYTES:
+            continue
+        key = media.url_hash(f'gmail:{provider_message_id}:cid:{cid.lower()}')
+        digest, ext, size = media.store(data, item.get('contentType'))
+        db.execute(
+            """INSERT OR REPLACE INTO email_images
+               (url_hash, url, content_hash, extension, content_type, byte_size,
+                status, attempt_count, error, created_at, fetched_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'stored', 0, NULL, ?, ?)""",
+            (key, f'cid:{cid}', digest, ext, item.get('contentType'), size, now, now),
+        )
+        local[cid.lower()] = f'/api/email/images/{key}'
+    return local
+
+
 def _store_parsed_message(db, account_id: str, provider_message_id: str, parsed: dict) -> str | None:
     """Sanitize + insert a parsed message (gmail_client.parse_message or
     imap_client.parse_message output — both use the same flat shape). Returns
@@ -94,7 +124,8 @@ def _store_parsed_message(db, account_id: str, provider_message_id: str, parsed:
     a lost race into "someone else already has it" instead of an
     IntegrityError that aborts the whole sync.
     """
-    body_html, image_refs = sanitize_email_html(parsed.get('bodyHtml') or '')
+    inline_urls = _store_inline_images(db, provider_message_id, parsed)
+    body_html, image_refs = sanitize_email_html(parsed.get('bodyHtml') or '', inline_urls)
     row_id = str(ULID())
     cur = db.execute(
         """
@@ -142,6 +173,11 @@ def _insert_message(db, account_id: str, gmail_id: str, access_token: str) -> st
             return None
         raise
     parsed = gmail_client.parse_message(raw)
+    for item in parsed.get('inlineImages') or []:
+        if item.get('data') is None and item.get('attachmentId'):
+            item['data'] = gmail_client.get_attachment(
+                access_token, gmail_id, item['attachmentId']
+            )
     return _store_parsed_message(db, account_id, parsed['gmailId'], parsed)
 
 

@@ -10,9 +10,10 @@ system SSD, so `EMAIL_MEDIA_ROOT` is expected to be set to a path on it.
 
 Two levels of deduplication, because they save different things:
 
-- **By URL** (`email_images.url_hash`, the primary key): stops the same
+- **By source** (`email_images.url_hash`, the primary key): stops the same
   campaign logo being *fetched* 4,000 times. This is the one that matters
-  for politeness and for wall-clock time.
+  for politeness and for wall-clock time. Inline MIME images use a synthetic
+  message-id/Content-ID source key instead of a remote URL.
 - **By content** (`content_hash`, the filename): stops the same bytes being
   *stored* twice when a sender rotates its CDN hostname or appends a cache
   buster, which URL keying alone cannot see through. This is the one the

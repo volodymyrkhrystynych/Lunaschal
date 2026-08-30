@@ -226,6 +226,16 @@ def get_message(access_token: str, gmail_id: str) -> dict:
     return resp.json()
 
 
+def get_attachment(access_token: str, gmail_id: str, attachment_id: str) -> bytes:
+    """Download one MIME part whose data Gmail kept out of messages.get."""
+    resp = requests.get(
+        f'{GMAIL_API_BASE}/users/me/messages/{gmail_id}/attachments/{attachment_id}',
+        headers=_auth_headers(access_token), timeout=_REQUEST_TIMEOUT,
+    )
+    _raise_for_status(resp)
+    return _decode_b64url_bytes(resp.json().get('data') or '')
+
+
 # --- pure parsing: no network, no DB — this is the unit-tested core ---
 
 _SENDER_RE = re.compile(r'<([^>]+)>')
@@ -249,9 +259,13 @@ def _split_sender(raw: str | None) -> tuple[str | None, str | None]:
     return None, raw.strip()
 
 
-def _decode_b64url(data: str) -> str:
+def _decode_b64url_bytes(data: str) -> bytes:
     padded = data + '=' * (-len(data) % 4)
-    return base64.urlsafe_b64decode(padded).decode('utf-8', errors='replace')
+    return base64.urlsafe_b64decode(padded)
+
+
+def _decode_b64url(data: str) -> str:
+    return _decode_b64url_bytes(data).decode('utf-8', errors='replace')
 
 
 def _walk_leaf_parts(payload: dict):
@@ -289,6 +303,33 @@ def _extract_bodies(payload: dict) -> tuple[str, str]:
     return '', ''
 
 
+def _extract_inline_images(payload: dict) -> list[dict]:
+    """Describe image MIME parts referenced by Content-ID.
+
+    Small parts carry data inline; larger ones carry an attachmentId and are
+    downloaded by sync.py, where the access token belongs.
+    """
+    found = []
+
+    def walk(part: dict) -> None:
+        headers = part.get('headers') or []
+        content_id = _header(headers, 'Content-ID')
+        mime = (part.get('mimeType') or '').lower()
+        if content_id and mime.startswith('image/'):
+            body = part.get('body') or {}
+            found.append({
+                'cid': content_id.strip().strip('<>'),
+                'contentType': mime,
+                'data': _decode_b64url_bytes(body['data']) if body.get('data') else None,
+                'attachmentId': body.get('attachmentId'),
+            })
+        for child in part.get('parts') or []:
+            walk(child)
+
+    walk(payload)
+    return found
+
+
 def parse_message(raw: dict) -> dict:
     """Gmail `users.messages.get?format=full` response -> the flat shape
     sync.py inserts into the `emails` table. Pure function: no network/DB."""
@@ -298,7 +339,7 @@ def parse_message(raw: dict) -> dict:
     internal_date = raw.get('internalDate')
     received_at = int(internal_date) // 1000 if internal_date else int(time.time())
     body_text, body_html = _extract_bodies(payload)
-    return {
+    parsed = {
         'gmailId': raw.get('id'),
         'threadId': raw.get('threadId'),
         'subject': _header(headers, 'Subject'),
@@ -313,3 +354,7 @@ def parse_message(raw: dict) -> dict:
         'labelIds': raw.get('labelIds') or [],
         'receivedAt': received_at,
     }
+    inline_images = _extract_inline_images(payload)
+    if inline_images:
+        parsed['inlineImages'] = inline_images
+    return parsed
