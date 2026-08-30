@@ -141,6 +141,12 @@ export function ProfileEditor() {
   }
 
   const { profile, roles, skills, education, answers } = data;
+  // Persisted React Query data can outlive backend schema additions. Keep the
+  // editor usable while an older cached profile is being refreshed.
+  const links = Array.isArray(profile.links) ? profile.links : [];
+  const companyBlacklist = Array.isArray(profile.companyBlacklist)
+    ? profile.companyBlacklist
+    : [];
 
   return (
     <div className="flex-1 overflow-y-auto min-w-0 space-y-6 pb-8">
@@ -189,7 +195,7 @@ export function ProfileEditor() {
         <div>
           <p className="text-xs text-[var(--color-text-muted)] mb-1">Links</p>
           <div className="space-y-1 mb-2">
-            {profile.links.map((link, i) => (
+            {links.map((link, i) => (
               <div key={`${link.url}-${i}`} className="flex items-center gap-2">
                 <span className="text-sm text-[var(--color-text)] truncate">
                   {link.label}: {link.url}
@@ -198,7 +204,7 @@ export function ProfileEditor() {
                   type="button"
                   onClick={() =>
                     patchContact.mutate({
-                      links: profile.links.filter((_, j) => j !== i),
+                      links: links.filter((_, j) => j !== i),
                     })
                   }
                   className="text-xs text-[var(--color-text-muted)] hover:text-red-400"
@@ -213,10 +219,7 @@ export function ProfileEditor() {
             onAdd={value => {
               const [label, ...rest] = value.split(' ');
               patchContact.mutate({
-                links: [
-                  ...profile.links,
-                  { label, url: rest.join(' ') || label },
-                ],
+                links: [...links, { label, url: rest.join(' ') || label }],
               });
             }}
           />
@@ -241,7 +244,7 @@ export function ProfileEditor() {
           />
           <Field
             label="Explicit company blacklist (comma-separated)"
-            value={profile.companyBlacklist.join(', ')}
+            value={companyBlacklist.join(', ')}
             onCommit={v =>
               patchContact.mutate({
                 companyBlacklist: v

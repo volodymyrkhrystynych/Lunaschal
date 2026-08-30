@@ -180,8 +180,8 @@ function Pipeline({ onOpen }: { onOpen: (applicationId: string) => void }) {
             Waiting 10+ days ({stale.length})
           </h3>
           <p className="text-xs text-[var(--color-text-muted)]">
-            Open one to draft a follow-up. Marking ghosted is always your
-            decision.
+            Open one to draft a follow-up. With no linked reply, it is marked
+            ghosted automatically after 60 days.
           </p>
           {stale.map(application => (
             <div

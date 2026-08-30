@@ -1,10 +1,12 @@
 """The jobs module's daemon loop.
 
-Six jobs on three cadences, sorted by what each one costs:
+Seven jobs on three cadences, sorted by what each one costs:
 
 - **Linkage** is pure string matching over new mail. It costs nothing, so it
   runs every tick — a rejection that landed at 09:00 shows up on the
   application by 09:05 rather than tomorrow morning.
+- **Ghosting** closes submitted applications after 60 days without a linked
+  reply. It runs after linkage so mail already in the inbox wins that race.
 - **Sync** is network but no model. It runs every tick too, gated per search by
   its own `interval_hours`, so the tick stays cheap while a daily search stays
   daily.
@@ -29,7 +31,7 @@ import threading
 import time
 from datetime import datetime
 
-from backend.jobs import career_watch, linker, queue, retention, sync, triager, workday_watch
+from backend.jobs import career_watch, linker, outcomes, queue, retention, sync, triager, workday_watch
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +49,15 @@ def tick(now: datetime | None = None, last_purge_date=None):
     `run_title_sweep` is.
     """
     now = now or datetime.now()
-    results = {'linkage': None, 'sync': None, 'careerWatch': None, 'workday': None, 'gated': None, 'triaged': None,
+    results = {'linkage': None, 'ghosted': None, 'sync': None, 'careerWatch': None, 'workday': None, 'gated': None, 'triaged': None,
                'queued': None, 'purge': None}
 
     results['linkage'] = linker.run_linkage_sweep()
+    try:
+        from backend.db.connection import get_db
+        results['ghosted'] = outcomes.mark_ghosted_applications(get_db())
+    except Exception as e:
+        logger.warning('Automatic job ghosting sweep failed: %s', e)
 
     # Each sweep is wrapped separately: a board that is down must not cost the
     # linkage result already computed above, nor stop the purge below.

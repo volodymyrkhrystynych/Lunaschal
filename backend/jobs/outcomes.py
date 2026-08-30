@@ -8,10 +8,12 @@ import time
 from backend.ai.llm import chat_json
 from backend.ai.provider import is_ai_configured
 from backend.db.connection import row_to_dict
+from backend.jobs import retention, status as application_status
 
 logger = logging.getLogger(__name__)
 DAY = 86400
 DEFAULT_STALE_DAYS = 10
+GHOST_AFTER_DAYS = 60
 
 SYSTEM = """Draft a concise job-application email in the candidate's voice.
 
@@ -52,6 +54,39 @@ def stale_applications(db, *, days: int = DEFAULT_STALE_DAYS,
         """, (now, cutoff),
     ).fetchall()
     return [row_to_dict(r) for r in rows]
+
+
+def mark_ghosted_applications(db, *, days: int = GHOST_AFTER_DAYS,
+                              now: int | None = None) -> dict:
+    """Close submitted applications that have received no linked reply.
+
+    This is deliberately the same evidence rule as ``stale_applications``.
+    Acknowledged applications already have a reply, while later stages must
+    never be overwritten by an age-based sweep.
+    """
+    now = int(time.time()) if now is None else now
+    cutoff = now - max(1, min(days, 365)) * DAY
+    rows = db.execute(
+        """
+        SELECT a.id
+        FROM applications a
+        WHERE a.status='submitted'
+          AND a.applied_at IS NOT NULL AND a.applied_at <= ?
+          AND NOT EXISTS (
+              SELECT 1 FROM job_email_links l JOIN emails e ON e.id=l.email_id
+              WHERE l.application_id=a.id AND e.received_at >= a.applied_at
+          )
+        """, (cutoff,),
+    ).fetchall()
+    changed = 0
+    for row in rows:
+        if application_status.record(
+            db, row['id'], 'ghosted', source='automatic', at=now
+        ):
+            retention.stamp_closed(db, row['id'], 'ghosted', now=now)
+            changed += 1
+    db.commit()
+    return {'ghosted': changed}
 
 
 def archived_submission(db, application_id: str) -> dict | None:
