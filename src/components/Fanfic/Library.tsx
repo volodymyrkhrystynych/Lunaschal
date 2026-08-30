@@ -488,12 +488,21 @@ function FicCard({
       ? siteLabel(fic.site)
       : fic.sourceType.toUpperCase();
 
+  const toggleDetailsFromCard = (event: React.MouseEvent<HTMLDivElement>) => {
+    const target = event.target as HTMLElement;
+    // Buttons and links keep their own actions. Clicking the title opens the
+    // reader; clicking the otherwise-empty card surface toggles its details.
+    if (target.closest('button, a, input, textarea, select')) return;
+    setExpanded(value => !value);
+  };
+
   return (
     <div
       ref={el => {
         if (el && selected) el.scrollIntoView({ block: 'nearest' });
       }}
-      className={`p-4 bg-[var(--color-surface)] rounded-lg border ${selected ? 'border-[var(--color-primary)]' : 'border-white/10'}`}
+      onClick={toggleDetailsFromCard}
+      className={`p-4 bg-[var(--color-surface)] rounded-lg border cursor-pointer ${selected ? 'border-[var(--color-primary)]' : 'border-white/10'}`}
     >
       <div className="flex items-start gap-3">
         {fic.coverPath && (
@@ -621,6 +630,20 @@ function FicCard({
 
           {expanded && (
             <div className="mt-3 space-y-3 border-t border-white/10 pt-3 text-sm">
+              <section>
+                <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                  My rating
+                </h3>
+                <p
+                  className={
+                    formatRating(fic.rating)
+                      ? 'text-amber-400'
+                      : 'text-[var(--color-text-muted)]'
+                  }
+                >
+                  {formatRating(fic.rating) || 'Not rated'}
+                </p>
+              </section>
               <section>
                 <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
                   Summary

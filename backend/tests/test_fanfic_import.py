@@ -78,7 +78,7 @@ def test_full_import(client, fake_net):
     fic = client.get(f'/api/fanfic/{fic_id}').get_json()
     assert fic['title'] == 'A Test Fic'
     assert fic['author'] == 'TestAuthor'
-    assert fic['description'] == 'A story about testing things.'
+    assert fic['description'] == 'First post body.'
     assert fic['downloadStatus'] == 'complete'
     assert fic['chapterCount'] == 4
     assert fic['wordCount'] > 0

@@ -11,6 +11,7 @@ from backend.fanfic.xenforo import (
     parse_thread_ref,
     parse_thread_tags,
     parse_threadmarks_index,
+    parse_thread_description,
     resolve_thread_ref,
 )
 
@@ -127,6 +128,15 @@ def test_parse_threadmarks_index_no_tabs():
 def test_parse_thread_tags_fixture():
     # page order kept, "Isekai" deduped case-insensitively against "isekai"
     assert parse_thread_tags(fixture('thread_page.html')) == ['isekai', 'time travel']
+
+
+def test_parse_thread_description_uses_full_opening_post():
+    assert parse_thread_description(fixture('thread_page.html')) == 'First post body.'
+
+
+def test_parse_thread_description_does_not_fall_back_to_truncated_metadata():
+    html = '<meta property="og:description" content="Shortened...">'
+    assert parse_thread_description(html) is None
 
 
 def test_parse_thread_tags_bare_taglist():

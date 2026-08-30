@@ -522,21 +522,26 @@ def _finalize_fic(db, fic_id: str, cover: str | None) -> None:
 
 
 def _sync_site_tags(db, fic_id: str, ref: xenforo.ThreadRef) -> None:
-    """Fetch the main thread page and replace the fic's site tags.
+    """Fetch the main thread page and refresh its full description and tags.
     Best-effort: a fetch/parse failure, or an empty result (usually a login
-    wall rather than an untagged thread), leaves existing tags alone."""
+    wall rather than an untagged thread), leaves existing metadata alone."""
     try:
-        tags = xenforo.parse_thread_tags(_fetch(ref.thread_url).text)
+        html = _fetch(ref.thread_url).text
+        tags = xenforo.parse_thread_tags(html)
+        description = xenforo.parse_thread_description(html)
     except Exception as e:
-        print(f'Fanfic tag fetch failed for {fic_id}: {e}')
+        print(f'Fanfic metadata fetch failed for {fic_id}: {e}')
         return
-    if not tags:
+    if not tags and not description:
         return
     now = int(time.time())
-    db.execute('DELETE FROM fic_site_tags WHERE fic_id=?', (fic_id,))
-    db.executemany(
-        'INSERT OR IGNORE INTO fic_site_tags(fic_id, name, created_at) VALUES (?,?,?)',
-        [(fic_id, t, now) for t in tags])
+    if description:
+        db.execute('UPDATE fics SET description=? WHERE id=?', (description, fic_id))
+    if tags:
+        db.execute('DELETE FROM fic_site_tags WHERE fic_id=?', (fic_id,))
+        db.executemany(
+            'INSERT OR IGNORE INTO fic_site_tags(fic_id, name, created_at) VALUES (?,?,?)',
+            [(fic_id, t, now) for t in tags])
     db.commit()
 
 

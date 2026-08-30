@@ -181,6 +181,28 @@ describe('Library views and expandable details', () => {
     expect(screen.getByText('A test review.')).toBeTruthy();
   });
 
+  it('expands from the card surface while the title opens the reader', async () => {
+    renderFanfic();
+    const title = await screen.findByRole('button', { name: 'Test Fic' });
+    const card = title.closest('.rounded-lg.border') as HTMLElement;
+
+    fireEvent.click(card);
+    expect(screen.getByText('A test summary.')).toBeTruthy();
+
+    fireEvent.click(title);
+    await screen.findByRole('heading', { name: 'Chapter 1' });
+  });
+
+  it('shows the personal rating in expanded details', async () => {
+    const { api } = await import('../../hooks/api');
+    vi.mocked(api.fanfic.list).mockResolvedValueOnce([{ ...FIC, rating: 4 }]);
+    renderFanfic();
+
+    fireEvent.click(await screen.findByRole('button', { name: /Details/ }));
+    expect(screen.getByText('My rating')).toBeTruthy();
+    expect(screen.getAllByText('★★★★☆').length).toBeGreaterThan(0);
+  });
+
   it('offers Library and Folders as separate views', async () => {
     renderFanfic();
     const folders = await screen.findByRole('tab', { name: 'Folders' });

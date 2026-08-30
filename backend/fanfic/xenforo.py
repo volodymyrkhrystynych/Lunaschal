@@ -277,6 +277,26 @@ def parse_thread_tags(html: str) -> list[str]:
     return tags
 
 
+def parse_thread_description(html: str) -> str | None:
+    """Full text of the thread's opening post.
+
+    XenForo's ``og:description`` is only a shortened social-card preview. The
+    opening post is the authoritative source for the synopsis shown on the
+    Library card. Prefer the standard message-body path, with a looser
+    fallback for customized XenForo themes.
+    """
+    soup = BeautifulSoup(html, 'html.parser')
+    body = (
+        soup.select_one('article.message .message-userContent .bbWrapper')
+        or soup.select_one('article.message .message-body .bbWrapper')
+        or soup.select_one('article.message .bbWrapper')
+    )
+    if body is None:
+        return None
+    lines = [re.sub(r'\s+', ' ', line).strip() for line in body.get_text('\n').splitlines()]
+    return '\n'.join(line for line in lines if line).strip() or None
+
+
 def _last_page(soup) -> int:
     last = 1
     for a in soup.select('.pageNav-main .pageNav-page'):
