@@ -17,7 +17,7 @@ type Metric = 'weight' | 'volume';
 
 const shortDate = (iso: string) => iso.slice(5).replace('-', '/');
 
-function BodyWeightChart() {
+function BodyWeightChart({ showHeading = true }: { showHeading?: boolean }) {
   const queryClient = useQueryClient();
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -54,9 +54,11 @@ function BodyWeightChart() {
 
   return (
     <div className="min-w-0">
-      <h3 className="text-sm font-medium text-[var(--color-text)] mb-1">
-        Body weight
-      </h3>
+      {showHeading && (
+        <h3 className="text-sm font-medium text-[var(--color-text)] mb-1">
+          Body weight
+        </h3>
+      )}
       <Sparkline
         series={series}
         color={ACTIVITY_COLORS.building}
@@ -95,6 +97,20 @@ function BodyWeightChart() {
         </div>
       )}
     </div>
+  );
+}
+
+/** The weigh-in can temporarily leave Progression while it is still due
+ * today. Keeping the same chart/form in both places means prioritising it does
+ * not turn it into a second, subtly different way to log weight. */
+export function BodyWeightCard() {
+  return (
+    <section className={CARD}>
+      <h2 className="text-lg font-semibold text-[var(--color-text)] mb-3">
+        Body weight
+      </h2>
+      <BodyWeightChart showHeading={false} />
+    </section>
   );
 }
 
@@ -191,14 +207,18 @@ function ExerciseChart() {
  *  a column with the workout log and calories/selfie cards rather than
  *  spanning the full tab width, so a side-by-side grid here would squeeze
  *  both charts rather than actually laying out side by side. */
-export function Progression() {
+export function Progression({
+  hideBodyWeight = false,
+}: {
+  hideBodyWeight?: boolean;
+}) {
   return (
     <section className={CARD}>
       <h2 className="text-lg font-semibold text-[var(--color-text)] mb-3">
         Progression
       </h2>
       <div className="flex flex-col gap-6">
-        <BodyWeightChart />
+        {!hideBodyWeight && <BodyWeightChart />}
         <ExerciseChart />
       </div>
     </section>

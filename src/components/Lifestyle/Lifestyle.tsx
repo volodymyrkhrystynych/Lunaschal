@@ -1,7 +1,10 @@
+import { useQuery } from '@tanstack/react-query';
+import { api } from '@/hooks/api';
+import { todayISO } from '@/lib/lifestyle';
 import { TasksSection } from '../Tasks';
 import { ActivityHeatmap } from './ActivityHeatmap';
 import { CaloriesCard } from './CaloriesCard';
-import { Progression } from './Progression';
+import { BodyWeightCard, Progression } from './Progression';
 import { SelfieCard } from './SelfieCard';
 import { TrendsChart } from './TrendsChart';
 import { WeatherCard } from './WeatherCard';
@@ -28,9 +31,45 @@ import { CARD, CARD_DIVIDER } from './card';
  * next to empty space. Everything else stacks vertically in the other column.
  */
 export function Lifestyle() {
+  const today = todayISO();
+  const { data: selfies } = useQuery({
+    queryKey: ['lifestyle', 'selfies'],
+    queryFn: () => api.lifestyle.selfies.list(120),
+  });
+  const { data: weights } = useQuery({
+    queryKey: ['lifestyle', 'weight'],
+    queryFn: () => api.lifestyle.weight.list(),
+  });
+  const { data: calories } = useQuery({
+    queryKey: ['lifestyle', 'calories'],
+    queryFn: () => api.lifestyle.calories.day(),
+  });
+
+  // Do not rearrange the page around loading placeholders. Once today's data
+  // is known, unfinished daily inputs move above everything else. The cards'
+  // own mutations update/invalidate these same query keys, so each one returns
+  // to its usual position as soon as it is completed.
+  const needsSelfie =
+    selfies !== undefined && !selfies.some(selfie => selfie.date === today);
+  const needsWeight =
+    weights !== undefined && !weights.some(log => log.date === today);
+  const needsCalories = calories !== undefined && calories.total < 2000;
+  const hasDailyPriorities = needsSelfie || needsWeight || needsCalories;
+
   return (
     <div className="flex-1 overflow-y-auto p-4">
       <div className="flex flex-col gap-4 max-w-6xl">
+        {hasDailyPriorities && (
+          <div
+            aria-label="Today's priorities"
+            className="grid gap-4 lg:grid-cols-2 items-start"
+          >
+            {needsSelfie && <SelfieCard />}
+            {needsWeight && <BodyWeightCard />}
+            {needsCalories && <CaloriesCard />}
+          </div>
+        )}
+
         <section className={CARD}>
           <ActivityHeatmap />
           <div className={CARD_DIVIDER}>
@@ -42,10 +81,10 @@ export function Lifestyle() {
           <TasksSection />
           <div className="flex flex-col gap-4 min-w-0">
             <WorkoutLog />
-            <CaloriesCard />
+            {!needsCalories && <CaloriesCard />}
             <WeatherCard />
-            <SelfieCard />
-            <Progression />
+            {!needsSelfie && <SelfieCard />}
+            <Progression hideBodyWeight={needsWeight} />
           </div>
         </div>
       </div>
