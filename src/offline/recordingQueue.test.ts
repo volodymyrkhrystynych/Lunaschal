@@ -37,6 +37,7 @@ const {
 const { MUTATION_KEYS, registerOfflineMutationDefaults } =
   await import('./mutationDefaults');
 const {
+  attachRecordingToEntry,
   enqueueRecordingUpload,
   handleFinishedRecording,
   resumeStoredRecordings,
@@ -152,6 +153,51 @@ describe('what happens to a finished recording', () => {
       transcribe: true,
     });
     expect(await listRecordings()).toEqual([]);
+  });
+});
+
+describe('attaching a recording to an entry that already exists', () => {
+  // The Journal's Transcribe button records while an entry is open, so the clip
+  // belongs on that entry rather than on a new one of its own. It goes through
+  // the same durable queue: `POST /api/journal/recordings` does INSERT OR IGNORE
+  // on the entry, so an id that already exists means "attach to this".
+  it('uploads against the entry id, not the recording id', async () => {
+    const rec = await storedRecording('audio');
+    createRecording.mockResolvedValue({ id: 'entry-7', attachment: {} });
+
+    await attachRecordingToEntry(client(), rec, 'entry-7');
+
+    expect(createRecording).toHaveBeenCalledTimes(1);
+    const opts = createRecording.mock.calls[0][1];
+    expect(opts.id).toBe('entry-7');
+    // The attachment keeps the recording's own id — that is what makes a replay
+    // of this upload a no-op instead of a second copy of the file.
+    expect(opts.attachmentId).toBe(rec.id);
+  });
+
+  it('does not ask the server to transcribe it a second time', async () => {
+    // The text was already fetched in the browser and put in the draft; a
+    // server-side pass would burn another CPU transcription and write into the
+    // entry body underneath an open editor.
+    const rec = await storedRecording('audio');
+    createRecording.mockResolvedValue({ id: 'entry-7', attachment: {} });
+
+    await attachRecordingToEntry(client(), rec, 'entry-7');
+
+    expect(createRecording.mock.calls[0][1]).toMatchObject({
+      transcribe: false,
+    });
+  });
+
+  it('lets go of the audio only once the server has it', async () => {
+    const rec = await storedRecording('audio');
+    createRecording.mockRejectedValue(new Error('offline'));
+
+    await expect(
+      attachRecordingToEntry(client(), rec, 'entry-7')
+    ).rejects.toThrow();
+
+    expect(await listRecordings()).toHaveLength(1);
   });
 });
 
