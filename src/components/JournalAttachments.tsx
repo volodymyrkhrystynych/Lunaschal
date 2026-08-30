@@ -55,6 +55,9 @@ export const JournalAttachments = memo(function JournalAttachments({
   const queryClient = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [imageRevisions, setImageRevisions] = useState<Record<string, number>>(
+    {}
+  );
   const list = attachments ?? [];
 
   const invalidate = () =>
@@ -76,6 +79,21 @@ export const JournalAttachments = memo(function JournalAttachments({
   const deleteAttachment = useMutation({
     mutationFn: (id: string) => api.journal.attachments.delete(id),
     onSuccess: invalidate,
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const rotateAttachment = useMutation({
+    mutationFn: (id: string) => api.journal.attachments.rotate(id),
+    onSuccess: (_, id) => {
+      setError(null);
+      // The file URL is deliberately stable. Bust the browser's image cache
+      // immediately while the journal query catches up with the new size.
+      setImageRevisions(current => ({
+        ...current,
+        [id]: (current[id] ?? 0) + 1,
+      }));
+      invalidate();
+    },
     onError: (e: Error) => setError(e.message),
   });
 
@@ -194,6 +212,9 @@ export const JournalAttachments = memo(function JournalAttachments({
       editable={editable}
       onRename={name => renameAttachment.mutate({ id: a.id, name })}
       onDelete={() => deleteAttachment.mutate(a.id)}
+      onRotate={() => rotateAttachment.mutate(a.id)}
+      isRotating={rotateAttachment.isPending}
+      imageRevision={imageRevisions[a.id] ?? 0}
       onTranscribe={() => transcribeAttachment.mutate(a.id)}
       onDescribeAudio={() => describeAudioAttachment.mutate(a.id)}
     />
@@ -294,6 +315,9 @@ function AttachmentRow({
   editable,
   onRename,
   onDelete,
+  onRotate,
+  isRotating,
+  imageRevision,
   onTranscribe,
   onDescribeAudio,
 }: {
@@ -301,6 +325,9 @@ function AttachmentRow({
   editable: boolean;
   onRename: (name: string) => void;
   onDelete: () => void;
+  onRotate: () => void;
+  isRotating: boolean;
+  imageRevision: number;
   onTranscribe: () => void;
   onDescribeAudio: () => void;
 }) {
@@ -323,6 +350,10 @@ function AttachmentRow({
   };
 
   const lightbox = useLightbox();
+  const imageUrl =
+    a.kind === 'image' && imageRevision
+      ? `${a.url}${a.url.includes('?') ? '&' : '?'}rotation=${imageRevision}`
+      : a.url;
   const geoLink = a.kind === 'image' ? mapLink(a.latitude, a.longitude) : null;
 
   const shareImage = async () => {
@@ -330,7 +361,7 @@ function AttachmentRow({
     setShareNotice(null);
     setIsSharing(true);
     try {
-      const response = await fetch(a.url);
+      const response = await fetch(imageUrl);
       if (!response.ok) throw new Error('Could not load the picture.');
       const blob = await response.blob();
       const extension =
@@ -414,12 +445,12 @@ function AttachmentRow({
               portrait box was being cropped to its middle third. */}
           <button
             type="button"
-            onClick={() => lightbox.open(a.url)}
+            onClick={() => lightbox.open(imageUrl)}
             className="shrink-0 h-32 max-w-full rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
             title="View"
           >
             <img
-              src={a.url}
+              src={imageUrl}
               alt={a.name}
               loading="lazy"
               className="h-full w-auto max-w-full object-contain"
@@ -484,6 +515,18 @@ function AttachmentRow({
         >
           Download
         </a>
+        {a.kind === 'image' && editable && (
+          <button
+            type="button"
+            onClick={onRotate}
+            disabled={isRotating}
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+            aria-label="Rotate image 90 degrees clockwise"
+            title="Rotate 90° clockwise"
+          >
+            {isRotating ? 'Rotating…' : 'Rotate ↻'}
+          </button>
+        )}
         {a.kind === 'image' && (
           <button
             type="button"

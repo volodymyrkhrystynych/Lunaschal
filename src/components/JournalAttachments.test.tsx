@@ -13,6 +13,7 @@ vi.mock('../hooks/api', () => ({
         upload: vi.fn(),
         rename: vi.fn(),
         delete: vi.fn(),
+        rotate: vi.fn(),
         transcribe: vi.fn(),
         describeAudio: vi.fn(),
       },
@@ -88,6 +89,36 @@ describe('JournalAttachments', () => {
     expect(screen.queryByText(/Photo$/)).toBeNull();
     expect(screen.queryByText(/File$/)).toBeNull();
     expect(screen.queryByText('Paste')).toBeNull();
+  });
+
+  it('rotates an image clockwise and refreshes its displayed file', async () => {
+    vi.mocked(api.journal.attachments.rotate).mockResolvedValue(
+      attachment({ kind: 'image' })
+    );
+    renderIt([attachment({ kind: 'image' })], true);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Rotate image 90 degrees clockwise' })
+    );
+
+    await waitFor(() =>
+      expect(api.journal.attachments.rotate).toHaveBeenCalledWith('a1')
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('img').getAttribute('src')).toContain(
+        'rotation=1'
+      )
+    );
+  });
+
+  it('only offers image rotation while editing', () => {
+    renderIt([attachment({ kind: 'image' })], false);
+
+    expect(
+      screen.queryByRole('button', {
+        name: 'Rotate image 90 degrees clockwise',
+      })
+    ).toBeNull();
   });
 
   it('uploads a picked file, naming it after the filename', async () => {

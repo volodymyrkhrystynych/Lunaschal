@@ -101,6 +101,34 @@ def test_upload_detects_images(client, entry_id):
     assert a['kind'] == 'image'
 
 
+def test_rotate_image_is_clockwise_and_persistent(client, entry_id):
+    image = Image.new('RGB', (3, 2))
+    image.putpixel((0, 0), (255, 0, 0))
+    image.putpixel((2, 0), (0, 255, 0))
+    buf = io.BytesIO()
+    image.save(buf, 'PNG')
+    a = _upload(client, entry_id, filename='corners.png', data=buf.getvalue(),
+                mime='image/png').get_json()
+
+    r = client.post(f"/api/journal/attachments/{a['id']}/rotate")
+
+    assert r.status_code == 200
+    stored = storage.resolve_stored_path(
+        journal_routes._load_attachment(a['id'])['path']
+    )
+    with Image.open(stored) as rotated:
+        assert rotated.size == (2, 3)
+        # The old top-left moves to the new top-right on a clockwise turn.
+        assert rotated.getpixel((1, 0)) == (255, 0, 0)
+        assert rotated.getpixel((1, 2)) == (0, 255, 0)
+
+
+def test_rotate_refuses_non_images(client, entry_id):
+    a = _upload(client, entry_id).get_json()
+    r = client.post(f"/api/journal/attachments/{a['id']}/rotate")
+    assert r.status_code == 400
+
+
 def test_upload_accepts_a_nameless_file(client, entry_id):
     """A voice memo dragged out of the iOS Voice Memos app is a File with an
     empty name, so FormData sends filename="". Rejecting that turned a working

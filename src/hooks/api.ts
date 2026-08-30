@@ -2498,6 +2498,10 @@ export const api = {
         }),
       delete: (attachmentId: string) =>
         del<{ success: boolean }>(`/api/journal/attachments/${attachmentId}`),
+      rotate: (attachmentId: string) =>
+        post<JournalAttachment>(
+          `/api/journal/attachments/${attachmentId}/rotate`
+        ),
       // Opt-in per attachment: transcribes audio, captions an image. Returns
       // as soon as the work is queued; the result arrives over /api/journal/events.
       transcribe: (attachmentId: string) =>

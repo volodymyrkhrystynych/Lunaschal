@@ -785,6 +785,32 @@ def update_attachment(attachment_id):
     return jsonify(_attachment_dict(row))
 
 
+@bp.post('/attachments/<attachment_id>/rotate')
+def rotate_attachment(attachment_id):
+    """Permanently rotate one journal photo 90 degrees clockwise."""
+    row = _load_attachment(attachment_id)
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['kind'] != 'image':
+        return jsonify({'error': 'Only image attachments can be rotated'}), 400
+    path = storage.resolve_stored_path(row['path'])
+    if path is None or not path.is_file():
+        return jsonify({'error': 'Image file not found'}), 404
+
+    try:
+        from backend.imaging import rotate_clockwise
+        size = rotate_clockwise(path)
+    except Exception as e:
+        return jsonify({'error': f'Could not rotate image: {e}'}), 422
+
+    db = get_db()
+    db.execute('UPDATE journal_attachments SET size=? WHERE id=?',
+               (size, attachment_id))
+    db.commit()
+    _notify_subscribers(row['entry_id'])
+    return jsonify(_attachment_dict(_load_attachment(attachment_id)))
+
+
 @bp.delete('/attachments/<attachment_id>')
 def delete_attachment(attachment_id):
     db = get_db()
