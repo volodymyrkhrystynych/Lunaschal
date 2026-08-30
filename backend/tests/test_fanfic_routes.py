@@ -65,17 +65,15 @@ def test_list_includes_expandable_details(client):
     assert rows[0]['title'] == 'Test Fic'
 
 
-def test_all_orders_by_fic_updated_at(client):
-    older_fic, _ = make_fic('Older Fic', chapters=[('Ch 1', 'hello world')])
-    newer_fic, _ = make_fic('Newer Fic', chapters=[('Ch 1', 'hello world')])
-
-    db = get_db()
-    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (100, newer_fic))
-    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (200, older_fic))
-    db.commit()
+def test_all_orders_by_latest_chapter_publication(client):
+    now = int(time.time())
+    older_fic, _ = make_fic('Older Fic')
+    _add_chapter(older_fic, posted_at=now - 200)
+    newer_fic, _ = make_fic('Newer Fic')
+    _add_chapter(newer_fic, posted_at=now - 100)
 
     rows = client.get('/api/fanfic').get_json()
-    assert [r['id'] for r in rows] == [older_fic, newer_fic]
+    assert [r['id'] for r in rows] == [newer_fic, older_fic]
 
 
 def test_search_matches_title(client):
@@ -361,16 +359,13 @@ def test_folder_membership_does_not_control_all_order(client):
     fic_a, _ = make_fic('A')
     fic_b, _ = make_fic('B')
     fic_c, _ = make_fic('C')  # stays unsorted
+    _add_chapter(fic_a, posted_at=now - 300)
+    _add_chapter(fic_b, posted_at=now - 200)
+    _add_chapter(fic_c, posted_at=now - 100)
     first = make_folder(client, 'first')
     second = make_folder(client, 'second')
     client.post(f'/api/fanfic/{fic_a}/folders', json={'folderId': first})
     client.post(f'/api/fanfic/{fic_b}/folders', json={'folderId': second})
-    db = get_db()
-    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (100, fic_a))
-    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (200, fic_b))
-    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (300, fic_c))
-    db.commit()
-
     assert [f['id'] for f in client.get('/api/fanfic').get_json()] == [fic_c, fic_b, fic_a]
     client.put('/api/fanfic/folders/order', json={'ids': [second, first]})
     assert [f['id'] for f in client.get('/api/fanfic').get_json()] == [fic_c, fic_b, fic_a]

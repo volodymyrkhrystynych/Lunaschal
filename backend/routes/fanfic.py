@@ -32,10 +32,9 @@ _LATEST_ACTIVITY_ORDER = (
     ' (SELECT MAX(posted_at) FROM fic_chapters WHERE fic_chapters.fic_id = fics.id),'
     ' (SELECT MAX(created_at) FROM fic_chapters WHERE fic_chapters.fic_id = fics.id),'
     ' fics.created_at'
-    ') DESC'
+    ') DESC, fics.created_at DESC'
 )
 
-_UPDATED_ORDER = 'fics.updated_at DESC, fics.created_at DESC'
 _OPENED_ORDER = 'fics.last_opened_at DESC NULLS LAST, fics.updated_at DESC'
 
 
@@ -99,8 +98,8 @@ def list_fics():
                      ' WHERE name=? AND fic_id=fics.id)')
         params.append(tag)
     where_sql = f" WHERE {' AND '.join(where)}" if where else ''
-    # All and folder views follow metadata/content updates. Recent is reading
-    # history, deliberately independent of forum publication dates.
+    # All and folder views follow chapter publication activity. Recent is
+    # reading history, deliberately independent of forum publication dates.
     sort = request.args.get('sort')
     if sort == 'recent':
         order = _OPENED_ORDER
@@ -108,7 +107,7 @@ def list_fics():
         # Preserve the existing ordering inside Unsorted and named folders.
         order = _LATEST_ACTIVITY_ORDER
     else:
-        order = _UPDATED_ORDER
+        order = _LATEST_ACTIVITY_ORDER
     rows = get_db().execute(
         f'SELECT {_LIST_COLS} FROM fics{where_sql}'
         f' ORDER BY {order} LIMIT ? OFFSET ?',

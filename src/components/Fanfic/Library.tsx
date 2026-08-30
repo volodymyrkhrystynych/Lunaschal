@@ -288,7 +288,7 @@ export function Library({ onOpen }: LibraryProps) {
             {view === 'library' ? (
               <div className="tag-row flex flex-wrap items-center gap-2 mb-4">
                 {[
-                  [null, 'All', 'Books ordered by most recently updated'],
+                  [null, 'All', 'Books ordered by latest chapter publication'],
                   ['recent', 'Recent', 'Books ordered by most recently opened'],
                   ['unsorted', 'Unsorted', 'Books not assigned to a folder'],
                 ].map(([id, label, title]) => (
