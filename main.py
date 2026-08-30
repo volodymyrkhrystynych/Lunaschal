@@ -4,6 +4,8 @@ import threading
 import time
 import urllib.request
 import urllib.error
+import base64
+import binascii
 
 # webview and Qt are imported inside _start_window() rather than here: --headless
 # is the production server (ops/run-prod.sh) and must not need a display, a
@@ -18,6 +20,32 @@ FLASK_PORT = int(os.environ.get('LUNASCHAL_PORT', '5000'))
 # running server to free it.
 DEV_FLASK_PORT = int(os.environ.get('LUNASCHAL_DEV_PORT', '5001'))
 ICON_PATH = os.path.join(os.path.dirname(__file__), 'public', 'icons', 'icon.png')
+
+
+class _DesktopApi:
+    """Small JS bridge for capabilities QtWebEngine does not provide."""
+
+    def copy_image(self, data_url: str) -> dict:
+        """Put a browser-fetched image on the desktop clipboard."""
+        try:
+            header, encoded = data_url.split(',', 1)
+            if not header.startswith('data:image/') or ';base64' not in header:
+                raise ValueError('Expected a base64 image.')
+            data = base64.b64decode(encoded, validate=True)
+
+            from qtpy.QtGui import QImage
+            from qtpy.QtWidgets import QApplication
+
+            image = QImage.fromData(data)
+            if image.isNull():
+                raise ValueError('The picture could not be decoded.')
+            app = QApplication.instance()
+            if app is None:
+                raise RuntimeError('The desktop application is not ready.')
+            app.clipboard().setImage(image)
+            return {'ok': True}
+        except (ValueError, binascii.Error, RuntimeError) as exc:
+            return {'ok': False, 'error': str(exc)}
 
 
 def _webview_storage_path() -> str:
@@ -208,7 +236,7 @@ def _start_window(url: str):
     _qt_app.setApplicationDisplayName('Lunaschal')
 
     webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600),
-                          text_select=True)
+                          text_select=True, js_api=_DesktopApi())
     # private_mode=False + a persistent storage_path so cookies/localStorage/
     # IndexedDB survive a restart (see _webview_storage_path). Without this the
     # network-mode login and all client-side persistence reset every launch.

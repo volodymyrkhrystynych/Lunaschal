@@ -307,6 +307,7 @@ function AttachmentRow({
   const [name, setName] = useState(a.name);
   const [isSharing, setIsSharing] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
 
   // Keep the field in step with the server after a refetch, but never while the
   // user is midway through typing a new name into it.
@@ -326,11 +327,9 @@ function AttachmentRow({
 
   const shareImage = async () => {
     setShareError(null);
+    setShareNotice(null);
     setIsSharing(true);
     try {
-      if (!navigator.share) {
-        throw new Error('Sharing is not supported by this browser.');
-      }
       const response = await fetch(a.url);
       if (!response.ok) throw new Error('Could not load the picture.');
       const blob = await response.blob();
@@ -342,10 +341,38 @@ function AttachmentRow({
         : `${baseName}.${extension}`;
       const file = new File([blob], filename, { type: blob.type });
       const shareData = { files: [file], title: a.name };
-      if (navigator.canShare && !navigator.canShare(shareData)) {
+      if (
+        navigator.share &&
+        (!navigator.canShare || navigator.canShare(shareData))
+      ) {
+        await navigator.share(shareData);
+        return;
+      }
+
+      const desktopApi = (
+        window as Window & {
+          pywebview?: {
+            api?: {
+              copy_image?: (
+                dataUrl: string
+              ) => Promise<{ ok: boolean; error?: string }>;
+            };
+          };
+        }
+      ).pywebview?.api?.copy_image;
+      if (!desktopApi) {
         throw new Error('Sharing pictures is not supported by this browser.');
       }
-      await navigator.share(shareData);
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error('Could not read the picture.'));
+        reader.readAsDataURL(blob);
+      });
+      const result = await desktopApi(dataUrl);
+      if (!result.ok)
+        throw new Error(result.error || 'Could not copy the picture.');
+      setShareNotice('Picture copied to clipboard.');
     } catch (e) {
       // Closing the native share sheet is an ordinary cancellation, not an
       // error the journal needs to keep showing under the picture.
@@ -481,6 +508,11 @@ function AttachmentRow({
       {shareError && (
         <div className="px-2 py-1 rounded bg-red-500/10 border border-red-500/20 text-xs text-red-400">
           {shareError}
+        </div>
+      )}
+      {shareNotice && (
+        <div className="px-2 py-1 rounded bg-white/5 border border-white/10 text-xs text-[var(--color-text-muted)]">
+          {shareNotice}
         </div>
       )}
 
