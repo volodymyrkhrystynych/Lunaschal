@@ -30,7 +30,12 @@ export interface EventGroupSpan {
 function feedItemTimeMs(item: FeedItem): number {
   switch (item.kind) {
     case 'entry':
-      return new Date(item.entry.createdAt).getTime();
+      // Optional on JournalEntry: an optimistically inserted row has no
+      // server timestamp yet. -Infinity keeps it outside every event's window
+      // rather than making the whole overlay NaN.
+      return item.entry.createdAt
+        ? new Date(item.entry.createdAt).getTime()
+        : -Infinity;
     case 'transcription':
       return new Date(item.transcription.createdAt).getTime();
     case 'conversation':

@@ -104,8 +104,16 @@ def client(isolated_db):
         from backend.research import worker
         from backend.journal import voice_drafts
         from backend.jobs import queue as job_queue, triager as job_triager
+        from backend.routes import journal as journal_routes
         worker.cancel()
         worker.wait_idle(timeout=15.0)
+        # Not an executor: the journal's title-metadata wait is a bare daemon
+        # thread (it cannot share `background`'s single worker with the
+        # captioning jobs it waits on without deadlocking), so it needs draining
+        # by name. It polls the connection closed below — this is the one that
+        # actually segfaulted a run.
+        journal_routes.cancel_metadata_waits()
+        journal_routes.wait_metadata_idle(timeout=15.0)
         background.wait_idle(timeout=15.0)
         runs.wait_idle(timeout=15.0)
         voice_drafts.wait_idle(timeout=15.0)

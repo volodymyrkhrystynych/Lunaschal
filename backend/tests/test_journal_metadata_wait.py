@@ -235,3 +235,66 @@ def test_the_context_is_photos_only(client, monkeypatch):
     db.commit()
 
     assert journal_routes._metadata_context(entry_id) is None
+
+
+def test_a_waiting_thread_can_be_cancelled_and_drained(client, monkeypatch):
+    """The contract `conftest.py` relies on, pinned.
+
+    This waiter is a bare daemon thread — it cannot go on `run_bg`'s single
+    worker without deadlocking against the captioning jobs it waits for — so it
+    is covered by none of the app's `wait_idle`s. It polls the module-global
+    SQLite connection, and a test that closes that connection while the thread
+    is mid-query does not raise: it segfaults the interpreter, taking the whole
+    pytest batch with it. That happened, which is why this exists.
+    """
+    monkeypatch.setattr(journal_routes, '_METADATA_WAIT_SECONDS', 60.0)
+    monkeypatch.setattr(journal_routes, 'run_bg', lambda fn: None)
+
+    client.post(
+        '/api/journal', json={'content': 'Waiting.', 'pendingAttachments': 3}
+    )
+
+    # Parked on a condition that will not come true for a minute.
+    assert any(
+        t.name.startswith('journal-meta-') for t in threading.enumerate()
+    )
+
+    journal_routes.cancel_metadata_waits()
+    assert journal_routes.wait_metadata_idle(timeout=5.0) is True
+    assert not any(
+        t.name.startswith('journal-meta-') for t in threading.enumerate()
+    )
+
+
+def test_a_cancelled_wait_does_not_go_on_to_generate(client, monkeypatch):
+    """Cancelling means abandon, not hurry up. Queueing the job anyway would put
+    it on `run_bg` after the suite had already drained that queue."""
+    monkeypatch.setattr(journal_routes, '_METADATA_WAIT_SECONDS', 60.0)
+    queued = []
+    monkeypatch.setattr(journal_routes, 'run_bg', queued.append)
+
+    client.post(
+        '/api/journal', json={'content': 'Waiting.', 'pendingAttachments': 3}
+    )
+    journal_routes.cancel_metadata_waits()
+    journal_routes.wait_metadata_idle(timeout=5.0)
+
+    assert queued == []
+
+
+def test_draining_is_a_no_op_when_nothing_is_waiting(client):
+    assert journal_routes.wait_metadata_idle(timeout=1.0) is True
+    journal_routes.cancel_metadata_waits()
+
+
+def test_a_finished_waiter_removes_itself_from_the_registry(client, monkeypatch):
+    """Otherwise the registry grows for the life of the process, holding a
+    reference to every thread that ever waited — and `wait_metadata_idle` walks
+    it on every call."""
+    monkeypatch.setattr(journal_routes, 'run_bg', lambda fn: None)
+
+    client.post('/api/journal', json={'content': 'A day.', 'pendingAttachments': 1})
+    journal_routes.cancel_metadata_waits()
+    journal_routes.wait_metadata_idle(timeout=5.0)
+
+    assert journal_routes._metadata_waiters == {}

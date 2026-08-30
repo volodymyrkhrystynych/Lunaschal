@@ -39,7 +39,10 @@ export function buildFeed(
   let p = 0;
   let f = 0;
   let k = 0;
-  const ms = (v: string) => new Date(v).getTime();
+  // `undefined` because JournalEntry.createdAt is optional — an optimistically
+  // inserted row exists before the server has stamped one. Such a row sorts to
+  // the end rather than crashing the merge or jumping to the top on NaN.
+  const ms = (v: string | undefined) => (v ? new Date(v).getTime() : -Infinity);
   while (
     e < entries.length ||
     t < transcriptions.length ||

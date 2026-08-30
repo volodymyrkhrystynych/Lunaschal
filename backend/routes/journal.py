@@ -1096,6 +1096,43 @@ _METADATA_WAIT_SECONDS = 300.0
 _METADATA_POLL_SECONDS = 2.0
 
 
+# Live metadata waiters: the thread, and the event that tells it to give up.
+# A dict rather than a set of pairs so a waiter can remove itself by the one
+# handle it has — a set of tuples invites a `discard(thread)` that silently
+# matches nothing and leaks the entry. Only ever touched under the lock;
+# `cancel_metadata_waits`/`wait_metadata_idle` are the drain contract every
+# other background worker in this app already exposes.
+_metadata_waiters: dict[threading.Thread, threading.Event] = {}
+_metadata_waiters_lock = threading.Lock()
+
+
+def cancel_metadata_waits() -> None:
+    """Tell every waiting metadata thread to give up.
+
+    Production never calls this — a wait is at most `_METADATA_WAIT_SECONDS` and
+    the process outlives it. The test suite does, before it closes the database
+    these threads read.
+    """
+    with _metadata_waiters_lock:
+        stops = list(_metadata_waiters.values())
+    for stop in stops:
+        stop.set()
+
+
+def wait_metadata_idle(timeout: float = 10.0) -> bool:
+    """Block until the waiting threads are gone. True if they went.
+
+    Pair it with `cancel_metadata_waits()`; on its own it would sit through the
+    full cap.
+    """
+    deadline = time.monotonic() + timeout
+    with _metadata_waiters_lock:
+        threads = list(_metadata_waiters)
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+    return not any(thread.is_alive() for thread in threads)
+
+
 def _metadata_context(entry_id: str) -> str | None:
     """Captions of the entry's photos, for the title/tags call.
 
@@ -1159,23 +1196,47 @@ def _generate_metadata_bg(
         run_bg(_run)
         return
 
+    stop = threading.Event()
+
     def _wait_then_run():
-        deadline = time.monotonic() + _METADATA_WAIT_SECONDS
-        while time.monotonic() < deadline:
-            try:
-                if _attachments_settled(journal_id, expect_attachments):
+        try:
+            deadline = time.monotonic() + _METADATA_WAIT_SECONDS
+            while time.monotonic() < deadline:
+                try:
+                    if _attachments_settled(journal_id, expect_attachments):
+                        break
+                except Exception as e:
+                    print(f'Metadata wait failed for {journal_id}: {e}')
                     break
-            except Exception as e:
-                print(f'Metadata wait failed for {journal_id}: {e}')
-                break
-            time.sleep(_METADATA_POLL_SECONDS)
-        run_bg(_run)
+                # `stop.wait`, not `time.sleep`: it doubles as the cancellation
+                # point, so a cancelled waiter goes away now rather than in up
+                # to a poll interval — which is the difference between the test
+                # suite draining cleanly and closing the database underneath it.
+                if stop.wait(_METADATA_POLL_SECONDS):
+                    return
+            if stop.is_set():
+                return
+            run_bg(_run)
+        finally:
+            with _metadata_waiters_lock:
+                _metadata_waiters.pop(waiter, None)
 
     # A plain daemon thread, deliberately NOT `run_bg`. That queue has a single
     # worker shared with the captioning jobs this is waiting for, so a job that
     # blocked on them would head-of-line block the very work that unblocks it —
     # a guaranteed deadlock until the cap expired. Nothing here touches a model;
     # it sleeps and reads one indexed row set.
-    threading.Thread(
+    #
+    # It is registered because it is *not* on one of the app's executors, and
+    # therefore not covered by any of their `wait_idle`s. It reads the
+    # module-global SQLite connection, so a test that closes that connection
+    # while this thread is mid-query segfaults the interpreter rather than
+    # raising — see backend/tests/conftest.py, which drains every other
+    # background worker for exactly this reason. Registering it is what lets it
+    # be drained too.
+    waiter = threading.Thread(
         target=_wait_then_run, daemon=True, name=f'journal-meta-{journal_id[:8]}'
-    ).start()
+    )
+    with _metadata_waiters_lock:
+        _metadata_waiters[waiter] = stop
+    waiter.start()

@@ -272,7 +272,12 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     let min = Infinity;
     let max = -Infinity;
     for (const e of entries ?? []) {
+      // `createdAt` is optional on JournalEntry — an optimistically inserted
+      // row can be in the list before the server has stamped one. Skip rather
+      // than let an Invalid Date poison the range and blank the whole overlay.
+      if (!e.createdAt) continue;
       const t = new Date(e.createdAt).getTime();
+      if (!Number.isFinite(t)) continue;
       if (t < min) min = t;
       if (t > max) max = t;
     }

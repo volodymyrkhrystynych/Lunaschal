@@ -28,12 +28,26 @@ export const timeFormat = new Intl.DateTimeFormat('en-US', {
   minute: '2-digit',
 });
 
-export function formatDateTime(date: string | number | Date): string {
-  return dateTimeFormat.format(new Date(date));
+/**
+ * `undefined` is a real case, not defensiveness: `JournalEntry.createdAt` is
+ * optional, because an optimistically inserted row exists before the server has
+ * stamped one. A blank label is the right answer there — "Invalid Date" in the
+ * feed is worse than no date at all.
+ */
+type Dateish = string | number | Date | null | undefined;
+
+function format(fmt: Intl.DateTimeFormat, date: Dateish): string {
+  if (date == null) return '';
+  const d = new Date(date);
+  return Number.isNaN(d.getTime()) ? '' : fmt.format(d);
 }
 
-export function formatTime(date: string | number | Date): string {
-  return timeFormat.format(new Date(date));
+export function formatDateTime(date: Dateish): string {
+  return format(dateTimeFormat, date);
+}
+
+export function formatTime(date: Dateish): string {
+  return format(timeFormat, date);
 }
 
 /** "Mon, Jan 5, 2026" — a day heading, no time. */
@@ -53,10 +67,10 @@ export const dayTimeFormat = new Intl.DateTimeFormat('en-US', {
   minute: '2-digit',
 });
 
-export function formatDay(date: string | number | Date): string {
-  return dayFormat.format(new Date(date));
+export function formatDay(date: Dateish): string {
+  return format(dayFormat, date);
 }
 
-export function formatDayTime(date: string | number | Date): string {
-  return dayTimeFormat.format(new Date(date));
+export function formatDayTime(date: Dateish): string {
+  return format(dayTimeFormat, date);
 }
