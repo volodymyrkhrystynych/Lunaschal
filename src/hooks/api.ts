@@ -3251,7 +3251,13 @@ export const api = {
     upload: (path: string, files: File[]) => {
       const form = new FormData();
       form.append('path', path);
-      for (const file of files) form.append('file', file);
+      for (const file of files) {
+        form.append('file', file);
+        // Folder pickers expose the path relative to the selected directory.
+        // Keep it separate from the multipart filename: browsers and servers
+        // commonly sanitize slashes in that field.
+        form.append('relative_path', file.webkitRelativePath || '');
+      }
       return upload<FileUploadResult>('/api/files/upload', form);
     },
     /** Not fetched — pointed at directly as an <img>/<video>/<a> src or href. */

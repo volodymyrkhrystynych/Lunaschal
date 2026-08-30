@@ -16,9 +16,11 @@ def _root(monkeypatch, tmp_path):
     monkeypatch.setenv('FILES_ROOT', str(tmp_path / 'root'))
 
 
-def _upload(client, *, path='', files):
+def _upload(client, *, path='', files, relative_paths=None):
     data = {'path': path}
     data['file'] = [(io.BytesIO(content), name) for name, content in files]
+    if relative_paths is not None:
+        data['relative_path'] = relative_paths
     return client.post(
         '/api/files/upload', data=data, content_type='multipart/form-data'
     )
@@ -40,6 +42,30 @@ class TestUpload:
         assert r.json['uploaded'][0]['path'] == 'pics/a.jpg'
         entries = client.get('/api/files', query_string={'path': 'pics'}).json
         assert any(e['name'] == 'a.jpg' for e in entries)
+
+    def test_upload_folder_preserves_its_relative_structure(self, client):
+        r = _upload(
+            client,
+            files=[('one.txt', b'one'), ('two.txt', b'two')],
+            relative_paths=['project/one.txt', 'project/nested/two.txt'],
+        )
+        assert r.status_code == 200
+        assert r.json['errors'] == []
+        assert {item['path'] for item in r.json['uploaded']} == {
+            'project/one.txt',
+            'project/nested/two.txt',
+        }
+
+    @pytest.mark.parametrize('relative_path', ['../escape.txt', '/escape.txt', r'..\\escape.txt'])
+    def test_upload_folder_rejects_unsafe_relative_paths(self, client, relative_path):
+        r = _upload(
+            client,
+            files=[('escape.txt', b'x')],
+            relative_paths=[relative_path],
+        )
+        assert r.status_code == 200
+        assert r.json['uploaded'] == []
+        assert r.json['errors'][0]['error'] == 'Invalid relative path'
 
     def test_upload_rejects_traversal_in_destination_folder(self, client):
         r = _upload(client, path='../escape', files=[('a.jpg', b'x')])

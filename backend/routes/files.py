@@ -2,6 +2,7 @@ import mimetypes
 import os
 import shutil
 import time
+from pathlib import PurePosixPath
 from pathlib import Path
 from typing import Callable
 
@@ -234,12 +235,42 @@ def _files_extra_routes(
         uploaded: list[dict] = []
         errors: list[dict] = []
         root = _root()
-        for storage in request.files.getlist('file'):
-            name = os.path.basename((storage.filename or '').strip())
+        relative_paths = request.form.getlist('relative_path')
+        for index, storage in enumerate(request.files.getlist('file')):
+            relative_path = (
+                relative_paths[index].strip() if index < len(relative_paths) else ''
+            )
+            relative_parts: tuple[str, ...] = ()
+            if relative_path:
+                candidate = PurePosixPath(relative_path)
+                if (
+                    candidate.is_absolute()
+                    or '\\' in relative_path
+                    or any(part in ('', '.', '..') for part in candidate.parts)
+                ):
+                    errors.append({
+                        'name': storage.filename or relative_path,
+                        'error': 'Invalid relative path',
+                    })
+                    continue
+                relative_parts = candidate.parts
+
+            name = (
+                relative_parts[-1]
+                if relative_parts
+                else os.path.basename((storage.filename or '').strip())
+            )
             if not name or name in ('.', '..'):
                 errors.append({'name': storage.filename or '', 'error': 'Invalid filename'})
                 continue
-            dest = _unique_dest(dest_dir / name)
+            file_dir = dest_dir.joinpath(*relative_parts[:-1])
+            try:
+                file_dir.relative_to(root)
+            except ValueError:
+                errors.append({'name': name, 'error': 'Invalid path'})
+                continue
+            file_dir.mkdir(parents=True, exist_ok=True)
+            dest = _unique_dest(file_dir / name)
             try:
                 dest.relative_to(root)
             except ValueError:

@@ -14,6 +14,7 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
   const { level } = useShortcuts();
   const qc = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const [dragOverRoot, setDragOverRoot] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
@@ -93,10 +94,29 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
           >
             ⬆ Upload
           </button>
+          <button
+            onClick={() => folderInputRef.current?.click()}
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] px-1"
+            title="Upload folder"
+          >
+            ⬆ Folder
+          </button>
           <input
             ref={fileInputRef}
             type="file"
             multiple
+            className="hidden"
+            onChange={e => {
+              const files = Array.from(e.target.files ?? []);
+              uploadFiles('', files);
+              e.target.value = '';
+            }}
+          />
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            {...{ webkitdirectory: '', directory: '' }}
             className="hidden"
             onChange={e => {
               const files = Array.from(e.target.files ?? []);
@@ -210,7 +230,8 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
 
         {rootEntries?.length === 0 && !showNewFile && (
           <div className="px-4 py-4 text-xs text-[var(--color-text-muted)]">
-            No files yet. Click "+ New", "Upload", or drop files here.
+            No files yet. Create a file, upload files or a folder, or drop files
+            here.
           </div>
         )}
       </div>

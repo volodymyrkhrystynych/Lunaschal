@@ -125,7 +125,7 @@ describe('FileTree', () => {
     renderTree();
     expect(
       await screen.findByText(
-        'No files yet. Click "+ New", "Upload", or drop files here.'
+        'No files yet. Create a file, upload files or a folder, or drop files here.'
       )
     ).toBeTruthy();
   });
@@ -141,6 +141,30 @@ describe('FileTree', () => {
     fireEvent.change(input, { target: { files: fileList([file]) } });
 
     await waitFor(() => expect(mocks.upload).toHaveBeenCalledWith('', [file]));
+  });
+
+  it('uploads every file picked from a folder', async () => {
+    renderTree();
+    await screen.findByText('todo.md');
+
+    const first = new File(['one'], 'one.txt', { type: 'text/plain' });
+    const second = new File(['two'], 'two.txt', { type: 'text/plain' });
+    Object.defineProperty(first, 'webkitRelativePath', {
+      value: 'project/one.txt',
+    });
+    Object.defineProperty(second, 'webkitRelativePath', {
+      value: 'project/nested/two.txt',
+    });
+    const folderInput = document.querySelector(
+      'input[webkitdirectory]'
+    ) as HTMLInputElement;
+    fireEvent.change(folderInput, {
+      target: { files: fileList([first, second]) },
+    });
+
+    await waitFor(() =>
+      expect(mocks.upload).toHaveBeenCalledWith('', [first, second])
+    );
   });
 
   it('uploads files dropped onto the tree root', async () => {
