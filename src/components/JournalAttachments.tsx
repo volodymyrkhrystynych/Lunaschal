@@ -305,6 +305,8 @@ function AttachmentRow({
   onDescribeAudio: () => void;
 }) {
   const [name, setName] = useState(a.name);
+  const [isSharing, setIsSharing] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
 
   // Keep the field in step with the server after a refetch, but never while the
   // user is midway through typing a new name into it.
@@ -321,6 +323,39 @@ function AttachmentRow({
 
   const lightbox = useLightbox();
   const geoLink = a.kind === 'image' ? mapLink(a.latitude, a.longitude) : null;
+
+  const shareImage = async () => {
+    setShareError(null);
+    setIsSharing(true);
+    try {
+      if (!navigator.share) {
+        throw new Error('Sharing is not supported by this browser.');
+      }
+      const response = await fetch(a.url);
+      if (!response.ok) throw new Error('Could not load the picture.');
+      const blob = await response.blob();
+      const extension =
+        blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg';
+      const baseName = a.name.trim() || 'journal-picture';
+      const filename = baseName.toLowerCase().endsWith(`.${extension}`)
+        ? baseName
+        : `${baseName}.${extension}`;
+      const file = new File([blob], filename, { type: blob.type });
+      const shareData = { files: [file], title: a.name };
+      if (navigator.canShare && !navigator.canShare(shareData)) {
+        throw new Error('Sharing pictures is not supported by this browser.');
+      }
+      await navigator.share(shareData);
+    } catch (e) {
+      // Closing the native share sheet is an ordinary cancellation, not an
+      // error the journal needs to keep showing under the picture.
+      if ((e as Error).name !== 'AbortError') {
+        setShareError((e as Error).message || 'Could not share the picture.');
+      }
+    } finally {
+      setIsSharing(false);
+    }
+  };
 
   return (
     <div className="rounded border border-white/10 bg-white/5 px-3 py-2 space-y-2">
@@ -422,6 +457,16 @@ function AttachmentRow({
         >
           Download
         </a>
+        {a.kind === 'image' && (
+          <button
+            type="button"
+            onClick={shareImage}
+            disabled={isSharing}
+            className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+          >
+            {isSharing ? 'Sharing…' : 'Share'}
+          </button>
+        )}
         {editable && (
           <button
             type="button"
@@ -432,6 +477,12 @@ function AttachmentRow({
           </button>
         )}
       </div>
+
+      {shareError && (
+        <div className="px-2 py-1 rounded bg-red-500/10 border border-red-500/20 text-xs text-red-400">
+          {shareError}
+        </div>
+      )}
 
       {a.transcriptStatus === 'error' && a.transcriptError && (
         <div className="px-2 py-1 rounded bg-red-500/10 border border-red-500/20 text-xs text-red-400">
