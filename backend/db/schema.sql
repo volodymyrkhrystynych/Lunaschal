@@ -313,9 +313,12 @@ CREATE TABLE IF NOT EXISTS user_memory (
     updated_at INTEGER NOT NULL
 );
 
--- Copy-on-write, the wiki_revisions/learning_revisions pattern. The assistant
--- writes to the memory without asking, so every change has to be inspectable and
--- undoable; `content` is the document as it stood BEFORE the change.
+-- Copy-on-write, the wiki_revisions/learning_revisions pattern. `content` is the
+-- document as it stood BEFORE the change, which is what Restore puts back. Built
+-- when the assistant still wrote here without asking; kept after that was taken
+-- away, because an undo history for a document steering every reply is worth
+-- having regardless — and because the rows those writes left behind (`source`
+-- 'remember'/'revise') still have to render.
 CREATE TABLE IF NOT EXISTS user_memory_revisions (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
@@ -325,6 +328,30 @@ CREATE TABLE IF NOT EXISTS user_memory_revisions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_user_memory_revisions_created ON user_memory_revisions(created_at DESC);
+
+-- Short standing facts the assistant noticed mid-conversation, via the chat
+-- delegate's `remember` tool. Deliberately NOT the user_memory document: that
+-- one is the user's own, and an assistant writing into it unasked is the thing
+-- that got the original `remember`/`revise_memory` pair removed. This is a
+-- staging queue instead — the same shape as chat_todos, small enough to ride in
+-- the system prompt while pending, and visible/deletable in Settings, which is
+-- what makes an instant write with no confirmation card a fair trade.
+--
+-- `folded_at`/`article_id` are written by the nightly synthesis pass when an
+-- observation has been folded into the life wiki. They stay NULL until that
+-- pass exists; a NULL folded_at is simply "still pending".
+CREATE TABLE IF NOT EXISTS assistant_observations (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    -- Where it came from: 'chat' today, room for the voice listener later.
+    source TEXT NOT NULL DEFAULT 'chat',
+    created_at INTEGER NOT NULL,
+    folded_at INTEGER,
+    article_id TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_assistant_observations_pending
+    ON assistant_observations(folded_at, created_at);
 
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY DEFAULT 1,

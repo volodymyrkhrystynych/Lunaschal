@@ -51,7 +51,8 @@ _active: set["threading.Event"] = set()
 _lock = threading.Lock()
 
 
-def start(message_id: str, messages: list[dict], system_prompt: str, *, tools_enabled: bool) -> "queue.Queue":
+def start(message_id: str, messages: list[dict], system_prompt: str, *,
+          tools_enabled: bool, conversation_id: str | None = None) -> "queue.Queue":
     """Spawns the run; returns the queue the caller's SSE view should relay
     from. Puts (kind, payload) tuples, same shape as stream_reply, plus a
     terminal ('_end', None) once the thread is done (whether by 'done' or by
@@ -61,7 +62,9 @@ def start(message_id: str, messages: list[dict], system_prompt: str, *, tools_en
     with _lock:
         _active.add(done)
     threading.Thread(
-        target=_run, args=(message_id, messages, system_prompt, tools_enabled, q, done),
+        target=_run,
+        args=(message_id, messages, system_prompt, tools_enabled, q, done,
+              conversation_id),
         daemon=True,
     ).start()
     return q
@@ -93,7 +96,8 @@ def _append_thinking(current: str, delta: str) -> str:
 
 
 def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enabled: bool,
-          q: "queue.Queue", done: "threading.Event | None" = None) -> None:
+          q: "queue.Queue", done: "threading.Event | None" = None,
+          conversation_id: str | None = None) -> None:
     token = priority.begin('chat.stream')
     db = get_db()
     content = ''
@@ -101,7 +105,9 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enable
     steps: list[dict] = []
     last_flush = 0.0
     try:
-        for kind, payload in delegate_chat.stream_reply(messages, system_prompt, tools_enabled=tools_enabled):
+        for kind, payload in delegate_chat.stream_reply(
+                messages, system_prompt, tools_enabled=tools_enabled,
+                conversation_id=conversation_id):
             q.put((kind, payload))
             if kind == 'content':
                 content += payload

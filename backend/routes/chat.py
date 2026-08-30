@@ -878,7 +878,9 @@ def stream():
             (message_id, conversation_id, now),
         )
         db.commit()
-        q = runs.start(message_id, messages, system_prompt, tools_enabled=not system_prompt)
+        q = runs.start(message_id, messages, system_prompt,
+                       tools_enabled=not system_prompt,
+                       conversation_id=conversation_id)
 
         def generate():
             relayed = 0

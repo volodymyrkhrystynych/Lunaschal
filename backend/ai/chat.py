@@ -19,8 +19,14 @@ turn every message into a task; it's fine for a chat to just be a chat.
 
 One short document of standing facts about the user is shown below when it isn't empty —
 proper names and their exact spellings above all, so prefer those spellings over anything a
-speech-to-text transcript seems to say. The user maintains it themselves; you cannot write
-to it, so don't offer to remember something permanently or claim that you have.
+speech-to-text transcript seems to say. That document is the user's own and you cannot write
+to it, so never offer to edit it or claim that you have.
+
+Your own notes are a separate, weaker thing. When the user tells you something durable about
+themselves — a standing preference, a person who keeps coming up, a correction to something
+you had wrong — record it with `remember` and then say nothing about having done so. It is a
+note to yourself, not an errand you ran for them, and a reply that reports it is a reply
+about you instead of about what they said.
 
 If the user says "note to self" without saying what the lesson actually is,
 ask them to spell it out before it can be saved.
@@ -34,7 +40,10 @@ If the user's schedule is included below, use it to know when they're busy or fr
 so you can suggest things that actually fit their day and not pester them mid-commitment.
 Same rule: let it shape what you say, don't read it back to them.
 
-When extra context from the user's knowledge base is provided, weave it in naturally."""
+You can look things up in the user's own record: `search_conversations` for what was said in
+earlier conversations, `search_journal` for anything older than the day of entries below, and
+`read_day` for one specific date. Use them when they refer back to something you cannot see
+rather than asking them to remind you — but only then. Most messages need none of this."""
 
 JOURNAL_WINDOW_SECONDS = 86400
 JOURNAL_MAX_ENTRIES = 10
@@ -131,15 +140,96 @@ def format_schedule_context(events: list[dict], now: int | None = None) -> str:
     )
 
 
+# How many open to-dos reach the prompt. The list is already ordered by
+# priority, so this is a tail cut, not a sample: past a handful the block stops
+# being "what is on your plate" and becomes a backlog dump the model reads as
+# equally urgent.
+PLATE_MAX_TODOS = 8
+
+
+def format_plate_context(now: int | None = None) -> str:
+    """What the user is meant to be doing today.
+
+    Reads the same three things the 05:00 briefing does — and that was the whole
+    problem: `gather_briefing_context` has assembled to-dos, daily tasks and
+    cards due from these tables for months, and the assistant the user actually
+    talks to could not see any of it. It could write into `chat_todos` via
+    `add_todos` and then had no idea what was in there.
+
+    Imports are function-local because backend/ai/briefing.py imports from this
+    module; at module level this is a cycle.
+    """
+    from backend.ai.briefing import learning_due_count, open_todos, pending_daily_tasks
+    from backend.ai.provider import get_settings
+    from backend.db.connection import get_db
+
+    now = now if now is not None else int(time.time())
+    db = get_db()
+    today = day_key_for(now)
+    lines: list[str] = []
+
+    settings = get_settings()
+    goals = ((settings.get('briefing_goals') if settings else None) or '').strip()
+    if goals:
+        lines += ['Their stated goals and current focus:', goals, '']
+
+    todos_today = db.execute(
+        'SELECT title, done FROM chat_todos WHERE day_key=? ORDER BY done, created_at',
+        (today,),
+    ).fetchall()
+    if todos_today:
+        lines.append("On today's list (the bar above the chat box):")
+        for t in todos_today:
+            mark = 'done' if t['done'] else 'not done'
+            lines.append(f'- {t["title"]} — {mark}')
+        lines.append('')
+
+    daily = pending_daily_tasks(db, today)
+    if daily:
+        lines.append('Daily tasks still pending today:')
+        lines += [f'- {t["title"]}' for t in daily]
+        lines.append('')
+
+    todos = open_todos(db)
+    if todos:
+        shown = todos[:PLATE_MAX_TODOS]
+        lines.append('Open to-dos:')
+        for t in shown:
+            suffix = ''
+            if t.get('due'):
+                suffix += f' (due {date.fromtimestamp(t["due"]).isoformat()})'
+            if t.get('priority') and t['priority'] != 3:
+                suffix += f' [priority {t["priority"]}/5]'
+            lines.append(f'- {t["title"]}{suffix}')
+        if len(todos) > len(shown):
+            lines.append(f'- …and {len(todos) - len(shown)} more')
+        lines.append('')
+
+    due = learning_due_count(db, now)
+    if due:
+        lines.append(f'Flashcards due for review: {due}.')
+
+    if not lines:
+        return ''
+    return "Where the user's day stands right now:\n\n" + '\n'.join(lines).strip()
+
+
 def build_chat_system_prompt(now: int | None = None) -> str:
     from backend.memory import format_memory_context
+    from backend.observations import format_observations_context
 
+    # Ordered least- to most-volatile, and that ordering is load-bearing: this
+    # prompt is paid twice per turn (the decision turn and the answer turn), and
+    # llama-server's prefix cache survives only up to the first block that
+    # changed. The memory document is the same tomorrow; the plate changes when a
+    # to-do is ticked. Putting the plate first would re-prefill everything under
+    # it on every tick.
     blocks = [
-        # First of the three: it is the only block that is the same tomorrow, and
-        # the spellings in it are what the model should trust over a transcript.
         format_memory_context(),
+        format_observations_context(),
         format_journal_context(get_recent_journal_entries(now), now),
         format_schedule_context(get_upcoming_schedule(now), now),
+        format_plate_context(now),
     ]
     parts = [SYSTEM_PROMPT] + [b for b in blocks if b]
     return '\n\n'.join(parts)

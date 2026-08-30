@@ -219,7 +219,8 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
     assert offered == {'delegate', 'add_todos', 'propose_calendar_event',
                        'propose_calorie_log', 'propose_food_log', 'propose_recipe',
                        'draft_flashcard', 'propose_flashcards',
-                       'create_note_to_self', 'ask_user'}
+                       'create_note_to_self', 'ask_user', 'remember',
+                       'search_conversations', 'search_journal', 'read_day'}
 
 
 def test_a_tool_call_the_model_invented_is_ignored(monkeypatch, answered):
@@ -298,7 +299,7 @@ def test_the_route_frames_every_event_kind(client, monkeypatch):
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True: iter([
+        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([
             ('step', {'tool': 'web_search', 'ok': True, 'count': 3}),
             ('thinking', 'weighing it up'),
             ('content', 'Here you go.'),
@@ -320,7 +321,7 @@ def test_the_route_frames_every_event_kind(client, monkeypatch):
 def test_a_mid_stream_failure_reaches_the_browser(client, monkeypatch):
     """The bug this whole change came from was a request that produced no
     reply, no error and no log line."""
-    def exploding(messages, system_prompt, tools_enabled=True):
+    def exploding(messages, system_prompt, tools_enabled=True, **_kw):
         yield ('content', 'partial')
         raise RuntimeError('llama-server died')
 
@@ -340,7 +341,7 @@ def test_the_priority_mark_is_released_after_the_turn(client, monkeypatch):
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True: iter([('content', 'hi')]),
+        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([('content', 'hi')]),
     )
     _post(client, {'messages': []})
     assert priority.active() is False
@@ -370,7 +371,7 @@ def test_a_conversation_id_persists_the_reply_via_a_background_run(client, monke
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True: iter([
+        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([
             ('content', 'Here you go.'),
             ('done', {'steps': [{'tool': 'web_search', 'ok': True}],
                       'sources': [{'url': 'https://ex.com'}], 'proposals': []}),
@@ -407,7 +408,7 @@ def test_a_conversation_id_run_that_fails_leaves_an_error_row(client, monkeypatc
     conv_id = _new_conversation(db)
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
 
-    def exploding(messages, system_prompt, tools_enabled=True):
+    def exploding(messages, system_prompt, tools_enabled=True, **_kw):
         yield ('content', 'partial')
         raise RuntimeError('llama-server died')
 
@@ -437,7 +438,7 @@ def test_no_conversation_id_keeps_the_inline_legacy_path(client, monkeypatch):
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True: iter([('content', 'hi')]),
+        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([('content', 'hi')]),
     )
 
     _post(client, {'messages': [], 'systemPrompt': 'You are a nudge.'})
@@ -576,7 +577,7 @@ def test_the_persisted_path_announces_the_row_before_anything_else(client, monke
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.runs.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True: iter([
+        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([
             ('content', 'Here you go.'),
             ('done', {'steps': [], 'sources': [], 'proposals': []}),
         ]),
@@ -607,7 +608,7 @@ def test_a_client_that_stops_reading_does_not_stop_the_run(client, monkeypatch, 
     release = threading.Event()
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
 
-    def slow_stream_reply(messages, system_prompt, tools_enabled=True):
+    def slow_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         yield ('content', 'half a ')
         release.wait(timeout=5)
         yield ('content', 'sentence.')

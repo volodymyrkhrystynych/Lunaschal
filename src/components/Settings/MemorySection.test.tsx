@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /**
- * The memory editor is what makes the assistant's unconfirmed `remember` write
- * acceptable — so what matters here is that a change is visible, that an edit
- * in progress can't be clobbered by one, and that any version is one click from
- * coming back.
+ * The user's own memory document. The assistant cannot write it — its `remember`
+ * tool appends to the note queue rendered by ObservationsPanel below instead —
+ * so what matters here is that an edit in progress can't be clobbered by a
+ * refetch, and that any version is one click from coming back.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, screen, waitFor } from '@testing-library/react';
@@ -18,6 +18,8 @@ vi.mock('../../hooks/api', () => ({
       update: vi.fn(),
       revisions: vi.fn(),
       restore: vi.fn(),
+      observations: vi.fn(),
+      deleteObservation: vi.fn(),
     },
   },
 }));
@@ -40,6 +42,10 @@ beforeEach(() => {
   vi.mocked(api.memory.get).mockResolvedValue({
     content: '- Their gym is Movati',
     maxChars: 4000,
+  });
+  vi.mocked(api.memory.observations).mockResolvedValue({
+    observations: [],
+    maxPending: 40,
   });
   vi.mocked(api.memory.update).mockResolvedValue({
     content: '- Their gym is GoodLife',

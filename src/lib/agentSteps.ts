@@ -16,6 +16,9 @@ export interface AgentStep {
   // deep_research step this rides alongside `ok: true` — a pass that was cut
   // short still writes up what it found, and that answer is a result.
   timedOut?: boolean;
+  // Present only on a `remember` step that found the fact already noted. The
+  // write was a no-op, so the label must not claim something new was recorded.
+  duplicate?: boolean;
   // Present only on the delegate's propose_* steps: what got staged for the
   // user to confirm. The card itself renders from `metadata.proposals`
   // (parseDelegateProposals below); this is what makes the step list mention
@@ -125,6 +128,24 @@ export function stepLabel(step: AgentStep): string {
         ? `Deep research timed out — answered from ${sources} so far`
         : `Deep-researched "${target}" — ${sources}`;
     }
+    // Read-only recall over the user's own record — the chat agent's, not the
+    // Ideas agent's. Nothing is written, so these never read as an action taken.
+    case 'search_conversations':
+      if (!step.ok)
+        return `Couldn't search past chats${step.error ? ` — ${step.error}` : ''}`;
+      return step.count
+        ? `Searched past chats for "${target}" — ${step.count} found`
+        : `Searched past chats for "${target}" — nothing found`;
+    case 'search_journal':
+      if (!step.ok)
+        return `Couldn't search the journal${step.error ? ` — ${step.error}` : ''}`;
+      return step.count
+        ? `Searched the journal for "${target}" — ${step.count} found`
+        : `Searched the journal for "${target}" — nothing found`;
+    case 'read_day':
+      return step.ok
+        ? `Looked up ${target}`
+        : `Couldn't look up that day${step.error ? ` — ${step.error}` : ''}`;
     // Only the Ideas agent has these; the delegate's toolbox carries no wiki
     // tools. Labelling them here rather than in a second copy is the point.
     case 'wiki_list':
@@ -143,13 +164,19 @@ export function stepLabel(step: AgentStep): string {
     // "Staged" would be the same lie in the other direction — the user needs to
     // know something was written so they can go and unwrite it.
     //
-    // `remember`/`revise_memory` are retired (the memory document is the user's
-    // to write now), but their labels stay: the steps they left behind are
+    // `remember` writes the assistant's own note queue
+    // (backend/observations.py). Its predecessor of the same name wrote the
+    // user's memory document instead — that one is retired, along with
+    // `revise_memory`, but both labels stay: the steps they left behind are
     // persisted in old messages' metadata and still have to render.
     case 'remember':
-      return step.ok
-        ? `Remembered: ${target}`
-        : `Didn't remember that${step.error ? ` — ${step.error}` : ''}`;
+      if (!step.ok)
+        return `Didn't remember that${step.error ? ` — ${step.error}` : ''}`;
+      // Steps written by the *retired* tool of this name carry no `duplicate`
+      // flag and fall through to the same label they always rendered.
+      return step.duplicate
+        ? `Already remembered: ${target}`
+        : `Remembered: ${target}`;
     case 'revise_memory':
       return step.ok
         ? `Updating what's remembered: ${target}`

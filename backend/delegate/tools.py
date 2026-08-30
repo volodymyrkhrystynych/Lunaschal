@@ -326,6 +326,38 @@ TOOLS = [
     {
         'type': 'function',
         'function': {
+            'name': 'remember',
+            'description': (
+                'Write down one durable fact about the user, immediately and '
+                'silently — no confirmation card. Use it for something that will '
+                'still be true next month: a standing preference, a person or '
+                'place that keeps coming up, how they like to work, a correction '
+                'to something you had wrong.\n'
+                'Do not use it for anything happening once (that is a to-do or a '
+                'calendar event), for a passing mood, or for a thought they want '
+                'resurfaced later (that is create_note_to_self). Do not record '
+                'something you have already recorded, and do not mention having '
+                'used this tool in your reply.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'fact': {
+                        'type': 'string',
+                        'description': (
+                            'The fact in one short sentence, written about the '
+                            'user in the third person, e.g. "Trains at GoodLife '
+                            'on Tuesdays and Fridays."'
+                        ),
+                    },
+                },
+                'required': ['fact'],
+            },
+        },
+    },
+    {
+        'type': 'function',
+        'function': {
             'name': 'ask_user',
             'description': (
                 'Ask the user one question instead of staging something built on '
@@ -585,6 +617,50 @@ def _create_note_to_self(args: dict) -> tuple[str, dict]:
     )
 
 
+def _remember(args: dict) -> tuple[str, dict]:
+    """Appends to backend/observations.py, immediately and with no confirm card.
+
+    The predecessor of this tool wrote the *user's* memory document, unasked,
+    and had the model announce it — which is what got it removed. Three things
+    are different now and all three matter: it writes the assistant's own queue
+    rather than the user's document, the queue is capped and listed in Settings
+    with a delete button, and the reply is told to say nothing about it. What
+    stays the same is the step in the trace, deliberately: an instant write the
+    user cannot see is one they cannot undo.
+    """
+    from backend import observations
+
+    fact = _text(args.get('fact'))
+    if not fact:
+        return _refused('remember', 'there is nothing to remember yet')
+    if len(fact) > observations.MAX_CHARS:
+        return _refused(
+            'remember',
+            f'that is longer than a standing fact should be '
+            f'({observations.MAX_CHARS} characters)',
+        )
+    try:
+        stored = observations.add_observation(fact)
+    except observations.ObservationsFull as e:
+        # Deliberately not silently dropping the oldest note to make room: the
+        # user is the one who decides what stops mattering, and they can see the
+        # queue in Settings.
+        return _refused('remember', str(e))
+
+    if stored is None:
+        return (
+            'You already have that noted — nothing new was written. Do not '
+            'mention it.',
+            {'tool': 'remember', 'ok': True, 'arg': fact, 'duplicate': True},
+        )
+    return (
+        f'Noted for yourself: {fact}\n'
+        'It is written already. Say nothing about it in your reply — carry on '
+        'answering what they actually said.',
+        {'tool': 'remember', 'ok': True, 'arg': fact},
+    )
+
+
 def _ask_user(args: dict) -> tuple[str, dict]:
     """The one tool here that stages nothing.
 
@@ -619,6 +695,7 @@ _HANDLERS = {
     'draft_flashcard': _draft_flashcard,
     'propose_flashcards': _propose_flashcards,
     'create_note_to_self': _create_note_to_self,
+    'remember': _remember,
     'ask_user': _ask_user,
 }
 

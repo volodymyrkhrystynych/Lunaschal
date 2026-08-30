@@ -42,6 +42,8 @@ from backend.ai.llm import chat_stream_events, chat_tool_turn
 from backend.ai.mcp_client import serialize_tool_calls
 from backend.chat.context import expand_attachments
 from backend.delegate import agent, limits, tools as proposal_tools
+from backend.lifewiki import tools as life_tools
+from backend.lifewiki.tools import LifeTools
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +97,7 @@ DELEGATE_TOOL = {
     },
 }
 
-TOOLS = [DELEGATE_TOOL] + proposal_tools.TOOLS
+TOOLS = [DELEGATE_TOOL] + proposal_tools.TOOLS + life_tools.TOOLS
 
 DECISION_NOTE = """Right now your only job is to decide which of your tools this \
 message needs, if any — your reply comes afterwards, in a separate turn.
@@ -111,6 +113,13 @@ stage what they said and leave the rest empty.
 
 Use delegate when answering needs something looked up on the web.
 
+Use search_conversations, search_journal or read_day when the answer is \
+something the user already told you or wrote down and you cannot see it in \
+this conversation. Their own record first, the web second.
+
+Use remember for a fact about them that will still be true next month. Not for \
+anything that happens once, and never for something already in your notes.
+
 If the message needs none of this, write nothing at all: anything you type in \
 this turn is discarded."""
 
@@ -124,6 +133,12 @@ ANSWER_INSTRUCTION = (
     'that question to them plainly and do not pretend you staged the thing it '
     'is about. If something could not be done, say so plainly rather than '
     'glossing over it.\n\n'
+    # `remember` writes to the assistant's own notes, and its predecessor was
+    # removed partly because it made every reply report the write. The tool's
+    # own return text says this too; it is repeated here because this is the
+    # instruction closest to the text actually being generated.
+    'If you noted something down for yourself this turn, do not mention it. '
+    'That is bookkeeping, not an answer.\n\n'
     # The tools were on the previous turn and are gone from this one, so a call
     # written here reaches nothing: llama-server only reconstructs `tool_calls`
     # from a request that carried `tools=`, and without that the raw notation
@@ -191,7 +206,8 @@ _KNOWN_TOOLS = {t['function']['name'] for t in TOOLS}
 
 
 def stream_reply(messages: list[dict], system_prompt: str = '', *,
-                 tools_enabled: bool = True, checkpoint=None):
+                 tools_enabled: bool = True, checkpoint=None,
+                 conversation_id: str | None = None):
     """Yields ('step', event) as each tool call finishes, then ('thinking',
     delta) and ('content', delta) as the reply streams, then one
     ('done', {steps, sources, proposals, truncated}).
@@ -205,6 +221,13 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     morning check-in all speak their replies aloud, where a staged card is
     invisible and the decision turn is pure added latency before the user hears
     a word.
+
+    `conversation_id` is only used to keep the recall tools from returning this
+    conversation's own messages back to it — they are already in the transcript
+    verbatim, and re-reading them would spend the result budget on nothing.
+    Callers without one (voice, nudges, Writing discussions) pass none and get
+    unfiltered hits, which is correct: they are not in a conversation that could
+    be returned.
 
     The chat deadline is established here rather than by the caller, so every
     caller gets it — the voice listener waiting on a spoken reply has more
@@ -224,6 +247,7 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     steps: list[dict] = []
     sources: list[dict] = []
     proposals: list[dict] = []
+    life = LifeTools(conversation_id)
 
     calls = _decision_calls(conversation) if tools_enabled else []
     results: list[tuple[object, str]] = []
@@ -244,6 +268,11 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
             # transcript: that compression is the point of delegating, and it
             # is what keeps this conversation's context flat as it grows.
             results.append((call, result.get('summary', '')))
+        elif call.function.name in life_tools.TOOL_NAMES:
+            # Bound to the conversation rather than handed it per call, the same
+            # way WikiTools binds its repo: the shared loop dispatches by name
+            # and knows nothing about either scope.
+            text, event = life.run_tool(call.function.name, _args_of(call))
         else:
             text, event = proposal_tools.run_tool(call.function.name, _args_of(call))
             steps.append(event)

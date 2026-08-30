@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type MemoryRevision } from '../../hooks/api';
+import { ObservationsPanel } from './ObservationsPanel';
 
 /**
  * The standing document about the user, read into every chat system prompt.
  *
- * This section is now the only thing that writes it. Chat used to write here
- * too, with no confirmation card, which is what the revision history was built
- * to make safe — the history stays, both for the user's own edits and because
- * the rows those retired tools left behind still have to render.
+ * This section is the only thing that writes it — the assistant cannot. That is
+ * the point of the split below: `remember` appends to its own note queue
+ * (ObservationsPanel) rather than editing this, so a passing correction never
+ * becomes a permanent fact in the user's own words without them saying so. The
+ * revision history predates that split and stays, both for the user's own edits
+ * and because the rows the retired tools left behind still have to render.
  */
 const SOURCE_LABEL: Record<MemoryRevision['source'], string> = {
   remember: 'assistant added a line',
@@ -79,10 +82,9 @@ export function MemorySection() {
       <div>
         <p className="text-xs text-[var(--color-text-muted)] mt-1">
           One page of standing facts the assistant carries between conversations
-          — names and their spellings, people, places, standing preferences. It
-          writes here itself when you correct it, without asking; this is where
-          you check and undo that. Spellings kept here are also what dictated
-          messages get corrected against.
+          — names and their spellings, people, places, standing preferences.
+          Yours to write: the assistant reads it but cannot change it. Spellings
+          kept here are also what dictated messages get corrected against.
         </p>
       </div>
 
@@ -156,6 +158,8 @@ export function MemorySection() {
           )}
         </div>
       )}
+
+      <ObservationsPanel />
     </div>
   );
 }

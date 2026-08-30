@@ -172,6 +172,49 @@ describe('stepLabel', () => {
     expect(label).not.toMatch(/staged/i);
   });
 
+  it('does not claim a new memory when the fact was already noted', () => {
+    // The write was a no-op: the assistant sees only the most recent slice of
+    // its own notes, so re-stating one it already has is normal.
+    expect(
+      stepLabel({
+        tool: 'remember',
+        arg: 'Their gym is Movati',
+        ok: true,
+        duplicate: true,
+      })
+    ).toBe('Already remembered: Their gym is Movati');
+  });
+
+  it('labels the recall tools as reading, never as acting', () => {
+    // Nothing is written by any of these, so none of them may read like a
+    // to-do appearing or a card being staged.
+    expect(
+      stepLabel({
+        tool: 'search_conversations',
+        arg: 'the dripping tap',
+        ok: true,
+        count: 3,
+      })
+    ).toBe('Searched past chats for "the dripping tap" — 3 found');
+    expect(
+      stepLabel({
+        tool: 'search_journal',
+        arg: 'carburettors',
+        ok: true,
+        count: 0,
+      })
+    ).toBe('Searched the journal for "carburettors" — nothing found');
+    expect(stepLabel({ tool: 'read_day', arg: '2026-03-04', ok: true })).toBe(
+      'Looked up 2026-03-04'
+    );
+  });
+
+  it('says when a recall tool could not run', () => {
+    expect(
+      stepLabel({ tool: 'read_day', ok: false, error: 'not a date' })
+    ).toBe("Couldn't look up that day — not a date");
+  });
+
   it('says when a memory could not be written, and why', () => {
     expect(
       stepLabel({ tool: 'remember', ok: false, error: 'the memory is full' })

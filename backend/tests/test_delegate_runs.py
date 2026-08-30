@@ -46,7 +46,7 @@ def test_run_checkpoints_content_and_flips_to_done(client, monkeypatch):
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         yield ('content', 'Hello ')
         yield ('content', 'there.')
         yield ('done', {
@@ -89,7 +89,7 @@ def test_run_checkpoints_steps_as_they_happen_not_just_at_the_end(client, monkey
 
     seen_after_first_step = {}
 
-    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         yield ('step', {'tool': 'web_search', 'ok': True, 'arg': 'q'})
         # Snapshot the row mid-run, before the second step or 'done' arrive.
         seen_after_first_step['metadata'] = json.loads(_row(db, msg_id)['metadata'])
@@ -131,7 +131,7 @@ def test_run_stamps_confirm_card_proposals_and_drops_flashcard_draft(client, mon
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         yield ('done', {
             'steps': [],
             'sources': [],
@@ -159,7 +159,7 @@ def test_run_marks_error_on_exception_and_keeps_partial_content(client, monkeypa
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         yield ('content', 'partial')
         raise RuntimeError('llama-server died')
 
@@ -205,7 +205,7 @@ def test_start_runs_on_a_real_thread_and_finishes_the_row(client, monkeypatch):
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         yield ('content', 'async reply')
         yield ('done', {'steps': [], 'sources': [], 'proposals': []})
 
@@ -235,7 +235,7 @@ def test_start_creates_the_row_as_streaming_before_the_thread_finishes(client, m
 
     release = threading.Event()
 
-    def slow_stream_reply(messages, system_prompt, tools_enabled=True):
+    def slow_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         release.wait(timeout=5)
         yield ('content', 'done waiting')
         yield ('done', {'steps': [], 'sources': [], 'proposals': []})
@@ -294,7 +294,7 @@ def test_run_persists_the_reply_reasoning(client, monkeypatch):
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         yield ('thinking', 'they probably mean ')
         yield ('thinking', 'the scheduler')
         yield ('content', 'FSRS.')
@@ -319,7 +319,7 @@ def test_run_checkpoints_reasoning_mid_run(client, monkeypatch):
 
     seen = {}
 
-    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         yield ('thinking', 'mulling it over')
         # A step forces a checkpoint; reasoning has to ride along with it.
         yield ('step', {'tool': 'web_search', 'ok': True, 'arg': 'q'})
@@ -341,7 +341,7 @@ def test_run_caps_runaway_reasoning(client, monkeypatch):
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         for _ in range(400):
             yield ('thinking', 'x' * 100)
         yield ('done', {'steps': [], 'sources': [], 'proposals': []})
@@ -364,7 +364,7 @@ def test_run_records_that_the_reply_was_cut_off(client, monkeypatch):
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
 
-    def fake_stream_reply(messages, system_prompt, tools_enabled=True):
+    def fake_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
         yield ('thinking', 'round in circles')
         yield ('done', {'steps': [], 'sources': [], 'proposals': [],
                         'truncated': True})

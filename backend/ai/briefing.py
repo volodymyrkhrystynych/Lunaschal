@@ -21,8 +21,13 @@ MAX_BRIEFING_TODOS = 5
 BRIEFING_MAX_TOKENS = 16384
 
 
-def _pending_daily_tasks(db, today: str) -> list[dict]:
+def pending_daily_tasks(db, today: str) -> list[dict]:
     """Daily tasks not yet completed today (mirrors tasks.list_tasks' join).
+
+    Public, along with `open_todos` and `learning_due_count`, because the chat
+    system prompt's "today" block reads the same three things. The briefing knew
+    more about the user's day than the assistant they were talking to did, from
+    the same tables.
 
     The id rides along so the briefing job can link a proposal to the real row;
     only the title is ever printed into the prompt.
@@ -38,7 +43,7 @@ def _pending_daily_tasks(db, today: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def _open_todos(db) -> list[dict]:
+def open_todos(db) -> list[dict]:
     # Exclude the 'archive' list — that's the "set aside" stash, deliberately
     # off the active plan, so it shouldn't resurface in the morning briefing.
     rows = db.execute(
@@ -59,7 +64,7 @@ def _upcoming_calendar(db, today: str, horizon: str) -> list[dict]:
     ]
 
 
-def _learning_due_count(db, now: int) -> int:
+def learning_due_count(db, now: int) -> int:
     row = db.execute(
         "SELECT COUNT(*) FROM learning_cards WHERE state='active' AND due <= ?",
         (now,),
@@ -82,10 +87,10 @@ def gather_briefing_context(now: int | None = None) -> dict:
         'today': today,
         'goals': (s.get('briefing_goals') if s else None) or '',
         'journal': get_recent_journal_entries(now),
-        'daily_tasks': _pending_daily_tasks(db, today),
-        'todos': _open_todos(db),
+        'daily_tasks': pending_daily_tasks(db, today),
+        'todos': open_todos(db),
         'calendar': _upcoming_calendar(db, today, horizon),
-        'learning_due': _learning_due_count(db, now),
+        'learning_due': learning_due_count(db, now),
     }
 
 
@@ -248,7 +253,7 @@ def fallback_plan(context: dict) -> list[dict]:
     # a day's plan, and a backlog of long-overdue low-priority to-dos would
     # otherwise crowd out the work the user themselves flagged as important. Due
     # date breaks ties (soonest first, undated last); full ties keep
-    # `_open_todos`' creation order, since sorted() is stable.
+    # `open_todos`' creation order, since sorted() is stable.
     todos = sorted(
         context['todos'],
         key=lambda t: (-(t.get('priority') or 3), t.get('due') or float('inf')),

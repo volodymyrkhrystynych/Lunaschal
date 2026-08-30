@@ -98,6 +98,7 @@ def init_db() -> None:
     _init_wiki_fts(db)
     _init_fanfic_fts(db)
     _init_emails_fts(db)
+    _init_messages_fts(db)
     _drop_vector_tables(db)
     _ensure_network_code(db)
     _ensure_writing_project_id(db)
@@ -1726,16 +1727,34 @@ def _init_wiki_fts(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def fts_match_query(query: str) -> str:
+    """Turn a user's words into an FTS5 MATCH expression: prefix-OR over each.
+
+    One implementation because there were four, and three of them split on
+    whitespace rather than on word characters — so a query containing a double
+    quote built a malformed MATCH expression and the search raised
+    OperationalError instead of returning nothing. `\\w+` drops the quote along
+    with the rest of the punctuation, which is the behaviour every caller
+    already wanted.
+
+    Returns '' when there is nothing searchable, which every caller reads as
+    "no results" rather than running the query.
+    """
+    words = [w for w in re.findall(r'\w+', query or '') if w]
+    if not words:
+        return ''
+    return ' OR '.join(f'"{w}"*' for w in words)
+
+
 def search_wiki_fts(query: str, limit: int = 20) -> list[dict]:
     """Prefix-OR search over the wiki, title-weighted.
 
     bm25 column weights: id, title, summary, content, tags — a title match
     should outrank a passing mention in a body paragraph.
     """
-    words = [w for w in re.findall(r'\w+', query) if w]
-    if not words:
+    escaped = fts_match_query(query)
+    if not escaped:
         return []
-    escaped = ' OR '.join(f'"{w}"*' for w in words)
     rows = get_db().execute(
         'SELECT id, bm25(wiki_fts, 0.0, 8.0, 4.0, 1.0, 2.0) AS rank'
         ' FROM wiki_fts WHERE wiki_fts MATCH ? ORDER BY rank LIMIT ?',
@@ -1813,6 +1832,55 @@ def _init_emails_fts(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _init_messages_fts(db: sqlite3.Connection) -> None:
+    """Full-text index over chat transcripts.
+
+    Every other substantial table in the app has had one of these for a while
+    -- journal, recipes, wiki, fic chapters, emails -- and `messages` did not,
+    which is why the chat agent could not reach a single thing said before the
+    current segment. The client only ever sends the conversation since the last
+    "New chat" (src/lib/chatSegments.ts), so without this index a question about
+    last week had no path to an answer at all.
+
+    Only `content` is indexed. The hit is joined back to `messages` for
+    conversation_id/created_at/role anyway, so duplicating those here would buy
+    nothing and cost a wider index.
+
+    The 'rebuild' at the end is what backfills every conversation that already
+    exists -- the triggers alone would only ever see new messages.
+    """
+    db.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            id UNINDEXED,
+            content,
+            content='messages',
+            content_rowid='rowid'
+        )
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, id, content)
+            VALUES (NEW.rowid, NEW.id, NEW.content);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, id, content)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.content);
+        END
+    """)
+    db.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, id, content)
+            VALUES ('delete', OLD.rowid, OLD.id, OLD.content);
+            INSERT INTO messages_fts(rowid, id, content)
+            VALUES (NEW.rowid, NEW.id, NEW.content);
+        END
+    """)
+    db.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+    db.commit()
+
+
 def _drop_vector_tables(db: sqlite3.Connection) -> None:
     """Tear down the retired RAG vector store.
 
@@ -1857,10 +1925,9 @@ def _drop_vector_tables(db: sqlite3.Connection) -> None:
 
 def search_journal_fts(query: str, limit: int = 50) -> list[dict]:
     db = get_db()
-    words = [w for w in query.split() if w]
-    if not words:
+    escaped = fts_match_query(query)
+    if not escaped:
         return []
-    escaped = ' OR '.join(f'"{w}"*' for w in words)
     rows = db.execute(
         'SELECT id, rank FROM journal_fts WHERE journal_fts MATCH ? ORDER BY rank LIMIT ?',
         (escaped, limit),
@@ -1870,10 +1937,9 @@ def search_journal_fts(query: str, limit: int = 50) -> list[dict]:
 
 def search_recipes_fts(query: str, limit: int = 50) -> list[dict]:
     db = get_db()
-    words = [w for w in query.split() if w]
-    if not words:
+    escaped = fts_match_query(query)
+    if not escaped:
         return []
-    escaped = ' OR '.join(f'"{w}"*' for w in words)
     rows = db.execute(
         'SELECT id, rank FROM recipes_fts WHERE recipes_fts MATCH ? ORDER BY rank LIMIT ?',
         (escaped, limit),
@@ -1883,10 +1949,9 @@ def search_recipes_fts(query: str, limit: int = 50) -> list[dict]:
 
 def search_emails_fts(query: str, limit: int = 50) -> list[dict]:
     db = get_db()
-    words = [w for w in query.split() if w]
-    if not words:
+    escaped = fts_match_query(query)
+    if not escaped:
         return []
-    escaped = ' OR '.join(f'"{w}"*' for w in words)
     rows = db.execute(
         'SELECT id, rank FROM emails_fts WHERE emails_fts MATCH ? ORDER BY rank LIMIT ?',
         (escaped, limit),

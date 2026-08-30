@@ -432,13 +432,13 @@ def _today_taken_titles(db, today: str) -> set[str]:
     tasks, and today's existing chat_todos rows. Used by the live-chat add
     paths (the bulk-add route and the add_todos tool) so a to-do added mid-
     conversation doesn't duplicate something already tracked elsewhere."""
-    from backend.ai.briefing import _pending_daily_tasks
+    from backend.ai.briefing import pending_daily_tasks
 
     taken = {
         r['title'].strip().lower()
         for r in db.execute('SELECT title FROM todos WHERE done=0').fetchall()
     }
-    taken |= {r['title'].strip().lower() for r in _pending_daily_tasks(db, today)}
+    taken |= {r['title'].strip().lower() for r in pending_daily_tasks(db, today)}
     taken |= {
         r['title'].strip().lower()
         for r in db.execute(

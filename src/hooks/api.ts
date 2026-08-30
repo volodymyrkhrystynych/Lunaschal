@@ -611,6 +611,18 @@ export interface UserMemory {
   maxChars: number;
 }
 
+// One short standing fact the assistant noticed for itself, via the chat
+// delegate's `remember` tool. Deliberately not part of the document above: that
+// one is the user's, and this queue is the assistant's own, capped and
+// deletable — which is what makes writing it without a confirmation card fair.
+export interface AssistantObservation {
+  id: string;
+  content: string;
+  source: string;
+  createdAt: string;
+  foldedAt: string | null;
+}
+
 // A snapshot of the document as it stood *before* one change — copy-on-write,
 // the wiki_revisions pattern. This is what makes an unconfirmed write by the
 // assistant safe to allow.
@@ -3218,6 +3230,12 @@ export const api = {
     revisions: () => get<MemoryRevision[]>('/api/memory/revisions'),
     restore: (id: string) =>
       post<UserMemory>(`/api/memory/revisions/${id}/restore`, {}),
+    observations: () =>
+      get<{ observations: AssistantObservation[]; maxPending: number }>(
+        '/api/memory/observations'
+      ),
+    deleteObservation: (id: string) =>
+      del<{ ok: boolean }>(`/api/memory/observations/${id}`),
   },
 
   // Notes to self: created only from chat (backend/delegate/tools.py's
