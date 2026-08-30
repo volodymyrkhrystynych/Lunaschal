@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useShortcuts } from './ShortcutProvider';
 
 /**
@@ -31,8 +31,36 @@ export function useListSelection(
 
   const isSelected = (idx: number) => level >= scopeDepth && idx === selIndex;
 
-  const scrollSelectedIntoView = (idx: number) => (el: HTMLElement | null) => {
-    if (el && isSelected(idx)) el.scrollIntoView({ block: 'nearest' });
+  /**
+   * A callback ref that scrolls the row into view when it is the selected one.
+   *
+   * The returned closures are cached per index. React compares a callback ref by
+   * identity and, when it changes, calls the old one with `null` and the new one
+   * with the node — so a fresh closure per row per render meant every row in the
+   * list detached and re-attached its ref on every render, and the selected row
+   * re-ran `scrollIntoView` (a forced synchronous layout) each time. In the
+   * Journal that happened on every keystroke in the compose box.
+   *
+   * The cache is cleared whenever the selection or the scope depth changes,
+   * which is exactly when the behaviour of these closures differs — so a stale
+   * closure can never be handed out.
+   */
+  const refCache = useRef(new Map<number, (el: HTMLElement | null) => void>());
+  const cacheKey = `${level}:${selIndex}`;
+  const lastKey = useRef(cacheKey);
+  if (lastKey.current !== cacheKey) {
+    lastKey.current = cacheKey;
+    refCache.current = new Map();
+  }
+
+  const scrollSelectedIntoView = (idx: number) => {
+    const cached = refCache.current.get(idx);
+    if (cached) return cached;
+    const fn = (el: HTMLElement | null) => {
+      if (el && isSelected(idx)) el.scrollIntoView({ block: 'nearest' });
+    };
+    refCache.current.set(idx, fn);
+    return fn;
   };
 
   return {

@@ -1,17 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api } from '../../hooks/api';
+import { api, type LlamaModel } from '../../hooks/api';
 
 const DEFAULT_URL = 'http://localhost:8080';
 const DEFAULT_MODEL = 'qwen36';
-// One fixed router alias behind the multimodal toggle below. It is *one*
-// because the model is any-to-any: images and audio go through the same
-// weights and the same projector, so there is nothing to choose between and
-// on/off is the whole interface. It writes to both llamaVisionModel and
-// llamaAudioModel — two backend columns because they gate two independent
-// features, one setting because they name one download. Must match the section
-// name in llama/presets.ini.
-const OMNI_MODEL_ALIAS = 'gemma4-12b-omni';
 
 export function LlamaConfigSection() {
   const [llamaUrl, setLlamaUrl] = useState(DEFAULT_URL);
@@ -138,36 +130,47 @@ export function LlamaConfigSection() {
                 , then restart llama-server.
               </p>
             )}
-            <div>
-              <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
-                <input
-                  type="checkbox"
-                  checked={!!llamaVisionModel || !!llamaAudioModel}
-                  onChange={e => {
-                    const alias = e.target.checked ? OMNI_MODEL_ALIAS : '';
-                    setLlamaVisionModel(alias);
-                    setLlamaAudioModel(alias);
-                  }}
-                />
-                Multimodal input (audio + images)
-              </label>
-              <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                Captions journal photo attachments, and describes non-speech
-                audio in audio/video ones — the latter separate from speech
-                transcription, which Parakeet/Whisper still handles. Both go
-                through the{' '}
-                <code className="text-[var(--color-text)]">
-                  [gemma4-12b-omni]
-                </code>{' '}
-                preset: one any-to-any model, CPU-only, so it never competes
-                with the chat model for the card. Needs a separate ~7.4 GB
-                download — see the comments in{' '}
-                <code className="text-[var(--color-text)]">
-                  llama/presets.ini
-                </code>
-                .
-              </p>
-            </div>
+            <ModalitySelect
+              label="Vision model (photo captions)"
+              testId="llama-vision-model"
+              value={llamaVisionModel}
+              onChange={setLlamaVisionModel}
+              models={models}
+              modality="image"
+              help={
+                <>
+                  Captions journal photo attachments, and the caption is what
+                  the entry's title is generated from.{' '}
+                  <code className="text-[var(--color-text)]">[qwen36]</code>{' '}
+                  carries its own projector with{' '}
+                  <code className="text-[var(--color-text)]">
+                    mmproj-offload = false
+                  </code>
+                  , so it reads images without taking any VRAM from the chat
+                  model it already is.
+                </>
+              }
+            />
+            <ModalitySelect
+              label="Audio description model"
+              testId="llama-audio-model"
+              value={llamaAudioModel}
+              onChange={setLlamaAudioModel}
+              models={models}
+              modality="audio"
+              help={
+                <>
+                  Describes non-speech content in audio and video attachments —
+                  separate from speech transcription, which Parakeet/Whisper
+                  still handles. Only{' '}
+                  <code className="text-[var(--color-text)]">
+                    [gemma4-12b-omni]
+                  </code>{' '}
+                  reports an audio encoder, and it is a separate ~7.4 GB
+                  download that needs room beside the chat model.
+                </>
+              }
+            />
             <div>
               <label className="flex items-center gap-2 text-sm text-[var(--color-text)]">
                 <input
@@ -179,18 +182,15 @@ export function LlamaConfigSection() {
               </label>
               <p className="text-xs text-[var(--color-text-muted)] mt-1">
                 Sends photos attached in Chat to the chat model itself instead
-                of having the CPU-only omni model describe them first — it then
-                looks at the picture with your question in hand, and can answer
-                follow-ups about it. Qwen3.6 is a vision-language model, but{' '}
-                <code className="text-[var(--color-text)]">[qwen36]</code> ships
-                with no projector: download an{' '}
-                <code className="text-[var(--color-text)]">mmproj</code>, add it
-                to{' '}
-                <code className="text-[var(--color-text)]">
-                  llama/presets.ini
-                </code>{' '}
-                and confirm the preset still loads <em>before</em> ticking this.
-                Leave it off and photos keep going through the omni model.
+                of having the vision model describe them first — it then looks
+                at the picture with your question in hand, and can answer
+                follow-ups about it. Safe to tick whenever the chat model above
+                is listed as taking images — Qwen3.6 is a vision-language model
+                and <code className="text-[var(--color-text)]">[qwen36]</code>{' '}
+                now sets an{' '}
+                <code className="text-[var(--color-text)]">mmproj</code>. Leave
+                it off and chat photos are described first by the vision model
+                above.
               </p>
             </div>
             <button
@@ -212,5 +212,83 @@ export function LlamaConfigSection() {
         </div>
       </div>
     </>
+  );
+}
+
+/**
+ * Picks the router alias for one non-text modality, offering only the models the
+ * router says can actually take it.
+ *
+ * This replaced a single "Multimodal input" checkbox that wrote one hardcoded
+ * alias — `gemma4-12b-omni` — into both the vision and audio columns. Two things
+ * were wrong with that. It could not express the situation the app is actually
+ * in (the chat model reads images and the omni model reads audio, so they are
+ * two different answers), and a hardcoded alias is exactly how the settings row
+ * came to hold `gemma4-vision`, a preset that never existed, for months: nothing
+ * validated it, and every caption 404'd at the router looking like a merely
+ * unconfigured feature.
+ *
+ * `GET /api/settings/llama-models` has reported `inputModalities` per model all
+ * along — it was fetched here, typed, and used for nothing. Offering only the
+ * capable models makes a dead alias unpickable, and a stored alias the router
+ * does not list is now called out rather than silently accepted.
+ */
+function ModalitySelect({
+  label,
+  testId,
+  value,
+  onChange,
+  models,
+  modality,
+  help,
+}: {
+  label: string;
+  testId: string;
+  value: string;
+  onChange: (value: string) => void;
+  models: LlamaModel[] | undefined;
+  modality: 'image' | 'audio';
+  help: React.ReactNode;
+}) {
+  const capable = (models ?? []).filter(m =>
+    m.inputModalities?.includes(modality)
+  );
+  // A value that is set but not on offer: a retired preset, a renamed section,
+  // or llama-server being unreachable. It stays selected — silently dropping it
+  // would rewrite the user's setting on a transient failure — and is labelled.
+  const unknown = !!value && !capable.some(m => m.name === value);
+
+  return (
+    <div>
+      <label className="text-sm text-[var(--color-text)]">{label}</label>
+      <select
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        data-testid={testId}
+        className="w-full mt-1 bg-[var(--color-bg)] text-[var(--color-text)] border border-white/10 rounded px-3 py-2 focus:outline-none focus:border-[var(--color-primary)]"
+      >
+        <option value="">Off</option>
+        {capable.map(m => (
+          <option key={m.name} value={m.name}>
+            {m.name}
+            {m.status === 'loaded' ? ' — loaded' : ` — ${m.status}`}
+          </option>
+        ))}
+        {unknown && <option value={value}>{value} — not on the router</option>}
+      </select>
+      {unknown && (
+        <p className="text-xs text-amber-400 mt-1">
+          llama-server does not list <code>{value}</code> as taking {modality}.
+          Either it is not running, or this names a preset that no longer exists
+          — in which case every call using it will fail at the router.
+        </p>
+      )}
+      {!unknown && capable.length === 0 && (
+        <p className="text-xs text-[var(--color-text-muted)] mt-1">
+          No model on the router reports {modality} input.
+        </p>
+      )}
+      <p className="text-xs text-[var(--color-text-muted)] mt-1">{help}</p>
+    </div>
   );
 }

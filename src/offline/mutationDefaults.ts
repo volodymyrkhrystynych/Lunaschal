@@ -93,6 +93,15 @@ export interface JournalCreateVars {
   content: string;
   title?: string;
   tags?: string[];
+  /**
+   * How many files the composer is about to upload against this id, so the
+   * server's title generation waits for their captions. A plain number, which
+   * is what makes it safe here: these vars are structured-cloned into IndexedDB
+   * and a paused create has to be replayable from them alone (the Files
+   * themselves are not, and are not stored — a create replayed after a reload
+   * simply arrives with nothing to wait for, and titles from its text).
+   */
+  pendingAttachments?: number;
 }
 export interface JournalUpdateVars {
   id: string;

@@ -151,3 +151,118 @@ def test_survives_a_settings_table_missing_the_optional_columns():
     connection._migrate_gemma_aliases_to_qwen36(db)
 
     assert _row(db)['llama_model'] is None
+
+
+# --- _repoint_vision_at_qwen36 -------------------------------------------------
+#
+# The second migration exists because the first one demonstrably did not do its
+# job on the developer's own DB: `qwen36_aliases_migrated` was present while
+# `llama_vision_model` still read `gemma4-vision` and the single image ever sent
+# for captioning carried `model 'gemma4-vision' not found` as its
+# transcript_error. A latched migration that skipped its own UPDATE cannot
+# notice, so the repair has to be a separate one with a separate marker.
+
+
+def test_a_dead_vision_alias_is_repointed_at_qwen36():
+    """Not merely nulled. `[qwen36]` carries a projector now (mmproj-offload =
+    false, so it costs the card nothing) and reports input_modalities
+    ["text","image"] — the weights are already loaded, which is exactly the
+    condition the first migration said was missing when it chose NULL."""
+    db = _db(llama_vision_model='gemma4-vision')
+    connection._repoint_vision_at_qwen36(db)
+
+    assert _row(db)['llama_vision_model'] == 'qwen36'
+
+
+def test_a_dead_audio_alias_is_only_cleared():
+    """Audio cannot follow vision onto qwen36: Gemma's projector is the only one
+    reporting has_audio_encoder, so pointing audio description at the chat model
+    would hand it a model that cannot hear."""
+    db = _db(llama_audio_model='gemma4-e4b-audio')
+    connection._repoint_vision_at_qwen36(db)
+
+    assert _row(db)['llama_audio_model'] is None
+
+
+def test_a_working_alias_is_left_alone():
+    db = _db(llama_vision_model='gemma4-12b-omni', llama_audio_model='gemma4-12b-omni')
+    connection._repoint_vision_at_qwen36(db)
+
+    row = _row(db)
+    assert row['llama_vision_model'] == 'gemma4-12b-omni'
+    assert row['llama_audio_model'] == 'gemma4-12b-omni'
+
+
+def test_an_unset_vision_alias_stays_unset():
+    """Repointing a dead value is a repair. Turning captioning on for someone who
+    never asked for it is not."""
+    db = _db()
+    connection._repoint_vision_at_qwen36(db)
+
+    assert _row(db)['llama_vision_model'] is None
+
+
+def test_repoint_does_not_clobber_a_later_user_choice():
+    db = _db(llama_vision_model='gemma4-vision')
+    connection._repoint_vision_at_qwen36(db)
+    assert _row(db)['llama_vision_model'] == 'qwen36'
+
+    db.execute("UPDATE settings SET llama_vision_model='gemma4-12b-omni' WHERE id=1")
+    db.commit()
+    connection._repoint_vision_at_qwen36(db)
+
+    assert _row(db)['llama_vision_model'] == 'gemma4-12b-omni'
+
+
+def test_repoint_is_idempotent():
+    db = _db(llama_vision_model='gemma4-vision', llama_audio_model='gemma4-e4b-audio')
+    connection._repoint_vision_at_qwen36(db)
+    first_cols, first_row = _columns(db), _row(db)
+
+    for _ in range(3):
+        connection._repoint_vision_at_qwen36(db)
+
+    assert _columns(db) == first_cols
+    assert _row(db) == first_row
+
+
+def test_repoint_latches_on_a_settings_table_with_no_row():
+    db = sqlite3.connect(':memory:')
+    db.row_factory = sqlite3.Row
+    db.executescript(SCHEMA)
+    connection._repoint_vision_at_qwen36(db)
+
+    assert 'vision_repointed_at_qwen36' in _columns(db)
+
+
+def test_repoint_survives_a_settings_table_missing_the_optional_columns():
+    db = sqlite3.connect(':memory:')
+    db.row_factory = sqlite3.Row
+    db.executescript(
+        'CREATE TABLE settings (id INTEGER PRIMARY KEY DEFAULT 1, llama_model TEXT,'
+        ' created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);'
+        " INSERT INTO settings(id, llama_model, created_at, updated_at)"
+        " VALUES (1, 'qwen36', 0, 0);"
+    )
+    connection._repoint_vision_at_qwen36(db)
+
+    assert 'vision_repointed_at_qwen36' in _columns(db)
+
+
+def test_it_repairs_a_db_the_first_migration_already_latched():
+    """The exact broken state found in the wild: marker present, dead values
+    intact. The first migration returns immediately; the second still fires."""
+    db = _db(llama_vision_model='gemma4-vision', llama_audio_model='gemma4-e4b-audio')
+    db.execute(
+        'ALTER TABLE settings ADD COLUMN qwen36_aliases_migrated INTEGER NOT NULL DEFAULT 1'
+    )
+    db.commit()
+
+    connection._migrate_gemma_aliases_to_qwen36(db)
+    assert _row(db)['llama_vision_model'] == 'gemma4-vision'  # still stuck
+
+    connection._repoint_vision_at_qwen36(db)
+
+    row = _row(db)
+    assert row['llama_vision_model'] == 'qwen36'
+    assert row['llama_audio_model'] is None

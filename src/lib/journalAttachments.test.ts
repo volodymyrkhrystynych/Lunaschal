@@ -70,10 +70,17 @@ describe('isAttachableFile', () => {
     expect(isAttachableFile(file('IMG_0043.MOV', ''))).toBe(true);
   });
 
-  it('rejects everything else', () => {
-    expect(isAttachableFile(file('notes.pdf', 'application/pdf'))).toBe(false);
-    expect(isAttachableFile(file('pasted.txt', 'text/plain'))).toBe(false);
-    expect(isAttachableFile(file('index.html', 'text/html'))).toBe(false);
+  it('accepts everything else too, now that the backend stores it', () => {
+    // This used to be `rejects everything else`. An upload the media tables
+    // don't claim is stored as kind='file' rather than refused, so dropping a
+    // PDF on an entry attaches the PDF.
+    expect(isAttachableFile(file('notes.pdf', 'application/pdf'))).toBe(true);
+    expect(isAttachableFile(file('pasted.txt', 'text/plain'))).toBe(true);
+  });
+
+  it('still rejects a file with nothing in it and no identity', () => {
+    const empty = new File([], '', { type: '' });
+    expect(isAttachableFile(empty)).toBe(false);
   });
 });
 
@@ -89,14 +96,24 @@ describe('filesFromTransfer', () => {
     });
   });
 
-  it('keeps media and reports the rest, preserving order', () => {
+  it('keeps every real file, preserving order', () => {
     const memo = new File(['x'], 'memo.m4a', { type: 'audio/mp4' });
-    const junk = new File(['x'], 'clip.html', { type: 'text/html' });
+    const doc = new File(['x'], 'notes.pdf', { type: 'application/pdf' });
     const clip = new File(['x'], 'clip.mov', { type: 'video/quicktime' });
 
-    expect(filesFromTransfer(transfer([memo, junk, clip]))).toEqual({
-      accepted: [memo, clip],
-      rejected: [junk],
+    expect(filesFromTransfer(transfer([memo, doc, clip]))).toEqual({
+      accepted: [memo, doc, clip],
+      rejected: [],
+    });
+  });
+
+  it('reports an empty, nameless file rather than silently dropping it', () => {
+    const memo = new File(['x'], 'memo.m4a', { type: 'audio/mp4' });
+    const nothing = new File([], '', { type: '' });
+
+    expect(filesFromTransfer(transfer([memo, nothing]))).toEqual({
+      accepted: [memo],
+      rejected: [nothing],
     });
   });
 

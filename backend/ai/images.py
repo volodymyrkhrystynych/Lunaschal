@@ -1,28 +1,34 @@
 """Image captioning for journal photo attachments.
 
-This is the project's only vision call, and it is deliberately gated behind its
-own model alias (`llama_vision_model`) rather than reusing `llama_model`: the
-chat preset takes text only and sets `mmproj-auto = false`, because the card has
-no room for a projector next to it (docs/learnings/moe-expert-placement.md).
+This is the project's only vision call, and it is gated behind its own model
+alias (`llama_vision_model`) rather than reusing `llama_model` so the two can
+differ. In practice they no longer have to: `[qwen36]` carries
+`Qwen3.6-35B-A3B-mmproj-F16.gguf` with `mmproj-offload = false`, so the vision
+tower lives in system RAM and costs the card nothing, and `/v1/models` reports
+the alias as `input_modalities: ["text", "image"]`. Settings offers whichever
+aliases the router says take images, and `_repoint_vision_at_qwen36` moves an
+existing dead value onto `qwen36`.
 
-Images go to `[gemma4-12b-omni]` instead — an any-to-any Gemma 4 12B pinned to
-the CPU, which is also what serves `backend/ai/audio_description.py`. One model,
-one ~175 MB projector, both non-text inputs, and no contention with the chat
-model for the GPU. Settings writes the one alias into both `llama_vision_model`
-and `llama_audio_model`.
+`[gemma4-12b-omni]` remains the alias for `backend/ai/audio_description.py`:
+its projector is the only one reporting `has_audio_encoder`. It is a poor
+*vision* choice on a single 8 GB card — measured, not assumed: with `[qwen36]`
+resident the router cannot load it at all, dying in llama.cpp's device-memory
+probe with `CUDA error: out of memory` even though the preset pins it to
+`n-gpu-layers 0`.
 
-Captioning stays off until that alias is configured — those weights are a
-separate ~7.4 GB download — and `VisionUnavailable` is what the UI shows instead
-of a mysteriously dead button.
+Captioning stays off while the alias is unset, and `VisionUnavailable` is what
+the UI shows instead of a mysteriously dead button.
 
 Historical note worth keeping: this used to tell you to create a `[gemma4-vision]`
 preset, and the Settings checkbox wrote that alias, but no such section ever
 existed in `llama/presets.ini`. Captioning had never once worked; it 404'd at the
 router, and the error surfaced as attachment text rather than as anything
 identifying a missing preset. A gate that names a model nobody defined fails
-exactly like a model that is merely slow to load.
+exactly like a model that is merely slow to load — which is why `describe_image`
+now recognises that specific refusal and says which alias was missing.
 """
 import base64
+import io
 import logging
 from pathlib import Path
 
@@ -62,16 +68,24 @@ _MAX_TOKENS = 300
 # verbatim is the point of this pass, and that is where the tokens go.
 _CHAT_MAX_TOKENS = 500
 
-# Matches backend/journal/storage.py's IMAGE_EXTS, mapped back to the mime types
-# a data: URI needs. heic/heif are stored but not sent — llama.cpp's projector
-# path decodes the common web formats, and a HEIC would arrive as garbage bytes.
-_EXT_MIME = {
-    'jpg': 'image/jpeg',
-    'jpeg': 'image/jpeg',
-    'png': 'image/png',
-    'webp': 'image/webp',
-    'gif': 'image/gif',
-}
+# Matches backend/journal/storage.py's IMAGE_EXTS. heic/heif are in the list now
+# that every image is re-encoded on the way out (see `data_uri`): Pillow opens
+# them via the HEIF opener `backend.imaging` registers, and what reaches
+# llama.cpp is a JPEG either way. Nothing here is sent as-is, so the values are
+# gone — this is a "can we be expected to decode it" set, not a mime table.
+_READABLE_EXTS = {'jpg', 'jpeg', 'png', 'webp', 'gif', 'heic', 'heif'}
+
+# The longest side the vision tower is given. Measured on a 5712x4284 iPhone
+# photo sent whole: 4104 image tokens, 110 s of prompt eval at 37 t/s, for a
+# caption that gained nothing from the extra pixels — the projector runs on the
+# CPU (`mmproj-offload = false`), so pixels are the cost driver and this is the
+# single cheapest lever on captioning latency. 1280 keeps a menu or a street
+# sign legible, which is what the chat-photo prompt is for.
+_MAX_EDGE = 1280
+
+# High enough that JPEG artefacts don't eat small text, low enough that the
+# base64 payload stays a few hundred KB rather than a few MB.
+_JPEG_QUALITY = 85
 
 
 def get_vision_model() -> str | None:
@@ -85,20 +99,74 @@ def is_vision_configured() -> bool:
 
 
 def data_uri(path: Path) -> str:
-    """The `data:` URI an `image_url` content part needs.
+    """The `data:` URI an `image_url` content part needs: a JPEG, upright, with
+    its longest side at most `_MAX_EDGE`.
+
+    Two things this is not allowed to skip, both of which the stored file gets
+    wrong for the model's purposes:
+
+    - **Orientation.** A phone writes the sensor's pixels and an EXIF tag saying
+      which way is up. llama.cpp's projector reads pixels and ignores the tag, so
+      a portrait photo arrives on its side; the model notices, and says so — a
+      real caption from this repo's own photos opened *"A person ... walks across
+      a paved lot, with the image rotated 90 degrees clockwise."* Attention spent
+      on that is attention not spent on the sign in the background.
+    - **Size.** See `_MAX_EDGE`. Sending the original is minutes per photo.
 
     Exported (not `_`-prefixed) because `backend/chat/context.py` builds image
-    parts for the chat model's own turn and must use the same mime table — heic
-    is stored but never sendable, and two copies of that rule would drift.
+    parts for the chat model's own turn and must go through the same pass — two
+    copies of this rule would drift, and the chat path has the same latency.
     """
     ext = path.suffix.lower().lstrip('.')
-    mime = _EXT_MIME.get(ext)
-    if not mime:
+    if ext not in _READABLE_EXTS:
         raise VisionUnavailable(
             f'{ext or "this"} images cannot be read — convert to JPEG or PNG'
         )
-    encoded = base64.b64encode(path.read_bytes()).decode('ascii')
-    return f'data:{mime};base64,{encoded}'
+    try:
+        # Imported for the side effect: it registers Pillow's HEIF opener, which
+        # is the only reason a .heic off an iPhone opens here at all.
+        import backend.imaging  # noqa: F401
+        from PIL import Image, ImageOps
+
+        with Image.open(path) as img:
+            img = ImageOps.exif_transpose(img)
+            img.thumbnail((_MAX_EDGE, _MAX_EDGE))
+            # A PNG or HEIC may carry alpha or a palette; JPEG takes neither.
+            if img.mode not in ('RGB', 'L'):
+                img = img.convert('RGB')
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=_JPEG_QUALITY)
+    except Exception as e:
+        raise VisionUnavailable(f'The image could not be read: {e}') from e
+    encoded = base64.b64encode(buf.getvalue()).decode('ascii')
+    return f'data:image/jpeg;base64,{encoded}'
+
+
+def _router_message(model: str, e: Exception) -> str:
+    """Name the configured alias when llama-server is the one refusing it.
+
+    The two router failures that matter are indistinguishable from a network
+    error once they are `str(e)` on an attachment row: a 400/404 `model 'X' not
+    found` (the alias has no section in `llama/presets.ini` — this is what a
+    stale `gemma4-vision` looked like for months) and a 500 `failed to load`
+    (the section exists but the weights would not fit; on one 8 GB card,
+    `gemma4-12b-omni` beside a resident `[qwen36]` dies in llama.cpp's
+    device-memory probe with `CUDA error: out of memory`). Both are settings
+    problems and neither reads like one.
+    """
+    text = str(e) or 'Failed'
+    lowered = text.lower()
+    if 'not found' in lowered and model.lower() in lowered:
+        return (
+            f"llama-server has no model called '{model}' — pick one it lists in"
+            ' Settings → llama.cpp, or add the preset to llama/presets.ini'
+        )
+    if 'failed to load' in lowered:
+        return (
+            f"llama-server could not load '{model}' (often no room beside the"
+            f' chat model) — {text}'
+        )
+    return text
 
 
 def describe_image(path: Path, *, system: str, prompt: str, max_tokens: int = _MAX_TOKENS) -> str:
@@ -146,7 +214,7 @@ def describe_image(path: Path, *, system: str, prompt: str, max_tokens: int = _M
         raise
     except Exception as e:
         logger.error('Image captioning failed: %s', e)
-        raise VisionUnavailable(str(e)) from e
+        raise VisionUnavailable(_router_message(model, e)) from e
 
     if not text:
         raise VisionUnavailable('The model returned an empty description')

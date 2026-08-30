@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, memo } from 'react';
 import {
   useQuery,
   useInfiniteQuery,
@@ -16,6 +16,7 @@ import { buildFeed, type FeedItem } from '../lib/journalFeed';
 import { computeEventGroupSpans } from '../lib/journalEventGroups';
 import { eventTimeLabel } from '../lib/calendar';
 import { localDayKey } from '../lib/dates';
+import { formatDateTime, formatDay, formatDayTime } from '../lib/dateFormats';
 import {
   categoryRingBoxShadow,
   parseCategoryTags,
@@ -24,13 +25,12 @@ import { isBreak, parseProposedTodos } from '../lib/chatSegments';
 import type { ProposedTodo } from '../hooks/api';
 import { formatCompletedAt } from '../lib/todos';
 import {
-  ACCEPT_AUDIO,
-  ACCEPT_IMAGE,
   defaultNameFor,
   filesFromTransfer,
   isVoiceOnlyEntry,
   rejectedFilesMessage,
 } from '../lib/journalAttachments';
+import { AttachmentButtons } from './AttachmentButtons';
 import { ImageLightbox, useLightbox } from './ImageLightbox';
 import { JournalAttachments } from './JournalAttachments';
 import { MessageMarkdown } from './MessageMarkdown';
@@ -42,7 +42,7 @@ import type {
   FoodJournalItem,
   TaskEvent,
 } from '../hooks/api';
-import { ratingStars, foodTitle, mapLink } from '../lib/food';
+import { ratingStars, foodTitle, mapLink, parseTags } from '../lib/food';
 import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
 import { useRecorder } from '../hooks/useRecorder';
@@ -54,7 +54,17 @@ interface JournalProps {
 
 const JOURNAL_PAGE_SIZE = 50;
 
+// Long enough to swallow a burst of typing, short enough that a pause feels
+// like a search rather than a delay.
+const SEARCH_DEBOUNCE_MS = 250;
+
 export function Journal({ onOpenFic }: JournalProps = {}) {
+  // Two pieces of state, deliberately. `searchInput` is what the field shows
+  // and updates on every keystroke; `searchQuery` is what the query key uses and
+  // lags it by DEBOUNCE_MS. They were one, which meant one FTS request per
+  // character typed — and, offline, one paused mutation-free query per character
+  // too. The field stays fully responsive either way.
+  const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCuratedTagId, setSelectedCuratedTagId] = useState<
     string | null
@@ -66,11 +76,10 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState('');
   const [editTitle, setEditTitle] = useState('');
-  const [newEntry, setNewEntry] = useState('');
   const [showNewEntry, setShowNewEntry] = useState(false);
-  // Files pasted/dropped into the compose box, held until the entry they belong
-  // to exists server-side.
-  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  // The compose box's own text and staged files live in NewEntryComposer, not
+  // here. Keeping them on Journal meant every keystroke re-rendered the whole
+  // feed — see the comment on that component.
   const [stagedUploadError, setStagedUploadError] = useState<string | null>(
     null
   );
@@ -103,8 +112,6 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   } | null>(null);
   const feedScrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
-  const newEntryAudioInputRef = useRef<HTMLInputElement>(null);
-  const newEntryImageInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
   const { data: curatedTags } = useQuery({
@@ -121,6 +128,16 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     queryKey: ['journal', 'voiceDrafts'],
     queryFn: api.journal.voiceDrafts.list,
   });
+
+  useEffect(() => {
+    // Clearing the box should feel instant — there is nothing to wait for.
+    if (!searchInput) {
+      setSearchQuery('');
+      return;
+    }
+    const t = setTimeout(() => setSearchQuery(searchInput), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   const isSearching = !!searchQuery;
 
@@ -154,7 +171,13 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     enabled: isSearching,
   });
 
-  const entries = isSearching ? searchResults : listData?.pages.flat();
+  // Memoized: `pages.flat()` mints a new array on every render, and every
+  // derivation below keys off this identity. Without it nothing downstream can
+  // ever be cached, however carefully its own deps are written.
+  const entries = useMemo(
+    () => (isSearching ? searchResults : listData?.pages.flat()),
+    [isSearching, searchResults, listData]
+  );
   const isLoading = isSearching ? searchLoading : listLoading;
 
   // Transcriptions only interleave in the plain chronological view — FTS search
@@ -208,15 +231,21 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   // whatever's actually loaded rather than a fixed window, since the feed is
   // infinite-scrolled by page count, not by date.
   const eventsVisible = !searchQuery && !selectedCuratedTagId;
-  const loadedEntryTimes = (entries ?? []).map(e =>
-    new Date(e.createdAt).getTime()
-  );
-  const eventsRangeStart = loadedEntryTimes.length
-    ? localDayKey(new Date(Math.min(...loadedEntryTimes)))
-    : null;
-  const eventsRangeEnd = loadedEntryTimes.length
-    ? localDayKey(new Date(Math.max(...loadedEntryTimes)))
-    : null;
+  // A reduce, not `Math.min(...times)`: the feed is unbounded (infinite scroll,
+  // 50 entries a page) and spreading thousands of arguments into a call is both
+  // slow and, past the engine's argument limit, a RangeError. Memoized because
+  // it walks every loaded entry and allocates a Date for each.
+  const [eventsRangeStart, eventsRangeEnd] = useMemo(() => {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const e of entries ?? []) {
+      const t = new Date(e.createdAt).getTime();
+      if (t < min) min = t;
+      if (t > max) max = t;
+    }
+    if (min === Infinity) return [null, null] as const;
+    return [localDayKey(new Date(min)), localDayKey(new Date(max))] as const;
+  }, [entries]);
   const { data: calendarEvents } = useQuery({
     queryKey: ['calendar', 'journal-range', eventsRangeStart, eventsRangeEnd],
     queryFn: () => api.calendar.listByRange(eventsRangeStart!, eventsRangeEnd!),
@@ -257,36 +286,17 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
   const createEntry = useJournalCreate();
   const updateEntry = useJournalUpdate();
 
-  const stageFiles = (
-    transfer: DataTransfer | null,
-    e: React.SyntheticEvent
-  ) => {
-    const { accepted, rejected } = filesFromTransfer(transfer);
-    if (accepted.length === 0) {
-      // A paste carrying files we can't take says so; one carrying no files at
-      // all is ordinary text and still belongs to the textarea.
-      setStagedUploadError(rejectedFilesMessage(rejected));
-      return;
-    }
-    e.preventDefault();
-    setStagedUploadError(null);
-    setPendingFiles(current => [...current, ...accepted]);
-  };
-
-  // Same staging as paste/drop, just reached through an explicit button — the
-  // entry has no server-side row yet, so files wait in pendingFiles either way.
-  const pickPendingFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = '';
-    if (files.length) setPendingFiles(current => [...current, ...files]);
-  };
-
-  const submitNewEntry = () => {
-    if (!newEntry.trim()) return;
+  const submitNewEntry = (content: string, staged: File[]) => {
     const id = ulid();
-    const staged = pendingFiles;
     createEntry.mutate(
-      { id, content: newEntry },
+      {
+        id,
+        content,
+        // Tells the server photos are coming, so the title waits for their
+        // captions instead of being generated from the text alone milliseconds
+        // from now. Attachments can only be uploaded once the entry exists.
+        pendingAttachments: staged.length || undefined,
+      },
       {
         // Per-call, so the shared offline defaults' own callbacks still run.
         // Uploads wait for the create to land: offline the mutation is paused
@@ -296,8 +306,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
         },
       }
     );
-    setNewEntry('');
-    setPendingFiles([]);
+    setStagedUploadError(null);
     setShowNewEntry(false);
   };
 
@@ -399,37 +408,58 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     },
   });
 
-  const formatDate = (date: string) =>
-    new Intl.DateTimeFormat('en-US', {
-      weekday: 'short',
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    }).format(new Date(date));
+  // formatDateTime, not a locally-constructed formatter. This is called once
+  // per row and used to build a fresh Intl.DateTimeFormat every time — the
+  // single largest per-render cost of the feed on the iPhone.
+  const formatDate = formatDateTime;
 
-  const feedItems = buildFeed(
-    entries ?? [],
-    transcriptionsVisible ? (transcriptions ?? []) : [],
-    conversationsVisible ? (chatConversations ?? []) : [],
-    papersVisible ? (journalPapers ?? []) : [],
-    foodVisible ? (journalFood ?? []) : [],
-    taskEventsVisible ? (taskEvents ?? []) : []
+  // An n-way merge sort over six unbounded lists, with a `new Date` per
+  // comparison. It depends on nothing the user is typing, so it has no business
+  // re-running when they type.
+  const feedItems = useMemo(
+    () =>
+      buildFeed(
+        entries ?? [],
+        transcriptionsVisible ? (transcriptions ?? []) : [],
+        conversationsVisible ? (chatConversations ?? []) : [],
+        papersVisible ? (journalPapers ?? []) : [],
+        foodVisible ? (journalFood ?? []) : [],
+        taskEventsVisible ? (taskEvents ?? []) : []
+      ),
+    [
+      entries,
+      transcriptionsVisible,
+      transcriptions,
+      conversationsVisible,
+      chatConversations,
+      papersVisible,
+      journalPapers,
+      foodVisible,
+      journalFood,
+      taskEventsVisible,
+      taskEvents,
+    ]
   );
   // Calendar events whose window covers a run of feedItems, rendered as a
   // colored border wrapping that run — see journalEventGroups.ts. This is a
   // read-only overlay computed from feedItems, never a change to it, so
   // entryIndex/keyboard selection below is untouched.
-  const eventGroupSpans = computeEventGroupSpans(
-    feedItems,
-    eventsVisible ? (calendarEvents ?? []) : []
-  );
-  const spanByStartIndex = new Map(eventGroupSpans.map(s => [s.startIndex, s]));
-  const indexInSpan = new Set<number>();
-  eventGroupSpans.forEach(s => {
-    for (let i = s.startIndex; i <= s.endIndex; i++) indexInSpan.add(i);
-  });
+  //
+  // Memoized together with the two lookups built from it: the span computation
+  // is O(events x feed) with a Date parse per item and a JSON.parse of each
+  // event's category tags, and the Map/Set are pure functions of its result.
+  const { spanByStartIndex, indexInSpan } = useMemo(() => {
+    const spans = computeEventGroupSpans(
+      feedItems,
+      eventsVisible ? (calendarEvents ?? []) : []
+    );
+    const byStart = new Map(spans.map(s => [s.startIndex, s]));
+    const covered = new Set<number>();
+    for (const s of spans) {
+      for (let i = s.startIndex; i <= s.endIndex; i++) covered.add(i);
+    }
+    return { spanByStartIndex: byStart, indexInSpan: covered };
+  }, [feedItems, eventsVisible, calendarEvents]);
 
   const renderFeedItem = (item: FeedItem) => {
     if (item.kind === 'conversation') {
@@ -498,6 +528,10 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
       );
     }
     const { entry, entryIndex: idx } = item;
+    // Parsed once. The tag row used to `JSON.parse(entry.tags)` twice per entry
+    // per render — once to decide whether to show the row at all, once to fill
+    // it — and this whole function ran for every entry on every keystroke.
+    const aiTags = parseTags(entry.tags);
     return (
       <div
         key={entry.id}
@@ -668,7 +702,7 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
 
         {((entry.ficRefs?.length ?? 0) > 0 ||
           entry.curatedTags?.length > 0 ||
-          (entry.tags && JSON.parse(entry.tags).length > 0)) && (
+          aiTags.length > 0) && (
           <div className="tag-row flex flex-wrap gap-1.5 mt-2">
             {entry.ficRefs?.map(ref => (
               <button
@@ -694,15 +728,14 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
                 #{tag}
               </span>
             ))}
-            {entry.tags &&
-              JSON.parse(entry.tags).map((tag: string) => (
-                <span
-                  key={tag}
-                  className="px-2 py-0.5 text-xs rounded border border-[var(--color-primary)]/40 text-[var(--color-primary)] bg-[var(--color-primary)]/10"
-                >
-                  {tag}
-                </span>
-              ))}
+            {aiTags.map(tag => (
+              <span
+                key={tag}
+                className="px-2 py-0.5 text-xs rounded border border-[var(--color-primary)]/40 text-[var(--color-primary)] bg-[var(--color-primary)]/10"
+              >
+                {tag}
+              </span>
+            ))}
           </div>
         )}
       </div>
@@ -736,9 +769,9 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
       <div className="mb-4">
         <input
           type="text"
-          value={searchQuery}
+          value={searchInput}
           onChange={e => {
-            setSearchQuery(e.target.value);
+            setSearchInput(e.target.value);
             setSelectedCuratedTagId(null);
           }}
           placeholder="Search entries..."
@@ -797,112 +830,10 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
       )}
 
       {showNewEntry && (
-        <div
-          className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10"
-          // The entry does not exist server-side yet, so a file pasted here is
-          // held until the create succeeds and uploaded then (submitNewEntry).
-          onPaste={e => stageFiles(e.clipboardData, e)}
-          onDrop={e => stageFiles(e.dataTransfer, e)}
-          onDragOver={e => {
-            if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
-          }}
-        >
-          <textarea
-            value={newEntry}
-            onChange={e => setNewEntry(e.target.value)}
-            autoFocus
-            onKeyDown={e => {
-              if (e.key === 'Escape') {
-                setShowNewEntry(false);
-                return;
-              }
-              // Enter saves; Shift+Enter inserts a newline.
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submitNewEntry();
-              }
-            }}
-            placeholder="Write your journal entry..."
-            rows={4}
-            className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none"
-          />
-          <div className="flex items-center gap-2 mt-2">
-            <input
-              ref={newEntryAudioInputRef}
-              type="file"
-              accept={ACCEPT_AUDIO}
-              onChange={pickPendingFiles}
-              className="hidden"
-              data-testid="journal-new-entry-audio-input"
-            />
-            <input
-              ref={newEntryImageInputRef}
-              type="file"
-              accept={ACCEPT_IMAGE}
-              onChange={pickPendingFiles}
-              className="hidden"
-              data-testid="journal-new-entry-image-input"
-            />
-            <button
-              type="button"
-              onClick={() => newEntryAudioInputRef.current?.click()}
-              className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20"
-            >
-              Add audio or video
-            </button>
-            <button
-              type="button"
-              onClick={() => newEntryImageInputRef.current?.click()}
-              className="px-2 py-1 text-xs rounded border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20"
-            >
-              Add photo
-            </button>
-          </div>
-          {pendingFiles.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
-              {pendingFiles.map((f, i) => (
-                <span
-                  key={`${f.name}:${i}`}
-                  className="flex items-center gap-1 px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] bg-white/5"
-                >
-                  {f.name}
-                  <button
-                    onClick={() =>
-                      setPendingFiles(files =>
-                        files.filter((_, index) => index !== i)
-                      )
-                    }
-                    aria-label={`Remove ${f.name}`}
-                    className="text-red-400 hover:text-red-300"
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              <span className="text-xs text-[var(--color-text-muted)] self-center">
-                attached on save
-              </span>
-            </div>
-          )}
-          <div className="flex justify-end gap-2 mt-2">
-            <button
-              onClick={() => {
-                setShowNewEntry(false);
-                setPendingFiles([]);
-              }}
-              className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={submitNewEntry}
-              disabled={!newEntry.trim()}
-              className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-            >
-              Save
-            </button>
-          </div>
-        </div>
+        <NewEntryComposer
+          onSubmit={submitNewEntry}
+          onCancel={() => setShowNewEntry(false)}
+        />
       )}
 
       <div
@@ -965,6 +896,142 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
             Loading more…
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The new-entry compose box.
+ *
+ * Its own component for one reason: **the draft text must not be state on
+ * `Journal`.** It was, and so every keystroke re-ran the whole `Journal` body
+ * and re-rendered the entire feed — rebuilding the merged feed, recomputing
+ * event-group spans (O(events × feed), with a `new Date` per item), re-parsing
+ * every entry's tags, and constructing a fresh `Intl.DateTimeFormat` per row.
+ * On a desktop that was invisible. On the iPhone typing was unusable.
+ *
+ * Nothing here is passed down from the feed, so lifting it out costs nothing
+ * and the composer now re-renders alone.
+ */
+function NewEntryComposer({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (content: string, files: File[]) => void;
+  onCancel: () => void;
+}) {
+  const [content, setContent] = useState('');
+  // Files picked, pasted or dropped here, held until the entry they belong to
+  // exists server-side.
+  const [files, setFiles] = useState<File[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  const stage = (transfer: DataTransfer | null, e: React.SyntheticEvent) => {
+    const { accepted, rejected } = filesFromTransfer(transfer);
+    if (accepted.length === 0) {
+      // A paste carrying files we can't take says so; one carrying no files at
+      // all is ordinary text and still belongs to the textarea.
+      setError(rejectedFilesMessage(rejected));
+      return;
+    }
+    e.preventDefault();
+    setError(null);
+    setFiles(current => [...current, ...accepted]);
+  };
+
+  const submit = () => {
+    // A photo with no words is a real entry — and the one that most needs its
+    // title generated from a caption.
+    if (!content.trim() && files.length === 0) return;
+    onSubmit(content, files);
+    setContent('');
+    setFiles([]);
+  };
+
+  return (
+    <div
+      className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10"
+      // The entry does not exist server-side yet, so a file pasted here is
+      // held until the create succeeds and uploaded then.
+      onPaste={e => stage(e.clipboardData, e)}
+      onDrop={e => stage(e.dataTransfer, e)}
+      onDragOver={e => {
+        if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+      }}
+    >
+      <textarea
+        value={content}
+        onChange={e => setContent(e.target.value)}
+        autoFocus
+        onKeyDown={e => {
+          if (e.key === 'Escape') {
+            onCancel();
+            return;
+          }
+          // Enter saves; Shift+Enter inserts a newline.
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder="Write your journal entry..."
+        rows={4}
+        className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none"
+      />
+      <AttachmentButtons
+        idPrefix="journal-new-entry"
+        onFiles={picked => {
+          setError(null);
+          setFiles(current => [...current, ...picked]);
+        }}
+      />
+      {error && (
+        <div className="mt-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
+          {error}
+        </div>
+      )}
+      {files.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {files.map((f, i) => (
+            <span
+              key={`${f.name}:${i}`}
+              className="flex items-center gap-1 px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] bg-white/5"
+            >
+              {f.name || 'attachment'}
+              <button
+                onClick={() =>
+                  setFiles(current => current.filter((_, index) => index !== i))
+                }
+                aria-label={`Remove ${f.name || 'attachment'}`}
+                className="text-red-400 hover:text-red-300"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          <span className="text-xs text-[var(--color-text-muted)] self-center">
+            attached on save
+          </span>
+        </div>
+      )}
+      <div className="flex justify-end gap-2 mt-2">
+        <button
+          onClick={() => {
+            setFiles([]);
+            onCancel();
+          }}
+          className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={submit}
+          disabled={!content.trim() && files.length === 0}
+          className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+        >
+          Save
+        </button>
       </div>
     </div>
   );
@@ -1172,7 +1239,16 @@ function ProposedTodoHistory({ items }: { items: ProposedTodo[] }) {
 
 // A saved chat day in the journal feed: collapsed by default (chats get long),
 // dimmed like transcriptions, with its full transcript lazily fetched on expand.
-function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
+// memo'd, like the two feed items below it. These render once per row in an
+// unbounded feed and none of them depends on anything the composer or the
+// search box changes; without memo they all re-rendered whenever Journal did.
+// SavedChatItem is the expensive one — an expanded chat re-runs react-markdown
+// over every message in it.
+const SavedChatItem = memo(function SavedChatItem({
+  conversation,
+}: {
+  conversation: DatedConversation;
+}) {
   const [open, setOpen] = useState(false);
   const { data, isLoading } = useQuery({
     queryKey: ['chat', 'conversation', conversation.id],
@@ -1180,12 +1256,7 @@ function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
     enabled: open,
   });
 
-  const dayLabel = new Intl.DateTimeFormat('en-US', {
-    weekday: 'short',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  }).format(new Date(conversation.dayKey + 'T00:00:00'));
+  const dayLabel = formatDay(conversation.dayKey + 'T00:00:00');
   const isWebSearch = conversation.mode === 'websearch';
   const title =
     conversation.title ||
@@ -1248,20 +1319,19 @@ function SavedChatItem({ conversation }: { conversation: DatedConversation }) {
       </div>
     </details>
   );
-}
+});
 
 // An archived paper (drawings) in the journal feed: a header with the day and a
 // horizontal filmstrip of page thumbnails. Tapping a page opens it full-screen.
 // View-only here — the paper is a record of what was drawn that day.
-function JournalPaperItem({ paper }: { paper: JournalPaper }) {
+const JournalPaperItem = memo(function JournalPaperItem({
+  paper,
+}: {
+  paper: JournalPaper;
+}) {
   const lightbox = useLightbox();
 
-  const dayLabel = new Intl.DateTimeFormat('en-US', {
-    weekday: 'short',
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  }).format(new Date(paper.journalDate + 'T00:00:00'));
+  const dayLabel = formatDay(paper.journalDate + 'T00:00:00');
   const title = paper.title || `Drawings — ${dayLabel}`;
   const pages = paper.pages.filter(pg => pg.imageUrl);
 
@@ -1301,7 +1371,7 @@ function JournalPaperItem({ paper }: { paper: JournalPaper }) {
       <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
     </div>
   );
-}
+});
 
 const TASK_LIST_LABELS: Record<string, string> = {
   todo: 'To-Do',
@@ -1366,18 +1436,16 @@ function JournalTaskEventItem({
 
 // A food-log entry in the journal feed: dish/place/rating with a media
 // filmstrip. View-only here — editing happens in the Food tab.
-function JournalFoodItem({ food }: { food: FoodJournalItem }) {
+const JournalFoodItem = memo(function JournalFoodItem({
+  food,
+}: {
+  food: FoodJournalItem;
+}) {
   const lightbox = useLightbox();
   const stars = ratingStars(food.rating);
   const geoLink = mapLink(food.latitude, food.longitude);
 
-  const dayLabel = new Intl.DateTimeFormat('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(new Date(food.createdAt));
+  const dayLabel = formatDayTime(food.createdAt);
 
   return (
     <div className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5">
@@ -1458,4 +1526,4 @@ function JournalFoodItem({ food }: { food: FoodJournalItem }) {
       <ImageLightbox src={lightbox.src} onClose={lightbox.close} />
     </div>
   );
-}
+});

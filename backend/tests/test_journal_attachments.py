@@ -127,9 +127,16 @@ def test_upload_still_rejects_a_missing_file_part(client, entry_id):
     assert r.get_json()['error'] == 'file is required'
 
 
-def test_upload_rejects_unsupported_types(client, entry_id):
+def test_upload_accepts_a_non_media_file(client, entry_id):
+    """This used to be `test_upload_rejects_unsupported_types`. The composer now
+    offers "attach a file" without qualification, so a PDF is a first-class
+    attachment stored under `kind='file'` — the media tables still decide audio
+    vs video vs image, and still gate everything that reaches a model."""
     r = _upload(client, entry_id, filename='notes.pdf', mime='application/pdf')
-    assert r.status_code == 400
+    assert r.status_code == 201
+    a = r.get_json()
+    assert a['kind'] == 'file'
+    assert a['name'] == 'notes.pdf'
 
 
 def test_upload_rejects_an_empty_file(client, entry_id):
@@ -216,13 +223,87 @@ def test_upload_auto_fires_audio_description_when_configured(client, entry_id, m
 
 
 def test_image_upload_never_auto_describes(client, entry_id, monkeypatch):
+    """The *audio* description path stays audio/video only. Captioning is the
+    separate transcript column, tested below."""
     monkeypatch.setattr(
         audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
+    monkeypatch.setattr(images_ai, 'get_provider_config', lambda: {})
     jobs = _run_pending_bg(monkeypatch)
     a = _upload(client, entry_id, filename='sink.jpg', mime='image/jpeg').get_json()
     assert a['descriptionStatus'] == 'idle'
     assert jobs == []
+
+
+def test_image_upload_auto_captions_when_vision_is_configured(
+    client, entry_id, monkeypatch
+):
+    """Captioning used to wait for an explicit press of Transcribe, which meant
+    the entry's title — generated from the caption — never saw the photo."""
+    monkeypatch.setattr(
+        images_ai, 'get_provider_config', lambda: {'llama_vision_model': 'qwen36'}
+    )
+    jobs = _run_pending_bg(monkeypatch)
+    monkeypatch.setattr(
+        journal_routes, '_do_attachment_caption',
+        lambda _p, _n: 'A cat asleep on a radiator.',
+    )
+
+    a = _upload(client, entry_id, filename='cat.jpg', mime='image/jpeg').get_json()
+    assert a['transcriptStatus'] == 'running'
+    assert len(jobs) == 1
+
+    jobs[0]()
+    got = client.get(f'/api/journal/{entry_id}/attachments').get_json()[0]
+    assert got['transcript'] == 'A cat asleep on a radiator.'
+    assert got['transcriptStatus'] == 'done'
+
+
+def test_image_upload_stays_idle_when_vision_is_off(client, entry_id, monkeypatch):
+    """Not 'error'. An unconfigured feature must not stamp every photo with a
+    failure — that is what made the dead `gemma4-vision` alias look like normal
+    behaviour for months."""
+    monkeypatch.setattr(images_ai, 'get_provider_config', lambda: {})
+    jobs = _run_pending_bg(monkeypatch)
+
+    a = _upload(client, entry_id, filename='cat.jpg', mime='image/jpeg').get_json()
+    assert a['transcriptStatus'] == 'idle'
+    assert jobs == []
+
+
+def test_audio_upload_still_does_not_auto_transcribe(client, entry_id, monkeypatch):
+    """The asymmetry is deliberate: a caption is one vision call, a transcript is
+    minutes of Whisper."""
+    monkeypatch.setattr(
+        images_ai, 'get_provider_config', lambda: {'llama_vision_model': 'qwen36'}
+    )
+    monkeypatch.setattr(audio_ai, 'get_provider_config', lambda: {})
+    jobs = _run_pending_bg(monkeypatch)
+
+    a = _upload(client, entry_id).get_json()
+    assert a['transcriptStatus'] == 'idle'
+    assert jobs == []
+
+
+def test_a_file_attachment_is_never_captioned(client, entry_id, monkeypatch):
+    monkeypatch.setattr(
+        images_ai, 'get_provider_config', lambda: {'llama_vision_model': 'qwen36'}
+    )
+    jobs = _run_pending_bg(monkeypatch)
+
+    a = _upload(client, entry_id, filename='taxes.pdf', mime='application/pdf').get_json()
+    assert a['kind'] == 'file'
+    assert a['transcriptStatus'] == 'idle'
+    assert jobs == []
+
+
+def test_a_file_attachment_cannot_be_transcribed_by_hand_either(client, entry_id):
+    a = _upload(client, entry_id, filename='taxes.pdf', mime='application/pdf').get_json()
+    r = client.post(f"/api/journal/attachments/{a['id']}/transcribe")
+    assert r.status_code == 400
+    # And the row is not left parked in 'running'.
+    got = client.get(f'/api/journal/{entry_id}/attachments').get_json()[0]
+    assert got['transcriptStatus'] == 'idle'
 
 
 # --- listing -----------------------------------------------------------------
@@ -392,8 +473,14 @@ def test_captioning_reports_that_vision_is_off(client, entry_id, monkeypatch):
     ('image/jpeg', 'IMG_0042', ('jpg', 'image')),
     # An unhelpful mime falls through to the suffix.
     ('application/octet-stream', 'memo.mp3', ('mp3', 'audio')),
-    ('application/octet-stream', 'notes.pdf', None),
-    (None, None, None),
+    # Not media: stored as the catch-all kind rather than refused.
+    ('application/octet-stream', 'notes.pdf', ('pdf', 'file')),
+    ('text/plain', 'shopping list', ('bin', 'file')),
+    (None, None, ('bin', 'file')),
+    # An extension that could become a path segment, or is simply absurd, does
+    # not survive into `attachment.<ext>`.
+    (None, 'sneaky./..\\x', ('bin', 'file')),
+    (None, 'archive.tar.gz', ('gz', 'file')),
     # iOS camera roll.
     ('video/quicktime', 'IMG_0043.MOV', ('mov', 'video')),
     ('video/mp4', 'clip.mp4', ('mp4', 'video')),
@@ -414,8 +501,17 @@ def test_attachment_path_refuses_a_traversing_id():
     assert storage.attachment_path('../../etc', 'mp3') is None
 
 
-def test_attachment_path_refuses_an_unaccepted_extension():
-    assert storage.attachment_path('01ABC', 'exe') is None
+@pytest.mark.parametrize('ext', ['../etc', 'a/b', 'has.dot', '', 'w' * 13])
+def test_attachment_path_refuses_a_malformed_extension(ext):
+    """Not "an extension we don't recognise" any more — `kind='file'` stores
+    whatever `safe_ext` let through. What is still refused is anything that
+    could introduce a path segment or separator."""
+    assert storage.attachment_path('01ABC', ext) is None
+
+
+def test_attachment_path_accepts_an_unrecognised_but_safe_extension(tmp_path, monkeypatch):
+    monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path))
+    assert storage.attachment_path('01ABC', 'pdf').name == 'attachment.pdf'
 
 
 def test_running_transcripts_are_reset_at_startup(client, entry_id, monkeypatch):
@@ -605,6 +701,9 @@ def test_recording_needs_a_file(client):
 
 def test_a_rejected_file_leaves_no_empty_entry_behind(client):
     before = len(client.get('/api/journal?limit=100').get_json())
+    # media_only: the recording route still refuses a non-media blob. A
+    # text/plain arriving there is the phone sending the wrong thing, not
+    # somebody choosing to attach a document.
     r = _record(client, filename='notes.txt', mime='text/plain')
     assert r.status_code == 400
     assert len(client.get('/api/journal?limit=100').get_json()) == before
