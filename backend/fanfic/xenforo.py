@@ -160,8 +160,17 @@ def parse_threadmarks_index(html: str) -> ThreadIndex:
     author_tag = soup.select_one('.p-description a.username')
     author = _tag_text(author_tag) or None
 
-    desc_tag = soup.find('meta', attrs={'property': 'og:description'})
-    description = (desc_tag.get('content') or '').strip() or None if desc_tag else None
+    # Threadmarks Pro exposes an author-maintained, untruncated synopsis in
+    # its index header. The Open Graph description is only a shortened social
+    # preview, so use it strictly as a fallback for threads without an index
+    # description.
+    desc_body = soup.select_one(
+        'div.threadmarkListingHeader article.message-body div.bbWrapper'
+    )
+    description = _body_text(desc_body)
+    if not description:
+        desc_tag = soup.find('meta', attrs={'property': 'og:description'})
+        description = (desc_tag.get('content') or '').strip() or None if desc_tag else None
 
     # Per-category counts from the tab panes' "Statistics (N threadmarks, …)"
     # headers (only present for panes the server rendered — usually just the
@@ -277,24 +286,10 @@ def parse_thread_tags(html: str) -> list[str]:
     return tags
 
 
-def parse_thread_description(html: str) -> str | None:
-    """Full text of the thread's opening post.
-
-    XenForo's ``og:description`` is only a shortened social-card preview. The
-    opening post is the authoritative source for the synopsis shown on the
-    Library card. Prefer the standard message-body path, with a looser
-    fallback for customized XenForo themes.
-    """
-    soup = BeautifulSoup(html, 'html.parser')
-    body = (
-        soup.select_one('article.message .message-userContent .bbWrapper')
-        or soup.select_one('article.message .message-body .bbWrapper')
-        or soup.select_one('article.message .bbWrapper')
-    )
+def _body_text(body) -> str | None:
     if body is None:
         return None
-    lines = [re.sub(r'\s+', ' ', line).strip() for line in body.get_text('\n').splitlines()]
-    return '\n'.join(line for line in lines if line).strip() or None
+    return re.sub(r'\s+', ' ', body.get_text(' ', strip=True)).strip() or None
 
 
 def _last_page(soup) -> int:

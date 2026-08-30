@@ -11,7 +11,6 @@ from backend.fanfic.xenforo import (
     parse_thread_ref,
     parse_thread_tags,
     parse_threadmarks_index,
-    parse_thread_description,
     resolve_thread_ref,
 )
 
@@ -107,7 +106,10 @@ def test_parse_threadmarks_index():
     index = parse_threadmarks_index(fixture('threadmarks_index.html'))
     assert index.title == 'A Test Fic'
     assert index.author == 'TestAuthor'
-    assert index.description == 'A story about testing things.'
+    assert index.description == (
+        'A complete threadmark synopsis with more detail than the social preview. '
+        'It can contain multiple paragraphs.'
+    )
     assert [(c.category_id, c.name, c.count) for c in index.categories] == [
         (1, 'Threadmarks', 3),
         (2, 'Sidestory', 1),
@@ -130,13 +132,10 @@ def test_parse_thread_tags_fixture():
     assert parse_thread_tags(fixture('thread_page.html')) == ['isekai', 'time travel']
 
 
-def test_parse_thread_description_uses_full_opening_post():
-    assert parse_thread_description(fixture('thread_page.html')) == 'First post body.'
-
-
-def test_parse_thread_description_does_not_fall_back_to_truncated_metadata():
-    html = '<meta property="og:description" content="Shortened...">'
-    assert parse_thread_description(html) is None
+def test_parse_threadmarks_description_falls_back_to_social_preview():
+    html = '<h1 class="p-title-value">Fic</h1>' \
+           '<meta property="og:description" content="Shortened...">'
+    assert parse_threadmarks_index(html).description == 'Shortened...'
 
 
 def test_parse_thread_tags_bare_taglist():
