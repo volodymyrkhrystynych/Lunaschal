@@ -153,6 +153,86 @@ describe('JournalAttachments', () => {
     expect(screen.queryByRole('link', { name: /map/ })).toBeNull();
   });
 
+  describe('picture sharing', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('shares the picture as a file through the native share sheet', async () => {
+      const share = vi.fn().mockResolvedValue(undefined);
+      const canShare = vi.fn().mockReturnValue(true);
+      vi.stubGlobal('navigator', { ...navigator, share, canShare });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          blob: async () => new Blob(['picture'], { type: 'image/jpeg' }),
+        })
+      );
+      renderIt([attachment({ kind: 'image', name: 'The sink' })], false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+
+      await waitFor(() => expect(share).toHaveBeenCalledTimes(1));
+      const shared = share.mock.calls[0][0];
+      expect(shared.title).toBe('The sink');
+      expect(shared.files[0]).toBeInstanceOf(File);
+      expect(shared.files[0].name).toBe('The sink.jpg');
+      expect(shared.files[0].type).toBe('image/jpeg');
+      expect(canShare).toHaveBeenCalledWith(shared);
+    });
+
+    it('explains when the browser cannot share files', async () => {
+      vi.stubGlobal('navigator', { ...navigator });
+      renderIt([attachment({ kind: 'image' })], false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+
+      expect(await screen.findByText(/Sharing is not supported/)).toBeTruthy();
+    });
+
+    it('reports a picture that could not be loaded', async () => {
+      vi.stubGlobal('navigator', {
+        ...navigator,
+        share: vi.fn(),
+        canShare: vi.fn().mockReturnValue(true),
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(new Response(null, { status: 404 }))
+      );
+      renderIt([attachment({ kind: 'image' })], false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+
+      expect(
+        await screen.findByText(/Could not load the picture/)
+      ).toBeTruthy();
+    });
+
+    it('does not show an error when the share sheet is cancelled', async () => {
+      const cancelled = new Error('cancelled');
+      cancelled.name = 'AbortError';
+      vi.stubGlobal('navigator', {
+        ...navigator,
+        share: vi.fn().mockRejectedValue(cancelled),
+        canShare: vi.fn().mockReturnValue(true),
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          blob: async () => new Blob(['picture'], { type: 'image/png' }),
+        })
+      );
+      renderIt([attachment({ kind: 'image' })], false);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Share' })).toBeTruthy()
+      );
+      expect(screen.queryByText(/cancelled/i)).toBeNull();
+    });
+  });
+
   // The point of the whole paste path: a voice memo copied on a phone should not
   // have to be exported to Files and picked back out.
   describe('paste and drop', () => {
