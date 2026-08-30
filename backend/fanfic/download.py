@@ -462,14 +462,15 @@ def _insert_chapter(db, fic_id: str, category: str, position: int,
     """Insert a chapter, or return None when this post is already stored."""
     from ulid import ULID
     chapter_id = str(ULID())
+    now = int(time.time())
     cur = db.execute(
         'INSERT OR IGNORE INTO fic_chapters'
         '(id, fic_id, position, title, category, content_html, content_text,'
-        ' source_url, source_post_id, word_count, posted_at, edited_at, created_at)'
-        ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ' source_url, source_post_id, word_count, posted_at, edited_at, created_at, updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (chapter_id, fic_id, position, post.threadmark_title or f'Chapter {position}',
          category, clean_html, text, source_url, post.post_id,
-         count_words(text), post.posted_at, post.edited_at, int(time.time())),
+         count_words(text), post.posted_at, post.edited_at, now, now),
     )
     return chapter_id if cur.rowcount > 0 else None
 
@@ -500,9 +501,9 @@ def _update_chapter(db, chapter_id: str, post: xenforo.ReaderPost,
     db.execute(
         "UPDATE fic_chapters SET title=COALESCE(NULLIF(?, ''), title),"
         ' content_html=?, content_text=?, word_count=?,'
-        ' posted_at=COALESCE(?, posted_at), edited_at=? WHERE id=?',
+        ' posted_at=COALESCE(?, posted_at), edited_at=?, updated_at=? WHERE id=?',
         (post.threadmark_title or '', clean_html, text, count_words(text),
-         post.posted_at, post.edited_at, chapter_id),
+         post.posted_at, post.edited_at, int(time.time()), chapter_id),
     )
 
 
@@ -1027,8 +1028,9 @@ def _repair_remote_images(db, fic_id: str, ref: xenforo.ThreadRef) -> int:
         clean, text, _ = process_post_html(fic_id, post.content_html, harvested_meta[post_id])
         if len(_REMOTE_IMG.findall(clean)) < len(_REMOTE_IMG.findall(row['content_html'])):
             db.execute(
-                'UPDATE fic_chapters SET content_html=?, content_text=?, word_count=? WHERE id=?',
-                (clean, text, count_words(text), row['id']))
+                'UPDATE fic_chapters SET content_html=?, content_text=?, word_count=?, updated_at=?'
+                ' WHERE id=?',
+                (clean, text, count_words(text), int(time.time()), row['id']))
             db.commit()
             repaired += 1
     return repaired

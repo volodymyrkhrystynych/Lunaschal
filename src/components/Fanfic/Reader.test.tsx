@@ -72,6 +72,7 @@ vi.mock('../../hooks/api', () => ({
   api: {
     fanfic: {
       get: vi.fn().mockResolvedValue(FIC),
+      markOpened: vi.fn().mockResolvedValue({ success: true }),
       chapters: vi.fn().mockResolvedValue(CHAPTERS),
       chapter: vi.fn().mockImplementation((id: string) => {
         const summary = CHAPTERS.find(c => c.id === id)!;

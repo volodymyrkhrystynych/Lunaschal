@@ -50,27 +50,28 @@ def test_get_404(client):
     assert client.get('/api/fanfic/chapters/nope').status_code == 404
 
 
-def test_list_excludes_description(client):
-    make_fic()
+def test_list_includes_expandable_details(client):
+    fic_id, _ = make_fic()
+    db = get_db()
+    db.execute(
+        'UPDATE fics SET description=?, review=? WHERE id=?',
+        ('A useful summary', 'My review', fic_id),
+    )
+    db.commit()
     rows = client.get('/api/fanfic').get_json()
     assert len(rows) == 1
-    assert 'description' not in rows[0]
+    assert rows[0]['description'] == 'A useful summary'
+    assert rows[0]['review'] == 'My review'
     assert rows[0]['title'] == 'Test Fic'
 
 
-def test_list_orders_by_latest_chapter_not_fic_created(client):
+def test_all_orders_by_fic_updated_at(client):
     older_fic, _ = make_fic('Older Fic', chapters=[('Ch 1', 'hello world')])
     newer_fic, _ = make_fic('Newer Fic', chapters=[('Ch 1', 'hello world')])
 
-    # A later "check updates" adds a fresh chapter to the older fic, which
-    # should bump it back to the top even though it was created first.
     db = get_db()
-    db.execute(
-        'INSERT INTO fic_chapters(id, fic_id, position, title, category,'
-        ' content_html, content_text, source_post_id, word_count, created_at)'
-        ' VALUES (?,?,?,?,?,?,?,?,?,?)',
-        (str(ULID()), older_fic, 2, 'Ch 2', 'threadmarks', '<p>new</p>', 'new',
-         '2000', 1, int(time.time()) + 1000))
+    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (100, newer_fic))
+    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (200, older_fic))
     db.commit()
 
     rows = client.get('/api/fanfic').get_json()
@@ -355,50 +356,31 @@ def test_folder_reorder_validation(client):
     assert [f['name'] for f in client.get('/api/fanfic/folders').get_json()] == ['a', 'b']
 
 
-def test_all_view_groups_fics_by_folder_order(client):
+def test_folder_membership_does_not_control_all_order(client):
     now = int(time.time())
     fic_a, _ = make_fic('A')
     fic_b, _ = make_fic('B')
     fic_c, _ = make_fic('C')  # stays unsorted
-    # distinct forum dates make within-group order deterministic:
-    # a is the most recently updated, then b, then c
-    _add_chapter(fic_a, posted_at=now - 50)
-    _add_chapter(fic_b, posted_at=now - 100)
-    _add_chapter(fic_c, posted_at=now - 10)
     first = make_folder(client, 'first')
     second = make_folder(client, 'second')
     client.post(f'/api/fanfic/{fic_a}/folders', json={'folderId': first})
     client.post(f'/api/fanfic/{fic_b}/folders', json={'folderId': second})
+    db = get_db()
+    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (100, fic_a))
+    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (200, fic_b))
+    db.execute('UPDATE fics SET updated_at=? WHERE id=?', (300, fic_c))
+    db.commit()
 
-    def ids():
-        return [f['id'] for f in client.get('/api/fanfic').get_json()]
-
-    # folder 1's fics, then folder 2's, unsorted last — even though the
-    # unsorted fic has the newest forum activity
-    assert ids() == [fic_a, fic_b, fic_c]
-
-    # swapping the folders swaps the groups
+    assert [f['id'] for f in client.get('/api/fanfic').get_json()] == [fic_c, fic_b, fic_a]
     client.put('/api/fanfic/folders/order', json={'ids': [second, first]})
-    assert ids() == [fic_b, fic_a, fic_c]
-
-    # a fic in several folders sorts under its earliest-positioned one:
-    # a joins the leading folder "second" and outranks b there by recency
-    client.post(f'/api/fanfic/{fic_a}/folders', json={'folderId': second})
-    assert ids() == [fic_a, fic_b, fic_c]
-
-    # single-folder and unsorted views ignore grouping entirely
+    assert [f['id'] for f in client.get('/api/fanfic').get_json()] == [fic_c, fic_b, fic_a]
     assert [f['id'] for f in
-            client.get(f'/api/fanfic?folderId={second}').get_json()] == [fic_a, fic_b]
+            client.get(f'/api/fanfic?folderId={second}').get_json()] == [fic_b]
     assert [f['id'] for f in
             client.get('/api/fanfic?folderId=unsorted').get_json()] == [fic_c]
 
-    # sort=recent opts out of folder grouping too: c (unsorted, most recent)
-    # now leads even though it trails both folders in the grouped view
-    assert [f['id'] for f in
-            client.get('/api/fanfic?sort=recent').get_json()] == [fic_c, fic_a, fic_b]
 
-
-def test_list_orders_by_forum_post_date_not_import_date(client):
+def test_recent_orders_by_last_opened(client):
     now = int(time.time())
     # imported just now, but its latest forum post is old
     stale, _ = make_fic('Stale')
@@ -407,18 +389,26 @@ def test_list_orders_by_forum_post_date_not_import_date(client):
     fresh, _ = make_fic('Fresh')
     _add_chapter(fresh, posted_at=now - 100, created_at=now - 3000)
 
-    ids = [f['id'] for f in client.get('/api/fanfic').get_json()]
+    db = get_db()
+    db.execute('UPDATE fics SET last_opened_at=? WHERE id=?', (now - 20, stale))
+    db.execute('UPDATE fics SET last_opened_at=? WHERE id=?', (now - 10, fresh))
+    db.commit()
+    ids = [f['id'] for f in client.get('/api/fanfic?sort=recent').get_json()]
     assert ids == [fresh, stale]
 
-    # chapters without a forum date (epub/docx) fall back to import time
-    epub, _ = make_fic('Epub')
-    _add_chapter(epub, posted_at=None, created_at=now + 50)
-    ids = [f['id'] for f in client.get('/api/fanfic').get_json()]
-    assert ids == [epub, fresh, stale]
 
-    # search uses the same ordering
-    hits = [f['id'] for f in client.get('/api/fanfic/search?query=s').get_json()]
-    assert hits == [fresh, stale]
+def test_opened_endpoint_records_reading_history(client):
+    fic_id, _ = make_fic()
+    assert client.post(f'/api/fanfic/{fic_id}/opened').status_code == 200
+    assert client.get(f'/api/fanfic/{fic_id}').get_json()['lastOpenedAt'] is not None
+    assert client.post('/api/fanfic/nope/opened').status_code == 404
+
+
+def test_chapter_list_has_created_and_updated_dates(client):
+    fic_id, _ = make_fic(chapters=[('One', 'text')])
+    chapter = client.get(f'/api/fanfic/{fic_id}/chapters').get_json()[0]
+    assert chapter['createdAt'] is not None
+    assert chapter['updatedAt'] is not None
 
 
 def test_folder_membership(client):

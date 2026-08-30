@@ -11,7 +11,7 @@ _conn: sqlite3.Connection | None = None
 
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
-    'posted_at', 'last_checked_at', 'edited_at', 'started_at', 'ended_at', 'due',
+    'posted_at', 'last_checked_at', 'last_opened_at', 'edited_at', 'started_at', 'ended_at', 'due',
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
     'researched_at', 'last_practiced_at', 'last_recall_at',
     'received_at', 'classified_at', 'last_synced_at', 'token_expires_at',
@@ -158,6 +158,7 @@ def init_db() -> None:
     _ensure_fic_folder_position(db)
     _ensure_fic_update_pending(db)
     _ensure_fic_deep_scan_columns(db)
+    _ensure_fic_library_dates(db)
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
@@ -399,6 +400,21 @@ def _ensure_fic_deep_scan_columns(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_fic_library_dates(db: sqlite3.Connection) -> None:
+    """Dates that distinguish content changes from the reader opening a fic."""
+    fic_cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
+    if 'last_opened_at' not in fic_cols:
+        db.execute('ALTER TABLE fics ADD COLUMN last_opened_at INTEGER')
+    chapter_cols = {r[1] for r in db.execute('PRAGMA table_info(fic_chapters)')}
+    if 'updated_at' not in chapter_cols:
+        db.execute('ALTER TABLE fic_chapters ADD COLUMN updated_at INTEGER')
+        db.execute(
+            'UPDATE fic_chapters SET updated_at=COALESCE(edited_at, created_at)'
+            ' WHERE updated_at IS NULL'
+        )
+    db.commit()
+
+
 def _ensure_site_cookie_user_agent(db: sqlite3.Connection) -> None:
     """cf_clearance is validated by Cloudflare against the User-Agent that
     solved the challenge — a hardcoded scraper UA that doesn't match the
@@ -435,8 +451,9 @@ def _repair_escaped_image_fallbacks(db: sqlite3.Connection) -> None:
             continue
         text = html_to_text(fixed)
         db.execute(
-            'UPDATE fic_chapters SET content_html=?, content_text=?, word_count=? WHERE id=?',
-            (fixed, text, count_words(text), row['id']),
+            'UPDATE fic_chapters SET content_html=?, content_text=?, word_count=?, updated_at=?'
+            ' WHERE id=?',
+            (fixed, text, count_words(text), int(time.time()), row['id']),
         )
     db.execute('UPDATE settings SET fic_escaped_img_repair=1')
     db.commit()

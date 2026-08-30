@@ -34,6 +34,7 @@ const formatDate = (date: string) =>
 const PAGE_SIZE = 50;
 
 export function Library({ onOpen }: LibraryProps) {
+  const [view, setView] = useState<'library' | 'folders'>('library');
   const [searchQuery, setSearchQuery] = useState('');
   const [showImport, setShowImport] = useState(false);
   const [importUrl, setImportUrl] = useState('');
@@ -61,7 +62,7 @@ export function Library({ onOpen }: LibraryProps) {
     initialPageParam: 0,
     getNextPageParam: (lastPage, allPages) =>
       lastPage.length === PAGE_SIZE ? allPages.length * PAGE_SIZE : undefined,
-    enabled: !searchQuery,
+    enabled: !searchQuery && (view === 'library' || !!folderId),
     // Poll while any fic is still downloading or queued behind the serial
     // update worker so progress bars and queued badges advance.
     refetchInterval: query =>
@@ -80,7 +81,11 @@ export function Library({ onOpen }: LibraryProps) {
     enabled: !!searchQuery,
   });
 
-  const fics = searchQuery ? searchResults.data : listQuery.data?.pages.flat();
+  const fics = searchQuery
+    ? searchResults.data
+    : view === 'folders' && !folderId
+      ? []
+      : listQuery.data?.pages.flat();
   const isLoading = searchQuery ? searchResults.isLoading : listQuery.isLoading;
 
   // Fetch the next page once the sentinel at the bottom of the scrollable
@@ -254,17 +259,70 @@ export function Library({ onOpen }: LibraryProps) {
       </div>
 
       {!searchQuery && (
-        <div className="flex flex-wrap items-center gap-2">
-          <FolderBar folderId={folderId} onSelect={setFolderId} />
-          {tag && (
-            <button
-              onClick={() => setTag(null)}
-              className="mb-4 px-3 py-1 text-sm rounded-full border border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]"
-              title="Clear tag filter"
-            >
-              tag: {tag} ✕
-            </button>
-          )}
+        <div>
+          <div
+            className="flex gap-2 mb-3"
+            role="tablist"
+            aria-label="Library views"
+          >
+            {(['library', 'folders'] as const).map(nextView => (
+              <button
+                key={nextView}
+                role="tab"
+                aria-selected={view === nextView}
+                onClick={() => {
+                  setView(nextView);
+                  setFolderId(null);
+                }}
+                className={`px-3 py-1.5 text-sm rounded-lg border ${
+                  view === nextView
+                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+                    : 'border-white/15 text-[var(--color-text-muted)]'
+                }`}
+              >
+                {nextView === 'library' ? 'Library' : 'Folders'}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {view === 'library' ? (
+              <div className="tag-row flex flex-wrap items-center gap-2 mb-4">
+                {[
+                  [null, 'All', 'Books ordered by most recently updated'],
+                  ['recent', 'Recent', 'Books ordered by most recently opened'],
+                  ['unsorted', 'Unsorted', 'Books not assigned to a folder'],
+                ].map(([id, label, title]) => (
+                  <button
+                    key={label}
+                    title={title ?? undefined}
+                    onClick={() => setFolderId(id)}
+                    className={`px-3 py-1 text-sm rounded-full border transition-colors ${
+                      folderId === id
+                        ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+                        : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <FolderBar
+                folderId={folderId}
+                onSelect={setFolderId}
+                showDefaults={false}
+              />
+            )}
+            {tag && (
+              <button
+                onClick={() => setTag(null)}
+                className="mb-4 px-3 py-1 text-sm rounded-full border border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]"
+                title="Clear tag filter"
+              >
+                tag: {tag} ✕
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -378,7 +436,9 @@ export function Library({ onOpen }: LibraryProps) {
           <div className="text-center text-[var(--color-text-muted)] py-12">
             {searchQuery
               ? 'No fics match'
-              : 'Nothing here yet — import a fic from a forum or upload an EPUB/DOCX/PDF.'}
+              : view === 'folders' && !folderId
+                ? 'Choose a folder to browse and group its books.'
+                : 'Nothing here yet — import a fic from a forum or upload an EPUB/DOCX/PDF.'}
           </div>
         )}
 
@@ -413,6 +473,7 @@ function FicCard({
   onTagClick: (name: string) => void;
   onDelete: () => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const [showReview, setShowReview] = useState(false);
   const downloading = fic.downloadStatus === 'downloading';
   const progress = fic.downloadProgress;
@@ -451,6 +512,14 @@ function FicCard({
               {fic.title}
             </button>
             <div className="flex flex-wrap gap-2 shrink-0">
+              <button
+                onClick={() => setExpanded(value => !value)}
+                aria-expanded={expanded}
+                className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                title="Show summary and review"
+              >
+                {expanded ? '▾ Details' : '▸ Details'}
+              </button>
               <FolderPicker fic={fic} />
               <button
                 onClick={() => setShowReview(!showReview)}
@@ -550,6 +619,29 @@ function FicCard({
             </div>
           )}
 
+          {expanded && (
+            <div className="mt-3 space-y-3 border-t border-white/10 pt-3 text-sm">
+              <section>
+                <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                  Summary
+                </h3>
+                <p className="whitespace-pre-wrap text-[var(--color-text)]">
+                  {fic.description?.trim() || 'No summary available.'}
+                </p>
+              </section>
+              {fic.review?.trim() && (
+                <section>
+                  <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
+                    Review
+                  </h3>
+                  <p className="whitespace-pre-wrap text-[var(--color-text)]">
+                    {fic.review}
+                  </p>
+                </section>
+              )}
+            </div>
+          )}
+
           {showReview && (
             <ReviewEditor fic={fic} onClose={() => setShowReview(false)} />
           )}
@@ -591,22 +683,14 @@ function FicCard({
 
 function ReviewEditor({ fic, onClose }: { fic: Fic; onClose: () => void }) {
   const [rating, setRating] = useState<number | null>(fic.rating);
-  // null = untouched; the stored review text arrives with the detail fetch
-  const [text, setText] = useState<string | null>(null);
+  const [text, setText] = useState(fic.review ?? '');
   const queryClient = useQueryClient();
-
-  // List rows omit the review text — load it when the editor opens.
-  const { data: detail } = useQuery({
-    queryKey: ['fanfic', 'detail', fic.id],
-    queryFn: () => api.fanfic.get(fic.id),
-  });
-  const value = text ?? detail?.review ?? '';
 
   const save = useMutation({
     mutationFn: () =>
       api.fanfic.saveReview(fic.id, {
         rating,
-        review: value.trim() || null,
+        review: text.trim() || null,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fanfic'] });
@@ -634,7 +718,7 @@ function ReviewEditor({ fic, onClose }: { fic: Fic; onClose: () => void }) {
         )}
       </div>
       <textarea
-        value={value}
+        value={text}
         onChange={e => setText(e.target.value)}
         placeholder="Your overall thoughts on this fic…"
         rows={3}

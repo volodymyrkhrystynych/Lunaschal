@@ -10,9 +10,11 @@ const pillBase = 'px-3 py-1 text-sm rounded-full border transition-colors';
 export function FolderBar({
   folderId,
   onSelect,
+  showDefaults = true,
 }: {
   folderId: string | null;
   onSelect: (id: string | null) => void;
+  showDefaults?: boolean;
 }) {
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -98,38 +100,44 @@ export function FolderBar({
 
   return (
     <div className="tag-row flex flex-wrap items-center gap-2 mb-4">
-      <button
-        onClick={() => onSelect(null)}
-        className={`${pillBase} ${
-          folderId === null
-            ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-            : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-        }`}
-      >
-        All
-      </button>
-      <button
-        onClick={() => onSelect(folderId === 'recent' ? null : 'recent')}
-        title="All fics, sorted only by the latest threadmark's forum post date"
-        className={`${pillBase} ${
-          folderId === 'recent'
-            ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-            : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-        }`}
-      >
-        Recent
-      </button>
-      <button
-        onClick={() => onSelect(folderId === 'unsorted' ? null : 'unsorted')}
-        title="Show fics not in any folder"
-        className={`${pillBase} ${
-          folderId === 'unsorted'
-            ? 'border-amber-400/60 bg-amber-400/10 text-amber-300'
-            : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-        }`}
-      >
-        Unsorted
-      </button>
+      {showDefaults && (
+        <button
+          onClick={() => onSelect(null)}
+          className={`${pillBase} ${
+            folderId === null
+              ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+              : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          All
+        </button>
+      )}
+      {showDefaults && (
+        <button
+          onClick={() => onSelect(folderId === 'recent' ? null : 'recent')}
+          title="All fics, sorted only by the latest threadmark's forum post date"
+          className={`${pillBase} ${
+            folderId === 'recent'
+              ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+              : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          Recent
+        </button>
+      )}
+      {showDefaults && (
+        <button
+          onClick={() => onSelect(folderId === 'unsorted' ? null : 'unsorted')}
+          title="Show fics not in any folder"
+          className={`${pillBase} ${
+            folderId === 'unsorted'
+              ? 'border-amber-400/60 bg-amber-400/10 text-amber-300'
+              : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          }`}
+        >
+          Unsorted
+        </button>
+      )}
       {folders?.map(f =>
         renaming && f.id === folderId ? (
           <span key={f.id}>
