@@ -20,6 +20,7 @@ from backend.jobs import (
     analytics, build, career_watch, company_research, cover_letter, distance, ingest, interview, linker, outcomes, profile as profile_mod, queue as queue_mod, render, report, resume_review,
     resolve, resume_import, retention, sources, storage, sync, tailor,
     triager, upskill, urlmatch, workday_watch, status as application_status,
+    scheduler as jobs_scheduler,
 )
 
 bp = Blueprint('jobs', __name__, url_prefix='/api/jobs')
@@ -691,6 +692,49 @@ def submit_application(application_id):
     swept = linker.run_linkage_sweep(now=now)
 
     return jsonify({'success': True, 'linkage': swept})
+
+
+@bp.get('/pause')
+def get_pause_state():
+    """Whether the jobs scheduler is paused, and what that is holding back.
+
+    The counts come back with the flag so the button can say what pressing it
+    costs — "Pause 140 sources" is a decision, "Pause" is a guess.
+    """
+    db = get_db()
+    return jsonify(_pause_payload(db))
+
+
+@bp.post('/pause')
+def set_pause_state():
+    """Pause or resume. One flag; no per-source row is touched either way."""
+    body = _body()
+    if 'paused' not in body:
+        return jsonify({'error': 'paused must be true or false.'}), 400
+    db = get_db()
+    db.execute('UPDATE settings SET jobs_paused=?', (1 if body['paused'] else 0,))
+    db.commit()
+    return jsonify(_pause_payload(db))
+
+
+def _pause_payload(db) -> dict:
+    def count(table):
+        return db.execute(
+            f'SELECT COUNT(*) c FROM {table} WHERE enabled=1'
+        ).fetchone()['c']
+
+    backlog = db.execute(
+        "SELECT COUNT(*) c FROM jobs j WHERE j.triage_state='pending'"
+        " AND j.dismissed=0 AND j.description<>''"
+        ' AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id=j.id)'
+    ).fetchone()['c']
+
+    return {
+        'paused': jobs_scheduler.is_paused(db),
+        'sources': (count('job_searches') + count('workday_boards')
+                    + count('career_page_watches')),
+        'pendingTriage': backlog,
+    }
 
 
 @bp.get('/outcomes/stale')

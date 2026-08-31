@@ -1465,6 +1465,17 @@ export interface FeedJob extends JobPosting {
   workLocation: '' | 'onsite' | 'hybrid' | 'remote' | 'unclear';
 }
 
+/** The one switch that stops the jobs scheduler fetching or spending the
+ * model. `sources` and `pendingTriage` come back with it so the button can say
+ * what pressing it costs rather than making the user guess. */
+export interface JobsPauseState {
+  paused: boolean;
+  /** Enabled saved searches + Workday boards + career-page watches. */
+  sources: number;
+  /** Postings waiting on a model call. */
+  pendingTriage: number;
+}
+
 export interface TriageStatus {
   enabled: boolean;
   pending: number;
@@ -4219,6 +4230,10 @@ export const api = {
     /** Re-rank the feed against the current profile. No model call. */
     rescore: () => post<{ rescored: number }>('/api/jobs/rescore'),
 
+    /** Whether the jobs scheduler is paused, plus what that holds back. */
+    pauseState: () => get<JobsPauseState>('/api/jobs/pause'),
+    setPaused: (paused: boolean) =>
+      post<JobsPauseState>('/api/jobs/pause', { paused }),
     /** `sort` changes only the order *inside* a fit bucket: 'match' is the
      * deterministic keyword score, 'distance' is remote-first then nearest. */
     feed: (limit = 100, sort: 'match' | 'distance' = 'match') =>

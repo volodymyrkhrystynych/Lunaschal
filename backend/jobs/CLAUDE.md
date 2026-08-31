@@ -353,6 +353,28 @@ never worked at, and the diff keeps a truthful "before". Editing **409s once
 `applied_at` is set**, which is what keeps the version a record of what was
 sent.
 
+## Pausing the whole thing
+
+`settings.jobs_paused`, read by `scheduler.is_paused()` on every tick and
+toggled from the Sources panel above the feed. It stops board sync, the career
+and Workday watches, the triage gate, the triage drain and the resume queue —
+everything that reaches a third party or spends a llama slot.
+
+**Linkage, ghosting and retention keep running through a pause**, because none
+of them does either, and stopping them would quietly rot the pipeline while the
+user believed they had paused only fetching: a rejection that lands during a
+fortnight's pause should still be on the application when it ends.
+
+**It is a flag, not `UPDATE ... SET enabled=0` across the three source
+tables.** A pause has to be lossless — mass-toggling rows forgets which sources
+the user had switched off by hand, and Resume would turn those back on. Nothing
+per-source is written either way, so unpausing restores exactly the
+configuration that was there. Reading the flag is wrapped: a database that has
+not run the migration yet behaves exactly as it did before the switch existed.
+
+The `Paused` badge shows on the _collapsed_ panel header. A pause nobody can
+see is a pause that gets forgotten, and then looks like a feed that broke.
+
 ## Retention
 
 Two clocks, whichever comes first: `applied_at + job_retention_days` (180), and
@@ -390,6 +412,7 @@ touches only `resume_versions` and `applications`, and a test pins that.
 | `linker.py`        | applies `linkage.py` to the database                                     |
 | `urlmatch.py`      | pure: is this browser tab that posting? Declines on ambiguity            |
 | `scheduler.py`     | linkage + sync + gate + both drains every tick, purge daily 07:00–08:00  |
+| —                  | …and `is_paused()`, the one switch that stops all of that reaching out   |
 | `storage.py`       | `IdScopedStorage('JOBS_ROOT', './data/jobs')`                            |
 | `backfill.py`      | confirmation mail → applications, for a search that predates the feature |
 

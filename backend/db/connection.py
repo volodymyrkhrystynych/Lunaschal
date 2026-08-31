@@ -1003,6 +1003,13 @@ def _ensure_job_settings(db: sqlite3.Connection) -> None:
         db.execute("ALTER TABLE settings ADD COLUMN adzuna_app_id TEXT DEFAULT ''")
     if 'adzuna_app_key' not in cols:
         db.execute("ALTER TABLE settings ADD COLUMN adzuna_app_key TEXT DEFAULT ''")
+    # The one switch that stops the jobs scheduler reaching out or spending the
+    # model. Deliberately a flag the scheduler reads rather than a mass update
+    # of `enabled` across the three source tables: a pause that rewrote 140
+    # rows would lose which of them the user had switched off by hand, and
+    # Resume would silently turn those back on. Nothing per-source is touched.
+    if 'jobs_paused' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN jobs_paused INTEGER NOT NULL DEFAULT 0')
     db.commit()
 
     profile_cols = {r[1] for r in db.execute('PRAGMA table_info(job_profile)')}

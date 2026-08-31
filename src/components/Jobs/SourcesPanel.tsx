@@ -41,6 +41,15 @@ export function SourcesPanel() {
     onSuccess: invalidate,
   });
 
+  const { data: pause } = useQuery({
+    queryKey: ['jobs', 'pause'],
+    queryFn: api.jobs.pauseState,
+  });
+  const setPaused = useMutation({
+    mutationFn: api.jobs.setPaused,
+    onSuccess: invalidate,
+  });
+
   const count =
     (searches?.length ?? 0) +
     (watches?.length ?? 0) +
@@ -63,6 +72,13 @@ export function SourcesPanel() {
             ({count}
             {broken > 0 && `, ${broken} failing`})
           </span>
+          {/* Visible while collapsed: a pause nobody can see is a pause that
+              gets forgotten, and then looks like a feed that stopped working. */}
+          {pause?.paused && (
+            <span className="ml-2 px-1.5 py-0.5 rounded text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/30">
+              Paused
+            </span>
+          )}
         </span>
         <span className="text-xs text-[var(--color-text-muted)]">
           {open ? 'Hide' : 'Show'}
@@ -71,6 +87,52 @@ export function SourcesPanel() {
 
       {open && (
         <div className="px-3 pb-3 space-y-3 border-t border-white/10 pt-3">
+          {pause && (
+            <div className="flex items-start gap-2 rounded border border-white/10 bg-[var(--color-bg)] p-2">
+              <button
+                type="button"
+                onClick={() => setPaused.mutate(!pause.paused)}
+                disabled={setPaused.isPending}
+                className={`shrink-0 min-h-[36px] px-3 rounded text-xs border disabled:opacity-50 ${
+                  pause.paused
+                    ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                    : 'border-amber-500/40 bg-amber-500/15 text-amber-300'
+                }`}
+              >
+                {setPaused.isPending
+                  ? 'Saving…'
+                  : pause.paused
+                    ? 'Resume all'
+                    : 'Pause all'}
+              </button>
+              <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                {pause.paused ? (
+                  <>
+                    Paused. No board is being fetched and nothing is reaching
+                    the model
+                    {pause.pendingTriage > 0 &&
+                      ` — ${pause.pendingTriage.toLocaleString()} posting${
+                        pause.pendingTriage === 1 ? '' : 's'
+                      } waiting`}
+                    . Email linkage and retention keep running. Your per-source
+                    switches are untouched.
+                  </>
+                ) : (
+                  <>
+                    Stops all {pause.sources} source
+                    {pause.sources === 1 ? '' : 's'} fetching and every model
+                    call
+                    {pause.pendingTriage > 0 &&
+                      `, including the ${pause.pendingTriage.toLocaleString()} posting${
+                        pause.pendingTriage === 1 ? '' : 's'
+                      } queued for triage`}
+                    . Nothing is deleted and no per-source switch is changed.
+                  </>
+                )}
+              </p>
+            </div>
+          )}
+
           {count === 0 && (
             <p className="text-xs text-[var(--color-text-muted)]">
               Nothing configured yet, so the feed stays empty. Paste a
