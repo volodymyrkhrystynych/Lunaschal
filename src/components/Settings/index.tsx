@@ -18,6 +18,7 @@ import { JobsSection } from './JobsSection';
 import { DisplaySection } from './DisplaySection';
 import { LlamaConfigSection } from './LlamaConfigSection';
 import { MemorySection } from './MemorySection';
+import { LifeWikiSection } from './LifeWikiSection';
 import { BackupSection } from './BackupSection';
 import { FilesSection } from './FilesSection';
 import { LogsPanel } from './LogsPanel';
@@ -107,6 +108,10 @@ export function Settings() {
 
           <CollapsibleSection title="Memory">
             <MemorySection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="What the assistant knows about you">
+            <LifeWikiSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Voice Status">

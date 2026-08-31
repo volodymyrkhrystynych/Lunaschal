@@ -623,6 +623,34 @@ export interface AssistantObservation {
   foldedAt: string | null;
 }
 
+// One article of the life wiki: what the nightly pass has worked out about the
+// user, rendered from `facts` rather than revised from its own previous prose.
+export interface LifeWikiArticle {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string;
+  content: string;
+  locked: number;
+  revision: number;
+  updatedAt: string;
+  facts?: LifeFact[];
+  rebuilding?: boolean;
+}
+
+// One recorded fact, and the id of the row it was drawn from. That citation is
+// what lets the user follow a wrong fact back to what was actually written,
+// rather than having to take it on trust.
+export interface LifeFact {
+  id: string;
+  statement: string;
+  sourceKind: string;
+  sourceId: string | null;
+  locked: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
 // A snapshot of the document as it stood *before* one change — copy-on-write,
 // the wiki_revisions pattern. This is what makes an unconfirmed write by the
 // assistant safe to allow.
@@ -3236,6 +3264,23 @@ export const api = {
       ),
     deleteObservation: (id: string) =>
       del<{ ok: boolean }>(`/api/memory/observations/${id}`),
+  },
+
+  // The life wiki (backend/lifewiki/). Read-and-correct only — the nightly pass
+  // is the only thing that writes an article from scratch.
+  lifeWiki: {
+    list: () => get<LifeWikiArticle[]>('/api/life-wiki'),
+    get: (slug: string) => get<LifeWikiArticle>(`/api/life-wiki/${slug}`),
+    update: (slug: string, content: string) =>
+      put<LifeWikiArticle>(`/api/life-wiki/${slug}`, { content }),
+    setLocked: (slug: string, locked: boolean) =>
+      post<LifeWikiArticle>(`/api/life-wiki/${slug}/lock`, { locked }),
+    rebuild: (slug: string) =>
+      post<{ rebuilding: boolean }>(`/api/life-wiki/${slug}/rebuild`, {}),
+    lockFact: (id: string, locked: boolean) =>
+      post<LifeFact>(`/api/life-wiki/facts/${id}/lock`, { locked }),
+    deleteFact: (id: string) =>
+      del<{ ok: boolean }>(`/api/life-wiki/facts/${id}`),
   },
 
   // Notes to self: created only from chat (backend/delegate/tools.py's

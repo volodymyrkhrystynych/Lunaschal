@@ -72,6 +72,21 @@ def learning_due_count(db, now: int) -> int:
     return int(row[0]) if row else 0
 
 
+def life_wiki_index(limit: int = 12) -> list[dict]:
+    """The life wiki's slugs and summaries.
+
+    The reason backend/briefing_scheduler.py runs the wiki pass before this one:
+    the briefing had been re-deriving who the user is from raw rows every single
+    morning, when a standing picture of them now exists and is current as of
+    minutes ago.
+
+    Summaries only, never bodies — the briefing is one short check-in, not a
+    recitation of everything known about the reader.
+    """
+    from backend.research import wiki
+    return wiki.list_articles(limit, repo_id=None, kind=wiki.LIFE_KIND)
+
+
 def gather_briefing_context(now: int | None = None) -> dict:
     """Assemble everything the briefing draws on. Pure w.r.t. the model — only
     reads the DB."""
@@ -91,6 +106,7 @@ def gather_briefing_context(now: int | None = None) -> dict:
         'todos': open_todos(db),
         'calendar': _upcoming_calendar(db, today, horizon),
         'learning_due': learning_due_count(db, now),
+        'life_wiki': life_wiki_index(),
     }
 
 
@@ -146,8 +162,19 @@ def build_briefing_prompt(context: dict) -> str:
         lines.append(f"Spaced-repetition cards due for review: {context['learning_due']}.")
         lines.append('')
 
+    # `.get`, not `[...]`: a context dict built before this key existed (an old
+    # test fixture, a caller assembling one by hand) should render a briefing
+    # without the block rather than raise on the way to the model.
+    articles = context.get('life_wiki') or []
+    if articles:
+        lines.append('What you already know about them, from your own notes:')
+        for article in articles:
+            summary = (article.get('summary') or '').strip()
+            lines.append(f'- {article["title"]}' + (f': {summary}' if summary else ''))
+        lines.append('')
+
     if not any((context['journal'], context['daily_tasks'], context['todos'],
-                context['calendar'], context['learning_due'])):
+                context['calendar'], context['learning_due'], articles)):
         lines.append('(No recent journal, tasks, to-dos, calendar events, or reviews.)')
 
     lines.append(

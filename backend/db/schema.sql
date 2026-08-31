@@ -1079,7 +1079,10 @@ CREATE TABLE IF NOT EXISTS wiki_articles (
     content TEXT NOT NULL DEFAULT '',
     sources TEXT,
     tags TEXT,
-    kind TEXT NOT NULL DEFAULT 'research' CHECK(kind IN ('research','code')),
+    -- 'research': a problem space, from the web, belonging to no repo.
+    -- 'code': one module of one repository, from reading it.
+    -- 'life': the user themselves, from their own record (backend/lifewiki/).
+    kind TEXT NOT NULL DEFAULT 'research' CHECK(kind IN ('research','code','life')),
     revision INTEGER NOT NULL DEFAULT 1,
     -- A locked article is the user's; the agent proposes changes instead.
     locked INTEGER NOT NULL DEFAULT 0,
@@ -1113,6 +1116,45 @@ CREATE TABLE IF NOT EXISTS wiki_revisions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_wiki_revisions_article ON wiki_revisions(article_id, revision DESC);
+
+-- The facts a `kind='life'` article is rendered from.
+--
+-- The article's prose is derived and disposable; these are the memory. That
+-- inversion is the whole design, and it exists because of a specific documented
+-- failure: an LLM asked to revise its own prose night after night accumulates
+-- distortions it cannot detect, and each rewrite compounds the last one's loss.
+-- Rendering from the fact list instead means the Nth render reads N facts, not
+-- N-1 renders, so there is no chain to compound along.
+--
+-- `source_kind`/`source_id` name the row this came from -- a journal entry, a
+-- message, a meal. That citation is what makes a wrong fact findable by a human
+-- instead of merely plausible, and it is what `rebuild_article` re-derives from.
+--
+-- Nothing here is ever edited or deleted by the pass. A fact that stops being
+-- true gets `superseded_by` pointed at the one that replaced it, so a wrong
+-- supersession is visible and reversible rather than a silent overwrite.
+CREATE TABLE IF NOT EXISTS life_facts (
+    id TEXT PRIMARY KEY,
+    article_id TEXT NOT NULL REFERENCES wiki_articles(id) ON DELETE CASCADE,
+    statement TEXT NOT NULL,
+    -- 'journal' | 'message' | 'food' | 'workout' | 'calendar' | 'observation'
+    source_kind TEXT NOT NULL,
+    -- The ULID of the row itself. NULL only for a fact carried over from a
+    -- rebuild that could no longer find its source.
+    source_id TEXT,
+    -- When the pass first wrote it, and when it last saw evidence for it.
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL,
+    -- A fact the user corrected by hand. Never superseded by the pass -- the
+    -- "frozen components" half of the drift mitigations.
+    locked INTEGER NOT NULL DEFAULT 0,
+    superseded_by TEXT REFERENCES life_facts(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL
+);
+
+-- The query every render and every prompt makes: the live facts of one article.
+CREATE INDEX IF NOT EXISTS idx_life_facts_article
+    ON life_facts(article_id, superseded_by, last_seen DESC);
 
 CREATE TABLE IF NOT EXISTS idea_wiki_links (
     idea_id TEXT NOT NULL REFERENCES ideas(id) ON DELETE CASCADE,

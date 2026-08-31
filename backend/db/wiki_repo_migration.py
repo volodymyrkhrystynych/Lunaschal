@@ -1,4 +1,14 @@
-"""Give wiki articles a repository.
+"""Rebuilds of `wiki_articles` that SQLite cannot express as an ALTER.
+
+Two of them now, both create-copy-drop-rename and both for the same reason:
+SQLite can add a column but cannot change a constraint. They live together
+because the recipe is delicate — foreign keys off outside the transaction, an
+explicit BEGIN, a `PRAGMA foreign_key_check` before COMMIT — and a second copy
+of it written from memory is how the revision history gets dropped on the floor.
+
+---
+
+`ensure_wiki_repo_scope`: give wiki articles a repository.
 
 The wiki was written for one thing — web research about the problem space an
 idea lives in — and its `slug` is `UNIQUE` across the whole table. Once there
@@ -98,6 +108,77 @@ def ensure_wiki_repo_scope(db: sqlite3.Connection) -> None:
     finally:
         # Restored whichever way the rebuild went: leaving enforcement off
         # would silently disable it for every write the process makes after.
+        db.execute('PRAGMA foreign_keys=ON')
+
+
+def ensure_wiki_life_kind(db: sqlite3.Connection) -> None:
+    """Widen `kind` to allow 'life' — notes about the user, not about code.
+
+    Same create-copy-drop-rename as `ensure_wiki_repo_scope` above, same
+    ordering constraint: it must run **before** `_init_wiki_fts`, because the
+    rebuild assigns new rowids and `DROP TABLE` takes the FTS triggers with it.
+
+    Detected by reading the stored CHECK rather than by looking for a column,
+    since nothing about the table's shape changes — only what the constraint
+    will accept. A database created after this landed already has 'life' in its
+    schema.sql and skips straight past.
+    """
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='wiki_articles'"
+    ).fetchone()
+    if row is None or not row[0]:
+        return
+    if "'life'" in row[0]:
+        return
+
+    db.execute('PRAGMA foreign_keys=OFF')
+    db.execute('BEGIN')
+    try:
+        db.execute("""
+            CREATE TABLE wiki_articles_new (
+                id TEXT PRIMARY KEY,
+                repo_id TEXT REFERENCES repos(id) ON DELETE CASCADE,
+                slug TEXT NOT NULL,
+                title TEXT NOT NULL,
+                summary TEXT NOT NULL DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                sources TEXT,
+                tags TEXT,
+                -- 'research' is a note about a problem space, written from the
+                -- web and belonging to no repo. 'code' is a note about one
+                -- module of one repository, written by reading it. 'life' is a
+                -- note about the user, written by the nightly pass from their
+                -- own journal, calendar, food, workouts and chats.
+                kind TEXT NOT NULL DEFAULT 'research'
+                    CHECK(kind IN ('research','code','life')),
+                revision INTEGER NOT NULL DEFAULT 1,
+                locked INTEGER NOT NULL DEFAULT 0,
+                last_researched_at INTEGER,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                UNIQUE(repo_id, slug)
+            )
+        """)
+        db.execute("""
+            INSERT INTO wiki_articles_new
+                (id, repo_id, slug, title, summary, content, sources, tags, kind,
+                 revision, locked, last_researched_at, created_at, updated_at)
+            SELECT id, repo_id, slug, title, summary, content, sources, tags,
+                   kind, revision, locked, last_researched_at,
+                   created_at, updated_at
+            FROM wiki_articles
+        """)
+        db.execute('DROP TABLE wiki_articles')
+        db.execute('ALTER TABLE wiki_articles_new RENAME TO wiki_articles')
+        _ensure_indexes(db)
+        problems = db.execute('PRAGMA foreign_key_check').fetchall()
+        if problems:
+            raise RuntimeError(f'wiki_articles life-kind migration broke FK integrity: {problems}')
+        db.execute('COMMIT')
+    except Exception:
+        db.execute('ROLLBACK')
+        raise
+    finally:
         db.execute('PRAGMA foreign_keys=ON')
 
 

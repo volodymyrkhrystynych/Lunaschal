@@ -61,7 +61,9 @@ def build_update(
     )
 
 
-from backend.db.wiki_repo_migration import ensure_snapshot_repo, ensure_wiki_repo_scope
+from backend.db.wiki_repo_migration import (
+    ensure_snapshot_repo, ensure_wiki_life_kind, ensure_wiki_repo_scope,
+)
 
 
 def get_db() -> sqlite3.Connection:
@@ -95,6 +97,8 @@ def init_db() -> None:
     # rowids and DROP TABLE takes the FTS triggers with it, so the index has to
     # be recreated on the new table. _init_wiki_fts does exactly that.
     ensure_wiki_repo_scope(db)
+    # Also before _init_wiki_fts, and for the same rowid reason.
+    ensure_wiki_life_kind(db)
     _init_wiki_fts(db)
     _init_fanfic_fts(db)
     _init_emails_fts(db)

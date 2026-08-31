@@ -43,7 +43,12 @@ Same rule: let it shape what you say, don't read it back to them.
 You can look things up in the user's own record: `search_conversations` for what was said in
 earlier conversations, `search_journal` for anything older than the day of entries below, and
 `read_day` for one specific date. Use them when they refer back to something you cannot see
-rather than asking them to remind you — but only then. Most messages need none of this."""
+rather than asking them to remind you — but only then. Most messages need none of this.
+
+Your own notes about them are indexed below by title. `wiki_read` opens one in full, and
+`wiki_search` looks across them. Those notes were written from what the user themselves
+recorded, so treat them as a good summary rather than as gospel — if one contradicts what
+they are telling you now, they are right and the note is stale."""
 
 JOURNAL_WINDOW_SECONDS = 86400
 JOURNAL_MAX_ENTRIES = 10
@@ -140,6 +145,36 @@ def format_schedule_context(events: list[dict], now: int | None = None) -> str:
     )
 
 
+# How many life-wiki articles reach the prompt. Slugs and one-line summaries
+# only — the index is a map of what is known, and `wiki_read` is how a body gets
+# into a turn that actually needs it.
+LIFE_WIKI_MAX = 15
+
+
+def format_life_wiki_context() -> str:
+    """The index of what the nightly pass has worked out about the user.
+
+    Deliberately summaries rather than bodies. The whole point of paying for a
+    synthesis pass overnight is that the result is cheap to consult at turn
+    time, and inlining every article would spend that saving straight back —
+    twice per turn, on articles most messages have no use for.
+    """
+    from backend.research import wiki
+
+    articles = wiki.list_articles(LIFE_WIKI_MAX, repo_id=None, kind=wiki.LIFE_KIND)
+    if not articles:
+        return ''
+    lines = []
+    for a in articles:
+        summary = (a.get('summary') or '').strip()
+        lines.append(f'- {a["slug"]}: {a["title"]}' + (f' — {summary}' if summary else ''))
+    return (
+        "Notes you have built up about the user over time, one line each. Read "
+        "any of them in full with `wiki_read` using the slug, when the answer "
+        "actually turns on what is in it:\n\n" + '\n'.join(lines)
+    )
+
+
 # How many open to-dos reach the prompt. The list is already ordered by
 # priority, so this is a tail cut, not a sample: past a handful the block stops
 # being "what is on your plate" and becomes a backlog dump the model reads as
@@ -221,11 +256,13 @@ def build_chat_system_prompt(now: int | None = None) -> str:
     # Ordered least- to most-volatile, and that ordering is load-bearing: this
     # prompt is paid twice per turn (the decision turn and the answer turn), and
     # llama-server's prefix cache survives only up to the first block that
-    # changed. The memory document is the same tomorrow; the plate changes when a
+    # changed. The memory document only moves when the user edits it, the wiki
+    # index once a night, the notes mid-conversation, and the plate every time a
     # to-do is ticked. Putting the plate first would re-prefill everything under
     # it on every tick.
     blocks = [
         format_memory_context(),
+        format_life_wiki_context(),
         format_observations_context(),
         format_journal_context(get_recent_journal_entries(now), now),
         format_schedule_context(get_upcoming_schedule(now), now),

@@ -65,8 +65,37 @@ def _repo_clause(repo_id: str | None) -> tuple[str, list]:
     return 'repo_id = ?', [repo_id]
 
 
-def get_article(slug: str, repo_id: str | None = None) -> dict | None:
+# The wikis that are about work rather than about the user. `WikiTools` with no
+# `kind` means these two and never 'life': the Ideas agent shares the unscoped
+# `repo_id IS NULL` space with the life wiki, and there is no reading of "how do
+# other people solve this" that wants the user's eating habits in it.
+WORK_KINDS = ('research', 'code')
+LIFE_KIND = 'life'
+
+
+def _kind_clause(kind) -> tuple[str, list]:
+    """SQL for a kind filter. `kind` is one name, a sequence of them, or None."""
+    if not kind:
+        return '', []
+    names = [kind] if isinstance(kind, str) else list(kind)
+    if not names:
+        return '', []
+    placeholders = ','.join('?' * len(names))
+    return f' AND kind IN ({placeholders})', names
+
+
+def get_article(slug: str, repo_id: str | None = None, kind=None) -> dict | None:
+    """`kind` narrows to one wiki within a scope.
+
+    The unscoped notes (`repo_id IS NULL`) now hold two unrelated things: web
+    research about problem spaces, and the life wiki about the user. Without
+    this a life article and a research article could share a slug, and whichever
+    was written second would be found by both readers.
+    """
     clause, params = _repo_clause(repo_id)
+    kind_sql, kind_params = _kind_clause(kind)
+    clause += kind_sql
+    params = [*params, *kind_params]
     row = get_db().execute(
         f'SELECT * FROM wiki_articles WHERE slug=? AND {clause}',
         [slug, *params],
@@ -84,13 +113,13 @@ def get_article_by_id(article_id: str) -> dict | None:
 def list_articles(
     limit: int = WIKI_INDEX_MAX,
     repo_id: str | None = None,
-    kind: str | None = None,
+    kind=None,
 ) -> list[dict]:
     """The index: enough to choose an article, cheap enough to inline."""
     clause, params = _repo_clause(repo_id)
-    if kind:
-        clause += ' AND kind = ?'
-        params = [*params, kind]
+    kind_sql, kind_params = _kind_clause(kind)
+    clause += kind_sql
+    params = [*params, *kind_params]
     rows = get_db().execute(
         'SELECT id, slug, title, summary, kind, revision, locked, updated_at'
         f' FROM wiki_articles WHERE {clause} ORDER BY updated_at DESC LIMIT ?',
@@ -99,7 +128,8 @@ def list_articles(
     return [row_to_dict(r) for r in rows]
 
 
-def search_articles(query: str, limit: int = 5, repo_id: str | None = None) -> list[dict]:
+def search_articles(query: str, limit: int = 5, repo_id: str | None = None,
+                    kind=None) -> list[dict]:
     """FTS-ranked articles, in rank order, scoped to one repo.
 
     The scope is applied when hydrating the FTS hits rather than inside the
@@ -112,6 +142,9 @@ def search_articles(query: str, limit: int = 5, repo_id: str | None = None) -> l
     if not hits:
         return []
     clause, params = _repo_clause(repo_id)
+    kind_sql, kind_params = _kind_clause(kind)
+    clause += kind_sql
+    params = [*params, *kind_params]
     db = get_db()
     placeholders = ','.join('?' * len(hits))
     by_id = {}
@@ -271,30 +304,37 @@ TOOLS = [
 
 
 class WikiTools:
-    """Repo-scoped wiki tools.
+    """Repo- and kind-scoped wiki tools.
 
     Same duck type as CodeTools, and for the same reason: agent._loop calls
-    `dispatch[name].run_tool(...)`, so binding a repo means binding an object
+    `dispatch[name].run_tool(...)`, so binding a scope means binding an object
     rather than threading an argument through the shared loop.
 
     A repo's agent sees that repo's articles *and* the unscoped research notes:
     "how do other people solve this" is not about any one codebase, and hiding
     it would make every repo re-research the same problem space.
+
+    **`kind` defaults to the work wikis, not to everything.** The life wiki
+    (backend/lifewiki/) also lives at `repo_id IS NULL`, so an unfiltered
+    unscoped instance would hand the Ideas agent the user's sleep and eating
+    habits while it researched a scheduling problem. The chat agent gets the
+    mirror image — `WikiTools(kind=LIFE_KIND)` — and never sees a code note.
     """
 
-    def __init__(self, repo_id: str | None = None):
+    def __init__(self, repo_id: str | None = None, kind=WORK_KINDS):
         self.repo_id = repo_id
+        self.kind = kind
 
     def _visible(self, limit: int = WIKI_INDEX_MAX) -> list[dict]:
-        articles = list_articles(limit, repo_id=self.repo_id)
+        articles = list_articles(limit, repo_id=self.repo_id, kind=self.kind)
         if self.repo_id is not None:
-            articles += list_articles(limit, repo_id=None)
+            articles += list_articles(limit, repo_id=None, kind=self.kind)
         return articles
 
     def _find(self, slug: str) -> dict | None:
-        article = get_article(slug, self.repo_id)
+        article = get_article(slug, self.repo_id, kind=self.kind)
         if article is None and self.repo_id is not None:
-            article = get_article(slug, None)
+            article = get_article(slug, None, kind=self.kind)
         return article
 
     def run_tool(self, name: str, args: dict) -> tuple[str, dict]:
@@ -308,9 +348,9 @@ class WikiTools:
 
         if name == 'wiki_search':
             query = (args.get('query') or '').strip()
-            hits = search_articles(query, repo_id=self.repo_id)
+            hits = search_articles(query, repo_id=self.repo_id, kind=self.kind)
             if self.repo_id is not None:
-                hits += [h for h in search_articles(query, repo_id=None)
+                hits += [h for h in search_articles(query, repo_id=None, kind=self.kind)
                          if h['id'] not in {x['id'] for x in hits}]
             if not hits:
                 return (f'No wiki articles match "{query}".',

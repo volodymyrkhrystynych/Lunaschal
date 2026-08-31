@@ -220,7 +220,8 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
                        'propose_calorie_log', 'propose_food_log', 'propose_recipe',
                        'draft_flashcard', 'propose_flashcards',
                        'create_note_to_self', 'ask_user', 'remember',
-                       'search_conversations', 'search_journal', 'read_day'}
+                       'search_conversations', 'search_journal', 'read_day',
+                       'wiki_read', 'wiki_search'}
 
 
 def test_a_tool_call_the_model_invented_is_ignored(monkeypatch, answered):

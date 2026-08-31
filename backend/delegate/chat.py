@@ -44,6 +44,7 @@ from backend.chat.context import expand_attachments
 from backend.delegate import agent, limits, tools as proposal_tools
 from backend.lifewiki import tools as life_tools
 from backend.lifewiki.tools import LifeTools
+from backend.research import wiki as wiki_tools
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,15 @@ DELEGATE_TOOL = {
     },
 }
 
-TOOLS = [DELEGATE_TOOL] + proposal_tools.TOOLS + life_tools.TOOLS
+# `wiki_list` is deliberately left out: the index is already in the system
+# prompt, so offering a tool that re-fetches it is a round trip for something
+# the model can already see.
+_LIFE_WIKI_TOOLS = [t for t in wiki_tools.TOOLS
+                    if t['function']['name'] in ('wiki_read', 'wiki_search')]
+_LIFE_WIKI_NAMES = {t['function']['name'] for t in _LIFE_WIKI_TOOLS}
+
+TOOLS = ([DELEGATE_TOOL] + proposal_tools.TOOLS + life_tools.TOOLS
+         + _LIFE_WIKI_TOOLS)
 
 DECISION_NOTE = """Right now your only job is to decide which of your tools this \
 message needs, if any — your reply comes afterwards, in a separate turn.
@@ -116,6 +125,9 @@ Use delegate when answering needs something looked up on the web.
 Use search_conversations, search_journal or read_day when the answer is \
 something the user already told you or wrote down and you cannot see it in \
 this conversation. Their own record first, the web second.
+
+Use wiki_read when one of your own notes about them is listed above and the \
+answer turns on what is actually in it, rather than on its title.
 
 Use remember for a fact about them that will still be true next month. Not for \
 anything that happens once, and never for something already in your notes.
@@ -248,6 +260,10 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     sources: list[dict] = []
     proposals: list[dict] = []
     life = LifeTools(conversation_id)
+    # Scoped to the life wiki, so a chat can never surface a note about a
+    # codebase — and, in the other direction, the Ideas agent's default
+    # WikiTools scope keeps the user's life out of a research turn.
+    life_wiki = wiki_tools.WikiTools(kind=wiki_tools.LIFE_KIND)
 
     calls = _decision_calls(conversation) if tools_enabled else []
     results: list[tuple[object, str]] = []
@@ -268,6 +284,8 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
             # transcript: that compression is the point of delegating, and it
             # is what keeps this conversation's context flat as it grows.
             results.append((call, result.get('summary', '')))
+        elif call.function.name in _LIFE_WIKI_NAMES:
+            text, event = life_wiki.run_tool(call.function.name, _args_of(call))
         elif call.function.name in life_tools.TOOL_NAMES:
             # Bound to the conversation rather than handed it per call, the same
             # way WikiTools binds its repo: the shared loop dispatches by name
