@@ -352,3 +352,76 @@ export function queueBreakdown(applications: JobApplication[]): {
   }
   return { ready, building, failed };
 }
+
+// --------------------------------------------------------------------------
+// Commute distance
+// --------------------------------------------------------------------------
+
+/** Where the backend measures from. Kept here so the card can name it rather
+ * than showing a bare number the reader has to take on faith. */
+export const DISTANCE_ANCHOR_LABEL = 'Union Station';
+
+/** Bands for the commute annotation, sized for the GTA rather than for the
+ * globe: downtown and the inner suburbs, the 905, the outer commuter belt,
+ * and then everything that is really a relocation. Coarse on purpose — the
+ * number is a rough signal, and `matchBand` above takes the same line. */
+export function distanceBand(
+  km: number | null
+): 'near' | 'commutable' | 'far' | 'distant' | 'unknown' {
+  if (km == null) return 'unknown';
+  if (km <= 10) return 'near';
+  if (km <= 30) return 'commutable';
+  if (km <= 80) return 'far';
+  return 'distant';
+}
+
+/**
+ * The commute line for a feed card.
+ *
+ * Remote is answered before distance and never as a number: a remote posting
+ * has no commute, and printing "0 km" for one would say something false about
+ * a job three subway stops away. An unplaced location returns null so the card
+ * renders nothing at all — the honest state, and the common one while 1,300
+ * backfilled rows carry no location.
+ */
+interface CommuteFields {
+  remote: boolean;
+  distanceKm: number | null;
+  distancePrecision?: string;
+  workLocation?: string;
+}
+
+/** True when the body says attendance is expected, whatever the board's flag
+ * says. This is the contradiction `work_location` exists to record. */
+function attendsInPerson(job: CommuteFields): boolean {
+  return job.workLocation === 'onsite' || job.workLocation === 'hybrid';
+}
+
+export function distanceLabel(job: CommuteFields): string | null {
+  // Remote is answered first and never as a number — unless the body itself
+  // contradicted it, in which case the commute is real and is the point.
+  if (job.remote && !attendsInPerson(job)) return 'Remote';
+  if (job.distanceKm == null) return job.remote ? 'Remote' : null;
+
+  const km = job.distanceKm;
+  const rounded = km < 10 ? Math.round(km * 10) / 10 : Math.round(km);
+  // 'exact' came from coordinates the board posted; everything else is a city
+  // or district centre, so the number gets a '~' rather than implying a
+  // door-to-door measurement it cannot support.
+  const prefix = job.distancePrecision === 'exact' ? '' : '~';
+  // Naming the mode only where it contradicts the board's flag: it is what
+  // explains why a posting listed as remote is sitting among the located ones.
+  const lead =
+    job.remote && attendsInPerson(job)
+      ? `${job.workLocation === 'hybrid' ? 'Hybrid' : 'On-site'} · `
+      : '';
+  return `${lead}${prefix}${rounded} km from ${DISTANCE_ANCHOR_LABEL}`;
+}
+
+/** The band the commute pill is coloured by. A posting with no real commute
+ * (remote, or unplaced) is `unknown` rather than being painted on the same
+ * scale as a distance somebody would actually travel. */
+export function commuteBand(job: CommuteFields) {
+  if (job.remote && !attendsInPerson(job)) return distanceBand(null);
+  return distanceBand(job.distanceKm);
+}

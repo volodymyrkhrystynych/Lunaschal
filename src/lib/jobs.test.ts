@@ -298,6 +298,9 @@ function feedJob(id: string, matchReasons: MatchReasons | null): FeedJob {
     triageFit: '',
     triageSummary: '',
     triageFlags: [],
+    distanceKm: null,
+    distancePrecision: '',
+    workLocation: '',
     triageAt: null,
     triageError: null,
   };

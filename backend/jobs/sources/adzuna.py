@@ -78,6 +78,10 @@ def _normalize(row: dict) -> dict:
         'remote': 'remote' in f"{row.get('title', '')} {location} {contract}".lower(),
         'salaryMin': coerce_number(row.get('salary_min')),
         'salaryMax': coerce_number(row.get('salary_max')),
+        # The only adapter that carries real coordinates. `distance.py` prefers
+        # them over its gazetteer, since a posted point beats a city centroid.
+        'latitude': coerce_number(row.get('latitude')),
+        'longitude': coerce_number(row.get('longitude')),
         'salaryCurrency': '',
         # Snippet, not body — see the module docstring.
         'description': row.get('description') or '',

@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
-from backend.jobs import keywords, profile as profile_mod
+from backend.jobs import distance, keywords, profile as profile_mod
 from backend.jobs.sources import SourceError, fetch as fetch_source
 
 logger = logging.getLogger(__name__)
@@ -124,6 +124,7 @@ def upsert_job(db, kind: str, job: dict, loaded_profile: dict) -> str | None:
         return None
 
     score, reasons = score_job(job, loaded_profile)
+    reading = distance.reading_for(job)
     now = _now()
     existing = db.execute(
         'SELECT id, description FROM jobs WHERE source=? AND source_id=?',
@@ -143,6 +144,11 @@ def upsert_job(db, kind: str, job: dict, loaded_profile: dict) -> str | None:
         'raw': json.dumps(job.get('raw')) if job.get('raw') is not None else None,
         'match_score': score,
         'match_reasons': reasons,
+        # Deterministic, like the score above, and refreshed on every list for
+        # the same reason: a board that moves a posting from Toronto to Ottawa
+        # has changed the only thing this column measures.
+        'distance_km': reading.km if reading else None,
+        'distance_precision': reading.precision if reading else '',
         'posted_at': parse_posted_at(job.get('postedAt')),
         'fetched_at': now,
         'updated_at': now,
@@ -316,6 +322,45 @@ def rescore_all(db) -> int:
         db.execute(
             'UPDATE jobs SET match_score=?, match_reasons=? WHERE id=?',
             (score, reasons, row['id']),
+        )
+        changed += 1
+    db.commit()
+    return changed
+
+
+def recompute_distances(db) -> int:
+    """Recompute `distance_km` for every undismissed posting.
+
+    Separate from `rescore_all` because it answers a different question and
+    depends on different inputs: the score is a function of the *profile*, this
+    is a function of the *posting*. Folding it into the profile-edit path would
+    tie a number that never changes with the profile to a trigger that fires
+    every time a skill is added.
+
+    Coordinates come from `raw` when the adapter carried them — Adzuna is the
+    only one that does — so a re-run picks up rows synced before this column
+    existed without re-fetching anything from the board.
+    """
+    rows = db.execute(
+        'SELECT id, location, raw FROM jobs WHERE dismissed=0'
+    ).fetchall()
+
+    changed = 0
+    for row in rows:
+        job = {'location': row['location'] or ''}
+        if row['raw']:
+            try:
+                raw = json.loads(row['raw'])
+            except ValueError:
+                raw = None
+            if isinstance(raw, dict):
+                job['latitude'] = raw.get('latitude')
+                job['longitude'] = raw.get('longitude')
+        reading = distance.reading_for(job)
+        db.execute(
+            'UPDATE jobs SET distance_km=?, distance_precision=? WHERE id=?',
+            (reading.km if reading else None,
+             reading.precision if reading else '', row['id']),
         )
         changed += 1
     db.commit()

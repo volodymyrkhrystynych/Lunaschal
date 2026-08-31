@@ -132,6 +132,7 @@ def init_db() -> None:
     _ensure_microsoft_oauth_settings(db)
     _ensure_job_settings(db)
     _ensure_job_triage_columns(db)
+    _ensure_job_distance_columns(db)
     _ensure_backup_settings(db)
     _ensure_files_settings(db)
     _ensure_llm_generation_settings(db)
@@ -1106,6 +1107,43 @@ def _ensure_job_triage_columns(db: sqlite3.Connection) -> None:
     settings_cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'job_triage_enabled' not in settings_cols:
         db.execute('ALTER TABLE settings ADD COLUMN job_triage_enabled INTEGER DEFAULT 1')
+    db.commit()
+
+
+def _ensure_job_distance_columns(db: sqlite3.Connection) -> None:
+    """Kilometres from the commute anchor, cached beside `match_score`.
+
+    Both are deterministic functions of a posting and the same argument applies
+    to both: computing one at sync time is what lets the feed sort the moment a
+    200-job sync lands, without a model call and without a second pass.
+
+    `distance_km` is nullable and NULL is load-bearing — it means the gazetteer
+    did not recognise the place, which is a different thing from "far away" and
+    must never be rendered as a number. Existing rows start NULL and stay that
+    way until `sync.recompute_distances` runs, exactly as `match_score` did:
+    the feed's default ordering does not consult this column, so a database
+    that has not been backfilled reads no differently than it does today.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(jobs)')}
+    if 'distance_km' not in cols:
+        db.execute('ALTER TABLE jobs ADD COLUMN distance_km REAL')
+    if 'distance_precision' not in cols:
+        db.execute("ALTER TABLE jobs ADD COLUMN distance_precision TEXT NOT NULL DEFAULT ''")
+    # What the *body* says about where the work happens, as distinct from
+    # `jobs.remote`, which is the board's own structured field. Deliberately a
+    # second column rather than an overwrite: a model correcting an employer's
+    # own answer in place would be unauditable, and the two disagreeing is
+    # exactly the signal worth keeping ("Remote" that means two days in a
+    # Toronto office). '' means nothing has read the body yet.
+    if 'work_location' not in cols:
+        db.execute("ALTER TABLE jobs ADD COLUMN work_location TEXT NOT NULL DEFAULT ''")
+    db.commit()
+
+    # Only the distance sort reads it, and only over the feed's own predicate.
+    db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_jobs_distance '
+        'ON jobs(distance_km) WHERE dismissed = 0'
+    )
     db.commit()
 
 

@@ -64,6 +64,13 @@ FLAG_KINDS = (
 
 FIT_LEVELS = ('strong', 'possible', 'stretch')
 
+# Where the work physically happens, as the *body* describes it. Kept apart
+# from `jobs.remote`, which is the board's own structured field: a model must
+# never overwrite what the employer stated in a dedicated column. This exists
+# for the case the column cannot express — "Remote" that turns out to mean
+# remote-within-Ontario with two days a week in a Toronto office.
+WORK_LOCATIONS = ('onsite', 'hybrid', 'remote', 'unclear')
+
 SYSTEM = """You triage job postings for one software engineer, before they \
 have looked at any of them. Two jobs, in one answer.
 
@@ -81,6 +88,15 @@ SECOND: if it is relevant, condense it. `summary` is at most two sentences \
 saying what the job actually is — the work, the stack, the shape of the team. \
 Not the company's self-description, not adjectives. Assume they will decide \
 from this alone and never open the posting.
+
+THIRD: where is the work. `workLocation` is what the *body* says, which is \
+often more specific than the location field: 'hybrid' when it names days in an \
+office, 'onsite' when attendance is required, 'remote' when it is not, \
+'unclear' when the posting genuinely does not say. Do not infer from the \
+company's headquarters. `cities` lists the places the work is actually done, \
+chosen only from the list you are given — leave it empty rather than \
+approximating, and never list a city merely because the company has an office \
+there.
 
 `flags` is for what a careful reader would notice and resent finding out \
 later: a title that disagrees with the experience demanded, unpaid or \
@@ -130,19 +146,29 @@ _BASE_SCHEMA: dict = {
 }
 
 
-def build_schema(missing_terms: list[str] | None) -> dict:
-    """The response schema, with `missingMustHaves` bound to real terms.
+def build_schema(missing_terms: list[str] | None,
+                 cities: list[str] | None = None) -> dict:
+    """The response schema, with its list fields bound to real vocabularies.
 
-    The enum is what makes the field trustworthy: llama-server compiles it to a
-    grammar, so a requirement the posting never stated cannot be produced. With
-    no terms to bind — an empty profile, or a posting mentioning nothing in the
-    vocabulary — the field is omitted entirely rather than left unbounded,
-    because an unbounded list here is exactly the invented-experience failure
-    the bound exists to prevent.
+    The enum is what makes each field trustworthy: llama-server compiles it to
+    a grammar, so a requirement the posting never stated cannot be produced.
+    With no terms to bind — an empty profile, or a posting mentioning nothing
+    in the vocabulary — the field is omitted entirely rather than left
+    unbounded, because an unbounded list here is exactly the invented-
+    experience failure the bound exists to prevent.
+
+    `cities` is the same trick pointed at a different problem. The caller
+    passes the gazetteer's own key list, so the model cannot *name* a place —
+    it can only point at one `backend/jobs/distance.py` already knows how to
+    measure. That keeps the rule this feature was built on intact: the model
+    never produces the kilometres, it only says which known place to measure
+    from. An unbound free-text city would put a fabricated location on the
+    sort key, which is the one thing the whole module refuses to allow.
     """
     schema = {
         **_BASE_SCHEMA,
         'properties': dict(_BASE_SCHEMA['properties']),
+        'required': [*_BASE_SCHEMA['required'], 'workLocation'],
     }
     terms = [t for t in (missing_terms or []) if t]
     if terms:
@@ -150,6 +176,16 @@ def build_schema(missing_terms: list[str] | None) -> dict:
             'type': 'array',
             'maxItems': 6,
             'items': {'type': 'string', 'enum': terms},
+        }
+    schema['properties']['workLocation'] = {
+        'type': 'string', 'enum': list(WORK_LOCATIONS),
+    }
+    places = [c for c in (cities or []) if c]
+    if places:
+        schema['properties']['cities'] = {
+            'type': 'array',
+            'maxItems': 3,
+            'items': {'type': 'string', 'enum': places},
         }
     return schema
 
@@ -185,6 +221,7 @@ def triage_posting(
     profile_summary: str,
     facts: dict,
     report: dict,
+    cities: list[str] | None = None,
 ) -> dict | None:
     """Judge and condense one posting. None when the model is unavailable.
 
@@ -210,7 +247,11 @@ THEIR BACKGROUND
 ALREADY COMPUTED — treat as fact
 {_facts_block(facts or {}, report or {})}"""
 
-    schema = build_schema((report or {}).get('missing'))
+    if cities:
+        prompt += ('\n\nPLACES YOU MAY NAME — use these exact strings, or none\n'
+                   + ', '.join(cities))
+
+    schema = build_schema((report or {}).get('missing'), cities)
     try:
         result = chat_json(
             prompt, system=SYSTEM, schema=schema, max_tokens=MAX_TOKENS
@@ -221,10 +262,11 @@ ALREADY COMPUTED — treat as fact
 
     if not isinstance(result, dict) or 'relevant' not in result:
         return None
-    return normalize_result(result, facts or {})
+    return normalize_result(result, facts or {}, cities)
 
 
-def normalize_result(result: dict, facts: dict) -> dict:
+def normalize_result(result: dict, facts: dict,
+                     cities: list[str] | None = None) -> dict:
     """Clamp the model's answer back inside its bounds.
 
     The grammar already enforces these, so this is belt-and-braces in the shape
@@ -253,6 +295,19 @@ def normalize_result(result: dict, facts: dict) -> dict:
         })
 
     fit = result.get('fit')
+    work_location = result.get('workLocation')
+
+    # Re-apply the city bound rather than trusting it. A place outside the
+    # allowed list is dropped, not corrected: it would become a distance on a
+    # feed that sorts by distance, and a plausible-looking wrong city is the
+    # failure this bound exists to prevent. With no list supplied there is
+    # nothing to validate against, so nothing survives.
+    allowed = {c for c in (cities or []) if c}
+    places = [
+        c for c in (result.get('cities') or [])
+        if isinstance(c, str) and c in allowed
+    ][:3]
+
     return {
         'relevant': bool(result.get('relevant')),
         'reason': str(result.get('reason') or '')[:300],
@@ -262,4 +317,6 @@ def normalize_result(result: dict, facts: dict) -> dict:
         'missingMustHaves': [
             t for t in (result.get('missingMustHaves') or []) if isinstance(t, str)
         ][:6],
+        'workLocation': work_location if work_location in WORK_LOCATIONS else 'unclear',
+        'cities': places,
     }

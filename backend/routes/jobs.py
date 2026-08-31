@@ -17,7 +17,7 @@ from ulid import ULID
 from backend.ai import job_match, priority
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.jobs import (
-    analytics, build, career_watch, company_research, cover_letter, ingest, interview, linker, outcomes, profile as profile_mod, queue as queue_mod, render, report, resume_review,
+    analytics, build, career_watch, company_research, cover_letter, distance, ingest, interview, linker, outcomes, profile as profile_mod, queue as queue_mod, render, report, resume_review,
     resolve, resume_import, retention, sources, storage, sync, tailor,
     triager, upskill, urlmatch, workday_watch, status as application_status,
 )
@@ -405,19 +405,26 @@ def create_job():
 
     now = _now()
     job_id = str(ULID())
+    # Same deterministic read the sync path does, so a posting typed in by hand
+    # carries a distance from the moment it lands rather than waiting on the
+    # next rescore.
+    reading = distance.reading_for(fields)
     db = get_db()
     db.execute(
         """
         INSERT INTO jobs (id, source, source_id, url, company, title, location,
                           remote, salary_min, salary_max, salary_currency,
-                          description, fetched_at, created_at, updated_at)
-        VALUES (?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          description, distance_km, distance_precision,
+                          fetched_at, created_at, updated_at)
+        VALUES (?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (job_id, job_id, fields.get('url') or '', fields.get('company') or '',
          fields.get('title') or '', fields.get('location') or '',
          1 if fields.get('remote') else 0, fields.get('salaryMin'),
          fields.get('salaryMax'), fields.get('salaryCurrency') or '',
-         fields.get('description') or '', now if url else None, now, now),
+         fields.get('description') or '',
+         reading.km if reading else None, reading.precision if reading else '',
+         now if url else None, now, now),
     )
     db.commit()
     return jsonify(row_to_dict(
@@ -1540,8 +1547,16 @@ def rescore():
     postings arrive, so without this the feed keeps ranking against whatever
     the skills list said last week. Pure string work, no model, so it is fast
     enough to run inline.
+
+    Distances are recomputed in the same pass. They do not depend on the
+    profile, so they are not the reason this route exists — but this is the one
+    "recompute what is derivable" path the UI already has, and a second button
+    would have to explain a distinction the person pressing it does not care
+    about. It is also how rows synced before the column existed get a number.
     """
-    return jsonify({'rescored': sync.rescore_all(get_db())})
+    db = get_db()
+    return jsonify({'rescored': sync.rescore_all(db),
+                    'distances': sync.recompute_distances(db)})
 
 
 @bp.get('/feed')
@@ -1558,17 +1573,40 @@ def job_feed():
     a coarse grouping is stable between refreshes in a way a model-produced
     0-100 score would not be, which is the property `job_match.py` set out to
     protect.
+
+    `?sort=distance` replaces only the *inner* key, with kilometres from the
+    commute anchor. The bucket stays primary deliberately — it is what the
+    client groups the cards by, and a sort mode that reshuffled the groups
+    themselves would be a different feed rather than the same one reordered.
+    Inside a bucket the order becomes: remote first as its own band, then
+    nearest outwards, then the postings whose location the gazetteer could not
+    place. Those last ones fall back to the keyword score rather than sinking
+    without one — an unrecognised location is missing information about a
+    posting, not a verdict on it, and 1,300 rows here have no location at all.
     """
     db = get_db()
     limit = min(int(request.args.get('limit') or 100), 500)
+    by_distance = request.args.get('sort') == 'distance'
+    inner_order = (
+        # A row is banded as remote only when the *body* did not contradict the
+        # board's flag. "Remote - Canada" that turns out to want two days a
+        # week in a Toronto office belongs with the located rows, at its
+        # distance — that contradiction is the whole reason `work_location`
+        # exists as a column beside `remote` rather than overwriting it.
+        "CASE WHEN j.remote = 1 AND j.work_location NOT IN ('onsite','hybrid')"
+        ' THEN 0 ELSE 1 END,'
+        ' j.distance_km IS NULL, j.distance_km ASC, '
+        if by_distance else ''
+    )
     rows = db.execute(
-        """
+        f"""
         SELECT j.* FROM jobs j
         LEFT JOIN applications a ON a.job_id = j.id
         WHERE j.dismissed = 0 AND a.id IS NULL AND j.triage_state != 'rejected'
         ORDER BY CASE j.triage_fit
                      WHEN 'strong' THEN 0 WHEN 'possible' THEN 1
                      WHEN 'stretch' THEN 2 ELSE 3 END,
+                 {inner_order}
                  j.match_score IS NULL, j.match_score DESC, j.posted_at DESC,
                  j.created_at DESC
         LIMIT ?
