@@ -56,6 +56,32 @@ QUIET_SECONDS = 10.0
 # backlog should not hold it open.
 GATE_BATCH = 2000
 
+# How long one tick may keep judging postings back to back.
+#
+# `drain_once` submits exactly one and returns, which is right for
+# `queue.drain_once` — the shape this was written in — because a tailoring pass
+# is a multi-minute generation and a handful are queued a day. A triage
+# call is 3-8 seconds, and the same shape under a 300-second poll means the
+# model works for four seconds and sleeps for 296. That ceiling of twelve
+# postings an hour was invisible while a few boards produced tens of postings a
+# day, and became a month-long queue the moment the backlog was thousands.
+#
+# So the drain keeps going while the machine is idle. The gate that makes this
+# safe is unchanged and is simply re-read every iteration instead of once every
+# five minutes: `drain_once` returns None the moment `priority.active()` is
+# true, so a chat message still stands the drain down between generations. What
+# changes is only the sleeping.
+#
+# Bounded rather than unbounded so one tick cannot run for hours while linkage,
+# sync and the purge wait behind it. Set to 0 to restore one-per-tick exactly.
+DRAIN_BUDGET_SECONDS = 240.0
+
+# Ceiling on waiting for one posting's verdict inside the drain loop. Past this
+# the generation is presumed wedged and the tick moves on rather than holding
+# the scheduler open — the row stays `pending` and is retried, which is what
+# would have happened anyway.
+DRAIN_STEP_TIMEOUT = 120.0
+
 STATE_PENDING = 'pending'
 STATE_KEPT = 'kept'
 STATE_REJECTED = 'rejected'
@@ -425,6 +451,78 @@ def drain_once() -> str | None:
     if pending is None:
         return None
     return pending['id'] if submit(pending['id']) else None
+
+
+def drain_while_idle(budget_seconds: float | None = None) -> dict:
+    """Judge postings back to back for as long as the machine stays idle.
+
+    Every iteration goes through `drain_once`, so all four of its gates —
+    another pass already running, triage switched off, `priority.active()`, and
+    an empty queue — are re-read between every generation. None of the deferral
+    behaviour changes; the loop only removes the five-minute sleep between two
+    four-second calls.
+
+    Each submission is waited on before the next is considered. Without that
+    the executor would simply accept a queue of jobs and the priority check
+    between them would never happen — which is the whole point of looping here
+    rather than raising a batch size.
+
+    Returns what happened, so the scheduler's result dict can say it.
+    """
+    budget = DRAIN_BUDGET_SECONDS if budget_seconds is None else budget_seconds
+    deadline = time.monotonic() + max(0.0, budget)
+
+    first = drain_once()
+    if first is None:
+        return {'submitted': 0, 'stopped': 'idle'}
+
+    # Every posting this pass has already handed to the worker. A row that
+    # comes back a second time means the last generation did not move it out
+    # of `pending`, and `process_one` does exactly that on purpose when the
+    # model is unreachable — it declines to record a verdict nobody reached.
+    # One posting per five minutes made that invisible; a loop turns it into
+    # thousands of retries against a dead llama-server inside one tick. So the
+    # loop stops on the absence of forward progress rather than trying to
+    # enumerate the reasons for it.
+    seen = {first}
+    submitted = 1
+    stopped = 'budget'
+    while True:
+        if not wait_idle(timeout=DRAIN_STEP_TIMEOUT):
+            stopped = 'timeout'
+            break
+        if time.monotonic() >= deadline:
+            break
+
+        # Peek before submitting rather than after. Checking the id `drain_once`
+        # returns would work too, but only once the repeat had already been
+        # handed to the worker — so the pass would both waste a generation and
+        # return with one still in flight.
+        if _repeats(seen):
+            stopped = 'stalled'
+            break
+
+        job_id = drain_once()
+        if job_id is None:
+            # Nothing left, the user came back, or triage was switched off.
+            stopped = 'idle'
+            break
+        seen.add(job_id)
+        submitted += 1
+
+    return {'submitted': submitted, 'stopped': stopped}
+
+
+def _repeats(seen: set[str]) -> bool:
+    """True when the next candidate is one this pass already judged."""
+    from backend.db.connection import get_db
+
+    try:
+        nxt = next_pending(get_db())
+    except Exception as e:
+        logger.warning('Could not look ahead in the triage queue: %s', e)
+        return True
+    return nxt is not None and nxt['id'] in seen
 
 
 def restore(db, job_id: str) -> bool:

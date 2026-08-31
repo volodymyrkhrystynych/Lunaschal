@@ -280,6 +280,31 @@ seconds-after-a-tap flow. It is the only part of the jobs scheduler that
 touches the model, so it is the only part that defers through
 `backend/ai/priority.py`.
 
+The **triage** drain works the same way with one difference that matters at
+scale: `triager.drain_while_idle` keeps judging for up to
+`DRAIN_BUDGET_SECONDS` instead of doing one and sleeping. `drain_once` submits
+exactly one and returns — correct for a tailoring pass, which is minutes long
+and queued a handful of times a day — but under the 300-second tick it gave
+triage a ceiling of **twelve postings an hour**: four seconds of model, 296 of
+sleeping. Invisible while a few boards produced tens of postings a day; a
+month-long queue the moment the backlog was thousands.
+
+The deferral behaviour is unchanged and is simply re-read every iteration
+rather than every five minutes, so a chat message still stands the drain down
+between generations. Two things keep the loop honest: each submission is
+**waited on** before the next is considered (otherwise the executor just
+accepts a queue and no gate is read between them), and the loop **stops when
+the next candidate is one it already judged**. That second guard is not
+theoretical — `process_one` deliberately leaves a row `pending` when the model
+is unreachable, because a verdict nobody reached must not be recorded, and
+without it an unreachable llama-server would mean thousands of retries inside
+one tick instead of one every five minutes. It looks ahead rather than checking
+after the fact, so the repeat is never handed to the worker.
+
+The queue drain runs **before** the triage drain, since the triage drain can
+hold the tick for minutes and a resume was explicitly asked for by tapping
+Queue while triage is speculative work over postings nobody has opened.
+
 **A failed application is skipped until it is re-queued.** Without that, one
 posting the model chokes on sits at the head of the queue and is retried every
 five minutes forever while nothing behind it is ever built. The failure is
