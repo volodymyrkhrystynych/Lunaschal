@@ -16,7 +16,11 @@ Seven jobs on three cadences, sorted by what each one costs:
 - **The triage drain and the queue drain** are the only parts that touch the
   model, so they are the only parts that defer through `backend/ai/priority.py`
   — the same moment-to-moment yielding `research_scheduler` does, rather than
-  an hour window.
+  an hour window. The queue runs first: a resume was explicitly asked for by
+  tapping Queue, and triage is speculative work over postings nobody has looked
+  at yet. The triage drain then keeps judging for up to
+  `triager.DRAIN_BUDGET_SECONDS` rather than doing one and sleeping — see the
+  constant for why one-per-tick was a ceiling of twelve an hour.
 - **Retention** deletes files and only needs to be right once a day.
 
 **Everything above except the bookkeeping stops when Settings → Jobs is
@@ -127,15 +131,20 @@ def tick(now: datetime | None = None, last_purge_date=None):
         except Exception as e:
             logger.warning('Job triage gate sweep failed: %s', e)
 
-        try:
-            results['triaged'] = triager.drain_once()
-        except Exception as e:
-            logger.warning('Job triage drain failed: %s', e)
-
+        # The resume queue goes first now that the triage drain can hold the
+        # tick for minutes. A resume is something the user explicitly asked
+        # for by tapping Queue; triage is speculative work over postings they
+        # have not looked at. Making the explicit request wait behind the
+        # speculative one is the wrong way round.
         try:
             results['queued'] = queue.drain_once()
         except Exception as e:
             logger.warning('Job queue drain failed: %s', e)
+
+        try:
+            results['triaged'] = triager.drain_while_idle()
+        except Exception as e:
+            logger.warning('Job triage drain failed: %s', e)
 
     in_window = PURGE_WINDOW_START_HOUR <= now.hour < PURGE_WINDOW_END_HOUR
     if in_window and last_purge_date != now.date():

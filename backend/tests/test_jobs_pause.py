@@ -37,7 +37,7 @@ def test_a_pause_stops_every_sweep_that_fetches_or_uses_the_model(db):
          patch.object(scheduler.career_watch, 'run_due') as careers, \
          patch.object(scheduler.workday_watch, 'run_due') as workday, \
          patch.object(scheduler.triager, 'run_gate_sweep') as gate, \
-         patch.object(scheduler.triager, 'drain_once') as triage, \
+         patch.object(scheduler.triager, 'drain_while_idle') as triage, \
          patch.object(scheduler.queue, 'drain_once') as resumes, \
          patch.object(scheduler.linker, 'run_linkage_sweep', return_value={}):
         results, _ = scheduler.tick(now=datetime(2026, 8, 30, 12, 0))
@@ -78,7 +78,7 @@ def test_resuming_runs_the_sweeps_again(db):
          patch.object(scheduler.career_watch, 'run_due'), \
          patch.object(scheduler.workday_watch, 'run_due'), \
          patch.object(scheduler.triager, 'run_gate_sweep'), \
-         patch.object(scheduler.triager, 'drain_once') as triage, \
+         patch.object(scheduler.triager, 'drain_while_idle') as triage, \
          patch.object(scheduler.queue, 'drain_once'), \
          patch.object(scheduler.linker, 'run_linkage_sweep', return_value={}):
         results, _ = scheduler.tick(now=datetime(2026, 8, 30, 12, 0))
@@ -95,7 +95,7 @@ def test_an_unreadable_flag_does_not_take_the_tick_down(db):
          patch.object(scheduler.career_watch, 'run_due'), \
          patch.object(scheduler.workday_watch, 'run_due'), \
          patch.object(scheduler.triager, 'run_gate_sweep'), \
-         patch.object(scheduler.triager, 'drain_once'), \
+         patch.object(scheduler.triager, 'drain_while_idle'), \
          patch.object(scheduler.queue, 'drain_once'), \
          patch.object(scheduler.linker, 'run_linkage_sweep', return_value={}):
         results, _ = scheduler.tick(now=datetime(2026, 8, 30, 12, 0))
