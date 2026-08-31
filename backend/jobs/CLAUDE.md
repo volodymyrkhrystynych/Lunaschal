@@ -160,6 +160,74 @@ open it, answering "what should this application lead with" — a different
 question from "should this be on the screen", and only worth asking once you are
 already interested.
 
+### Distance, and why it is a gazetteer
+
+`distance.py` answers the feed's other question — "could I actually get
+there?" — and is built exactly like `keywords.py`: pure, deterministic,
+computed at sync time, no network and no model. `distance_km` is cached on the
+row beside `match_score` for the same reason that one is, so a 200-job sync is
+still free and still sorted the moment it lands.
+
+**An unrecognised place resolves to None, never to a large number.** That is
+`geo.py`'s rule one layer up, and it is why provinces and countries are
+_absent_ from the gazetteer rather than present with a centroid: "Remote -
+Canada" has no point worth measuring, and a fabricated 4,000 km would sort a
+real job off the end of a feed that orders on this column. A bare ambiguous
+name resolves to None too — London ON and London UK are 5,500 km apart, so
+`london` alone is declined the way `urlmatch.py` declines an ambiguous tab,
+while `london on` and `london uk` are ordinary entries.
+
+**Remote is not zero kilometres.** It is a different state, carried by
+`jobs.remote`, and the distance sort gives it its own band ahead of the located
+rows. Folding it in would rank every remote posting ahead of a job three subway
+stops away.
+
+Matching is longest-match-wins over token spans — `keywords.py`'s shape, for
+`keywords.py`'s reason — and then **nearest wins** among what survives, so a
+posting listing three offices is measured at the one you could reach. Adzuna is
+the only adapter that carries real coordinates; they beat the gazetteer when
+present, and `recompute_distances` digs them back out of stored `raw` so rows
+synced before the column existed are fixed without re-fetching a board.
+
+### What the model is allowed to add to it
+
+The gazetteer reads `jobs.location`, which the boards fill in themselves. That
+covers the ordinary case and needs no model — running one over a structured
+field would swap a fact for an inference. The case it cannot cover is a body
+that **contradicts** the field: "Remote - Canada" that turns out to want two
+days a week in a Toronto office.
+
+`ai/job_triage.py` already reads every posting body, and the prefill is the
+expensive part, so that verdict carries two more fields for ~nothing:
+
+- **`workLocation`** (`onsite | hybrid | remote | unclear`) lands in
+  `jobs.work_location`, a **second column beside `jobs.remote`, never an
+  overwrite**. The board's flag is the employer's own statement; this is a
+  model reading prose. Keeping both is what makes the disagreement legible
+  instead of destroying one of the two answers.
+- **`cities`** is `enum`-bound to `distance.selectable_places()` — the
+  gazetteer's own keys, minus the ambiguous bare names. So **the model cannot
+  name a place, only point at one the gazetteer can already measure**. That
+  keeps the module's rule intact: the model never produces the kilometres. An
+  unbounded free-text city would put a fabricated location straight onto the
+  sort key, which is the one thing this feature refuses to allow — the
+  `missingMustHaves` and `tailor.py` trick, pointed at a third problem.
+
+`_store_inferred_distance` then fills `distance_km` **only where it is still
+NULL**, guarded in SQL rather than in Python so a re-triage racing a re-sync
+cannot win. Precision is `'inferred'`, the weakest of the four and the only one
+that did not come from a structured field. A row banded as remote by the sort
+is one where `work_location` did _not_ contradict the flag, so the hybrid case
+sorts at its real distance instead of hiding at the top.
+
+The sort is `GET /feed?sort=distance`, and it replaces only the **inner** key:
+the fit bucket stays primary because it is what the client groups cards by, and
+a mode that reshuffled the groups would be a different feed rather than the
+same one reordered. Unplaced rows fall back to the keyword score rather than
+sinking without one — a location the gazetteer could not read is missing
+information about a posting, not a verdict on it, and most rows in a mailbox
+backfill have no location at all.
+
 Two upsert rules in `sync.py` keep the feed usable, and now a third:
 
 - **A re-sync never clears `dismissed`.** Boards re-list the same posting every
@@ -304,6 +372,7 @@ touches only `resume_versions` and `applications`, and a test pins that.
 | ------------------ | ------------------------------------------------------------------------ |
 | `linkage.py`       | pure scoring + status advance. No DB, no network, no model               |
 | `keywords.py`      | pure JD↔profile keyword gap — also the feed's match score                |
+| `distance.py`      | pure: km from the commute anchor. Declines rather than guesses           |
 | `retention.py`     | pure date policy + the purge executor                                    |
 | `profile.py`       | DB reads in the shapes tailoring and rendering want                      |
 | `resume_import.py` | an existing `.docx`/text → the profile, bullets index-bound              |
@@ -323,6 +392,15 @@ touches only `resume_versions` and `applications`, and a test pins that.
 | `scheduler.py`     | linkage + sync + gate + both drains every tick, purge daily 07:00–08:00  |
 | `storage.py`       | `IdScopedStorage('JOBS_ROOT', './data/jobs')`                            |
 | `backfill.py`      | confirmation mail → applications, for a search that predates the feature |
+
+`scripts/import-company-boards.py` is beside it in spirit: a Markdown company
+list (`docs/toronto-tech-companies.md`) → `job_searches` and `workday_boards`
+rows, reusing `resolve.find_candidates` rather than growing a second copy of
+its regexes. It does **not** verify each slug against the live board the way
+`resolve.py` does — that is one network call per company, and 220 of them is a
+rate-limit incident. The first scheduled sweep verifies them the ordinary way,
+and a bad slug shows red in the sources panel. Dry run by default; idempotent
+on `(kind, slug)` so re-reviewing the list does not double every source.
 
 ## Backfilling a search that started before the feature
 

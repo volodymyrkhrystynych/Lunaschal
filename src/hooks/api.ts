@@ -1451,6 +1451,18 @@ export interface FeedJob extends JobPosting {
   /** When the verdict was reached. Null until it has been. */
   triageAt: string | null;
   triageError: string | null;
+  /** Kilometres from the commute anchor. **Null means the gazetteer did not
+   * recognise the location**, which is not the same as "far" and must never be
+   * rendered as a number — see backend/jobs/distance.py. */
+  distanceKm: number | null;
+  /** How the point was arrived at: 'exact' (the source posted coordinates),
+   * 'district', 'city', 'inferred' (a model read it out of the body), or ''
+   * when there is no reading. */
+  distancePrecision: '' | 'exact' | 'district' | 'city' | 'inferred';
+  /** What the posting *body* says about where the work happens, as opposed to
+   * `remote`, which is the board's own structured flag. '' until a model has
+   * read it. The two disagreeing is the signal, not a bug. */
+  workLocation: '' | 'onsite' | 'hybrid' | 'remote' | 'unclear';
 }
 
 export interface TriageStatus {
@@ -4207,7 +4219,10 @@ export const api = {
     /** Re-rank the feed against the current profile. No model call. */
     rescore: () => post<{ rescored: number }>('/api/jobs/rescore'),
 
-    feed: (limit = 100) => get<FeedJob[]>(`/api/jobs/feed?limit=${limit}`),
+    /** `sort` changes only the order *inside* a fit bucket: 'match' is the
+     * deterministic keyword score, 'distance' is remote-first then nearest. */
+    feed: (limit = 100, sort: 'match' | 'distance' = 'match') =>
+      get<FeedJob[]>(`/api/jobs/feed?limit=${limit}&sort=${sort}`),
     /** What triage threw out. The filter discards opportunities, so it has to
      * be reviewable — see backend/jobs/triager.py. */
     filtered: (limit = 200) =>

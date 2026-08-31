@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type FeedJob } from '@/hooks/api';
 import {
+  commuteBand,
+  distanceLabel,
   FIT_LABELS,
   FLAG_LABELS,
   formatSalary,
@@ -22,9 +24,16 @@ import { SourcesPanel } from './SourcesPanel';
  * background by backend/jobs/queue.py — so a decision costs a tap, not a wait.
  */
 export function Feed() {
+  // The sort lives in the client, not the profile: it is a way of reading the
+  // same feed, not a standing preference, and a phone that reopens on "nearest
+  // first" would hide the strongest matches from someone who forgot they set
+  // it. Part of the query key, so switching refetches rather than reordering a
+  // cached page the server ordered differently.
+  const [sort, setSort] = useState<'match' | 'distance'>('match');
+
   const { data: jobs, isLoading } = useQuery({
-    queryKey: ['jobs', 'feed'],
-    queryFn: () => api.jobs.feed(),
+    queryKey: ['jobs', 'feed', sort],
+    queryFn: () => api.jobs.feed(100, sort),
   });
   const { data: queue } = useQuery({
     queryKey: ['jobs', 'queueStatus'],
@@ -79,6 +88,36 @@ export function Feed() {
           read
           {triage.running && ' · one being read now'}
           {' — they show unsummarised until then.'}
+        </div>
+      )}
+
+      {(jobs ?? []).length > 0 && (
+        <div className="flex items-center gap-1 text-xs">
+          <span className="text-[var(--color-text-muted)] mr-1">Sort</span>
+          {(
+            [
+              ['match', 'Best match'],
+              ['distance', 'Nearest'],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setSort(key)}
+              className={`px-2 min-h-[36px] rounded border transition-colors ${
+                sort === key
+                  ? 'border-[var(--color-primary)]/40 bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
+                  : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+          {sort === 'distance' && (
+            <span className="text-[var(--color-text-muted)] ml-1">
+              remote first, then nearest
+            </span>
+          )}
         </div>
       )}
 
@@ -256,6 +295,17 @@ const BAND_CLASS = {
   none: 'bg-white/10',
 } as const;
 
+// Remote lands on `unknown` deliberately: it is not a short commute, it is the
+// absence of one, and colouring it green would put it on the same scale as a
+// job downtown. The pill still reads "Remote"; only the tone is neutral.
+const DISTANCE_CLASS = {
+  near: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+  commutable: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  far: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+  distant: 'bg-rose-500/15 text-rose-300 border-rose-500/30',
+  unknown: 'bg-white/5 text-[var(--color-text-muted)] border-white/15',
+} as const;
+
 function FeedCard({ job }: { job: FeedJob }) {
   const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState(false);
@@ -279,6 +329,7 @@ function FeedCard({ job }: { job: FeedJob }) {
   const percent = matchPercent(job.matchReasons);
   const gaps = topGaps(job.matchReasons);
   const salary = formatSalary(job.salaryMin, job.salaryMax, job.salaryCurrency);
+  const commute = distanceLabel(job);
   const assessment = rationale.data ?? job.matchReasons?.assessment;
 
   return (
@@ -290,7 +341,6 @@ function FeedCard({ job }: { job: FeedJob }) {
         <p className="text-xs text-[var(--color-text-muted)]">
           {job.company}
           {job.location && ` · ${job.location}`}
-          {job.remote && ' · Remote'}
           {salary && ` · ${salary}`}
         </p>
       </div>
@@ -304,8 +354,22 @@ function FeedCard({ job }: { job: FeedJob }) {
         </p>
       )}
 
-      {job.triageFlags.length > 0 && (
+      {(job.triageFlags.length > 0 || commute) && (
         <div className="flex flex-wrap gap-1">
+          {/* The commute flag sits with the triage flags because it is read the
+              same way — one glance, one decision — even though it is computed
+              here rather than judged by the model. A posting the gazetteer
+              could not place shows nothing at all rather than a hedge. */}
+          {commute && (
+            <span
+              title={`Straight-line distance, ${job.distancePrecision || 'unknown'} precision`}
+              className={`px-1.5 py-0.5 rounded text-[11px] border ${
+                DISTANCE_CLASS[commuteBand(job)]
+              }`}
+            >
+              {commute}
+            </span>
+          )}
           {job.triageFlags.map(flag => (
             <span
               key={flag.kind}

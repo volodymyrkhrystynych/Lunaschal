@@ -216,8 +216,8 @@ def _store(db, job_id: str, verdict: dict) -> None:
     relevant = bool(verdict.get('relevant'))
     db.execute(
         'UPDATE jobs SET triage_state=?, triage_reason=?, triage_fit=?,'
-        ' triage_summary=?, triage_flags=?, triage_at=?, triage_error=NULL,'
-        ' updated_at=? WHERE id=?',
+        ' triage_summary=?, triage_flags=?, work_location=?, triage_at=?,'
+        ' triage_error=NULL, updated_at=? WHERE id=?',
         (
             STATE_KEPT if relevant else STATE_REJECTED,
             verdict.get('reason') or '',
@@ -226,12 +226,40 @@ def _store(db, job_id: str, verdict: dict) -> None:
             (verdict.get('fit') or '') if relevant else '',
             verdict.get('summary') or '',
             json.dumps(verdict.get('flags') or []),
+            verdict.get('workLocation') or '',
             now,
             now,
             job_id,
         ),
     )
+    _store_inferred_distance(db, job_id, verdict)
     db.commit()
+
+
+def _store_inferred_distance(db, job_id: str, verdict: dict) -> None:
+    """Fill `distance_km` from the model's cities, but only as a last resort.
+
+    **A structured reading is never overwritten.** The board's own location
+    field and a posted coordinate are both statements by the employer; this
+    came from a model reading prose, and letting it replace either would swap a
+    fact for an inference on the column the feed sorts by. So the update is
+    guarded on `distance_km IS NULL` in SQL rather than in Python — a re-triage
+    racing a re-sync must not be able to win.
+
+    The complementary case is why it exists at all: a posting whose location
+    field says only "Remote - Canada" while the body asks for two days a week
+    in a Toronto office has no structured reading to protect.
+    """
+    from backend.jobs import distance
+
+    reading = distance.resolve_keys(verdict.get('cities'))
+    if reading is None:
+        return
+    db.execute(
+        'UPDATE jobs SET distance_km=?, distance_precision=?'
+        ' WHERE id=? AND distance_km IS NULL',
+        (reading.km, reading.precision, job_id),
+    )
 
 
 def process_one(job_id: str) -> dict:
@@ -242,7 +270,7 @@ def process_one(job_id: str) -> dict:
     """
     from backend.ai import job_triage
     from backend.db.connection import get_db
-    from backend.jobs import keywords, preferences, profile as profile_mod, triage
+    from backend.jobs import distance, keywords, preferences, profile as profile_mod, triage
 
     db = get_db()
     row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -285,7 +313,11 @@ def process_one(job_id: str) -> dict:
         ).to_dict()
 
         # Everything above is DB work; nothing is left open across the call.
-        verdict = job_triage.triage_posting(job, profile_summary, facts, report)
+        # The gazetteer's own keys go in as the enum bound, so the model can
+        # only point at a place `distance.py` can already measure.
+        verdict = job_triage.triage_posting(
+            job, profile_summary, facts, report, distance.selectable_places()
+        )
         if verdict is not None and verdict.get('relevant'):
             verdict['flags'] = (verdict.get('flags') or []) + preferences.soft_flags(job, loaded)
     except Exception as e:
