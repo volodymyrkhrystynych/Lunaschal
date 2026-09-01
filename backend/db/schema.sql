@@ -1725,3 +1725,19 @@ CREATE TABLE IF NOT EXISTS workday_boards (
     last_count INTEGER, last_error TEXT, created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- Imported symbolic scores for the server-desktop Piano practice view. Files
+-- are normalized to plain MusicXML at upload time, including compressed .mxl,
+-- so the browser never needs to unpack an archive or guess its root score.
+CREATE TABLE IF NOT EXISTS piano_pieces (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    composer TEXT,
+    source_filename TEXT NOT NULL,
+    score_path TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_piano_pieces_updated
+    ON piano_pieces(updated_at DESC);

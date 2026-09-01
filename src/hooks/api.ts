@@ -15,6 +15,7 @@ import type {
   ServerLogResponse,
   ServerLogUnit,
 } from '../lib/serverLogs';
+import type { PianoPiece } from '../lib/piano';
 
 export type { SleepDay };
 export type { ServerLogEntry, ServerLogResponse, ServerLogUnit };
@@ -2456,6 +2457,26 @@ export const api = {
     login: (password: string, code: string) =>
       post<{ success: boolean }>('/api/auth/login', { password, code }),
     logout: () => post<{ success: boolean }>('/api/auth/logout'),
+  },
+
+  piano: {
+    list: () => get<PianoPiece[]>('/api/piano/pieces'),
+    import: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return upload<PianoPiece>('/api/piano/pieces', form);
+    },
+    score: async (id: string) => {
+      const response = await fetch(`/api/piano/pieces/${id}/score`, {
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+      return response.text();
+    },
+    remove: (id: string) => del<{ ok: boolean }>(`/api/piano/pieces/${id}`),
   },
 
   settings: {

@@ -23,6 +23,7 @@ import { Email } from './components/Email';
 import { Jobs } from './components/Jobs';
 import { Paper } from './components/Paper/Paper';
 import { Meetings } from './components/Meetings';
+import { Piano } from './components/Piano';
 import { api } from './hooks/api';
 import { useTodaySelfieStatus } from './hooks/useTodaySelfieStatus';
 import { useTodayCaloriesStatus } from './hooks/useTodayCaloriesStatus';
@@ -31,8 +32,10 @@ import { resolveAuthGate } from './lib/authGate';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 import { MOBILE_QUERY } from './lib/breakpoints';
 import { getStoredView, setStoredView, type View } from './lib/viewPersistence';
+import { useDesktopShell } from './hooks/useDesktopShell';
 
 export default function App() {
+  const isDesktopShell = useDesktopShell();
   const [currentView, setCurrentView] = useState<View>(
     () => getStoredView() ?? 'chat'
   );
@@ -167,6 +170,8 @@ export default function App() {
         return <Learning />;
       case 'practice':
         return <Practice />;
+      case 'piano':
+        return isDesktopShell ? <Piano /> : null;
       case 'settings':
         return <Settings />;
       case 'files':
@@ -222,6 +227,9 @@ export default function App() {
       currentView={currentView}
       onViewChange={setCurrentView}
       onToggleSidebar={() => setSidebarOpen(o => !o)}
+      availableViews={navItems
+        .filter(item => !item.desktopOnly || isDesktopShell)
+        .map(item => item.view)}
     >
       <div className="h-dvh flex flex-col bg-[var(--color-bg)]">
         <header className="md:hidden h-11 shrink-0 flex items-center gap-2 px-2 border-b border-white/10 bg-[var(--color-surface)]">

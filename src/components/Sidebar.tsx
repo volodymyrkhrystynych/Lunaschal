@@ -1,5 +1,6 @@
 import { useShortcuts } from '../shortcuts/ShortcutProvider';
 import { useIsMobile } from '@/hooks/useMediaQuery';
+import { useDesktopShell } from '@/hooks/useDesktopShell';
 
 type View =
   | 'chat'
@@ -19,6 +20,7 @@ type View =
   | 'paper'
   | 'email'
   | 'practice'
+  | 'piano'
   | 'jobs';
 
 interface SidebarProps {
@@ -32,9 +34,15 @@ interface SidebarProps {
   newspapersNeedAttention?: boolean;
 }
 
-export const navItems: { view: View; label: string; icon: string }[] = [
+export const navItems: {
+  view: View;
+  label: string;
+  icon: string;
+  desktopOnly?: boolean;
+}[] = [
   { view: 'learning', label: 'Learning', icon: '🧠' },
   { view: 'practice', label: 'Practice', icon: '⌨️' },
+  { view: 'piano', label: 'Piano', icon: '🎹', desktopOnly: true },
   { view: 'chat', label: 'Chat', icon: '💬' },
   { view: 'journal', label: 'Journal', icon: '📓' },
   // Lifestyle sits this high because it absorbed the Tasks tab: daily tasks and
@@ -67,6 +75,7 @@ export function Sidebar({
 }: SidebarProps) {
   const { level } = useShortcuts();
   const isMobile = useIsMobile();
+  const isDesktopShell = useDesktopShell();
 
   // On mobile, picking a view also closes the overlay drawer; on desktop the
   // sidebar stays pinned.
@@ -91,40 +100,42 @@ export function Sidebar({
 
   const nav = (
     <nav className="p-2 flex-1 overflow-y-auto">
-      {navItems.map(item => (
-        <button
-          key={item.view}
-          onClick={() => handleNav(item.view)}
-          className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors min-h-[44px] md:min-h-0 ${
-            currentView === item.view
-              ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
-              : 'text-[var(--color-text)] hover:bg-white/10'
-          } ${currentView === item.view && level === 0 ? 'ring-1 ring-[var(--color-primary)]' : ''}`}
-        >
-          <span>{item.icon}</span>
-          <span>{item.label}</span>
-          {item.view === 'lifestyle' &&
-            lifestyleReasons &&
-            lifestyleReasons.length > 0 && (
+      {navItems
+        .filter(item => !item.desktopOnly || isDesktopShell)
+        .map(item => (
+          <button
+            key={item.view}
+            onClick={() => handleNav(item.view)}
+            className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors min-h-[44px] md:min-h-0 ${
+              currentView === item.view
+                ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
+                : 'text-[var(--color-text)] hover:bg-white/10'
+            } ${currentView === item.view && level === 0 ? 'ring-1 ring-[var(--color-primary)]' : ''}`}
+          >
+            <span>{item.icon}</span>
+            <span>{item.label}</span>
+            {item.view === 'lifestyle' &&
+              lifestyleReasons &&
+              lifestyleReasons.length > 0 && (
+                <span
+                  style={{ color: '#f0b429' }}
+                  title={lifestyleReasons.join(' · ')}
+                  aria-label={lifestyleReasons.join(' · ')}
+                >
+                  ❗
+                </span>
+              )}
+            {item.view === 'newspapers' && newspapersNeedAttention && (
               <span
                 style={{ color: '#f0b429' }}
-                title={lifestyleReasons.join(' · ')}
-                aria-label={lifestyleReasons.join(' · ')}
+                title="Today's front pages haven't all synced yet"
+                aria-label="Today's front pages haven't all synced yet"
               >
                 ❗
               </span>
             )}
-          {item.view === 'newspapers' && newspapersNeedAttention && (
-            <span
-              style={{ color: '#f0b429' }}
-              title="Today's front pages haven't all synced yet"
-              aria-label="Today's front pages haven't all synced yet"
-            >
-              ❗
-            </span>
-          )}
-        </button>
-      ))}
+          </button>
+        ))}
     </nav>
   );
 

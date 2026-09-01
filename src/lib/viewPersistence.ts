@@ -23,6 +23,7 @@ export const VIEWS = [
   'paper',
   'email',
   'practice',
+  'piano',
   'jobs',
 ] as const;
 
