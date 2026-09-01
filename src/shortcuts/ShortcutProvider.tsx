@@ -82,6 +82,7 @@ export type AppView =
   | 'paper'
   | 'email'
   | 'practice'
+  | 'piano'
   | 'jobs';
 
 // Must stay in the same order as the sidebar's navItems (src/components/Sidebar
@@ -90,6 +91,7 @@ export type AppView =
 export const VIEW_ORDER: AppView[] = [
   'learning',
   'practice',
+  'piano',
   'chat',
   'journal',
   'lifestyle',
@@ -167,6 +169,7 @@ interface ShortcutProviderProps {
   currentView: AppView;
   onViewChange: (view: AppView) => void;
   onToggleSidebar?: () => void;
+  availableViews?: AppView[];
   children: ReactNode;
 }
 
@@ -174,6 +177,7 @@ export function ShortcutProvider({
   currentView,
   onViewChange,
   onToggleSidebar,
+  availableViews = VIEW_ORDER,
   children,
 }: ShortcutProviderProps) {
   const [level, setLevel] = useState(0);
@@ -317,12 +321,12 @@ export function ShortcutProvider({
       else handled = false;
     } else if (action === 'nav.up' || action === 'nav.down') {
       if (lvl === 0) {
-        const idx = VIEW_ORDER.indexOf(currentViewRef.current);
+        const idx = availableViews.indexOf(currentViewRef.current);
         const next =
           action === 'nav.down'
-            ? Math.min(idx + 1, VIEW_ORDER.length - 1)
+            ? Math.min(idx + 1, availableViews.length - 1)
             : Math.max(idx - 1, 0);
-        if (next !== idx) onViewChange(VIEW_ORDER[next]);
+        if (next !== idx) onViewChange(availableViews[next]);
       } else {
         // Lists move their selection; content-only scopes scroll instead.
         const handler =

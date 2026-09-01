@@ -6,6 +6,7 @@ import urllib.request
 import urllib.error
 import base64
 import binascii
+from collections import deque
 
 # webview and Qt are imported inside _start_window() rather than here: --headless
 # is the production server (ops/run-prod.sh) and must not need a display, a
@@ -24,6 +25,78 @@ ICON_PATH = os.path.join(os.path.dirname(__file__), 'public', 'icons', 'icon.png
 
 class _DesktopApi:
     """Small JS bridge for capabilities QtWebEngine does not provide."""
+
+    def __init__(self):
+        self._midi_lock = threading.Lock()
+        self._midi_events = deque(maxlen=2048)
+        self._midi_stop = threading.Event()
+        self._midi_thread = None
+        self._midi_path = None
+
+    def is_desktop(self) -> bool:
+        return True
+
+    def midi_devices(self) -> list[dict[str, str]]:
+        from backend.piano.midi import list_raw_midi_devices
+
+        return list_raw_midi_devices()
+
+    def midi_open(self, path: str) -> dict:
+        devices = {item['id'] for item in self.midi_devices()}
+        if path not in devices:
+            return {'ok': False, 'error': 'That MIDI device is not available.'}
+        self.midi_close()
+        self._midi_stop.clear()
+        self._midi_path = path
+        self._midi_thread = threading.Thread(
+            target=self._read_midi,
+            args=(path,),
+            daemon=True,
+            name='piano-midi-input',
+        )
+        self._midi_thread.start()
+        return {'ok': True}
+
+    def midi_poll(self) -> dict:
+        with self._midi_lock:
+            events = list(self._midi_events)
+            self._midi_events.clear()
+        return {'events': events, 'connected': self._midi_path is not None}
+
+    def midi_close(self) -> dict:
+        self._midi_stop.set()
+        thread = self._midi_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=0.3)
+        self._midi_thread = None
+        self._midi_path = None
+        return {'ok': True}
+
+    def _read_midi(self, path: str) -> None:
+        from backend.piano.midi import MidiStreamParser
+
+        parser = MidiStreamParser()
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            try:
+                while not self._midi_stop.wait(0.01):
+                    try:
+                        chunk = os.read(fd, 256)
+                    except BlockingIOError:
+                        continue
+                    if not chunk:
+                        continue
+                    with self._midi_lock:
+                        self._midi_events.extend(
+                            event.as_dict() for event in parser.feed(chunk)
+                        )
+            finally:
+                os.close(fd)
+        except OSError as exc:
+            with self._midi_lock:
+                self._midi_events.append({'kind': 'error', 'message': str(exc)})
+        finally:
+            self._midi_path = None
 
     def copy_image(self, data_url: str) -> dict:
         """Put a browser-fetched image on the desktop clipboard."""
