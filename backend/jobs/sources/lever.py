@@ -17,10 +17,30 @@ API_ROOT = 'https://api.lever.co/v0/postings'
 def fetch(params: dict, *, creds: dict | None = None) -> SourceResult:
     slug = clean_slug(params.get('slug'))
     payload = get_json(f'{API_ROOT}/{slug}', params={'mode': 'json'})
-    rows = payload if isinstance(payload, list) else []
-    return SourceResult(
-        jobs=[_normalize(r, slug) for r in rows if isinstance(r, dict)]
-    )
+    rows = [r for r in (payload if isinstance(payload, list) else []) if isinstance(r, dict)]
+    locations = [str(x).strip().lower() for x in (params.get('locations') or []) if str(x).strip()]
+    if locations:
+        rows = [r for r in rows if _in_locations(r, locations)]
+    return SourceResult(jobs=[_normalize(r, slug) for r in rows])
+
+
+def _in_locations(row: dict, wanted: list[str]) -> bool:
+    """Whether a posting sits in one of the locations the board URL named.
+
+    Read from `categories.allLocations` rather than `categories.location`: a
+    posting open in several cities lists them all there and only the first in
+    the singular field, so matching the singular one would drop a Toronto role
+    that happened to lead with New York.
+
+    Substring rather than equality, because the URL says `?location=Toronto`
+    while the posting says `Toronto, ON` — the hosted board matches these the
+    same loose way.
+    """
+    categories = row.get('categories') or {}
+    haystack = [str(x).lower() for x in categories.get('allLocations') or []]
+    if categories.get('location'):
+        haystack.append(str(categories['location']).lower())
+    return any(want in place for place in haystack for want in wanted)
 
 
 def _description(row: dict) -> str:

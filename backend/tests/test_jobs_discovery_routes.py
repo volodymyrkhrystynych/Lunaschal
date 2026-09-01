@@ -279,3 +279,106 @@ def test_the_rationale_releases_its_priority_mark(client, profile, monkeypatch):
         client.post(f'/api/jobs/{job_id}/rationale')
 
     assert priority.active() is False
+
+
+# --------------------------------------------------------------------------
+# The commute radius, end to end
+# --------------------------------------------------------------------------
+
+def _located_job(client, title, location, *, distance_km=None, remote=0,
+                 work_location=''):
+    job_id = client.post('/api/jobs', json={
+        'title': title, 'company': 'Acme', 'location': location,
+        'description': 'We need Python.', 'remote': bool(remote),
+    }).get_json()['id']
+    db = get_db()
+    db.execute('UPDATE jobs SET distance_km=?, work_location=? WHERE id=?',
+               (distance_km, work_location, job_id))
+    db.commit()
+    return job_id
+
+
+def _feed_ids(client):
+    return [item['id'] for item in client.get('/api/jobs/feed').get_json()]
+
+
+def test_the_radius_filters_the_feed_and_keeps_the_row_reviewable(client):
+    """The whole contract in one test: hidden, not deleted, and restorable.
+
+    A rejection here is a *state* with a reason, so the row stays in
+    `/filtered` with a Restore button rather than vanishing — the rule the
+    Filtered-out section exists to honour.
+    """
+    near = _located_job(client, 'Near', 'Toronto, ON', distance_km=1.0)
+    far = _located_job(client, 'Far', 'Vancouver, BC', distance_km=3359.0)
+
+    assert set(_feed_ids(client)) == {near, far}
+
+    client.patch('/api/jobs/profile', json={'maxDistanceKm': 200})
+    client.post('/api/jobs/triage/gate')
+
+    assert _feed_ids(client) == [near]
+    filtered = client.get('/api/jobs/filtered').get_json()
+    assert [item['id'] for item in filtered] == [far]
+    assert 'beyond your 200 km radius' in filtered[0]['triageReason']
+
+
+def test_raising_the_radius_brings_a_posting_back(client):
+    """No row was mutated beyond its verdict, so widening re-reveals it.
+
+    `preference_keys` resets every cached verdict on a preference change, which
+    is what makes the radius a live rule rather than a one-way filter.
+    """
+    far = _located_job(client, 'Far', 'Ottawa, ON', distance_km=352.0)
+    client.patch('/api/jobs/profile', json={'maxDistanceKm': 200})
+    client.post('/api/jobs/triage/gate')
+    assert far not in _feed_ids(client)
+
+    client.patch('/api/jobs/profile', json={'maxDistanceKm': 500})
+    client.post('/api/jobs/triage/gate')
+    assert far in _feed_ids(client)
+
+
+def test_the_radius_keeps_remote_and_unplaceable_postings(client):
+    """The two exemptions, on the feed rather than in a unit test.
+
+    A fully-remote posting is in range at any radius, and a location nothing
+    could read is missing information rather than a distant job.
+    """
+    remote = _located_job(client, 'Remote', 'Remote - Canada', remote=1,
+                          work_location='remote')
+    unknown = _located_job(client, 'Unknown', 'N/A')
+    far = _located_job(client, 'Far', 'Bengaluru, India')
+
+    client.patch('/api/jobs/profile', json={'maxDistanceKm': 200})
+    client.post('/api/jobs/triage/gate')
+
+    feed = set(_feed_ids(client))
+    assert remote in feed and unknown in feed
+    assert far not in feed
+
+
+def test_clearing_the_radius_restores_the_unfiltered_feed(client):
+    far = _located_job(client, 'Far', 'Vancouver, BC', distance_km=3359.0)
+    client.patch('/api/jobs/profile', json={'maxDistanceKm': 200})
+    client.post('/api/jobs/triage/gate')
+    assert far not in _feed_ids(client)
+
+    client.patch('/api/jobs/profile', json={'maxDistanceKm': None})
+    client.post('/api/jobs/triage/gate')
+    assert far in _feed_ids(client)
+
+
+def test_a_preference_change_resets_cached_triage_verdicts(client):
+    """Previously untested, and the radius depends on it entirely."""
+    job_id = make_job(client, 'Engineer')
+    db = get_db()
+    db.execute("UPDATE jobs SET triage_state='kept', triage_fit='strong' WHERE id=?",
+               (job_id,))
+    db.commit()
+
+    client.patch('/api/jobs/profile', json={'maxDistanceKm': 200})
+    state = db.execute('SELECT triage_state, triage_fit FROM jobs WHERE id=?',
+                       (job_id,)).fetchone()
+    assert state['triage_state'] == 'pending'
+    assert state['triage_fit'] == ''

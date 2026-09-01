@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 import requests
 
 from backend.htmltext import strip_html
@@ -14,7 +14,33 @@ LOCALE_RE = re.compile(r'^[a-z]{2}(?:-[A-Z]{2})?$')
 MAX_POSTINGS = 200
 
 
+# Facet parameters are forwarded by *name*, because the name varies per tenant
+# and is the tenant's own — but only names that are about place, which is what
+# this feature scopes on. An allowlist of exact names would not survive that
+# variation (`locations`, `locationCountry`, `Location_Country`,
+# `LocationCountry` are four spellings of two facets across the registered
+# boards); forwarding everything would send Workday tracking junk as a facet
+# and get an empty board back. Matching on the word is what fits both.
+_FACET_NAME_RE = re.compile(r'location|country', re.IGNORECASE)
+# Facet ids are opaque Workday hashes; anything else is not one.
+_FACET_VALUE_RE = re.compile(r'^[A-Za-z0-9_-]{1,128}$')
+
+
 def parse_board_url(url: str) -> dict:
+    """Host, tenant, site — and the facets the URL already scopes the board to.
+
+    Twenty-nine of the thirty registered Workday boards carry a location facet
+    in their query string, `?locationCountry=a30a87ed…` being Workday's own
+    Canada id. Dropping it meant fetching the board worldwide, which is why
+    boards curated to Canada were returning Mumbai and Taipei postings — and,
+    because `MAX_POSTINGS` caps the walk at 200, a global board could exhaust
+    its budget before reaching a Canadian row at all.
+
+    The facet *parameter name* varies by tenant (`locationCountry`,
+    `Location_Country`, `LocationCountry`, `locations`), which is exactly why
+    they are forwarded as given rather than normalised: the name in the URL is
+    the name the tenant's own board uses.
+    """
     parsed = urlsplit(url if '://' in url else f'https://{url}')
     host = (parsed.hostname or '').lower()
     if parsed.scheme != 'https' or not HOST_RE.fullmatch(host):
@@ -26,7 +52,25 @@ def parse_board_url(url: str) -> dict:
     site = segments[0] if segments else ''
     if not site or not SLUG_RE.fullmatch(site):
         raise SourceError('Could not identify the Workday career-site name from that URL.')
-    return {'host': host, 'tenant': tenant, 'site': site}
+
+    facets: dict[str, list[str]] = {}
+    search_text = ''
+    for key, values in parse_qs(parsed.query, keep_blank_values=False).items():
+        if key == 'q':
+            search_text = values[0].strip()[:128]
+            continue
+        if not _FACET_NAME_RE.search(key):
+            continue
+        clean = [v for v in values if _FACET_VALUE_RE.fullmatch(v)]
+        if clean:
+            facets[key] = clean
+
+    out = {'host': host, 'tenant': tenant, 'site': site}
+    if facets:
+        out['facets'] = facets
+    if search_text:
+        out['searchText'] = search_text
+    return out
 
 
 def fetch(params: dict, *, creds: dict | None = None) -> SourceResult:
@@ -35,12 +79,17 @@ def fetch(params: dict, *, creds: dict | None = None) -> SourceResult:
         raise SourceError('Invalid Workday board parameters.')
     root = f'https://{host}/wday/cxs/{tenant}/{site}'
     headers = {'User-Agent': DESKTOP_UA, 'Accept': 'application/json'}
+    # The facets the registered URL already chose. Unlike the company boards,
+    # this filter is applied by Workday rather than here, so a scoped board
+    # spends its 200-posting budget on postings that are actually in scope.
+    applied = {k: list(v) for k, v in (params.get('facets') or {}).items()}
+    search_text = str(params.get('searchText') or '')
     rows = []
     for offset in range(0, MAX_POSTINGS, 20):
         try:
             response = requests.post(
-                f'{root}/jobs', json={'appliedFacets': {}, 'limit': 20,
-                                      'offset': offset, 'searchText': ''},
+                f'{root}/jobs', json={'appliedFacets': applied, 'limit': 20,
+                                      'offset': offset, 'searchText': search_text},
                 headers=headers, timeout=REQUEST_TIMEOUT,
             )
             response.raise_for_status(); payload = response.json()

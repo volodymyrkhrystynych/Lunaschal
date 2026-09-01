@@ -1400,6 +1400,10 @@ CREATE TABLE IF NOT EXISTS job_profile (
     remote_only INTEGER NOT NULL DEFAULT 0,
     avoid_clearance_roles INTEGER NOT NULL DEFAULT 0,
     soft_salary_floor REAL,
+    -- Commute radius in kilometres from the anchor in `backend/jobs/distance.py`.
+    -- Nullable like soft_salary_floor: NULL is "no restriction", which is a
+    -- different thing from a radius of 0.
+    max_distance_km REAL,
     soft_preferences TEXT NOT NULL DEFAULT '',
     company_blacklist TEXT,
     created_at INTEGER NOT NULL,

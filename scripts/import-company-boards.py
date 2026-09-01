@@ -70,7 +70,11 @@ def classify(name: str, url: str) -> dict:
             clean_slug(slug)
         except SourceError:
             continue
-        return {'company': name, 'url': url, 'kind': kind, 'slug': slug}
+        # Most of these URLs are a company's *Toronto* careers page and say so
+        # in the query string. Keeping that scope is the difference between
+        # syncing one office and syncing the whole global board.
+        return {'company': name, 'url': url, 'kind': kind, 'slug': slug,
+                'params': {'slug': slug, **resolve.scope_filters(kind, url)}}
 
     # Workday is listed as unsupported by `resolve.py` because it is not one of
     # the four `job_searches.kind` values — that column has a baked-in CHECK
@@ -168,12 +172,62 @@ def commit(rows: list[dict], *, interval_hours: int, enabled: bool) -> dict:
             ' interval_hours, created_at, updated_at)'
             ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             (str(ULID()), row['kind'], row['company'],
-             json.dumps({'slug': row['slug']}), 1 if enabled else 0,
-             interval_hours, now, now),
+             json.dumps(row.get('params') or {'slug': row['slug']}),
+             1 if enabled else 0, interval_hours, now, now),
         )
         added += 1
     db.commit()
     return {'added': added, 'alreadyPresent': len(rows) - added}
+
+
+def refresh_filters(rows: list[dict]) -> dict:
+    """Re-scope saved searches that were registered before scope was kept.
+
+    The 96 boards imported from this file kept only `{"slug": …}`, so a board
+    the URL had scoped to one office was synced worldwide — 365 of the 452 rows
+    on the ten scoped Greenhouse boards were for offices the URL excluded.
+    `job_searches` stores no URL of its own, so this file is the only place the
+    original scope still exists, which is why the backfill lives here rather
+    than in a migration.
+
+    Matched on `(kind, slug)`, the same key `commit` dedupes on. Only the scope
+    keys are written; the slug and everything else on the row is left alone,
+    and a board whose URL carries no scope is not touched at all — an empty
+    filter set means "whole board", and writing it would be indistinguishable
+    from having never run this.
+
+    Workday boards are absent on purpose: their URL is on their own row, so
+    `_ensure_workday_board_facets` re-derives them at startup with no file.
+    """
+    import json as json_mod
+
+    from backend.db.connection import get_db
+
+    db = get_db()
+    by_slug = {}
+    for row in rows:
+        if row['kind'] == 'workday' or not row.get('params'):
+            continue
+        scope = {k: v for k, v in row['params'].items() if k != 'slug'}
+        if scope:
+            by_slug[(row['kind'], row['slug'].lower())] = scope
+
+    updated = 0
+    for row in db.execute('SELECT id, kind, params FROM job_searches').fetchall():
+        try:
+            params = json_mod.loads(row['params'] or '{}') or {}
+        except ValueError:
+            continue
+        if not isinstance(params, dict):
+            continue
+        scope = by_slug.get((row['kind'], (params.get('slug') or '').lower()))
+        if not scope or all(params.get(k) == v for k, v in scope.items()):
+            continue
+        db.execute('UPDATE job_searches SET params=? WHERE id=?',
+                   (json_mod.dumps({**params, **scope}), row['id']))
+        updated += 1
+    db.commit()
+    return {'updated': updated, 'scoped': len(by_slug)}
 
 
 def main() -> int:
@@ -185,6 +239,9 @@ def main() -> int:
     parser.add_argument('--disabled', action='store_true',
                         help='create the sources switched off, to enable by hand')
     parser.add_argument('--show-skipped', action='store_true')
+    parser.add_argument('--refresh-filters', action='store_true',
+                        help='re-apply office/location scope to searches that '
+                             'already exist, without adding any')
     args = parser.parse_args()
 
     if not args.doc.exists():
@@ -220,6 +277,10 @@ def main() -> int:
                     enabled=not args.disabled)
     print(f"\nAdded {result['added']} saved searches "
           f"({result['alreadyPresent']} already present).")
+    if args.refresh_filters:
+        scope = refresh_filters(syncable)
+        print(f"Re-scoped {scope['updated']} existing searches "
+              f"({scope['scoped']} boards in this file carry a scope).")
     return 0
 
 

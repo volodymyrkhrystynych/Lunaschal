@@ -254,3 +254,53 @@ def test_the_route_accepts_a_bare_hostname(client, monkeypatch, board_answers):
 
 def test_the_route_needs_a_url(client):
     assert client.post('/api/jobs/searches/resolve', json={}).status_code == 400
+
+
+# --------------------------------------------------------------------------
+# scope_filters: the office/location scope a careers URL already carries
+# --------------------------------------------------------------------------
+
+def test_a_greenhouse_embed_url_yields_its_office():
+    assert resolve.scope_filters(
+        'greenhouse',
+        'https://job-boards.greenhouse.io/embed/job_board?for=stripe&offices%5B%5D=87006'
+    ) == {'offices': ['87006']}
+
+
+def test_several_offices_are_all_kept():
+    """Take-Two registers two, and dropping either would hide a real office."""
+    assert resolve.scope_filters(
+        'greenhouse',
+        'https://job-boards.greenhouse.io/taketwo?offices%5B%5D=65538&offices%5B%5D=73331'
+    ) == {'offices': ['65538', '73331']}
+
+
+def test_a_lever_url_yields_its_location():
+    assert resolve.scope_filters(
+        'lever', 'https://jobs.lever.co/hashtagpaid/?location=Toronto'
+    ) == {'locations': ['Toronto']}
+
+
+def test_a_url_with_no_scope_yields_nothing():
+    """The common case — 96 of the registered boards are bare slugs."""
+    assert resolve.scope_filters(
+        'greenhouse', 'https://job-boards.greenhouse.io/ada18') == {}
+
+
+def test_a_department_filter_is_not_treated_as_a_location():
+    """Clutch scopes by team. That is a different intent and is not applied."""
+    assert resolve.scope_filters(
+        'greenhouse',
+        'https://job-boards.greenhouse.io/clutch/?departments%5B%5D=4004505004'
+    ) == {}
+
+
+def test_ashby_is_declined_because_its_filter_cannot_be_honoured():
+    """`?locationId=<uuid>` names an id the posting API never returns.
+
+    Storing it would look configured and filter nothing, which is worse than
+    an honestly unscoped board.
+    """
+    assert resolve.scope_filters(
+        'ashby', 'https://jobs.ashbyhq.com/alan?locationId=669a4aa2-35f5-4e13'
+    ) == {}

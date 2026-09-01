@@ -23,8 +23,6 @@ describe('ProfileEditor', () => {
       relocationWillingness: '',
       securityClearance: '',
       eeoAnswers: '',
-      allowedLocations: '',
-      remoteOnly: false,
       avoidClearanceRoles: false,
       softSalaryFloor: null,
       softPreferences: '',

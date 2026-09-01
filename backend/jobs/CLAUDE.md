@@ -215,10 +215,103 @@ expensive part, so that verdict carries two more fields for ~nothing:
 
 `_store_inferred_distance` then fills `distance_km` **only where it is still
 NULL**, guarded in SQL rather than in Python so a re-triage racing a re-sync
-cannot win. Precision is `'inferred'`, the weakest of the four and the only one
+cannot win. The complement of that guard lives in `sync.recompute_distances`,
+which must **not clear an `inferred` reading**: it recomputes from the same
+`location` field the model was called in for, so it produces None for exactly
+those rows — and since the writer only fills a NULL, an unguarded overwrite
+could only be undone by a re-triage. It also has to look inside Workday's
+`raw = {'listing', 'detail'}` wrapper for coordinates rather than at the top
+level alone. Precision is `'inferred'`, the weakest of the four and the only one
 that did not come from a structured field. A row banded as remote by the sort
 is one where `work_location` did _not_ contradict the flag, so the hybrid case
 sorts at its real distance instead of hiding at the top.
+
+### The commute radius
+
+`preferences.hard_gate` decides location in exactly one place: a
+`maxDistanceKm` on the profile, rejecting a posting only when
+`distance.verdict` returns **`out_of_range`**. The verdict is three-valued and
+that is the whole design — `unknown` fails open, because a location the
+gazetteer could not read is missing information about a posting, not a verdict
+on it. Fully remote is exempt, read from the structured `remote` +
+`work_location` pair the distance band uses rather than searching prose.
+
+**It replaced `remoteOnly` and `allowedLocations`, which are gone from the
+gate and the profile UI.** Both decided geography with string operations — one
+searching the body for "remote"/"on site" phrases, the other substring-matching
+a comma-separated list against the location string — so neither could tell that
+"Mississauga" is 24 km out and "Bengaluru, India" is not. Three overlapping
+location gates is also how a posting gets rejected for a reason the user cannot
+predict. **The two columns are kept** (`job_profile.allowed_locations`,
+`job_profile.remote_only`), unread: this codebase's migrations are additive and
+nothing is destroyed, but a value left in either must no longer filter, or a
+stale setting would keep silently hiding postings. A test pins that.
+
+Not to be confused with the **per-search** `remoteOnly`, which is alive and
+unrelated: it is an Adzuna query parameter in `job_searches.params`, read by
+`sync.matches_hunt` and `sources/adzuna.py`, and scopes one saved search rather
+than gating every posting.
+
+Two things follow from putting it here rather than in the feed's `WHERE`. The
+rejection is a **state with a reason**, so it lands in the existing
+`Filtered out (N)` section with a Restore button and no new API surface. And
+`preference_keys` already resets every cached verdict when a preference
+changes, so raising the radius re-reveals rows with no bespoke invalidation.
+
+**A region can be out of range without having a distance.** `_FAR_REGIONS`
+names countries, provinces and US states with no point within 200 km of the
+anchor — a _bound_, not a centroid, which is why it coexists with the rule that
+countries have no point worth measuring. It never produces a `Reading` and
+never reaches `distance_km`. `ontario`, `canada`, `new york` and
+`pennsylvania` are deliberately absent: each contains points that _are_ in
+range (Buffalo and Niagara Falls NY are ~130 km out), so the region says
+nothing. Measured on the live feed it settles 425 of the 744 rows the
+gazetteer had left unplaced.
+
+`tokenize` also folds diacritics now. `[^a-z0-9]+` treated an accent as a
+separator, so `Montréal` split into `montr` + `al` and never matched — as did
+`São Paulo`, `Bogotá` and `Québec`. `paris` joined `london` and `cambridge` in
+`_AMBIGUOUS` for the same reason those are there: Paris, Ontario is ~95 km out
+and would be _in_ range.
+
+### The scope a registered careers URL already carries
+
+Almost every URL in [docs/toronto-tech-companies.md](../../docs/toronto-tech-companies.md)
+was collected from a company's **Toronto** careers page, and about a third say
+so in the query string — `?offices[]=87006` is Stripe's Toronto office,
+`?locationCountry=a30a87ed…` is Workday's Canada facet. Registration reduced
+each to a bare slug, so a board the user had scoped to one city was synced
+worldwide. On the ten scoped Greenhouse boards that was 365 of 452 rows.
+
+`resolve.scope_filters` reads the scope out of the URL at registration;
+`workday.parse_board_url` returns its facets alongside host/tenant/site. Then:
+
+- **greenhouse** filters client-side on `offices[].id` **and `child_ids`** —
+  the offices are a tree and matching only the exact id drops postings filed
+  against a child. Filtering on the _office_ rather than the location text is
+  the point: it correctly keeps the Toronto postings whose location reads
+  `N/A`, `TOR` or `CA-Toronto, CA-Montreal, CA-Vancouver`, none of which any
+  gazetteer places.
+- **lever** filters on `categories.allLocations`, not the singular
+  `categories.location` — a role open in several cities lists them all there.
+- **workday** sends `appliedFacets`, so the filter is applied by Workday. That
+  also matters against `MAX_POSTINGS = 200`: an unfiltered global board could
+  exhaust its budget before reaching a Canadian row. Facet parameter _names_
+  are forwarded as written (`locations`, `locationCountry`, `Location_Country`
+  and `LocationCountry` are four spellings across the registered boards), but
+  only names containing "location" or "country" — forwarding everything would
+  hand Workday a tracking blob as a facet, and an unrecognised facet returns an
+  empty board.
+- **ashby is deliberately unscoped.** Its boards filter with
+  `?locationId=<uuid>` and the posting API returns no location id, so the
+  filter cannot be honoured. Storing it would look configured and filter
+  nothing.
+
+Backfilling the two tables differs because only one of them kept the URL.
+`workday_boards.url` is on the row, so `_ensure_workday_board_facets`
+re-derives the facets at startup with no network. `job_searches` stores no URL,
+so the doc is the only place that scope still exists — hence
+`scripts/import-company-boards.py --refresh-filters`.
 
 The sort is `GET /feed?sort=distance`, and it replaces only the **inner** key:
 the fit bucket stays primary because it is what the client groups cards by, and

@@ -1,3 +1,4 @@
+import json
 import os
 import random
 import re
@@ -134,6 +135,7 @@ def init_db() -> None:
     _ensure_job_settings(db)
     _ensure_job_triage_columns(db)
     _ensure_job_distance_columns(db)
+    _ensure_workday_board_facets(db)
     _ensure_backup_settings(db)
     _ensure_files_settings(db)
     _ensure_llm_generation_settings(db)
@@ -1029,6 +1031,11 @@ def _ensure_job_settings(db: sqlite3.Connection) -> None:
             db.execute(f'ALTER TABLE job_profile ADD COLUMN {field} INTEGER NOT NULL DEFAULT 0')
     if 'soft_salary_floor' not in profile_cols:
         db.execute('ALTER TABLE job_profile ADD COLUMN soft_salary_floor REAL')
+    # Nullable rather than NOT NULL DEFAULT 0, because NULL is load-bearing:
+    # it means "no radius", where 0 would mean "nothing further than the anchor
+    # itself" and would empty the feed.
+    if 'max_distance_km' not in profile_cols:
+        db.execute('ALTER TABLE job_profile ADD COLUMN max_distance_km REAL')
     db.commit()
 
     app_cols = {r[1] for r in db.execute('PRAGMA table_info(applications)')}
@@ -1152,6 +1159,52 @@ def _ensure_job_distance_columns(db: sqlite3.Connection) -> None:
         'CREATE INDEX IF NOT EXISTS idx_jobs_distance '
         'ON jobs(distance_km) WHERE dismissed = 0'
     )
+    db.commit()
+
+
+def _ensure_workday_board_facets(db: sqlite3.Connection) -> None:
+    """Re-derive each Workday board's location facets from its stored URL.
+
+    `workday.parse_board_url` used to keep only host/tenant/site, so a board
+    registered as
+    `abbott.wd5.myworkdayjobs.com/abbottcareers?Location_Country=a30a87ed…`
+    was polled with `appliedFacets: {}` and returned the whole global board —
+    which is why boards curated to Canada were producing Mumbai and Taipei
+    postings, and why a large board could spend all 200 of its `MAX_POSTINGS`
+    before reaching a Canadian row.
+
+    The URL is on the row, so this needs no re-registration and no network: the
+    scope the user originally chose is re-read from what they typed. Idempotent
+    because it is derived, not accumulated — re-running it recomputes the same
+    params. A row whose params already match is left alone so `updated_at` does
+    not churn, and a URL that no longer parses is skipped rather than failing
+    startup for every other board.
+    """
+    from backend.jobs.sources import workday
+
+    try:
+        rows = db.execute('SELECT id, url, params FROM workday_boards').fetchall()
+    except sqlite3.OperationalError:
+        return  # Table predates this feature; schema.sql creates it above.
+
+    for row in rows:
+        try:
+            derived = workday.parse_board_url(row['url'] or '')
+        except Exception:
+            continue
+        if not derived.get('facets') and not derived.get('searchText'):
+            continue
+        try:
+            current = json.loads(row['params'] or '{}')
+        except ValueError:
+            current = {}
+        if not isinstance(current, dict):
+            current = {}
+        if current.get('facets') == derived.get('facets') and \
+                current.get('searchText', '') == derived.get('searchText', ''):
+            continue
+        db.execute('UPDATE workday_boards SET params=? WHERE id=?',
+                   (json.dumps({**current, **derived}), row['id']))
     db.commit()
 
 

@@ -47,6 +47,20 @@ def _json_or_none(value):
     return json.dumps(value) if value else None
 
 
+def _coerce_float(value):
+    """A number for a nullable REAL column, or None to clear it.
+
+    Blank, null and unparseable all clear rather than raise: the client sends
+    whatever is in a text field, and a typo there should not 500 a profile save.
+    """
+    if value in (None, ''):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 # --------------------------------------------------------------------------
 # Profile
 # --------------------------------------------------------------------------
@@ -69,8 +83,6 @@ def update_profile():
         'relocationWillingness': 'relocation_willingness',
         'securityClearance': 'security_clearance',
         'eeoAnswers': 'eeo_answers',
-        'allowedLocations': 'allowed_locations',
-        'remoteOnly': 'remote_only',
         'avoidClearanceRoles': 'avoid_clearance_roles',
         'softSalaryFloor': 'soft_salary_floor',
         'softPreferences': 'soft_preferences',
@@ -83,11 +95,18 @@ def update_profile():
         updates['links'] = _json_or_none(body['links'])
     if 'companyBlacklist' in body:
         updates['company_blacklist'] = _json_or_none(body['companyBlacklist'])
+    # Kept out of `field_map` deliberately: that loop writes `body[camel] or ''`,
+    # which would store the empty string for a posted 0 or null and make "no
+    # radius" indistinguishable from "0 km" on a REAL column. Here an empty
+    # value clears the column to NULL and a number is stored as a number.
+    if 'maxDistanceKm' in body:
+        updates['max_distance_km'] = _coerce_float(body['maxDistanceKm'])
     db = get_db()
     build_update(db, 'job_profile', updates, 'id=1')
     preference_keys = {
-        'allowedLocations', 'remoteOnly', 'avoidClearanceRoles',
+        'avoidClearanceRoles',
         'softSalaryFloor', 'softPreferences', 'companyBlacklist',
+        'maxDistanceKm',
     }
     if preference_keys.intersection(body):
         # A hard gate or annotation changed, so cached verdicts no longer
@@ -1425,6 +1444,13 @@ def create_search():
             sources.clean_slug(params.get('slug'))
         except sources.SourceError as e:
             return jsonify({'error': str(e)}), 400
+
+    # A careers URL usually scopes the board to one office already
+    # (`?offices[]=87006` is Stripe's Toronto). Derived here rather than
+    # accepted from the client, so the filter that decides what gets synced
+    # comes from the URL the user actually registered.
+    if body.get('url'):
+        params = {**resolve.scope_filters(kind, str(body['url'])), **params}
 
     now = _now()
     search_id = str(ULID())

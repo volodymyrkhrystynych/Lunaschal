@@ -1323,12 +1323,13 @@ export interface JobProfileContact {
   relocationWillingness: string;
   securityClearance: string;
   eeoAnswers: string;
-  allowedLocations: string;
-  remoteOnly: boolean;
   avoidClearanceRoles: boolean;
   softSalaryFloor: number | null;
   softPreferences: string;
   companyBlacklist: string[];
+  /** Commute radius in km from the anchor in `backend/jobs/distance.py`.
+   *  null means no restriction, which is a different thing from 0. */
+  maxDistanceKm: number | null;
 }
 
 export interface ProfileBullet {
@@ -4213,6 +4214,10 @@ export const api = {
         label?: string;
         params: Record<string, unknown>;
         intervalHours?: number;
+        /** The careers URL this board was resolved from. The backend reads any
+         *  office/location scope out of its query string; it is never trusted
+         *  from the client as a params value. */
+        url?: string;
       }) => post<JobSearch>('/api/jobs/searches', data),
       update: (
         id: string,

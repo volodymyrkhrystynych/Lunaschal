@@ -29,7 +29,6 @@ def load_profile(db) -> dict:
     profile = row_to_dict(row) if row else {}
     profile['links'] = _json_list(profile.get('links'))
     profile['companyBlacklist'] = _json_list(profile.get('companyBlacklist'))
-    profile['remoteOnly'] = bool(profile.get('remoteOnly'))
     profile['avoidClearanceRoles'] = bool(profile.get('avoidClearanceRoles'))
 
     roles = []
