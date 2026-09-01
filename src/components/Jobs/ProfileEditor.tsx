@@ -16,6 +16,23 @@ function Field({
   multiline?: boolean;
 }) {
   const [draft, setDraft] = useState(value);
+  // `useState(value)` seeds the draft once and never looks at `value` again,
+  // so a value that arrives *after* the first render never reaches the input.
+  // That is the normal case here, not an edge one: the persisted query cache
+  // paints immediately on reload and the real profile lands on the refetch a
+  // moment later, so a saved setting rendered as blank and stayed blank. The
+  // silent half was worse — blurring a stale draft commits it, writing the
+  // stale value back over the real one.
+  //
+  // Resynchronised during render rather than in an effect: React re-runs the
+  // component immediately on this `setState`, so the input never paints the
+  // stale value, and an in-progress edit survives because the reset is gated
+  // on `value` itself changing, not on every render.
+  const [lastValue, setLastValue] = useState(value);
+  if (value !== lastValue) {
+    setLastValue(value);
+    setDraft(value);
+  }
   const Tag = multiline ? 'textarea' : 'input';
 
   return (
