@@ -10,6 +10,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Development happens on two machines: a desktop (comfortable, full mouse/keyboard) and a GPD Pocket 2 — a low-powered handheld with no usable mouse. On the Pocket 2, manual click-through testing is slow and painful, so the workflow leans on branches and automated tests so changes can be verified without a hands-on walkthrough.
 
+### Work in the `claude` worktree
+
+- **Do the work in the git worktree named `claude`, not in the primary checkout.** The user keeps `/home/volodya/workspace/Lunaschal` for their own editing; agent work belongs in a separate worktree so the two never fight over the same working tree.
+- It lives at `.claude/worktrees/claude`, on a long-lived branch also called `claude`. If it's missing, recreate it: `git worktree add .claude/worktrees/claude -b claude main`.
+- **Every time you move into it, bring it up to date with `main` first** — `git fetch` if there's a remote, then rebase or merge `main` into the worktree's branch before writing code. A worktree left over from an earlier session is usually stale; starting from stale `main` is how a change gets built against code that's already been replaced.
+- If the worktree has uncommitted changes from previous work, say so and ask before rebasing or resetting anything.
+
 ### Branch per feature
 
 - **Whenever the user asks for a new feature, start it on a fresh branch** — don't build features on `main`. Create the branch before writing code.

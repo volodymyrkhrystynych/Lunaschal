@@ -59,6 +59,20 @@ Development happens on both a desktop and a low-powered, keyboard-first GPD
 Pocket 2. Favor automated verification over asking the user to perform manual UI
 click-through testing.
 
+### Prefer the `codex` worktree
+
+- Prefer doing Codex work in the git worktree whose directory is named `codex`,
+  rather than in the user's primary checkout. This is the Codex-specific
+  equivalent of references to the `claude` worktree in `CLAUDE.md`.
+- If the `codex` worktree does not exist, create it when the approved branch
+  workflow permits doing so.
+- Whenever moving into the `codex` worktree, bring its branch up to date with
+  `main` before making changes. Fetch first when a remote is available, then
+  rebase or merge the current `main` into the worktree branch as appropriate.
+- Inspect the worktree before synchronizing it. If it contains uncommitted work,
+  preserve it and ask the user before rebasing, resetting, or otherwise changing
+  that work.
+
 ### Branch per feature
 
 - For a new feature, do not implement directly on `main`.
