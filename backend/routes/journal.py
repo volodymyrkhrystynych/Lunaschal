@@ -100,6 +100,43 @@ def _enrich_with_fic_refs(db, dicts: list[dict]) -> list[dict]:
     return dicts
 
 
+def _enrich_with_idea_refs(db, dicts: list[dict]) -> list[dict]:
+    """Attach the idea a dictated entry belongs to, when it still exists.
+
+    Read through a join rather than trusted from the column: `idea_id` is
+    cleared when an idea is deleted, but only where foreign keys are on for that
+    connection — and a link pill that opens a 404 is worse than no pill. The
+    title falls back to the idea's first line the way the Ideas list does
+    (backend/research/idea_text.py), so an idea whose title has not been
+    generated yet is still recognisable here.
+    """
+    if not dicts:
+        return dicts
+    from backend.research.idea_text import display_title
+
+    ids = [d['id'] for d in dicts if d.get('ideaId')]
+    titles: dict[str, str] = {}
+    if ids:
+        placeholders = ','.join('?' * len(ids))
+        rows = db.execute(
+            f'SELECT i.id, i.title, i.raw_content, i.content FROM ideas i'
+            f' JOIN journal_entries je ON je.idea_id = i.id'
+            f' WHERE je.id IN ({placeholders})',
+            ids,
+        ).fetchall()
+        titles = {r['id']: display_title(dict(r)) for r in rows}
+    for d in dicts:
+        idea_id = d.get('ideaId')
+        if idea_id and idea_id in titles:
+            d['ideaTitle'] = titles[idea_id]
+        else:
+            # The idea is gone (or there never was one): drop the dangling id
+            # too, so the client has one thing to test rather than two.
+            d['ideaId'] = None
+            d['ideaTitle'] = None
+    return dicts
+
+
 @bp.get('')
 def list_entries():
     limit = min(int(request.args.get('limit', 50)), 100)
@@ -121,7 +158,10 @@ def list_entries():
         ).fetchall()
     dicts = [row_to_dict(r) for r in rows]
     return jsonify(_enrich_with_attachments(
-        db, _enrich_with_fic_refs(db, _enrich_with_curated_tags(db, dicts))
+        db,
+        _enrich_with_fic_refs(
+            db, _enrich_with_idea_refs(db, _enrich_with_curated_tags(db, dicts))
+        ),
     ))
 
 
@@ -143,7 +183,10 @@ def search():
     ).fetchall()
     dicts = sorted([row_to_dict(r) for r in rows], key=lambda d: id_rank.get(d['id'], 0))
     return jsonify(_enrich_with_attachments(
-        db, _enrich_with_fic_refs(db, _enrich_with_curated_tags(db, dicts))
+        db,
+        _enrich_with_fic_refs(
+            db, _enrich_with_idea_refs(db, _enrich_with_curated_tags(db, dicts))
+        ),
     ))
 
 
@@ -153,7 +196,9 @@ def get_entry(id):
     row = db.execute('SELECT * FROM journal_entries WHERE id=?', (id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(_enrich_with_attachments(db, [row_to_dict(row)])[0])
+    return jsonify(_enrich_with_attachments(
+        db, _enrich_with_idea_refs(db, [row_to_dict(row)])
+    )[0])
 
 
 def create_journal_entry(
@@ -409,7 +454,10 @@ def merge_entry(id):
         db.execute('SELECT * FROM journal_entries WHERE id=?', (target_id,)).fetchone()
     )
     return jsonify(_enrich_with_attachments(
-        db, _enrich_with_fic_refs(db, _enrich_with_curated_tags(db, [merged]))
+        db,
+        _enrich_with_fic_refs(
+            db, _enrich_with_idea_refs(db, _enrich_with_curated_tags(db, [merged]))
+        ),
     )[0])
 
 
@@ -680,6 +728,16 @@ def _client_id(value: str | None) -> str | None:
     return value
 
 
+def _link_recording_idea(entry_id: str, idea_id: str, repo_id=None) -> None:
+    """Open the idea half of an Ideas-tab recording and point the entry at it."""
+    from backend.routes.ideas import create_recording_idea
+
+    create_recording_idea(idea_id, repo_id)
+    db = get_db()
+    db.execute('UPDATE journal_entries SET idea_id=? WHERE id=?', (idea_id, entry_id))
+    db.commit()
+
+
 @bp.post('/recordings')
 def create_recording_entry():
     """Save a recording as a journal entry, optionally transcribing it.
@@ -702,10 +760,16 @@ def create_recording_entry():
     already hold. The attachment check comes *first*, before the file is read,
     so a replay doesn't stream a hundred megabytes to disk to discover it was
     already there.
+
+    `ideaId` is the Ideas tab's Record button, where the same clip is also an
+    idea. One upload, one transcription, two rows: the entry below and an empty
+    idea, linked by `journal_entries.idea_id` and filled in together when the
+    transcript lands. That id is the client's too, for the same replay reason.
     """
     try:
         entry_id = _client_id(request.form.get('id'))
         attachment_id = _client_id(request.form.get('attachmentId'))
+        idea_id = _client_id(request.form.get('ideaId'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -715,6 +779,12 @@ def create_recording_entry():
     if attachment_id:
         existing = _load_attachment(attachment_id)
         if existing is not None:
+            if idea_id:
+                # Converge rather than assume: the first call could have stored
+                # the file and died before writing the idea. Both statements are
+                # idempotent, so a normal replay changes nothing.
+                _link_recording_idea(existing['entry_id'], idea_id,
+                                     request.form.get('repoId'))
             if transcribe:
                 _queue_attachment_transcription(
                     existing, into_entry=True, skip_completed=True
@@ -761,10 +831,16 @@ def create_recording_entry():
         message, status = failure
         return jsonify({'error': message}), status
 
+    if idea_id:
+        # After the file, not before: a rejected upload rolls the entry back,
+        # and an idea left pointing at nothing would be a permanently empty row
+        # in the backlog with no recording to explain it.
+        _link_recording_idea(entry_id, idea_id, request.form.get('repoId'))
+
     _notify_subscribers(entry_id)
     if transcribe:
         _queue_attachment_transcription(_load_attachment(attachment['id']), into_entry=True)
-    return jsonify({'id': entry_id, 'attachment': attachment}), 201
+    return jsonify({'id': entry_id, 'attachment': attachment, 'ideaId': idea_id}), 201
 
 
 @bp.patch('/attachments/<attachment_id>')
@@ -986,6 +1062,24 @@ def _do_attachment_caption(path: str, name: str) -> str:
     return caption_image(p, hint=name)
 
 
+def _deliver_idea_transcript(entry_id: str, text: str) -> None:
+    """Hand the transcript to the idea this entry was dictated for, if any.
+
+    The link is re-read here rather than captured when the transcription was
+    queued: minutes can pass, and an idea deleted in between should take no
+    further writes. `apply_recording_transcript` is guarded on the same thing
+    from its side.
+    """
+    row = get_db().execute(
+        'SELECT idea_id FROM journal_entries WHERE id=?', (entry_id,)
+    ).fetchone()
+    if not row or not row['idea_id']:
+        return
+    from backend.routes.ideas import apply_recording_transcript
+
+    apply_recording_transcript(row['idea_id'], text)
+
+
 def _transcribe_attachment_bg(
     attachment_id: str, entry_id: str, kind: str, path: str, name: str,
     *, into_entry: bool = False,
@@ -1017,6 +1111,11 @@ def _transcribe_attachment_bg(
             db.commit()
             _notify_subscribers(entry_id)
             if text is not None and into_entry:
+                # The idea first: it is the tab the recording was made in, so
+                # it is the one being watched. All four passes share the single
+                # background worker, so this is purely about which finishes
+                # first.
+                _deliver_idea_transcript(entry_id, text)
                 _polish_bg(entry_id, text)
                 _generate_metadata_bg(entry_id, text)
         except Exception as e:

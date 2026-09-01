@@ -116,14 +116,14 @@ class FakeEventSource {
   close() {}
 }
 
-function renderJournal() {
+function renderJournal(props: Parameters<typeof Journal>[0] = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="journal" onViewChange={() => {}}>
-        <Journal />
+        <Journal {...props} />
       </ShortcutProvider>
     </QueryClientProvider>
   );
@@ -871,5 +871,62 @@ describe('Journal voice drafts panel', () => {
       expect(deleteVoiceDraftMock).toHaveBeenCalledWith('d3')
     );
     await waitFor(() => expect(screen.queryByText(/Voice drafts/)).toBeNull());
+  });
+});
+
+describe('an entry that was recorded as an idea', () => {
+  const listMock = api.journal.list as ReturnType<typeof vi.fn>;
+
+  // The Ideas tab's Record button files one clip as two rows. From this side
+  // the entry is an ordinary journal entry that happens to know which idea it
+  // became — and stops knowing the moment that idea is deleted, which is why
+  // the pill is drawn off `ideaId` rather than off the presence of a title.
+  const withIdea = (over: Partial<JournalEntry> = {}) => [
+    {
+      ...ENTRIES[0]!,
+      content: 'A grid of habits in the day view.',
+      ideaId: 'i9',
+      ideaTitle: 'Habit grid',
+      ...over,
+    },
+  ];
+
+  afterEach(() => listMock.mockResolvedValue(ENTRIES));
+
+  it('offers a link into the idea', async () => {
+    listMock.mockResolvedValue(withIdea());
+    const onOpenIdea = vi.fn();
+    renderJournal({ onOpenIdea });
+
+    fireEvent.click(await screen.findByText('💡 Habit grid'));
+    expect(onOpenIdea).toHaveBeenCalledWith({ ideaId: 'i9' });
+  });
+
+  it('names an idea that has not been titled yet', async () => {
+    listMock.mockResolvedValue(withIdea({ ideaTitle: null }));
+    renderJournal();
+    expect(await screen.findByText('💡 Untitled idea')).toBeTruthy();
+  });
+
+  it('shows no link once the idea is deleted', async () => {
+    listMock.mockResolvedValue(withIdea({ ideaId: null, ideaTitle: null }));
+    renderJournal();
+
+    // The entry and its recording survive the idea; only the pill goes.
+    expect(
+      await screen.findByText('A grid of habits in the day view.')
+    ).toBeTruthy();
+    expect(screen.queryByText(/💡/)).toBeNull();
+  });
+
+  it('scrolls to the entry the Ideas tab linked back to', async () => {
+    listMock.mockResolvedValue([...withIdea(), ENTRIES[1]!]);
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    renderJournal({ target: { entryId: 'e1' }, onTargetConsumed: vi.fn() });
+    await screen.findByText('A grid of habits in the day view.');
+
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
   });
 });

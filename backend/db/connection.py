@@ -112,6 +112,7 @@ def init_db() -> None:
     _ensure_stt_shortcuts(db)
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
+    _ensure_journal_idea_id(db)
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
     _ensure_nudge_settings(db)
@@ -1540,6 +1541,30 @@ def _ensure_journal_raw_content(db: sqlite3.Connection) -> None:
     if 'raw_content' not in cols:
         db.execute('ALTER TABLE journal_entries ADD COLUMN raw_content TEXT')
         db.commit()
+
+
+def _ensure_journal_idea_id(db: sqlite3.Connection) -> None:
+    """Which idea a journal entry was dictated for, if any.
+
+    One tap of Record in the Ideas tab produces two rows — the idea, and a
+    journal entry that holds the audio and gets the transcript — and this is the
+    link between them. `ON DELETE SET NULL` rather than a cascade: deleting the
+    idea must not take the journal entry (or the recording on it) with it, it
+    just stops the entry pointing anywhere.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'idea_id' not in cols:
+        db.execute(
+            'ALTER TABLE journal_entries ADD COLUMN idea_id TEXT'
+            ' REFERENCES ideas(id) ON DELETE SET NULL'
+        )
+    # Outside the guard: the index is what makes "the entry for this idea" — read
+    # on every open of an idea — not a scan of the whole journal.
+    db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_journal_entries_idea'
+        ' ON journal_entries(idea_id)'
+    )
+    db.commit()
 
 
 def _migrate_flashcards_to_learning(db: sqlite3.Connection) -> None:

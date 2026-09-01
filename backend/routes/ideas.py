@@ -131,7 +131,44 @@ def get_idea(idea_id):
     row = get_db().execute('SELECT * FROM ideas WHERE id=?', (idea_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(row_to_dict(row))
+    d = row_to_dict(row)
+    d['recording'] = _idea_recording(idea_id)
+    return jsonify(d)
+
+
+def _idea_recording(idea_id: str) -> dict | None:
+    """The journal entry an idea was dictated into, and the audio on it.
+
+    An idea captured by voice keeps no audio of its own: the clip is a journal
+    attachment, and the idea is the second row that recording created (see
+    `create_recording_entry` in backend/routes/journal.py). This is how the
+    detail pane can play back what was actually said — the transcript is the
+    model's reading of it, and the recording is the original.
+
+    None when the idea was typed, or when the journal entry has since been
+    deleted. `transcriptStatus` is the attachment's, which is what says whether
+    an idea that is still empty is working or stuck.
+    """
+    db = get_db()
+    entry = db.execute(
+        'SELECT id FROM journal_entries WHERE idea_id=? ORDER BY created_at LIMIT 1',
+        (idea_id,),
+    ).fetchone()
+    if not entry:
+        return None
+    att = db.execute(
+        'SELECT id, transcript_status, transcript_error'
+        " FROM journal_attachments WHERE entry_id=? AND kind IN ('audio','video')"
+        ' ORDER BY position, created_at LIMIT 1',
+        (entry['id'],),
+    ).fetchone()
+    return {
+        'entryId': entry['id'],
+        'attachmentId': att['id'] if att else None,
+        'url': f'/api/journal/attachments/{att["id"]}/file' if att else None,
+        'transcriptStatus': att['transcript_status'] if att else None,
+        'transcriptError': att['transcript_error'] if att else None,
+    }
 
 
 @bp.patch('/<idea_id>')
@@ -220,6 +257,52 @@ def _enrich_idea_bg(idea_id: str, raw_content: str, *, polish: bool = True) -> N
         )
         db.commit()
     run_bg(_run)
+
+
+# --- Ideas captured as audio -------------------------------------------------
+#
+# Record in the Ideas tab uploads the clip through the journal's recording
+# endpoint, which creates the journal entry, the attachment and — via these two
+# — the idea. Both halves are written from one transcription: see
+# `_transcribe_attachment_bg` in backend/routes/journal.py.
+
+
+def create_recording_idea(idea_id: str, repo_id=None) -> None:
+    """Open an empty idea for a recording that has not been transcribed yet.
+
+    Empty on purpose, and idempotent for the same reason `create_from_voice` is:
+    the phone re-POSTs a recording until the server confirms it, so this runs
+    again on every replay and must not mint a second idea. The text arrives
+    later through `apply_recording_transcript`; until then the list shows
+    "Untitled idea" and the detail pane says it is transcribing.
+    """
+    now = int(time.time())
+    db = get_db()
+    db.execute(
+        'INSERT OR IGNORE INTO ideas(id, title, raw_content, content, status,'
+        ' repo_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
+        (idea_id, '', '', '', 'new', _resolve_repo_id(repo_id), now, now),
+    )
+    db.commit()
+
+
+def apply_recording_transcript(idea_id: str, text: str) -> None:
+    """Give a dictated idea the transcript of its recording, then name it.
+
+    Guarded on the idea still being empty, which covers both ways this can
+    arrive late: the idea was deleted while the transcription ran (no row, no
+    update), or its text has already been written — by an earlier run, or by the
+    user typing into the detail pane while waiting. A transcript is never worth
+    overwriting either of those with.
+    """
+    db = get_db()
+    cur = db.execute(
+        "UPDATE ideas SET raw_content=?, updated_at=? WHERE id=? AND raw_content=''",
+        (text, int(time.time()), idea_id),
+    )
+    db.commit()
+    if cur.rowcount:
+        _enrich_idea_bg(idea_id, text)
 
 
 @bp.post('/voice')

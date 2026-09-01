@@ -5,6 +5,7 @@ import {
   assembleBlob,
   beginRecording,
   finalizeRecording,
+  type RecordingIdea,
   type RecordingMode,
   type StoredRecording,
 } from '../offline/recordingStore';
@@ -290,7 +291,7 @@ export function useRecorder(
 
   const start = async (
     mode: RecorderMode = 'transcribe',
-    opts: { durable?: boolean } = {}
+    opts: { durable?: boolean; idea?: RecordingIdea } = {}
   ) => {
     // A second tap while the first start is still waiting on the permission
     // prompt used to open a second recorder over a second getUserMedia: one
@@ -408,7 +409,12 @@ export function useRecorder(
         // Created before the first chunk so there is somewhere to put it.
         const storedMode: RecordingMode =
           mode === 'audio' ? 'audio' : 'transcribe';
-        recording = await beginRecording(storedMode, mimeType);
+        // `idea` is written now, with the first chunk, rather than when the
+        // recording stops: an app killed mid-recording is exactly the case
+        // where the resumed upload has to still know what this clip was for.
+        recording = await beginRecording(storedMode, mimeType, {
+          idea: opts.idea,
+        });
       }
 
       // The microphone can die while that write is in flight, in which case the

@@ -1,7 +1,9 @@
 import { useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { ulid } from '../../lib/ulid';
 import { useIdeaCreate } from '../../offline/mutationDefaults';
 import { useRecorder } from '../../hooks/useRecorder';
+import { captureIdeaRecording } from '../../offline/recordingQueue';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 
 interface IdeaCaptureProps {
@@ -15,26 +17,63 @@ interface IdeaCaptureProps {
 }
 
 /**
- * Capture box at the top of the list pane. Dictation appends to the textarea
- * rather than submitting straight away (the BrainDump pattern) so a transcript
- * can be corrected, or two thoughts recorded into one idea, before saving.
+ * Capture box at the top of the list pane: type an idea, or record one.
+ *
+ * The two halves are deliberately different. Typing is a small edit loop —
+ * write, correct, Save. Recording is the Journal button's contract instead:
+ * **stopping the recording is the save**. The clip goes to the durable store
+ * and is uploaded as a journal entry carrying the idea's id, the idea appears
+ * in the list immediately with no text in it, and the transcript, the cleanup
+ * and the title all arrive minutes later on their own.
+ *
+ * It used to work the other way — dictation appended to the textarea and you
+ * pressed Save — which is fine at a desk and wrong everywhere an idea actually
+ * turns up. It meant holding the thought while the transcription ran, then
+ * needing a second deliberate action; anything that interrupted the phone in
+ * between lost the recording outright, because it only ever existed in memory.
  */
 export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
   const [text, setText] = useState('');
+  const [notice, setNotice] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const recorder = useRecorder(transcript =>
-    setText(prev => (prev ? `${prev}\n${transcript}` : transcript))
-  );
+  const qc = useQueryClient();
 
   // Queued, not posted: an idea captured with no backend in reach is still an
   // idea. The id is minted here so the optimistic row and the eventual server
   // row are the same row, and `onCreated` can open it before it has been sent.
   const create = useIdeaCreate();
 
+  const recorder = useRecorder(
+    // No transcript comes back here: in durable mode the audio is uploaded and
+    // the server transcribes it into both the entry and the idea.
+    () => undefined,
+    undefined,
+    {
+      onNotice: setNotice,
+      onRecording: rec => {
+        // Not awaited — see captureIdeaRecording. The idea is already in the
+        // list from the optimistic insert, and the audio is on disk until the
+        // server confirms it, so there is nothing left to wait for.
+        void captureIdeaRecording(qc, rec).catch(() => undefined);
+        if (rec.idea) onCreated(rec.idea.id);
+      },
+    }
+  );
+
   const toggleRecording = () => {
-    if (recorder.status === 'recording') recorder.stop();
-    else if (recorder.status === 'idle') recorder.start();
+    if (recorder.status === 'recording') {
+      recorder.stop();
+      return;
+    }
+    if (recorder.status !== 'idle') return;
+    setNotice('');
+    // The idea's id is minted before the first chunk and stored beside the
+    // audio, so a phone that dies mid-recording still knows, on the way back
+    // up, that this clip was an idea.
+    void recorder.start('transcribe', {
+      durable: true,
+      idea: { id: ulid(), ...(repoId ? { repoId } : {}) },
+    });
   };
 
   useShortcutScope(1, {
@@ -74,17 +113,10 @@ export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
         <button
           type="button"
           onClick={toggleRecording}
-          // Gated only when idle: these say whether dictation can start, and
-          // while recording this button is the only way to stop.
-          disabled={
-            recorder.status === 'transcribing' ||
-            (recorder.status === 'idle' && !recorder.canTranscribe)
-          }
-          title={
-            recorder.canTranscribe
-              ? undefined
-              : 'Offline — dictation needs the server'
-          }
+          // Gated only while the recorder is finishing one off: recording works
+          // offline (the clip is stored and uploaded later), and while
+          // recording this button is the only way to stop.
+          disabled={recorder.status === 'saving'}
           aria-label={
             recorder.status === 'recording'
               ? 'Stop recording'
@@ -96,11 +128,7 @@ export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
               : 'bg-white/10 text-[var(--color-text)] hover:bg-white/15'
           } disabled:opacity-50`}
         >
-          {recorder.status === 'recording'
-            ? '■ Stop'
-            : recorder.status === 'transcribing'
-              ? 'Transcribing…'
-              : '● Record'}
+          {recorder.status === 'recording' ? '■ Stop' : '● Record'}
         </button>
         <button
           type="button"
@@ -110,7 +138,15 @@ export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
         >
           {create.isPending ? 'Saving…' : 'Save idea'}
         </button>
+        {recorder.status === 'recording' && (
+          <span className="text-xs text-[var(--color-text-muted)]">
+            Stop to save — it transcribes itself.
+          </span>
+        )}
       </div>
+      {notice && (
+        <p className="mt-2 text-xs text-[var(--color-text-muted)]">{notice}</p>
+      )}
       {recorder.error && (
         <p className="mt-2 text-xs text-red-400">{recorder.error}</p>
       )}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
@@ -7,10 +7,34 @@ import { MasterDetailBack } from '@/components/MasterDetailBack';
 import { IdeaList } from './IdeaList';
 import { IdeaDetail } from './IdeaDetail';
 
-export function Ideas() {
+interface IdeasProps {
+  /** Open straight onto this idea — the Journal's link back into a dictated
+   *  idea. Cleared through `onTargetConsumed` so it fires once, not on every
+   *  return to the tab. */
+  target?: { ideaId: string } | null;
+  onTargetConsumed?: () => void;
+  /** Switch to the Journal, at the entry a dictated idea's recording became. */
+  onOpenEntry?: (entryId: string) => void;
+}
+
+export function Ideas({
+  target,
+  onTargetConsumed,
+  onOpenEntry,
+}: IdeasProps = {}) {
   const [selectedId, setSelectedId] = useState<string>('');
   const { isMobile, showList, showDetail, openDetail, openList } =
     useMasterDetail();
+
+  useEffect(() => {
+    if (!target) return;
+    setSelectedId(target.ideaId);
+    openDetail();
+    onTargetConsumed?.();
+    // openDetail/onTargetConsumed are re-created per render; the target is the
+    // only thing that should re-run this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
 
   const { data: ideas, isLoading } = useQuery({
     queryKey: ['ideas'],
@@ -62,7 +86,11 @@ export function Ideas() {
         <div className="flex-1 flex flex-col overflow-hidden">
           <MasterDetailBack onClick={openList} label="Ideas" />
           {selectedId ? (
-            <IdeaDetail key={selectedId} ideaId={selectedId} />
+            <IdeaDetail
+              key={selectedId}
+              ideaId={selectedId}
+              onOpenEntry={onOpenEntry}
+            />
           ) : (
             <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
               Select an idea, or capture a new one
