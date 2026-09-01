@@ -257,3 +257,104 @@ def test_non_dict_rows_are_skipped(monkeypatch):
     })
     jobs = greenhouse.fetch({'slug': 'acme'}).jobs
     assert [j['title'] for j in jobs] == ['Real Job']
+
+
+# --------------------------------------------------------------------------
+# Board scope: the office/location filter carried by the registered URL
+# --------------------------------------------------------------------------
+
+def _gh_board(monkeypatch, rows):
+    monkeypatch.setattr(greenhouse, 'get_json',
+                        lambda url, params=None: {'jobs': rows})
+
+
+def _gh_row(job_id, title, location, offices):
+    return {'id': job_id, 'title': title, 'location': {'name': location},
+            'offices': offices, 'content': '<p>Work.</p>',
+            'absolute_url': f'https://boards.greenhouse.io/acme/jobs/{job_id}'}
+
+
+def test_greenhouse_without_a_scope_syncs_the_whole_board(monkeypatch):
+    """The common case: 96 of the registered boards carry no scope at all."""
+    _gh_board(monkeypatch, [
+        _gh_row(1, 'Toronto role', 'Toronto', [{'id': 87006, 'name': 'Toronto'}]),
+        _gh_row(2, 'Dublin role', 'Dublin', [{'id': 87011, 'name': 'Ireland'}]),
+    ])
+    assert len(greenhouse.fetch({'slug': 'acme'}).jobs) == 2
+
+
+def test_greenhouse_keeps_only_the_offices_the_url_named(monkeypatch):
+    _gh_board(monkeypatch, [
+        _gh_row(1, 'Toronto role', 'Toronto', [{'id': 87006, 'name': 'Toronto'}]),
+        _gh_row(2, 'Dublin role', 'Dublin', [{'id': 87011, 'name': 'Ireland'}]),
+    ])
+    jobs = greenhouse.fetch({'slug': 'acme', 'offices': ['87006']}).jobs
+    assert [j['title'] for j in jobs] == ['Toronto role']
+
+
+def test_greenhouse_matches_an_office_through_its_children(monkeypatch):
+    """Greenhouse offices are a tree; a posting can be filed against a child.
+
+    Matching only the exact id drops real Toronto postings — Stripe's 87006
+    has children, and this is the case that silently loses them.
+    """
+    _gh_board(monkeypatch, [
+        _gh_row(1, 'Child office role', 'Toronto',
+                [{'id': 99999, 'name': 'Canada', 'child_ids': [87006, 80460]}]),
+    ])
+    jobs = greenhouse.fetch({'slug': 'acme', 'offices': ['87006']}).jobs
+    assert [j['title'] for j in jobs] == ['Child office role']
+
+
+def test_greenhouse_scope_keeps_a_posting_whose_location_is_unreadable(monkeypatch):
+    """The whole reason to filter on the office rather than the location text.
+
+    `N/A`, `TOR` and `CA-Toronto, CA-Montreal, CA-Vancouver` are all real
+    values on live Toronto postings and no gazetteer reads any of them. The
+    employer's own office id does.
+    """
+    _gh_board(monkeypatch, [
+        _gh_row(1, 'Unreadable but Toronto', 'N/A', [{'id': 87006, 'name': 'Toronto'}]),
+        _gh_row(2, 'Also Toronto', 'TOR', [{'id': 87006, 'name': 'Toronto'}]),
+    ])
+    jobs = greenhouse.fetch({'slug': 'acme', 'offices': ['87006']}).jobs
+    assert len(jobs) == 2
+
+
+def test_greenhouse_scope_drops_a_posting_with_no_offices_at_all(monkeypatch):
+    _gh_board(monkeypatch, [_gh_row(1, 'Orphan', 'Somewhere', [])])
+    assert greenhouse.fetch({'slug': 'acme', 'offices': ['87006']}).jobs == []
+
+
+def _lever_row(title, location, all_locations=None):
+    return {'id': title, 'text': title, 'descriptionPlain': 'Work.',
+            'categories': {'location': location,
+                           'allLocations': all_locations or [location]},
+            'hostedUrl': 'https://jobs.lever.co/acme/1'}
+
+
+def test_lever_keeps_only_the_locations_the_url_named(monkeypatch):
+    monkeypatch.setattr(lever, 'get_json', lambda url, params=None: [
+        _lever_row('Toronto role', 'Toronto, ON'),
+        _lever_row('Addison role', 'Addison, TX'),
+    ])
+    jobs = lever.fetch({'slug': 'acme', 'locations': ['Toronto']}).jobs
+    assert [j['title'] for j in jobs] == ['Toronto role']
+
+
+def test_lever_reads_every_location_a_posting_lists(monkeypatch):
+    """`categories.location` holds one city; `allLocations` holds them all.
+
+    A Toronto role that happens to lead with New York is still a Toronto role.
+    """
+    monkeypatch.setattr(lever, 'get_json', lambda url, params=None: [
+        _lever_row('Multi-city', 'New York, NY', ['New York, NY', 'Toronto, ON']),
+    ])
+    jobs = lever.fetch({'slug': 'acme', 'locations': ['Toronto']}).jobs
+    assert [j['title'] for j in jobs] == ['Multi-city']
+
+
+def test_lever_without_a_scope_syncs_the_whole_board(monkeypatch):
+    monkeypatch.setattr(lever, 'get_json', lambda url, params=None: [
+        _lever_row('A', 'Toronto, ON'), _lever_row('B', 'Addison, TX')])
+    assert len(lever.fetch({'slug': 'acme'}).jobs) == 2

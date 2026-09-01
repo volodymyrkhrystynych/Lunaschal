@@ -340,9 +340,18 @@ def recompute_distances(db) -> int:
     Coordinates come from `raw` when the adapter carried them — Adzuna is the
     only one that does — so a re-run picks up rows synced before this column
     existed without re-fetching anything from the board.
+
+    **An `inferred` reading is never cleared by this pass.** That precision is
+    written by `triager._store_inferred_distance` from a model reading the
+    posting body, and it exists precisely for rows whose `location` field the
+    gazetteer cannot place. Recomputing from that same unplaceable field
+    produces None, so an unguarded overwrite deleted the only reading those
+    rows had — and, because the writer is guarded on `distance_km IS NULL`, it
+    could only be recovered by a re-triage. A reading that *can* be recomputed
+    is still refreshed, so a gazetteer improvement reaches every row it should.
     """
     rows = db.execute(
-        'SELECT id, location, raw FROM jobs WHERE dismissed=0'
+        'SELECT id, location, raw, distance_precision FROM jobs WHERE dismissed=0'
     ).fetchall()
 
     changed = 0
@@ -354,9 +363,10 @@ def recompute_distances(db) -> int:
             except ValueError:
                 raw = None
             if isinstance(raw, dict):
-                job['latitude'] = raw.get('latitude')
-                job['longitude'] = raw.get('longitude')
+                job['latitude'], job['longitude'] = _stored_coords(raw)
         reading = distance.reading_for(job)
+        if reading is None and row['distance_precision'] == 'inferred':
+            continue
         db.execute(
             'UPDATE jobs SET distance_km=?, distance_precision=? WHERE id=?',
             (reading.km if reading else None,
@@ -365,3 +375,20 @@ def recompute_distances(db) -> int:
         changed += 1
     db.commit()
     return changed
+
+
+def _stored_coords(raw: dict):
+    """Latitude and longitude out of a stored `raw` payload, whatever its shape.
+
+    Adzuna stores the normalized row flat, so the pair is at the top level.
+    Workday wraps its two API responses as `{'listing': …, 'detail': …}`, and
+    looking only at the top level silently found nothing there — a shape
+    difference, not an absence of data.
+    """
+    for candidate in (raw, raw.get('detail'), raw.get('listing')):
+        if not isinstance(candidate, dict):
+            continue
+        latitude, longitude = candidate.get('latitude'), candidate.get('longitude')
+        if latitude is not None and longitude is not None:
+            return latitude, longitude
+    return None, None

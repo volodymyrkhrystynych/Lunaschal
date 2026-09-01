@@ -56,8 +56,25 @@ def test_reads_the_slug_out_of_each_board_shape():
     assert by_company['1Password'] == {
         'company': '1Password', 'url': 'https://jobs.ashbyhq.com/1password',
         'kind': 'ashby', 'slug': '1password',
+        # `params` is what actually gets written to job_searches, so it carries
+        # the slug plus any office/location scope the URL was registered with.
+        # This board has none, which is the common case.
+        'params': {'slug': '1password'},
     }
     assert by_company['Achievers']['kind'] == 'lever'
+
+
+def test_a_scoped_board_carries_its_office_into_the_params_that_get_written():
+    """Stripe's entry is its *Toronto* board, and the office id says so.
+
+    Registering it as a bare slug is what synced the whole global board: of the
+    452 rows on the ten scoped Greenhouse boards, 365 were for offices these
+    URLs had already excluded.
+    """
+    row = importer.classify(
+        'Stripe',
+        'https://job-boards.greenhouse.io/embed/job_board?for=stripe&offices%5B%5D=87006')
+    assert row['params'] == {'slug': 'stripe', 'offices': ['87006']}
 
 
 def test_workday_is_syncable_even_though_the_resolver_declines_it():

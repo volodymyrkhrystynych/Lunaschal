@@ -233,15 +233,13 @@ export function ProfileEditor() {
           </h3>
           <p className="text-xs text-[var(--color-text-muted)]">
             Hard gates filter before AI. Soft preferences only add a warning.
-            Companies from completed roles are excluded automatically.
+            Companies from completed roles are excluded automatically. A commute
+            radius keeps fully-remote roles and anything whose location cannot
+            be read &mdash; only postings known to be further are filtered, and
+            they stay listed under &ldquo;Filtered out&rdquo;.
           </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field
-            label="Allowed locations (comma-separated)"
-            value={profile.allowedLocations}
-            onCommit={v => patchContact.mutate({ allowedLocations: v })}
-          />
           <Field
             label="Explicit company blacklist (comma-separated)"
             value={companyBlacklist.join(', ')}
@@ -262,22 +260,19 @@ export function ProfileEditor() {
             }
           />
           <Field
+            label="Max commute (km from Union Station)"
+            value={profile.maxDistanceKm?.toString() ?? ''}
+            onCommit={v =>
+              patchContact.mutate({ maxDistanceKm: v ? Number(v) : null })
+            }
+          />
+          <Field
             label="Soft preferences (comma-separated)"
             value={profile.softPreferences}
             onCommit={v => patchContact.mutate({ softPreferences: v })}
           />
         </div>
         <div className="flex flex-wrap gap-4 text-sm">
-          <label className="flex items-center gap-2 min-h-[44px]">
-            <input
-              type="checkbox"
-              checked={profile.remoteOnly}
-              onChange={e =>
-                patchContact.mutate({ remoteOnly: e.target.checked })
-              }
-            />
-            Remote roles only
-          </label>
           <label className="flex items-center gap-2 min-h-[44px]">
             <input
               type="checkbox"

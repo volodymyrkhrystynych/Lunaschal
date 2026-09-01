@@ -367,6 +367,10 @@ function AddSearch({ onAdded }: { onAdded: () => void }) {
         kind: found.kind,
         label: found.company,
         params: { slug: found.slug },
+        // The careers URL usually scopes the board to one office already. The
+        // backend reads the scope out of it; sending the slug alone is what
+        // used to sync a Toronto-scoped board worldwide.
+        url: url.trim(),
       }),
     onSuccess: () => {
       setUrl('');

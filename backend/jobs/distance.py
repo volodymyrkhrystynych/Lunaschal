@@ -29,11 +29,20 @@ that appears as a whole-token run is collected, spans contained in a longer
 span are dropped, and of what survives the **nearest** wins — so
 `"Toronto, ON; New York, NY"` is a Toronto job rather than whichever name the
 string happened to put first.
+
+There is one thing this module answers besides "how far": **whether a posting is
+out of range at all**, which is a strictly easier question. `verdict` can say
+"further than 200 km" about `"Bengaluru, India"` without saying how much
+further, because no point in India is within 200 km of the anchor. That is why
+`_FAR_REGIONS` can exist alongside the rule that countries have no centroid: a
+*bound* is not a guess, only a *distance* would be. A region name therefore
+never produces a `Reading` and never reaches `distance_km`.
 """
 from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from dataclasses import dataclass
 
 # Union Station: the transit hub the commute would actually be measured from,
@@ -126,6 +135,60 @@ _CITIES = {
     'dublin': (53.3498, -6.2603),
     'berlin': (52.5200, 13.4050),
     'amsterdam': (52.3676, 4.9041),
+    # The tail: every one of these appeared as an unplaceable location on a
+    # live posting, which is the only reason any of them is here. They are
+    # ordinary points like the rest — the alternative was leaving ~310 rows
+    # undecidable and visible on a feed that had been asked to exclude them.
+    'menlo park': (37.4530, -122.1817),
+    'sunnyvale': (37.3688, -122.0363),
+    'san jose': (37.3382, -121.8863),
+    'santa clara': (37.3541, -121.9552),
+    'bellevue': (47.6101, -122.2015),
+    'redmond': (47.6740, -122.1215),
+    'dallas': (32.7767, -96.7970),
+    'addison': (32.9618, -96.8292),
+    'houston': (29.7604, -95.3698),
+    'phoenix': (33.4484, -112.0740),
+    'pittsburgh': (40.4406, -79.9959),
+    'newark': (40.7357, -74.1724),
+    'sandy': (40.5649, -111.8389),
+    'lenexa': (38.9536, -94.7336),
+    'deer park': (29.7050, -95.1238),
+    'burnaby': (49.2488, -122.9805),
+    'surrey': (49.1913, -122.8490),
+    'mumbai': (19.0760, 72.8777),
+    'bengaluru': (12.9716, 77.5946),
+    'bangalore': (12.9716, 77.5946),
+    'noida': (28.5355, 77.3910),
+    'kochi': (9.9312, 76.2673),
+    'taipei': (25.0330, 121.5654),
+    'singapore': (1.3521, 103.8198),
+    'hong kong': (22.3193, 114.1694),
+    'dubai': (25.2048, 55.2708),
+    'yerevan': (40.1792, 44.4991),
+    'belgrade': (44.7866, 20.4489),
+    'bucharest': (44.4268, 26.1025),
+    'copenhagen': (55.6761, 12.5683),
+    'lisbon': (38.7223, -9.1393),
+    'barcelona': (41.3851, 2.1734),
+    'madrid': (40.4168, -3.7038),
+    'lyon': (45.7640, 4.8357),
+    'bordeaux': (44.8378, -0.5792),
+    'marseille': (43.2965, 5.3698),
+    'brussels': (50.8503, 4.3517),
+    'munich': (48.1351, 11.5820),
+    'milan': (45.4642, 9.1900),
+    'ferrara': (44.8381, 11.6198),
+    'manchester': (53.4808, -2.2426),
+    'sao paulo': (-23.5558, -46.6396),
+    'buenos aires': (-34.6037, -58.3816),
+    'bogota': (4.7110, -74.0721),
+    'medellin': (6.2476, -75.5658),
+    'mexico city': (19.4326, -99.1332),
+    'sydney': (-33.8688, 151.2093),
+    'melbourne': (-37.8136, 144.9631),
+    'tel aviv': (32.0853, 34.7818),
+    'tokyo': (35.6762, 139.6503),
     # Qualified forms of the ambiguous names below. Longest-match-wins picks
     # these over the bare token whenever the string bothered to say which one.
     'london ontario': (42.9849, -81.2453),
@@ -139,13 +202,76 @@ _CITIES = {
     'cambridge massachusetts': (42.3736, -71.1097),
     'cambridge uk': (52.2053, 0.1218),
     'cambridge united kingdom': (52.2053, 0.1218),
+    # Paris joins the ambiguous set for the same reason London did: Paris,
+    # Ontario is ~95 km out and would be *in* range, so resolving a bare
+    # "Paris" to France would exclude a job the user could take. Qualified, it
+    # is ordinary. A bare one still reaches `out_of_range` whenever the string
+    # says "France" anywhere, via `_FAR_REGIONS`.
+    'paris france': (48.8566, 2.3522),
+    'paris fr': (48.8566, 2.3522),
+    'paris ontario': (43.1998, -80.3841),
+    'paris on': (43.1998, -80.3841),
 }
 
 # Names that mean two different cities on two different continents, where
 # guessing wrong is a 6,000 km error. Bare, they resolve to nothing; qualified,
 # they are ordinary entries in `_CITIES` above. This is `urlmatch.py`'s
 # instinct — ambiguity resolves to None, never to a best guess.
-_AMBIGUOUS = frozenset({'london', 'cambridge'})
+_AMBIGUOUS = frozenset({'london', 'cambridge', 'paris'})
+
+# Regions with no point within `IN_RANGE_CEILING_KM` of the anchor. These are
+# emphatically *not* gazetteer entries: they have no coordinate here and can
+# never produce a `Reading`, because a country has no centre worth measuring.
+# What they can do is settle the weaker question `verdict` asks — "is this
+# further away than X?" — which needs a bound rather than a point. No guess is
+# involved: there is no part of India or Alberta within 200 km of Union Station.
+#
+# Three kinds of name are deliberately absent, and each absence is load-bearing:
+#   * `ontario` and `canada` contain the anchor itself;
+#   * `new york` and `pennsylvania` reach to within ~130 km (Buffalo, Niagara
+#     Falls NY, Erie PA), so the region says nothing about the posting;
+#   * bare two-letter codes, because `on` is Ontario, `in` and `or` and `me`
+#     are English words, and `ca` means Canada as often as California.
+_FAR_REGIONS = frozenset({
+    # Countries.
+    'india', 'singapore', 'france', 'spain', 'belgium', 'germany', 'portugal',
+    'italy', 'brazil', 'brasil', 'argentina', 'colombia', 'mexico', 'chile',
+    'peru', 'uruguay', 'ecuador', 'venezuela', 'bolivia', 'paraguay',
+    'australia', 'new zealand', 'japan', 'china', 'taiwan', 'hong kong',
+    'south korea', 'korea', 'vietnam', 'thailand', 'philippines', 'indonesia',
+    'malaysia', 'israel', 'turkey', 'egypt', 'nigeria', 'kenya', 'ghana',
+    'south africa', 'morocco', 'tunisia', 'united arab emirates', 'uae',
+    'saudi arabia', 'qatar', 'kuwait', 'bahrain', 'oman', 'jordan', 'lebanon',
+    'pakistan', 'bangladesh', 'sri lanka', 'nepal', 'russia', 'ukraine',
+    'poland', 'romania', 'serbia', 'bulgaria', 'greece', 'croatia', 'hungary',
+    'czechia', 'czech republic', 'slovakia', 'austria', 'switzerland',
+    'netherlands', 'denmark', 'sweden', 'norway', 'finland', 'iceland',
+    'ireland', 'united kingdom', 'england', 'scotland', 'wales', 'armenia',
+    'lithuania', 'latvia', 'estonia', 'slovenia', 'bosnia', 'albania',
+    'moldova', 'belarus', 'cyprus', 'malta', 'luxembourg', 'costa rica',
+    'panama', 'guatemala', 'el salvador', 'honduras', 'nicaragua',
+    'dominican republic', 'jamaica', 'trinidad', 'barbados',
+    # Canadian provinces and territories other than Ontario.
+    'british columbia', 'alberta', 'saskatchewan', 'manitoba', 'quebec',
+    'nova scotia', 'new brunswick', 'newfoundland', 'labrador',
+    'prince edward island', 'yukon', 'nunavut', 'northwest territories',
+    # US states whose nearest point is still well beyond the ceiling.
+    'california', 'texas', 'washington', 'oregon', 'nevada', 'arizona', 'utah',
+    'colorado', 'idaho', 'montana', 'wyoming', 'new mexico', 'oklahoma',
+    'kansas', 'nebraska', 'iowa', 'missouri', 'arkansas', 'louisiana',
+    'mississippi', 'alabama', 'georgia', 'florida', 'south carolina',
+    'north carolina', 'tennessee', 'kentucky', 'virginia', 'west virginia',
+    'maryland', 'delaware', 'new jersey', 'connecticut', 'rhode island',
+    'massachusetts', 'vermont', 'new hampshire', 'maine', 'minnesota',
+    'wisconsin', 'illinois', 'indiana', 'north dakota', 'south dakota',
+    'hawaii', 'alaska',
+})
+
+# The radius beyond which `_FAR_REGIONS` is asserted to hold. It is not the
+# user's setting — it is the number the region list was *built* against, and
+# `verdict` refuses to use the list for a wider radius than this rather than
+# quietly asserting something the data does not support.
+IN_RANGE_CEILING_KM = 200.0
 
 GAZETTEER: dict[str, tuple[float, float]] = {**_CITIES, **_DISTRICTS}
 
@@ -183,7 +309,17 @@ def haversine(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 
 def tokenize(location: str) -> list[str]:
-    return [token for token in _TOKEN_SPLIT.split((location or '').lower()) if token]
+    """Lowercase alphanumeric tokens, with diacritics folded away first.
+
+    The fold is not cosmetic. `[^a-z0-9]+` treats an accented letter as a
+    separator, so `Montréal` split into `montr` + `al` and never matched
+    `montreal` — and `São Paulo`, `Bogotá` and `Québec` failed the same way.
+    Folding to the unaccented form is what a gazetteer keyed in ASCII needs to
+    be reachable from the strings employers actually write.
+    """
+    folded = unicodedata.normalize('NFD', (location or '').lower())
+    stripped = ''.join(c for c in folded if unicodedata.category(c) != 'Mn')
+    return [token for token in _TOKEN_SPLIT.split(stripped) if token]
 
 
 def _matches(tokens: list[str]) -> list[tuple[int, int, str]]:
@@ -278,6 +414,90 @@ def resolve_keys(keys) -> Reading | None:
         if best is None or reading.km < best.km:
             best = reading
     return best
+
+
+_MAX_REGION_TOKENS = max(len(key.split()) for key in _FAR_REGIONS)
+
+
+def names_a_far_region(location: str) -> bool:
+    """Whether the string names a region wholly beyond `IN_RANGE_CEILING_KM`.
+
+    Whole-token runs only, the same shape as the gazetteer scan, so `indiana`
+    is not read as `india` and `oregon` is not read as `or`. Note this is
+    deliberately *not* longest-match-wins: a string mentioning two regions is
+    out of range if either of them is, and the anchor's own region is absent
+    from the set, so there is nothing a longer span could rescue.
+    """
+    tokens = tokenize(location)
+    for width in range(min(_MAX_REGION_TOKENS, len(tokens)), 0, -1):
+        for start in range(len(tokens) - width + 1):
+            if ' '.join(tokens[start:start + width]) in _FAR_REGIONS:
+                return True
+    return False
+
+
+def is_fully_remote(job) -> bool:
+    """Remote by the board's flag, and not contradicted by the body.
+
+    The same band `GET /feed?sort=distance` groups first and
+    `src/lib/jobs.ts:attendsInPerson` mirrors on the card. `work_location` is a
+    second column beside `remote` rather than an overwrite, so a "Remote -
+    Canada" posting that turns out to want two days a week in an office is
+    *not* fully remote and has to be judged on its distance like anything else.
+    """
+    remote = _field(job, 'remote')
+    if not remote:
+        return False
+    return (_field(job, 'work_location') or '') not in ('onsite', 'hybrid')
+
+
+def _field(job, snake: str):
+    """One column, whichever case the caller's row happens to use.
+
+    `triager.run_gate_sweep` hands `preferences.hard_gate` a raw sqlite row
+    (snake_case) while other callers pass an API-shaped dict (camelCase).
+    `soft_flags` already hedges the same way for `salary_max`.
+    """
+    if snake in job:
+        return job[snake]
+    head, *rest = snake.split('_')
+    return job.get(head + ''.join(part.title() for part in rest))
+
+
+def verdict(job, max_km: float) -> str:
+    """`'in_range'`, `'out_of_range'` or `'unknown'` for one posting.
+
+    Deliberately three-valued. `unknown` is not a soft `out_of_range`: a
+    location the gazetteer could not read is *missing information about a
+    posting, not a verdict on it*, and the caller is expected to keep it — the
+    same reason the distance sort ranks unplaced rows on their keyword score
+    instead of sinking them to the bottom.
+
+    Order of evidence, strongest first:
+
+    1. **Fully remote** is in range at any radius. It is a different state from
+       zero kilometres, and the question "could I get there" does not arise.
+    2. **A stored `distance_km`** was computed from a real point, by this
+       module, at sync time.
+    3. **A far region named in the text**, which settles the bound without ever
+       producing a number — but only up to `IN_RANGE_CEILING_KM`, the radius
+       the region list was actually built against.
+    """
+    if not max_km or max_km <= 0:
+        return 'in_range'
+    if is_fully_remote(job):
+        return 'in_range'
+
+    km = _field(job, 'distance_km')
+    if km is not None:
+        try:
+            return 'in_range' if float(km) <= max_km else 'out_of_range'
+        except (TypeError, ValueError):
+            pass
+
+    if max_km <= IN_RANGE_CEILING_KM and names_a_far_region(_field(job, 'location') or ''):
+        return 'out_of_range'
+    return 'unknown'
 
 
 def reading_for(job: dict) -> Reading | None:

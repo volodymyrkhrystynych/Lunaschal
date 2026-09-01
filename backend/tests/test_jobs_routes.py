@@ -455,3 +455,35 @@ def test_settings_retention_change_is_honoured_by_the_sweep(client, job, jobs_ro
     db.commit()
 
     assert client.post('/api/jobs/retention/sweep').get_json()['applications'] == 1
+
+
+def test_the_commute_radius_round_trips(client):
+    response = client.patch('/api/jobs/profile', json={'maxDistanceKm': 200})
+    assert response.status_code == 200
+    assert response.get_json()['profile']['maxDistanceKm'] == 200
+
+
+def test_the_commute_radius_distinguishes_unset_from_zero(client):
+    """The reason it is handled outside `field_map`.
+
+    That loop writes `body[camel] or ''`, which would store the empty string
+    for both — and on a REAL column "no radius" and "0 km" mean opposite
+    things: one syncs everything, the other would empty the feed.
+    """
+    client.patch('/api/jobs/profile', json={'maxDistanceKm': 200})
+    zeroed = client.patch('/api/jobs/profile', json={'maxDistanceKm': 0})
+    assert zeroed.get_json()['profile']['maxDistanceKm'] == 0
+
+    cleared = client.patch('/api/jobs/profile', json={'maxDistanceKm': None})
+    assert cleared.get_json()['profile']['maxDistanceKm'] is None
+
+
+def test_the_radius_defaults_to_unset(client):
+    """Shipping a default would silently filter a feed nobody asked to filter."""
+    assert client.get('/api/jobs/profile').get_json()['profile']['maxDistanceKm'] is None
+
+
+def test_a_nonsense_radius_clears_it_rather_than_failing_the_save(client):
+    response = client.patch('/api/jobs/profile', json={'maxDistanceKm': 'soon'})
+    assert response.status_code == 200
+    assert response.get_json()['profile']['maxDistanceKm'] is None

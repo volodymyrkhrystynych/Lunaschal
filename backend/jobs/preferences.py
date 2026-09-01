@@ -1,6 +1,8 @@
 """Hard job gates and non-rejecting soft preference annotations."""
 import re
 
+from backend.jobs import distance
+
 
 def _norm(value: str) -> str:
     return ' '.join(re.sub(r'[^a-z0-9]+', ' ', value.lower()).split())
@@ -24,16 +26,25 @@ def hard_gate(job: dict, loaded: dict) -> str:
     if company and company in blacklist:
         return 'company is on your blacklist (past employers are included)'
 
-    body = _norm(f"{job.get('title') or ''} {job.get('location') or ''} {job.get('description') or ''}")
-    remote = bool(job.get('remote')) or bool(re.search(r'\b(remote|work from home)\b', body))
-    onsite_required = bool(re.search(r'\b(on site|onsite|in office|office based)\b', body))
-    if profile.get('remoteOnly') and (onsite_required or not remote):
-        return 'profile requires remote work but the posting is on-site or not remote'
+    # Where the work is, decided in one place. This replaced two gates that
+    # both read the location as *text*: `remoteOnly`, which searched the body
+    # for "remote"/"on site" phrases, and `allowedLocations`, which substring
+    # matched a comma-separated list against the location string. Neither could
+    # tell that "Mississauga" is 24 km away or that "Bengaluru, India" is not,
+    # so both were guesses about geography made with string operations.
+    #
+    # `distance.verdict` is three-valued on purpose and only `out_of_range`
+    # rejects: a posting the gazetteer could not place is missing information,
+    # not a job that is far away, and rejecting on silence would hide the ~75
+    # rows that say nothing more than "Canada" or "N/A". Fully remote is exempt
+    # inside `verdict`, which reads the structured `remote` + `work_location`
+    # pair rather than searching prose for the word.
+    max_km = profile.get('maxDistanceKm')
+    if max_km not in (None, '') and distance.verdict(job, float(max_km)) == 'out_of_range':
+        return (f"location {job.get('location')} is beyond your "
+                f"{float(max_km):g} km radius")
 
-    allowed = [_norm(x) for x in (profile.get('allowedLocations') or '').split(',') if _norm(x)]
-    location = _norm(job.get('location') or '')
-    if allowed and not remote and location and not any(term in location for term in allowed):
-        return f"location {job.get('location')} is outside your allowed locations"
+    body = _norm(f"{job.get('title') or ''} {job.get('location') or ''} {job.get('description') or ''}")
 
     asks_clearance = bool(re.search(r'\b(security clearance|secret clearance|top secret|ts sci|reliability status)\b', body))
     if profile.get('avoidClearanceRoles') and asks_clearance:

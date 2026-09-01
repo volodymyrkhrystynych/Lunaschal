@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from urllib.parse import parse_qs, urlsplit
 
 from backend.jobs import ingest
 from backend.jobs.sources import SourceError, fetch as fetch_source
@@ -130,6 +131,52 @@ def find_candidates(html: str, final_url: str = '') -> list[tuple[str, str]]:
                     seen.add(key)
                     found.append(key)
     return found
+
+
+# Query parameters that scope a board to a subset of its postings, per ATS.
+# The value is the key the params dict stores them under, which is the key the
+# adapter reads. Deliberately narrow: `departments[]` also scopes a Greenhouse
+# board, but by team rather than place, and applying it would silently drop
+# roles the user never asked to hide.
+_SCOPE_PARAMS = {
+    'greenhouse': {'offices[]': 'offices', 'offices': 'offices'},
+    'lever': {'location': 'locations'},
+}
+
+
+def scope_filters(kind: str, url: str) -> dict:
+    """The location scope a registered careers URL already carries.
+
+    Every URL in `docs/toronto-tech-companies.md` was collected from the
+    company's *Toronto* careers page, and about a third of them say so in the
+    query string — `?offices[]=87006` is Stripe's Toronto office. Reducing the
+    URL to a bare slug threw that away, so a board the user had scoped to one
+    city was synced worldwide: of 452 rows on the ten scoped Greenhouse boards,
+    365 were for offices the URL had excluded.
+
+    Returns `{}` for a URL that carries no scope, which is the common case and
+    means "sync the whole board", exactly as before. Nothing here guesses: an
+    unrecognised parameter is ignored rather than interpreted.
+
+    Ashby is absent on purpose. Its boards scope with `?locationId=<uuid>`, and
+    the public posting API returns no location id on a posting — so the filter
+    cannot be honoured, and inventing a match from the free-text location would
+    be the guess this module is built to avoid.
+    """
+    wanted = _SCOPE_PARAMS.get(kind)
+    if not wanted or not url:
+        return {}
+    query = urlsplit(url if '://' in url else f'https://{url}').query
+    out: dict[str, list[str]] = {}
+    for key, values in parse_qs(query, keep_blank_values=False).items():
+        target = wanted.get(key)
+        if not target:
+            continue
+        for value in values:
+            value = value.strip()
+            if value and value not in out.setdefault(target, []):
+                out[target].append(value)
+    return out
 
 
 def find_unsupported(html: str, final_url: str = '') -> str:
