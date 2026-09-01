@@ -47,6 +47,12 @@ export default function App() {
   );
   const [pendingInsert, setPendingInsert] = useState<string | null>(null);
   const [ficTarget, setFicTarget] = useState<FicTarget | null>(null);
+  // The two halves of a dictated idea point at each other across tabs: the
+  // journal entry holds the recording, the idea holds the thought.
+  const [ideaTarget, setIdeaTarget] = useState<{ ideaId: string } | null>(null);
+  const [journalTarget, setJournalTarget] = useState<{
+    entryId: string;
+  } | null>(null);
   const queryClient = useQueryClient();
 
   const {
@@ -147,6 +153,12 @@ export default function App() {
               setFicTarget(target);
               setCurrentView('fanfic');
             }}
+            onOpenIdea={target => {
+              setIdeaTarget(target);
+              setCurrentView('ideas');
+            }}
+            target={journalTarget}
+            onTargetConsumed={() => setJournalTarget(null)}
           />
         );
       case 'calendar':
@@ -169,7 +181,16 @@ export default function App() {
       case 'writing':
         return <Writing />;
       case 'ideas':
-        return <Ideas />;
+        return (
+          <Ideas
+            target={ideaTarget}
+            onTargetConsumed={() => setIdeaTarget(null)}
+            onOpenEntry={entryId => {
+              setJournalTarget({ entryId });
+              setCurrentView('journal');
+            }}
+          />
+        );
       case 'food':
         return <Food />;
       case 'lifestyle':

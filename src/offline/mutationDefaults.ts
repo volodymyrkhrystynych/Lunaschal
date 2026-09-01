@@ -129,6 +129,14 @@ export interface JournalRecordingVars {
    * audio itself is not here.
    */
   entryId?: string;
+  /**
+   * Also capture this clip as an idea, under this id — the Ideas tab's Record
+   * button. One upload, one transcription, two rows; see
+   * `create_recording_entry` in backend/routes/journal.py.
+   */
+  ideaId?: string;
+  /** Which repository that idea belongs to; omitted means the default. */
+  repoId?: string;
 }
 export type TodoCreateVars = TodoPayload & { title: string; id: string };
 export interface TodoUpdateVars {
@@ -441,6 +449,8 @@ const journalRecordingCfg = (
         attachmentId: vars.id,
         name: vars.name,
         transcribe: rec.mode === 'transcribe',
+        ideaId: vars.ideaId,
+        repoId: vars.repoId,
       });
       // Confirmed stored. This is the only place the audio may be let go of.
       await deleteRecording(vars.id);
@@ -455,6 +465,12 @@ const journalRecordingCfg = (
     }
   },
   onMutate: vars => {
+    // An Ideas capture shows up in the Ideas list the moment recording stops,
+    // for the same reason the journal entry does below: stopping *is* the save,
+    // and a list that stays empty until the upload lands reads as a lost idea.
+    // Empty of text on purpose — the transcript is minutes away, and inventing
+    // a placeholder title here would be a guess the user then has to delete.
+    if (vars.ideaId) insertPendingIdea(qc, vars.ideaId, vars.repoId);
     // Nothing to insert when the clip is being attached to an entry that is
     // already in the feed — an optimistic row here would show a duplicate of
     // the entry the user is looking at, then vanish on the next refetch.
@@ -469,12 +485,19 @@ const journalRecordingCfg = (
       title: vars.name ?? null,
       tags: null,
       curatedTags: [],
+      ideaId: vars.ideaId ?? null,
+      ideaTitle: null,
       createdAt: nowIso,
       updatedAt: nowIso,
     };
     patchJournalLists(qc, list => [entry, ...list], { firstPageOnly: true });
   },
-  onSettled: () => qc.invalidateQueries({ queryKey: ['journal'] }),
+  onSettled: (_data, _err, vars) => {
+    qc.invalidateQueries({ queryKey: ['journal'] });
+    // The transcript fills the idea in as well, so the list it is sitting in
+    // has to be refetched too — the optimistic row above carries no text.
+    if (vars.ideaId) qc.invalidateQueries({ queryKey: ['ideas'] });
+  },
 });
 
 const todoCreateCfg = (
@@ -738,35 +761,64 @@ const ideaCreateCfg = (
       ? api.ideas.createFromVoice(vars.rawContent, vars.id, vars.repoId)
       : api.ideas.create(vars),
   onMutate: vars => {
-    const captured: IdeaSummary = {
-      id: vars.id,
+    insertPendingIdea(qc, vars.id, vars.repoId, {
       title: vars.title || (vars.rawContent ?? '').slice(0, 80),
-      status: 'new',
-      tags: vars.tags ? JSON.stringify(vars.tags) : null,
-      sketchCount: 0,
-      openQuestionCount: 0,
-      articleCount: 0,
-      hasPlan: false,
-      verdict: null,
-      confidence: null,
-      effort: null,
-      onRoadmap: false,
-      assessmentStale: false,
-      userVerdict: null,
-      researchState: null,
-      // Null when the server will pick the default: the optimistic row cannot
-      // know which repo that is, and guessing would make the row jump between
-      // filters when the real one arrives.
-      repoId: vars.repoId ?? null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    qc.setQueryData<IdeaSummary[]>(['ideas'], old =>
-      old ? [captured, ...old] : [captured]
-    );
+      tags: vars.tags,
+    });
   },
   onSettled: () => qc.invalidateQueries({ queryKey: ['ideas'] }),
 });
+
+/**
+ * Put an idea in the list before the server has one.
+ *
+ * Shared by the two ways an idea is captured — typed/dictated text, and a
+ * recording that has not been transcribed yet — because both need the row on
+ * screen immediately and neither can wait for a round trip. A recording's row
+ * arrives with no title at all, which is honest: `displayTitle` shows
+ * "Untitled idea" until the transcript lands, and the detail pane says it is
+ * transcribing.
+ */
+function insertPendingIdea(
+  qc: QueryClient,
+  id: string,
+  repoId?: string,
+  opts: { title?: string; tags?: string[] } = {}
+): void {
+  const nowIso = new Date().toISOString();
+  const captured: IdeaSummary = {
+    id,
+    title: opts.title ?? '',
+    status: 'new',
+    tags: opts.tags ? JSON.stringify(opts.tags) : null,
+    sketchCount: 0,
+    openQuestionCount: 0,
+    articleCount: 0,
+    hasPlan: false,
+    verdict: null,
+    confidence: null,
+    effort: null,
+    onRoadmap: false,
+    assessmentStale: false,
+    userVerdict: null,
+    researchState: null,
+    // Null when the server will pick the default: the optimistic row cannot
+    // know which repo that is, and guessing would make the row jump between
+    // filters when the real one arrives.
+    repoId: repoId ?? null,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+  qc.setQueryData<IdeaSummary[]>(['ideas'], old => {
+    if (!old) return [captured];
+    // Already on screen — a replayed upload after a reload, most likely, and
+    // the row it finds may have a title and text on it by now. Blanking that
+    // back to an empty capture until the next refetch would be a lie about
+    // what the server holds.
+    if (old.some(i => i.id === id)) return old;
+    return [captured, ...old];
+  });
+}
 
 const calorieLogCfg = (qc: QueryClient): Cfg<CalorieLog, CalorieLogVars> => ({
   ...ONLINE,

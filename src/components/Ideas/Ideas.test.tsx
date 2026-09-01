@@ -35,15 +35,50 @@ vi.mock('../../hooks/api', () => ({
 
 // The recorder owns getUserMedia/MediaRecorder, neither of which exists in
 // jsdom; the capture box's own behaviour is what's under test here.
+//
+// `start` records what it was asked for and arms `finishRecording`, which
+// stands in for the user pressing Stop: the real hook stores the clip and hands
+// the caller the stored recording, idea id and all.
 const recorderState = {
   status: 'idle' as string,
   start: vi.fn(),
   stop: vi.fn(),
 };
+interface StartCall {
+  mode?: string;
+  opts?: { durable?: boolean; idea?: { id: string; repoId?: string } };
+}
+let startCalls: StartCall[] = [];
+let finishRecording: (() => void) | null = null;
+
 vi.mock('../../hooks/useRecorder', () => ({
-  useRecorder: (onTranscript: (t: string) => void) => {
-    recorderState.start = vi.fn(() => onTranscript('a spoken idea'));
+  useRecorder: (
+    onTranscript: (t: string) => void,
+    _onAudio: unknown,
+    options: { onRecording?: (rec: unknown) => void } = {}
+  ) => {
+    recorderState.start = vi.fn((mode?: string, opts?: StartCall['opts']) => {
+      startCalls.push({ mode, opts });
+      // Durable captures deliver a stored recording when the user stops;
+      // plain dictation (the discussion and decision boxes) delivers text.
+      if (opts?.durable) {
+        finishRecording = () =>
+          options.onRecording?.({ id: 'rec-1', idea: opts?.idea });
+      } else {
+        onTranscript('a spoken idea');
+      }
+    });
     return { ...recorderState, error: '', canTranscribe: true };
+  },
+}));
+
+// The durable upload queue. Its own behaviour is covered in
+// src/offline/recordingQueue.test.ts; here it only has to be observable.
+const captureIdeaRecording = vi.fn();
+vi.mock('../../offline/recordingQueue', () => ({
+  captureIdeaRecording: (...args: unknown[]) => {
+    captureIdeaRecording(...args);
+    return Promise.resolve();
   },
 }));
 
@@ -94,13 +129,13 @@ function detail(over: Partial<Idea> = {}): Idea {
   };
 }
 
-function renderIt() {
+function renderIt(props: Parameters<typeof Ideas>[0] = {}) {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={qc}>
-      <Ideas />
+      <Ideas {...props} />
     </QueryClientProvider>
   );
 }
@@ -211,14 +246,63 @@ describe('Ideas', () => {
 });
 
 describe('IdeaCapture', () => {
-  it('appends a transcript to the box instead of saving straight away', async () => {
+  beforeEach(() => {
+    startCalls = [];
+    finishRecording = null;
+    captureIdeaRecording.mockClear();
+  });
+
+  it('records durably, with the idea id minted before the first chunk', async () => {
     renderIt();
     await screen.findByText('Habit tracking');
 
     fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
-    expect(await screen.findByDisplayValue('a spoken idea')).toBeTruthy();
-    // Dictation is editable before it becomes an idea.
+
+    // 'transcribe' + durable: the clip is stored on the device and the server
+    // transcribes it, rather than the browser transcribing a clip it holds in
+    // memory. The idea's id goes into the store with the audio so a phone that
+    // dies mid-recording still knows what the clip was for.
+    expect(startCalls).toHaveLength(1);
+    expect(startCalls[0]!.mode).toBe('transcribe');
+    expect(startCalls[0]!.opts?.durable).toBe(true);
+    expect(startCalls[0]!.opts?.idea?.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  });
+
+  it('stopping the recording is the save, and opens the idea', async () => {
+    renderIt();
+    await screen.findByText('Habit tracking');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
+    const ideaId = startCalls[0]!.opts!.idea!.id;
+    finishRecording!();
+
+    // Queued as one durable upload — no text was transcribed in the browser,
+    // and nothing was posted to the ideas endpoints.
+    await waitFor(() => expect(captureIdeaRecording).toHaveBeenCalled());
+    const rec = captureIdeaRecording.mock.calls[0]![1] as {
+      idea?: { id: string };
+    };
+    expect(rec.idea?.id).toBe(ideaId);
     expect(api.ideas.createFromVoice).not.toHaveBeenCalled();
+
+    // ...and the idea it will become is already open.
+    await waitFor(() => expect(api.ideas.get).toHaveBeenCalledWith(ideaId));
+  });
+
+  it('files the recording under the repo the list is filtered to', async () => {
+    vi.mocked(api.repos.list).mockResolvedValue([
+      repo({ id: 'r1', name: 'Lunaschal' }),
+      repo({ id: 'r2', name: 'Other' }),
+    ]);
+    renderIt();
+    await screen.findByText('Habit tracking');
+
+    fireEvent.change(await screen.findByLabelText('Repository'), {
+      target: { value: 'r2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
+
+    expect(startCalls.at(-1)!.opts?.idea?.repoId).toBe('r2');
   });
 
   it('saves the captured text and selects the new idea', async () => {
@@ -251,6 +335,93 @@ describe('IdeaCapture', () => {
     });
     expect(save.hasAttribute('disabled')).toBe(true);
     expect(api.ideas.createFromVoice).not.toHaveBeenCalled();
+  });
+});
+
+describe('an idea that was dictated', () => {
+  // The audio belongs to the journal entry the same recording created — an
+  // idea holds no files of its own — so the pane shows a pointer at it. Worth
+  // having here: the body is a transcription, and when that comes back wrong
+  // the recording is the only thing that still holds the idea.
+  const recording = {
+    entryId: 'e9',
+    attachmentId: 'a9',
+    url: '/api/journal/attachments/a9/file',
+    transcriptStatus: 'done' as const,
+    transcriptError: null,
+  };
+
+  it('plays the recording and links to the journal entry', async () => {
+    vi.mocked(api.ideas.get).mockResolvedValue(detail({ recording }));
+    const onOpenEntry = vi.fn();
+    renderIt({ onOpenEntry });
+    await openIdea();
+
+    fireEvent.click(await screen.findByText('Journal entry ›'));
+    expect(onOpenEntry).toHaveBeenCalledWith('e9');
+    expect(
+      document.querySelector('audio[src="/api/journal/attachments/a9/file"]')
+    ).toBeTruthy();
+  });
+
+  it('says it is transcribing rather than looking like an empty idea', async () => {
+    vi.mocked(api.ideas.get).mockResolvedValue(
+      detail({
+        title: '',
+        rawContent: '',
+        content: '',
+        recording: { ...recording, transcriptStatus: 'running' },
+      })
+    );
+    renderIt();
+    await openIdea();
+
+    expect(await screen.findByText('Transcribing…')).toBeTruthy();
+  });
+
+  it('shows a failed transcription, with the audio still there', async () => {
+    vi.mocked(api.ideas.get).mockResolvedValue(
+      detail({
+        title: '',
+        rawContent: '',
+        content: '',
+        recording: {
+          ...recording,
+          transcriptStatus: 'error',
+          transcriptError: 'No speech found in the recording',
+        },
+      })
+    );
+    renderIt();
+    await openIdea();
+
+    expect(await screen.findByText(/No speech found/)).toBeTruthy();
+    expect(document.querySelector('audio')).toBeTruthy();
+  });
+
+  it('opens straight onto the idea the Journal linked to', async () => {
+    const onTargetConsumed = vi.fn();
+    renderIt({ target: { ideaId: 'i1' }, onTargetConsumed });
+
+    await waitFor(() => expect(api.ideas.get).toHaveBeenCalledWith('i1'));
+    // Consumed on arrival, so coming back to the tab later doesn't re-navigate.
+    expect(onTargetConsumed).toHaveBeenCalled();
+  });
+
+  it('says a just-recorded idea is still saving rather than gone', async () => {
+    // The pane opens the instant the recording stops, which is before the
+    // upload that creates the idea has landed — a 404 there is "not yet", not
+    // "deleted", and the optimistic row in the list is what says which.
+    vi.mocked(api.ideas.get).mockRejectedValue(new Error('Not found'));
+    renderIt({ target: { ideaId: 'i1' } });
+
+    expect(await screen.findByText(/Saving this idea/)).toBeTruthy();
+  });
+
+  it('shows nothing of the sort for a typed idea', async () => {
+    renderIt();
+    await openIdea();
+    expect(screen.queryByText('Journal entry ›')).toBeNull();
   });
 });
 

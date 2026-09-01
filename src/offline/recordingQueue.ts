@@ -3,6 +3,7 @@ import { MUTATION_KEYS, type JournalRecordingVars } from './mutationDefaults';
 import {
   finalizeRecording,
   listRecordings,
+  type RecordingIdea,
   type StoredRecording,
 } from './recordingStore';
 
@@ -16,6 +17,8 @@ import {
  */
 
 const DEFAULT_NAME = 'Recording';
+/** The attachment's label in the journal entry an idea capture creates. */
+const IDEA_NAME = 'Idea';
 
 /**
  * Hand a stored recording to the offline write queue, which uploads it now if
@@ -27,14 +30,23 @@ export function enqueueRecordingUpload(
   qc: QueryClient,
   id: string,
   name?: string,
-  entryId?: string
+  opts: { entryId?: string; idea?: RecordingIdea } = {}
 ): Promise<unknown> {
   const mutation = qc
     .getMutationCache()
     .build<unknown, Error, JournalRecordingVars, unknown>(qc, {
       mutationKey: MUTATION_KEYS.journalRecording,
     });
-  return mutation.execute({ id, name, entryId });
+  return mutation.execute({
+    id,
+    name,
+    entryId: opts.entryId,
+    // Flattened out of the stored recording: these vars are structured-cloned
+    // into the persisted cache and a paused upload has to be replayable from
+    // them alone.
+    ideaId: opts.idea?.id,
+    repoId: opts.idea?.repoId,
+  });
 }
 
 /** True if this recording already has a live or paused upload in flight. */
@@ -64,7 +76,9 @@ export async function handleFinishedRecording(
   rec: StoredRecording,
   opts: { name?: string } = {}
 ): Promise<void> {
-  await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME);
+  await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME, {
+    idea: rec.idea,
+  });
 }
 
 /**
@@ -91,7 +105,29 @@ export async function attachRecordingToEntry(
   entryId: string,
   opts: { name?: string } = {}
 ): Promise<void> {
-  await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME, entryId);
+  await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME, {
+    entryId,
+  });
+}
+
+/**
+ * The Ideas tab's Record button: the same durable journal upload, carrying the
+ * id of the idea the clip is also being captured as.
+ *
+ * Deliberately not awaited by its caller. The other two are — their buttons sit
+ * in a panel that shows "Saving…" — but stopping the recording *is* the save
+ * here, and the idea is already on screen from the optimistic insert. Waiting
+ * would park the button on "Saving…" for as long as the phone stays offline,
+ * over a recording that is safely on disk.
+ */
+export function captureIdeaRecording(
+  qc: QueryClient,
+  rec: StoredRecording,
+  opts: { name?: string } = {}
+): Promise<unknown> {
+  return enqueueRecordingUpload(qc, rec.id, opts.name ?? IDEA_NAME, {
+    idea: rec.idea,
+  });
 }
 
 /**
@@ -113,7 +149,14 @@ export async function resumeStoredRecordings(qc: QueryClient): Promise<void> {
     // Never finalized: the app died mid-recording. Close it and upload the
     // prefix — a truncated recording still carries most of what was said.
     if (!rec.finalized) await finalizeRecording(rec.id, { recovered: true });
-    void enqueueRecordingUpload(qc, rec.id, DEFAULT_NAME).catch(() => {
+    void enqueueRecordingUpload(
+      qc,
+      rec.id,
+      rec.idea ? IDEA_NAME : DEFAULT_NAME,
+      {
+        idea: rec.idea,
+      }
+    ).catch(() => {
       // Failures are recorded on the stored recording by the mutation itself;
       // the pending strip is what surfaces them.
     });

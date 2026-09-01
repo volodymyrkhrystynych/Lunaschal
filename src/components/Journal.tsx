@@ -55,7 +55,26 @@ import { useRecorder } from '../hooks/useRecorder';
 interface JournalProps {
   /** Navigate to the fanfic reader (chip on entries linked to a fic chapter). */
   onOpenFic?: (target: { ficId: string; chapterId?: string }) => void;
+  /** Navigate to the Ideas tab (chip on entries dictated as an idea). */
+  onOpenIdea?: (target: { ideaId: string }) => void;
+  /**
+   * Scroll to and highlight one entry — the Ideas tab's link back to the
+   * recording an idea was captured from. Cleared through `onTargetConsumed`.
+   */
+  target?: { entryId: string } | null;
+  onTargetConsumed?: () => void;
 }
+
+/** How long a linked-to entry stays outlined after being scrolled to. */
+const HIGHLIGHT_MS = 2500;
+/**
+ * How many extra pages to pull while looking for a linked-to entry. The feed
+ * loads fifty at a time and the entry being linked to is nearly always recent
+ * (an idea's recording is the entry it just created), so this is a bound on a
+ * rare miss rather than a real search — hunting to the bottom of a years-long
+ * journal to underline one row is not worth the requests.
+ */
+const TARGET_PAGE_LIMIT = 4;
 
 const JOURNAL_PAGE_SIZE = 50;
 
@@ -76,7 +95,12 @@ interface StagedFile {
 // like a search rather than a delay.
 const SEARCH_DEBOUNCE_MS = 250;
 
-export function Journal({ onOpenFic }: JournalProps = {}) {
+export function Journal({
+  onOpenFic,
+  onOpenIdea,
+  target,
+  onTargetConsumed,
+}: JournalProps = {}) {
   // Two pieces of state, deliberately. `searchInput` is what the field shows
   // and updates on every keystroke; `searchQuery` is what the query key uses and
   // lags it by DEBOUNCE_MS. They were one, which meant one FTS request per
@@ -289,6 +313,57 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     queryFn: () => api.calendar.listByRange(eventsRangeStart!, eventsRangeEnd!),
     enabled: eventsVisible && !!eventsRangeStart && !!eventsRangeEnd,
   });
+
+  // --- linked-to entry (the Ideas tab's "Journal entry ›") -------------------
+  //
+  // Held in state rather than read from the prop: the prop is consumed on
+  // arrival (so returning to the tab later doesn't jump the feed again), while
+  // the hunt below may still need a page or two to find the row.
+  const [targetEntryId, setTargetEntryId] = useState<string | null>(null);
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  const targetPagesRef = useRef(0);
+
+  useEffect(() => {
+    if (!target) return;
+    // Search hides most of the feed; a link into it has to land in the plain
+    // chronological view or the row it points at may not be there at all.
+    setSearchInput('');
+    setSelectedCuratedTagId(null);
+    setTargetEntryId(target.entryId);
+    targetPagesRef.current = 0;
+    onTargetConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
+  useEffect(() => {
+    if (!targetEntryId) return;
+    // Nothing has been rendered yet — the feed is still loading its first page.
+    // Giving up here would be the common case, not the rare one: this effect
+    // runs the moment the target arrives, which is before any entry exists.
+    if (!entries) return;
+    const el = document.querySelector<HTMLElement>(
+      `[data-journal-entry="${targetEntryId}"]`
+    );
+    if (el) {
+      el.scrollIntoView({ block: 'center' });
+      setHighlightId(targetEntryId);
+      setTargetEntryId(null);
+      const t = setTimeout(() => setHighlightId(null), HIGHLIGHT_MS);
+      return () => clearTimeout(t);
+    }
+    // Not on the pages loaded so far. Pull another one and look again — the
+    // effect re-runs when `entries` grows.
+    if (
+      hasNextPage &&
+      !isFetchingNextPage &&
+      targetPagesRef.current < TARGET_PAGE_LIMIT
+    ) {
+      targetPagesRef.current += 1;
+      fetchNextPage();
+      return;
+    }
+    if (!isFetchingNextPage) setTargetEntryId(null);
+  }, [targetEntryId, entries, hasNextPage, isFetchingNextPage, fetchNextPage]);
 
   useEffect(() => {
     const es = new EventSource('/api/journal/events');
@@ -577,9 +652,14 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
     return (
       <div
         key={entry.id}
+        data-journal-entry={entry.id}
         ref={scrollSelectedIntoView(idx)}
         className={`p-4 bg-[var(--color-surface)] rounded-lg border ${
-          isSelected(idx) ? 'border-[var(--color-primary)]' : 'border-white/10'
+          isSelected(idx)
+            ? 'border-[var(--color-primary)]'
+            : highlightId === entry.id
+              ? 'border-[var(--color-accent)]'
+              : 'border-white/10'
         }`}
       >
         <div className="flex items-start justify-between mb-2">
@@ -751,9 +831,24 @@ export function Journal({ onOpenFic }: JournalProps = {}) {
         )}
 
         {((entry.ficRefs?.length ?? 0) > 0 ||
+          !!entry.ideaId ||
           entry.curatedTags?.length > 0 ||
           aiTags.length > 0) && (
           <div className="tag-row flex flex-wrap gap-1.5 mt-2">
+            {/* Only ever set on an entry dictated from the Ideas tab, and only
+                while that idea still exists — the server drops the id with the
+                idea, so a deleted idea leaves the entry and its recording
+                behind with nothing to click. */}
+            {entry.ideaId && (
+              <button
+                key={`i:${entry.ideaId}`}
+                onClick={() => onOpenIdea?.({ ideaId: entry.ideaId! })}
+                title="Open the idea this was recorded as"
+                className="px-2 py-0.5 text-xs rounded border border-[var(--color-accent)]/40 text-[var(--color-accent)] bg-[var(--color-accent)]/10 hover:bg-[var(--color-accent)]/20 transition-colors"
+              >
+                💡 {entry.ideaTitle || 'Untitled idea'}
+              </button>
+            )}
             {entry.ficRefs?.map(ref => (
               <button
                 key={`f:${ref.ficId}:${ref.chapterId ?? ''}`}

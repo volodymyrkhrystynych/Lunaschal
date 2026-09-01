@@ -27,6 +27,13 @@ export interface JournalEntry {
   tags: string | null;
   curatedTags: string[];
   ficRefs?: FicRef[];
+  /**
+   * The idea this entry was dictated for, when it was recorded in the Ideas tab
+   * — null once that idea is deleted, which is why the server nulls the id
+   * rather than leaving it to be tested against a missing title.
+   */
+  ideaId?: string | null;
+  ideaTitle?: string | null;
   attachments?: JournalAttachment[];
   createdAt?: string;
   updatedAt?: string;
@@ -953,6 +960,21 @@ export interface Idea extends Omit<
   rawContent: string;
   content: string;
   userVerdictNote: string | null;
+  /** Present only on the detail fetch, and only for a dictated idea. */
+  recording?: IdeaRecording | null;
+}
+
+/**
+ * The recording an idea was captured from. The audio itself belongs to the
+ * journal entry the same clip created — an idea holds no files of its own — so
+ * this is a pointer into the journal, and it goes away with that entry.
+ */
+export interface IdeaRecording {
+  entryId: string;
+  attachmentId: string | null;
+  url: string | null;
+  transcriptStatus: 'idle' | 'running' | 'done' | 'error' | null;
+  transcriptError: string | null;
 }
 
 /** Evidence the agent cited — chosen by index from a list the server built,
@@ -2515,6 +2537,10 @@ export const api = {
         attachmentId?: string;
         name?: string;
         transcribe?: boolean;
+        /** Also open an idea for this clip — the Ideas tab's Record button. */
+        ideaId?: string;
+        /** Which repo that idea belongs to; omitted means the default. */
+        repoId?: string;
       } = {}
     ) => {
       const form = new FormData();
@@ -2523,10 +2549,13 @@ export const api = {
       if (opts.id) form.append('id', opts.id);
       if (opts.attachmentId) form.append('attachmentId', opts.attachmentId);
       if (opts.transcribe) form.append('transcribe', 'true');
-      return upload<{ id: string; attachment: JournalAttachment }>(
-        '/api/journal/recordings',
-        form
-      );
+      if (opts.ideaId) form.append('ideaId', opts.ideaId);
+      if (opts.repoId) form.append('repoId', opts.repoId);
+      return upload<{
+        id: string;
+        attachment: JournalAttachment;
+        ideaId?: string | null;
+      }>('/api/journal/recordings', form);
     },
     update: (
       id: string,

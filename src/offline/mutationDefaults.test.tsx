@@ -13,6 +13,7 @@ import {
   useDailyToggle,
   useCalorieLog,
   useIdeaCreate,
+  useJournalRecording,
   useFoodCreate,
   useSelfieUpload,
   usePaperCreate,
@@ -21,6 +22,11 @@ import {
   usePaperPageAdd,
 } from './mutationDefaults';
 import { getPageSave, storePageSave } from './pageStore';
+import {
+  appendChunk,
+  beginRecording,
+  finalizeRecording,
+} from './recordingStore';
 import { getPhoto, listPhotos, storePhoto } from './photoStore';
 import type {
   CalorieDay,
@@ -323,6 +329,51 @@ describe('the capture surfaces that were online-only', () => {
     // The voice endpoint, so the background polish pass still runs on it.
     expect(url).toBe('/api/ideas/voice');
     expect(JSON.parse(init.body as string).id).toBe('i9');
+  });
+});
+
+describe('an idea recorded rather than typed', () => {
+  it('shows up in the Ideas list before the upload, and carries the id to the server', async () => {
+    // Stopping the recording is the save, so the row has to be there the
+    // instant it stops — with no text in it, because the transcript is minutes
+    // away and a placeholder would be a guess the user then has to delete.
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ id: 'rec-1', attachment: {}, ideaId: 'i9' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const rec = await beginRecording('transcribe', 'audio/mp4', {
+      idea: { id: 'i9' },
+    });
+    await appendChunk(rec.id, new Blob(['spoken words']));
+    await finalizeRecording(rec.id);
+
+    const qc = makeClient();
+    qc.setQueryData<IdeaSummary[]>(['ideas'], []);
+    const { result } = renderHook(() => useJournalRecording(), {
+      wrapper: wrapperFor(qc),
+    });
+
+    act(() => result.current.mutate({ id: rec.id, ideaId: 'i9' }));
+
+    await waitFor(() => {
+      const row = qc.getQueryData<IdeaSummary[]>(['ideas'])?.[0];
+      expect(row?.id).toBe('i9');
+      expect(row?.title).toBe('');
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [, init] = fetchMock.mock.calls.at(-1) as unknown as [
+      string,
+      RequestInit,
+    ];
+    const form = init.body as FormData;
+    expect(form.get('ideaId')).toBe('i9');
+    // One id for the entry and the attachment, as ever — that is what makes a
+    // replay a no-op, and it is the same request that opens the idea.
+    expect(form.get('id')).toBe(rec.id);
+    expect(form.get('transcribe')).toBe('true');
   });
 });
 

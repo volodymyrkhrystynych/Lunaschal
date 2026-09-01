@@ -46,7 +46,12 @@ export function PendingRecordings() {
 
   const retry = (rec: StoredRecording) => {
     void markAttempt(rec.id, null, false).then(() =>
-      enqueueRecordingUpload(qc, rec.id).catch(() => undefined)
+      // `rec.idea` rather than nothing: a retried Ideas capture is still an
+      // idea, and re-filing it as a plain journal entry would lose the half the
+      // user was waiting for.
+      enqueueRecordingUpload(qc, rec.id, undefined, { idea: rec.idea }).catch(
+        () => undefined
+      )
     );
   };
 

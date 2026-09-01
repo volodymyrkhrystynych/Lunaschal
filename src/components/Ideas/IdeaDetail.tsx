@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api, type Idea, type IdeaStatus } from '../../hooks/api';
+import {
+  api,
+  type Idea,
+  type IdeaStatus,
+  type IdeaSummary,
+} from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { IDEA_STATUSES, statusClasses } from '../../lib/ideas';
 import {
@@ -18,6 +23,7 @@ import { IdeaAssessment } from './IdeaAssessment';
 import { IdeaDecisions } from './IdeaDecisions';
 import { IdeaDiscussion } from './IdeaDiscussion';
 import { IdeaPlan } from './IdeaPlan';
+import { IdeaRecording } from './IdeaRecording';
 
 const SAVE_DEBOUNCE_MS = 1500;
 
@@ -34,6 +40,14 @@ const TITLE_POLL_MS = 4000;
  * request every four seconds forever.
  */
 const TITLE_POLL_WINDOW_MS = 3 * 60 * 1000;
+/**
+ * The same poll, for the longer wait a dictated idea has: speech-to-text runs
+ * before the polish and the title, and a long clip on a CPU backend takes
+ * minutes. Bounded for the same reason as the title window — a transcription
+ * that died with the process is reset to idle at startup, but one wedged in a
+ * live process would otherwise be polled forever.
+ */
+const RECORDING_POLL_WINDOW_MS = 30 * 60 * 1000;
 
 const TABS = [
   { id: 'idea', label: 'Idea' },
@@ -46,11 +60,13 @@ type TabId = (typeof TABS)[number]['id'];
 
 interface IdeaDetailProps {
   ideaId: string;
+  /** Switch to the Journal, at the entry a dictated idea's recording became. */
+  onOpenEntry?: (entryId: string) => void;
 }
 
 const EMPTY: IdeaDraft = { title: '', body: '' };
 
-export function IdeaDetail({ ideaId }: IdeaDetailProps) {
+export function IdeaDetail({ ideaId, onOpenEntry }: IdeaDetailProps) {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<TabId>('idea');
   const [draft, setDraft] = useState<IdeaDraft>(EMPTY);
@@ -71,9 +87,15 @@ export function IdeaDetail({ ideaId }: IdeaDetailProps) {
     queryFn: () => api.ideas.get(ideaId),
     refetchInterval: query => {
       const row = query.state.data as Idea | undefined;
-      if (!row || row.title.trim()) return false;
+      if (!row) return false;
       const age = Date.now() - new Date(row.createdAt).getTime();
-      return age >= 0 && age < TITLE_POLL_WINDOW_MS ? TITLE_POLL_MS : false;
+      if (age < 0) return false;
+      // The idea's text is still being transcribed out of its recording: a
+      // definite wait with a visible end, so it gets its own longer window.
+      if (row.recording?.transcriptStatus === 'running')
+        return age < RECORDING_POLL_WINDOW_MS ? TITLE_POLL_MS : false;
+      if (row.title.trim()) return false;
+      return age < TITLE_POLL_WINDOW_MS ? TITLE_POLL_MS : false;
     },
   });
 
@@ -173,9 +195,18 @@ export function IdeaDetail({ ideaId }: IdeaDetailProps) {
     );
   }
   if (!idea) {
+    // A recorded idea is opened the moment the recording stops, which is before
+    // the upload that creates it server-side has landed (and, offline, before
+    // it has even been attempted). The list still holds the optimistic row, so
+    // that — not a 404 — is what tells the two cases apart.
+    const queued = queryClient
+      .getQueryData<IdeaSummary[]>(['ideas'])
+      ?.some(i => i.id === ideaId);
     return (
       <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
-        This idea no longer exists.
+        {queued
+          ? 'Saving this idea — the recording is on this device until it lands.'
+          : 'This idea no longer exists.'}
       </div>
     );
   }
@@ -287,6 +318,15 @@ export function IdeaDetail({ ideaId }: IdeaDetailProps) {
 
       {tab === 'idea' && (
         <div className="flex-1 flex flex-col overflow-y-auto">
+          {/* Above the body, not below it: while the transcript is still coming
+              this is the only thing on the screen that explains the empty
+              box. */}
+          {idea.recording && (
+            <IdeaRecording
+              recording={idea.recording}
+              onOpenEntry={onOpenEntry}
+            />
+          )}
           <textarea
             ref={bodyRef}
             data-idea-editor

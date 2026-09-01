@@ -32,6 +32,22 @@ const store = idbAvailable()
 /** What happens to the audio once it reaches the server. */
 export type RecordingMode = 'audio' | 'transcribe';
 
+/**
+ * The idea this clip is also being captured as — the Ideas tab's Record button.
+ *
+ * Stored beside the audio rather than held in the component that started the
+ * recording, for the same reason the audio is: everything that picks a
+ * recording up later (the retry button, the startup sweep after the app was
+ * killed mid-recording) knows only what is in this store, and a resumed upload
+ * that has forgotten its idea silently files the recording as a plain journal
+ * entry instead.
+ */
+export interface RecordingIdea {
+  id: string;
+  /** Which repository to file the idea under; omitted means the default. */
+  repoId?: string;
+}
+
 export interface StoredRecording {
   id: string;
   mode: RecordingMode;
@@ -48,6 +64,8 @@ export interface StoredRecording {
   lastError: string | null;
   /** Terminal failure (a 4xx). Stop retrying, but never throw the audio away. */
   failed: boolean;
+  /** Set when the clip is an Ideas-tab capture; absent for journal recordings. */
+  idea?: RecordingIdea;
 }
 
 const META_PREFIX = 'rec:';
@@ -110,12 +128,14 @@ async function writeMeta(meta: StoredRecording): Promise<void> {
 /** Start a recording. Returns the record; its id is the future entry id. */
 export function beginRecording(
   mode: RecordingMode,
-  mimeType: string
+  mimeType: string,
+  opts: { idea?: RecordingIdea } = {}
 ): Promise<StoredRecording> {
   const meta: StoredRecording = {
     id: ulid(),
     mode,
     mimeType,
+    ...(opts.idea ? { idea: opts.idea } : {}),
     startedAt: Date.now(),
     endedAt: null,
     chunkCount: 0,

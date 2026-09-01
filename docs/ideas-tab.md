@@ -72,9 +72,30 @@ ROADMAP.md and TODO.md are still the human ledger. The agent reads them, never w
 what was dictated is never overwritten, and the detail pane falls back to it until an AI-cleaned
 version exists, with the transcript still reachable under "As captured".
 
-Dictation **appends to the capture box rather than saving immediately** (`useRecorder`, the
-`Learning/BrainDump.tsx` pattern), so a transcript can be corrected — or two thoughts recorded
-into one idea — before it becomes a row.
+Typing an idea is a small edit loop: write, correct, Save. **Recording one is not** — stopping the
+recording is the save, the way the Journal button works. The clip is written to IndexedDB while it
+is being recorded and uploaded once, through `POST /api/journal/recordings` with an `ideaId`, so a
+single request creates the journal entry, its audio attachment and the idea; one transcription then
+fills in both halves and the usual polish/title pass runs on the idea's.
+
+That is a reversal. Dictation used to append to the capture box (`useRecorder`, the
+`Learning/BrainDump.tsx` pattern) so a transcript could be corrected — or two thoughts recorded
+into one idea — before it became a row. The correction is worth something at a desk and worthless
+on a phone: it meant holding the thought while the transcription ran and then taking a second
+deliberate action, and the recording existed only in memory until then, so a lock screen or an
+incoming call lost the idea outright. The detail pane is where an idea gets corrected now, and
+`raw_content` still keeps what was actually said.
+
+The two rows are linked by `journal_entries.idea_id` (`ON DELETE SET NULL`), and each survives the
+other: delete the idea and the entry keeps the recording, losing only its pill; delete the entry and
+the idea keeps the text it already has. A transcript landing after either deletion is dropped rather
+than resurrecting a row, and it never overwrites text typed into the idea while it was still
+transcribing.
+
+The idea's id is minted before the first chunk and stored **beside the audio** rather than held in
+the component: the retry button and the startup sweep after an app kill know only what is in the
+recording store, and a resumed upload that had forgotten its idea would quietly file the clip as a
+plain journal entry — the loss this whole path exists to refuse.
 
 ### 2. The repo-context agent
 

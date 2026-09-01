@@ -38,6 +38,7 @@ const { MUTATION_KEYS, registerOfflineMutationDefaults } =
   await import('./mutationDefaults');
 const {
   attachRecordingToEntry,
+  captureIdeaRecording,
   enqueueRecordingUpload,
   handleFinishedRecording,
   resumeStoredRecordings,
@@ -65,8 +66,11 @@ function client() {
   return qc;
 }
 
-async function storedRecording(mode: 'audio' | 'transcribe' = 'audio') {
-  const rec = await beginRecording(mode, 'audio/mp4');
+async function storedRecording(
+  mode: 'audio' | 'transcribe' = 'audio',
+  opts: { idea?: { id: string; repoId?: string } } = {}
+) {
+  const rec = await beginRecording(mode, 'audio/mp4', opts);
   await appendChunk(rec.id, new Blob(['spoken words']));
   return (await finalizeRecording(rec.id))!;
 }
@@ -198,6 +202,58 @@ describe('attaching a recording to an entry that already exists', () => {
     ).rejects.toThrow();
 
     expect(await listRecordings()).toHaveLength(1);
+  });
+});
+
+describe('recording an idea', () => {
+  // The Ideas tab's Record button: one upload, which the server turns into a
+  // journal entry, its attachment, and the idea — all from one transcription.
+  it('uploads the clip with the idea it is also being captured as', async () => {
+    const rec = await storedRecording('transcribe', {
+      idea: { id: 'idea-9', repoId: 'repo-2' },
+    });
+    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
+
+    await captureIdeaRecording(client(), rec);
+
+    expect(createRecording).toHaveBeenCalledTimes(1);
+    expect(createRecording.mock.calls[0][1]).toMatchObject({
+      id: rec.id,
+      attachmentId: rec.id,
+      ideaId: 'idea-9',
+      repoId: 'repo-2',
+      // The server transcribes it — into the entry and into the idea.
+      transcribe: true,
+    });
+    expect(await listRecordings()).toEqual([]);
+  });
+
+  it('keeps the audio, and the idea link, when the upload fails', async () => {
+    const rec = await storedRecording('transcribe', { idea: { id: 'idea-9' } });
+    createRecording.mockRejectedValue(new Error('Failed to fetch'));
+
+    await expect(captureIdeaRecording(client(), rec)).rejects.toThrow();
+
+    const after = (await getRecording(rec.id))!;
+    expect(after.idea).toEqual({ id: 'idea-9' });
+  });
+
+  it('still knows it was an idea after the app was killed mid-recording', async () => {
+    // The idea id is written to the store with the first chunk precisely so the
+    // startup sweep can find it: a resumed upload that had forgotten it would
+    // file the clip as a plain journal entry and lose the idea entirely.
+    const rec = await beginRecording('transcribe', 'audio/mp4', {
+      idea: { id: 'idea-9' },
+    });
+    await appendChunk(rec.id, new Blob(['half a thought']));
+    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
+
+    await resumeStoredRecordings(client());
+    await vi.waitFor(() => expect(createRecording).toHaveBeenCalledTimes(1));
+
+    expect(createRecording.mock.calls[0][1]).toMatchObject({
+      ideaId: 'idea-9',
+    });
   });
 });
 
