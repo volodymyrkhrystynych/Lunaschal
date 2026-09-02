@@ -1,10 +1,18 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import {
+  act,
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+} from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Reader } from './Reader';
 import { ShortcutProvider } from '../../shortcuts/ShortcutProvider';
 import { api } from '../../hooks/api';
+import { captureFicCommentary } from '../../offline/recordingQueue';
+import { installFakeMediaRecorder } from '../../test/mediaRecorder';
 import type {
   Fic,
   FicBookmark,
@@ -67,6 +75,13 @@ const { CHAPTERS, FIC } = vi.hoisted(() => {
   };
   return { CHAPTERS, FIC };
 });
+
+// The durable upload queue is exercised in its own tests. What this file is
+// about is what the reader hands it: which fic and chapter the clip is
+// commentary on.
+vi.mock('../../offline/recordingQueue', () => ({
+  captureFicCommentary: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../../hooks/api', () => ({
   api: {
@@ -459,50 +474,112 @@ describe('Reader commentary microphone', () => {
     Element.prototype.scrollTo = vi.fn();
   });
 
-  // Dictated commentary saves itself. You are mid-chapter when you say it, not
-  // looking at the box — and every dictation now goes through the two-model STT
-  // cross-check, which is what the read-it-back-then-click step was for.
-  it('records and saves the transcript straight to the journal', async () => {
-    class FakeMediaRecorder {
-      onstop: (() => void) | null = null;
-      ondataavailable: ((e: { data: Blob }) => void) | null = null;
-      start() {}
-      stop() {
-        this.onstop?.();
-      }
-    }
-    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
-    vi.stubGlobal('navigator', {
-      ...navigator,
-      mediaDevices: {
-        getUserMedia: vi
-          .fn()
-          .mockResolvedValue({ getTracks: () => [], getAudioTracks: () => [] }),
-      },
-    });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ text: 'loved this chapter' }),
-      })
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // Which chapter opens by default follows whatever bookmark mock an earlier
+  // test in this file left behind, so the starting chapter is opened here
+  // rather than assumed — this block is about which chapter the recording is
+  // filed under, and that has to be a chapter the test picked.
+  const record = async (startChapter = 'Chapter 1') => {
+    const fake = installFakeMediaRecorder();
+    renderReader();
+    fireEvent.click(await screen.findByTitle(startChapter));
+    await screen.findByRole('heading', { name: startChapter });
+    fireEvent.click(screen.getByText(/Commentary/));
+    fireEvent.click(screen.getByRole('button', { name: '🎤' }));
+    const stop = await screen.findByRole('button', { name: '■ Stop' });
+    fake.emit();
+    return { fake, stop };
+  };
+
+  const lastCapture = () =>
+    (captureFicCommentary as unknown as ReturnType<typeof vi.fn>).mock.calls.at(
+      -1
     );
 
+  // Stopping is the save. The clip goes to the durable store and is uploaded as
+  // a journal entry carrying the fic and chapter; the transcript is written onto
+  // that entry by the server, minutes later. Nothing is transcribed here, which
+  // is the point — the audio used to exist only in memory, so a failed
+  // transcription took the commentary with it.
+  it('saves the recording as a chapter-linked journal entry, transcript to follow', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const { fake } = await record();
+
+    await act(async () => {
+      await fake.stop();
+    });
+
+    await waitFor(() => expect(captureFicCommentary).toHaveBeenCalled());
+    const rec = lastCapture()?.[1];
+    expect(rec.fic).toEqual({ ficId: 'fic1', chapterId: 'ch1' });
+    // 'transcribe' is what tells the upload to ask the server for a transcript
+    // once the audio has landed.
+    expect(rec.mode).toBe('transcribe');
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      '/api/transcribe',
+      expect.anything()
+    );
+    expect(api.journal.createFromVoice).not.toHaveBeenCalled();
+    await screen.findByText(/transcript follows/);
+  });
+
+  // The reader does not sit still while you talk: W/S walks to the next chapter
+  // mid-thought. What the commentary is about was decided when recording began,
+  // so the chapter is captured with the first chunk rather than read off the
+  // screen at upload time.
+  it('links to the chapter the recording started on, not the one open when it stops', async () => {
+    const { fake } = await record();
+
+    fireEvent.click(screen.getByTitle('Chapter 3'));
+    await screen.findByRole('heading', { name: 'Chapter 3' });
+
+    await act(async () => {
+      await fake.stop();
+    });
+
+    await waitFor(() => expect(captureFicCommentary).toHaveBeenCalled());
+    expect(lastCapture()?.[1].fic).toEqual({ ficId: 'fic1', chapterId: 'ch1' });
+  });
+
+  // The two halves of the panel are now separate entries: the mic no longer
+  // feeds the textarea, so a half-typed note is not swept into the recording's
+  // entry — nor emptied out from under the user.
+  it('leaves typed commentary in the box alone', async () => {
+    const { fake } = await record();
+    fireEvent.change(screen.getByPlaceholderText(/Your thoughts on/), {
+      target: { value: 'ch3 spoiler:' },
+    });
+
+    await act(async () => {
+      await fake.stop();
+    });
+
+    await waitFor(() => expect(captureFicCommentary).toHaveBeenCalled());
+    expect(
+      (screen.getByPlaceholderText(/Your thoughts on/) as HTMLTextAreaElement)
+        .value
+    ).toBe('ch3 spoiler:');
+    expect(api.journal.createFromVoice).not.toHaveBeenCalled();
+  });
+
+  // The typed half is unchanged: it still posts the text as a journal entry and
+  // links it in a second call.
+  it('still saves typed commentary through the Save button', async () => {
     renderReader();
     fireEvent.click(await screen.findByText(/Commentary/));
-    fireEvent.click(screen.getByRole('button', { name: '🎤' }));
-
-    const stop = await screen.findByRole('button', { name: '■ Stop' });
-    fireEvent.click(stop);
+    fireEvent.change(screen.getByPlaceholderText(/Your thoughts on/), {
+      target: { value: 'loved this chapter' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save to journal' }));
 
     await waitFor(() =>
       expect(api.journal.createFromVoice).toHaveBeenCalledWith(
         'loved this chapter'
       )
     );
-    // Linked to the fic and the open chapter, the same as a typed-then-saved
-    // one. (Which chapter is open depends on where the reader last was, so it
-    // is deliberately not pinned here.)
     await waitFor(() =>
       expect(api.fanfic.linkJournal).toHaveBeenCalledWith(
         'fic1',
@@ -510,55 +587,5 @@ describe('Reader commentary microphone', () => {
         expect.any(String)
       )
     );
-    // …and the box is emptied, not left holding a copy of what was saved.
-    await waitFor(() =>
-      expect(
-        (screen.getByPlaceholderText(/Your thoughts on/) as HTMLTextAreaElement)
-          .value
-      ).toBe('')
-    );
-    vi.unstubAllGlobals();
-  });
-
-  it('saves what was typed together with what was spoken', async () => {
-    class FakeMediaRecorder {
-      onstop: (() => void) | null = null;
-      ondataavailable: ((e: { data: Blob }) => void) | null = null;
-      start() {}
-      stop() {
-        this.onstop?.();
-      }
-    }
-    vi.stubGlobal('MediaRecorder', FakeMediaRecorder);
-    vi.stubGlobal('navigator', {
-      ...navigator,
-      mediaDevices: {
-        getUserMedia: vi
-          .fn()
-          .mockResolvedValue({ getTracks: () => [], getAudioTracks: () => [] }),
-      },
-    });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({ text: 'loved this chapter' }),
-      })
-    );
-
-    renderReader();
-    fireEvent.click(await screen.findByText(/Commentary/));
-    fireEvent.change(screen.getByPlaceholderText(/Your thoughts on/), {
-      target: { value: 'ch3 spoiler:' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '🎤' }));
-    fireEvent.click(await screen.findByRole('button', { name: '■ Stop' }));
-
-    await waitFor(() =>
-      expect(api.journal.createFromVoice).toHaveBeenCalledWith(
-        'ch3 spoiler:\nloved this chapter'
-      )
-    );
-    vi.unstubAllGlobals();
   });
 });

@@ -738,6 +738,46 @@ def _link_recording_idea(entry_id: str, idea_id: str, repo_id=None) -> None:
     db.commit()
 
 
+def _link_recording_fic(entry_id: str, fic_id: str, chapter_id: str | None) -> None:
+    """Point a recording's entry at the fic (and chapter) it was dictated over.
+
+    The reader's commentary microphone sends these ids *with* the upload rather
+    than linking in a second request, for the same reason `ideaId` is on this
+    endpoint at all: the upload is replayed until it lands, so a link made by a
+    separate call is the one step in the sequence that a dropped connection can
+    lose — leaving the commentary in the journal with nothing saying which
+    chapter it was about.
+
+    Idempotent like every other half of this route: the same (entry, fic,
+    chapter) triple inserts once. A fic or chapter that no longer exists is
+    dropped rather than failing the upload — the audio is the irreplaceable
+    half, and an entry that lost its link is still the entry.
+    """
+    db = get_db()
+    if not db.execute('SELECT id FROM fics WHERE id=?', (fic_id,)).fetchone():
+        print(f'Recording {entry_id} references unknown fic {fic_id}; link skipped')
+        return
+    if chapter_id and not db.execute(
+        'SELECT id FROM fic_chapters WHERE id=? AND fic_id=?', (chapter_id, fic_id)
+    ).fetchone():
+        print(f'Recording {entry_id} references unknown chapter {chapter_id}; '
+              'linking to the fic alone')
+        chapter_id = None
+    existing = db.execute(
+        'SELECT id FROM journal_entry_fic_refs'
+        ' WHERE journal_entry_id=? AND fic_id=? AND chapter_id IS ?',
+        (entry_id, fic_id, chapter_id),
+    ).fetchone()
+    if existing:
+        return
+    db.execute(
+        'INSERT INTO journal_entry_fic_refs(id, journal_entry_id, fic_id, chapter_id, created_at)'
+        ' VALUES (?,?,?,?,?)',
+        (str(ULID()), entry_id, fic_id, chapter_id, int(time.time())),
+    )
+    db.commit()
+
+
 @bp.post('/recordings')
 def create_recording_entry():
     """Save a recording as a journal entry, optionally transcribing it.
@@ -765,11 +805,18 @@ def create_recording_entry():
     idea. One upload, one transcription, two rows: the entry below and an empty
     idea, linked by `journal_entries.idea_id` and filled in together when the
     transcript lands. That id is the client's too, for the same replay reason.
+
+    `ficId` (with an optional `chapterId`) is the fanfic reader's commentary
+    microphone, and rides along here for the same reason: the entry it makes is
+    commentary *on a chapter*, and the link that says so has to survive the
+    replay loop along with the audio. See `_link_recording_fic`.
     """
     try:
         entry_id = _client_id(request.form.get('id'))
         attachment_id = _client_id(request.form.get('attachmentId'))
         idea_id = _client_id(request.form.get('ideaId'))
+        fic_id = _client_id(request.form.get('ficId'))
+        chapter_id = _client_id(request.form.get('chapterId'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -785,6 +832,11 @@ def create_recording_entry():
                 # idempotent, so a normal replay changes nothing.
                 _link_recording_idea(existing['entry_id'], idea_id,
                                      request.form.get('repoId'))
+            if fic_id:
+                # Same convergence, same reason: a first call that stored the
+                # clip and died before the link would otherwise leave the
+                # commentary permanently detached from its chapter.
+                _link_recording_fic(existing['entry_id'], fic_id, chapter_id)
             if transcribe:
                 _queue_attachment_transcription(
                     existing, into_entry=True, skip_completed=True
@@ -837,10 +889,16 @@ def create_recording_entry():
         # in the backlog with no recording to explain it.
         _link_recording_idea(entry_id, idea_id, request.form.get('repoId'))
 
+    if fic_id:
+        # After the file for the same reason: a fic ref to a rolled-back entry
+        # would put a dead row in the reader's commentary history.
+        _link_recording_fic(entry_id, fic_id, chapter_id)
+
     _notify_subscribers(entry_id)
     if transcribe:
         _queue_attachment_transcription(_load_attachment(attachment['id']), into_entry=True)
-    return jsonify({'id': entry_id, 'attachment': attachment, 'ideaId': idea_id}), 201
+    return jsonify({'id': entry_id, 'attachment': attachment, 'ideaId': idea_id,
+                    'ficId': fic_id}), 201
 
 
 @bp.patch('/attachments/<attachment_id>')

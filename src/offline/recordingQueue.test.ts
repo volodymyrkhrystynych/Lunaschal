@@ -38,6 +38,7 @@ const { MUTATION_KEYS, registerOfflineMutationDefaults } =
   await import('./mutationDefaults');
 const {
   attachRecordingToEntry,
+  captureFicCommentary,
   captureIdeaRecording,
   enqueueRecordingUpload,
   handleFinishedRecording,
@@ -68,7 +69,10 @@ function client() {
 
 async function storedRecording(
   mode: 'audio' | 'transcribe' = 'audio',
-  opts: { idea?: { id: string; repoId?: string } } = {}
+  opts: {
+    idea?: { id: string; repoId?: string };
+    fic?: { ficId: string; chapterId?: string };
+  } = {}
 ) {
   const rec = await beginRecording(mode, 'audio/mp4', opts);
   await appendChunk(rec.id, new Blob(['spoken words']));
@@ -253,6 +257,65 @@ describe('recording an idea', () => {
 
     expect(createRecording.mock.calls[0][1]).toMatchObject({
       ideaId: 'idea-9',
+    });
+  });
+});
+
+describe('commentary recorded in the fanfic reader', () => {
+  // The reader's Commentary microphone: the clip becomes a journal entry that
+  // is linked to the chapter it was spoken over, and the transcript is written
+  // onto that entry by the server afterwards.
+  it('uploads the clip with the fic and chapter it is commentary on', async () => {
+    const rec = await storedRecording('transcribe', {
+      fic: { ficId: 'fic-1', chapterId: 'ch-4' },
+    });
+    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
+
+    await captureFicCommentary(client(), rec);
+
+    expect(createRecording).toHaveBeenCalledTimes(1);
+    expect(createRecording.mock.calls[0][1]).toMatchObject({
+      id: rec.id,
+      attachmentId: rec.id,
+      ficId: 'fic-1',
+      chapterId: 'ch-4',
+      // The link rides along with the upload rather than following in a second
+      // request, so a dropped connection cannot land the audio and lose the
+      // chapter it was about.
+      transcribe: true,
+    });
+    expect(await listRecordings()).toEqual([]);
+  });
+
+  it('sends no chapter for a PDF fic, which has none', async () => {
+    const rec = await storedRecording('transcribe', {
+      fic: { ficId: 'fic-1' },
+    });
+    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
+
+    await captureFicCommentary(client(), rec);
+
+    expect(createRecording.mock.calls[0][1]).toMatchObject({ ficId: 'fic-1' });
+    expect(createRecording.mock.calls[0][1].chapterId).toBeUndefined();
+  });
+
+  it('still knows which chapter it was after the app was killed mid-recording', async () => {
+    // Same reason as the idea case above: a resumed upload that has forgotten
+    // its fic files the commentary as a plain journal entry, with nothing left
+    // saying which chapter it was a reaction to.
+    const rec = await beginRecording('transcribe', 'audio/mp4', {
+      fic: { ficId: 'fic-1', chapterId: 'ch-4' },
+    });
+    await appendChunk(rec.id, new Blob(['half a thought']));
+    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
+
+    await resumeStoredRecordings(client());
+    await vi.waitFor(() => expect(createRecording).toHaveBeenCalledTimes(1));
+
+    expect(createRecording.mock.calls[0][1]).toMatchObject({
+      ficId: 'fic-1',
+      chapterId: 'ch-4',
+      name: 'Commentary',
     });
   });
 });

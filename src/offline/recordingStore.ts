@@ -48,6 +48,22 @@ export interface RecordingIdea {
   repoId?: string;
 }
 
+/**
+ * The fic (and chapter) this clip is commentary on — the reader's Commentary
+ * microphone.
+ *
+ * Stored beside the audio for the same reason `RecordingIdea` is, and with one
+ * more of its own: what the commentary is *about* is decided when recording
+ * starts. The reader moves on — W/S walks to the next chapter while a thought
+ * is still being spoken — so a link resolved at upload time would file the
+ * entry under whatever chapter happened to be open by then.
+ */
+export interface RecordingFic {
+  ficId: string;
+  /** Absent for a PDF fic, which has no chapters to link to. */
+  chapterId?: string;
+}
+
 export interface StoredRecording {
   id: string;
   mode: RecordingMode;
@@ -66,6 +82,8 @@ export interface StoredRecording {
   failed: boolean;
   /** Set when the clip is an Ideas-tab capture; absent for journal recordings. */
   idea?: RecordingIdea;
+  /** Set when the clip is fic commentary; absent for journal recordings. */
+  fic?: RecordingFic;
 }
 
 const META_PREFIX = 'rec:';
@@ -129,13 +147,14 @@ async function writeMeta(meta: StoredRecording): Promise<void> {
 export function beginRecording(
   mode: RecordingMode,
   mimeType: string,
-  opts: { idea?: RecordingIdea } = {}
+  opts: { idea?: RecordingIdea; fic?: RecordingFic } = {}
 ): Promise<StoredRecording> {
   const meta: StoredRecording = {
     id: ulid(),
     mode,
     mimeType,
     ...(opts.idea ? { idea: opts.idea } : {}),
+    ...(opts.fic ? { fic: opts.fic } : {}),
     startedAt: Date.now(),
     endedAt: null,
     chunkCount: 0,
