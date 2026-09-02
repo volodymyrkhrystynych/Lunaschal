@@ -34,6 +34,7 @@ import {
 import { useMasterDetail } from '@/hooks/useMasterDetail';
 import { MasterDetailBack } from '@/components/MasterDetailBack';
 import { useRecorder } from '../../hooks/useRecorder';
+import { captureFicCommentary } from '../../offline/recordingQueue';
 
 interface ReaderProps {
   ficId: string;
@@ -46,7 +47,12 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
     initialChapterId ?? null
   );
   const [commentary, setCommentary] = useState('');
-  const [commentarySaved, setCommentarySaved] = useState(false);
+  // What to show beside the Commentary header after a save. Two different
+  // sentences, because the two halves of this panel finish differently: typed
+  // commentary is an entry the moment it is saved, a recording is an entry with
+  // its text still on the way.
+  const [commentarySaved, setCommentarySaved] = useState('');
+  const [recordingNotice, setRecordingNotice] = useState('');
   const [showCommentary, setShowCommentary] = useState(false);
   const [navVisible, setNavVisible] = useState(true);
   const [fontSize, setFontSize] = useState(getStoredReadingFontSize);
@@ -63,17 +69,49 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
     });
   }, [ficId]);
 
-  // Speak the commentary instead of typing it — and it saves itself, the same
-  // as dictation in Chat and the writing discussions. Reacting to a chapter is
-  // the case that most wants to stay hands-free: you are mid-read, not looking
-  // at the box. Anything already typed goes into the same entry.
-  const recorder = useRecorder(t => {
-    const raw = t.trim();
-    if (!raw) return;
-    const combined = commentary.trim() ? `${commentary.trim()}\n${raw}` : raw;
-    setCommentary(combined);
-    saveCommentary.mutate(combined);
+  // Speak the commentary instead of typing it. This is the Journal button's
+  // contract, not a dictation box's: **stopping the recording is the save**.
+  // The clip goes to the durable store, is uploaded as a journal entry linked
+  // to this chapter, and the transcript, the polish and the title all arrive
+  // on that entry minutes later on their own.
+  //
+  // It used to transcribe in the browser, append the text to the box below and
+  // post that — which meant the audio lived only in memory, so a failed
+  // transcription (or a locked phone mid-thought) lost the commentary outright.
+  // Reacting to a chapter is the case that most wants to stay hands-free: you
+  // are mid-read, not looking at the box. So no transcript comes back here; the
+  // textarea is left alone for what was typed into it.
+  const recorder = useRecorder(() => undefined, undefined, {
+    onNotice: setRecordingNotice,
+    onRecording: rec => {
+      // Not awaited — see captureFicCommentary. The audio is on disk until the
+      // server confirms it, and the entry is already in the journal feed from
+      // the upload's optimistic insert.
+      void captureFicCommentary(queryClient, rec).catch(() => undefined);
+      setCommentarySaved('recording saved — the transcript follows ✓');
+      setTimeout(() => setCommentarySaved(''), 3000);
+    },
   });
+
+  const toggleRecording = () => {
+    if (recorder.status === 'recording') {
+      recorder.stop();
+      return;
+    }
+    if (recorder.status !== 'idle') return;
+    setRecordingNotice('');
+    // The chapter is captured here, at the first chunk, and stored beside the
+    // audio: W/S moves the reader on while a thought is still being spoken, and
+    // resolving the link at upload time would file the commentary under
+    // whatever chapter was open by then. A PDF fic has no chapters to link to.
+    void recorder.start('transcribe', {
+      durable: true,
+      fic: {
+        ficId,
+        ...(!isPdf && chapterId ? { chapterId } : {}),
+      },
+    });
+  };
 
   // Opening a fic (even by mouse) puts keyboard focus inside the reader so
   // W/S move between chapters instead of switching app tabs.
@@ -342,8 +380,8 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
     },
     onSuccess: () => {
       setCommentary('');
-      setCommentarySaved(true);
-      setTimeout(() => setCommentarySaved(false), 3000);
+      setCommentarySaved('saved to journal ✓');
+      setTimeout(() => setCommentarySaved(''), 3000);
       queryClient.invalidateQueries({ queryKey: ['journal'] });
     },
   });
@@ -706,7 +744,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                 >
                   {showCommentary ? '▾' : '▸'} Commentary
                   {commentarySaved && (
-                    <span className="text-green-400">saved to journal ✓</span>
+                    <span className="text-green-400">{commentarySaved}</span>
                   )}
                 </button>
                 <button
@@ -754,28 +792,34 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                       {(saveCommentary.error as Error).message}
                     </div>
                   )}
+                  {recordingNotice && (
+                    <p className="mb-2 text-xs text-[var(--color-text-muted)]">
+                      {recordingNotice}
+                    </p>
+                  )}
                   {recorder.error && (
                     <p className="mb-2 text-xs text-red-400">
                       {recorder.error}
                     </p>
                   )}
                   <div className="flex justify-end gap-2">
+                    {recorder.status === 'recording' && (
+                      <span className="mr-auto self-center text-xs text-[var(--color-text-muted)]">
+                        Stop to save — it transcribes itself.
+                      </span>
+                    )}
                     <button
-                      onClick={() =>
-                        recorder.status === 'recording'
-                          ? recorder.stop()
-                          : recorder.start()
-                      }
-                      disabled={
-                        recorder.status === 'transcribing' ||
-                        !recorder.canTranscribe
-                      }
+                      onClick={toggleRecording}
+                      // Not gated on being online any more: the clip is stored
+                      // on the device and uploaded when the server is back, so
+                      // commentary on a chapter read offline is still kept.
+                      // Only the moment it is being handed over is blocked, and
+                      // while recording this button is the only way to stop.
+                      disabled={recorder.status === 'saving'}
                       title={
-                        !recorder.canTranscribe
-                          ? 'Offline — dictation needs the server'
-                          : recorder.status === 'recording'
-                            ? 'Stop recording'
-                            : 'Speak to save to the journal'
+                        recorder.status === 'recording'
+                          ? 'Stop recording'
+                          : 'Record commentary — it saves and transcribes itself'
                       }
                       className={`px-3 py-1 rounded disabled:opacity-50 ${
                         recorder.status === 'recording'
@@ -785,8 +829,8 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                     >
                       {recorder.status === 'recording'
                         ? '■ Stop'
-                        : recorder.status === 'transcribing'
-                          ? 'Transcribing…'
+                        : recorder.status === 'saving'
+                          ? 'Saving…'
                           : '🎤'}
                     </button>
                     <button

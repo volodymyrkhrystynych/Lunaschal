@@ -377,6 +377,50 @@ describe('an idea recorded rather than typed', () => {
   });
 });
 
+describe('commentary recorded in the fanfic reader', () => {
+  it('carries the fic and chapter on the upload itself', async () => {
+    // Not a follow-up call to /api/fanfic/<id>/journal-link: this upload is
+    // replayed until it lands, and a separate request is the step that can be
+    // lost — taking with it the only thing saying which chapter the entry is
+    // commentary on.
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ id: 'rec-1', attachment: {}, ficId: 'fic-1' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const rec = await beginRecording('transcribe', 'audio/mp4', {
+      fic: { ficId: 'fic-1', chapterId: 'ch-4' },
+    });
+    await appendChunk(rec.id, new Blob(['spoken words']));
+    await finalizeRecording(rec.id);
+
+    const { result } = renderHook(() => useJournalRecording(), {
+      wrapper: wrapperFor(makeClient()),
+    });
+    act(() =>
+      result.current.mutate({
+        id: rec.id,
+        ficId: 'fic-1',
+        chapterId: 'ch-4',
+        name: 'Commentary',
+      })
+    );
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const [, init] = fetchMock.mock.calls.at(-1) as unknown as [
+      string,
+      RequestInit,
+    ];
+    const form = init.body as FormData;
+    expect(form.get('ficId')).toBe('fic-1');
+    expect(form.get('chapterId')).toBe('ch-4');
+    // The server transcribes it into the entry afterwards; nothing was
+    // transcribed in the browser first.
+    expect(form.get('transcribe')).toBe('true');
+  });
+});
+
 describe('photos, which are the thing that cannot be retyped', () => {
   it('keeps the meal and its picture on the device, and uploads both later', async () => {
     // The whole point of the media queue: a photograph is not recoverable. A

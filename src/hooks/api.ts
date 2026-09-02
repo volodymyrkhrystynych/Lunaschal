@@ -2608,6 +2608,15 @@ export const api = {
         ideaId?: string;
         /** Which repo that idea belongs to; omitted means the default. */
         repoId?: string;
+        /**
+         * Link the entry to this fic — the reader's Commentary microphone.
+         * Sent with the upload rather than as a follow-up `fanfic.linkJournal`
+         * call so the link is replayed along with the audio instead of being
+         * the one step a dropped connection can lose.
+         */
+        ficId?: string;
+        /** Which chapter of it; omitted for a PDF fic, which has none. */
+        chapterId?: string;
       } = {}
     ) => {
       const form = new FormData();
@@ -2618,10 +2627,13 @@ export const api = {
       if (opts.transcribe) form.append('transcribe', 'true');
       if (opts.ideaId) form.append('ideaId', opts.ideaId);
       if (opts.repoId) form.append('repoId', opts.repoId);
+      if (opts.ficId) form.append('ficId', opts.ficId);
+      if (opts.chapterId) form.append('chapterId', opts.chapterId);
       return upload<{
         id: string;
         attachment: JournalAttachment;
         ideaId?: string | null;
+        ficId?: string | null;
       }>('/api/journal/recordings', form);
     },
     update: (

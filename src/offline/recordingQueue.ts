@@ -3,6 +3,7 @@ import { MUTATION_KEYS, type JournalRecordingVars } from './mutationDefaults';
 import {
   finalizeRecording,
   listRecordings,
+  type RecordingFic,
   type RecordingIdea,
   type StoredRecording,
 } from './recordingStore';
@@ -19,6 +20,8 @@ import {
 const DEFAULT_NAME = 'Recording';
 /** The attachment's label in the journal entry an idea capture creates. */
 const IDEA_NAME = 'Idea';
+/** The same, for a clip recorded over a chapter in the fanfic reader. */
+const COMMENTARY_NAME = 'Commentary';
 
 /**
  * Hand a stored recording to the offline write queue, which uploads it now if
@@ -30,7 +33,7 @@ export function enqueueRecordingUpload(
   qc: QueryClient,
   id: string,
   name?: string,
-  opts: { entryId?: string; idea?: RecordingIdea } = {}
+  opts: { entryId?: string; idea?: RecordingIdea; fic?: RecordingFic } = {}
 ): Promise<unknown> {
   const mutation = qc
     .getMutationCache()
@@ -46,6 +49,8 @@ export function enqueueRecordingUpload(
     // them alone.
     ideaId: opts.idea?.id,
     repoId: opts.idea?.repoId,
+    ficId: opts.fic?.ficId,
+    chapterId: opts.fic?.chapterId,
   });
 }
 
@@ -131,6 +136,27 @@ export function captureIdeaRecording(
 }
 
 /**
+ * The fanfic reader's Commentary microphone: the same durable journal upload,
+ * carrying the fic and chapter the clip is commentary on.
+ *
+ * Deliberately not awaited, like the Ideas capture and for the same reason —
+ * stopping the recording *is* the save. It used to be the opposite: the clip
+ * was transcribed in the browser, the text appended to the commentary box and
+ * posted as a plain journal entry, so the audio existed only in memory and a
+ * transcription failure took the thought with it. Now the recording lands
+ * first and the transcript arrives on the entry minutes later.
+ */
+export function captureFicCommentary(
+  qc: QueryClient,
+  rec: StoredRecording,
+  opts: { name?: string } = {}
+): Promise<unknown> {
+  return enqueueRecordingUpload(qc, rec.id, opts.name ?? COMMENTARY_NAME, {
+    fic: rec.fic,
+  });
+}
+
+/**
  * Pick up recordings left on the device by a previous session.
  *
  * `resumePausedMutations()` only knows about mutations React Query itself saw
@@ -152,9 +178,13 @@ export async function resumeStoredRecordings(qc: QueryClient): Promise<void> {
     void enqueueRecordingUpload(
       qc,
       rec.id,
-      rec.idea ? IDEA_NAME : DEFAULT_NAME,
+      rec.idea ? IDEA_NAME : rec.fic ? COMMENTARY_NAME : DEFAULT_NAME,
       {
         idea: rec.idea,
+        // Carried through here too, not just on the live path: a resumed
+        // upload that has forgotten its fic files the commentary as a plain
+        // journal entry with nothing saying which chapter it was about.
+        fic: rec.fic,
       }
     ).catch(() => {
       // Failures are recorded on the stored recording by the mutation itself;

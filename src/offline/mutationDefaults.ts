@@ -137,6 +137,14 @@ export interface JournalRecordingVars {
   ideaId?: string;
   /** Which repository that idea belongs to; omitted means the default. */
   repoId?: string;
+  /**
+   * Link the entry this clip becomes to a fic — the reader's Commentary
+   * microphone. Flat ids rather than the stored recording's `fic` object, for
+   * the same structured-clone reason as `ideaId`/`repoId` above.
+   */
+  ficId?: string;
+  /** Which chapter of it; omitted for a PDF fic, which has none. */
+  chapterId?: string;
 }
 export type TodoCreateVars = TodoPayload & { title: string; id: string };
 export interface TodoUpdateVars {
@@ -451,6 +459,8 @@ const journalRecordingCfg = (
         transcribe: rec.mode === 'transcribe',
         ideaId: vars.ideaId,
         repoId: vars.repoId,
+        ficId: vars.ficId,
+        chapterId: vars.chapterId,
       });
       // Confirmed stored. This is the only place the audio may be let go of.
       await deleteRecording(vars.id);
@@ -498,6 +508,9 @@ const journalRecordingCfg = (
     // has to be refetched too — the optimistic row above carries no text.
     if (vars.ideaId) qc.invalidateQueries({ queryKey: ['ideas'] });
   },
+  // Note there is nothing fic-specific here: the link lives on the journal
+  // entry (`ficRefs`), which the invalidation above already refetches, and the
+  // reader shows no list of its own commentary to go stale.
 });
 
 const todoCreateCfg = (
