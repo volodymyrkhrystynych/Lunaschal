@@ -108,6 +108,43 @@ def test_gate_sweep_is_off_when_triage_is_disabled(client):
     assert triager.run_gate_sweep(db)['scanned'] == 0
 
 
+def test_gate_sweep_reaches_rows_behind_a_batch_of_keepers(client, monkeypatch):
+    """The batch bounds memory, not how far the sweep gets.
+
+    A rejected row leaves `pending` and so leaves the result set, but a kept
+    one stays in it forever. With a plain `LIMIT` the sweep re-reads the same
+    leading keepers every tick and creeps forward only by what it just
+    rejected — and once a full batch of them accumulates at the front it stops
+    advancing entirely. Everything behind is then reachable only by the model
+    drain, one generation at a time, which is how thousands of postings ended
+    up queued behind a gate that had already decided about them.
+    """
+    monkeypatch.setattr(triager, 'GATE_BATCH', 2)
+    db = get_db()
+    keepers = [make_job(db, title='Backend Engineer') for _ in range(4)]
+    cook = make_job(db, title='Line Cook')
+
+    result = triager.run_gate_sweep(db)
+
+    assert state_of(db, cook)['triage_state'] == 'rejected'
+    assert result['rejected'] == 1
+    assert result['scanned'] == 5
+    for job_id in keepers:
+        assert state_of(db, job_id)['triage_state'] == 'pending'
+
+
+def test_gate_sweep_terminates_when_every_row_is_a_keeper(client, monkeypatch):
+    """The paging cursor counts kept rows, so an all-keep table still ends."""
+    monkeypatch.setattr(triager, 'GATE_BATCH', 2)
+    db = get_db()
+    for _ in range(5):
+        make_job(db, title='Backend Engineer')
+
+    result = triager.run_gate_sweep(db)
+
+    assert result == {'scanned': 5, 'rejected': 0}
+
+
 # --------------------------------------------------------------------------
 # The model layer
 # --------------------------------------------------------------------------
