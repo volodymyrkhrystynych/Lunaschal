@@ -15,7 +15,13 @@ import type {
   ServerLogResponse,
   ServerLogUnit,
 } from '../lib/serverLogs';
-import type { PianoPiece } from '../lib/piano';
+import type {
+  PianoArchiveItem,
+  PianoArchivePage,
+  PianoArchiveScanResult,
+  PianoArchiveStatus,
+  PianoPiece,
+} from '../lib/piano';
 
 export type { SleepDay };
 export type { ServerLogEntry, ServerLogResponse, ServerLogUnit };
@@ -2308,6 +2314,11 @@ const WRITE_TIMEOUT_MS = 60_000;
 // helper with no timeout at all, and a half-open connection there hangs until
 // the OS gives up, which now also stalls every queued recording behind it.
 const UPLOAD_TIMEOUT_MS = 10 * 60_000;
+// A first scan of a research-sized score corpus can walk hundreds of thousands
+// of files on a spinning USB drive. The backend checkpoints every 500 rows, so
+// retrying is safe; the client still needs to wait substantially longer than a
+// normal write before deciding that the connection is stuck.
+const ARCHIVE_SCAN_TIMEOUT_MS = 30 * 60_000;
 
 /**
  * An error carrying the HTTP status, so a caller can tell "the server is
@@ -2391,7 +2402,8 @@ async function get<T>(url: string): Promise<T> {
 async function send<T>(
   method: string,
   url: string,
-  body?: unknown
+  body?: unknown,
+  timeoutMs = WRITE_TIMEOUT_MS
 ): Promise<T> {
   const r = await fetchWithTimeout(
     url,
@@ -2402,7 +2414,7 @@ async function send<T>(
         body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     },
-    WRITE_TIMEOUT_MS
+    timeoutMs
   );
   if (!r.ok) {
     const b = await r.json().catch(() => ({}));
@@ -2477,6 +2489,39 @@ export const api = {
       return response.text();
     },
     remove: (id: string) => del<{ ok: boolean }>(`/api/piano/pieces/${id}`),
+    archiveStatus: () => get<PianoArchiveStatus>('/api/piano/archive/status'),
+    archiveItems: (options?: {
+      query?: string;
+      favoritesOnly?: boolean;
+      limit?: number;
+      offset?: number;
+    }) => {
+      const params = new URLSearchParams();
+      if (options?.query) params.set('q', options.query);
+      if (options?.favoritesOnly) params.set('favorite', '1');
+      if (options?.limit != null) params.set('limit', String(options.limit));
+      if (options?.offset != null) params.set('offset', String(options.offset));
+      const query = params.toString();
+      return get<PianoArchivePage>(
+        `/api/piano/archive/items${query ? `?${query}` : ''}`
+      );
+    },
+    archiveUpload: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return upload<PianoArchiveItem>('/api/piano/archive/items', form);
+    },
+    archiveScan: () =>
+      send<PianoArchiveScanResult>(
+        'POST',
+        '/api/piano/archive/scan',
+        undefined,
+        ARCHIVE_SCAN_TIMEOUT_MS
+      ),
+    archiveFavorite: (id: string, favorite: boolean) =>
+      patch<PianoArchiveItem>(`/api/piano/archive/items/${id}`, {
+        favorite,
+      }),
   },
 
   settings: {

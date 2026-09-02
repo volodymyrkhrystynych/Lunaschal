@@ -1741,3 +1741,33 @@ CREATE TABLE IF NOT EXISTS piano_pieces (
 
 CREATE INDEX IF NOT EXISTS idx_piano_pieces_updated
     ON piano_pieces(updated_at DESC);
+
+-- Large files are kept on the external backup drive, not in SQLite. This
+-- catalog deliberately stores paths relative to that drive's Piano archive so
+-- moving the configured backup destination does not invalidate every row.
+-- A compatible favorite gets a small normalized copy in piano_pieces, which
+-- keeps practice available while the archive drive is unplugged.
+CREATE TABLE IF NOT EXISTS media_archive_items (
+    id TEXT PRIMARY KEY,
+    collection TEXT NOT NULL DEFAULT 'piano',
+    title TEXT NOT NULL,
+    creator TEXT,
+    media_type TEXT NOT NULL DEFAULT 'file',
+    source_filename TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    source_url TEXT,
+    content_type TEXT,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT,
+    practice_compatible INTEGER NOT NULL DEFAULT 0,
+    favorite INTEGER NOT NULL DEFAULT 0,
+    piano_piece_id TEXT REFERENCES piano_pieces(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(collection, relative_path)
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_archive_collection_updated
+    ON media_archive_items(collection, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_media_archive_collection_favorite
+    ON media_archive_items(collection, favorite, title COLLATE NOCASE);

@@ -1,11 +1,8 @@
-import time
-
 from flask import Blueprint, jsonify, request, send_file
-from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
-from backend.piano import storage
-from backend.piano.musicxml import ScoreImportError, normalize_score, score_metadata
+from backend.piano import archive, library, storage
+from backend.piano.musicxml import ScoreImportError, normalize_score
 
 bp = Blueprint('piano', __name__, url_prefix='/api/piano')
 
@@ -28,28 +25,7 @@ def import_piece():
         score = normalize_score(upload.read(), upload.filename)
     except ScoreImportError as exc:
         return jsonify({'error': str(exc)}), 400
-    fallback = upload.filename.rsplit('.', 1)[0].strip() or 'Untitled score'
-    title, composer = score_metadata(score, fallback)
-    piece_id = str(ULID())
-    directory = storage.piano_dir(piece_id)
-    assert directory is not None
-    directory.mkdir(parents=True, exist_ok=False)
-    path = directory / 'score.musicxml'
-    try:
-        path.write_bytes(score)
-        now = int(time.time())
-        db = get_db()
-        db.execute(
-            'INSERT INTO piano_pieces '
-            '(id,title,composer,source_filename,score_path,created_at,updated_at) '
-            'VALUES (?,?,?,?,?,?,?)',
-            (piece_id, title, composer, upload.filename, str(path), now, now),
-        )
-        db.commit()
-    except Exception:
-        storage.delete_piano_dir(piece_id)
-        raise
-    row = db.execute('SELECT * FROM piano_pieces WHERE id=?', (piece_id,)).fetchone()
+    _, row = library.store_piece(score, upload.filename)
     return jsonify(row_to_dict(row)), 201
 
 
@@ -68,10 +44,80 @@ def get_score(piece_id):
 
 @bp.delete('/pieces/<piece_id>')
 def delete_piece(piece_id):
-    db = get_db()
-    cursor = db.execute('DELETE FROM piano_pieces WHERE id=?', (piece_id,))
-    db.commit()
-    if cursor.rowcount == 0:
+    if not library.delete_piece(piece_id):
         return jsonify({'error': 'Not found'}), 404
-    storage.delete_piano_dir(piece_id)
     return jsonify({'ok': True})
+
+
+@bp.get('/archive/status')
+def archive_status():
+    return jsonify(archive.status())
+
+
+@bp.get('/archive/items')
+def archive_items():
+    try:
+        limit = int(request.args.get('limit', archive.DEFAULT_PAGE_SIZE))
+        offset = int(request.args.get('offset', 0))
+    except ValueError:
+        return jsonify({'error': 'Pagination values must be whole numbers.'}), 400
+    return jsonify(
+        archive.list_items(
+            query=request.args.get('q', ''),
+            favorites_only=request.args.get('favorite') == '1',
+            limit=limit,
+            offset=offset,
+        )
+    )
+
+
+@bp.post('/archive/items')
+def upload_archive_item():
+    upload = request.files.get('file')
+    if upload is None:
+        return jsonify({'error': 'Choose a file to archive.'}), 400
+    try:
+        item = archive.store_upload(upload, source_url=request.form.get('sourceUrl'))
+    except (ValueError, archive.ArchiveUnavailable) as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(item), 201
+
+
+@bp.post('/archive/scan')
+def scan_archive():
+    try:
+        return jsonify(archive.scan())
+    except archive.ArchiveUnavailable as exc:
+        return jsonify({'error': str(exc)}), 400
+
+
+@bp.patch('/archive/items/<item_id>')
+def update_archive_item(item_id):
+    body = request.get_json(silent=True) or {}
+    if 'favorite' not in body or not isinstance(body['favorite'], bool):
+        return jsonify({'error': 'favorite must be true or false.'}), 400
+    try:
+        item = archive.set_favorite(item_id, body['favorite'])
+    except (ScoreImportError, archive.ArchiveUnavailable) as exc:
+        return jsonify({'error': str(exc)}), 400
+    if item is None:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(item)
+
+
+@bp.get('/archive/items/<item_id>/file')
+def get_archive_file(item_id):
+    try:
+        resolved = archive.item_path(item_id)
+    except archive.ArchiveUnavailable as exc:
+        return jsonify({'error': str(exc)}), 404
+    if resolved is None:
+        return jsonify({'error': 'Not found'}), 404
+    path, row = resolved
+    return send_file(
+        path,
+        mimetype=row['content_type'] or 'application/octet-stream',
+        as_attachment=True,
+        download_name=row['source_filename'],
+        conditional=True,
+    )

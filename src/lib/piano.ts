@@ -9,6 +9,62 @@ export interface PianoPiece {
   updatedAt: string;
 }
 
+export interface PianoArchiveItem {
+  id: string;
+  collection: 'piano';
+  title: string;
+  creator: string | null;
+  mediaType:
+    | 'score'
+    | 'midi'
+    | 'document'
+    | 'archive'
+    | 'audio'
+    | 'video'
+    | 'image'
+    | 'file';
+  sourceFilename: string;
+  relativePath: string;
+  sourceUrl: string | null;
+  contentType: string | null;
+  sizeBytes: number;
+  sha256: string | null;
+  practiceCompatible: number;
+  favorite: number;
+  pianoPieceId: string | null;
+  available: boolean;
+  fileUrl: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PianoArchivePage {
+  items: PianoArchiveItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface PianoArchiveStatus {
+  configured: boolean;
+  available: boolean;
+  writable: boolean;
+  root: string | null;
+  destination: string | null;
+  reason: string | null;
+  itemCount: number;
+  favoriteCount: number;
+  sizeBytes: number;
+  freeBytes: number | null;
+  totalBytes: number | null;
+}
+
+export interface PianoArchiveScanResult {
+  indexed: number;
+  updated: number;
+  skipped: number;
+}
+
 export interface PracticeStep {
   measure: number;
   beat: number;
