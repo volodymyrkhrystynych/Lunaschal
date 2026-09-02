@@ -9,9 +9,11 @@ import {
   type PianoPiece,
 } from '../../lib/piano';
 import { renderMusicXml } from '../../lib/verovio';
+import { PianoArchive } from './PianoArchive';
 import { PianoKeyboard } from './PianoKeyboard';
 
 export function Piano() {
+  const [section, setSection] = useState<'practice' | 'archive'>('practice');
   const [devices, setDevices] = useState<MidiDevice[]>([]);
   const [deviceId, setDeviceId] = useState('');
   const [connected, setConnected] = useState(false);
@@ -197,150 +199,182 @@ export function Piano() {
     <section className="flex flex-1 overflow-hidden text-[var(--color-text)]">
       <aside className="w-72 shrink-0 overflow-y-auto border-r border-white/10 bg-[var(--color-surface)] p-4">
         <h2 className="text-xl font-semibold">Piano</h2>
-        <label className="mt-4 block cursor-pointer rounded bg-[var(--color-primary)] px-4 py-2 text-center text-white">
-          Import sheet music
-          <input
-            type="file"
-            accept=".musicxml,.xml,.mxl"
-            className="hidden"
-            onChange={event => {
-              const file = event.target.files?.[0];
-              if (file) void importScore(file);
-              event.target.value = '';
-            }}
-          />
-        </label>
-        <p className="mt-2 text-xs text-[var(--color-text-muted)]">
-          MusicXML, XML, or compressed MXL
-        </p>
-        <div className="mt-5 space-y-2">
-          {!pieces.length && (
-            <p className="text-sm text-[var(--color-text-muted)]">
-              No pieces imported yet.
-            </p>
-          )}
-          {pieces.map(item => (
-            <div
-              key={item.id}
-              className={`w-full rounded border p-3 text-left ${
-                piece?.id === item.id
-                  ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10'
-                  : 'border-white/10 hover:border-white/30'
+        <div className="mt-4 grid grid-cols-2 rounded border border-white/10 p-1 text-sm">
+          {(['practice', 'archive'] as const).map(value => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setSection(value)}
+              className={`rounded px-2 py-1.5 capitalize ${
+                section === value
+                  ? 'bg-[var(--color-primary)] text-white'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
               }`}
             >
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => void openPiece(item)}
-                  className="min-w-0 flex-1 text-left"
-                >
-                  <span className="block font-medium">{item.title}</span>
-                  {item.composer && (
-                    <span className="block text-xs text-[var(--color-text-muted)]">
-                      {item.composer}
-                    </span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  aria-label={`Delete ${item.title}`}
-                  title="Delete score"
-                  onClick={() => void removePiece(item)}
-                  className="self-start rounded px-2 py-1 text-[var(--color-text-muted)] hover:bg-red-500/10 hover:text-red-300"
-                >
-                  ×
-                </button>
-              </div>
-            </div>
+              {value}
+            </button>
           ))}
         </div>
-      </aside>
-
-      <div className="flex-1 space-y-5 overflow-auto p-5">
-        <MidiControls
-          devices={devices}
-          deviceId={deviceId}
-          connected={connected}
-          sustain={sustain}
-          onDevice={setDeviceId}
-          onConnect={connect}
-          onDisconnect={async () => {
-            await desktopApi()?.midi_close();
-            setConnected(false);
-          }}
-          onRefresh={refreshDevices}
-        />
-        {error && (
-          <div
-            role="alert"
-            className="rounded border border-red-500/50 bg-red-500/10 p-3 text-red-300"
-          >
-            {error}
-          </div>
-        )}
-        {piece ? (
+        {section === 'practice' ? (
           <>
-            <PracticeControls
-              piece={piece}
-              hand={hand}
-              loopStart={loopStart}
-              loopEnd={loopEnd}
-              connected={connected}
-              canStart={practiceSteps.length > 0}
-              onHand={value => {
-                setHand(value);
-                setStepIndex(0);
-              }}
-              onLoopStart={setLoopStart}
-              onLoopEnd={setLoopEnd}
-              onStart={startPractice}
-            />
-            <div className="sticky top-0 z-20 flex flex-wrap items-center gap-4 rounded-lg border border-cyan-400/30 bg-zinc-950/95 p-3 shadow-lg">
-              <strong>
-                {practicing
-                  ? 'Your turn'
-                  : stepIndex >= practiceSteps.length && practiceSteps.length
-                    ? 'Complete'
-                    : 'Ready'}
-              </strong>
-              {currentStep && (
-                <span>
-                  Measure {currentStep.measure}, beat{' '}
-                  {formatBeat(currentStep.beat)}
-                </span>
-              )}
-              {currentStep && (
-                <span className="text-cyan-300">
-                  Play MIDI {notesForHand(currentStep, hand).join(' + ')}
-                </span>
-              )}
-              <span className="text-sm text-[var(--color-text-muted)]">
-                Step {Math.min(stepIndex + 1, practiceSteps.length)} /{' '}
-                {practiceSteps.length} · Wrong notes {wrongNotes}
-              </span>
-            </div>
-            <div className="overflow-x-auto">
-              <PianoKeyboard activeNotes={activeNotes} />
-            </div>
-            <div className="space-y-4">
-              {loadingScore && (
-                <p className="text-[var(--color-text-muted)]">
-                  Engraving score…
+            <label className="mt-4 block cursor-pointer rounded bg-[var(--color-primary)] px-4 py-2 text-center text-white">
+              Import sheet music
+              <input
+                type="file"
+                accept=".musicxml,.xml,.mxl"
+                className="hidden"
+                onChange={event => {
+                  const file = event.target.files?.[0];
+                  if (file) void importScore(file);
+                  event.target.value = '';
+                }}
+              />
+            </label>
+            <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+              MusicXML, XML, or compressed MXL
+            </p>
+            <div className="mt-5 space-y-2">
+              {!pieces.length && (
+                <p className="text-sm text-[var(--color-text-muted)]">
+                  No pieces imported yet.
                 </p>
               )}
-              {scorePages.map((svg, index) => (
+              {pieces.map(item => (
                 <div
-                  key={index}
-                  className="mx-auto max-w-5xl overflow-hidden rounded bg-white p-3"
-                  dangerouslySetInnerHTML={{ __html: svg }}
-                />
+                  key={item.id}
+                  className={`w-full rounded border p-3 text-left ${
+                    piece?.id === item.id
+                      ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10'
+                      : 'border-white/10 hover:border-white/30'
+                  }`}
+                >
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void openPiece(item)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <span className="block font-medium">{item.title}</span>
+                      {item.composer && (
+                        <span className="block text-xs text-[var(--color-text-muted)]">
+                          {item.composer}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Delete ${item.title}`}
+                      title="Delete score"
+                      onClick={() => void removePiece(item)}
+                      className="self-start rounded px-2 py-1 text-[var(--color-text-muted)] hover:bg-red-500/10 hover:text-red-300"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
           </>
         ) : (
-          <div className="rounded-lg border border-dashed border-white/20 p-12 text-center text-[var(--color-text-muted)]">
-            Import a MusicXML score to begin learning a piece.
-          </div>
+          <p className="mt-4 text-sm text-[var(--color-text-muted)]">
+            Browse large collections on the external backup drive. Star a
+            MusicXML score to add it here for practice.
+          </p>
+        )}
+      </aside>
+
+      <div className="flex-1 space-y-5 overflow-auto p-5">
+        {section === 'archive' ? (
+          <PianoArchive onLibraryChanged={refreshPieces} />
+        ) : (
+          <>
+            <MidiControls
+              devices={devices}
+              deviceId={deviceId}
+              connected={connected}
+              sustain={sustain}
+              onDevice={setDeviceId}
+              onConnect={connect}
+              onDisconnect={async () => {
+                await desktopApi()?.midi_close();
+                setConnected(false);
+              }}
+              onRefresh={refreshDevices}
+            />
+            {error && (
+              <div
+                role="alert"
+                className="rounded border border-red-500/50 bg-red-500/10 p-3 text-red-300"
+              >
+                {error}
+              </div>
+            )}
+            {piece ? (
+              <>
+                <PracticeControls
+                  piece={piece}
+                  hand={hand}
+                  loopStart={loopStart}
+                  loopEnd={loopEnd}
+                  connected={connected}
+                  canStart={practiceSteps.length > 0}
+                  onHand={value => {
+                    setHand(value);
+                    setStepIndex(0);
+                  }}
+                  onLoopStart={setLoopStart}
+                  onLoopEnd={setLoopEnd}
+                  onStart={startPractice}
+                />
+                <div className="sticky top-0 z-20 flex flex-wrap items-center gap-4 rounded-lg border border-cyan-400/30 bg-zinc-950/95 p-3 shadow-lg">
+                  <strong>
+                    {practicing
+                      ? 'Your turn'
+                      : stepIndex >= practiceSteps.length &&
+                          practiceSteps.length
+                        ? 'Complete'
+                        : 'Ready'}
+                  </strong>
+                  {currentStep && (
+                    <span>
+                      Measure {currentStep.measure}, beat{' '}
+                      {formatBeat(currentStep.beat)}
+                    </span>
+                  )}
+                  {currentStep && (
+                    <span className="text-cyan-300">
+                      Play MIDI {notesForHand(currentStep, hand).join(' + ')}
+                    </span>
+                  )}
+                  <span className="text-sm text-[var(--color-text-muted)]">
+                    Step {Math.min(stepIndex + 1, practiceSteps.length)} /{' '}
+                    {practiceSteps.length} · Wrong notes {wrongNotes}
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <PianoKeyboard activeNotes={activeNotes} />
+                </div>
+                <div className="space-y-4">
+                  {loadingScore && (
+                    <p className="text-[var(--color-text-muted)]">
+                      Engraving score…
+                    </p>
+                  )}
+                  {scorePages.map((svg, index) => (
+                    <div
+                      key={index}
+                      className="mx-auto max-w-5xl overflow-hidden rounded bg-white p-3"
+                      dangerouslySetInnerHTML={{ __html: svg }}
+                    />
+                  ))}
+                </div>
+              </>
+            ) : (
+              <div className="rounded-lg border border-dashed border-white/20 p-12 text-center text-[var(--color-text-muted)]">
+                Import a MusicXML score to begin learning a piece.
+              </div>
+            )}
+          </>
         )}
       </div>
     </section>
