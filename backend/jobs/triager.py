@@ -105,10 +105,26 @@ def is_enabled(db) -> bool:
 # --------------------------------------------------------------------------
 
 def run_gate_sweep(db=None) -> dict:
-    """Reject what the title alone settles. No model, safe on every tick.
+    """Reject what the title and the profile settle. No model, safe on every tick.
 
     Runs over `pending` rows only, so a posting a human restored stays
     restored and one the model already judged is never revisited.
+
+    **Pages to the end rather than stopping after one batch.** A rejected row
+    leaves `pending` and so leaves the result set, but a *kept* one stays in it
+    forever — so a plain `LIMIT` re-reads the same leading rows every tick and
+    only creeps forward by however many it just rejected. Once the first
+    `GATE_BATCH` pending rows are all keeps it advances by nothing at all, and
+    every posting behind them is reachable only by the model drain, one 3-8
+    second generation at a time. That is how 3,758 rows ended up queued behind
+    a gate that had already decided about them. `offset` therefore counts the
+    rows this sweep *kept*, which is exactly the number the next page has to
+    step over.
+
+    The batch is now only how much is held in memory at once. There is no
+    reason to rate-limit the work itself: it is string comparison and a
+    gazetteer lookup, no model and no network, so the whole table costs a
+    couple of seconds.
     """
     from backend.db.connection import get_db
     from backend.jobs import preferences, profile as profile_mod, triage
@@ -117,36 +133,42 @@ def run_gate_sweep(db=None) -> dict:
     if not is_enabled(db):
         return {'scanned': 0, 'rejected': 0}
 
-    # The application check matches the feed's own exclusion. Without it the
-    # filtered list fills with postings the user applied to years ago, which
-    # they are conspicuously not missing out on — and the list exists to show
-    # what they *are* missing. No description check, though: judging a title is
-    # exactly what this layer is for.
-    rows = db.execute(
-        'SELECT * FROM jobs WHERE triage_state=? AND dismissed=0'
-        ' AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id = jobs.id)'
-        ' LIMIT ?',
-        (STATE_PENDING, GATE_BATCH),
-    ).fetchall()
-
     loaded = profile_mod.load_profile(db)
+    scanned = 0
     rejected = 0
+    offset = 0
     now = _now()
-    for row in rows:
-        result = triage.gate(row['title'])
-        preference_reason = preferences.hard_gate(dict(row), loaded)
-        if result.keep and not preference_reason:
-            continue
-        db.execute(
-            'UPDATE jobs SET triage_state=?, triage_reason=?, triage_at=?,'
-            ' updated_at=? WHERE id=?',
-            (STATE_REJECTED,
-             f'profile: {preference_reason}' if preference_reason else f'title: {result.reason}',
-             now, now, row['id']),
-        )
-        rejected += 1
-    db.commit()
-    return {'scanned': len(rows), 'rejected': rejected}
+    while True:
+        # The application check matches the feed's own exclusion. Without it
+        # the filtered list fills with postings the user applied to years ago,
+        # which they are conspicuously not missing out on — and the list exists
+        # to show what they *are* missing. No description check, though:
+        # judging a title is exactly what this layer is for.
+        rows = db.execute(
+            'SELECT * FROM jobs WHERE triage_state=? AND dismissed=0'
+            ' AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id = jobs.id)'
+            ' ORDER BY rowid LIMIT ? OFFSET ?',
+            (STATE_PENDING, GATE_BATCH, offset),
+        ).fetchall()
+        if not rows:
+            break
+        scanned += len(rows)
+        for row in rows:
+            result = triage.gate(row['title'])
+            preference_reason = preferences.hard_gate(dict(row), loaded)
+            if result.keep and not preference_reason:
+                offset += 1
+                continue
+            db.execute(
+                'UPDATE jobs SET triage_state=?, triage_reason=?, triage_at=?,'
+                ' updated_at=? WHERE id=?',
+                (STATE_REJECTED,
+                 f'profile: {preference_reason}' if preference_reason else f'title: {result.reason}',
+                 now, now, row['id']),
+            )
+            rejected += 1
+        db.commit()
+    return {'scanned': scanned, 'rejected': rejected}
 
 
 # --------------------------------------------------------------------------
