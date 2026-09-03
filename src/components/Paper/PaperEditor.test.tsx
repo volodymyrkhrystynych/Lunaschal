@@ -754,6 +754,93 @@ describe('the images prop stays stable while drawing', () => {
   });
 });
 
+describe('the page is never refetched while it is already cached', () => {
+  it('keeps a not-yet-uploaded picture across a page flip past the stale time', async () => {
+    // The invariant: this client is the only writer to a page's content, so the
+    // server is only ever *behind* the cache, never ahead. A GET against a
+    // populated cache can return equal-or-older content and nothing else.
+    //
+    // What made that matter rather than merely wasteful: Save is manual, so a
+    // page sits legitimately ahead of the server for as long as the session
+    // lasts, and a picture pasted in that window exists *only* as an optimistic
+    // row in the cache — the server has never heard of it. React Query replaces
+    // query data wholesale on a successful fetch, so one ordinary background
+    // refetch (60s idle, then an app-switch) would drop that row and the
+    // picture would disappear off the page.
+    URL.createObjectURL = vi.fn(
+      () => 'blob:pasted'
+    ) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      configurable: true,
+      set() {
+        setTimeout(() => this.onerror?.(), 0);
+      },
+    });
+
+    const { container, queryClient } = renderEditor();
+    await waitFor(() => expect(api.paper.getPage).toHaveBeenCalledWith(PAGE_1));
+
+    await act(async () => {
+      const event = new Event('paste') as Event & { clipboardData: unknown };
+      event.clipboardData = {
+        items: [
+          {
+            kind: 'file',
+            type: 'image/png',
+            getAsFile: () =>
+              new File(['pixels'], 'pasted.png', { type: 'image/png' }),
+          },
+        ],
+      };
+      window.dispatchEvent(event);
+      await new Promise(r => setTimeout(r, 10));
+    });
+    expect(
+      queryClient.getQueryData<{ images: unknown[] }>(['paper', 'page', PAGE_1])
+        ?.images
+    ).toHaveLength(1);
+
+    const fetchesOfPage1 = () =>
+      vi.mocked(api.paper.getPage).mock.calls.filter(c => c[0] === PAGE_1)
+        .length;
+    const before = fetchesOfPage1();
+
+    // Flip away first, at the real clock: leaving the page commits it locally,
+    // and that write refreshes the cache entry's timestamp. Jumping the clock
+    // before this point would have made the entry look freshly written and the
+    // test would pass without proving anything.
+    await act(async () => {
+      fireEvent.click(screen.getByTitle('Next page'));
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    // Now jump well past the 60s staleTime the app configures, so page 1's
+    // entry is firmly stale, and flip back — the page-content query gains an
+    // observer again, which is exactly when refetchOnMount fires. Date.now is
+    // what react-query measures staleness with; spying on it beats fake timers,
+    // which would deadlock the awaits in this file.
+    const realNow = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(realNow + 120_000);
+    try {
+      await act(async () => {
+        fireEvent.click(screen.getByTitle('Previous page'));
+        await new Promise(r => setTimeout(r, 20));
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    expect(fetchesOfPage1()).toBe(before);
+    // And the picture the server has never heard of is still on the page.
+    expect(
+      queryClient.getQueryData<{ images: unknown[] }>(['paper', 'page', PAGE_1])
+        ?.images
+    ).toHaveLength(1);
+  });
+});
+
 describe('deleting a picture', () => {
   const serverImage = {
     id: 'img-1',

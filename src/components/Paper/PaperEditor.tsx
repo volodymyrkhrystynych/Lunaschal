@@ -205,10 +205,23 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   const pages = paper?.pages ?? [];
   const currentPage = pages[currentIndex];
 
+  // `staleTime: Infinity` because this data cannot go stale: nothing but this
+  // client ever writes a page's strokes or pictures, so the server is only ever
+  // *behind* the cache — never ahead of it. A refetch against a populated cache
+  // can return equal-or-older content and nothing else, which makes it useless
+  // at best and destructive at worst: since Save is manual, a page can sit
+  // legitimately ahead of the server for a whole session, and a picture pasted
+  // in that time exists only as an optimistic row here (the server has never
+  // heard of it). React Query replaces query data wholesale on a successful
+  // fetch, so one background refetch — 60s of idle plus an app-switch, which on
+  // an iPad is just Tuesday — would drop that row and the picture would vanish
+  // off the page. The only fetch that carries any information is the cold one
+  // on a real cache miss, and that still happens.
   const { data: content } = useQuery({
     queryKey: ['paper', 'page', currentPage?.id],
     queryFn: () => api.paper.getPage(currentPage!.id),
     enabled: !!currentPage?.id,
+    staleTime: Infinity,
   });
 
   // Page saves and picture writes go through the offline queue: paused while the
@@ -681,14 +694,6 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     pendingImageDeletes.length > 0 ||
     heldImageCount > 0;
 
-  const refreshPage = () => {
-    if (currentPage) {
-      queryClient.invalidateQueries({
-        queryKey: ['paper', 'page', currentPage.id],
-      });
-    }
-  };
-
   /** Stage a picture transform locally instead of syncing it straight away —
    * like strokes, it only reaches the server on Save (or on leaving the
    * page). Merged over whatever is already pending for this image so several
@@ -718,8 +723,11 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
    * the id back on the staged list instead, so the next Save tries again. */
   const deleteOnServer = async (id: string, pageId: string) => {
     try {
+      // Deliberately no invalidate afterwards: the row was already dropped from
+      // the cache on the way out, and an invalidate ignores staleTime — it
+      // would refetch and take every *other* never-uploaded picture on the page
+      // with it.
       await api.paper.deleteImage(id);
-      refreshPage();
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Could not delete it');
       setStaged(prev =>
