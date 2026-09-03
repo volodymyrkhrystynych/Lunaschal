@@ -1,15 +1,30 @@
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useMutationState,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { api, type FeedJob } from '@/hooks/api';
 import {
+  MUTATION_KEYS,
+  useJobDecide,
+  type JobDecideVars,
+} from '@/offline/mutationDefaults';
+import {
   commuteBand,
+  decidedIds,
+  decisionErrors,
   distanceLabel,
+  type FeedDecision,
   FIT_LABELS,
   FLAG_LABELS,
   formatSalary,
+  hideDecided,
   isPartialScore,
   matchBand,
   matchPercent,
+  pendingDecisionLabel,
   SOURCE_LABELS,
   splitFeed,
   topGaps,
@@ -22,6 +37,14 @@ import { SourcesPanel } from './SourcesPanel';
  * One posting per card, and the two actions at the bottom of each where a
  * thumb reaches. Queue returns immediately — the resume is built in the
  * background by backend/jobs/queue.py — so a decision costs a tap, not a wait.
+ *
+ * The tap is not a wait either. Both decisions go through the offline write
+ * queue (`useJobDecide`), so the card leaves on the tap and the POST follows —
+ * and a decision made with the backend unreachable is parked and replayed
+ * rather than lost. What is on screen is therefore read from the mutation
+ * queue, not from local state: a decision survives leaving this tab, and a
+ * failed one hands its card back with the reason on it, which is the only case
+ * where the optimism was wrong and the only case worth telling the user about.
  */
 export function Feed() {
   // The sort lives in the client, not the profile: it is a way of reading the
@@ -35,6 +58,7 @@ export function Feed() {
     queryKey: ['jobs', 'feed', sort],
     queryFn: () => api.jobs.feed(100, sort),
   });
+
   const { data: queue } = useQuery({
     queryKey: ['jobs', 'queueStatus'],
     queryFn: api.jobs.queueStatus,
@@ -46,7 +70,31 @@ export function Feed() {
     refetchInterval: 15_000,
   });
 
-  const { promising, rest } = splitFeed(jobs ?? []);
+  const decide = useJobDecide();
+  // Read straight from the write queue rather than from component state: a
+  // decision paused offline outlives this component and even the page, and the
+  // feed must keep reading as though it had already landed.
+  const pending = useMutationState({
+    filters: { mutationKey: MUTATION_KEYS.jobDecide, status: 'pending' },
+    select: m => m.state.variables as JobDecideVars | undefined,
+  });
+  const failures = useMutationState({
+    filters: { mutationKey: MUTATION_KEYS.jobDecide, status: 'error' },
+    select: m => ({
+      variables: m.state.variables as JobDecideVars | undefined,
+      error: m.state.error,
+    }),
+  });
+
+  const decided = decidedIds(pending);
+  const visible = hideDecided(jobs ?? [], decided);
+  const { promising, rest } = splitFeed(visible);
+  const saving = pendingDecisionLabel(decided.size);
+  const cardProps = {
+    errors: decisionErrors(failures),
+    onDecide: (job: FeedJob, kind: FeedDecision) =>
+      decide.mutate({ jobId: job.id, kind }),
+  };
 
   return (
     <div className="flex-1 overflow-y-auto min-w-0 space-y-3">
@@ -75,7 +123,7 @@ export function Feed() {
         <p className="text-sm text-[var(--color-text-muted)]">Loading…</p>
       )}
 
-      {!isLoading && (jobs ?? []).length === 0 && (
+      {!isLoading && visible.length === 0 && (
         <p className="text-sm text-[var(--color-text-muted)]">
           Nothing to triage. Add a source above, or paste a posting from the
           Pipeline tab.
@@ -91,7 +139,7 @@ export function Feed() {
         </div>
       )}
 
-      {(jobs ?? []).length > 0 && (
+      {visible.length > 0 && (
         <div className="flex items-center gap-1 text-xs">
           <span className="text-[var(--color-text-muted)] mr-1">Sort</span>
           {(
@@ -122,13 +170,20 @@ export function Feed() {
       )}
 
       {promising.length > 0 && (
-        <Section label="Worth a look" jobs={promising} />
+        <Section label="Worth a look" jobs={promising} {...cardProps} />
       )}
       {rest.length > 0 && (
         <Section
           label={promising.length > 0 ? 'The rest' : 'Postings'}
           jobs={rest}
+          {...cardProps}
         />
+      )}
+
+      {/* Deliberately a footer and not a blocker: the decisions are already
+          made, this only says the writing has not caught up yet. */}
+      {saving && (
+        <p className="text-xs text-[var(--color-text-muted)]">{saving}</p>
       )}
 
       <FilteredSection count={triage?.rejected ?? 0} />
@@ -202,14 +257,29 @@ function FilteredCard({ job }: { job: FeedJob }) {
   );
 }
 
-function Section({ label, jobs }: { label: string; jobs: FeedJob[] }) {
+function Section({
+  label,
+  jobs,
+  errors,
+  onDecide,
+}: {
+  label: string;
+  jobs: FeedJob[];
+  errors: Record<string, string>;
+  onDecide: (job: FeedJob, kind: FeedDecision) => void;
+}) {
   return (
     <div className="space-y-3">
       <h3 className="text-xs uppercase tracking-wide text-[var(--color-text-muted)]">
         {label} ({jobs.length})
       </h3>
       {jobs.map(job => (
-        <FeedCard key={job.id} job={job} />
+        <FeedCard
+          key={job.id}
+          job={job}
+          error={errors[job.id]}
+          onDecide={onDecide}
+        />
       ))}
     </div>
   );
@@ -306,22 +376,18 @@ const DISTANCE_CLASS = {
   unknown: 'bg-white/5 text-[var(--color-text-muted)] border-white/15',
 } as const;
 
-function FeedCard({ job }: { job: FeedJob }) {
-  const queryClient = useQueryClient();
+function FeedCard({
+  job,
+  error,
+  onDecide,
+}: {
+  job: FeedJob;
+  /** Set only when this card's own decision came back as a failure. */
+  error?: string;
+  onDecide: (job: FeedJob, kind: FeedDecision) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
 
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['jobs'] });
-  };
-
-  const queue = useMutation({
-    mutationFn: () => api.jobs.queue(job.id),
-    onSuccess: refresh,
-  });
-  const dismiss = useMutation({
-    mutationFn: () => api.jobs.dismiss(job.id),
-    onSuccess: refresh,
-  });
   const rationale = useMutation({
     mutationFn: () => api.jobs.rationale(job.id),
   });
@@ -438,24 +504,27 @@ function FeedCard({ job }: { job: FeedJob }) {
         </p>
       )}
 
+      {/* Neither button is ever disabled or busy: the card is gone by the time
+          a second tap could land, so there is nothing to guard against. */}
       <div className="flex flex-wrap items-center gap-2 pt-1">
         <button
           type="button"
-          onClick={() => queue.mutate()}
-          disabled={queue.isPending}
-          className="flex-1 min-w-[100px] min-h-[44px] px-3 rounded text-sm bg-[var(--color-primary)]/20 text-[var(--color-primary)] border border-[var(--color-primary)]/40 disabled:opacity-50"
+          onClick={() => onDecide(job, 'queue')}
+          className="flex-1 min-w-[100px] min-h-[44px] px-3 rounded text-sm bg-[var(--color-primary)]/20 text-[var(--color-primary)] border border-[var(--color-primary)]/40"
         >
-          {queue.isPending ? 'Queueing…' : 'Queue'}
+          Queue
         </button>
         <button
           type="button"
-          onClick={() => dismiss.mutate()}
-          disabled={dismiss.isPending}
-          className="flex-1 min-w-[100px] min-h-[44px] px-3 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10 disabled:opacity-50"
+          onClick={() => onDecide(job, 'dismiss')}
+          className="flex-1 min-w-[100px] min-h-[44px] px-3 rounded text-sm border border-white/20 bg-white/5 hover:bg-white/10"
         >
           Dismiss
         </button>
       </div>
+
+      {/* The card came back. Say why, on the card, where the retry is. */}
+      {error && <p className="text-xs text-red-400">{error}</p>}
 
       <div className="flex flex-wrap items-center gap-3 text-xs">
         <button

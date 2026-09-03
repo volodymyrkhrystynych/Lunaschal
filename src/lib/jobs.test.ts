@@ -11,6 +11,8 @@ import type {
 import {
   answerSummary,
   coveragePercent,
+  decidedIds,
+  decisionErrors,
   daysUntilPurge,
   describeSearch,
   formatSalary,
@@ -18,8 +20,10 @@ import {
   isOpen,
   isPartialScore,
   matchBand,
+  hideDecided,
   importSummary,
   matchPercent,
+  pendingDecisionLabel,
   parseQuestionList,
   queueBreakdown,
   rewrittenBullets,
@@ -561,5 +565,57 @@ describe('importSummary', () => {
     expect(
       importSummary({ roles: [{ bullets: undefined }] } as never)
     ).toMatchObject({ roles: 1, bullets: 0 });
+  });
+});
+
+describe('feed decisions', () => {
+  const queued = { jobId: 'a', kind: 'queue' } as const;
+  const dismissed = { jobId: 'b', kind: 'dismiss' } as const;
+
+  it('hides every posting a decision is still being written for', () => {
+    const jobs = [feedJob('a', null), feedJob('b', null), feedJob('c', null)];
+    const visible = hideDecided(jobs, decidedIds([queued, dismissed]));
+    expect(visible.map(j => j.id)).toEqual(['c']);
+  });
+
+  it('keeps a posting hidden when a refetch hands it back mid-flight', () => {
+    // Tapping through a run of cards: the first decision settles and refetches
+    // the feed while the rest are still in flight, so the server answers with
+    // postings it has not been told about yet.
+    const refetched = [feedJob('b', null), feedJob('c', null)];
+    expect(
+      hideDecided(refetched, decidedIds([dismissed])).map(j => j.id)
+    ).toEqual(['c']);
+  });
+
+  it('returns the same list when nothing is pending', () => {
+    const jobs = [feedJob('a', null)];
+    expect(hideDecided(jobs, decidedIds([]))).toBe(jobs);
+  });
+
+  it('ignores a queued mutation with no variables yet', () => {
+    expect(decidedIds([undefined, queued])).toEqual(new Set(['a']));
+  });
+
+  it('names what failed, per posting', () => {
+    const errors = decisionErrors([
+      { variables: queued, error: new Error('offline') },
+      { variables: dismissed, error: null },
+    ]);
+    expect(errors.a).toBe("Couldn't queue this — offline");
+    // A failure with no message still has to say something actionable.
+    expect(errors.b).toBe("Couldn't dismiss this — the server refused it");
+  });
+
+  it('drops a failure whose variables were never recorded', () => {
+    expect(
+      decisionErrors([{ variables: undefined, error: new Error('x') }])
+    ).toEqual({});
+  });
+
+  it('counts what is still being saved, and says nothing when nothing is', () => {
+    expect(pendingDecisionLabel(0)).toBeNull();
+    expect(pendingDecisionLabel(1)).toBe('Saving 1 decision…');
+    expect(pendingDecisionLabel(3)).toBe('Saving 3 decisions…');
   });
 });

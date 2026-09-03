@@ -425,3 +425,68 @@ export function commuteBand(job: CommuteFields) {
   if (job.remote && !attendsInPerson(job)) return distanceBand(null);
   return distanceBand(job.distanceKm);
 }
+
+/**
+ * The decisions a triage tap makes. Mirrors `JobDecideVars['kind']` — the
+ * offline queue owns the write, this file owns how the feed reads while it is
+ * still in flight.
+ */
+export type FeedDecision = 'queue' | 'dismiss';
+
+/** One decision as it sits in the mutation queue, in flight or paused. */
+export interface PendingDecision {
+  jobId: string;
+  kind: FeedDecision;
+}
+
+/**
+ * The postings a decision is still being written for.
+ *
+ * The write already removed them from the cached feed, so this only matters
+ * when a refetch overtakes a POST — tapping through ten cards, the settle of
+ * the first refetches the feed while the rest are still in flight, and the
+ * server still has every one of them. Without this they would all come back
+ * for a moment, which is the exact flicker the optimism is here to avoid.
+ * Variables can be undefined for a mutation restored mid-construction, so the
+ * list is filtered rather than mapped.
+ */
+export function decidedIds(
+  pending: (PendingDecision | undefined)[]
+): Set<string> {
+  const ids = new Set<string>();
+  for (const decision of pending) if (decision) ids.add(decision.jobId);
+  return ids;
+}
+
+/** The feed as it should read, minus what has already been decided. */
+export function hideDecided(jobs: FeedJob[], decided: Set<string>): FeedJob[] {
+  // Identity when nothing is pending, so the common case allocates nothing.
+  if (decided.size === 0) return jobs;
+  return jobs.filter(job => !decided.has(job.id));
+}
+
+/**
+ * What went wrong, per posting, for the cards a failed decision handed back.
+ *
+ * Keyed by job id rather than kept in a list because it is read on the card
+ * itself: a failure is only worth saying next to the button that will retry
+ * it. A later decision on the same posting overwrites the earlier verdict.
+ */
+export function decisionErrors(
+  failures: { variables?: PendingDecision; error: Error | null }[]
+): Record<string, string> {
+  const errors: Record<string, string> = {};
+  for (const { variables, error } of failures) {
+    if (!variables) continue;
+    const verb = variables.kind === 'queue' ? 'queue' : 'dismiss';
+    errors[variables.jobId] =
+      `Couldn't ${verb} this — ${error?.message || 'the server refused it'}`;
+  }
+  return errors;
+}
+
+/** What the footer says while decisions are still being written. */
+export function pendingDecisionLabel(count: number): string | null {
+  if (count <= 0) return null;
+  return count === 1 ? 'Saving 1 decision…' : `Saving ${count} decisions…`;
+}
