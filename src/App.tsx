@@ -33,9 +33,25 @@ import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 import { MOBILE_QUERY } from './lib/breakpoints';
 import { getStoredView, setStoredView, type View } from './lib/viewPersistence';
 import { useDesktopShell } from './hooks/useDesktopShell';
+import { ImmersiveProvider, useImmersive } from './components/ImmersiveContext';
 
+/**
+ * The shell, wrapped so a view can ask for it to get out of the way. Split in
+ * two only because the provider has to sit *above* the component that reads it.
+ */
 export default function App() {
+  return (
+    <ImmersiveProvider>
+      <AppShell />
+    </ImmersiveProvider>
+  );
+}
+
+function AppShell() {
   const isDesktopShell = useDesktopShell();
+  // Set by the Paper editor on a tablet: no header, no sidebar, no bottom bar,
+  // so the page is the screen and its own Back button is the way out.
+  const immersive = useImmersive();
   const [currentView, setCurrentView] = useState<View>(
     () => getStoredView() ?? 'chat'
   );
@@ -232,37 +248,45 @@ export default function App() {
         .map(item => item.view)}
     >
       <div className="h-dvh flex flex-col bg-[var(--color-bg)]">
-        <header className="md:hidden h-11 shrink-0 flex items-center gap-2 px-2 border-b border-white/10 bg-[var(--color-surface)]">
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(true)}
-            className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 text-[var(--color-text)]"
-            aria-label="Open menu"
-          >
-            ☰
-          </button>
-          <span className="font-semibold text-[var(--color-text)]">
-            {navItems.find(i => i.view === currentView)?.label ?? 'Lunaschal'}
-          </span>
-        </header>
+        {!immersive && (
+          <header className="md:hidden h-11 shrink-0 flex items-center gap-2 px-2 border-b border-white/10 bg-[var(--color-surface)]">
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              className="p-2 min-h-[44px] min-w-[44px] flex items-center justify-center rounded hover:bg-white/10 text-[var(--color-text)]"
+              aria-label="Open menu"
+            >
+              ☰
+            </button>
+            <span className="font-semibold text-[var(--color-text)]">
+              {navItems.find(i => i.view === currentView)?.label ?? 'Lunaschal'}
+            </span>
+          </header>
+        )}
         <div className="flex flex-1 overflow-hidden">
-          <Sidebar
-            currentView={currentView}
-            onViewChange={setCurrentView}
-            isOpen={sidebarOpen}
-            onToggle={() => setSidebarOpen(!sidebarOpen)}
-            lifestyleReasons={lifestyleReasons}
-            newspapersNeedAttention={newspapersNeedAttention}
-          />
+          {!immersive && (
+            <Sidebar
+              currentView={currentView}
+              onViewChange={setCurrentView}
+              isOpen={sidebarOpen}
+              onToggle={() => setSidebarOpen(!sidebarOpen)}
+              lifestyleReasons={lifestyleReasons}
+              newspapersNeedAttention={newspapersNeedAttention}
+            />
+          )}
           <main className="flex-1 flex flex-col overflow-hidden">
             {renderView()}
           </main>
         </div>
+        {/* The one piece of chrome immersive mode keeps: whether the backend is
+         * reachable is exactly what a page being drawn on offline needs to say. */}
         <OfflineIndicator />
-        <SttPanel
-          onTranscribed={handleTranscribed}
-          onMeetingUploaded={() => setCurrentView('meetings')}
-        />
+        {!immersive && (
+          <SttPanel
+            onTranscribed={handleTranscribed}
+            onMeetingUploaded={() => setCurrentView('meetings')}
+          />
+        )}
       </div>
     </ShortcutProvider>
   );

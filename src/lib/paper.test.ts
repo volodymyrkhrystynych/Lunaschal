@@ -644,16 +644,25 @@ describe('panel placement persistence', () => {
 
 describe('saveStatusLabel', () => {
   it('reports the three states in a slot that never changes size', () => {
-    expect(saveStatusLabel(true, true)).toBe('Saving…');
-    expect(saveStatusLabel(false, true)).toBe('Unsaved');
-    expect(saveStatusLabel(false, false)).toBe('Saved');
+    expect(saveStatusLabel(true, 1)).toBe('Saving…');
+    expect(saveStatusLabel(false, 1)).toBe('Unsaved');
+    expect(saveStatusLabel(false, 0)).toBe('Saved');
     // Always some text: an empty label is what let the old bar reflow.
     for (const label of [
-      saveStatusLabel(true, false),
-      saveStatusLabel(false, true),
-      saveStatusLabel(false, false),
+      saveStatusLabel(true, 0),
+      saveStatusLabel(false, 1),
+      saveStatusLabel(false, 0),
     ]) {
       expect(label.length).toBeGreaterThan(0);
     }
+  });
+
+  it('counts the pages waiting, not just the one on screen', () => {
+    // Save sends the whole paper, so a page flipped away from is still
+    // unsaved — a status that only knew about the open page said "Saved".
+    expect(saveStatusLabel(false, 3)).toBe('3 unsaved');
+    expect(saveStatusLabel(false, 2)).toBe('2 unsaved');
+    // Saving wins over the count: it is the state that is about to change.
+    expect(saveStatusLabel(true, 3)).toBe('Saving…');
   });
 });

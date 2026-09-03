@@ -638,12 +638,17 @@ export function savePanelPlacement(placement: PanelPlacement): void {
   }
 }
 
-/** The autosave indicator's text. It lives in a fixed-width slot in the top bar
- * and deliberately *not* in the tool panel: when it shared a row with the tools,
- * every autosave popped it in and out and reflowed the whole bar, which made
- * drawing near the top edge a game of chase. */
-export function saveStatusLabel(saving: boolean, dirty: boolean): string {
+/** The save indicator's text. It lives in a fixed-width slot in the top bar and
+ * deliberately *not* in the tool panel: when it shared a row with the tools, it
+ * popped in and out on every save and reflowed the whole bar, which made drawing
+ * near the top edge a game of chase.
+ *
+ * Counts *pages*, not strokes, because Save sends the whole paper: a page
+ * written on and flipped away from is still unsaved, and a status that only knew
+ * about the page on screen said "Saved" while three others were waiting. */
+export function saveStatusLabel(saving: boolean, unsavedPages: number): string {
   if (saving) return 'Saving…';
-  if (dirty) return 'Unsaved';
+  if (unsavedPages > 1) return `${unsavedPages} unsaved`;
+  if (unsavedPages === 1) return 'Unsaved';
   return 'Saved';
 }
