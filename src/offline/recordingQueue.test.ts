@@ -29,6 +29,7 @@ vi.mock('../hooks/api', async () => {
 const { ApiError } = await import('../hooks/api');
 const {
   appendChunk,
+  assignRecordingEntry,
   beginRecording,
   finalizeRecording,
   getRecording,
@@ -207,6 +208,21 @@ describe('attaching a recording to an entry that already exists', () => {
 
     expect(await listRecordings()).toHaveLength(1);
   });
+
+  it('writes the entry id to the store, so a rescue can still find it', async () => {
+    // A clip whose upload fails is picked up by the boot sweep on the next
+    // launch — from the store, not from the mutation's variables, which died
+    // with the tab. Without this it is rescued as a bare entry of its own,
+    // beside the one whose words it was recorded with.
+    const rec = await storedRecording('audio');
+    createRecording.mockRejectedValue(new Error('offline'));
+
+    await expect(
+      attachRecordingToEntry(client(), rec, 'entry-7')
+    ).rejects.toThrow();
+
+    expect((await getRecording(rec.id))?.entryId).toBe('entry-7');
+  });
 });
 
 describe('recording an idea', () => {
@@ -345,5 +361,22 @@ describe('picking up recordings from a previous session', () => {
 
     expect(createRecording).not.toHaveBeenCalled();
     expect(await listRecordings()).toHaveLength(1);
+  });
+
+  it('puts a rescued clip back on its entry rather than making a new one', async () => {
+    // The composer's Transcribe button records into a draft, so the entry id is
+    // not minted until Save. A rescue that has forgotten it files the clip as a
+    // journal entry of its own, next to the entry it was recorded alongside —
+    // the audio survives, detached from the words.
+    const rec = await storedRecording('audio');
+    await assignRecordingEntry(rec.id, 'entry-7');
+    createRecording.mockResolvedValue({ id: 'entry-7', attachment: {} });
+
+    await resumeStoredRecordings(client());
+    await vi.waitFor(() => expect(createRecording).toHaveBeenCalledTimes(1));
+
+    const opts = createRecording.mock.calls[0][1];
+    expect(opts.id).toBe('entry-7');
+    expect(opts.attachmentId).toBe(rec.id);
   });
 });

@@ -63,6 +63,7 @@ export const MUTATION_KEYS = {
   journalCreate: ['journal', 'create'] as const,
   journalUpdate: ['journal', 'update'] as const,
   journalRecording: ['journal', 'recording'] as const,
+  journalAttachment: ['journal', 'attachment'] as const,
   todoCreate: ['todos', 'create'] as const,
   todoUpdate: ['todos', 'update'] as const,
   dailyToggle: ['tasks', 'toggle'] as const,
@@ -108,6 +109,39 @@ export interface JournalUpdateVars {
   content: string;
   title: string;
 }
+/**
+ * One staged file on its way to an entry that exists (or is queued ahead of it
+ * in `JOURNAL_LANE`).
+ *
+ * `attachmentId` is both the key into `photoStore` and the id the server is
+ * asked to store the row under, which is what makes a replay a no-op — exactly
+ * the trick `JournalRecordingVars` plays with the audio. The blob is not here
+ * for the same reason it is not there: these vars are structured-cloned into
+ * the persisted cache on every unrelated write.
+ */
+export interface JournalAttachmentVars {
+  attachmentId: string;
+  entryId: string;
+  name?: string;
+}
+
+/**
+ * The journal's writes, in one lane — the same device-ordering `PAPER_LANE`
+ * gives paper, for the same reason.
+ *
+ * An attachment belongs to an entry and `POST /api/journal/<id>/attachments`
+ * answers 404 when that entry is not there yet. Replayed in parallel (what
+ * `resumePausedMutations` does otherwise) a queued photo can reach the server
+ * before the create it was staged with, and a 404 is not a network failure, so
+ * nothing would retry it. Sharing a scope makes the create land first because
+ * it was started first.
+ *
+ * The recording upload stays out of the lane on purpose: its route does
+ * `INSERT OR IGNORE` on the entry, so it cannot 404 on a missing one, and a
+ * hundred-megabyte clip should not hold a photo behind it.
+ */
+const JOURNAL_LANE = { scope: { id: 'journal' } };
+
 /**
  * Note what is *not* here: the audio. The persister structured-clones the whole
  * query client on every write, so a Blob in the payload would be copied on every
@@ -378,6 +412,7 @@ const journalCreateCfg = (
   qc: QueryClient
 ): Cfg<{ id: string }, JournalCreateVars> => ({
   ...ONLINE,
+  ...JOURNAL_LANE,
   mutationFn: vars => api.journal.create(vars),
   onMutate: vars => {
     const nowIso = new Date().toISOString();
@@ -511,6 +546,54 @@ const journalRecordingCfg = (
   // Note there is nothing fic-specific here: the link lives on the journal
   // entry (`ficRefs`), which the invalidation above already refetches, and the
   // reader shows no list of its own commentary to go stale.
+});
+
+/** Driven through `enqueueJournalAttachment` rather than a `use*` hook: the
+ *  callers hand a file to the queue and walk away, and the boot sweep has no
+ *  component to hang a hook off at all. */
+const journalAttachmentCfg = (
+  qc: QueryClient
+): Cfg<JournalAttachment, JournalAttachmentVars> => ({
+  ...ONLINE,
+  ...JOURNAL_LANE,
+  mutationFn: async vars => {
+    const stored = await getPhoto(vars.attachmentId);
+    if (!stored) throw new Error('That file is no longer on this device.');
+    try {
+      const attachment = await api.journal.attachments.upload(
+        vars.entryId,
+        stored.blob,
+        {
+          name: vars.name,
+          // A materialized Blob has no name of its own; this is the one the
+          // file was picked under, and what the server resolves `kind` from.
+          filename: stored.meta.filename,
+          attachmentId: vars.attachmentId,
+        }
+      );
+      // Confirmed stored. The only place the file may be let go of.
+      await deletePhoto(vars.attachmentId);
+      return attachment;
+    } catch (e) {
+      // A 404 is the one 4xx that is not this file's fault: it means the entry
+      // has not landed yet, because its create failed or is still queued ahead
+      // in the lane. Recording it as terminal would retire the photo over a
+      // problem that fixes itself the moment the create goes through, and
+      // nothing else carries a journal attachment — so it stays queueable and
+      // the boot sweep tries again.
+      const missingEntry = e instanceof ApiError && e.status === 404;
+      await markPhotoAttempt(
+        vars.attachmentId,
+        e instanceof Error ? e.message : 'Upload failed',
+        isTerminal(e) && !missingEntry
+      );
+      throw e;
+    }
+  },
+  // No optimistic insert: the entry is already in the feed from the create's
+  // own `onMutate`, and an attachment has no on-screen presence there until it
+  // has a URL to render — which only the server can give it.
+  onSettled: () => qc.invalidateQueries({ queryKey: ['journal'] }),
 });
 
 const todoCreateCfg = (
@@ -691,6 +774,10 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
     [
       MUTATION_KEYS.journalRecording,
       journalRecordingCfg(qc) as Cfg<unknown, never>,
+    ],
+    [
+      MUTATION_KEYS.journalAttachment,
+      journalAttachmentCfg(qc) as Cfg<unknown, never>,
     ],
     [MUTATION_KEYS.todoCreate, todoCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.todoUpdate, todoUpdateCfg(qc) as Cfg<unknown, never>],

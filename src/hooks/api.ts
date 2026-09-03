@@ -2654,12 +2654,34 @@ export const api = {
     attachments: {
       list: (entryId: string) =>
         get<JournalAttachment[]>(`/api/journal/${entryId}/attachments`),
-      upload: (entryId: string, file: File, name?: string) => {
+      upload: (
+        entryId: string,
+        file: Blob & { name?: string },
+        opts: {
+          /** The user-facing label for the attachment. */
+          name?: string;
+          /**
+           * The name to send the file part under, when the blob has none of
+           * its own — anything read back out of `photoStore` is a materialized
+           * Blob, and the filename is what tells the server a HEIC from the
+           * camera roll apart from a PDF.
+           */
+          filename?: string;
+          /**
+           * The client's own ULID for the row. Sent when the upload is queued
+           * and replayed until the server confirms it, which is what makes the
+           * replay a no-op server-side. A one-shot paste leaves it off and the
+           * server mints one.
+           */
+          attachmentId?: string;
+        } = {}
+      ) => {
         const form = new FormData();
         // Explicit filename: an iOS voice memo is a File with an empty `name`,
         // and the two-argument form would send `filename=""`.
-        form.append('file', file, uploadFilenameFor(file));
-        if (name?.trim()) form.append('name', name.trim());
+        form.append('file', file, opts.filename || uploadFilenameFor(file));
+        if (opts.name?.trim()) form.append('name', opts.name.trim());
+        if (opts.attachmentId) form.append('attachmentId', opts.attachmentId);
         return upload<JournalAttachment>(
           `/api/journal/${entryId}/attachments`,
           form

@@ -11,9 +11,15 @@ import { ShortcutProvider } from '../shortcuts/ShortcutProvider';
 import { api, type JournalEntry } from '../hooks/api';
 import {
   attachRecordingToEntry,
+  enqueueRecordingUpload,
   handleFinishedRecording,
 } from '../offline/recordingQueue';
-import { deleteRecording } from '../offline/recordingStore';
+import {
+  assignRecordingEntry,
+  deleteRecording,
+} from '../offline/recordingStore';
+import { storePhoto } from '../offline/photoStore';
+import { enqueueJournalAttachment } from '../offline/photoQueue';
 
 const { ENTRIES } = vi.hoisted(() => {
   const ENTRIES: JournalEntry[] = [
@@ -103,12 +109,25 @@ vi.mock('../hooks/useRecorder', () => ({
 
 vi.mock('../offline/recordingQueue', () => ({
   attachRecordingToEntry: vi.fn().mockResolvedValue(undefined),
+  enqueueRecordingUpload: vi.fn().mockResolvedValue(undefined),
   handleFinishedRecording: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../offline/recordingStore', () => ({
   assembleBlob: vi.fn(async () => new Blob(['audio'], { type: 'audio/webm' })),
+  assignRecordingEntry: vi.fn().mockResolvedValue(undefined),
   deleteRecording: vi.fn().mockResolvedValue(undefined),
+}));
+
+// The durable path a staged file now takes: on the device first, then into the
+// offline queue. Both are asserted rather than the raw upload, because the raw
+// upload is exactly what a bad connection used to lose.
+vi.mock('../offline/photoStore', () => ({
+  storePhoto: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../offline/photoQueue', () => ({
+  enqueueJournalAttachment: vi.fn().mockResolvedValue(undefined),
 }));
 
 class FakeEventSource {
@@ -391,6 +410,13 @@ describe('Journal new-entry attachments', () => {
 
   beforeEach(() => {
     vi.mocked(deleteRecording).mockClear();
+    vi.mocked(assignRecordingEntry).mockClear();
+    vi.mocked(enqueueRecordingUpload).mockClear();
+    vi.mocked(storePhoto).mockClear();
+    vi.mocked(storePhoto).mockResolvedValue(
+      undefined as unknown as Awaited<ReturnType<typeof storePhoto>>
+    );
+    vi.mocked(enqueueJournalAttachment).mockClear();
     vi.stubGlobal('EventSource', FakeEventSource);
     Element.prototype.scrollIntoView = vi.fn();
     createMock.mockReset();
@@ -438,9 +464,12 @@ describe('Journal new-entry attachments', () => {
     expect(uploadMock).not.toHaveBeenCalled();
   });
 
-  it('uploads the recorded audio on save and only then lets go of it', async () => {
-    // The invariant this whole durable path exists for: the IndexedDB copy is
-    // released after the server confirms the attachment, never before.
+  it('queues the recorded audio on save against the entry it was recorded in', async () => {
+    // The clip is already durable — it has been in recordingStore since it was
+    // captured — so saving hands it to its own idempotent route rather than
+    // POSTing the blob a second time. Carrying `entryId` (and writing it to the
+    // store) is what stops a clip rescued on a later boot from arriving as a
+    // bare entry of its own beside the words it was recorded with.
     renderJournal();
     fireEvent.click(await screen.findByText('+ New Entry'));
     const textarea = screen.getByPlaceholderText(
@@ -448,14 +477,26 @@ describe('Journal new-entry attachments', () => {
     ) as HTMLTextAreaElement;
     fireEvent.click(screen.getByTestId('journal-new-entry-transcribe'));
     await screen.findByText('recording.webm');
-    expect(deleteRecording).not.toHaveBeenCalled();
+    expect(enqueueRecordingUpload).not.toHaveBeenCalled();
 
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
-    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(1));
-    const [, file] = uploadMock.mock.calls[0];
-    expect((file as File).name).toBe('recording.webm');
-    await waitFor(() => expect(deleteRecording).toHaveBeenCalledWith('rec-1'));
+    const entryId = await waitFor(() => createMock.mock.calls[0][0].id);
+    await waitFor(() =>
+      expect(assignRecordingEntry).toHaveBeenCalledWith('rec-1', entryId)
+    );
+    expect(enqueueRecordingUpload).toHaveBeenCalledWith(
+      expect.anything(),
+      'rec-1',
+      'recording',
+      { entryId }
+    );
+    // Never copied into the photo store as well, and never POSTed directly.
+    expect(storePhoto).not.toHaveBeenCalled();
+    expect(uploadMock).not.toHaveBeenCalled();
+    // And the audio is still on the device: only the queue may let go of it,
+    // and only once the server has confirmed it.
+    expect(deleteRecording).not.toHaveBeenCalled();
   });
 
   it('discards the audio when a staged recording is removed by hand', async () => {
@@ -481,23 +522,78 @@ describe('Journal new-entry attachments', () => {
     expect(save.disabled).toBe(false);
   });
 
-  it('stages a pasted file and uploads it after the entry saves', async () => {
+  it('puts a staged file on the device and queues it, never POSTing it directly', async () => {
+    // The regression this branch exists for. A staged file used to live only in
+    // the composer's React state and go up on a bare fetch with no retry, so a
+    // phone on spotty wifi lost the picture outright — while the recording
+    // beside it came back, because recordingStore had been holding it. Now the
+    // bytes are on the device before anything is attempted.
     const memo = new File(['x'], 'New Recording 4.m4a', { type: 'audio/mp4' });
     const textarea = await composeWith([memo]);
 
-    // Shown as pending — nothing is uploaded while the entry is unsaved.
+    // Shown as pending — nothing leaves while the entry is unsaved.
     expect(screen.getByText('New Recording 4.m4a')).toBeTruthy();
-    expect(uploadMock).not.toHaveBeenCalled();
+    expect(storePhoto).not.toHaveBeenCalled();
 
     fireEvent.change(textarea, { target: { value: 'a thought' } });
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
-    await waitFor(() => expect(uploadMock).toHaveBeenCalledTimes(1));
-    const [entryId, file, name] = uploadMock.mock.calls[0];
+    await waitFor(() => expect(storePhoto).toHaveBeenCalledTimes(1));
+    const entryId = createMock.mock.calls[0][0].id;
+    const [attachmentId, file, target, targetId] =
+      vi.mocked(storePhoto).mock.calls[0];
     expect(file).toBe(memo);
-    expect(name).toBe('New Recording 4');
-    // Uploaded against the same client-generated ULID the create used.
-    expect(entryId).toBe(createMock.mock.calls[0][0].id);
+    expect(target).toBe('journal');
+    // Against the same client-generated ULID the create used.
+    expect(targetId).toBe(entryId);
+
+    expect(enqueueJournalAttachment).toHaveBeenCalledWith(
+      expect.anything(),
+      attachmentId,
+      entryId,
+      'New Recording 4'
+    );
+    expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('tells the server how many files are coming so the title waits for them', async () => {
+    const textarea = await composeWith([
+      new File(['x'], 'one.png', { type: 'image/png' }),
+      new File(['x'], 'two.png', { type: 'image/png' }),
+    ]);
+
+    fireEvent.change(textarea, { target: { value: 'a thought' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    await waitFor(() => expect(createMock).toHaveBeenCalled());
+    expect(createMock.mock.calls[0][0].pendingAttachments).toBe(2);
+    // Both queued, in the order they were pasted — the server's `position`
+    // counter is what orders them, and it counts arrivals.
+    await waitFor(() =>
+      expect(enqueueJournalAttachment).toHaveBeenCalledTimes(2)
+    );
+    expect(
+      vi.mocked(enqueueJournalAttachment).mock.calls.map(c => c[3])
+    ).toEqual(['one', 'two']);
+  });
+
+  it('queues every staged file even when an earlier one cannot be read', async () => {
+    // The old loop was one try/catch around a sequential for-await: the first
+    // failure aborted the rest, which is why two pictures went at once.
+    vi.mocked(storePhoto).mockRejectedValueOnce(
+      new Error('Could not read that photo from this device.')
+    );
+    const textarea = await composeWith([
+      new File(['x'], 'one.png', { type: 'image/png' }),
+      new File(['x'], 'two.png', { type: 'image/png' }),
+    ]);
+
+    fireEvent.change(textarea, { target: { value: 'a thought' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    await waitFor(() => expect(storePhoto).toHaveBeenCalledTimes(2));
+    expect(enqueueJournalAttachment).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueJournalAttachment).mock.calls[0][3]).toBe('two');
   });
 
   it('lets a staged file be removed before saving', async () => {
@@ -511,7 +607,8 @@ describe('Journal new-entry attachments', () => {
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     await waitFor(() => expect(createMock).toHaveBeenCalled());
-    expect(uploadMock).not.toHaveBeenCalled();
+    expect(storePhoto).not.toHaveBeenCalled();
+    expect(enqueueJournalAttachment).not.toHaveBeenCalled();
   });
 
   it('offers a photo and a file button in the compose box, staging a picked file', async () => {
@@ -635,8 +732,13 @@ describe('Journal new-entry attachments', () => {
     expect(textarea).toBeTruthy();
   });
 
-  it('reports a failed attachment upload without implying the entry was lost', async () => {
-    uploadMock.mockRejectedValue(new Error('file is too large'));
+  it('reports a file it could not read without implying the entry was lost', async () => {
+    // The only attachment failure the user can still act on. A failed *upload*
+    // is no longer one of them — it is queued, and it retries — so this is
+    // about a file whose bytes never reached the device at all.
+    vi.mocked(storePhoto).mockRejectedValue(
+      new Error('That photo came back empty')
+    );
     const textarea = await composeWith([
       new File(['x'], 'big.mov', { type: 'video/quicktime' }),
     ]);
@@ -645,7 +747,9 @@ describe('Journal new-entry attachments', () => {
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
     expect(
-      await screen.findByText(/The entry was saved, but its attachment failed/)
+      await screen.findByText(
+        /The entry was saved, but "big.mov" could not be attached/
+      )
     ).toBeTruthy();
   });
 });

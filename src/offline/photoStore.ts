@@ -28,10 +28,17 @@ const store = idbAvailable()
 
 export interface StoredPhoto {
   id: string;
-  /** What this photo belongs to, so a sweep knows which upload to retry. */
-  target: 'food' | 'selfie' | 'cookbook' | 'paper';
-  /** The row it attaches to: a food entry, recipe or paper page id, or the
-   *  selfie's date. */
+  /** What this photo belongs to, so a sweep knows which upload to retry.
+   *
+   *  `journal` is the odd one out and deliberately still lives here: a journal
+   *  attachment may be a PDF as readily as a picture (the composer's File
+   *  button takes anything, and the backend stores what it can't place as
+   *  `kind='file'`). Nothing in this store actually reads the bytes — it
+   *  materializes a Blob, remembers a mime type and a filename, and hands both
+   *  back — so a second store would differ from this one only in its name. */
+  target: 'food' | 'selfie' | 'cookbook' | 'paper' | 'journal';
+  /** The row it attaches to: a food entry, recipe, paper page or journal entry
+   *  id, or the selfie's date. */
   targetId: string;
   /** Where the picture sits on the page it was pasted onto, in page space.
    *  Paper only, and kept here rather than only in the mutation's variables so
@@ -143,7 +150,7 @@ export async function storePhoto(
     // The name is read off the original File — a materialized Blob has none —
     // and it is what tells the server a HEIC from the camera roll apart from a
     // JPEG when the mime type arrives empty.
-    filename: file.name || `${id}.jpg`,
+    filename: file.name || fallbackFilename(id, file.type),
     size: blob.size,
     createdAt: Date.now(),
     attempts: 0,
@@ -155,6 +162,21 @@ export async function storePhoto(
   await put(blobKey(id), blob);
   await put(metaKey(id), meta);
   return meta;
+}
+
+/**
+ * A name for a nameless blob.
+ *
+ * `.jpg` for anything image-shaped (or type-less), which is every photo this
+ * store was built for. A journal attachment can be a PDF, though, and calling
+ * one `.jpg` would make the server resolve it as an image and queue a vision
+ * caption for a document — so a non-image mime lends its own subtype instead.
+ */
+function fallbackFilename(id: string, mimeType: string): string {
+  const type = (mimeType || '').toLowerCase();
+  if (!type || type.startsWith('image/')) return `${id}.jpg`;
+  const subtype = type.split('/')[1]?.split(';')[0];
+  return subtype ? `${id}.${subtype}` : `${id}.bin`;
 }
 
 /**

@@ -54,7 +54,7 @@ export function isMediaFile(file: File): boolean {
  * backend used to reject outright — hence the explicit third argument at the
  * call site and this fallback built from the mime type.
  */
-export function uploadFilenameFor(file: File): string {
+export function uploadFilenameFor(file: Blob & { name?: string }): string {
   if (file.name) return file.name;
   return `attachment.${extForMime(file.type, 'bin')}`;
 }

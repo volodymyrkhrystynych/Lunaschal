@@ -2,11 +2,43 @@ import type { QueryClient } from '@tanstack/react-query';
 import {
   MUTATION_KEYS,
   type FoodCreateVars,
+  type JournalAttachmentVars,
   type PaperImageAddVars,
   type SelfieUploadVars,
 } from './mutationDefaults';
 import { api, ApiError } from '../hooks/api';
+import { defaultNameFor } from '../lib/journalAttachments';
 import { deletePhoto, getPhoto, listPhotos, markAttempt } from './photoStore';
+
+/**
+ * Hand a stored journal attachment to the offline write queue.
+ *
+ * The photo twin of `enqueueRecordingUpload`, and the one path every journal
+ * attachment now takes — the composer's staged files and the editor's paste
+ * alike. It uploads immediately when the backend is reachable and pauses until
+ * it is otherwise, sharing `JOURNAL_LANE` with the entry's own create so the
+ * entry is always there first.
+ *
+ * The file is deleted from the device only after the server has confirmed it.
+ * Before this existed the composer uploaded staged files with a bare `fetch`
+ * and no retry, holding them nowhere but React state — so a photo added on a
+ * bad connection was gone the moment the upload failed or the tab was reaped,
+ * while the recording beside it survived in `recordingStore`. That asymmetry
+ * is the bug this closes.
+ */
+export function enqueueJournalAttachment(
+  qc: QueryClient,
+  attachmentId: string,
+  entryId: string,
+  name?: string
+): Promise<unknown> {
+  return qc
+    .getMutationCache()
+    .build<unknown, Error, JournalAttachmentVars, unknown>(qc, {
+      mutationKey: MUTATION_KEYS.journalAttachment,
+    })
+    .execute({ attachmentId, entryId, name });
+}
 
 /**
  * The boot-time sweep for photos the device is still holding.
@@ -47,6 +79,19 @@ export async function resumeStoredPhotos(qc: QueryClient): Promise<void> {
           filename: photo.filename,
         })
         .catch(() => {});
+      continue;
+    }
+
+    if (photo.target === 'journal') {
+      // The label is re-derived from the filename rather than stored beside
+      // it: it is what the composer passed in the first place, so a rescued
+      // orphan lands under the name it would have had.
+      void enqueueJournalAttachment(
+        qc,
+        photo.id,
+        photo.targetId,
+        defaultNameFor(photo.filename)
+      );
       continue;
     }
 
@@ -124,6 +169,12 @@ function alreadyQueued(qc: QueryClient, photoId: string): boolean {
         return (
           (m.state.variables as PaperImageAddVars | undefined)?.imageId ===
           photoId
+        );
+      }
+      if (key?.[0] === 'journal' && key?.[1] === 'attachment') {
+        return (
+          (m.state.variables as JournalAttachmentVars | undefined)
+            ?.attachmentId === photoId
         );
       }
       if (key?.[0] === 'cookbook' && key?.[1] === 'create') {
