@@ -23,6 +23,17 @@ DEV_FLASK_PORT = int(os.environ.get('LUNASCHAL_DEV_PORT', '5001'))
 ICON_PATH = os.path.join(os.path.dirname(__file__), 'public', 'icons', 'icon.png')
 
 
+def _timestamp_midi_events(events) -> list[dict]:
+    """Stamp a parser batch once so simultaneous chord notes stay simultaneous."""
+    captured_at = time.time_ns() // 1_000_000
+    result = []
+    for event in events:
+        value = event.as_dict()
+        value['timestampMs'] = captured_at
+        result.append(value)
+    return result
+
+
 class _DesktopApi:
     """Small JS bridge for capabilities QtWebEngine does not provide."""
 
@@ -88,7 +99,7 @@ class _DesktopApi:
                         continue
                     with self._midi_lock:
                         self._midi_events.extend(
-                            event.as_dict() for event in parser.feed(chunk)
+                            _timestamp_midi_events(parser.feed(chunk))
                         )
             finally:
                 os.close(fd)

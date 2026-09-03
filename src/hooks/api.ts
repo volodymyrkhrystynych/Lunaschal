@@ -20,7 +20,11 @@ import type {
   PianoArchivePage,
   PianoArchiveScanResult,
   PianoArchiveStatus,
+  PianoAttempt,
+  PianoHistoryDay,
+  PianoPreferences,
   PianoPiece,
+  PianoToday,
 } from '../lib/piano';
 
 export type { SleepDay };
@@ -2472,6 +2476,39 @@ export const api = {
   },
 
   piano: {
+    today: () => get<PianoToday>('/api/piano/today'),
+    history: () => get<PianoHistoryDay[]>('/api/piano/history'),
+    updatePreferences: (preferences: {
+      sessionMinutes: number;
+      skillLevel: PianoPreferences['skillLevel'];
+      jazzPercent: number;
+    }) => patch<PianoPreferences>('/api/piano/preferences', preferences),
+    completeExercise: (
+      id: string,
+      attempt: {
+        startedAt?: number;
+        tempo?: number;
+        correctNotes?: number;
+        wrongNotes?: number;
+        onsetAccuracy?: number;
+        durationAccuracy?: number;
+        tempoStability?: number;
+        velocityEvenness?: number;
+        achievedTempo?: number;
+        selfRating?: number;
+        notes?: string;
+      }
+    ) => post<PianoAttempt>(`/api/piano/daily/${id}/attempts`, attempt),
+    exerciseScore: async (id: string) => {
+      const response = await fetch(`/api/piano/daily/${id}/score`, {
+        credentials: 'include',
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${response.status}`);
+      }
+      return response.text();
+    },
     list: () => get<PianoPiece[]>('/api/piano/pieces'),
     import: (file: File) => {
       const form = new FormData();

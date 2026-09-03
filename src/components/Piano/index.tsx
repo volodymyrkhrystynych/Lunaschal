@@ -6,14 +6,23 @@ import {
   parsePracticeSteps,
   stepIsComplete,
   type PianoHand,
+  type PianoDailyExercise,
   type PianoPiece,
 } from '../../lib/piano';
+import {
+  jazzVoicingAccepted,
+  scorePerformance,
+  type CapturedMidiEvent,
+} from '../../lib/pianoPractice';
 import { renderMusicXml } from '../../lib/verovio';
 import { PianoArchive } from './PianoArchive';
 import { PianoKeyboard } from './PianoKeyboard';
+import { PianoToday } from './PianoToday';
 
 export function Piano() {
-  const [section, setSection] = useState<'practice' | 'archive'>('practice');
+  const [section, setSection] = useState<'today' | 'library' | 'archive'>(
+    'today'
+  );
   const [devices, setDevices] = useState<MidiDevice[]>([]);
   const [deviceId, setDeviceId] = useState('');
   const [connected, setConnected] = useState(false);
@@ -34,6 +43,21 @@ export function Piano() {
   const [practicing, setPracticing] = useState(false);
   const practicingRef = useRef(false);
   const [wrongNotes, setWrongNotes] = useState(0);
+  const wrongNotesRef = useRef(0);
+  const [dailyExercise, setDailyExercise] = useState<PianoDailyExercise | null>(
+    null
+  );
+  const attemptStartedRef = useRef<number | null>(null);
+  const capturedRef = useRef<CapturedMidiEvent[]>([]);
+  const [practiceTempo, setPracticeTempo] = useState(80);
+  const [countingIn, setCountingIn] = useState(false);
+  const audioRef = useRef<AudioContext | null>(null);
+  const metronomeTimerRef = useRef<number | null>(null);
+  const [earPromptPlaying, setEarPromptPlaying] = useState(false);
+  const [earReveal, setEarReveal] = useState(true);
+  const [lastMetrics, setLastMetrics] = useState<ReturnType<
+    typeof scorePerformance
+  > | null>(null);
 
   const allSteps = useMemo(
     () => (score ? parsePracticeSteps(score) : []),
@@ -97,6 +121,18 @@ export function Piano() {
           continue;
         }
         if (event.note === undefined) continue;
+        const timestampMs = event.timestampMs ?? Date.now();
+        if (
+          practicingRef.current &&
+          (event.kind === 'noteOn' || event.kind === 'noteOff')
+        ) {
+          capturedRef.current.push({
+            kind: event.kind,
+            note: event.note,
+            velocity: event.velocity,
+            timestampMs,
+          });
+        }
         const held = new Set(activeRef.current);
         if (event.kind === 'noteOn') held.add(event.note);
         else held.delete(event.note);
@@ -106,25 +142,66 @@ export function Piano() {
         if (event.kind !== 'noteOn' || !practicingRef.current) continue;
         const step = stepsRef.current[stepIndexRef.current];
         if (!step) continue;
-        if (stepIsComplete(step, handRef.current, held)) {
+        const flexibleJazz =
+          dailyExercise?.exerciseKey === 'ii-v-i' &&
+          jazzVoicingAccepted(
+            stepIndexRef.current,
+            held,
+            tonicMidi(dailyExercise.keyName)
+          );
+        if (stepIsComplete(step, handRef.current, held) || flexibleJazz) {
           const next = stepIndexRef.current + 1;
           stepIndexRef.current = next;
           setStepIndex(next);
           if (next >= stepsRef.current.length) {
             practicingRef.current = false;
             setPracticing(false);
+            stopMetronome();
+            const assignment = dailyExercise;
+            if (assignment) {
+              const metrics = scorePerformance(
+                stepsRef.current,
+                handRef.current,
+                capturedRef.current,
+                practiceTempo
+              );
+              setLastMetrics(metrics);
+              setEarReveal(true);
+              void api.piano
+                .completeExercise(assignment.id, {
+                  startedAt: attemptStartedRef.current ?? undefined,
+                  tempo: practiceTempo,
+                  correctNotes: stepsRef.current.reduce(
+                    (count, completedStep) =>
+                      count +
+                      notesForHand(completedStep, handRef.current).length,
+                    0
+                  ),
+                  wrongNotes: wrongNotesRef.current,
+                  onsetAccuracy: metrics.onsetAccuracy,
+                  durationAccuracy: metrics.durationAccuracy ?? undefined,
+                  tempoStability: metrics.tempoStability,
+                  velocityEvenness: metrics.velocityEvenness ?? undefined,
+                  achievedTempo: metrics.achievedTempo ?? undefined,
+                })
+                .catch(cause =>
+                  setError(errorMessage(cause, 'Could not save the attempt.'))
+                );
+            }
           }
         } else if (!notesForHand(step, handRef.current).includes(event.note)) {
-          setWrongNotes(count => count + 1);
+          wrongNotesRef.current += 1;
+          setWrongNotes(wrongNotesRef.current);
         }
       }
     }, 16);
     return () => window.clearInterval(timer);
-  }, [connected]);
+  }, [connected, dailyExercise, practiceTempo]);
 
   useEffect(
     () => () => {
       void desktopApi()?.midi_close();
+      stopMetronome();
     },
     []
   );
@@ -188,19 +265,123 @@ export function Piano() {
     }
   };
 
+  const stopMetronome = () => {
+    if (metronomeTimerRef.current !== null)
+      window.clearInterval(metronomeTimerRef.current);
+    metronomeTimerRef.current = null;
+    void audioRef.current?.close();
+    audioRef.current = null;
+  };
+
+  const click = (context: AudioContext, when: number, accent = false) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.frequency.value = accent ? 1200 : 800;
+    gain.gain.setValueAtTime(0.15, when);
+    gain.gain.exponentialRampToValueAtTime(0.001, when + 0.04);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(when);
+    oscillator.stop(when + 0.05);
+  };
+
   const startPractice = () => {
+    stopMetronome();
     setWrongNotes(0);
+    wrongNotesRef.current = 0;
     setStepIndex(0);
     stepIndexRef.current = 0;
-    setPracticing(practiceSteps.length > 0);
+    capturedRef.current = [];
+    setLastMetrics(null);
+    if (!practiceSteps.length) return;
+    const context = new AudioContext();
+    audioRef.current = context;
+    const interval = 60 / practiceTempo;
+    setCountingIn(true);
+    for (let beat = 0; beat < 4; beat += 1)
+      click(context, context.currentTime + beat * interval, beat === 0);
+    window.setTimeout(() => {
+      if (audioRef.current !== context) return;
+      setCountingIn(false);
+      practicingRef.current = true;
+      setPracticing(true);
+      attemptStartedRef.current = Math.floor(Date.now() / 1000);
+      click(context, context.currentTime, true);
+      let beat = 1;
+      metronomeTimerRef.current = window.setInterval(() => {
+        click(context, context.currentTime, beat % 4 === 0);
+        beat += 1;
+      }, interval * 1000);
+    }, interval * 4000);
+  };
+
+  const practiceDaily = async (exercise: PianoDailyExercise) => {
+    setError(null);
+    const isEarPhrase = exercise.exerciseKey === 'ear-phrase';
+    // Constructing the context synchronously preserves browser user-gesture
+    // authorization even though score fetching follows.
+    const earContext = isEarPhrase ? new AudioContext() : null;
+    try {
+      const xml = await api.piano.exerciseScore(exercise.id);
+      const virtualPiece: PianoPiece = {
+        id: `daily:${exercise.id}`,
+        title: `${exercise.title}${exercise.keyName ? ` in ${exercise.keyName}` : ''}`,
+        composer: 'Daily exercise',
+        sourceFilename: 'generated.musicxml',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setDailyExercise(exercise);
+      setPracticeTempo(exercise.targetTempo ?? 80);
+      setPiece(virtualPiece);
+      setScore(xml);
+      setStepIndex(0);
+      setWrongNotes(0);
+      wrongNotesRef.current = 0;
+      setLoopStart(1);
+      setLoopEnd(1);
+      setScorePages(await renderMusicXml(xml));
+      setEarReveal(!isEarPhrase);
+      setSection('library');
+      if (earContext) {
+        setEarPromptPlaying(true);
+        playEarPhrase(
+          earContext,
+          tonicMidi(exercise.keyName),
+          exercise.targetTempo ?? 80
+        );
+        window.setTimeout(
+          () => {
+            setEarPromptPlaying(false);
+            void earContext.close();
+          },
+          (60_000 / (exercise.targetTempo ?? 80)) * 6
+        );
+      }
+    } catch (cause) {
+      void earContext?.close();
+      setError(errorMessage(cause, 'Could not open the exercise.'));
+    }
+  };
+
+  const openDailyRepertoire = async (exercise: PianoDailyExercise) => {
+    const selected = pieces.find(item => item.id === exercise.pianoPieceId);
+    if (!selected) {
+      setError('The assigned repertoire piece is no longer in the library.');
+      return;
+    }
+    setDailyExercise(exercise);
+    await openPiece(selected);
+    setLoopStart(exercise.measureStart ?? 1);
+    setLoopEnd(exercise.measureEnd ?? 8);
+    setSection('library');
   };
 
   return (
     <section className="flex flex-1 overflow-hidden text-[var(--color-text)]">
       <aside className="w-72 shrink-0 overflow-y-auto border-r border-white/10 bg-[var(--color-surface)] p-4">
         <h2 className="text-xl font-semibold">Piano</h2>
-        <div className="mt-4 grid grid-cols-2 rounded border border-white/10 p-1 text-sm">
-          {(['practice', 'archive'] as const).map(value => (
+        <div className="mt-4 grid grid-cols-3 rounded border border-white/10 p-1 text-sm">
+          {(['today', 'library', 'archive'] as const).map(value => (
             <button
               key={value}
               type="button"
@@ -215,7 +396,7 @@ export function Piano() {
             </button>
           ))}
         </div>
-        {section === 'practice' ? (
+        {section === 'library' ? (
           <>
             <label className="mt-4 block cursor-pointer rounded bg-[var(--color-primary)] px-4 py-2 text-center text-white">
               Import sheet music
@@ -251,7 +432,10 @@ export function Piano() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => void openPiece(item)}
+                      onClick={() => {
+                        setDailyExercise(null);
+                        void openPiece(item);
+                      }}
                       className="min-w-0 flex-1 text-left"
                     >
                       <span className="block font-medium">{item.title}</span>
@@ -275,10 +459,15 @@ export function Piano() {
               ))}
             </div>
           </>
-        ) : (
+        ) : section === 'archive' ? (
           <p className="mt-4 text-sm text-[var(--color-text-muted)]">
             Browse large collections on the external backup drive. Star a
             MusicXML score to add it here for practice.
+          </p>
+        ) : (
+          <p className="mt-4 text-sm text-[var(--color-text-muted)]">
+            A balanced routine of technique, harmony, listening, and repertoire
+            generated locally for each 4 a.m. practice day.
           </p>
         )}
       </aside>
@@ -286,6 +475,11 @@ export function Piano() {
       <div className="flex-1 space-y-5 overflow-auto p-5">
         {section === 'archive' ? (
           <PianoArchive onLibraryChanged={refreshPieces} />
+        ) : section === 'today' ? (
+          <PianoToday
+            onPractice={practiceDaily}
+            onRepertoire={openDailyRepertoire}
+          />
         ) : (
           <>
             <MidiControls
@@ -317,7 +511,7 @@ export function Piano() {
                   loopStart={loopStart}
                   loopEnd={loopEnd}
                   connected={connected}
-                  canStart={practiceSteps.length > 0}
+                  canStart={practiceSteps.length > 0 && !earPromptPlaying}
                   onHand={value => {
                     setHand(value);
                     setStepIndex(0);
@@ -325,6 +519,9 @@ export function Piano() {
                   onLoopStart={setLoopStart}
                   onLoopEnd={setLoopEnd}
                   onStart={startPractice}
+                  tempo={practiceTempo}
+                  countingIn={countingIn}
+                  onTempo={setPracticeTempo}
                 />
                 <div className="sticky top-0 z-20 flex flex-wrap items-center gap-4 rounded-lg border border-cyan-400/30 bg-zinc-950/95 p-3 shadow-lg">
                   <strong>
@@ -350,7 +547,27 @@ export function Piano() {
                     Step {Math.min(stepIndex + 1, practiceSteps.length)} /{' '}
                     {practiceSteps.length} · Wrong notes {wrongNotes}
                   </span>
+                  {dailyExercise?.exerciseKey === 'ear-phrase' &&
+                    !earReveal && (
+                      <span className="text-amber-300">
+                        {earPromptPlaying
+                          ? 'Listen…'
+                          : 'Phrase hidden — sing it, then play it back'}
+                      </span>
+                    )}
                 </div>
+                {lastMetrics && (
+                  <div className="rounded border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
+                    Timing {lastMetrics.onsetAccuracy}% · pulse{' '}
+                    {lastMetrics.tempoStability}%
+                    {lastMetrics.durationAccuracy != null
+                      ? ` · releases ${lastMetrics.durationAccuracy}%`
+                      : ''}
+                    {lastMetrics.achievedTempo
+                      ? ` · ${lastMetrics.achievedTempo} BPM`
+                      : ''}
+                  </div>
+                )}
                 <div className="overflow-x-auto">
                   <PianoKeyboard activeNotes={activeNotes} />
                 </div>
@@ -360,13 +577,14 @@ export function Piano() {
                       Engraving score…
                     </p>
                   )}
-                  {scorePages.map((svg, index) => (
-                    <div
-                      key={index}
-                      className="mx-auto max-w-5xl overflow-hidden rounded bg-white p-3"
-                      dangerouslySetInnerHTML={{ __html: svg }}
-                    />
-                  ))}
+                  {(dailyExercise?.exerciseKey !== 'ear-phrase' || earReveal) &&
+                    scorePages.map((svg, index) => (
+                      <div
+                        key={index}
+                        className="mx-auto max-w-5xl overflow-hidden rounded bg-white p-3"
+                        dangerouslySetInnerHTML={{ __html: svg }}
+                      />
+                    ))}
                 </div>
               </>
             ) : (
@@ -445,6 +663,9 @@ function PracticeControls(props: {
   onLoopStart: (measure: number) => void;
   onLoopEnd: (measure: number) => void;
   onStart: () => void;
+  tempo: number;
+  countingIn: boolean;
+  onTempo: (tempo: number) => void;
 }) {
   return (
     <div className="flex flex-wrap items-end gap-4 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4">
@@ -488,12 +709,25 @@ function PracticeControls(props: {
       </label>
       <button
         type="button"
-        disabled={!props.connected || !props.canStart}
+        disabled={!props.connected || !props.canStart || props.countingIn}
         onClick={props.onStart}
         className="rounded bg-emerald-600 px-4 py-2 text-white disabled:opacity-40"
       >
-        Start practice
+        {props.countingIn ? 'Count-in…' : 'Start with 4-beat count-in'}
       </button>
+      <label className="text-sm">
+        Tempo
+        <input
+          aria-label="Practice tempo"
+          type="number"
+          min="30"
+          max="240"
+          value={props.tempo}
+          onChange={event => props.onTempo(Number(event.target.value))}
+          className="ml-2 w-20 rounded border border-white/20 bg-[var(--color-bg)] px-2 py-1"
+        />{' '}
+        BPM
+      </label>
     </div>
   );
 }
@@ -506,4 +740,44 @@ function formatBeat(beat: number): string {
   return Number.isInteger(beat)
     ? String(beat)
     : beat.toFixed(2).replace(/0+$/, '');
+}
+
+function tonicMidi(keyName: string | null): number {
+  return (
+    {
+      C: 60,
+      G: 67,
+      D: 62,
+      A: 69,
+      E: 64,
+      F: 65,
+      'B-flat': 58,
+      'E-flat': 63,
+      'A-flat': 56,
+    }[keyName ?? 'C'] ?? 60
+  );
+}
+
+function playEarPhrase(context: AudioContext, tonic: number, tempo: number) {
+  const offsets =
+    tempo <= 60
+      ? [0, 2, 4]
+      : tempo < 100
+        ? [0, 2, 4, 7, 4]
+        : [0, 4, 2, 7, 9, 7];
+  const beatSeconds = 60 / tempo;
+  offsets.forEach((offset, index) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const start = context.currentTime + 0.08 + index * beatSeconds;
+    const stop = start + beatSeconds * 0.78;
+    oscillator.type = 'triangle';
+    oscillator.frequency.value = 440 * 2 ** ((tonic + offset - 69) / 12);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.13, start + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, stop);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(stop + 0.02);
+  });
 }

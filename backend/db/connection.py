@@ -185,6 +185,7 @@ def init_db() -> None:
     _ensure_message_raw_content(db)
     _ensure_chat_attachment_location(db)
     _ensure_practice_recall_columns(db)
+    _ensure_piano_attempt_metrics(db)
     _ensure_learning_attempts_speech_requested(db)
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
@@ -1645,6 +1646,18 @@ def _migrate_flashcards_to_learning(db: sqlite3.Connection) -> None:
     )
     db.execute('DROP TABLE flashcards')
     db.execute('DROP INDEX IF EXISTS idx_flashcard_next_review')
+    db.commit()
+
+
+def _ensure_piano_attempt_metrics(db: sqlite3.Connection) -> None:
+    """Add Stage 2 performance metrics without replacing existing attempts."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(piano_exercise_attempts)')}
+    for name in (
+        'onset_accuracy', 'duration_accuracy', 'tempo_stability',
+        'velocity_evenness', 'achieved_tempo',
+    ):
+        if name not in cols:
+            db.execute(f'ALTER TABLE piano_exercise_attempts ADD COLUMN {name} REAL')
     db.commit()
 
 

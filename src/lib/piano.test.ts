@@ -17,8 +17,8 @@ describe('MusicXML practice timeline', () => {
   it('groups chords and aligns both staves by musical onset', () => {
     const steps = parsePracticeSteps(SCORE);
     expect(steps).toEqual([
-      { measure: 1, beat: 1, right: [60], left: [48] },
-      { measure: 1, beat: 2, right: [64, 67], left: [] },
+      { measure: 1, beat: 1, right: [60], left: [48], durationBeats: 2 },
+      { measure: 1, beat: 2, right: [64, 67], left: [], durationBeats: 1 },
     ]);
   });
 
