@@ -248,3 +248,27 @@ describe('a journal attachment whose entry is not there yet', () => {
     await vi.waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledTimes(2));
   });
 });
+
+describe('paper is left to its own Save', () => {
+  it('does not upload a held paper picture on boot', async () => {
+    // Nothing in a paper reaches the server except by pressing Save — drawing
+    // on a tablet with bad wifi was unusable while the app synced on its own —
+    // and a boot-time upload would quietly break that. The rescue this sweep
+    // exists for is not lost: the editor's Save reads the same held set for the
+    // open paper and sends every picture its pages are still carrying.
+    await storePhoto('img-1', jpeg(), 'paper', 'page-1', {
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+    });
+    const qc = makeClient();
+
+    await resumeStoredPhotos(qc);
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    // And the bytes are still here, waiting for that Save.
+    expect(await getPhoto('img-1')).toBeTruthy();
+  });
+});

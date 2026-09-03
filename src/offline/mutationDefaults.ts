@@ -1153,6 +1153,80 @@ const paperPageSaveCfg = (
   onSettled: () => qc.invalidateQueries({ queryKey: ['paper'], exact: true }),
 });
 
+/**
+ * Fire one queued paper write without going through a component's mutation
+ * hook.
+ *
+ * A `useMutation` carries a single observer, so firing it several times in one
+ * burst runs one and silently drops the rest. That is exactly what Save does
+ * now: a paper is sent whole, so one press can be four page uploads, a handful
+ * of picture placements and a delete. Built straight on the cache instead, each
+ * write is its own mutation — same key, same registered config (so it pauses
+ * offline and replays after a reload), same lane, so ordering still holds.
+ *
+ * The twin of `enqueueJournalAttachment` in photoQueue.ts, and the reason
+ * `registerOfflineMutationDefaults` has to have run: the config lives on the
+ * key, not on the call.
+ */
+export function enqueuePaperWrite(
+  qc: QueryClient,
+  mutationKey: readonly unknown[],
+  vars: unknown,
+  hooks?: { onSuccess?: () => void; onSettled?: () => void }
+): void {
+  void qc
+    .getMutationCache()
+    .build<unknown, Error, unknown, unknown>(qc, { mutationKey })
+    .execute(vars)
+    .then(() => hooks?.onSuccess?.())
+    // A paused mutation never settles, so neither of these runs until the
+    // backend is actually reached — which is the point. A rejection is already
+    // reported by the config; swallow it here so it is not also unhandled.
+    .catch(() => {})
+    .finally(() => hooks?.onSettled?.());
+}
+
+/**
+ * Put a just-added picture on the page's cached content, before any upload.
+ *
+ * The picture has to be *on the page* the instant it is pasted, backend or no
+ * backend. `url` is left empty on purpose: a blob: URL baked into the persisted
+ * cache is dead after a reload, so the editor resolves the image from the device
+ * store instead (see PaperEditor's localUrls).
+ *
+ * Exported because paper no longer uploads a picture when it is pasted — the
+ * editor holds the bytes and sends them on Save — so the optimistic insert has
+ * to happen without a mutation to hang it off. The mutation still calls it too,
+ * for the orphan a Save (or a replay) sends for a page that was never opened.
+ */
+export function insertPendingPaperImage(
+  qc: QueryClient,
+  vars: Pick<PaperImageAddVars, 'imageId' | 'pageId' | 'box'>
+): void {
+  qc.setQueryData<PaperPageContent>(['paper', 'page', vars.pageId], prev =>
+    prev
+      ? {
+          ...prev,
+          images: prev.images.some(i => i.id === vars.imageId)
+            ? prev.images
+            : [
+                ...prev.images,
+                {
+                  id: vars.imageId,
+                  pageId: vars.pageId,
+                  url: '',
+                  ...vars.box,
+                  rotation: 0,
+                  flipped: 0,
+                  locked: 0,
+                  position: prev.images.length,
+                },
+              ],
+        }
+      : prev
+  );
+}
+
 const paperImageAddCfg = (
   qc: QueryClient
 ): Cfg<PaperPageImage, PaperImageAddVars> => ({
@@ -1181,30 +1255,7 @@ const paperImageAddCfg = (
     }
   },
   onMutate: vars => {
-    // The picture has to be *on the page* the instant it is pasted, backend or
-    // no backend. `url` is left empty on purpose: a blob: URL baked into the
-    // persisted cache is dead after a reload, so the editor resolves the image
-    // from the device store instead (see PaperEditor's localUrls).
-    qc.setQueryData<PaperPageContent>(['paper', 'page', vars.pageId], prev =>
-      prev
-        ? {
-            ...prev,
-            images: [
-              ...prev.images,
-              {
-                id: vars.imageId,
-                pageId: vars.pageId,
-                url: '',
-                ...vars.box,
-                rotation: 0,
-                flipped: 0,
-                locked: 0,
-                position: prev.images.length,
-              },
-            ],
-          }
-        : prev
-    );
+    insertPendingPaperImage(qc, vars);
   },
   onSuccess: (image, vars) => {
     // Swap the placeholder for the row the server actually stored — above all

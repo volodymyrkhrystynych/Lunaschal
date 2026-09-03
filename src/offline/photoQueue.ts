@@ -63,22 +63,13 @@ export async function resumeStoredPhotos(qc: QueryClient): Promise<void> {
     if (alreadyQueued(qc, photo.id)) continue;
 
     if (photo.target === 'paper') {
-      // The box it was placed in is on the photo itself, precisely so an
-      // orphan can be put back where it was pasted rather than guessed at.
-      const box = photo.placement;
-      if (!box) continue;
-      void qc
-        .getMutationCache()
-        .build<unknown, Error, PaperImageAddVars, unknown>(qc, {
-          mutationKey: MUTATION_KEYS.paperImageAdd,
-        })
-        .execute({
-          imageId: photo.id,
-          pageId: photo.targetId,
-          box,
-          filename: photo.filename,
-        })
-        .catch(() => {});
+      // Paper is the one target this sweep deliberately leaves alone. Nothing
+      // in a paper reaches the server except by pressing Save — drawing on a
+      // tablet with bad wifi was unusable while the app synced on its own — and
+      // a boot-time upload would quietly break that. The rescue path is not
+      // lost: the editor's Save reads this same `listPhotos()` set for the open
+      // paper and sends every picture its pages are still holding, so an orphan
+      // is picked up the next time that paper is saved.
       continue;
     }
 
