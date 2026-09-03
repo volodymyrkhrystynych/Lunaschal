@@ -449,7 +449,14 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     // Repaint when a picture is added, moved or removed. Cheap: the strokes are
     // already in memory, and this is the only thing that reflects a transform
     // committed through the overlay.
+    //
+    // Guarded the same way the initialStrokes effect above is: a stroke in
+    // progress is painted straight onto the canvas before it commits into
+    // stateRef, so a redraw here — triggered by something as unrelated as a
+    // picture on another page finishing its upload — would wipe it until the
+    // stroke completes and commits its own repaint.
     useEffect(() => {
+      if (drawingRef.current) return;
       redrawAll();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [images]);

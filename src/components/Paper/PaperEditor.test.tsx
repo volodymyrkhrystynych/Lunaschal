@@ -16,7 +16,7 @@ import { api, ApiError } from '../../hooks/api';
 import { PaperEditor } from './PaperEditor';
 import { registerOfflineMutationDefaults } from '@/offline/mutationDefaults';
 import { ImmersiveProvider, useImmersive } from '@/components/ImmersiveContext';
-import { PAGE_HEIGHT, PAGE_WIDTH } from '@/lib/paper';
+import { fitPageBox, PAGE_HEIGHT, PAGE_WIDTH } from '@/lib/paper';
 
 // The real module minus its `api`: `ApiError` and `NetworkError` are the two
 // classes the offline queue decides with (`instanceof`), so stubbing them away
@@ -538,6 +538,219 @@ describe('Save sends the whole paper', () => {
     for (const call of vi.mocked(api.paper.savePage).mock.calls) {
       expect(call[1].strokes).not.toBe('[]');
     }
+  });
+});
+
+describe('a picture pasted, moved, then saved before it ever uploaded', () => {
+  // What this pins: paste a picture, drag it off centre, keep writing, press
+  // Save. The picture is still only a blob on this device at that point — its
+  // add hasn't gone out yet — so its move lived in `staged.edits` under the
+  // same id as its pending upload. Sending that as a PATCH first 404s (no row
+  // to patch), and the add that followed then created the row back at the
+  // *original* pasted position, undoing the move the instant Save finished.
+  it('uploads at the moved position instead of the original pasted one', async () => {
+    URL.createObjectURL = vi.fn(
+      () => 'blob:pasted'
+    ) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      configurable: true,
+      set() {
+        setTimeout(() => this.onerror?.(), 0);
+      },
+    });
+    vi.mocked(api.paper.addImage).mockResolvedValue({ id: 'ignored' } as never);
+
+    const { container, queryClient } = renderEditor();
+    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+
+    await act(async () => {
+      const event = new Event('paste') as Event & { clipboardData: unknown };
+      event.clipboardData = {
+        items: [
+          {
+            kind: 'file',
+            type: 'image/png',
+            getAsFile: () =>
+              new File(['pixels'], 'pasted.png', { type: 'image/png' }),
+          },
+        ],
+      };
+      window.dispatchEvent(event);
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    const pasted = queryClient.getQueryData<{
+      images: {
+        id: string;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      }[];
+    }>(['paper', 'page', PAGE_1])!.images[0];
+    const originalX = pasted.x;
+
+    // The layer converts client coordinates to page space through its own
+    // (jsdom-default, all-zero) bounding rect and the same scale PaperEditor
+    // computes from the 800x1000 stage the beforeEach block sets up — so a
+    // pointer at the pasted picture's own centre, in that scale, actually
+    // lands on it instead of missing and just deselecting.
+    const box = fitPageBox({ width: 800 - 20, height: 1000 - 20 });
+    const scale = box.width / PAGE_WIDTH;
+    const centerClientX = (pasted.x + pasted.width / 2) * scale;
+    const centerClientY = (pasted.y + pasted.height / 2) * scale;
+
+    // Move it — select mode is already on, and the paste already chose it.
+    const layer = await waitFor(() => screen.getByTestId('paper-image-layer'));
+    fireEvent.pointerDown(layer, {
+      clientX: centerClientX,
+      clientY: centerClientY,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(layer, {
+      clientX: centerClientX + 150,
+      clientY: centerClientY,
+      pointerId: 1,
+    });
+    fireEvent.pointerUp(layer, {
+      clientX: centerClientX + 150,
+      clientY: centerClientY,
+      pointerId: 1,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save/i }));
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    await waitFor(() => expect(api.paper.addImage).toHaveBeenCalled());
+    const [, , uploadedBox] = vi.mocked(api.paper.addImage).mock.calls[0];
+    // The box the upload actually carried is the moved one, not the original.
+    expect(uploadedBox.x).not.toBe(originalX);
+    // And nothing tried to PATCH a row that didn't exist yet.
+    expect(api.paper.updateImage).not.toHaveBeenCalled();
+  });
+});
+
+describe('rotating a picture before it ever uploaded', () => {
+  it('creates the row first, then patches the rotation onto it', async () => {
+    URL.createObjectURL = vi.fn(
+      () => 'blob:pasted'
+    ) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      configurable: true,
+      set() {
+        setTimeout(() => this.onerror?.(), 0);
+      },
+    });
+    vi.mocked(api.paper.addImage).mockResolvedValue({ id: 'ignored' } as never);
+
+    const { container } = renderEditor();
+    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+
+    await act(async () => {
+      const event = new Event('paste') as Event & { clipboardData: unknown };
+      event.clipboardData = {
+        items: [
+          {
+            kind: 'file',
+            type: 'image/png',
+            getAsFile: () =>
+              new File(['pixels'], 'pasted.png', { type: 'image/png' }),
+          },
+        ],
+      };
+      window.dispatchEvent(event);
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    // Already selected by the paste — rotate it without ever having saved.
+    fireEvent.click(await screen.findByLabelText('Rotate right 90°'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save/i }));
+      await new Promise(r => setTimeout(r, 10));
+    });
+
+    await waitFor(() => expect(api.paper.addImage).toHaveBeenCalled());
+    await waitFor(() => expect(api.paper.updateImage).toHaveBeenCalled());
+    // Order matters: the row has to exist before the PATCH can land on it.
+    const addOrder = vi.mocked(api.paper.addImage).mock.invocationCallOrder[0];
+    const updateOrder = vi.mocked(api.paper.updateImage).mock
+      .invocationCallOrder[0];
+    expect(addOrder).toBeLessThan(updateOrder);
+    expect(vi.mocked(api.paper.updateImage).mock.calls[0][1]).toEqual({
+      rotation: 90,
+    });
+  });
+});
+
+describe('the images prop stays stable while drawing', () => {
+  // What this pins: a local commit (the idle timer, or leaving the page)
+  // rewrites the page's query cache to carry the freshly drawn strokes —
+  // that's the whole point of it being local-only. But it used to also produce
+  // a brand-new `images` array on every one of those writes even though the
+  // pictures themselves hadn't changed, and PaperCanvas redraws itself from
+  // scratch whenever its `images` prop changes identity — wiping an
+  // in-progress, not-yet-committed stroke until it landed. A committed
+  // stroke's own repaint painted over the gap, which is what read as "some of
+  // what I wrote erased and came back."
+  it('keeps the same images array across a local commit that only touched strokes', async () => {
+    vi.mocked(api.paper.getPage).mockResolvedValue({
+      strokes: '[]',
+      width: null,
+      height: null,
+      images: [
+        {
+          id: 'img-1',
+          url: '/api/paper/images/img-1/file',
+          x: 100,
+          y: 100,
+          width: 200,
+          height: 200,
+          rotation: 0,
+          flipped: 0,
+          locked: 0,
+          position: 0,
+        },
+      ],
+    } as never);
+
+    const { container, queryClient } = renderEditor();
+    const canvas = await drawOn(container);
+    const before = queryClient.getQueryData<{ images: unknown }>([
+      'paper',
+      'page',
+      PAGE_1,
+    ])!.images;
+
+    // A second stroke stands in for the idle-timer's local commit — both take
+    // the same commitLocal path, and this way the test needs no fake timers.
+    await act(async () => {
+      canvas.dispatchEvent(
+        new MouseEvent('pointerdown', {
+          bubbles: true,
+          clientX: 30,
+          clientY: 30,
+        })
+      );
+      canvas.dispatchEvent(
+        new MouseEvent('pointerup', { bubbles: true, clientX: 30, clientY: 30 })
+      );
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => expect(api.paper.savePage).toHaveBeenCalled());
+
+    const after = queryClient.getQueryData<{ images: unknown }>([
+      'paper',
+      'page',
+      PAGE_1,
+    ])!.images;
+    // Same array, not merely equal content — that identity is what keeps
+    // PaperCanvas's images-effect from firing on a strokes-only commit.
+    expect(after).toBe(before);
   });
 });
 
