@@ -74,6 +74,73 @@ function renderCanvas(initialStrokes: Stroke[]) {
   return { ...view, ref };
 }
 
+describe('a picture changing elsewhere never wipes a stroke in progress', () => {
+  it('defers the images repaint until the stroke commits', async () => {
+    // The reported bug: writing on a page stuttered — some of what had just
+    // been written erased and came back. The `images` prop changes far more
+    // often than it used to now that a local commit rewrites the page's cache
+    // every couple of seconds while drawing, and that effect repaints from
+    // `stateRef`'s *committed* strokes only — a stroke still in flight (drawn
+    // straight to the canvas, not yet in stateRef) has nowhere to survive a
+    // repaint that fires mid-stroke.
+    const { container, rerender, ref } = renderCanvas([]);
+    await waitFor(() => expect(ctx.setTransform).toHaveBeenCalled());
+    const canvas = container.querySelector('canvas')!;
+    canvas.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, width: 400, height: 566 }) as DOMRect;
+
+    canvas.dispatchEvent(
+      new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 20 })
+    );
+    canvas.dispatchEvent(
+      new MouseEvent('pointermove', { bubbles: true, clientX: 60, clientY: 90 })
+    );
+    // Still mid-stroke — no pointerup yet.
+    const paintsBeforeImageChange = ctx.fillRect.mock.calls.length;
+
+    rerender(
+      <PaperCanvas
+        ref={ref}
+        pageId="p1"
+        images={[
+          {
+            id: 'img-1',
+            url: 'blob:x',
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 100,
+            rotation: 0,
+            flipped: false,
+            locked: false,
+            position: 0,
+          },
+        ]}
+        initialStrokes={[]}
+        initialSize={{ width: PAGE_WIDTH, height: PAGE_HEIGHT }}
+        tool="pen"
+        size={4}
+        onSwipe={() => {}}
+      />
+    );
+
+    // No repaint yet: one mid-stroke would have cleared the canvas and redrawn
+    // only the committed strokes, dropping the one still being drawn — the
+    // in-progress ink is painted directly to the canvas during the move above
+    // and has nowhere else to live until it commits.
+    expect(ctx.fillRect.mock.calls.length).toBe(paintsBeforeImageChange);
+
+    // Finishing the stroke commits it safely — the deferred picture is not
+    // lost, just delayed to whenever the next real redraw comes along (undo
+    // is one; so is the next picture move, or simply drawing again).
+    canvas.dispatchEvent(
+      new MouseEvent('pointerup', { bubbles: true, clientX: 60, clientY: 90 })
+    );
+    const dataAfter = await ref.current!.getSaveData();
+    expect(dataAfter).not.toBeNull();
+  });
+});
+
 describe('adopting content that arrives after mount', () => {
   it('draws strokes that land while the canvas is already up', async () => {
     // The reported bug: a page seeded from a stale (pre-save) cache entry came
