@@ -11,6 +11,7 @@ import {
   registerOfflineMutationDefaults,
   useJournalCreate,
   useDailyToggle,
+  useJobDecide,
   useCalorieLog,
   useIdeaCreate,
   useJournalRecording,
@@ -31,6 +32,7 @@ import { getPhoto, listPhotos, storePhoto } from './photoStore';
 import type {
   CalorieDay,
   DailyTask,
+  FeedJob,
   IdeaSummary,
   JournalEntry,
 } from '../hooks/api';
@@ -170,6 +172,115 @@ describe('offline write queue', () => {
       const tasks = qc.getQueryData<DailyTask[]>(['tasks']);
       expect(tasks?.[0]?.done).toBe(true);
     });
+  });
+});
+
+describe('triaging the job feed, which is done on a phone', () => {
+  function posting(id: string): FeedJob {
+    return {
+      id,
+      source: 'greenhouse',
+      url: '',
+      company: 'Acme',
+      title: `Engineer ${id}`,
+      location: '',
+      remote: false,
+      salaryMin: null,
+      salaryMax: null,
+      salaryCurrency: '',
+      description: '',
+      matchScore: null,
+      dismissed: false,
+      postedAt: null,
+      createdAt: '',
+      matchReasons: null,
+      triageState: 'pending',
+      triageReason: '',
+      triageFit: '',
+      triageSummary: '',
+      triageFlags: [],
+      distanceKm: null,
+      distancePrecision: '',
+      workLocation: '',
+      triageAt: null,
+      triageError: null,
+    };
+  }
+
+  it('queues a posting out of every cached feed at once, offline, and sends it later', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = makeClient();
+    // The feed is cached per sort order, and the same posting can be sitting
+    // in the filtered-out list too. A decision is about the posting, not about
+    // the list it was tapped in.
+    qc.setQueryData<FeedJob[]>(
+      ['jobs', 'feed', 'match'],
+      [posting('a'), posting('b')]
+    );
+    qc.setQueryData<FeedJob[]>(['jobs', 'feed', 'distance'], [posting('a')]);
+    qc.setQueryData<FeedJob[]>(['jobs', 'filtered'], [posting('a')]);
+
+    const { result } = renderHook(() => useJobDecide(), {
+      wrapper: wrapperFor(qc),
+    });
+
+    onlineManager.setOnline(false);
+    act(() => result.current.mutate({ jobId: 'a', kind: 'queue' }));
+
+    await waitFor(() => {
+      expect(
+        qc.getQueryData<FeedJob[]>(['jobs', 'feed', 'match'])?.map(j => j.id)
+      ).toEqual(['b']);
+    });
+    expect(qc.getQueryData<FeedJob[]>(['jobs', 'feed', 'distance'])).toEqual(
+      []
+    );
+    expect(qc.getQueryData<FeedJob[]>(['jobs', 'filtered'])).toEqual([]);
+
+    // Parked, not sent: a decision made on a train is still a decision.
+    await waitFor(() => expect(result.current.isPaused).toBe(true));
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    onlineManager.setOnline(true);
+    await act(async () => {
+      await qc.resumePausedMutations();
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url, opts] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe('/api/jobs/a/queue');
+    expect(opts.method).toBe('POST');
+  });
+
+  it('dismisses through the same queue', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({}) }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = makeClient();
+    qc.setQueryData<FeedJob[]>(['jobs', 'feed', 'match'], [posting('a')]);
+    const { result } = renderHook(() => useJobDecide(), {
+      wrapper: wrapperFor(qc),
+    });
+
+    onlineManager.setOnline(false);
+    act(() => result.current.mutate({ jobId: 'a', kind: 'dismiss' }));
+    await waitFor(() => expect(result.current.isPaused).toBe(true));
+
+    onlineManager.setOnline(true);
+    await act(async () => {
+      await qc.resumePausedMutations();
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const [url, opts] = fetchMock.mock.calls[0] as unknown as [
+      string,
+      RequestInit,
+    ];
+    expect(url).toBe('/api/jobs/a/dismiss');
+    expect(JSON.parse(opts.body as string)).toEqual({ dismissed: true });
   });
 });
 

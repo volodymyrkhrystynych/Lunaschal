@@ -14,6 +14,18 @@ generated resume, fix it, send it. That split is why `POST /<job_id>/queue`
 writes one row and returns instead of tailoring inline: tapping Queue on a bus
 is a decision, not a request to wait on a model.
 
+**The tap does not wait for that row either.** Both feed decisions go through
+the app's offline write queue (`MUTATION_KEYS.jobDecide` in
+`src/offline/mutationDefaults.ts`): the card leaves the cached feed in
+`onMutate` and the POST follows, so triaging stays a rhythm rather than a
+round trip apiece — and a decision made with the backend out of reach is
+parked and replayed instead of lost, which on a bus is the normal case. Both
+endpoints are idempotent for exactly that reason (re-queueing clears the
+error and re-stamps `queued_at`; dismissing twice is one dismissal), because a
+replayed decision must cost nothing. The feed reads what is still in flight
+out of the mutation queue rather than component state, so a card stays gone
+even when a refetch of `/feed` overtakes its write and hands the posting back.
+
 ## Getting a profile in the first place
 
 `resume_import.py` reads an existing `.docx` (or pasted text) into the profile,

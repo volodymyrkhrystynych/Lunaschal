@@ -13,6 +13,7 @@ import {
   type CalorieLog,
   type ClaimCoverage,
   type DailyTask,
+  type FeedJob,
   type FoodEntry,
   type JournalAttachment,
   type IdeaSummary,
@@ -85,6 +86,7 @@ export const MUTATION_KEYS = {
   paperImageAdd: ['paper', 'image', 'add'] as const,
   paperImageUpdate: ['paper', 'image', 'update'] as const,
   recipeCreate: ['cookbook', 'create'] as const,
+  jobDecide: ['jobs', 'decide'] as const,
 };
 
 // --- variable shapes (self-contained so a reloaded replay can run them) ---
@@ -322,6 +324,19 @@ export interface RecipeCreateVars {
   content: string;
   tags?: string[];
   photoIds: string[];
+}
+
+/**
+ * One triage decision on one posting: queue it for a resume, or dismiss it.
+ *
+ * Ids and a word, nothing else — these are structured-cloned into IndexedDB
+ * when the decision is made offline, and a replay after a reload has to run
+ * from them alone. Both endpoints are idempotent (queue re-queues, dismiss
+ * re-dismisses), so a replay of a decision that did land costs nothing.
+ */
+export interface JobDecideVars {
+  jobId: string;
+  kind: 'queue' | 'dismiss';
 }
 
 // The behavioral slice of a mutation's options that both the hook and the
@@ -750,6 +765,55 @@ const notebookWriteCfg = (
  * so a mutation paused before a page reload can be replayed by
  * `resumePausedMutations()`. Call once, before render, in main.tsx.
  */
+/**
+ * Take a posting out of every feed list it is cached in.
+ *
+ * The feed is cached per sort order, and the same posting can also be sitting
+ * in the filtered-out list, so this drops it wherever it is rather than from
+ * the one list that happened to be on screen.
+ */
+function dropFeedJob(qc: QueryClient, jobId: string): void {
+  qc.setQueriesData<FeedJob[]>(
+    {
+      predicate: q =>
+        q.queryKey[0] === 'jobs' &&
+        (q.queryKey[1] === 'feed' || q.queryKey[1] === 'filtered'),
+    },
+    old => old?.filter(job => job.id !== jobId)
+  );
+}
+
+/**
+ * Queue or dismiss a posting, without the card waiting for the round trip.
+ *
+ * Triaging a feed is a rhythm — a card that lingers while a POST completes
+ * breaks it, and invites a second tap on a posting already queued. So the card
+ * leaves the cache on the tap and the write follows. It is queueable for the
+ * same reason the journal's writes are: this is the phone half of the feature,
+ * and a decision made on a train is still a decision.
+ */
+const jobDecideCfg = (qc: QueryClient): Cfg<void, JobDecideVars> => ({
+  ...ONLINE,
+  // Neither response is read — the feed is refetched instead — so the two are
+  // awaited into one void result rather than a union of row shapes.
+  mutationFn: async vars => {
+    if (vars.kind === 'queue') await api.jobs.queue(vars.jobId);
+    else await api.jobs.dismiss(vars.jobId);
+  },
+  onMutate: vars => dropFeedJob(qc, vars.jobId),
+  onSettled: (_data, error) => {
+    // Tapping through ten cards should cost one feed fetch, not ten: only the
+    // last decision still in flight reconciles (this one is still counted
+    // while its own callbacks run, hence > 1). A failure never waits its turn
+    // — the card is gone from the cache and the server still has the posting,
+    // so the refetch is what puts it back for another try.
+    if (!error && qc.isMutating({ mutationKey: MUTATION_KEYS.jobDecide }) > 1) {
+      return;
+    }
+    qc.invalidateQueries({ queryKey: ['jobs'] });
+  },
+});
+
 export function registerOfflineMutationDefaults(qc: QueryClient): void {
   const pairs: Array<[readonly unknown[], Cfg<unknown, never>]> = [
     [MUTATION_KEYS.foodCreate, foodCreateCfg(qc) as Cfg<unknown, never>],
@@ -804,6 +868,7 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
       learningReviewCfg(qc) as Cfg<unknown, never>,
     ],
     [MUTATION_KEYS.notebookWrite, notebookWriteCfg(qc) as Cfg<unknown, never>],
+    [MUTATION_KEYS.jobDecide, jobDecideCfg(qc) as Cfg<unknown, never>],
   ];
   for (const [key, cfg] of pairs) qc.setMutationDefaults(key, cfg);
 }
@@ -1289,6 +1354,9 @@ export const useTodoUpdate = (
 export const useDailyToggle = (
   o?: CallerOptions<{ success: boolean }, DailyToggleVars>
 ) => useOfflineMutation(MUTATION_KEYS.dailyToggle, dailyToggleCfg, o);
+
+export const useJobDecide = (o?: CallerOptions<void, JobDecideVars>) =>
+  useOfflineMutation(MUTATION_KEYS.jobDecide, jobDecideCfg, o);
 
 export const useFanficProgress = (
   o?: CallerOptions<{ success: boolean }, FanficProgressVars>
