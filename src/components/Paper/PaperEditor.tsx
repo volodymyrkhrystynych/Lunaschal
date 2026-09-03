@@ -205,10 +205,23 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   const pages = paper?.pages ?? [];
   const currentPage = pages[currentIndex];
 
+  // `staleTime: Infinity` because this data cannot go stale: nothing but this
+  // client ever writes a page's strokes or pictures, so the server is only ever
+  // *behind* the cache — never ahead of it. A refetch against a populated cache
+  // can return equal-or-older content and nothing else, which makes it useless
+  // at best and destructive at worst: since Save is manual, a page can sit
+  // legitimately ahead of the server for a whole session, and a picture pasted
+  // in that time exists only as an optimistic row here (the server has never
+  // heard of it). React Query replaces query data wholesale on a successful
+  // fetch, so one background refetch — 60s of idle plus an app-switch, which on
+  // an iPad is just Tuesday — would drop that row and the picture would vanish
+  // off the page. The only fetch that carries any information is the cold one
+  // on a real cache miss, and that still happens.
   const { data: content } = useQuery({
     queryKey: ['paper', 'page', currentPage?.id],
     queryFn: () => api.paper.getPage(currentPage!.id),
     enabled: !!currentPage?.id,
+    staleTime: Infinity,
   });
 
   // Page saves and picture writes go through the offline queue: paused while the
@@ -333,7 +346,86 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
           : parseImageEditsBuffer(
               await idbGet(imageEditsBufferKey(page.id)).catch(() => undefined)
             );
+
+        // Pictures this device is still holding for the page. Pasting one no
+        // longer uploads it, so this is where the bytes go — and it doubles as
+        // the rescue path for an orphan the boot sweep deliberately leaves
+        // alone (see src/offline/photoQueue.ts).
+        //
+        // Handled before the plain edits loop below, and deliberately not by
+        // it: a picture moved before it ever reached the server has its move
+        // sitting in `edits` under the same id as its pending upload. Sending
+        // that as a PATCH would 404 — there is no row yet — and the add that
+        // follows would then create one back at the *original* pasted
+        // position, undoing the move right as Save finished. The fix is to
+        // fold any staged position into the upload itself.
+        const heldForPage = held.filter(
+          p =>
+            p.target === 'paper' &&
+            p.targetId === page.id &&
+            !p.failed &&
+            !!p.placement
+        );
+        const heldIds = new Set(heldForPage.map(p => p.id));
+        for (const photo of heldForPage) {
+          const edit = edits[photo.id];
+          const box = edit
+            ? {
+                x: edit.x ?? photo.placement!.x,
+                y: edit.y ?? photo.placement!.y,
+                width: edit.width ?? photo.placement!.width,
+                height: edit.height ?? photo.placement!.height,
+              }
+            : photo.placement!;
+          enqueuePaperWrite(
+            queryClient,
+            MUTATION_KEYS.paperImageAdd,
+            {
+              imageId: photo.id,
+              pageId: page.id,
+              box,
+              filename: photo.filename,
+            },
+            { onSettled: () => void refreshPending() }
+          );
+          // Rotation/flip/lock aren't accepted by the add endpoint. Enqueued
+          // right behind it rather than before: the lane runs writes in the
+          // order they were queued, so by the time this PATCH lands the row
+          // the add just created is already there to apply it to.
+          //
+          // Picked explicitly rather than by stripping x/y/width/height: a
+          // staged edit is built from PaperImageLayer's drag state, which
+          // carries the picture's whole cached row (id, url, position…)
+          // forward through every move — harmless when it rides along on a
+          // PATCH to an existing row, but not something to invent a *second*
+          // write to send on its own.
+          // A move (or a resize) always carries the picture's rotation,
+          // flipped and locked flags along for the ride, at whatever value
+          // they already had — which for a picture that has never been
+          // uploaded is exactly what the add above is about to create anyway
+          // (the endpoint has no rotation/flip/lock parameters, so a fresh
+          // row is always rotation 0, unflipped, unlocked). Comparing against
+          // those same defaults, not just checking the field is present, is
+          // what keeps a plain move from manufacturing a pointless PATCH.
+          const rest: Partial<
+            Pick<PageImage, 'rotation' | 'flipped' | 'locked'>
+          > = {};
+          if (edit?.rotation !== undefined && edit.rotation !== 0) {
+            rest.rotation = edit.rotation;
+          }
+          if (edit?.flipped) rest.flipped = edit.flipped;
+          if (edit?.locked) rest.locked = edit.locked;
+          if (Object.keys(rest).length > 0) {
+            enqueuePaperWrite(queryClient, MUTATION_KEYS.paperImageUpdate, {
+              imageId: photo.id,
+              pageId: page.id,
+              edit: rest,
+            });
+          }
+        }
+
         for (const [imageId, edit] of Object.entries(edits)) {
+          if (heldIds.has(imageId)) continue; // folded into the add above
           enqueuePaperWrite(queryClient, MUTATION_KEYS.paperImageUpdate, {
             imageId,
             pageId: page.id,
@@ -365,26 +457,6 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
         }
         if (deletes.length > 0 && !isOpen) {
           idbDel(imageDeletesBufferKey(page.id)).catch(() => {});
-        }
-
-        // Pictures this device is still holding for the page. Pasting one no
-        // longer uploads it, so this is where the bytes go — and it doubles as
-        // the rescue path for an orphan the boot sweep deliberately leaves
-        // alone (see src/offline/photoQueue.ts).
-        for (const photo of held) {
-          if (photo.target !== 'paper' || photo.targetId !== page.id) continue;
-          if (photo.failed || !photo.placement) continue;
-          enqueuePaperWrite(
-            queryClient,
-            MUTATION_KEYS.paperImageAdd,
-            {
-              imageId: photo.id,
-              pageId: page.id,
-              box: photo.placement,
-              filename: photo.filename,
-            },
-            { onSettled: () => void refreshPending() }
-          );
         }
       }
       setStaged(prev =>
@@ -554,6 +626,14 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   }, [pendingImageIds]);
 
   // SQLite hands booleans back as 0/1; the geometry module wants real booleans.
+  // Depends on `content?.images`, not `content` itself: an idle-timer local
+  // commit rewrites the page's cache entry every couple of seconds while the
+  // pen is moving (see LOCAL_COMMIT_DELAY_MS below), and that write keeps the
+  // same `images` array — only `strokes` changes. Depending on the whole
+  // object made this recompute on every one of those commits, which gave the
+  // canvas a new `images` prop identity mid-sentence and made it redraw from
+  // scratch (see the `[images]` effect in PaperCanvas) — visible as strokes
+  // being written flickering out and back while drawing.
   const images = useMemo<PageImage[]>(
     () =>
       (content?.images ?? []).map(i => ({
@@ -568,7 +648,7 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
         locked: !!i.locked,
         position: i.position,
       })),
-    [content, localUrls]
+    [content?.images, localUrls]
   );
 
   // The staged work belongs to one page. Reading it through this guard rather
@@ -614,14 +694,6 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     pendingImageDeletes.length > 0 ||
     heldImageCount > 0;
 
-  const refreshPage = () => {
-    if (currentPage) {
-      queryClient.invalidateQueries({
-        queryKey: ['paper', 'page', currentPage.id],
-      });
-    }
-  };
-
   /** Stage a picture transform locally instead of syncing it straight away —
    * like strokes, it only reaches the server on Save (or on leaving the
    * page). Merged over whatever is already pending for this image so several
@@ -651,8 +723,11 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
    * the id back on the staged list instead, so the next Save tries again. */
   const deleteOnServer = async (id: string, pageId: string) => {
     try {
+      // Deliberately no invalidate afterwards: the row was already dropped from
+      // the cache on the way out, and an invalidate ignores staleTime — it
+      // would refetch and take every *other* never-uploaded picture on the page
+      // with it.
       await api.paper.deleteImage(id);
-      refreshPage();
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'Could not delete it');
       setStaged(prev =>
