@@ -56,7 +56,7 @@ EXERCISES = (
              'Improvise over ii–V–I using only guide tones. Sing a phrase first, then find it on the piano.', 5),
     Exercise('ear-phrase', 'Learn a phrase by ear', 'Ear', 'shared',
              'Turn listening into keyboard vocabulary.',
-             'Choose a short phrase from a recording, sing it, find it without notation, then transpose it once.', 5),
+             'Listen once, sing it back, then reproduce the phrase on MIDI. The notation stays hidden until you finish.', 5, True, 'ear'),
 )
 BY_KEY = {item.key: item for item in EXERCISES}
 
@@ -64,6 +64,44 @@ BY_KEY = {item.key: item for item in EXERCISES}
 def _pick(day_key: str, values: tuple[str, ...], salt: str = '') -> str:
     digest = hashlib.sha256(f'{day_key}:{salt}'.encode()).digest()
     return values[int.from_bytes(digest[:4], 'big') % len(values)]
+
+
+def _adaptive_key(db, day_key: str, level: str) -> str:
+    """Prefer keys with weak/recently missing results, with deterministic ties."""
+    rows = db.execute(
+        'SELECT d.key_name, AVG(COALESCE(a.onset_accuracy, 100)) AS accuracy, '
+        'COUNT(a.id) AS attempts FROM piano_daily_exercises d '
+        'LEFT JOIN piano_exercise_attempts a ON a.daily_exercise_id=d.id '
+        'WHERE d.key_name IS NOT NULL GROUP BY d.key_name'
+    ).fetchall()
+    stats = {row['key_name']: (row['accuracy'], row['attempts']) for row in rows}
+    ranked = sorted(
+        KEYS,
+        key=lambda name: (
+            stats.get(name, (100, 0))[1] > 0,
+            stats.get(name, (100, 0))[0],
+            hashlib.sha256(f'{day_key}:{level}:{name}'.encode()).digest(),
+        ),
+    )
+    return ranked[0]
+
+
+def _adaptive_tempo(db, category: str, key_name: str, base: int) -> int:
+    exercise_keys = [item.key for item in EXERCISES if item.category == category]
+    placeholders = ','.join('?' for _ in exercise_keys)
+    row = db.execute(
+        'SELECT AVG(a.achieved_tempo) AS tempo, AVG(a.onset_accuracy) AS accuracy '
+        'FROM piano_exercise_attempts a JOIN piano_daily_exercises d '
+        f'ON d.id=a.daily_exercise_id WHERE d.key_name=? AND d.exercise_key IN ({placeholders})',
+        (key_name, *exercise_keys),
+    ).fetchone()
+    if not row or row['tempo'] is None:
+        return base
+    achieved = float(row['tempo'])
+    accuracy = float(row['accuracy'] or 0)
+    # Keep tomorrow achievable: consolidate weak timing, nudge strong timing.
+    adjusted = achieved - 5 if accuracy < 75 else achieved + (5 if accuracy >= 92 else 0)
+    return max(40, min(base + 20, round(adjusted / 5) * 5))
 
 
 def preferences(db) -> dict:
@@ -122,7 +160,7 @@ def today(db, day_key: str | None = None) -> dict:
     ).fetchall()
     if not rows:
         now = int(time.time())
-        chosen_key = _pick(key, KEYS, pref['skillLevel'])
+        chosen_key = _adaptive_key(db, key, pref['skillLevel'])
         plan = _plan(pref)
         piece = db.execute(
             'SELECT id FROM piano_pieces ORDER BY updated_at DESC LIMIT 1'
@@ -132,7 +170,8 @@ def today(db, day_key: str | None = None) -> dict:
             plan, pref['sessionMinutes'] - repertoire_minutes
         )
         for position, (exercise, minutes) in enumerate(zip(plan, allocated)):
-            tempo = {'beginner': 60, 'intermediate': 80, 'advanced': 100}[pref['skillLevel']] if exercise.gradeable else None
+            base_tempo = {'beginner': 60, 'intermediate': 80, 'advanced': 100}[pref['skillLevel']]
+            tempo = _adaptive_tempo(db, exercise.category, chosen_key, base_tempo) if exercise.gradeable else None
             db.execute(
                 'INSERT INTO piano_daily_exercises '
                 '(id,day_key,exercise_key,position,key_name,target_tempo,minutes,created_at) '
@@ -159,8 +198,13 @@ def history(db, *, limit: int = 14) -> list[dict]:
     rows = db.execute(
         'SELECT day_key, COUNT(*) AS exercise_count, '
         'SUM(CASE WHEN completed_at IS NOT NULL THEN 1 ELSE 0 END) AS completed_count, '
-        'SUM(minutes) AS minutes_planned '
-        'FROM piano_daily_exercises GROUP BY day_key '
+        'SUM(minutes) AS minutes_planned, AVG(a.onset_accuracy) AS onset_accuracy, '
+        'AVG(a.tempo_stability) AS tempo_stability, AVG(a.velocity_evenness) AS velocity_evenness '
+        'FROM piano_daily_exercises d LEFT JOIN ('
+        'SELECT daily_exercise_id, AVG(onset_accuracy) onset_accuracy, '
+        'AVG(tempo_stability) tempo_stability, AVG(velocity_evenness) velocity_evenness '
+        'FROM piano_exercise_attempts GROUP BY daily_exercise_id) a '
+        'ON a.daily_exercise_id=d.id GROUP BY day_key '
         'ORDER BY day_key DESC LIMIT ?',
         (limit,),
     ).fetchall()
@@ -208,14 +252,23 @@ def record_attempt(db, daily_id: str, values: dict) -> dict | None:
     rating = values.get('selfRating')
     if rating is not None and (not isinstance(rating, int) or not 1 <= rating <= 5):
         raise ValueError('selfRating must be a whole number from 1 to 5.')
+    metrics = ('onsetAccuracy', 'durationAccuracy', 'tempoStability', 'velocityEvenness')
+    for metric in metrics:
+        value = values.get(metric)
+        if value is not None and (not isinstance(value, (int, float)) or not 0 <= value <= 100):
+            raise ValueError(f'{metric} must be between 0 and 100.')
     now = int(time.time())
     attempt_id = str(ULID())
     db.execute(
         'INSERT INTO piano_exercise_attempts '
-        '(id,daily_exercise_id,started_at,completed_at,tempo,correct_notes,wrong_notes,self_rating,notes,created_at) '
-        'VALUES (?,?,?,?,?,?,?,?,?,?)',
+        '(id,daily_exercise_id,started_at,completed_at,tempo,correct_notes,wrong_notes,'
+        'onset_accuracy,duration_accuracy,tempo_stability,velocity_evenness,achieved_tempo,'
+        'self_rating,notes,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
         (attempt_id, daily_id, values.get('startedAt'), now, values.get('tempo'),
-         values.get('correctNotes'), values.get('wrongNotes'), rating,
+         values.get('correctNotes'), values.get('wrongNotes'),
+         values.get('onsetAccuracy'), values.get('durationAccuracy'),
+         values.get('tempoStability'), values.get('velocityEvenness'),
+         values.get('achievedTempo'), rating,
          (values.get('notes') or '').strip() or None, now),
     )
     db.execute(
@@ -235,10 +288,13 @@ def exercise_score(db, daily_id: str) -> bytes | None:
     definition = BY_KEY.get(row['exercise_key'])
     if not definition or not definition.notation:
         return None
-    return _musicxml(row['key_name'] or 'C', definition.notation, definition.title).encode()
+    return _musicxml(
+        row['key_name'] or 'C', definition.notation, definition.title,
+        row['target_tempo'],
+    ).encode()
 
 
-def _musicxml(key_name: str, pattern: str, title: str) -> str:
+def _musicxml(key_name: str, pattern: str, title: str, target_tempo: int | None = None) -> str:
     roots = {'C': 60, 'G': 67, 'D': 62, 'A': 69, 'E': 64, 'F': 65,
              'B-flat': 58, 'E-flat': 63, 'A-flat': 56}
     root = roots[key_name]
@@ -248,6 +304,11 @@ def _musicxml(key_name: str, pattern: str, title: str) -> str:
         offsets = [0, 2, 4, 5, 7, 9, 11, 12, 11, 9, 7, 5, 4, 2, 0]
     elif pattern == 'cadence':
         offsets = [[0, 4, 7], [5, 9, 12], [0, 4, 7], [7, 11, 14], [0, 4, 7]]
+    elif pattern == 'ear':
+        # Compact singable phrases, transposed by key and expanded with level.
+        offsets = ([0, 2, 4] if (target_tempo or 80) <= 60 else
+                   [0, 2, 4, 7, 4] if (target_tempo or 80) < 100 else
+                   [0, 4, 2, 7, 9, 7])
     else:
         # ii7 – V7 – Imaj7, deliberately root-position for Stage 1 exact-note grading.
         offsets = [[2, 5, 9, 12], [7, 11, 14, 17], [0, 4, 7, 11]]

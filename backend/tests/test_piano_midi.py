@@ -1,4 +1,5 @@
 from backend.piano.midi import MidiStreamParser
+from main import _timestamp_midi_events
 
 
 def test_parses_note_on_note_off_and_sustain():
@@ -33,3 +34,15 @@ def test_keeps_partial_message_between_reads_and_ignores_clock():
 
     assert len(events) == 1
     assert events[0].note == 72
+
+
+def test_desktop_bridge_adds_epoch_millisecond_timestamp(monkeypatch):
+    monkeypatch.setattr('main.time.time_ns', lambda: 1_765_000_123_456_000_000)
+    events = MidiStreamParser().feed(bytes([0x90, 60, 90, 64, 80]))
+
+    stamped = _timestamp_midi_events(events)
+
+    assert [event['timestampMs'] for event in stamped] == [
+        1_765_000_123_456,
+        1_765_000_123_456,
+    ]

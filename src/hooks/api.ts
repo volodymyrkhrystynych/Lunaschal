@@ -2490,6 +2490,11 @@ export const api = {
         tempo?: number;
         correctNotes?: number;
         wrongNotes?: number;
+        onsetAccuracy?: number;
+        durationAccuracy?: number;
+        tempoStability?: number;
+        velocityEvenness?: number;
+        achievedTempo?: number;
         selfRating?: number;
         notes?: string;
       }

@@ -212,12 +212,27 @@ export function PianoToday(props: {
               </p>
             )}
             {exercise.completedAt ? (
-              <p className="mt-4 text-sm text-emerald-300">
-                ✓ Complete
-                {exercise.latestAttempt?.selfRating
-                  ? ` · ${exercise.latestAttempt.selfRating}/5`
-                  : ''}
-              </p>
+              <>
+                <p className="mt-4 text-sm text-emerald-300">
+                  ✓ Complete
+                  {exercise.latestAttempt?.selfRating
+                    ? ` · ${exercise.latestAttempt.selfRating}/5`
+                    : ''}
+                </p>
+                {exercise.latestAttempt?.onsetAccuracy != null && (
+                  <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+                    Timing {Math.round(exercise.latestAttempt.onsetAccuracy)}% ·{' '}
+                    pulse{' '}
+                    {Math.round(exercise.latestAttempt.tempoStability ?? 0)}%
+                    {exercise.latestAttempt.velocityEvenness != null
+                      ? ` · evenness ${Math.round(exercise.latestAttempt.velocityEvenness)}%`
+                      : ''}
+                    {exercise.latestAttempt.achievedTempo
+                      ? ` · ${Math.round(exercise.latestAttempt.achievedTempo)} BPM achieved`
+                      : ''}
+                  </p>
+                )}
+              </>
             ) : exercise.exerciseKey === 'repertoire' ? (
               <button
                 type="button"
@@ -282,6 +297,9 @@ export function PianoToday(props: {
               <span className="text-[var(--color-text-muted)]">
                 {day.completedCount}/{day.exerciseCount} complete ·{' '}
                 {day.minutesPlanned} min planned
+                {day.onsetAccuracy != null
+                  ? ` · timing ${Math.round(day.onsetAccuracy)}%`
+                  : ''}
               </span>
             </div>
           ))}

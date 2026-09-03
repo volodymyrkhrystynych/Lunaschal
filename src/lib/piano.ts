@@ -22,6 +22,11 @@ export interface PianoAttempt {
   tempo: number | null;
   correctNotes: number | null;
   wrongNotes: number | null;
+  onsetAccuracy: number | null;
+  durationAccuracy: number | null;
+  tempoStability: number | null;
+  velocityEvenness: number | null;
+  achievedTempo: number | null;
   selfRating: number | null;
   notes: string | null;
 }
@@ -57,6 +62,9 @@ export interface PianoHistoryDay {
   exerciseCount: number;
   completedCount: number;
   minutesPlanned: number;
+  onsetAccuracy: number | null;
+  tempoStability: number | null;
+  velocityEvenness: number | null;
 }
 
 export interface PianoArchiveItem {
@@ -120,6 +128,7 @@ export interface PracticeStep {
   beat: number;
   right: number[];
   left: number[];
+  durationBeats: number;
 }
 
 const SEMITONES: Record<string, number> = {
@@ -190,7 +199,12 @@ export function parsePracticeSteps(xml: string): PracticeStep[] {
             beat: onset / divisions + 1,
             right: [],
             left: [],
+            durationBeats: duration / divisions,
           };
+          step.durationBeats = Math.max(
+            step.durationBeats,
+            duration / divisions
+          );
           const staff = numberText(event, 'staff', pitch < 60 ? 2 : 1);
           (staff === 2 ? step.left : step.right).push(pitch);
           steps.set(key, step);

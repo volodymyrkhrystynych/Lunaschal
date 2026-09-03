@@ -1779,6 +1779,11 @@ CREATE TABLE IF NOT EXISTS piano_exercise_attempts (
     tempo INTEGER,
     correct_notes INTEGER,
     wrong_notes INTEGER,
+    onset_accuracy REAL,
+    duration_accuracy REAL,
+    tempo_stability REAL,
+    velocity_evenness REAL,
+    achieved_tempo REAL,
     self_rating INTEGER CHECK (self_rating BETWEEN 1 AND 5),
     notes TEXT,
     created_at INTEGER NOT NULL

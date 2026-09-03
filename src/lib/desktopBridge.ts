@@ -15,6 +15,7 @@ export interface DesktopApi {
       velocity?: number;
       value?: number;
       message?: string;
+      timestampMs?: number;
     }>;
   }>;
   midi_close(): Promise<{ ok: boolean }>;

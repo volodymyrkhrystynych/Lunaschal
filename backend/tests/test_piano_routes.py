@@ -100,7 +100,45 @@ def test_daily_routine_is_stable_and_records_attempt(client, monkeypatch):
         'exerciseCount': len(routine['exercises']),
         'completedCount': 1,
         'minutesPlanned': 25,
+        'onsetAccuracy': None,
+        'tempoStability': None,
+        'velocityEvenness': None,
     }
+
+
+def test_records_stage_two_metrics_and_rejects_invalid_scores(client, monkeypatch):
+    monkeypatch.setattr('backend.piano.daily.day_key_for', lambda: '2026-09-02')
+    daily_id = client.get('/api/piano/today').get_json()['exercises'][0]['id']
+    response = client.post(
+        f'/api/piano/daily/{daily_id}/attempts',
+        json={
+            'tempo': 76, 'achievedTempo': 74.5, 'onsetAccuracy': 88,
+            'durationAccuracy': 81, 'tempoStability': 92,
+            'velocityEvenness': 79,
+        },
+    )
+    assert response.status_code == 201
+    assert response.get_json()['achievedTempo'] == 74.5
+    history = client.get('/api/piano/history').get_json()[0]
+    assert history['onsetAccuracy'] == 88
+    assert client.post(
+        f'/api/piano/daily/{daily_id}/attempts',
+        json={'onsetAccuracy': 101},
+    ).status_code == 400
+
+
+def test_next_day_prioritizes_an_unpracticed_key(client, monkeypatch):
+    monkeypatch.setattr('backend.piano.daily.day_key_for', lambda: '2026-09-02')
+    first = client.get('/api/piano/today').get_json()
+    first_key = first['exercises'][0]['keyName']
+    for item in first['exercises']:
+        if item['gradeable']:
+            client.post(f"/api/piano/daily/{item['id']}/attempts", json={
+                'onsetAccuracy': 95, 'achievedTempo': item['targetTempo']
+            })
+    monkeypatch.setattr('backend.piano.daily.day_key_for', lambda: '2026-09-03')
+    second = client.get('/api/piano/today').get_json()
+    assert second['exercises'][0]['keyName'] != first_key
 
 
 def test_daily_preferences_apply_to_the_next_routine(client, monkeypatch):
@@ -118,6 +156,10 @@ def test_daily_preferences_apply_to_the_next_routine(client, monkeypatch):
     assert sum(item['minutes'] for item in next_day['exercises']) == 30
     assert all(item['style'] != 'classical' for item in next_day['exercises'])
     assert next(item for item in next_day['exercises'] if item['gradeable'])['targetTempo'] == 100
+    ear = next(item for item in next_day['exercises'] if item['exerciseKey'] == 'ear-phrase')
+    ear_score = client.get(f"/api/piano/daily/{ear['id']}/score")
+    assert ear_score.status_code == 200
+    assert ear_score.data.count(b'<note>') == 6
 
 
 def test_rejects_invalid_piano_attempt_rating(client, monkeypatch):
