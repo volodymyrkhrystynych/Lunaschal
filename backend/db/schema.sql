@@ -1742,6 +1742,51 @@ CREATE TABLE IF NOT EXISTS piano_pieces (
 CREATE INDEX IF NOT EXISTS idx_piano_pieces_updated
     ON piano_pieces(updated_at DESC);
 
+-- Deterministic daily piano practice. Exercise definitions live in code; these
+-- rows preserve the concrete key/tempo/order a user was assigned on a day.
+CREATE TABLE IF NOT EXISTS piano_practice_preferences (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    session_minutes INTEGER NOT NULL DEFAULT 25,
+    skill_level TEXT NOT NULL DEFAULT 'intermediate',
+    jazz_percent INTEGER NOT NULL DEFAULT 50,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS piano_daily_exercises (
+    id TEXT PRIMARY KEY,
+    day_key TEXT NOT NULL,
+    exercise_key TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    key_name TEXT,
+    target_tempo INTEGER,
+    minutes INTEGER NOT NULL,
+    piano_piece_id TEXT REFERENCES piano_pieces(id) ON DELETE SET NULL,
+    measure_start INTEGER,
+    measure_end INTEGER,
+    completed_at INTEGER,
+    created_at INTEGER NOT NULL,
+    UNIQUE(day_key, exercise_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_piano_daily_day
+    ON piano_daily_exercises(day_key, position);
+
+CREATE TABLE IF NOT EXISTS piano_exercise_attempts (
+    id TEXT PRIMARY KEY,
+    daily_exercise_id TEXT NOT NULL REFERENCES piano_daily_exercises(id) ON DELETE CASCADE,
+    started_at INTEGER,
+    completed_at INTEGER NOT NULL,
+    tempo INTEGER,
+    correct_notes INTEGER,
+    wrong_notes INTEGER,
+    self_rating INTEGER CHECK (self_rating BETWEEN 1 AND 5),
+    notes TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_piano_attempts_daily
+    ON piano_exercise_attempts(daily_exercise_id, completed_at DESC);
+
 -- Large files are kept on the external backup drive, not in SQLite. This
 -- catalog deliberately stores paths relative to that drive's Piano archive so
 -- moving the configured backup destination does not invalidate every row.

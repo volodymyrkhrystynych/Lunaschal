@@ -1,10 +1,56 @@
 from flask import Blueprint, jsonify, request, send_file
 
 from backend.db.connection import get_db, row_to_dict
-from backend.piano import archive, library, storage
+from backend.piano import archive, daily, library, storage
 from backend.piano.musicxml import ScoreImportError, normalize_score
 
 bp = Blueprint('piano', __name__, url_prefix='/api/piano')
+
+
+@bp.get('/today')
+def get_today():
+    return jsonify(daily.today(get_db()))
+
+
+@bp.get('/history')
+def get_history():
+    try:
+        limit = min(60, max(1, int(request.args.get('limit', 14))))
+    except ValueError:
+        return jsonify({'error': 'limit must be a whole number.'}), 400
+    return jsonify(daily.history(get_db(), limit=limit))
+
+
+@bp.patch('/preferences')
+def update_preferences():
+    body = request.get_json(silent=True) or {}
+    try:
+        result = daily.update_preferences(
+            get_db(), session_minutes=int(body.get('sessionMinutes', 25)),
+            skill_level=body.get('skillLevel', ''), jazz_percent=int(body.get('jazzPercent', 50)),
+        )
+    except (TypeError, ValueError) as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(result)
+
+
+@bp.post('/daily/<daily_id>/attempts')
+def create_attempt(daily_id):
+    try:
+        result = daily.record_attempt(get_db(), daily_id, request.get_json(silent=True) or {})
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    if result is None:
+        return jsonify({'error': 'Not found'}), 404
+    return jsonify(result), 201
+
+
+@bp.get('/daily/<daily_id>/score')
+def get_exercise_score(daily_id):
+    score = daily.exercise_score(get_db(), daily_id)
+    if score is None:
+        return jsonify({'error': 'This exercise has no generated score.'}), 404
+    return score, 200, {'Content-Type': 'application/vnd.recordare.musicxml+xml'}
 
 
 @bp.get('/pieces')

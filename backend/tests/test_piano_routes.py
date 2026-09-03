@@ -60,3 +60,89 @@ def test_rejects_arbitrary_xml(client):
     )
     assert response.status_code == 400
     assert 'MusicXML' in response.get_json()['error']
+
+
+def test_daily_routine_is_stable_and_records_attempt(client, monkeypatch):
+    monkeypatch.setattr('backend.piano.daily.day_key_for', lambda: '2026-09-02')
+
+    first = client.get('/api/piano/today')
+    assert first.status_code == 200
+    routine = first.get_json()
+    assert routine['dayKey'] == '2026-09-02'
+    assert routine['preferences']['sessionMinutes'] == 25
+    assert routine['preferences']['jazzPercent'] == 50
+    assert {item['style'] for item in routine['exercises']} >= {'shared', 'classical', 'jazz'}
+    assert sum(item['minutes'] for item in routine['exercises']) == 25
+
+    again = client.get('/api/piano/today').get_json()
+    assert [item['id'] for item in again['exercises']] == [
+        item['id'] for item in routine['exercises']
+    ]
+
+    gradeable = next(item for item in routine['exercises'] if item['gradeable'])
+    score = client.get(f"/api/piano/daily/{gradeable['id']}/score")
+    assert score.status_code == 200
+    assert b'<score-partwise' in score.data
+
+    attempt = client.post(
+        f"/api/piano/daily/{gradeable['id']}/attempts",
+        json={'tempo': 80, 'correctNotes': 9, 'wrongNotes': 1},
+    )
+    assert attempt.status_code == 201
+    assert attempt.get_json()['wrongNotes'] == 1
+    completed = client.get('/api/piano/today').get_json()
+    saved = next(item for item in completed['exercises'] if item['id'] == gradeable['id'])
+    assert saved['completedAt'] is not None
+    assert saved['latestAttempt']['tempo'] == 80
+    history = client.get('/api/piano/history').get_json()
+    assert history[0] == {
+        'dayKey': '2026-09-02',
+        'exerciseCount': len(routine['exercises']),
+        'completedCount': 1,
+        'minutesPlanned': 25,
+    }
+
+
+def test_daily_preferences_apply_to_the_next_routine(client, monkeypatch):
+    monkeypatch.setattr('backend.piano.daily.day_key_for', lambda: '2026-09-02')
+    client.get('/api/piano/today')
+    response = client.patch(
+        '/api/piano/preferences',
+        json={'sessionMinutes': 30, 'skillLevel': 'advanced', 'jazzPercent': 100},
+    )
+    assert response.status_code == 200
+    assert response.get_json()['skillLevel'] == 'advanced'
+
+    monkeypatch.setattr('backend.piano.daily.day_key_for', lambda: '2026-09-03')
+    next_day = client.get('/api/piano/today').get_json()
+    assert sum(item['minutes'] for item in next_day['exercises']) == 30
+    assert all(item['style'] != 'classical' for item in next_day['exercises'])
+    assert next(item for item in next_day['exercises'] if item['gradeable'])['targetTempo'] == 100
+
+
+def test_rejects_invalid_piano_attempt_rating(client, monkeypatch):
+    monkeypatch.setattr('backend.piano.daily.day_key_for', lambda: '2026-09-02')
+    daily_id = client.get('/api/piano/today').get_json()['exercises'][0]['id']
+    response = client.post(
+        f'/api/piano/daily/{daily_id}/attempts', json={'selfRating': 6}
+    )
+    assert response.status_code == 400
+
+
+def test_daily_routine_includes_recent_repertoire_within_budget(
+    client, tmp_path, monkeypatch
+):
+    monkeypatch.setenv('PIANO_ROOT', str(tmp_path / 'piano'))
+    monkeypatch.setattr('backend.piano.daily.day_key_for', lambda: '2026-09-02')
+    client.post(
+        '/api/piano/pieces',
+        data={'file': (io.BytesIO(SCORE), 'minuet.musicxml')},
+    )
+
+    routine = client.get('/api/piano/today').get_json()
+    repertoire = next(
+        item for item in routine['exercises'] if item['exerciseKey'] == 'repertoire'
+    )
+    assert repertoire['pieceTitle'] == 'Minuet in G'
+    assert repertoire['measureStart'] == 1
+    assert sum(item['minutes'] for item in routine['exercises']) == 25

@@ -6,14 +6,18 @@ import {
   parsePracticeSteps,
   stepIsComplete,
   type PianoHand,
+  type PianoDailyExercise,
   type PianoPiece,
 } from '../../lib/piano';
 import { renderMusicXml } from '../../lib/verovio';
 import { PianoArchive } from './PianoArchive';
 import { PianoKeyboard } from './PianoKeyboard';
+import { PianoToday } from './PianoToday';
 
 export function Piano() {
-  const [section, setSection] = useState<'practice' | 'archive'>('practice');
+  const [section, setSection] = useState<'today' | 'library' | 'archive'>(
+    'today'
+  );
   const [devices, setDevices] = useState<MidiDevice[]>([]);
   const [deviceId, setDeviceId] = useState('');
   const [connected, setConnected] = useState(false);
@@ -34,6 +38,10 @@ export function Piano() {
   const [practicing, setPracticing] = useState(false);
   const practicingRef = useRef(false);
   const [wrongNotes, setWrongNotes] = useState(0);
+  const [dailyExercise, setDailyExercise] = useState<PianoDailyExercise | null>(
+    null
+  );
+  const attemptStartedRef = useRef<number | null>(null);
 
   const allSteps = useMemo(
     () => (score ? parsePracticeSteps(score) : []),
@@ -113,6 +121,24 @@ export function Piano() {
           if (next >= stepsRef.current.length) {
             practicingRef.current = false;
             setPracticing(false);
+            const assignment = dailyExercise;
+            if (assignment) {
+              void api.piano
+                .completeExercise(assignment.id, {
+                  startedAt: attemptStartedRef.current ?? undefined,
+                  tempo: assignment.targetTempo ?? undefined,
+                  correctNotes: stepsRef.current.reduce(
+                    (count, completedStep) =>
+                      count +
+                      notesForHand(completedStep, handRef.current).length,
+                    0
+                  ),
+                  wrongNotes,
+                })
+                .catch(cause =>
+                  setError(errorMessage(cause, 'Could not save the attempt.'))
+                );
+            }
           }
         } else if (!notesForHand(step, handRef.current).includes(event.note)) {
           setWrongNotes(count => count + 1);
@@ -120,7 +146,7 @@ export function Piano() {
       }
     }, 16);
     return () => window.clearInterval(timer);
-  }, [connected]);
+  }, [connected, dailyExercise, wrongNotes]);
 
   useEffect(
     () => () => {
@@ -193,14 +219,54 @@ export function Piano() {
     setStepIndex(0);
     stepIndexRef.current = 0;
     setPracticing(practiceSteps.length > 0);
+    attemptStartedRef.current = Math.floor(Date.now() / 1000);
+  };
+
+  const practiceDaily = async (exercise: PianoDailyExercise) => {
+    setError(null);
+    try {
+      const xml = await api.piano.exerciseScore(exercise.id);
+      const virtualPiece: PianoPiece = {
+        id: `daily:${exercise.id}`,
+        title: `${exercise.title}${exercise.keyName ? ` in ${exercise.keyName}` : ''}`,
+        composer: 'Daily exercise',
+        sourceFilename: 'generated.musicxml',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      setDailyExercise(exercise);
+      setPiece(virtualPiece);
+      setScore(xml);
+      setStepIndex(0);
+      setWrongNotes(0);
+      setLoopStart(1);
+      setLoopEnd(1);
+      setScorePages(await renderMusicXml(xml));
+      setSection('library');
+    } catch (cause) {
+      setError(errorMessage(cause, 'Could not open the exercise.'));
+    }
+  };
+
+  const openDailyRepertoire = async (exercise: PianoDailyExercise) => {
+    const selected = pieces.find(item => item.id === exercise.pianoPieceId);
+    if (!selected) {
+      setError('The assigned repertoire piece is no longer in the library.');
+      return;
+    }
+    setDailyExercise(exercise);
+    await openPiece(selected);
+    setLoopStart(exercise.measureStart ?? 1);
+    setLoopEnd(exercise.measureEnd ?? 8);
+    setSection('library');
   };
 
   return (
     <section className="flex flex-1 overflow-hidden text-[var(--color-text)]">
       <aside className="w-72 shrink-0 overflow-y-auto border-r border-white/10 bg-[var(--color-surface)] p-4">
         <h2 className="text-xl font-semibold">Piano</h2>
-        <div className="mt-4 grid grid-cols-2 rounded border border-white/10 p-1 text-sm">
-          {(['practice', 'archive'] as const).map(value => (
+        <div className="mt-4 grid grid-cols-3 rounded border border-white/10 p-1 text-sm">
+          {(['today', 'library', 'archive'] as const).map(value => (
             <button
               key={value}
               type="button"
@@ -215,7 +281,7 @@ export function Piano() {
             </button>
           ))}
         </div>
-        {section === 'practice' ? (
+        {section === 'library' ? (
           <>
             <label className="mt-4 block cursor-pointer rounded bg-[var(--color-primary)] px-4 py-2 text-center text-white">
               Import sheet music
@@ -251,7 +317,10 @@ export function Piano() {
                   <div className="flex gap-2">
                     <button
                       type="button"
-                      onClick={() => void openPiece(item)}
+                      onClick={() => {
+                        setDailyExercise(null);
+                        void openPiece(item);
+                      }}
                       className="min-w-0 flex-1 text-left"
                     >
                       <span className="block font-medium">{item.title}</span>
@@ -275,10 +344,15 @@ export function Piano() {
               ))}
             </div>
           </>
-        ) : (
+        ) : section === 'archive' ? (
           <p className="mt-4 text-sm text-[var(--color-text-muted)]">
             Browse large collections on the external backup drive. Star a
             MusicXML score to add it here for practice.
+          </p>
+        ) : (
+          <p className="mt-4 text-sm text-[var(--color-text-muted)]">
+            A balanced routine of technique, harmony, listening, and repertoire
+            generated locally for each 4 a.m. practice day.
           </p>
         )}
       </aside>
@@ -286,6 +360,11 @@ export function Piano() {
       <div className="flex-1 space-y-5 overflow-auto p-5">
         {section === 'archive' ? (
           <PianoArchive onLibraryChanged={refreshPieces} />
+        ) : section === 'today' ? (
+          <PianoToday
+            onPractice={practiceDaily}
+            onRepertoire={openDailyRepertoire}
+          />
         ) : (
           <>
             <MidiControls

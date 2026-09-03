@@ -9,6 +9,56 @@ export interface PianoPiece {
   updatedAt: string;
 }
 
+export interface PianoPreferences {
+  sessionMinutes: number;
+  skillLevel: 'beginner' | 'intermediate' | 'advanced';
+  jazzPercent: number;
+  updatedAt: string;
+}
+
+export interface PianoAttempt {
+  id: string;
+  completedAt: string;
+  tempo: number | null;
+  correctNotes: number | null;
+  wrongNotes: number | null;
+  selfRating: number | null;
+  notes: string | null;
+}
+
+export interface PianoDailyExercise {
+  id: string;
+  exerciseKey: string;
+  title: string;
+  category: string;
+  style: 'shared' | 'classical' | 'jazz';
+  description: string;
+  instructions: string;
+  keyName: string | null;
+  targetTempo: number | null;
+  minutes: number;
+  gradeable: boolean;
+  pianoPieceId: string | null;
+  measureStart: number | null;
+  measureEnd: number | null;
+  pieceTitle?: string | null;
+  completedAt: string | null;
+  latestAttempt: PianoAttempt | null;
+}
+
+export interface PianoToday {
+  dayKey: string;
+  preferences: PianoPreferences;
+  exercises: PianoDailyExercise[];
+}
+
+export interface PianoHistoryDay {
+  dayKey: string;
+  exerciseCount: number;
+  completedCount: number;
+  minutesPlanned: number;
+}
+
 export interface PianoArchiveItem {
   id: string;
   collection: 'piano';
