@@ -4,6 +4,15 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { JournalAttachments } from './JournalAttachments';
 import { api, type JournalAttachment } from '../hooks/api';
+import { storePhoto } from '../offline/photoStore';
+import { enqueueJournalAttachment } from '../offline/photoQueue';
+
+/** The (file, name) pair one attach produced, whatever route it took. */
+const attached = (i = 0) => ({
+  file: vi.mocked(storePhoto).mock.calls[i]?.[1],
+  entryId: vi.mocked(storePhoto).mock.calls[i]?.[3],
+  name: vi.mocked(enqueueJournalAttachment).mock.calls[i]?.[3],
+});
 
 vi.mock('../hooks/api', () => ({
   api: {
@@ -19,6 +28,18 @@ vi.mock('../hooks/api', () => ({
       },
     },
   },
+}));
+
+// An attachment added here goes through the same durable queue the composer's
+// staged files do: written to the device first, uploaded (and retried) by the
+// offline mutation afterwards. The assertions below are about which files are
+// taken, in what order and under what name — all of which the queue preserves.
+vi.mock('../offline/photoStore', () => ({
+  storePhoto: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../offline/photoQueue', () => ({
+  enqueueJournalAttachment: vi.fn().mockResolvedValue(undefined),
 }));
 
 function attachment(over: Partial<JournalAttachment> = {}): JournalAttachment {
@@ -124,8 +145,7 @@ describe('JournalAttachments', () => {
     ).toBeNull();
   });
 
-  it('uploads a picked file, naming it after the filename', async () => {
-    vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
+  it('takes a picked file, naming it after the filename', async () => {
     const { container } = renderIt([]);
 
     const input = container.querySelector<HTMLInputElement>(
@@ -134,13 +154,15 @@ describe('JournalAttachments', () => {
     const file = new File(['x'], 'voice-memo-004.m4a', { type: 'audio/mp4' });
     fireEvent.change(input, { target: { files: [file] } });
 
-    await waitFor(() =>
-      expect(api.journal.attachments.upload).toHaveBeenCalledWith(
-        'e1',
-        file,
-        'voice-memo-004'
-      )
-    );
+    await waitFor(() => expect(storePhoto).toHaveBeenCalled());
+    expect(attached()).toMatchObject({
+      file,
+      entryId: 'e1',
+      name: 'voice-memo-004',
+    });
+    // Never POSTed straight from here: a file added on a bad connection has to
+    // outlive the request, exactly as the composer's staged ones do.
+    expect(api.journal.attachments.upload).not.toHaveBeenCalled();
   });
 
   it('renders a player matched to each kind', () => {
@@ -365,8 +387,7 @@ describe('JournalAttachments', () => {
       clipboardData: { files: files as unknown as FileList },
     });
 
-    it('uploads a pasted media file', async () => {
-      vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
+    it('takes a pasted media file', async () => {
       const { container } = renderIt([]);
       const zone = container.querySelector(
         '[data-testid="journal-attachment-dropzone"]'
@@ -377,13 +398,12 @@ describe('JournalAttachments', () => {
       });
       fireEvent.paste(zone, pasteEvent([memo]));
 
-      await waitFor(() =>
-        expect(api.journal.attachments.upload).toHaveBeenCalledWith(
-          'e1',
-          memo,
-          'New Recording 4'
-        )
-      );
+      await waitFor(() => expect(storePhoto).toHaveBeenCalled());
+      expect(attached()).toMatchObject({
+        file: memo,
+        entryId: 'e1',
+        name: 'New Recording 4',
+      });
     });
 
     it('uploads several pasted files in order', async () => {
@@ -397,18 +417,18 @@ describe('JournalAttachments', () => {
       const second = new File(['x'], 'b.mov', { type: 'video/quicktime' });
       fireEvent.paste(zone, pasteEvent([first, second]));
 
-      await waitFor(() =>
-        expect(api.journal.attachments.upload).toHaveBeenCalledTimes(2)
-      );
-      expect(
-        vi.mocked(api.journal.attachments.upload).mock.calls.map(c => c[1])
-      ).toEqual([first, second]);
+      // One at a time and in order: the server's `position` counter is what
+      // orders an entry's attachments, and it counts arrivals.
+      await waitFor(() => expect(storePhoto).toHaveBeenCalledTimes(2));
+      expect(vi.mocked(storePhoto).mock.calls.map(c => c[1])).toEqual([
+        first,
+        second,
+      ]);
     });
 
     it('takes a pasted document now that the backend stores one', async () => {
       // This used to assert a refusal. The attach-a-file button promises any
       // file; a paste of the same file has to mean the same thing.
-      vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
       const { container } = renderIt([]);
       const zone = container.querySelector(
         '[data-testid="journal-attachment-dropzone"]'
@@ -417,13 +437,8 @@ describe('JournalAttachments', () => {
 
       fireEvent.paste(zone, pasteEvent([doc]));
 
-      await waitFor(() =>
-        expect(api.journal.attachments.upload).toHaveBeenCalledWith(
-          'e1',
-          doc,
-          'notes'
-        )
-      );
+      await waitFor(() => expect(storePhoto).toHaveBeenCalled());
+      expect(attached()).toMatchObject({ file: doc, name: 'notes' });
     });
 
     it('says why a paste it cannot take was ignored', async () => {
@@ -436,11 +451,10 @@ describe('JournalAttachments', () => {
 
       // Silence here is what made the earlier version feel broken.
       expect(await screen.findByText(/Can't attach/)).toBeTruthy();
-      expect(api.journal.attachments.upload).not.toHaveBeenCalled();
+      expect(storePhoto).not.toHaveBeenCalled();
     });
 
     it('uploads a file iOS handed over with no name', async () => {
-      vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
       const { container } = renderIt([]);
       const zone = container.querySelector(
         '[data-testid="journal-attachment-dropzone"]'
@@ -451,13 +465,8 @@ describe('JournalAttachments', () => {
         dataTransfer: { files: [nameless] as unknown as FileList },
       });
 
-      await waitFor(() =>
-        expect(api.journal.attachments.upload).toHaveBeenCalledWith(
-          'e1',
-          nameless,
-          ''
-        )
-      );
+      await waitFor(() => expect(storePhoto).toHaveBeenCalled());
+      expect(attached()).toMatchObject({ file: nameless, name: '' });
     });
 
     it('leaves an ordinary text paste alone', () => {
@@ -467,7 +476,7 @@ describe('JournalAttachments', () => {
       )!;
 
       fireEvent.paste(zone, pasteEvent([]));
-      expect(api.journal.attachments.upload).not.toHaveBeenCalled();
+      expect(storePhoto).not.toHaveBeenCalled();
     });
 
     it('ignores a paste outside edit mode', () => {
@@ -480,7 +489,7 @@ describe('JournalAttachments', () => {
         zone,
         pasteEvent([new File(['x'], 'a.m4a', { type: 'audio/mp4' })])
       );
-      expect(api.journal.attachments.upload).not.toHaveBeenCalled();
+      expect(storePhoto).not.toHaveBeenCalled();
     });
 
     // Safari offers no paste affordance unless the tap lands in an editable
@@ -492,9 +501,6 @@ describe('JournalAttachments', () => {
       afterEach(() => vi.unstubAllGlobals());
 
       it('uploads audio it finds on the clipboard', async () => {
-        vi.mocked(api.journal.attachments.upload).mockResolvedValue(
-          attachment()
-        );
         stubClipboard(async () => [
           {
             types: ['audio/mp4'],
@@ -505,12 +511,8 @@ describe('JournalAttachments', () => {
 
         fireEvent.click(screen.getByText('Paste'));
 
-        await waitFor(() =>
-          expect(api.journal.attachments.upload).toHaveBeenCalled()
-        );
-        expect(
-          vi.mocked(api.journal.attachments.upload).mock.calls[0][1].type
-        ).toBe('audio/mp4');
+        await waitFor(() => expect(storePhoto).toHaveBeenCalled());
+        expect(vi.mocked(storePhoto).mock.calls[0][1].type).toBe('audio/mp4');
       });
 
       it('says so when the clipboard holds nothing attachable', async () => {
@@ -524,7 +526,7 @@ describe('JournalAttachments', () => {
         expect(
           await screen.findByText(/clipboard has no audio, video or image/)
         ).toBeTruthy();
-        expect(api.journal.attachments.upload).not.toHaveBeenCalled();
+        expect(storePhoto).not.toHaveBeenCalled();
       });
 
       it('reports a clipboard the browser refuses to read', async () => {
@@ -539,8 +541,7 @@ describe('JournalAttachments', () => {
       });
     });
 
-    it('uploads a dropped file', async () => {
-      vi.mocked(api.journal.attachments.upload).mockResolvedValue(attachment());
+    it('takes a dropped file', async () => {
       const { container } = renderIt([]);
       const zone = container.querySelector(
         '[data-testid="journal-attachment-dropzone"]'
@@ -551,13 +552,8 @@ describe('JournalAttachments', () => {
         dataTransfer: { files: [clip] as unknown as FileList },
       });
 
-      await waitFor(() =>
-        expect(api.journal.attachments.upload).toHaveBeenCalledWith(
-          'e1',
-          clip,
-          'IMG_0043'
-        )
-      );
+      await waitFor(() => expect(storePhoto).toHaveBeenCalled());
+      expect(attached()).toMatchObject({ file: clip, name: 'IMG_0043' });
     });
   });
 
@@ -683,9 +679,13 @@ describe('JournalAttachments', () => {
     expect(field.value).toBe('Walk home');
   });
 
-  it('surfaces an upload failure instead of failing silently', async () => {
-    vi.mocked(api.journal.attachments.upload).mockRejectedValue(
-      new Error('file is too large')
+  it('surfaces a file it cannot read instead of failing silently', async () => {
+    // A failed *upload* is no longer an error the user sees — it is queued and
+    // retried. What is left is a file whose bytes never reached the device: a
+    // picker reference that stopped resolving, or an iCloud photo whose
+    // full-size original never came down.
+    vi.mocked(storePhoto).mockRejectedValue(
+      new Error('That photo came back empty')
     );
     const { container } = renderIt([]);
 
@@ -696,6 +696,6 @@ describe('JournalAttachments', () => {
       target: { files: [new File(['x'], 'big.png', { type: 'image/png' })] },
     });
 
-    expect(await screen.findByText('file is too large')).toBeTruthy();
+    expect(await screen.findByText('That photo came back empty')).toBeTruthy();
   });
 });

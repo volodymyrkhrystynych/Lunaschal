@@ -50,10 +50,14 @@ def entry_id(client):
 
 
 def _upload(client, entry_id, *, filename='memo.m4a', data=b'\x00' * 2048,
-            mime='audio/mp4', name=None):
-    form = {'file': (io.BytesIO(data), filename, mime)}
+            mime='audio/mp4', name=None, attachment_id=None, file=True):
+    form = {}
+    if file:
+        form['file'] = (io.BytesIO(data), filename, mime)
     if name is not None:
         form['name'] = name
+    if attachment_id is not None:
+        form['attachmentId'] = attachment_id
     return client.post(
         f'/api/journal/{entry_id}/attachments',
         data=form, content_type='multipart/form-data',
@@ -869,3 +873,71 @@ def test_a_malformed_client_id_is_refused(client):
         r = _record(client, **{field: '../../etc/passwd'})
         assert r.status_code == 400, field
     assert _entry_count(client) == before
+
+
+# --- replaying an upload ------------------------------------------------
+#
+# The phone holds a staged attachment in IndexedDB and re-POSTs it on every
+# reconnect until the server confirms it, so a retry after a response that never
+# made it back is the normal case, not an edge case. A client-supplied
+# `attachmentId` is what lets the replay be recognized.
+
+
+def test_a_replayed_upload_stores_the_row_once(client, entry_id):
+    aid = str(ULID())
+
+    first = _upload(client, entry_id, attachment_id=aid, name='The walk')
+    second = _upload(client, entry_id, attachment_id=aid, name='The walk')
+
+    assert first.status_code == 201
+    # Answered as if it had just been saved, so the client lets go of its copy.
+    assert second.status_code == 201
+    assert second.get_json()['id'] == aid
+    listed = client.get(f'/api/journal/{entry_id}/attachments').get_json()
+    assert [a['id'] for a in listed] == [aid]
+
+
+def test_a_replay_does_not_need_the_file_a_second_time(client, entry_id):
+    # The check comes before the file is read, so a replay does not stream a
+    # hundred megabytes to disk to discover it was already there.
+    aid = str(ULID())
+    _upload(client, entry_id, attachment_id=aid)
+
+    replay = _upload(client, entry_id, attachment_id=aid, file=False)
+
+    assert replay.status_code == 201
+    assert replay.get_json()['id'] == aid
+
+
+def test_a_replay_keeps_the_first_upload_name(client, entry_id):
+    aid = str(ULID())
+    _upload(client, entry_id, attachment_id=aid, name='The walk')
+
+    replay = _upload(client, entry_id, attachment_id=aid, name='Something else')
+
+    assert replay.get_json()['name'] == 'The walk'
+
+
+def test_an_upload_without_a_client_id_still_mints_one(client, entry_id):
+    # Paste and drop on the desktop upload once and surface their own error;
+    # nothing about them changes.
+    first = _upload(client, entry_id)
+    second = _upload(client, entry_id)
+
+    ids = {first.get_json()['id'], second.get_json()['id']}
+    assert len(ids) == 2
+
+
+def test_a_malformed_attachment_id_is_refused_rather_than_replaced(client, entry_id):
+    # An attachment id becomes a directory name, and silently substituting a
+    # fresh one would break the very replay the client is counting on.
+    res = _upload(client, entry_id, attachment_id='../../etc/passwd')
+
+    assert res.status_code == 400
+    assert client.get(f'/api/journal/{entry_id}/attachments').get_json() == []
+
+
+def test_an_upload_to_a_missing_entry_is_still_a_404(client):
+    res = _upload(client, str(ULID()), attachment_id=str(ULID()))
+
+    assert res.status_code == 404

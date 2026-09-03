@@ -694,6 +694,34 @@ def _store_attachment(
 
 @bp.post('/<id>/attachments')
 def upload_attachment(id):
+    """Attach a file to an entry that already exists.
+
+    **Replaying this request must be a no-op**, for the same reason the
+    recording route's replay must be: the composer now holds a staged photo in
+    IndexedDB and re-POSTs it until the server confirms it, so a retry after a
+    response that never made it back is the normal case on a phone. An optional
+    client-supplied `attachmentId` is what lets the replay be recognized, and
+    the early return below happens *before* the file is read so a replay does
+    not stream the picture to disk again to discover it was already there.
+
+    Without the id (paste and drop on the desktop, which upload once and
+    surface their own error) every call mints a fresh one and behaves as it
+    always has.
+    """
+    try:
+        attachment_id = _client_id(request.form.get('attachmentId'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    if attachment_id:
+        existing = _load_attachment(attachment_id)
+        if existing is not None:
+            # Answer as if we'd just saved it so the client lets go of its local
+            # copy — the whole point of the retry loop. Deliberately not checked
+            # against `id`: an attachment we already hold is stored, and moving
+            # it would be a stranger outcome than ignoring the duplicate POST.
+            return jsonify(_attachment_dict(existing)), 201
+
     entry = get_db().execute(
         'SELECT id FROM journal_entries WHERE id=?', (id,)
     ).fetchone()
@@ -704,7 +732,9 @@ def upload_attachment(id):
     if file is None:
         return jsonify({'error': 'file is required'}), 400
 
-    attachment, failure = _store_attachment(id, file, request.form.get('name'))
+    attachment, failure = _store_attachment(
+        id, file, request.form.get('name'), attachment_id
+    )
     if failure is not None:
         message, status = failure
         return jsonify({'error': message}), status

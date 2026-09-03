@@ -1,6 +1,7 @@
 import type { QueryClient } from '@tanstack/react-query';
 import { MUTATION_KEYS, type JournalRecordingVars } from './mutationDefaults';
 import {
+  assignRecordingEntry,
   finalizeRecording,
   listRecordings,
   type RecordingFic,
@@ -110,6 +111,9 @@ export async function attachRecordingToEntry(
   entryId: string,
   opts: { name?: string } = {}
 ): Promise<void> {
+  // Written to the store before the upload is queued, so the boot sweep can
+  // put a rescued clip back on this entry rather than filing it as a new one.
+  await assignRecordingEntry(rec.id, entryId);
   await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME, {
     entryId,
   });
@@ -185,6 +189,12 @@ export async function resumeStoredRecordings(qc: QueryClient): Promise<void> {
         // upload that has forgotten its fic files the commentary as a plain
         // journal entry with nothing saying which chapter it was about.
         fic: rec.fic,
+        // And for the same reason: a composer clip resumed without its entry
+        // becomes a bare entry of its own, next to the one whose words it was
+        // recorded alongside. `INSERT OR IGNORE` on the route means naming an
+        // entry that has not landed yet is safe — it creates it, and the
+        // queued create converges on the same row.
+        entryId: rec.entryId,
       }
     ).catch(() => {
       // Failures are recorded on the stored recording by the mutation itself;

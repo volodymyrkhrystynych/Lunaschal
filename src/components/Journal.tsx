@@ -13,9 +13,16 @@ import {
 } from '../offline/mutationDefaults';
 import {
   attachRecordingToEntry,
+  enqueueRecordingUpload,
   handleFinishedRecording,
 } from '../offline/recordingQueue';
-import { assembleBlob, deleteRecording } from '../offline/recordingStore';
+import {
+  assembleBlob,
+  assignRecordingEntry,
+  deleteRecording,
+} from '../offline/recordingStore';
+import { storePhoto } from '../offline/photoStore';
+import { enqueueJournalAttachment } from '../offline/photoQueue';
 import { buildFeed, type FeedItem } from '../lib/journalFeed';
 import { computeEventGroupSpans } from '../lib/journalEventGroups';
 import { eventTimeLabel } from '../lib/calendar';
@@ -401,52 +408,74 @@ export function Journal({
 
   const submitNewEntry = (content: string, staged: StagedFile[]) => {
     const id = ulid();
-    createEntry.mutate(
-      {
-        id,
-        content,
-        // Tells the server photos are coming, so the title waits for their
-        // captions instead of being generated from the text alone milliseconds
-        // from now. Attachments can only be uploaded once the entry exists.
-        pendingAttachments: staged.length || undefined,
-      },
-      {
-        // Per-call, so the shared offline defaults' own callbacks still run.
-        // Uploads wait for the create to land: offline the mutation is paused
-        // and the entry has no server-side row for an attachment to hang off.
-        onSuccess: () => {
-          if (staged.length) uploadStagedFiles(id, staged);
-        },
-      }
-    );
+    // Fired first, so it is first into JOURNAL_LANE and the entry exists before
+    // anything is hung off it — online *and* on a queue replayed after a
+    // reload, where the two would otherwise race.
+    createEntry.mutate({
+      id,
+      content,
+      // Tells the server files are coming, so the title waits for their
+      // captions instead of being generated from the text alone milliseconds
+      // from now.
+      pendingAttachments: staged.length || undefined,
+    });
     setStagedUploadError(null);
     setShowNewEntry(false);
+    if (staged.length) void queueStagedFiles(id, staged);
   };
 
-  // Deliberately fire-and-forget with its own error surface: the entry is
-  // already saved by this point, so a failed upload must not look like a failed
-  // save. Sequential so the server's `position` matches the paste order.
-  const uploadStagedFiles = async (entryId: string, files: StagedFile[]) => {
-    try {
-      for (const staged of files) {
-        await api.journal.attachments.upload(
+  /**
+   * Put the composer's staged files on the device, then hand them to the
+   * durable queue.
+   *
+   * This used to be a bare `fetch` per file inside the create's `onSuccess`:
+   * no retry, no persistence, and an abort on the first failure. The files
+   * lived only in the composer's React state, so a bad connection or a tab the
+   * OS reaped lost them outright — while the recording staged beside them came
+   * back, because `recordingStore` had been holding it all along. Now both
+   * halves keep the same promise: the bytes are on the device before anything
+   * is attempted, and are let go of only once the server has confirmed them.
+   *
+   * Not awaited by its caller. The entry is already in the feed and the
+   * composer is already closed; waiting here would park the UI on an upload
+   * that is allowed to take until the next time the phone has signal.
+   */
+  const queueStagedFiles = async (entryId: string, files: StagedFile[]) => {
+    for (const staged of files) {
+      // A recording is already durable — it has been in `recordingStore` since
+      // the moment it was captured — so it goes up its own idempotent route
+      // rather than being copied into the photo store as well. Carrying
+      // `entryId` is also what stops a rescued clip from arriving as an entry
+      // of its own: the boot sweep reads it back off the stored recording.
+      if (staged.recordingId) {
+        await assignRecordingEntry(staged.recordingId, entryId);
+        void enqueueRecordingUpload(
+          queryClient,
+          staged.recordingId,
+          defaultNameFor(staged.file.name),
+          { entryId }
+        );
+        continue;
+      }
+      try {
+        const attachmentId = ulid();
+        await storePhoto(attachmentId, staged.file, 'journal', entryId);
+        void enqueueJournalAttachment(
+          queryClient,
+          attachmentId,
           entryId,
-          staged.file,
           defaultNameFor(staged.file.name)
         );
-        // Confirmed on the server. This is the only place a *staged* recording's
-        // audio may be let go of — the composer holds the IndexedDB copy until
-        // exactly here, so a tab that dies before Save leaves it recoverable.
-        if (staged.recordingId) await deleteRecording(staged.recordingId);
+      } catch (e) {
+        // The only failure left that the user can act on: the file could not be
+        // read off the device at all (a revoked picker reference, or an
+        // iCloud-optimized photo whose full-size original never came down).
+        // Everything after this point is the queue's problem, and it retries.
+        setStagedUploadError(
+          `The entry was saved, but "${staged.file.name || 'an attachment'}" ` +
+            `could not be attached: ${(e as Error).message || 'upload failed'}`
+        );
       }
-    } catch (e) {
-      setStagedUploadError(
-        `The entry was saved, but its attachment failed to upload: ${
-          (e as Error).message || 'upload failed'
-        }`
-      );
-    } finally {
-      queryClient.invalidateQueries({ queryKey: ['journal'] });
     }
   };
 

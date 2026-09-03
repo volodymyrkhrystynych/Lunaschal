@@ -80,6 +80,18 @@ export interface StoredRecording {
   lastError: string | null;
   /** Terminal failure (a 4xx). Stop retrying, but never throw the audio away. */
   failed: boolean;
+  /**
+   * The entry this clip is to be attached to, when it belongs to one that
+   * already exists — the composer's Transcribe button, whose entry id is not
+   * minted until Save.
+   *
+   * Stored beside the audio rather than only in the upload's variables for the
+   * same reason `idea` and `fic` are: the boot sweep finds an orphaned
+   * recording by enumerating this store, and one that has forgotten its entry
+   * is filed as a brand-new journal entry of its own — the clip survives, but
+   * detached from the words it was recorded with.
+   */
+  entryId?: string;
   /** Set when the clip is an Ideas-tab capture; absent for journal recordings. */
   idea?: RecordingIdea;
   /** Set when the clip is fic commentary; absent for journal recordings. */
@@ -167,6 +179,24 @@ export function beginRecording(
   return enqueue(async () => {
     await writeMeta(meta);
     return meta;
+  });
+}
+
+/**
+ * Point a stored recording at the entry it is to be attached to.
+ *
+ * Separate from `beginRecording` because the composer does not know the id
+ * until Save: the clip is recorded into a draft, and the entry it becomes part
+ * of is minted when that draft is submitted.
+ */
+export function assignRecordingEntry(
+  id: string,
+  entryId: string
+): Promise<void> {
+  return enqueue(async () => {
+    const meta = await readMeta(id);
+    if (!meta) return;
+    await writeMeta({ ...meta, entryId });
   });
 }
 
