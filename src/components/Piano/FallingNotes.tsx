@@ -46,7 +46,7 @@ export function FallingNotes({
           <div
             key={item.id}
             aria-label={`${item.hand} hand ${midiNoteName(item.note)}`}
-            className={`absolute flex items-end justify-center rounded-md border px-0.5 pb-1 text-[10px] font-bold text-white shadow-lg transition-[bottom] duration-200 ease-out ${
+            className={`absolute flex items-end justify-center rounded-md border px-0.5 pb-1 text-[10px] font-bold text-white shadow-lg ${
               item.hand === 'right'
                 ? 'border-cyan-200/80 bg-cyan-500/90 shadow-cyan-500/30'
                 : 'border-violet-200/80 bg-violet-500/90 shadow-violet-500/30'

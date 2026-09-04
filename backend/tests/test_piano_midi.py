@@ -1,5 +1,5 @@
 from backend.piano.midi import MidiStreamParser
-from main import _timestamp_midi_events
+from main import _DesktopApi, _timestamp_midi_events
 
 
 def test_parses_note_on_note_off_and_sustain():
@@ -46,3 +46,39 @@ def test_desktop_bridge_adds_epoch_millisecond_timestamp(monkeypatch):
         1_765_000_123_456,
         1_765_000_123_456,
     ]
+
+
+def test_desktop_bridge_pushes_midi_batches_to_its_event_sink():
+    pushed = []
+    api = _DesktopApi(midi_event_sink=pushed.append)
+    events = [{'kind': 'noteOn', 'note': 60, 'timestampMs': 123}]
+
+    api._emit_midi_events(events)
+
+    assert pushed == [events]
+
+
+def test_desktop_bridge_keeps_capture_alive_when_page_is_unavailable():
+    def unavailable(_events):
+        raise RuntimeError('page is navigating')
+
+    api = _DesktopApi(midi_event_sink=unavailable)
+
+    api._emit_midi_events([{'kind': 'noteOn', 'note': 60}])
+
+
+def test_desktop_bridge_dispatches_a_browser_custom_event():
+    scripts = []
+    window = type(
+        'Window',
+        (),
+        {'evaluate_js': lambda self, script: scripts.append(script)},
+    )()
+    api = _DesktopApi()
+    api._set_midi_window(window)
+
+    api._emit_midi_events([{'kind': 'noteOn', 'note': 60}])
+
+    assert len(scripts) == 1
+    assert 'CustomEvent("lunaschal-midi"' in scripts[0]
+    assert '"kind": "noteOn", "note": 60' in scripts[0]
