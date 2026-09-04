@@ -1,4 +1,4 @@
-const BLACK_NOTES = new Set([1, 3, 6, 8, 10]);
+import { isBlackPianoKey } from '../../lib/pianoVisualization';
 
 interface Props {
   activeNotes: ReadonlySet<number>;
@@ -6,7 +6,7 @@ interface Props {
 
 export function PianoKeyboard({ activeNotes }: Props) {
   const notes = Array.from({ length: 88 }, (_, index) => index + 21);
-  const whiteNotes = notes.filter(note => !BLACK_NOTES.has(note % 12));
+  const whiteNotes = notes.filter(note => !isBlackPianoKey(note));
   const whiteIndex = new Map(whiteNotes.map((note, index) => [note, index]));
 
   return (
@@ -22,29 +22,27 @@ export function PianoKeyboard({ activeNotes }: Props) {
           />
         ))}
       </div>
-      {notes
-        .filter(note => BLACK_NOTES.has(note % 12))
-        .map(note => {
-          const previousWhite = [...whiteNotes]
-            .reverse()
-            .find(white => white < note);
-          if (previousWhite === undefined) return null;
-          const index = whiteIndex.get(previousWhite) ?? 0;
-          return (
-            <div
-              key={note}
-              aria-label={`MIDI note ${note}`}
-              className={`absolute top-0 z-10 h-[62%] rounded-b-sm border border-black transition-colors ${
-                activeNotes.has(note) ? 'bg-cyan-400' : 'bg-zinc-900'
-              }`}
-              style={{
-                left: `${((index + 1) / whiteNotes.length) * 100}%`,
-                width: `${(0.62 / whiteNotes.length) * 100}%`,
-                transform: 'translateX(-50%)',
-              }}
-            />
-          );
-        })}
+      {notes.filter(isBlackPianoKey).map(note => {
+        const previousWhite = [...whiteNotes]
+          .reverse()
+          .find(white => white < note);
+        if (previousWhite === undefined) return null;
+        const index = whiteIndex.get(previousWhite) ?? 0;
+        return (
+          <div
+            key={note}
+            aria-label={`MIDI note ${note}`}
+            className={`absolute top-0 z-10 h-[62%] rounded-b-sm border border-black transition-colors ${
+              activeNotes.has(note) ? 'bg-cyan-400' : 'bg-zinc-900'
+            }`}
+            style={{
+              left: `${((index + 1) / whiteNotes.length) * 100}%`,
+              width: `${(0.62 / whiteNotes.length) * 100}%`,
+              transform: 'translateX(-50%)',
+            }}
+          />
+        );
+      })}
     </div>
   );
 }
