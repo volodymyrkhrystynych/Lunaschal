@@ -59,13 +59,24 @@ export function buildFallingNotes(
   steps: PracticeStep[],
   currentIndex: number,
   hand: PianoHand,
-  visibleBeats = 8
+  visibleBeats = 8,
+  elapsedBeats?: number
 ): FallingNote[] {
   const notes: FallingNote[] = [];
+  const timelineBeat =
+    elapsedBeats ??
+    steps
+      .slice(0, currentIndex)
+      .reduce((total, step) => total + step.durationBeats, 0);
   let beatOffset = 0;
-  for (let index = currentIndex; index < steps.length; index += 1) {
-    if (beatOffset > visibleBeats) break;
+  for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
+    const relativeBeat = beatOffset - timelineBeat;
+    if (relativeBeat > visibleBeats) break;
+    if (index < currentIndex) {
+      beatOffset += step.durationBeats;
+      continue;
+    }
     const hands =
       hand === 'both'
         ? (['right', 'left'] as const)
@@ -76,7 +87,7 @@ export function buildFallingNotes(
           id: `${index}:${selectedHand}:${note}:${noteIndex}`,
           note,
           hand: selectedHand,
-          beatOffset,
+          beatOffset: relativeBeat,
           durationBeats: step.durationBeats,
           current: index === currentIndex,
         });

@@ -57,6 +57,15 @@ describe('piano visualization', () => {
     ]);
   });
 
+  it('moves notes continuously against the metronome timeline', () => {
+    expect(
+      buildFallingNotes(STEPS, 0, 'right', 8, -4).map(item => item.beatOffset)
+    ).toEqual([4, 4, 5, 7]);
+    expect(
+      buildFallingNotes(STEPS, 1, 'right', 8, 1.5).map(item => item.beatOffset)
+    ).toEqual([-0.5, 1.5]);
+  });
+
   it('formats MIDI pitches for readable note labels', () => {
     expect(midiNoteName(60)).toBe('C4');
     expect(midiNoteName(70)).toBe('A♯4');
