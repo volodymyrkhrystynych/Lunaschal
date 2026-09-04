@@ -499,6 +499,36 @@ describe('Reader commentary microphone', () => {
       -1
     );
 
+  it('shows feedback while the microphone is still starting', async () => {
+    installFakeMediaRecorder();
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(
+      navigator.mediaDevices
+    );
+    let allowMicrophone!: () => void;
+    const microphoneReady = new Promise<void>(resolve => {
+      allowMicrophone = resolve;
+    });
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(
+      async constraints => {
+        await microphoneReady;
+        return getUserMedia(constraints);
+      }
+    );
+
+    renderReader();
+    fireEvent.click(await screen.findByTitle('Chapter 1'));
+    await screen.findByRole('heading', { name: 'Chapter 1' });
+    fireEvent.click(screen.getByText(/Commentary/));
+    fireEvent.click(screen.getByRole('button', { name: '🎤' }));
+
+    const starting = screen.getByRole('button', { name: 'Starting…' });
+    expect((starting as HTMLButtonElement).disabled).toBe(true);
+    expect(starting.getAttribute('title')).toBe('Starting microphone');
+
+    allowMicrophone();
+    await screen.findByRole('button', { name: '■ Stop' });
+  });
+
   // Stopping is the save. The clip goes to the durable store and is uploaded as
   // a journal entry carrying the fic and chapter; the transcript is written onto
   // that entry by the server, minutes later. Nothing is transcribed here, which
