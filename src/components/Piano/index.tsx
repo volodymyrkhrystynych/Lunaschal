@@ -55,6 +55,9 @@ export function Piano() {
   const capturedRef = useRef<CapturedMidiEvent[]>([]);
   const [practiceTempo, setPracticeTempo] = useState(80);
   const [countingIn, setCountingIn] = useState(false);
+  const [practiceTimelineStartMs, setPracticeTimelineStartMs] = useState<
+    number | null
+  >(null);
   const audioRef = useRef<AudioContext | null>(null);
   const metronomeTimerRef = useRef<number | null>(null);
   const [earPromptPlaying, setEarPromptPlaying] = useState(false);
@@ -271,6 +274,7 @@ export function Piano() {
     metronomeTimerRef.current = null;
     void audioRef.current?.close();
     audioRef.current = null;
+    setPracticeTimelineStartMs(null);
   };
 
   const click = (context: AudioContext, when: number, accent = false) => {
@@ -297,6 +301,7 @@ export function Piano() {
     audioRef.current = context;
     const interval = 60 / practiceTempo;
     setCountingIn(true);
+    setPracticeTimelineStartMs(performance.now() + interval * 4000);
     for (let beat = 0; beat < 4; beat += 1)
       click(context, context.currentTime + beat * interval, beat === 0);
     window.setTimeout(() => {
@@ -572,6 +577,8 @@ export function Piano() {
                     steps={practiceSteps}
                     stepIndex={stepIndex}
                     hand={hand}
+                    tempo={practiceTempo}
+                    timelineStartMs={practiceTimelineStartMs}
                     hidden={
                       dailyExercise?.exerciseKey === 'ear-phrase' && !earReveal
                     }

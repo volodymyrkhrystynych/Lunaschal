@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { PianoHand, PracticeStep } from '../../lib/piano';
 import {
   buildFallingNotes,
@@ -9,6 +10,8 @@ interface Props {
   steps: PracticeStep[];
   stepIndex: number;
   hand: PianoHand;
+  tempo: number;
+  timelineStartMs: number | null;
   hidden?: boolean;
 }
 
@@ -18,9 +21,30 @@ export function FallingNotes({
   steps,
   stepIndex,
   hand,
+  tempo,
+  timelineStartMs,
   hidden = false,
 }: Props) {
-  const notes = hidden ? [] : buildFallingNotes(steps, stepIndex, hand);
+  const [frameTimeMs, setFrameTimeMs] = useState(() => performance.now());
+
+  useEffect(() => {
+    if (timelineStartMs === null) return;
+    let frame = 0;
+    const draw = (now: number) => {
+      setFrameTimeMs(now);
+      frame = requestAnimationFrame(draw);
+    };
+    frame = requestAnimationFrame(draw);
+    return () => cancelAnimationFrame(frame);
+  }, [timelineStartMs]);
+
+  const elapsedBeats =
+    timelineStartMs === null
+      ? undefined
+      : ((frameTimeMs - timelineStartMs) * tempo) / 60_000;
+  const notes = hidden
+    ? []
+    : buildFallingNotes(steps, stepIndex, hand, 8, elapsedBeats);
 
   return (
     <div
