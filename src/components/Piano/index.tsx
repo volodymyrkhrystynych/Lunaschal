@@ -14,7 +14,7 @@ import {
   scorePerformance,
   type CapturedMidiEvent,
 } from '../../lib/pianoPractice';
-import { renderMusicXml } from '../../lib/verovio';
+import { FallingNotes } from './FallingNotes';
 import { PianoArchive } from './PianoArchive';
 import { PianoKeyboard } from './PianoKeyboard';
 import { PianoToday } from './PianoToday';
@@ -33,7 +33,6 @@ export function Piano() {
   const [pieces, setPieces] = useState<PianoPiece[]>([]);
   const [piece, setPiece] = useState<PianoPiece | null>(null);
   const [score, setScore] = useState('');
-  const [scorePages, setScorePages] = useState<string[]>([]);
   const [loadingScore, setLoadingScore] = useState(false);
   const [hand, setHand] = useState<PianoHand>('both');
   const [loopStart, setLoopStart] = useState(1);
@@ -230,7 +229,6 @@ export function Piano() {
       setScore(xml);
       setLoopStart(Math.min(...measures, 1));
       setLoopEnd(Math.max(...measures, 1));
-      setScorePages(await renderMusicXml(xml));
     } catch (cause) {
       setError(errorMessage(cause, 'Could not open the score.'));
     } finally {
@@ -257,7 +255,6 @@ export function Piano() {
       if (piece?.id === selected.id) {
         setPiece(null);
         setScore('');
-        setScorePages([]);
       }
       await refreshPieces();
     } catch (cause) {
@@ -339,7 +336,6 @@ export function Piano() {
       wrongNotesRef.current = 0;
       setLoopStart(1);
       setLoopEnd(1);
-      setScorePages(await renderMusicXml(xml));
       setEarReveal(!isEarPhrase);
       setSection('library');
       if (earContext) {
@@ -568,24 +564,22 @@ export function Piano() {
                       : ''}
                   </div>
                 )}
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto rounded-xl shadow-2xl shadow-black/30">
+                  <FallingNotes
+                    steps={practiceSteps}
+                    stepIndex={stepIndex}
+                    hand={hand}
+                    hidden={
+                      dailyExercise?.exerciseKey === 'ear-phrase' && !earReveal
+                    }
+                  />
                   <PianoKeyboard activeNotes={activeNotes} />
                 </div>
-                <div className="space-y-4">
-                  {loadingScore && (
-                    <p className="text-[var(--color-text-muted)]">
-                      Engraving score…
-                    </p>
-                  )}
-                  {(dailyExercise?.exerciseKey !== 'ear-phrase' || earReveal) &&
-                    scorePages.map((svg, index) => (
-                      <div
-                        key={index}
-                        className="mx-auto max-w-5xl overflow-hidden rounded bg-white p-3"
-                        dangerouslySetInnerHTML={{ __html: svg }}
-                      />
-                    ))}
-                </div>
+                {loadingScore && (
+                  <p className="text-[var(--color-text-muted)]">
+                    Preparing notes…
+                  </p>
+                )}
               </>
             ) : (
               <div className="rounded-lg border border-dashed border-white/20 p-12 text-center text-[var(--color-text-muted)]">
