@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../hooks/api';
-import { desktopApi, type MidiDevice } from '../../lib/desktopBridge';
+import {
+  desktopApi,
+  subscribeMidiEvents,
+  type MidiDevice,
+  type MidiEvent,
+} from '../../lib/desktopBridge';
 import {
   notesForHand,
   parsePracticeSteps,
@@ -106,13 +111,11 @@ export function Piano() {
 
   useEffect(() => {
     if (!connected) return;
-    const timer = window.setInterval(async () => {
-      const result = await desktopApi()?.midi_poll();
-      if (!result) return;
-      setConnected(result.connected);
-      for (const event of result.events) {
+    const receiveEvents = (events: MidiEvent[]) => {
+      for (const event of events) {
         if (event.kind === 'error') {
           setError(event.message ?? 'The MIDI device disconnected.');
+          setConnected(false);
           continue;
         }
         if (event.kind === 'sustain') {
@@ -193,8 +196,8 @@ export function Piano() {
           setWrongNotes(wrongNotesRef.current);
         }
       }
-    }, 16);
-    return () => window.clearInterval(timer);
+    };
+    return subscribeMidiEvents(receiveEvents);
   }, [connected, dailyExercise, practiceTempo]);
 
   useEffect(

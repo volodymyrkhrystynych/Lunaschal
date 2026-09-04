@@ -6,7 +6,7 @@ import urllib.request
 import urllib.error
 import base64
 import binascii
-from collections import deque
+import json
 
 # webview and Qt are imported inside _start_window() rather than here: --headless
 # is the production server (ops/run-prod.sh) and must not need a display, a
@@ -37,12 +37,30 @@ def _timestamp_midi_events(events) -> list[dict]:
 class _DesktopApi:
     """Small JS bridge for capabilities QtWebEngine does not provide."""
 
-    def __init__(self):
-        self._midi_lock = threading.Lock()
-        self._midi_events = deque(maxlen=2048)
+    def __init__(self, midi_event_sink=None):
         self._midi_stop = threading.Event()
         self._midi_thread = None
         self._midi_path = None
+        self._midi_event_sink = midi_event_sink
+
+    def _set_midi_window(self, window) -> None:
+        """Send native MIDI batches straight to the already-loaded page."""
+        self._midi_event_sink = lambda events: window.evaluate_js(
+            'window.dispatchEvent(new CustomEvent("lunaschal-midi", '
+            f'{{detail: {json.dumps(events)}}}));'
+        )
+
+    def _emit_midi_events(self, events: list[dict]) -> None:
+        if not events:
+            return
+        sink = self._midi_event_sink
+        if sink is not None:
+            try:
+                sink(events)
+            except Exception:
+                # Navigation/window teardown can briefly make JS evaluation
+                # unavailable. MIDI capture must survive that UI lifecycle.
+                pass
 
     def is_desktop(self) -> bool:
         return True
@@ -68,12 +86,6 @@ class _DesktopApi:
         self._midi_thread.start()
         return {'ok': True}
 
-    def midi_poll(self) -> dict:
-        with self._midi_lock:
-            events = list(self._midi_events)
-            self._midi_events.clear()
-        return {'events': events, 'connected': self._midi_path is not None}
-
     def midi_close(self) -> dict:
         self._midi_stop.set()
         thread = self._midi_thread
@@ -97,15 +109,13 @@ class _DesktopApi:
                         continue
                     if not chunk:
                         continue
-                    with self._midi_lock:
-                        self._midi_events.extend(
-                            _timestamp_midi_events(parser.feed(chunk))
-                        )
+                    events = _timestamp_midi_events(parser.feed(chunk))
+                    self._emit_midi_events(events)
             finally:
                 os.close(fd)
         except OSError as exc:
-            with self._midi_lock:
-                self._midi_events.append({'kind': 'error', 'message': str(exc)})
+            event = {'kind': 'error', 'message': str(exc)}
+            self._emit_midi_events([event])
         finally:
             self._midi_path = None
 
@@ -319,8 +329,12 @@ def _start_window(url: str):
     _qt_app.setApplicationName('lunaschal')
     _qt_app.setApplicationDisplayName('Lunaschal')
 
-    webview.create_window('Lunaschal', url, width=1280, height=800, min_size=(800, 600),
-                          text_select=True, js_api=_DesktopApi())
+    desktop_api = _DesktopApi()
+    window = webview.create_window(
+        'Lunaschal', url, width=1280, height=800, min_size=(800, 600),
+        text_select=True, js_api=desktop_api,
+    )
+    desktop_api._set_midi_window(window)
     # private_mode=False + a persistent storage_path so cookies/localStorage/
     # IndexedDB survive a restart (see _webview_storage_path). Without this the
     # network-mode login and all client-side persistence reset every launch.
