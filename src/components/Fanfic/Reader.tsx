@@ -53,6 +53,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   // its text still on the way.
   const [commentarySaved, setCommentarySaved] = useState('');
   const [recordingNotice, setRecordingNotice] = useState('');
+  const [recordingStarting, setRecordingStarting] = useState(false);
   const [showCommentary, setShowCommentary] = useState(false);
   const [navVisible, setNavVisible] = useState(true);
   const [fontSize, setFontSize] = useState(getStoredReadingFontSize);
@@ -98,19 +99,27 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
       recorder.stop();
       return;
     }
-    if (recorder.status !== 'idle') return;
+    if (recorder.status !== 'idle' || recordingStarting) return;
     setRecordingNotice('');
     // The chapter is captured here, at the first chunk, and stored beside the
     // audio: W/S moves the reader on while a thought is still being spoken, and
     // resolving the link at upload time would file the commentary under
     // whatever chapter was open by then. A PDF fic has no chapters to link to.
-    void recorder.start('transcribe', {
-      durable: true,
-      fic: {
-        ficId,
-        ...(!isPdf && chapterId ? { chapterId } : {}),
-      },
-    });
+    // getUserMedia and the first IndexedDB write both happen before the shared
+    // recorder can report `recording`. Reflect that setup immediately: without
+    // it the browser's microphone indicator came on while this button still
+    // looked untouched, and another tap was silently ignored by useRecorder's
+    // duplicate-start guard.
+    setRecordingStarting(true);
+    void recorder
+      .start('transcribe', {
+        durable: true,
+        fic: {
+          ficId,
+          ...(!isPdf && chapterId ? { chapterId } : {}),
+        },
+      })
+      .finally(() => setRecordingStarting(false));
   };
 
   // Opening a fic (even by mouse) puts keyboard focus inside the reader so
@@ -815,11 +824,15 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                       // commentary on a chapter read offline is still kept.
                       // Only the moment it is being handed over is blocked, and
                       // while recording this button is the only way to stop.
-                      disabled={recorder.status === 'saving'}
+                      disabled={
+                        recorder.status === 'saving' || recordingStarting
+                      }
                       title={
-                        recorder.status === 'recording'
-                          ? 'Stop recording'
-                          : 'Record commentary — it saves and transcribes itself'
+                        recordingStarting
+                          ? 'Starting microphone'
+                          : recorder.status === 'recording'
+                            ? 'Stop recording'
+                            : 'Record commentary — it saves and transcribes itself'
                       }
                       className={`px-3 py-1 rounded disabled:opacity-50 ${
                         recorder.status === 'recording'
@@ -827,11 +840,13 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                           : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
                       }`}
                     >
-                      {recorder.status === 'recording'
-                        ? '■ Stop'
-                        : recorder.status === 'saving'
-                          ? 'Saving…'
-                          : '🎤'}
+                      {recordingStarting
+                        ? 'Starting…'
+                        : recorder.status === 'recording'
+                          ? '■ Stop'
+                          : recorder.status === 'saving'
+                            ? 'Saving…'
+                            : '🎤'}
                     </button>
                     <button
                       onClick={() => saveCommentary.mutate(commentary.trim())}
