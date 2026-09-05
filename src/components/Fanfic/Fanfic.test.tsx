@@ -68,6 +68,7 @@ vi.mock('../../hooks/api', () => ({
       checkUpdates: vi
         .fn()
         .mockResolvedValue({ id: 'fic1', queued: true, deep: false }),
+      uploadFile: vi.fn().mockResolvedValue({ id: 'fic2' }),
     },
     shortcuts: {
       get: vi.fn().mockResolvedValue({ bindings: {} }),
@@ -209,6 +210,35 @@ describe('Library views and expandable details', () => {
     fireEvent.click(folders);
     expect(folders.getAttribute('aria-selected')).toBe('true');
     expect(screen.getByText(/Choose a folder/)).toBeTruthy();
+  });
+
+  it('offers forum and file as the two sources under one Import button', async () => {
+    const { api } = await import('../../hooks/api');
+    const { container } = renderFanfic();
+
+    fireEvent.click(await screen.findByRole('button', { name: '+ Import' }));
+    expect(
+      screen.getByPlaceholderText(/forums\.spacebattles\.com/)
+    ).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Upload file' }));
+    expect(screen.queryByPlaceholderText(/forums\.spacebattles\.com/)).toBe(
+      null
+    );
+
+    const file = new File(['x'], 'fic.epub');
+    const input = container.querySelector(
+      'input[type="file"]'
+    ) as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() =>
+      expect(api.fanfic.uploadFile).toHaveBeenCalledWith(file)
+    );
+    // The panel closes on a successful upload, like a forum import does.
+    await waitFor(() =>
+      expect(screen.queryByRole('tab', { name: 'Upload file' })).toBe(null)
+    );
   });
 });
 

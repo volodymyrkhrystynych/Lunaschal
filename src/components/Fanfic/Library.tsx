@@ -37,6 +37,7 @@ export function Library({ onOpen }: LibraryProps) {
   const [view, setView] = useState<'library' | 'folders'>('library');
   const [searchQuery, setSearchQuery] = useState('');
   const [showImport, setShowImport] = useState(false);
+  const [importMode, setImportMode] = useState<'forum' | 'file'>('forum');
   const [importUrl, setImportUrl] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
   const [folderId, setFolderId] = useState<string | null>(null);
@@ -136,6 +137,7 @@ export function Library({ onOpen }: LibraryProps) {
     mutationFn: (file: File) => api.fanfic.uploadFile(file),
     onSuccess: () => {
       invalidate();
+      setShowImport(false);
       setImportError(null);
     },
     onError: (e: Error) => setImportError(e.message),
@@ -198,73 +200,9 @@ export function Library({ onOpen }: LibraryProps) {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
-      <div className="flex items-center justify-end gap-2 mb-4">
-        <div className="flex flex-wrap justify-end gap-2">
-          <button
-            onClick={() => refreshAlerts.mutate()}
-            disabled={refreshAlerts.isPending}
-            title="Check each site's alerts page and queue updates for threads with new activity"
-            className="px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
-          >
-            {refreshAlerts.isPending ? 'Checking…' : '⟳ Refresh'}
-          </button>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploadFile.isPending}
-            className="px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
-          >
-            {uploadFile.isPending ? 'Importing…' : 'Upload file'}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".epub,.docx,.pdf"
-            className="hidden"
-            onChange={e => {
-              const file = e.target.files?.[0];
-              if (file) uploadFile.mutate(file);
-              e.target.value = '';
-            }}
-          />
-          <button
-            onClick={() => setShowDelete(!showDelete)}
-            title={showDelete ? 'Hide delete buttons' : 'Show delete buttons'}
-            className={`px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base border rounded-lg transition-colors ${
-              showDelete
-                ? 'border-red-400/50 text-red-400 bg-red-500/10'
-                : 'border-white/20 text-[var(--color-text-muted)] hover:bg-white/10'
-            }`}
-          >
-            🗑
-          </button>
-          <button
-            onClick={() => setShowImport(!showImport)}
-            className="px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors"
-          >
-            <span className="md:hidden">+ Import</span>
-            <span className="hidden md:inline">+ Import from forum</span>
-          </button>
-        </div>
-      </div>
-
-      <div className="mb-4">
-        <input
-          ref={searchInputRef}
-          type="text"
-          value={searchQuery}
-          onChange={e => setSearchQuery(e.target.value)}
-          placeholder="Search titles and tags..."
-          className="w-full bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
-        />
-      </div>
-
-      {!searchQuery && (
-        <div>
-          <div
-            className="flex gap-2 mb-3"
-            role="tablist"
-            aria-label="Library views"
-          >
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        {!searchQuery ? (
+          <div className="flex gap-2" role="tablist" aria-label="Library views">
             {(['library', 'folders'] as const).map(nextView => (
               <button
                 key={nextView}
@@ -284,6 +222,51 @@ export function Library({ onOpen }: LibraryProps) {
               </button>
             ))}
           </div>
+        ) : (
+          <div />
+        )}
+        <div className="flex flex-wrap justify-end gap-2">
+          <button
+            onClick={() => refreshAlerts.mutate()}
+            disabled={refreshAlerts.isPending}
+            title="Check each site's alerts page and queue updates for threads with new activity"
+            className="px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
+          >
+            {refreshAlerts.isPending ? 'Checking…' : '⟳ Refresh'}
+          </button>
+          <button
+            onClick={() => setShowDelete(!showDelete)}
+            title={showDelete ? 'Hide delete buttons' : 'Show delete buttons'}
+            className={`px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base border rounded-lg transition-colors ${
+              showDelete
+                ? 'border-red-400/50 text-red-400 bg-red-500/10'
+                : 'border-white/20 text-[var(--color-text-muted)] hover:bg-white/10'
+            }`}
+          >
+            🗑
+          </button>
+          <button
+            onClick={() => setShowImport(!showImport)}
+            className="px-2.5 py-1 text-sm md:px-4 md:py-2 md:text-base bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors"
+          >
+            + Import
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-4">
+        <input
+          ref={searchInputRef}
+          type="text"
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          placeholder="Search titles and tags..."
+          className="w-full bg-[var(--color-surface)] border border-white/10 rounded-lg px-4 py-2 text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
+        />
+      </div>
+
+      {!searchQuery && (
+        <div>
           <div className="flex flex-wrap items-center gap-2">
             {view === 'library' ? (
               <div className="tag-row flex flex-wrap items-center gap-2 mb-4">
@@ -328,31 +311,91 @@ export function Library({ onOpen }: LibraryProps) {
 
       {showImport && (
         <div className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
-          <div className="text-sm text-[var(--color-text-muted)] mb-2">
-            Paste any link to the fic — a chapter, the thread, or the reader.
-            The whole fic (all threadmarks, sidestories and images) is
-            downloaded for offline reading.
+          <div
+            className="flex gap-2 mb-3"
+            role="tablist"
+            aria-label="Import source"
+          >
+            {(
+              [
+                ['forum', 'From forum'],
+                ['file', 'Upload file'],
+              ] as const
+            ).map(([mode, label]) => (
+              <button
+                key={mode}
+                role="tab"
+                aria-selected={importMode === mode}
+                onClick={() => {
+                  setImportMode(mode);
+                  setImportError(null);
+                }}
+                className={`px-3 py-1.5 text-sm rounded-lg border ${
+                  importMode === mode
+                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
+                    : 'border-white/15 text-[var(--color-text-muted)]'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          <input
-            value={importUrl}
-            autoFocus
-            onChange={e => {
-              setImportUrl(e.target.value);
-              setImportError(null);
-            }}
-            onKeyDown={e => {
-              if (e.key === 'Escape') setShowImport(false);
-              if (e.key === 'Enter' && importUrl.trim())
-                importFic.mutate(importUrl.trim());
-            }}
-            placeholder="https://forums.spacebattles.com/threads/..."
-            className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none border border-white/10 rounded p-2 mb-2"
-          />
-          {importSite && (
-            <div className="mb-2 text-xs text-[var(--color-primary)]">
-              {SITE_LABELS[importSite]} thread detected
-            </div>
+
+          {importMode === 'forum' ? (
+            <>
+              <div className="text-sm text-[var(--color-text-muted)] mb-2">
+                Paste any link to the fic — a chapter, the thread, or the
+                reader. The whole fic (all threadmarks, sidestories and images)
+                is downloaded for offline reading.
+              </div>
+              <input
+                value={importUrl}
+                autoFocus
+                onChange={e => {
+                  setImportUrl(e.target.value);
+                  setImportError(null);
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') setShowImport(false);
+                  if (e.key === 'Enter' && importUrl.trim())
+                    importFic.mutate(importUrl.trim());
+                }}
+                placeholder="https://forums.spacebattles.com/threads/..."
+                className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none border border-white/10 rounded p-2 mb-2"
+              />
+              {importSite && (
+                <div className="mb-2 text-xs text-[var(--color-primary)]">
+                  {SITE_LABELS[importSite]} thread detected
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="text-sm text-[var(--color-text-muted)] mb-2">
+                Import a fic you already have as a file — EPUB, DOCX or PDF.
+                It's split into chapters for the reader.
+              </div>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadFile.isPending}
+                className="mb-2 px-3 py-1.5 text-sm border border-white/20 text-[var(--color-text)] rounded-lg hover:bg-white/10 transition-colors disabled:opacity-50"
+              >
+                {uploadFile.isPending ? 'Importing…' : 'Choose file…'}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".epub,.docx,.pdf"
+                className="hidden"
+                onChange={e => {
+                  const file = e.target.files?.[0];
+                  if (file) uploadFile.mutate(file);
+                  e.target.value = '';
+                }}
+              />
+            </>
           )}
+
           {importError && (
             <div className="mb-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
               {importError}
@@ -368,13 +411,15 @@ export function Library({ onOpen }: LibraryProps) {
             >
               Cancel
             </button>
-            <button
-              onClick={() => importFic.mutate(importUrl.trim())}
-              disabled={!importUrl.trim() || importFic.isPending}
-              className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
-            >
-              {importFic.isPending ? 'Starting…' : 'Import'}
-            </button>
+            {importMode === 'forum' && (
+              <button
+                onClick={() => importFic.mutate(importUrl.trim())}
+                disabled={!importUrl.trim() || importFic.isPending}
+                className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
+              >
+                {importFic.isPending ? 'Starting…' : 'Import'}
+              </button>
+            )}
           </div>
         </div>
       )}
