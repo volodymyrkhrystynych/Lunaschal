@@ -160,8 +160,15 @@ before Stage 3.
 
 Honest list of what Stage 1's green suite does _not_ prove:
 
-- **The real `yt-dlp` path has never run.** Both invocations are stubbed in tests. The format
-  selector, the merge behaviour and the metadata JSON shape are argued-for, not observed.
+- ~~**The real `yt-dlp` path has never run.**~~ **Run on 2026-09-05, and it caught a real defect
+  the green suite could not.** The mechanics were fine — correct title and duration, the height
+  cap held, no leftover `video.fNNN.mp4` fragments, and a Range request returned
+  `206 Partial Content`, so seeking genuinely works. But yt-dlp's idea of "best" is **AV1 + Opus**,
+  and Safari has no software AV1 decoder; Apple's first hardware one is the A17 Pro / M3, so every
+  12.9" iPad Pro fails to play it silently. The tab is large-screen-only _for that iPad_, so the
+  feature was unusable on its own target device while every test passed. Fixed by naming
+  H.264 + AAC in the selector. **The lesson generalises: a stubbed subprocess proves the arguments
+  we pass, never what comes back.**
 - **No PDF has been rendered in a real browser** — pdf.js is mocked in the component test. The
   build emits the worker chunk correctly, which is a different claim.
 - **Nothing has been read on an actual iPad**, which is half the reason the tab is gated to large

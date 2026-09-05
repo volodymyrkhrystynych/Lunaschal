@@ -203,6 +203,30 @@ def test_youtube_import_serves_ranges_so_the_video_can_seek(
     assert served.data == b'ftyp'
 
 
+def test_youtube_download_asks_for_h264_within_the_height_cap(
+    client, monkeypatch, sync_imports
+):
+    """Safari has no software AV1 decoder, and Apple's first hardware one is the
+    A17 Pro / M3 — so on the 12.9" iPad Pro this tab targets, an AV1 download
+    silently fails to play. The selector must ask for avc1/mp4a first."""
+    monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
+    calls = _fake_ytdlp(monkeypatch)
+
+    client.post('/api/study/sources/youtube', json={'url': 'https://youtu.be/aircAruvnKk'})
+
+    fmt = calls[1][calls[1].index('-f') + 1]
+    # The *first* branch is what wins on any normal YouTube video.
+    assert fmt.split('/')[0] == (
+        f'bv*[height<={importer.YTDLP_MAX_HEIGHT}][vcodec^=avc1]'
+        f'+ba[acodec^=mp4a]'
+    )
+    # Every branch stays inside the height cap except the bare last-resort one.
+    branches = fmt.split('/')
+    assert all(f'height<={importer.YTDLP_MAX_HEIGHT}' in b for b in branches[:-1])
+    assert branches[-1] == 'b'
+    assert '--merge-output-format' in calls[1]
+
+
 def test_youtube_import_ignores_a_leftover_format_fragment(
     client, study_root, monkeypatch, sync_imports
 ):
