@@ -21,8 +21,14 @@ vi.mock('idb-keyval', () => ({
   keys: async () => [...idb.keys()],
 }));
 
-const { storePhoto, getPhoto, listPhotos, markAttempt, deletePhoto } =
-  await import('./photoStore');
+const {
+  storePhoto,
+  getPhoto,
+  listPhotos,
+  markAttempt,
+  deletePhoto,
+  updatePhotoPlacement,
+} = await import('./photoStore');
 
 const jpeg = (bytes = 'jpegbytes', name = 'meal.jpg') =>
   new File([bytes], name, { type: 'image/jpeg' });
@@ -138,5 +144,43 @@ describe('photoStore', () => {
     idb.delete('blob:p1');
 
     expect(await getPhoto('p1')).toBeUndefined();
+  });
+
+  it("follows a paper picture when it is moved, so a retry doesn't re-centre it", async () => {
+    // What this pins: `placement` was written once, at paste time, and the
+    // editor's staged edits — where a resize lived until it was uploaded — are
+    // cleared by every Save whether or not the upload reached the server. So a
+    // picture resized and saved on a bad connection kept the box it was pasted
+    // into as its only durable record, and the next Save put it back in the
+    // middle of the page.
+    const pasted = { x: 449, y: 594, width: 1200, height: 1782 };
+    await storePhoto('p1', jpeg('pixels'), 'paper', 'page-1', pasted);
+
+    await updatePhotoPlacement('p1', {
+      x: 80,
+      y: 120,
+      width: 600,
+      height: 891,
+    });
+
+    const found = await getPhoto('p1');
+    expect(found!.meta.placement).toEqual({
+      x: 80,
+      y: 120,
+      width: 600,
+      height: 891,
+    });
+    // The picture itself is untouched — this moves a box, nothing more.
+    expect(await found!.blob.text()).toBe('pixels');
+    expect(found!.meta.attempts).toBe(0);
+  });
+
+  it('has nothing to move for a picture that is already uploaded', async () => {
+    // Save deletes the device copy the moment the server confirms it, and the
+    // fold in `saveAll` runs against a list that can be a moment stale.
+    await expect(
+      updatePhotoPlacement('gone', { x: 1, y: 2, width: 3, height: 4 })
+    ).resolves.toBeUndefined();
+    expect(idb.size).toBe(0);
   });
 });

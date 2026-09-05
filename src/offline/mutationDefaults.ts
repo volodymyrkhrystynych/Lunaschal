@@ -1197,34 +1197,60 @@ export function enqueuePaperWrite(
  * Exported because paper no longer uploads a picture when it is pasted — the
  * editor holds the bytes and sends them on Save — so the optimistic insert has
  * to happen without a mutation to hang it off. The mutation still calls it too,
- * for the orphan a Save (or a replay) sends for a page that was never opened.
+ * for the orphan a Save (or a replay) sends for a page that was never opened,
+ * and PaperEditor calls it again on load for a picture the device is still
+ * holding for a page whose cache entry did not survive.
+ *
+ * A picture already on the page is *re-placed* rather than skipped, so long as
+ * it has no server url: `box` is the newest box the device has for it, and Save
+ * clears the editor's staged edits as it enqueues the upload. Without this the
+ * picture snapped back to where it was pasted the moment Save was pressed and
+ * stayed there until the upload landed — which, for an upload that never
+ * landed, was for good. A row carrying a url is the server's answer, not a
+ * placeholder; leave it alone.
  */
 export function insertPendingPaperImage(
   qc: QueryClient,
   vars: Pick<PaperImageAddVars, 'imageId' | 'pageId' | 'box'>
 ): void {
-  qc.setQueryData<PaperPageContent>(['paper', 'page', vars.pageId], prev =>
-    prev
-      ? {
-          ...prev,
-          images: prev.images.some(i => i.id === vars.imageId)
-            ? prev.images
-            : [
-                ...prev.images,
-                {
-                  id: vars.imageId,
-                  pageId: vars.pageId,
-                  url: '',
-                  ...vars.box,
-                  rotation: 0,
-                  flipped: 0,
-                  locked: 0,
-                  position: prev.images.length,
-                },
-              ],
-        }
-      : prev
-  );
+  qc.setQueryData<PaperPageContent>(['paper', 'page', vars.pageId], prev => {
+    if (!prev) return prev;
+    const existing = prev.images.find(i => i.id === vars.imageId);
+    if (existing) {
+      if (existing.url) return prev;
+      const same =
+        existing.x === vars.box.x &&
+        existing.y === vars.box.y &&
+        existing.width === vars.box.width &&
+        existing.height === vars.box.height;
+      // Same reference back when nothing moved: the canvas redraws from
+      // scratch whenever its `images` prop changes identity, and a redraw
+      // landing mid-stroke wipes what is being written.
+      if (same) return prev;
+      return {
+        ...prev,
+        images: prev.images.map(i =>
+          i.id === vars.imageId ? { ...i, ...vars.box } : i
+        ),
+      };
+    }
+    return {
+      ...prev,
+      images: [
+        ...prev.images,
+        {
+          id: vars.imageId,
+          pageId: vars.pageId,
+          url: '',
+          ...vars.box,
+          rotation: 0,
+          flipped: 0,
+          locked: 0,
+          position: prev.images.length,
+        },
+      ],
+    };
+  });
 }
 
 const paperImageAddCfg = (

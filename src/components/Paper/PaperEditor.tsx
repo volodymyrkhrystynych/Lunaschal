@@ -8,6 +8,7 @@ import {
   getPhoto,
   listPhotos,
   storePhoto,
+  updatePhotoPlacement,
   type StoredPhoto,
 } from '@/offline/photoStore';
 import {
@@ -41,6 +42,7 @@ import { PaperCanvas, type PaperCanvasHandle } from './PaperCanvas';
 import { PaperToolPanel } from './PaperToolPanel';
 import { PaperImageLayer } from './PaperImageLayer';
 import { PaperImageActions } from './PaperImageActions';
+import { PaperImageWarnings } from './PaperImageWarnings';
 
 /** Breathing room between the fitted page and the edge of the drawing area, so
  * the panel has somewhere to sit when it is docked. */
@@ -377,6 +379,13 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
                 height: edit.height ?? photo.placement!.height,
               }
             : photo.placement!;
+          // Fold it into the device record too, not just into this upload. The
+          // writes below are fired and not awaited, and the staged edits they
+          // were built from are cleared the moment this loop is done — so if
+          // this add never lands, `placement` is all the next Save has left to
+          // read. It was the pasted box until now, which is why a picture whose
+          // first upload failed came back centred on the page.
+          if (edit) await updatePhotoPlacement(photo.id, box).catch(() => {});
           enqueuePaperWrite(
             queryClient,
             MUTATION_KEYS.paperImageAdd,
@@ -583,6 +592,58 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     return () => window.removeEventListener('keydown', onKey);
   }, [toggleEraser]);
 
+  // Put back any picture this device is still holding for the page on screen.
+  //
+  // A picture that has not been uploaded is on its page as an optimistic row in
+  // the query cache and nowhere else: the boot sweep in photoQueue.ts
+  // deliberately leaves paper alone, since nothing in a paper reaches the
+  // server except by pressing Save. That made a display cache the only record
+  // that a held picture belongs on this page — and a display cache is not a
+  // record. When the entry doesn't survive to the next session (a persist that
+  // failed on quota, a PERSIST_BUSTER bump between releases, a cleared store)
+  // the page came back without the picture while its bytes and its box sat
+  // safely in IndexedDB, and the next Save uploaded it as if it were new.
+  // `photoStore` is the durable copy, so read the page back from it.
+  //
+  // Keyed on `content?.images` rather than `content`, like the memo below: the
+  // idle local commit rewrites this cache entry every couple of seconds while
+  // the pen is moving, and none of those touch the pictures.
+  const heldImages = content?.images;
+  useEffect(() => {
+    const pageId = currentPage?.id;
+    if (!pageId || !heldImages) return;
+    let cancelled = false;
+    void (async () => {
+      const held = await listPhotos().catch(() => [] as StoredPhoto[]);
+      if (cancelled) return;
+      const known = new Set(heldImages.map(i => i.id));
+      // A refused picture is re-placed as readily as a queued one: it is still
+      // on the device, the banner beside the toolbar explains why it has not
+      // gone up, and Retry needs it to be visible to be worth offering.
+      const missing = held.filter(
+        photo =>
+          photo.target === 'paper' &&
+          photo.targetId === pageId &&
+          !!photo.placement &&
+          !known.has(photo.id)
+      );
+      if (missing.length === 0) return;
+      for (const photo of missing) {
+        insertPendingPaperImage(queryClient, {
+          imageId: photo.id,
+          pageId,
+          box: photo.placement!,
+        });
+      }
+      // The page has a picture on it that the stored snapshot does not, and the
+      // snapshot is the whole of what the explorer grid and the Journal show.
+      canvasRef.current?.markDirty();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPage?.id, heldImages, queryClient]);
+
   // A picture pasted while the backend was unreachable has no server URL yet —
   // it is a blob on this device. Object URLs are made here rather than stored
   // on the cached image, because a blob: URL written into the persisted cache
@@ -685,6 +746,20 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
   // A locked picture is deliberately invisible to the hit test, so tapping the
   // page can never reach one again. This is the way back to it.
   const lockedImages = shownImages.filter(i => i.locked);
+  // Which pictures *on this page* the server refused, and why. The banner
+  // counts them for the whole paper — Save sends every page of it — but the
+  // mark belongs on the picture, which only the open page can carry.
+  const imageFailures = useMemo(() => {
+    const pageId = currentPage?.id;
+    const out: Record<string, string> = {};
+    if (!pageId) return out;
+    for (const photo of refusedPhotos) {
+      if (photo.targetId === pageId && photo.lastError) {
+        out[photo.id] = photo.lastError;
+      }
+    }
+    return out;
+  }, [refusedPhotos, currentPage?.id]);
   // A picture with no server url has never been uploaded — it is a blob this
   // device is holding — so the page is unsaved even if nothing has been drawn
   // or moved since it was pasted.
@@ -709,6 +784,25 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
         deletes: base.deletes,
       };
     });
+    // A picture that has never reached the server keeps its box in two places:
+    // here, and on the device record Save uploads it from. Keep them in step.
+    // Staged edits are cleared by every Save — landed or not — so the device
+    // copy is the one that has to be right, or a picture whose upload failed
+    // comes back at the box it was pasted into, in the middle of the page.
+    // Only geometry: rotation, flip and lock are the add's own defaults and go
+    // up as a PATCH behind it (see `saveAll`).
+    const row = (content?.images ?? []).find(i => i.id === id);
+    if (row && !row.url) {
+      const pendingEdit =
+        staged.pageId === pageId ? staged.edits[id] : undefined;
+      const merged = { ...row, ...pendingEdit, ...data };
+      void updatePhotoPlacement(id, {
+        x: merged.x,
+        y: merged.y,
+        width: merged.width,
+        height: merged.height,
+      }).catch(() => {});
+    }
     setImagePreview(null);
     // The page looks different now, so its snapshot is out of date — and the
     // snapshot is the whole of what the explorer grid and the Journal show.
@@ -1240,6 +1334,13 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
               onSwipe={navigate}
               onToggleEraser={toggleEraser}
               onStateChange={setCanvasState}
+            />
+            {/* Mounted in every mode: which picture is stuck on the device is
+             * not a select-mode question. Never takes a pointer. */}
+            <PaperImageWarnings
+              images={shownImages}
+              failures={imageFailures}
+              scale={box.width / PAGE_WIDTH}
             />
             {/* Only mounted in select mode, so it can never swallow a stroke. */}
             {selectMode && (

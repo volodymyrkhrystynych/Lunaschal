@@ -425,6 +425,15 @@ describe('a picture pasted with no backend in reach', () => {
     await screen.findByText(/never reached the server/);
     expect(screen.getByText(/unsupported image type/)).toBeTruthy();
 
+    // And marked on the picture itself. The banner is about the paper, which
+    // is every page of it; a paper with four pictures gave no clue which one
+    // was still stuck on the device — a refused picture draws exactly like a
+    // saved one, from the blob it was pasted from.
+    const marked = await screen.findByRole('img', {
+      name: /never reached the server/,
+    });
+    expect(marked.getAttribute('title')).toContain('unsupported image type');
+
     // And the bytes are still here — that is what makes the retry worth
     // offering at all.
     const { listPhotos } = await import('@/offline/photoStore');
@@ -457,6 +466,10 @@ describe('a picture pasted with no backend in reach', () => {
     await waitFor(() =>
       expect(screen.queryByText(/never reached the server/)).toBeNull()
     );
+    // The mark goes with it — the picture is on the server now.
+    expect(
+      screen.queryByRole('img', { name: /never reached the server/ })
+    ).toBeNull();
   });
 });
 
@@ -630,6 +643,270 @@ describe('a picture pasted, moved, then saved before it ever uploaded', () => {
     expect(uploadedBox.x).not.toBe(originalX);
     // And nothing tried to PATCH a row that didn't exist yet.
     expect(api.paper.updateImage).not.toHaveBeenCalled();
+  });
+});
+
+describe('a picture whose upload never landed', () => {
+  /** Paste one picture onto the open page and hand back its cached row. */
+  const pasteOne = async (queryClient: QueryClient) => {
+    await act(async () => {
+      const event = new Event('paste') as Event & { clipboardData: unknown };
+      event.clipboardData = {
+        items: [
+          {
+            kind: 'file',
+            type: 'image/png',
+            getAsFile: () =>
+              new File(['pixels'], 'pasted.png', { type: 'image/png' }),
+          },
+        ],
+      };
+      window.dispatchEvent(event);
+      await new Promise(r => setTimeout(r, 10));
+    });
+    return queryClient.getQueryData<{
+      images: {
+        id: string;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      }[];
+    }>(['paper', 'page', PAGE_1])!.images[0];
+  };
+
+  /** Drag the picture `dx` page-units to the right, through the overlay. */
+  const dragRight = async (
+    picture: { x: number; y: number; width: number; height: number },
+    dx: number
+  ) => {
+    const box = fitPageBox({ width: 800 - 20, height: 1000 - 20 });
+    const scale = box.width / PAGE_WIDTH;
+    const cx = (picture.x + picture.width / 2) * scale;
+    const cy = (picture.y + picture.height / 2) * scale;
+    const layer = await waitFor(() => screen.getByTestId('paper-image-layer'));
+    fireEvent.pointerDown(layer, { clientX: cx, clientY: cy, pointerId: 1 });
+    fireEvent.pointerMove(layer, {
+      clientX: cx + dx * scale,
+      clientY: cy,
+      pointerId: 1,
+    });
+    fireEvent.pointerUp(layer, {
+      clientX: cx + dx * scale,
+      clientY: cy,
+      pointerId: 1,
+    });
+  };
+
+  const save = async () => {
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /save/i }));
+      await new Promise(r => setTimeout(r, 20));
+    });
+  };
+
+  it('goes up at the moved box on the next Save, not back in the middle', async () => {
+    // The morning: paste a screenshot, resize it, write around it, Save. The
+    // upload failed, and Save clears the staged edits as it enqueues the writes
+    // — landed or not — so the only surviving record of where the picture sat
+    // was `placement`, written once at paste time. The evening's Save duly
+    // re-sent the picture into the middle of the page.
+    URL.createObjectURL = vi.fn(
+      () => 'blob:pasted'
+    ) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      configurable: true,
+      set() {
+        setTimeout(() => this.onerror?.(), 0);
+      },
+    });
+    // A 500 is not terminal: the picture stays queueable, which is exactly the
+    // case where its box has to survive to the next attempt.
+    vi.mocked(api.paper.addImage).mockRejectedValue(
+      new ApiError('server exploded', 500)
+    );
+
+    const { container, queryClient } = renderEditor();
+    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+
+    const pasted = await pasteOne(queryClient);
+    await dragRight(pasted, 150);
+    await save();
+
+    await waitFor(() => expect(api.paper.addImage).toHaveBeenCalledTimes(1));
+    const movedX = vi.mocked(api.paper.addImage).mock.calls[0][2].x;
+    expect(movedX).toBeGreaterThan(pasted.x);
+
+    // The device is still holding it, and holding it where it actually sits.
+    const { listPhotos } = await import('@/offline/photoStore');
+    const [held] = (await listPhotos()).filter(p => p.target === 'paper');
+    expect(held.failed).toBe(false);
+    expect(held.placement!.x).toBeCloseTo(movedX, 5);
+
+    // Press Save again — the whole point of a queued picture. It goes up where
+    // it was left, not where it was pasted.
+    vi.mocked(api.paper.addImage).mockResolvedValue({ id: 'ignored' } as never);
+    await save();
+
+    await waitFor(() => expect(api.paper.addImage).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.paper.addImage).mock.calls[1][2].x).toBeCloseTo(
+      movedX,
+      5
+    );
+  });
+
+  it('stays where it was put on the page while its upload is still pending', async () => {
+    // Save clears the staged edits as it fires the writes, so the moved box has
+    // to be on the cached row by then or the picture visibly snaps back to the
+    // middle the instant Save is pressed — and stays there until the upload
+    // lands, which for a paused one can be the next day.
+    URL.createObjectURL = vi.fn(
+      () => 'blob:pasted'
+    ) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+    Object.defineProperty(HTMLImageElement.prototype, 'src', {
+      configurable: true,
+      set() {
+        setTimeout(() => this.onerror?.(), 0);
+      },
+    });
+
+    const { container, queryClient } = renderEditor();
+    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+
+    const pasted = await pasteOne(queryClient);
+    await dragRight(pasted, 150);
+
+    onlineManager.setOnline(false);
+    await save();
+    onlineManager.setOnline(true);
+
+    const row = queryClient.getQueryData<{
+      images: { id: string; x: number; url: string }[];
+    }>(['paper', 'page', PAGE_1])!.images[0];
+    expect(row.url).toBe('');
+    expect(row.x).toBeGreaterThan(pasted.x);
+  });
+});
+
+describe('a page opened while the device still holds a picture for it', () => {
+  it('puts the picture back on the page instead of losing it', async () => {
+    // What this pins: a picture that has not been uploaded is on its page as an
+    // optimistic row in the query cache and nowhere else — the boot sweep
+    // leaves paper alone on purpose, since nothing in a paper reaches the
+    // server except by pressing Save. So a cache entry that did not survive to
+    // the next session (a persist that failed, a PERSIST_BUSTER bump) took the
+    // picture off the page with it, while the bytes and the box sat in
+    // IndexedDB. The page came back without it, and the next Save uploaded it
+    // as though it were new — in the middle of the page.
+    URL.createObjectURL = vi.fn(
+      () => 'blob:held'
+    ) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+
+    const { storePhoto } = await import('@/offline/photoStore');
+    const placement = { x: 80, y: 120, width: 600, height: 891 };
+    await storePhoto(
+      'held-1',
+      new File(['pixels'], 'pasted.png', { type: 'image/png' }),
+      'paper',
+      PAGE_1,
+      placement
+    );
+
+    // The server has never heard of it, which is the whole situation.
+    vi.mocked(api.paper.getPage).mockResolvedValue({
+      strokes: '[]',
+      width: null,
+      height: null,
+      images: [],
+    });
+
+    const { queryClient } = renderEditor();
+    await waitFor(() => expect(api.paper.getPage).toHaveBeenCalled());
+
+    const row = await waitFor(() => {
+      const images = queryClient.getQueryData<{
+        images: {
+          id: string;
+          url: string;
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+        }[];
+      }>(['paper', 'page', PAGE_1])!.images;
+      expect(images).toHaveLength(1);
+      return images[0];
+    });
+    // Back where it was left, with no server url — it is still this device's.
+    expect(row.id).toBe('held-1');
+    expect(row.url).toBe('');
+    expect({
+      x: row.x,
+      y: row.y,
+      width: row.width,
+      height: row.height,
+    }).toEqual(placement);
+
+    // And the page counts as unsaved because of it, so Save can send it.
+    expect(
+      (screen.getByRole('button', { name: /save/i }) as HTMLButtonElement)
+        .disabled
+    ).toBe(false);
+  });
+
+  it('leaves a picture the server already has alone', async () => {
+    // The device copy is deleted the moment an upload is confirmed, so there is
+    // normally nothing to re-place; a stale one must never overwrite the row
+    // the server just answered with.
+    URL.createObjectURL = vi.fn(
+      () => 'blob:held'
+    ) as unknown as typeof URL.createObjectURL;
+    URL.revokeObjectURL = vi.fn();
+
+    const { storePhoto } = await import('@/offline/photoStore');
+    await storePhoto(
+      'img-1',
+      new File(['pixels'], 'pasted.png', { type: 'image/png' }),
+      'paper',
+      PAGE_1,
+      { x: 0, y: 0, width: 100, height: 100 }
+    );
+    vi.mocked(api.paper.getPage).mockResolvedValue({
+      strokes: '[]',
+      width: null,
+      height: null,
+      images: [
+        {
+          id: 'img-1',
+          pageId: PAGE_1,
+          url: '/api/paper/images/img-1/file?v=1',
+          x: 700,
+          y: 800,
+          width: 500,
+          height: 500,
+          rotation: 0,
+          flipped: 0,
+          locked: 0,
+          position: 0,
+        },
+      ],
+    } as never);
+
+    const { queryClient } = renderEditor();
+    await waitFor(() => expect(api.paper.getPage).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise(r => setTimeout(r, 20));
+    });
+
+    const images = queryClient.getQueryData<{
+      images: { id: string; url: string; x: number }[];
+    }>(['paper', 'page', PAGE_1])!.images;
+    expect(images).toHaveLength(1);
+    expect(images[0].x).toBe(700);
+    expect(images[0].url).toContain('/api/paper/images/img-1/file');
   });
 });
 
