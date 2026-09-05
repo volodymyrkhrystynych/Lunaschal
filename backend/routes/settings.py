@@ -142,6 +142,18 @@ def get_settings():
         # The key itself never leaves the server, same as the Google secret
         # above — the UI only needs to know whether Adzuna is configured.
         'hasAdzunaCredentials': bool(s.get('adzuna_app_id')) and bool(s.get('adzuna_app_key')),
+        # Torrent stack. Defaults repeated for a settings row predating the
+        # columns, same as the job ones above. The qBittorrent WebUI
+        # password never comes back out — only whether one is set. The
+        # ProtonVPN key is not here at all: it lives in torrent/.env.
+        'torrentClientUrl': s.get('torrent_client_url') or 'http://127.0.0.1:8080',
+        'torrentUsername': s.get('torrent_username') or '',
+        'hasTorrentPassword': bool(s.get('torrent_password')),
+        'torrentVpnUrl': s.get('torrent_vpn_url') or 'http://127.0.0.1:8000',
+        'torrentRequireVpn': bool(s.get('torrent_require_vpn', 1)),
+        'torrentDefaultRetentionDays': s.get('torrent_default_retention_days') or 0,
+        'torrentDefaultRatioLimit': s.get('torrent_default_ratio_limit'),
+        'torrentDefaultSeedingMinutes': s.get('torrent_default_seeding_minutes'),
     })
 
 
@@ -204,6 +216,14 @@ def update_ai():
         'jobRejectionGraceDays': 'job_rejection_grace_days',
         'adzunaAppId': 'adzuna_app_id',
         'adzunaAppKey': 'adzuna_app_key',
+        'torrentClientUrl': 'torrent_client_url',
+        'torrentUsername': 'torrent_username',
+        'torrentPassword': 'torrent_password',
+        'torrentVpnUrl': 'torrent_vpn_url',
+        'torrentRequireVpn': 'torrent_require_vpn',
+        'torrentDefaultRetentionDays': 'torrent_default_retention_days',
+        'torrentDefaultRatioLimit': 'torrent_default_ratio_limit',
+        'torrentDefaultSeedingMinutes': 'torrent_default_seeding_minutes',
     }
     updates: dict = {'updated_at': int(time.time())}
     for camel, snake in field_map.items():
@@ -211,7 +231,7 @@ def update_ai():
             value = body[camel]
             if camel in ('briefingThinking', 'llmThinking', 'repoContextEnabled',
                          'researchEnabled', 'llamaChatVision', 'chatTimeoutEnabled',
-                         'researchTimeoutEnabled'):
+                         'researchTimeoutEnabled', 'torrentRequireVpn'):
                 # Stored as 0/1 — Gemma 4's thinking channel is on or off, with no
                 # graded levels to validate against.
                 value = 1 if value else 0

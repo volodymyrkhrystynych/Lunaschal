@@ -32,6 +32,10 @@ export PIANO_ARCHIVE_ROOT="$SCRATCH/piano-archive"
 # — so the scratch root travels with the checkout instead of being baked into
 # the seeded database as one machine's absolute path.
 export FILES_ROOT="$SCRATCH/files"
+# Downloads. In production this points at /media/expansion/torrents and is
+# the same directory torrent/docker-compose.yml bind-mounts into the client
+# as /downloads; here it is scratch, and no client is running against it.
+export TORRENT_ROOT="$SCRATCH/torrents"
 export SHORTCUTS_PATH="$SCRATCH/shortcuts.json"
 
 # Same idiom backend/tests/conftest.py uses: keep every daemon scheduler off

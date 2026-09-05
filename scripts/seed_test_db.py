@@ -29,7 +29,7 @@ REQUIRED_ENV_VARS = [
     'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'RECIPE_ROOT',
     'CHAT_ROOT', 'PAPER_ROOT', 'JOBS_ROOT', 'NEWSPAPERS_ROOT',
     'NOTEBOOK_ROOT', 'EMAIL_MEDIA_ROOT', 'PIANO_ROOT', 'PIANO_ARCHIVE_ROOT',
-    'FILES_ROOT', 'SHORTCUTS_PATH',
+    'FILES_ROOT', 'TORRENT_ROOT', 'SHORTCUTS_PATH',
 ]
 
 
@@ -431,6 +431,43 @@ def seed_newspapers(db):
         db.execute(
             'INSERT INTO newspaper_frontpages (id, paper, date, image_path, created_at) VALUES (?, ?, ?, ?, ?)',
             (new_id(), paper, today, str(path), ts(0)),
+        )
+
+
+def seed_torrents(db):
+    """A couple of finished downloads.
+
+    Only what qBittorrent has no concept of is stored here — the note and the
+    retention policy — so a seeded row on its own renders as an *untracked*
+    torrent until a client is running. That is correct rather than a gap: the
+    tab is a view of the client, and there is no client in a demo environment.
+    The files on disk are what make the view show something either way.
+
+    Both rows are finished on purpose. There is no in-flight torrent state in
+    this schema to seed wrongly, but a half-downloaded demo file would still be
+    a lie about a download nothing is progressing.
+    """
+    from backend.torrent.storage import torrent_root
+
+    rows = [
+        ('c9e15763f722f23e98a29decdfae341b98d53056', 'debian-13.1.0-amd64-netinst.iso',
+         'magnet', 'Keep — reinstall media', None, 9, 8),
+        ('5a8e0f2b1c4d3e6f7a8b9c0d1e2f3a4b5c6d7e8f', 'Blender Open Movie - Sprite Fright',
+         'magnet', 'Watched, safe to clear', 30, 40, 38),
+    ]
+    for info_hash, name, source, note, retention_days, added_days, done_days in rows:
+        # A real file so the per-torrent file list and the streaming route have
+        # something to serve in the demo.
+        path = torrent_root() / name / f'{name}.bin'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'lunaschal demo payload\n' * 64)
+        db.execute(
+            'INSERT INTO torrents (id, info_hash, name, source, magnet_uri, note,'
+            ' retention_days, added_at, completed_at, created_at, updated_at)'
+            ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (new_id(), info_hash, name, source, f'magnet:?xt=urn:btih:{info_hash}&dn={name}',
+             note, retention_days, ts(added_days), ts(done_days), ts(added_days),
+             ts(done_days)),
         )
 
 
@@ -1365,6 +1402,7 @@ def main() -> None:
     seed_food(db, recipe_id)
     seed_fanfic(db, journal_ids)
     seed_newspapers(db)
+    seed_torrents(db)
     email_ids = seed_email(db)
     seed_jobs(db, email_ids)
     seed_chat(db)
