@@ -201,27 +201,29 @@ export function Library({ onOpen }: LibraryProps) {
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+        {/* One button, not a pair: on a phone this row already carries Refresh,
+            the delete toggle and Import, and two view buttons pushed it over
+            the width. So the switch says where you are and swaps on a tap —
+            the glyph is what marks it tappable rather than a label, and the
+            title says what the tap will do. */}
         {!searchQuery ? (
-          <div className="flex gap-2" role="tablist" aria-label="Library views">
-            {(['library', 'folders'] as const).map(nextView => (
-              <button
-                key={nextView}
-                role="tab"
-                aria-selected={view === nextView}
-                onClick={() => {
-                  setView(nextView);
-                  setFolderId(null);
-                }}
-                className={`px-3 py-1.5 text-sm rounded-lg border ${
-                  view === nextView
-                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-                    : 'border-white/15 text-[var(--color-text-muted)]'
-                }`}
-              >
-                {nextView === 'library' ? 'Library' : 'Folders'}
-              </button>
-            ))}
-          </div>
+          <button
+            onClick={() => {
+              setView(view === 'library' ? 'folders' : 'library');
+              setFolderId(null);
+            }}
+            title={
+              view === 'library'
+                ? 'Switch to folders'
+                : 'Switch to the whole library'
+            }
+            className="px-3 py-1.5 text-sm rounded-lg border border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]"
+          >
+            {view === 'library' ? 'Library' : 'Folders'}
+            <span aria-hidden="true" className="ml-1.5 opacity-60">
+              ⇄
+            </span>
+          </button>
         ) : (
           <div />
         )}

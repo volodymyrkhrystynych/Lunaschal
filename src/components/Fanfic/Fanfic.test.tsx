@@ -204,12 +204,22 @@ describe('Library views and expandable details', () => {
     expect(screen.getAllByText('★★★★☆').length).toBeGreaterThan(0);
   });
 
-  it('offers Library and Folders as separate views', async () => {
+  it('swaps between Library and Folders from one button', async () => {
+    // One button rather than a pair, because the header row it shares with
+    // Refresh, delete and Import runs out of width on a phone. It names the
+    // view you are in, so the swap has to be readable from the label changing.
     renderFanfic();
-    const folders = await screen.findByRole('tab', { name: 'Folders' });
-    fireEvent.click(folders);
-    expect(folders.getAttribute('aria-selected')).toBe('true');
+    const toggle = await screen.findByRole('button', { name: /Library/ });
+    expect(toggle.getAttribute('title')).toBe('Switch to folders');
+
+    fireEvent.click(toggle);
     expect(screen.getByText(/Choose a folder/)).toBeTruthy();
+    const back = screen.getByRole('button', { name: /Folders/ });
+    expect(back.getAttribute('title')).toBe('Switch to the whole library');
+
+    fireEvent.click(back);
+    expect(screen.queryByText(/Choose a folder/)).toBe(null);
+    expect(screen.getByRole('button', { name: /Library/ })).toBeTruthy();
   });
 
   it('offers forum and file as the two sources under one Import button', async () => {
