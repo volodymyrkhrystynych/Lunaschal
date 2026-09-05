@@ -1,5 +1,9 @@
 import { api } from '../../hooks/api';
-import { viewerKindFor, type StudySource } from '../../lib/study';
+import {
+  offlineReason,
+  viewerKindFor,
+  type StudySource,
+} from '../../lib/study';
 import { PdfViewer } from './PdfViewer';
 
 interface Props {
@@ -30,6 +34,21 @@ export function SourceViewer({ source }: Props) {
         {source.importError && (
           <div className="mt-2 text-xs max-w-md">{source.importError}</div>
         )}
+      </Centered>
+    );
+  }
+
+  // Videos live on the external archive drive and nowhere else — there is no
+  // second copy by design, so an unplugged drive means no playback. Saying so
+  // beats a <video> element sitting silently on a 404.
+  if (kind === 'offline') {
+    return (
+      <Centered>
+        <div className="text-[var(--color-text)]">{offlineReason(source)}</div>
+        <div className="mt-2 text-xs max-w-md">
+          Downloaded videos are kept on the archive drive rather than backed up.
+          Plug it in to watch this one.
+        </div>
       </Centered>
     );
   }

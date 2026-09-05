@@ -1,7 +1,11 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
-import { sourceSubtitle, type StudySource } from '../../lib/study';
+import {
+  offlineReason,
+  sourceSubtitle,
+  type StudySource,
+} from '../../lib/study';
 
 const KIND_ICON: Record<StudySource['kind'], string> = {
   pdf: '📕',
@@ -41,16 +45,25 @@ export function StudyLibrary({ onOpen }: Props) {
   });
 
   const importUrl = useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       kind,
       value,
+      replaces,
     }: {
       kind: 'web' | 'youtube';
       value: string;
-    }) =>
-      kind === 'web'
-        ? api.study.importWeb(value)
-        : api.study.importYoutube(value),
+      /** A failed row this import supersedes — Retry, rather than a new one. */
+      replaces?: string;
+    }) => {
+      const started =
+        kind === 'web'
+          ? await api.study.importWeb(value)
+          : await api.study.importYoutube(value);
+      // Dropped only once the replacement is under way, so a Retry that is
+      // refused outright still leaves the original row and its error visible.
+      if (replaces) await api.study.remove(replaces);
+      return started;
+    },
     onSuccess: () => {
       setUrl('');
       setUrlKind(null);
@@ -164,7 +177,9 @@ export function StudyLibrary({ onOpen }: Props) {
                           ? `Importing… ${source.importProgress?.phase ?? ''}`.trim()
                           : source.importStatus === 'error'
                             ? (source.importError ?? 'Import failed')
-                            : sourceSubtitle(source)}
+                            : source.fileAvailable === false
+                              ? offlineReason(source)
+                              : sourceSubtitle(source)}
                       </span>
                     </span>
                   </button>
@@ -174,6 +189,7 @@ export function StudyLibrary({ onOpen }: Props) {
                         importUrl.mutate({
                           kind: source.kind === 'youtube' ? 'youtube' : 'web',
                           value: source.sourceUrl as string,
+                          replaces: source.id,
                         })
                       }
                     >

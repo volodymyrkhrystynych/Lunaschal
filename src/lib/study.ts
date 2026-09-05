@@ -17,6 +17,13 @@ export interface StudySource {
   importStatus: StudyImportStatus;
   importError: string | null;
   lastOpenedAt: string | null;
+  /**
+   * Whether this source's bytes are reachable right now. Only ever false for a
+   * video: those live on the external archive drive and nowhere else, so an
+   * unplugged drive leaves the row listed and the file gone.
+   */
+  fileAvailable?: boolean;
+  fileUnavailableReason?: string;
   createdAt: string;
   updatedAt: string;
   importProgress?: StudyImportProgress;
@@ -29,14 +36,26 @@ export interface StudyImportProgress {
 }
 
 /** What the left pane should mount for a source. */
-export type ViewerKind = 'pdf' | 'video' | 'article' | 'importing' | 'error';
+export type ViewerKind =
+  'pdf' | 'video' | 'article' | 'importing' | 'error' | 'offline';
 
 export function viewerKindFor(source: StudySource): ViewerKind {
   if (source.importStatus === 'error') return 'error';
   if (source.importStatus === 'importing') return 'importing';
+  // Ordered before the kind checks on purpose: a ready video whose drive is
+  // unplugged has nothing to render, and a <video> pointed at a 404 shows an
+  // empty black box with no explanation in it.
+  if (source.fileAvailable === false) return 'offline';
   if (source.kind === 'pdf') return 'pdf';
   if (source.kind === 'youtube') return 'video';
   return 'article';
+}
+
+/** Why a source cannot be opened right now, for the viewer to print. */
+export const DRIVE_OFFLINE_MESSAGE = 'The archive drive is not connected.';
+
+export function offlineReason(source: StudySource): string {
+  return source.fileUnavailableReason || DRIVE_OFFLINE_MESSAGE;
 }
 
 // Notes for the Study tab live in one folder of the notebook rather than a

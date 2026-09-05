@@ -30,7 +30,8 @@ REQUIRED_ENV_VARS = [
     'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'RECIPE_ROOT',
     'CHAT_ROOT', 'PAPER_ROOT', 'JOBS_ROOT', 'NEWSPAPERS_ROOT',
     'NOTEBOOK_ROOT', 'EMAIL_MEDIA_ROOT', 'PIANO_ROOT', 'PIANO_ARCHIVE_ROOT',
-    'FILES_ROOT', 'TORRENT_ROOT', 'STUDY_ROOT', 'SHORTCUTS_PATH',
+    'FILES_ROOT', 'TORRENT_ROOT', 'STUDY_ROOT', 'STUDY_ARCHIVE_ROOT',
+    'SHORTCUTS_PATH',
 ]
 
 
@@ -1322,6 +1323,11 @@ def seed_study(db):
 
     Its title and duration are still filled in, which is the honest shape of
     that failure: yt-dlp's metadata pass succeeded and the download did not.
+
+    That choice has since acquired a second justification. Videos live on the
+    external archive drive and nowhere else, so a `ready` video row would mean
+    a seed run writing to `STUDY_ARCHIVE_ROOT` — and a seeder that touches the
+    archive is a seeder that can touch the real one when an env var is missed.
     """
     from backend.study.storage import source_file_path
 
@@ -1337,7 +1343,7 @@ def seed_study(db):
         '- Positional encoding is what puts order back in.\n'
         '- See also [[reference/knots]] for how a link renders.\n',
     )
-    pdf_path = source_file_path(pdf_id, 'book', 'pdf')
+    pdf_path = source_file_path(pdf_id, 'book', 'pdf', 'pdf')
     placeholder_pdf(pdf_path, ['Attention Is All You Need', '2. Background', '3. Model Architecture'])
 
     web_note = 'study/wal-mode.md'
@@ -1345,7 +1351,7 @@ def seed_study(db):
         notebook_root / web_note,
         '# WAL mode\n\n- Readers do not block the writer.\n- One writer at a time.\n',
     )
-    web_path = source_file_path(web_id, 'article', 'html')
+    web_path = source_file_path(web_id, 'article', 'html', 'web')
     placeholder_text(
         web_path,
         '<h1>Write-Ahead Logging</h1>\n'

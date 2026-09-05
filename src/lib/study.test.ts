@@ -5,6 +5,8 @@ import {
   noteSlugFor,
   sourceSubtitle,
   viewerKindFor,
+  offlineReason,
+  DRIVE_OFFLINE_MESSAGE,
   type StudySource,
 } from './study';
 
@@ -40,6 +42,37 @@ describe('viewerKindFor', () => {
       'importing'
     );
     expect(viewerKindFor(source({ importStatus: 'error' }))).toBe('error');
+  });
+
+  it('reports an unreachable file ahead of the kind too', () => {
+    // A video lives on the archive drive alone. Unplugged, there is nothing to
+    // render, and a <video> on a 404 is a silent black box.
+    expect(
+      viewerKindFor(source({ kind: 'youtube', fileAvailable: false }))
+    ).toBe('offline');
+    // Still after the import states: a failed import never had a file at all.
+    expect(
+      viewerKindFor(
+        source({ kind: 'youtube', fileAvailable: false, importStatus: 'error' })
+      )
+    ).toBe('error');
+  });
+
+  it('treats a source that says nothing about its file as present', () => {
+    // The field is optional, and PDFs and articles never carry it.
+    expect(viewerKindFor(source({ kind: 'youtube' }))).toBe('video');
+    expect(viewerKindFor(source({ fileAvailable: true }))).toBe('pdf');
+  });
+});
+
+describe('offlineReason', () => {
+  it('prefers what the server said over the generic line', () => {
+    expect(
+      offlineReason(
+        source({ fileUnavailableReason: 'The backup drive is not connected.' })
+      )
+    ).toBe('The backup drive is not connected.');
+    expect(offlineReason(source())).toBe(DRIVE_OFFLINE_MESSAGE);
   });
 });
 

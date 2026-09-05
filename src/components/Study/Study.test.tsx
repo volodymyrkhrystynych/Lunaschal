@@ -102,6 +102,62 @@ describe('the Study library', () => {
     expect(screen.getByText('Retry')).toBeTruthy();
   });
 
+  it('says why a video on an unplugged drive cannot be opened', async () => {
+    // Videos live on the external archive drive and nowhere else, so an
+    // unplugged drive leaves the row browsable and the file gone. The row must
+    // explain that rather than open a <video> pointed at a 404.
+    vi.spyOn(api.study, 'sources').mockResolvedValue([
+      source({
+        kind: 'youtube',
+        title: 'Lecture 1: Backprop',
+        durationSeconds: 3771,
+        fileAvailable: false,
+        fileUnavailableReason: 'The backup drive is not connected.',
+      }),
+    ]);
+    renderStudy();
+
+    await waitFor(() =>
+      expect(screen.getByText('Lecture 1: Backprop')).toBeTruthy()
+    );
+    expect(
+      screen.getAllByText('The backup drive is not connected.').length
+    ).toBeGreaterThan(0);
+
+    // Still openable — the desk is where the explanation lives.
+    fireEvent.click(screen.getByText('Lecture 1: Backprop'));
+    await waitFor(() =>
+      expect(screen.getByText(/kept on the archive drive/)).toBeTruthy()
+    );
+    expect(document.querySelector('video')).toBeNull();
+  });
+
+  it('retries a failed import in place instead of beside itself', async () => {
+    vi.spyOn(api.study, 'sources').mockResolvedValue([
+      source({
+        id: 'failed',
+        kind: 'youtube',
+        importStatus: 'error',
+        importError: 'The backup drive is not connected.',
+        sourceUrl: 'https://youtu.be/abc',
+      }),
+    ]);
+    const importYoutube = vi
+      .spyOn(api.study, 'importYoutube')
+      .mockResolvedValue({ id: 's9', source: source({ kind: 'youtube' }) });
+    const remove = vi.spyOn(api.study, 'remove').mockResolvedValue(undefined);
+    renderStudy();
+
+    await waitFor(() => expect(screen.getByText('Retry')).toBeTruthy());
+    fireEvent.click(screen.getByText('Retry'));
+
+    await waitFor(() =>
+      expect(importYoutube).toHaveBeenCalledWith('https://youtu.be/abc')
+    );
+    // The row it replaces goes only once the replacement is under way.
+    await waitFor(() => expect(remove).toHaveBeenCalledWith('failed'));
+  });
+
   it('imports a website through the web endpoint', async () => {
     vi.spyOn(api.study, 'sources').mockResolvedValue([]);
     const importWeb = vi

@@ -1,9 +1,20 @@
 # Study tab — staged build plan
 
-**Status (2026-09-05): Stage 1 built and tested, uncommitted, on `feat/study-tab`.** 27 backend
-and 21 frontend tests added; the full suites pass (14/14 backend batches, 1730 frontend tests).
-Stage 1 has **not** been run against a real `yt-dlp` download or a real PDF in a browser — the
-tests stub the subprocess and mock pdf.js. Stages 2 onward are not started.
+**Status (2026-09-05): Stage 1 built, tested and committed on `feat/study-tab`** (`da45876`,
+plus `cafb220` for the codec fix below). 28 backend and 21 frontend tests of its own; full suites
+pass. Rebased onto `74a9a3b`, which added the rule that a new table is seeded in the same change —
+`study_sources` now has three seed rows, so `./test-env.sh` brings up a Study tab with a real PDF,
+a real archived article and a failed import to look at.
+
+**One real YouTube import has been run, and it found a defect the green suite could not**: yt-dlp's
+"best" is AV1, which Safari cannot decode on any 12.9" iPad Pro. Fixed. A PDF has still never been
+rendered in a real browser, and nothing has been opened on the iPad itself — see
+[What we do not know yet](#what-we-do-not-know-yet). Stages 2 onward are not started.
+
+**Storage was corrected before Stage 2** (`feat/study-archive-videos`): downloaded videos now live on
+the external archive drive and nowhere else, since `data/` is mirrored twice nightly and a lecture is
+one `yt-dlp` away from being replaced. PDFs and archived pages stay on the SSD and keep being backed
+up. See [Where the bytes live](#where-the-bytes-live).
 
 This is the timeline. `backend/study/CLAUDE.md` documents how the built code works and what will
 bite someone changing it; this documents what is coming, in what order, and why that order.
@@ -55,6 +66,24 @@ Three decisions worth carrying forward:
 
 **Schema already carries the next two stages.** `study_sources` has `duration_seconds`,
 `last_opened_at` and room beside them; nothing in Stage 2 or 3 needs a table rebuild.
+
+---
+
+## Where the bytes live
+
+Not a stage — a correction made after Stage 1 was used for real, and the answer to the second of the
+[open questions](#open-questions) about what "save system" covers.
+
+- **`./data/study/<id>/`** — an uploaded PDF or an archived page. Small, and an uploaded PDF has no
+  source URL, so losing it means losing it. Backed up exactly like everything else under `data/`.
+- **`<settings.backup_path>/archive/study/<id>/`** — a downloaded video, and this is its **only**
+  copy. It is not backed up, because the archive _is_ where it lives. `ops/backup.sh` needed no
+  change: the archive is a sibling of the rsync destination and outside its source.
+
+Two consequences that are decisions, not bugs. With the drive unplugged, **an import fails loudly**
+rather than falling back to the SSD (a `mkdir -p` onto an unmounted mountpoint followed by a 279 MB
+download is the one failure that looks like success), and **a video already imported is listed but
+cannot be played** — Piano's model, with the desk saying why.
 
 ---
 
@@ -148,8 +177,9 @@ before Stage 3.
 1. **"a text editor that you can import from the notebook tab"** — Stage 1 read this as _notes are
    Notebook files_. It could instead have meant _pull a copy of a note in, edited separately_. The
    built behaviour is the more useful reading, but it is a reading.
-2. **What "save system" covers.** Read here as reading position. It may have meant durability of
-   the archive itself, which is a different (and larger) piece of work touching `ops/backup.sh`.
+2. ~~**What "save system" covers.**~~ **Settled.** It means reading position; durability was
+   answered separately and in the opposite direction — see
+   [Where the bytes live](#where-the-bytes-live). Videos are deliberately _not_ durable.
 3. **The 1024px threshold is a guess** at the Pocket 2's CSS width, which depends on its OS
    scaling. One constant in `src/lib/breakpoints.ts`. A 12.9" iPad in _portrait_ reports exactly
    1024, so the boundary is tight on purpose.

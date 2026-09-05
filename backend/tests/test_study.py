@@ -25,6 +25,30 @@ def study_root(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def archive_root(monkeypatch, tmp_path):
+    """A stand-in for the external drive, mounted.
+
+    The parent must exist and the root must not: that is exactly the shape of a
+    plugged-in drive whose `archive/study/` has never been written to, and it is
+    what `archive_location.resolve`'s parent probe is there for.
+    """
+    root = tmp_path / 'external' / 'study-archive'
+    root.parent.mkdir()
+    monkeypatch.setenv('STUDY_ARCHIVE_ROOT', str(root))
+    return root
+
+
+@pytest.fixture
+def archive_unplugged(monkeypatch, tmp_path):
+    """No drive at all: no override, and a backup path that does not exist."""
+    monkeypatch.delenv('STUDY_ARCHIVE_ROOT', raising=False)
+    missing = tmp_path / 'unplugged' / 'lunaschal'
+    get_db().execute('UPDATE settings SET backup_path=?', (str(missing),))
+    get_db().commit()
+    return missing
+
+
+@pytest.fixture
 def sync_imports(monkeypatch):
     """Run imports inline instead of on a daemon thread."""
     monkeypatch.setattr(study_routes, '_start_web_import_bg', importer.import_web)
@@ -161,7 +185,7 @@ def _fake_ytdlp(monkeypatch, tmp_dir_written='video.mp4', *, meta_rc=0, dl_rc=0,
 
 
 def test_youtube_import_downloads_and_records_the_video(
-    client, study_root, monkeypatch, sync_imports
+    client, study_root, archive_root, monkeypatch, sync_imports
 ):
     monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
     calls = _fake_ytdlp(monkeypatch)
@@ -178,7 +202,10 @@ def test_youtube_import_downloads_and_records_the_video(
     assert source['title'] == 'Lecture 1: Backprop'
     assert source['durationSeconds'] == 3671
     assert source['contentType'] == 'video/mp4'
-    assert (study_root / source_id / 'video.mp4').is_file()
+    # On the drive, and nowhere else: a lecture is hundreds of megabytes and
+    # `data/` is what the nightly rsync mirrors twice.
+    assert (archive_root / source_id / 'video.mp4').is_file()
+    assert not (study_root / source_id).exists()
 
     # The playlist in the pasted URL is dropped before yt-dlp sees it.
     assert 'https://www.youtube.com/watch?v=aircAruvnKk' in calls[0]
@@ -187,7 +214,7 @@ def test_youtube_import_downloads_and_records_the_video(
 
 
 def test_youtube_import_serves_ranges_so_the_video_can_seek(
-    client, monkeypatch, sync_imports
+    client, archive_root, monkeypatch, sync_imports
 ):
     monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
     _fake_ytdlp(monkeypatch)
@@ -204,7 +231,7 @@ def test_youtube_import_serves_ranges_so_the_video_can_seek(
 
 
 def test_youtube_download_asks_for_h264_within_the_height_cap(
-    client, monkeypatch, sync_imports
+    client, archive_root, monkeypatch, sync_imports
 ):
     """Safari has no software AV1 decoder, and Apple's first hardware one is the
     A17 Pro / M3 — so on the 12.9" iPad Pro this tab targets, an AV1 download
@@ -228,7 +255,7 @@ def test_youtube_download_asks_for_h264_within_the_height_cap(
 
 
 def test_youtube_import_ignores_a_leftover_format_fragment(
-    client, study_root, monkeypatch, sync_imports
+    client, archive_root, monkeypatch, sync_imports
 ):
     """`video.f137.mp4` globs like the real file and sorts *before* it."""
     monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
@@ -253,7 +280,9 @@ def test_youtube_import_ignores_a_leftover_format_fragment(
     assert client.get(f'/api/study/sources/{source_id}/file').data == b'merged'
 
 
-def test_youtube_import_surfaces_a_ytdlp_failure(client, monkeypatch, sync_imports):
+def test_youtube_import_surfaces_a_ytdlp_failure(
+    client, archive_root, monkeypatch, sync_imports
+):
     monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
     _fake_ytdlp(monkeypatch, dl_rc=1, stderr='ERROR: Video unavailable')
 
@@ -265,6 +294,94 @@ def test_youtube_import_surfaces_a_ytdlp_failure(client, monkeypatch, sync_impor
     source = client.get(f'/api/study/sources/{source_id}').get_json()
     assert source['importStatus'] == 'error'
     assert 'Video unavailable' in source['importError']
+
+
+def test_youtube_import_refuses_when_the_archive_drive_is_gone(
+    client, study_root, archive_unplugged, monkeypatch, sync_imports
+):
+    """The failure this whole storage split exists to prevent.
+
+    A `mkdir -p` onto an unmounted mountpoint followed by a 279 MB download is
+    the one failure mode that looks exactly like success — it fills the root
+    partition and reports ready. So: refuse, say why, and write nothing.
+    """
+    monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
+    calls = _fake_ytdlp(monkeypatch)
+
+    res = client.post(
+        '/api/study/sources/youtube', json={'url': 'https://youtu.be/aircAruvnKk'}
+    )
+    source_id = res.get_json()['id']
+
+    source = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert source['importStatus'] == 'error'
+    assert source['importError'] == 'The backup drive is not connected.'
+    # Nothing on the SSD, nothing conjured at the mountpoint, and yt-dlp was
+    # never even asked for the metadata.
+    assert not (study_root / source_id).exists()
+    assert not archive_unplugged.exists()
+    assert calls == []
+
+
+def test_a_video_on_a_disconnected_drive_is_listed_but_not_served(
+    client, archive_root, monkeypatch, sync_imports
+):
+    """Piano's model: the catalog stays browsable, the file 404s."""
+    monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
+    _fake_ytdlp(monkeypatch)
+    res = client.post(
+        '/api/study/sources/youtube', json={'url': 'https://youtu.be/aircAruvnKk'}
+    )
+    source_id = res.get_json()['id']
+    assert client.get(f'/api/study/sources/{source_id}').get_json()['fileAvailable']
+
+    # Unplug it.
+    monkeypatch.setenv('STUDY_ARCHIVE_ROOT', str(archive_root / 'nope' / 'gone'))
+
+    listing = client.get('/api/study/sources').get_json()
+    row = next(r for r in listing if r['id'] == source_id)
+    assert row['title'] == 'Lecture 1: Backprop'
+    assert row['fileAvailable'] is False
+    assert row['fileUnavailableReason']
+    assert client.get(f'/api/study/sources/{source_id}/file').status_code == 404
+
+
+def test_a_pdf_is_always_available_and_stays_on_the_local_root(
+    client, study_root, archive_unplugged
+):
+    """PDFs and articles are small and irreplaceable; they keep riding the
+    backup, and an absent drive has nothing to do with them."""
+    source_id = _upload_pdf(client).get_json()['id']
+
+    assert (study_root / source_id / 'book.pdf').is_file()
+    source = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert source['fileAvailable'] is True
+    assert client.get(f'/api/study/sources/{source_id}/file').status_code == 200
+
+
+def test_resolve_stored_path_guards_both_roots(client, study_root, archive_root, tmp_path):
+    outside = tmp_path / 'elsewhere' / 'x.mp4'
+    assert storage.resolve_stored_path(str(study_root / 'abc' / 'book.pdf')) is not None
+    assert storage.resolve_stored_path(str(archive_root / 'abc' / 'video.mp4')) is not None
+    assert storage.resolve_stored_path(str(outside)) is None
+    # Too deep is still refused against both — the grandchild shape is the rule.
+    assert storage.resolve_stored_path(str(study_root / 'a' / 'b' / 'c.pdf')) is None
+    assert storage.resolve_stored_path(str(archive_root / 'a' / 'b' / 'c.mp4')) is None
+
+
+def test_deleting_a_video_removes_it_from_the_archive(
+    client, archive_root, monkeypatch, sync_imports
+):
+    monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
+    _fake_ytdlp(monkeypatch)
+    res = client.post(
+        '/api/study/sources/youtube', json={'url': 'https://youtu.be/aircAruvnKk'}
+    )
+    source_id = res.get_json()['id']
+    assert (archive_root / source_id).is_dir()
+
+    assert client.delete(f'/api/study/sources/{source_id}').status_code == 200
+    assert not (archive_root / source_id).exists()
 
 
 def test_youtube_import_rejects_a_non_youtube_url(client, monkeypatch, sync_imports):

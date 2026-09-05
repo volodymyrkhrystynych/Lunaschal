@@ -8,15 +8,15 @@ import os
 import re
 import shutil
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from ulid import ULID
 from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
+from backend import archive_location
+from backend.archive_location import ArchiveLocation, ArchiveUnavailable
 from backend.db.connection import get_db, row_to_dict
-from backend.ops.backup_config import get_config
 from backend.piano import library
 from backend.piano.musicxml import ScoreImportError, normalize_score, score_metadata
 
@@ -34,77 +34,16 @@ _VIDEO_SUFFIXES = {'.mp4', '.mkv', '.mov', '.webm', '.avi', '.m4v'}
 _IMAGE_SUFFIXES = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.tif', '.tiff'}
 
 
-class ArchiveUnavailable(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class ArchiveLocation:
-    root: Path | None
-    configured: bool
-    available: bool
-    writable: bool
-    destination: str | None
-    reason: str | None
-
-
+# `ArchiveUnavailable` is imported rather than defined here, and stays
+# reachable as `archive.ArchiveUnavailable` — backend/routes/piano.py catches
+# it under that name, and the exception belongs to the archive as a concept
+# rather than to Piano's use of it.
 def location(db=None) -> ArchiveLocation:
-    override = os.environ.get(ARCHIVE_ENV, '').strip()
-    if override:
-        root = Path(override).expanduser().resolve()
-        probe = root if root.exists() else root.parent
-        available = probe.is_dir()
-        writable = available and os.access(probe, os.W_OK)
-        return ArchiveLocation(
-            root=root,
-            configured=True,
-            available=available,
-            writable=writable,
-            destination=str(root),
-            reason=None if available else 'The archive folder is unavailable.',
-        )
-
-    cfg = get_config(db or get_db())
-    destination = cfg['path'].strip()
-    if not destination:
-        return ArchiveLocation(
-            root=None,
-            configured=False,
-            available=False,
-            writable=False,
-            destination=None,
-            reason='Choose the main backup folder in Settings first.',
-        )
-    base = Path(destination).expanduser()
-    if not base.is_dir():
-        return ArchiveLocation(
-            root=(base / 'archive' / COLLECTION),
-            configured=True,
-            available=False,
-            writable=False,
-            destination=destination,
-            reason='The backup drive is not connected.',
-        )
-    writable = os.access(base, os.W_OK)
-    return ArchiveLocation(
-        root=(base / 'archive' / COLLECTION).resolve(),
-        configured=True,
-        available=True,
-        writable=writable,
-        destination=destination,
-        reason=None if writable else 'The backup drive is not writable.',
-    )
+    return archive_location.resolve(COLLECTION, ARCHIVE_ENV, db)
 
 
 def require_root(db=None, *, create: bool = False) -> Path:
-    state = location(db)
-    if not state.available or state.root is None:
-        raise ArchiveUnavailable(state.reason or 'The archive is unavailable.')
-    if create and not state.writable:
-        raise ArchiveUnavailable(state.reason or 'The archive is not writable.')
-    if create:
-        state.root.mkdir(parents=True, exist_ok=True)
-    return state.root
+    return archive_location.require_root(COLLECTION, ARCHIVE_ENV, db, create=create)
 
 
 def status(db=None) -> dict:

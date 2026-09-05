@@ -32,6 +32,27 @@ def _attach_progress(source: dict) -> dict:
     return source
 
 
+def _attach_availability(source: dict, archive) -> dict:
+    """Whether this source's bytes are reachable right now.
+
+    Only archived kinds can answer anything but yes: a video lives on the
+    external drive alone, so an unplugged drive means the row is still listed
+    and browsable (Piano's model) while the file 404s. Saying so on the row is
+    what lets the viewer explain it instead of rendering a dead <video>.
+    """
+    if source['kind'] not in storage.ARCHIVED_KINDS:
+        source['fileAvailable'] = True
+        return source
+    source['fileAvailable'] = archive.available
+    if not archive.available:
+        source['fileUnavailableReason'] = archive.reason or 'The archive is unavailable.'
+    return source
+
+
+def _archive_state():
+    return storage.archive_location_state(get_db())
+
+
 # Module-level so tests can monkeypatch them to the synchronous functions —
 # the indirection backend/tests/test_fanfic_import.py's fixture relies on.
 def _start_web_import_bg(source_id: str, url: str) -> None:
@@ -51,7 +72,12 @@ def list_sources():
     rows = get_db().execute(
         f'SELECT {_LIST_COLS} FROM study_sources ORDER BY created_at DESC'
     ).fetchall()
-    return jsonify([_attach_progress(row_to_dict(row)) for row in rows])
+    # Resolved once for the whole listing rather than per row: it reads the
+    # settings table and stats the drive.
+    archive = _archive_state()
+    return jsonify(
+        [_attach_availability(_attach_progress(row_to_dict(row)), archive) for row in rows]
+    )
 
 
 @bp.get('/sources/<source_id>')
@@ -61,7 +87,7 @@ def get_source(source_id):
     ).fetchone()
     if row is None:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(_attach_progress(row_to_dict(row)))
+    return jsonify(_attach_availability(_attach_progress(row_to_dict(row)), _archive_state()))
 
 
 @bp.get('/sources/<source_id>/status')
@@ -100,7 +126,7 @@ def upload_pdf():
 
     db = get_db()
     try:
-        path = storage.source_file_path(source_id, 'book', 'pdf')
+        path = storage.source_file_path(source_id, 'book', 'pdf', 'pdf')
         if path is None:
             raise ValueError('could not build a storage path')
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,17 +218,23 @@ def delete_source(source_id):
     db.execute('DELETE FROM study_sources WHERE id=?', (source_id,))
     db.commit()
     storage.delete_source_dir(source_id)
+    # A video's bytes are on the drive, not under STUDY_ROOT. With the drive
+    # unplugged this is a no-op and the directory is orphaned — deleting the
+    # row is still the right answer, since refusing to delete a library entry
+    # because a disk is elsewhere would be worse than a stray folder.
+    storage.delete_archived_dir(source_id, db)
     return jsonify({'success': True})
 
 
 @bp.get('/sources/<source_id>/file')
 def serve_file(source_id):
-    row = get_db().execute(
+    db = get_db()
+    row = db.execute(
         'SELECT file_path, content_type FROM study_sources WHERE id=?', (source_id,)
     ).fetchone()
     if row is None or not row['file_path']:
         return jsonify({'error': 'Not found'}), 404
-    path = storage.resolve_stored_path(row['file_path'])
+    path = storage.resolve_stored_path(row['file_path'], db)
     if path is None or not path.is_file():
         return jsonify({'error': 'Not found'}), 404
     # conditional=True is load-bearing for video: it is what answers Range

@@ -17,6 +17,7 @@ import time
 
 import nh3
 
+from backend.archive_location import ArchiveUnavailable
 from backend.db.connection import get_db
 from backend.htmltext import strip_html_with_title
 from backend.research.web import UnsafeUrl, assert_public_url, fetch_public_page
@@ -145,7 +146,7 @@ def import_web(source_id: str, url: str) -> None:
         _, title = strip_html_with_title(body)
         clean = sanitize_page_html(body)
 
-        path = storage.source_file_path(source_id, 'article', 'html')
+        path = storage.source_file_path(source_id, 'article', 'html', 'web')
         if path is None:
             _fail(source_id, 'Could not build a storage path for this source.')
             return
@@ -232,7 +233,12 @@ def import_youtube(source_id: str, url: str) -> None:
         # playlist download behind --no-playlist's back.
         target = youtube.watch_url(video_id)
 
-        directory = storage.source_dir(source_id)
+        # The archive check comes before the metadata pass, not after it: a
+        # video lives on the external drive and nowhere else, so with the drive
+        # unplugged there is nothing to do but say so. Falling back to the SSD
+        # would pour a few hundred megabytes into the root partition and look
+        # exactly like it had worked.
+        directory = storage.source_dir(source_id, 'youtube', create=True)
         if directory is None:
             _fail(source_id, 'Could not build a storage path for this source.')
             return
@@ -304,6 +310,11 @@ def import_youtube(source_id: str, url: str) -> None:
             **({'title': title} if title else {}),
         )
     except UnsafeUrl as e:
+        _fail(source_id, str(e))
+    except ArchiveUnavailable as e:
+        # 'error' with a readable reason, which the library already renders
+        # with a Retry — so plugging the drive in and hitting Retry is the
+        # whole recovery story.
         _fail(source_id, str(e))
     except subprocess.TimeoutExpired:
         _fail(source_id, 'yt-dlp timed out.')
