@@ -67,6 +67,37 @@ npm run build
 python main.py
 ```
 
+### Try it with demo data
+
+A fresh install starts completely empty, which makes it hard to tell what any of
+the views are for. To browse a fully populated instance instead:
+
+```bash
+./test-env.sh
+```
+
+That builds a throwaway database and media tree under `data/test-run/`, seeds
+**every** table with realistic dummy data, and opens the app on
+`http://localhost:5173`. Details worth knowing:
+
+- **Your real data is never touched.** The script points `DATABASE_URL` and every
+  `*_ROOT` at the scratch directory, and the seeder (`scripts/seed_test_db.py`)
+  refuses to run at all unless they are all set — so a bare run of it cannot
+  reach `./data/lunaschal.db`.
+- **No GPU or big model required.** If nothing is already serving on `:8080`, a
+  tiny local model is started for the session from `llama/presets.tiny.ini` and
+  stopped on exit; a llama-server that was already running is left alone. The
+  whole UI is browsable with no model at all — only actual AI calls fail.
+- **Background schedulers stay off** (`LUNASCHAL_NO_SCHEDULERS=1`), so nothing
+  rewrites the seeded data or makes a stray network call while you look around.
+- **Reset by deleting `data/test-run/`**, or just run the script again — it wipes
+  and rebuilds rather than appending.
+
+The seeded database is not checked into git; it is generated, so it can never
+drift from the current schema. `backend/tests/test_seed_test_db.py` asserts that
+every table in `schema.sql` comes out with at least one row, which is what keeps
+the demo complete as the schema grows.
+
 ### Production
 
 ```bash
