@@ -202,3 +202,12 @@ Honest list of what Stage 1's green suite does _not_ prove:
   build emits the worker chunk correctly, which is a different claim.
 - **Nothing has been read on an actual iPad**, which is half the reason the tab is gated to large
   screens at all.
+- **The real archive drive has never been written to, or unplugged.** `feat/study-archive-videos`
+  exists to stop a video import filling the root partition when the drive is absent, and the test
+  that proves it uses a fake root under `tmp_path` — so what is verified is the logic, not the
+  drive at `/media/expansion/lunaschal`. Two things are still worth doing by hand, in this order:
+  import a short video and confirm the bytes land under `<backup_path>/archive/study/` and **not**
+  under `data/study/`, then unplug the drive and confirm the next import fails loudly rather than
+  quietly succeeding onto the SSD. The second is the whole point of the branch, and it is exactly
+  the shape of failure the AV1 defect was — green suite, broken behaviour, and only a real run
+  can tell the difference.
