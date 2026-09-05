@@ -1878,5 +1878,35 @@ CREATE TABLE IF NOT EXISTS torrents (
     updated_at INTEGER NOT NULL
 );
 
+-- Study sources: the thing on the left half of the Study desk. A book (PDF), a
+-- web page archived as sanitized HTML, or a YouTube video pulled down by
+-- yt-dlp. The bytes live under <STUDY_ROOT>/<id>/ and only the path is stored,
+-- the same layout fanfic/meetings/paper use.
+--
+-- `note_path` binds the source to a note in the Notebook's own file tree
+-- rather than duplicating an editor and a store: the right half of the desk is
+-- NotebookEditorPane over this path.
+CREATE TABLE IF NOT EXISTS study_sources (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK(kind IN ('pdf','web','youtube')),
+    source_url TEXT,
+    file_path TEXT,
+    content_type TEXT,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    duration_seconds INTEGER,
+    note_path TEXT,
+    -- Mirrors fics.download_status/download_error: an import that dies with the
+    -- process leaves a row here, and _reset_stale_study_imports is what makes
+    -- it retryable rather than permanently 'importing'.
+    import_status TEXT NOT NULL DEFAULT 'ready'
+        CHECK(import_status IN ('importing','ready','error')),
+    import_error TEXT,
+    last_opened_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_torrents_added ON torrents(added_at DESC);
 CREATE INDEX IF NOT EXISTS idx_torrents_completed ON torrents(completed_at);
+CREATE INDEX IF NOT EXISTS idx_study_sources_created ON study_sources(created_at DESC);

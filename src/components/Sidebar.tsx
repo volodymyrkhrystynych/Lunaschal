@@ -1,6 +1,7 @@
 import { useShortcuts } from '../shortcuts/ShortcutProvider';
-import { useIsMobile } from '@/hooks/useMediaQuery';
+import { useIsLargeScreen, useIsMobile } from '@/hooks/useMediaQuery';
 import { useDesktopShell } from '@/hooks/useDesktopShell';
+import { visibleNavItems } from '@/lib/navVisibility';
 
 type View =
   | 'chat'
@@ -23,7 +24,8 @@ type View =
   | 'practice'
   | 'piano'
   | 'jobs'
-  | 'knowledge';
+  | 'knowledge'
+  | 'study';
 
 interface SidebarProps {
   currentView: View;
@@ -42,10 +44,16 @@ export const navItems: {
   view: View;
   label: string;
   icon: string;
+  /** Needs the native PyWebView shell — see src/lib/navVisibility.ts. */
   desktopOnly?: boolean;
+  /** Needs a viewport wide enough for two panes — see src/lib/navVisibility.ts. */
+  largeOnly?: boolean;
 }[] = [
   { view: 'learning', label: 'Learning', icon: '🧠' },
   { view: 'practice', label: 'Practice', icon: '⌨️' },
+  // Study is a split reading desk: half source, half notes. It is unusable at
+  // phone or Pocket 2 width, so it is hidden rather than squeezed.
+  { view: 'study', label: 'Study', icon: '📖', largeOnly: true },
   { view: 'piano', label: 'Piano', icon: '🎹', desktopOnly: true },
   { view: 'chat', label: 'Chat', icon: '💬' },
   { view: 'journal', label: 'Journal', icon: '📓' },
@@ -83,6 +91,7 @@ export function Sidebar({
   const { level } = useShortcuts();
   const isMobile = useIsMobile();
   const isDesktopShell = useDesktopShell();
+  const isLargeScreen = useIsLargeScreen();
 
   // On mobile, picking a view also closes the overlay drawer; on desktop the
   // sidebar stays pinned.
@@ -107,9 +116,8 @@ export function Sidebar({
 
   const nav = (
     <nav className="p-2 flex-1 overflow-y-auto">
-      {navItems
-        .filter(item => !item.desktopOnly || isDesktopShell)
-        .map(item => (
+      {visibleNavItems(navItems, { isDesktopShell, isLargeScreen }).map(
+        item => (
           <button
             key={item.view}
             onClick={() => handleNav(item.view)}
@@ -151,7 +159,8 @@ export function Sidebar({
               </span>
             )}
           </button>
-        ))}
+        )
+      )}
     </nav>
   );
 

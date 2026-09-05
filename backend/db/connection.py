@@ -196,6 +196,7 @@ def init_db() -> None:
     # in-flight torrent state that a restart could orphan. See the comment on
     # the `torrents` table in schema.sql.
     _reset_stale_fic_downloads(db)
+    _reset_stale_study_imports(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
     _reset_stale_chat_attachment_descriptions(db)
@@ -618,6 +619,19 @@ def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
         "UPDATE fics SET download_status='error',"
         " download_error='Interrupted by an app restart — click Update to retry.'"
         " WHERE download_status='downloading'"
+    )
+    db.commit()
+
+
+def _reset_stale_study_imports(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_fic_downloads: a study import runs on a
+    daemon thread (and, for YouTube, a yt-dlp subprocess), neither of which
+    survives the process. Reset to 'error' rather than 'idle' — nothing re-arms
+    an import on its own, the library's Retry is what starts it again."""
+    db.execute(
+        "UPDATE study_sources SET import_status='error',"
+        " import_error='Interrupted by an app restart — retry the import.'"
+        " WHERE import_status='importing'"
     )
     db.commit()
 

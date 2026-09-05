@@ -26,6 +26,7 @@ import { Paper } from './components/Paper/Paper';
 import { Meetings } from './components/Meetings';
 import { Piano } from './components/Piano';
 import { Knowledge } from './components/Knowledge/Knowledge';
+import { Study } from './components/Study/Study';
 import { api } from './hooks/api';
 import { useTodaySelfieStatus } from './hooks/useTodaySelfieStatus';
 import { useTodayCaloriesStatus } from './hooks/useTodayCaloriesStatus';
@@ -35,7 +36,9 @@ import { resolveAuthGate } from './lib/authGate';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 import { MOBILE_QUERY } from './lib/breakpoints';
 import { getStoredView, setStoredView, type View } from './lib/viewPersistence';
+import { visibleNavItems } from './lib/navVisibility';
 import { useDesktopShell } from './hooks/useDesktopShell';
+import { useIsLargeScreen } from './hooks/useMediaQuery';
 import { ImmersiveProvider, useImmersive } from './components/ImmersiveContext';
 
 /**
@@ -52,6 +55,7 @@ export default function App() {
 
 function AppShell() {
   const isDesktopShell = useDesktopShell();
+  const isLargeScreen = useIsLargeScreen();
   // Set by the Paper editor on a tablet: no header, no sidebar, no bottom bar,
   // so the page is the screen and its own Back button is the way out.
   const immersive = useImmersive();
@@ -61,6 +65,20 @@ function AppShell() {
   useEffect(() => {
     setStoredView(currentView);
   }, [currentView]);
+
+  const availableViews = visibleNavItems(navItems, {
+    isDesktopShell,
+    isLargeScreen,
+  }).map(item => item.view);
+
+  // A gated view the last session left behind renders nothing at all on a
+  // device that can't show it — a phone whose stored view is 'study' (or
+  // 'piano') came up to a blank <main> with no way back except the sidebar.
+  // Fall back to the default rather than leaving the shell empty.
+  const viewAvailable = availableViews.includes(currentView);
+  useEffect(() => {
+    if (!viewAvailable) setCurrentView('chat');
+  }, [viewAvailable]);
   // Desktop starts with the sidebar pinned open; mobile starts with the drawer
   // closed. Read matchMedia synchronously so the drawer never flashes open on
   // a phone's first paint.
@@ -192,6 +210,8 @@ function AppShell() {
         return <Practice />;
       case 'piano':
         return isDesktopShell ? <Piano /> : null;
+      case 'study':
+        return isLargeScreen ? <Study /> : null;
       case 'settings':
         return <Settings />;
       case 'files':
@@ -251,9 +271,7 @@ function AppShell() {
       currentView={currentView}
       onViewChange={setCurrentView}
       onToggleSidebar={() => setSidebarOpen(o => !o)}
-      availableViews={navItems
-        .filter(item => !item.desktopOnly || isDesktopShell)
-        .map(item => item.view)}
+      availableViews={availableViews}
     >
       <div className="h-dvh flex flex-col bg-[var(--color-bg)]">
         {!immersive && (

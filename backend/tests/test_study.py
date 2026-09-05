@@ -1,0 +1,331 @@
+"""Study sources: uploads, the two URL imports, and the file route.
+
+No real network and no real yt-dlp — `importer.fetch_public_page` and
+`importer._run_ytdlp` are monkeypatched, and the route's `_start_*_bg` thread
+launchers are swapped for the synchronous functions so a POST can be asserted
+on directly (the backend/tests/test_fanfic_import.py pattern).
+"""
+import io
+import json
+import subprocess
+
+import pytest
+
+from backend.db.connection import get_db
+from backend.research.web import UnsafeUrl
+from backend.routes import study as study_routes
+from backend.study import importer, storage, youtube
+
+
+@pytest.fixture(autouse=True)
+def study_root(monkeypatch, tmp_path):
+    root = tmp_path / 'study'
+    monkeypatch.setenv('STUDY_ROOT', str(root))
+    return root
+
+
+@pytest.fixture
+def sync_imports(monkeypatch):
+    """Run imports inline instead of on a daemon thread."""
+    monkeypatch.setattr(study_routes, '_start_web_import_bg', importer.import_web)
+    monkeypatch.setattr(study_routes, '_start_youtube_import_bg', importer.import_youtube)
+
+
+PAGE_HTML = """
+<html><head><title>Attention Is All You Need</title>
+<style>body{color:red}</style></head>
+<body><script>alert(1)</script>
+<h1>Attention</h1><p>The Transformer is a <b>model</b>.</p>
+<iframe src="https://evil.example/x"></iframe>
+</body></html>
+"""
+
+
+def _upload_pdf(client, data=b'%PDF-1.4 fake', name='Deep Learning.pdf'):
+    return client.post(
+        '/api/study/sources/pdf',
+        data={'file': (io.BytesIO(data), name)},
+        content_type='multipart/form-data',
+    )
+
+
+# --- pdf upload ---
+
+def test_upload_pdf_stores_the_file_and_serves_it_back(client, study_root):
+    res = _upload_pdf(client)
+    assert res.status_code == 201
+    body = res.get_json()
+    source_id = body['id']
+    assert body['source']['kind'] == 'pdf'
+    assert body['source']['title'] == 'Deep Learning'
+    assert body['source']['importStatus'] == 'ready'
+    assert body['source']['sizeBytes'] == len(b'%PDF-1.4 fake')
+
+    assert (study_root / source_id / 'book.pdf').read_bytes() == b'%PDF-1.4 fake'
+
+    served = client.get(f'/api/study/sources/{source_id}/file')
+    assert served.status_code == 200
+    assert served.mimetype == 'application/pdf'
+    assert served.data == b'%PDF-1.4 fake'
+
+
+def test_upload_rejects_a_non_pdf(client):
+    res = client.post(
+        '/api/study/sources/pdf',
+        data={'file': (io.BytesIO(b'nope'), 'notes.txt')},
+        content_type='multipart/form-data',
+    )
+    assert res.status_code == 400
+    assert client.get('/api/study/sources').get_json() == []
+
+
+def test_the_stored_path_never_leaves_the_server(client):
+    source_id = _upload_pdf(client).get_json()['id']
+    listed = client.get('/api/study/sources').get_json()
+    assert 'filePath' not in listed[0]
+    assert 'filePath' not in client.get(f'/api/study/sources/{source_id}').get_json()
+
+
+# --- web import ---
+
+def test_web_import_archives_a_sanitized_page(client, study_root, monkeypatch, sync_imports):
+    monkeypatch.setattr(
+        importer, 'fetch_public_page',
+        lambda url, **kw: ('https://arxiv.org/abs/1706.03762', PAGE_HTML),
+    )
+    res = client.post('/api/study/sources/web', json={'url': 'https://arxiv.org/abs/1706.03762'})
+    assert res.status_code == 202
+    source_id = res.get_json()['id']
+
+    source = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert source['importStatus'] == 'ready'
+    assert source['title'] == 'Attention Is All You Need'
+    assert source['contentType'] == 'text/html'
+
+    stored = (study_root / source_id / 'article.html').read_text()
+    assert 'The Transformer is a <b>model</b>' in stored
+    # Script/style content is dropped with the tag, not merely unwrapped, and
+    # an iframe is not in the allowed set at all.
+    assert 'alert(1)' not in stored
+    assert 'color:red' not in stored
+    assert '<iframe' not in stored
+
+    served = client.get(f'/api/study/sources/{source_id}/file')
+    assert served.status_code == 200
+    assert served.mimetype == 'text/html'
+
+
+def test_web_import_refuses_a_private_address(client, monkeypatch, sync_imports):
+    def refuse(url, **kw):
+        raise UnsafeUrl('169.254.169.254 resolves to a non-public address')
+
+    monkeypatch.setattr(importer, 'fetch_public_page', refuse)
+    res = client.post('/api/study/sources/web', json={'url': 'http://169.254.169.254/latest/'})
+    source_id = res.get_json()['id']
+
+    source = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert source['importStatus'] == 'error'
+    assert 'non-public address' in source['importError']
+    # Nothing half-written: a refused fetch never reaches the filesystem.
+    assert storage.source_dir(source_id) is not None
+    assert not storage.source_dir(source_id).exists()
+
+
+def test_web_import_needs_a_url(client):
+    assert client.post('/api/study/sources/web', json={}).status_code == 400
+
+
+# --- youtube import ---
+
+def _fake_ytdlp(monkeypatch, tmp_dir_written='video.mp4', *, meta_rc=0, dl_rc=0,
+                stderr='', title='Lecture 1: Backprop', duration=3671):
+    calls = []
+
+    def run(args, timeout):
+        calls.append(args)
+        if '-J' in args:
+            return subprocess.CompletedProcess(
+                args, meta_rc,
+                json.dumps({'title': title, 'duration': duration}), stderr,
+            )
+        if dl_rc == 0:
+            # -o <dir>/video.%(ext)s — write what yt-dlp would have written.
+            out = args[args.index('-o') + 1]
+            path = out.replace('%(ext)s', tmp_dir_written.rsplit('.', 1)[1])
+            from pathlib import Path
+            Path(path).write_bytes(b'\x00\x00\x00 ftypmp42')
+        return subprocess.CompletedProcess(args, dl_rc, '', stderr)
+
+    monkeypatch.setattr(importer, '_run_ytdlp', run)
+    return calls
+
+
+def test_youtube_import_downloads_and_records_the_video(
+    client, study_root, monkeypatch, sync_imports
+):
+    monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
+    calls = _fake_ytdlp(monkeypatch)
+
+    res = client.post(
+        '/api/study/sources/youtube',
+        json={'url': 'https://www.youtube.com/watch?v=aircAruvnKk&list=PLabc'},
+    )
+    assert res.status_code == 202
+    source_id = res.get_json()['id']
+
+    source = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert source['importStatus'] == 'ready'
+    assert source['title'] == 'Lecture 1: Backprop'
+    assert source['durationSeconds'] == 3671
+    assert source['contentType'] == 'video/mp4'
+    assert (study_root / source_id / 'video.mp4').is_file()
+
+    # The playlist in the pasted URL is dropped before yt-dlp sees it.
+    assert 'https://www.youtube.com/watch?v=aircAruvnKk' in calls[0]
+    assert all('list=' not in arg for call in calls for arg in call)
+    assert '--no-playlist' in calls[1]
+
+
+def test_youtube_import_serves_ranges_so_the_video_can_seek(
+    client, monkeypatch, sync_imports
+):
+    monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
+    _fake_ytdlp(monkeypatch)
+    res = client.post(
+        '/api/study/sources/youtube', json={'url': 'https://youtu.be/aircAruvnKk'}
+    )
+    source_id = res.get_json()['id']
+
+    served = client.get(
+        f'/api/study/sources/{source_id}/file', headers={'Range': 'bytes=4-7'}
+    )
+    assert served.status_code == 206
+    assert served.data == b'ftyp'
+
+
+def test_youtube_import_ignores_a_leftover_format_fragment(
+    client, study_root, monkeypatch, sync_imports
+):
+    """`video.f137.mp4` globs like the real file and sorts *before* it."""
+    monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
+
+    def run(args, timeout):
+        if '-J' in args:
+            return subprocess.CompletedProcess(
+                args, 0, json.dumps({'title': 'Lecture', 'duration': 60}), ''
+            )
+        from pathlib import Path
+        out = Path(args[args.index('-o') + 1])
+        out.with_name('video.f137.mp4').write_bytes(b'fragment')
+        out.with_name('video.mp4').write_bytes(b'merged')
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    monkeypatch.setattr(importer, '_run_ytdlp', run)
+    res = client.post(
+        '/api/study/sources/youtube', json={'url': 'https://youtu.be/aircAruvnKk'}
+    )
+    source_id = res.get_json()['id']
+
+    assert client.get(f'/api/study/sources/{source_id}/file').data == b'merged'
+
+
+def test_youtube_import_surfaces_a_ytdlp_failure(client, monkeypatch, sync_imports):
+    monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
+    _fake_ytdlp(monkeypatch, dl_rc=1, stderr='ERROR: Video unavailable')
+
+    res = client.post(
+        '/api/study/sources/youtube', json={'url': 'https://youtu.be/aircAruvnKk'}
+    )
+    source_id = res.get_json()['id']
+
+    source = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert source['importStatus'] == 'error'
+    assert 'Video unavailable' in source['importError']
+
+
+def test_youtube_import_rejects_a_non_youtube_url(client, monkeypatch, sync_imports):
+    monkeypatch.setattr(importer, 'assert_public_url', lambda url: url)
+    res = client.post('/api/study/sources/youtube', json={'url': 'https://vimeo.com/12345'})
+    source_id = res.get_json()['id']
+
+    source = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert source['importStatus'] == 'error'
+    assert 'YouTube' in source['importError']
+    # The URL stands in as the title, so a failed row still says what it was.
+    assert source['title'] == 'https://vimeo.com/12345'
+
+
+# --- url parsing ---
+
+@pytest.mark.parametrize('url,expected', [
+    ('https://www.youtube.com/watch?v=aircAruvnKk', 'aircAruvnKk'),
+    ('https://youtube.com/watch?v=aircAruvnKk&t=42s', 'aircAruvnKk'),
+    ('https://youtu.be/aircAruvnKk', 'aircAruvnKk'),
+    ('https://youtu.be/aircAruvnKk?t=42', 'aircAruvnKk'),
+    ('https://www.youtube.com/shorts/aircAruvnKk', 'aircAruvnKk'),
+    ('https://www.youtube.com/embed/aircAruvnKk', 'aircAruvnKk'),
+    ('https://m.youtube.com/watch?v=aircAruvnKk', 'aircAruvnKk'),
+    ('https://vimeo.com/watch?v=aircAruvnKk', None),
+    ('https://www.youtube.com/playlist?list=PLabc', None),
+    ('https://www.youtube.com/watch?v=short', None),
+    ('ftp://youtube.com/watch?v=aircAruvnKk', None),
+    ('not a url', None),
+])
+def test_parse_video_id(url, expected):
+    assert youtube.parse_video_id(url) == expected
+
+
+# --- notes, deletion, guards ---
+
+def test_binding_a_note_and_touching_the_open_time(client):
+    source_id = _upload_pdf(client).get_json()['id']
+
+    res = client.patch(
+        f'/api/study/sources/{source_id}', json={'notePath': 'study/deep-learning.md'}
+    )
+    assert res.status_code == 200
+    assert res.get_json()['notePath'] == 'study/deep-learning.md'
+
+    touched = client.patch(f'/api/study/sources/{source_id}', json={'touch': True})
+    assert touched.get_json()['lastOpenedAt'] is not None
+
+    # An emptied path unbinds rather than storing ''.
+    cleared = client.patch(f'/api/study/sources/{source_id}', json={'notePath': ''})
+    assert cleared.get_json()['notePath'] is None
+
+
+def test_delete_removes_the_row_and_the_directory(client, study_root):
+    source_id = _upload_pdf(client).get_json()['id']
+    assert (study_root / source_id).is_dir()
+
+    assert client.delete(f'/api/study/sources/{source_id}').status_code == 200
+    assert not (study_root / source_id).exists()
+    assert client.get(f'/api/study/sources/{source_id}').status_code == 404
+    assert client.delete(f'/api/study/sources/{source_id}').status_code == 404
+
+
+def test_a_tampered_stored_path_is_not_served(client, tmp_path):
+    source_id = _upload_pdf(client).get_json()['id']
+    secret = tmp_path / 'secret.pdf'
+    secret.write_bytes(b'not yours')
+    db = get_db()
+    db.execute('UPDATE study_sources SET file_path=? WHERE id=?', (str(secret), source_id))
+    db.commit()
+
+    assert client.get(f'/api/study/sources/{source_id}/file').status_code == 404
+
+
+def test_stale_imports_are_reset_at_startup(client):
+    """A row left 'importing' by a killed process has no thread behind it."""
+    from backend.db.connection import _reset_stale_study_imports
+
+    source_id = _upload_pdf(client).get_json()['id']
+    db = get_db()
+    db.execute("UPDATE study_sources SET import_status='importing' WHERE id=?", (source_id,))
+    db.commit()
+
+    _reset_stale_study_imports(db)
+
+    source = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert source['importStatus'] == 'error'
+    assert 'restart' in source['importError']

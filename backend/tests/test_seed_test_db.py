@@ -29,6 +29,7 @@ ROOT_ENV_VARS = [
     'LIFESTYLE_ROOT', 'FOOD_ROOT', 'RECIPE_ROOT', 'CHAT_ROOT', 'PAPER_ROOT',
     'JOBS_ROOT', 'NEWSPAPERS_ROOT', 'NOTEBOOK_ROOT', 'EMAIL_MEDIA_ROOT',
     'PIANO_ROOT', 'PIANO_ARCHIVE_ROOT', 'FILES_ROOT', 'TORRENT_ROOT',
+    'STUDY_ROOT',
 ]
 
 # Trigger-maintained FTS5 shadow tables — never seeded directly, so never

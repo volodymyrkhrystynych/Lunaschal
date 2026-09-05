@@ -28,6 +28,7 @@ Applicable nested guides currently include:
 - `backend/paper/CLAUDE.md`
 - `backend/practice/CLAUDE.md`
 - `backend/research/CLAUDE.md`
+- `backend/study/CLAUDE.md`
 - `src/components/Chat/CLAUDE.md`
 - `src/components/Writing/CLAUDE.md`
 - `stt/CLAUDE.md`
@@ -151,7 +152,12 @@ details. Keep these especially important constraints in mind:
 - Adding a top-level frontend view requires coordinated edits to `VIEWS` in
   `src/lib/viewPersistence.ts`, the switch in `src/App.tsx`, `View` and
   `navItems` in `src/components/Sidebar.tsx`, and `AppView` and `VIEW_ORDER` in
-  `src/shortcuts/ShortcutProvider.tsx`.
+  `src/shortcuts/ShortcutProvider.tsx`. `src/lib/navVisibility.test.ts` fails
+  when those lists drift apart.
+- A view may be gated per device, and the two gates differ: `desktopOnly` means
+  the native PyWebView shell, `largeOnly` means a viewport at least 1024px wide.
+  The Pocket 2 satisfies the first and fails the second. Both are applied by the
+  one pure `visibleNavItems` in `src/lib/navVisibility.ts`.
 - Shortcut scope numbers must be unique within a mounted tree. The number row is
   reserved for Learning review ratings.
 - Long-running in-memory work that must survive restart needs a database
