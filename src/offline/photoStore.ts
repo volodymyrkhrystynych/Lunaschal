@@ -266,6 +266,25 @@ export async function clearFailure(id: string): Promise<void> {
   await put(metaKey(id), { ...meta, failed: false, lastError: null });
 }
 
+/** Move a held picture's box on the device record.
+ *
+ * Paper only, and the reason it exists is that `placement` used to be written
+ * once, at paste time, and never again. A picture that has not been uploaded
+ * yet keeps its geometry in the editor's staged edits — and Save clears those
+ * as it enqueues the upload, whether or not the upload actually reaches the
+ * server. So an add that failed left the only surviving record of where the
+ * picture sits at the box it was pasted into, and the next Save duly put it
+ * back in the middle of the page. This is the durable copy: it has to follow
+ * the picture. */
+export async function updatePhotoPlacement(
+  id: string,
+  placement: NonNullable<StoredPhoto['placement']>
+): Promise<void> {
+  const meta = await take<StoredPhoto>(metaKey(id));
+  if (!meta) return;
+  await put(metaKey(id), { ...meta, placement });
+}
+
 /** Called in exactly one place: after the server has confirmed the upload. */
 export async function deletePhoto(id: string): Promise<void> {
   await drop(blobKey(id));
