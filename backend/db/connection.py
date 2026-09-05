@@ -190,6 +190,7 @@ def init_db() -> None:
     _ensure_practice_recall_columns(db)
     _ensure_piano_attempt_metrics(db)
     _ensure_learning_attempts_speech_requested(db)
+    _ensure_study_position(db)
     _ensure_torrent_settings(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
     # own container and outlives this process, so Lunaschal never holds an
@@ -621,6 +622,15 @@ def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
         " WHERE download_status='downloading'"
     )
     db.commit()
+
+
+def _ensure_study_position(db: sqlite3.Connection) -> None:
+    """Where you left off in a source. One column, not two: `kind` already says
+    whether the number is a page or a second."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(study_sources)')}
+    if 'position' not in cols:
+        db.execute('ALTER TABLE study_sources ADD COLUMN position REAL')
+        db.commit()
 
 
 def _reset_stale_study_imports(db: sqlite3.Connection) -> None:

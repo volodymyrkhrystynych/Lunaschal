@@ -5,6 +5,7 @@ import {
   noteSlugFor,
   sourceSubtitle,
   viewerKindFor,
+  progressLabel,
   offlineReason,
   DRIVE_OFFLINE_MESSAGE,
   type StudySource,
@@ -23,6 +24,7 @@ function source(overrides: Partial<StudySource> = {}): StudySource {
     importStatus: 'ready',
     importError: null,
     lastOpenedAt: null,
+    position: null,
     createdAt: '2026-09-04T10:00:00+00:00',
     updatedAt: '2026-09-04T10:00:00+00:00',
     ...overrides,
@@ -73,6 +75,42 @@ describe('offlineReason', () => {
       )
     ).toBe('The backup drive is not connected.');
     expect(offlineReason(source())).toBe(DRIVE_OFFLINE_MESSAGE);
+  });
+});
+
+describe('progressLabel', () => {
+  it('reads the one position column through the row kind', () => {
+    expect(progressLabel(source({ kind: 'pdf', position: 214 }))).toBe(
+      'page 214'
+    );
+    expect(progressLabel(source({ kind: 'youtube', position: 2831.5 }))).toBe(
+      '47 min in'
+    );
+  });
+
+  it('says nothing where there is no progress to report', () => {
+    // Page 1 and the first minute are where you were anyway.
+    expect(progressLabel(source({ kind: 'pdf', position: 1 }))).toBeNull();
+    expect(progressLabel(source({ kind: 'youtube', position: 12 }))).toBeNull();
+    expect(progressLabel(source({ kind: 'pdf', position: null }))).toBeNull();
+    // An archived page never stores one — its iframe is an opaque origin.
+    expect(progressLabel(source({ kind: 'web', position: 900 }))).toBeNull();
+  });
+});
+
+describe('sourceSubtitle', () => {
+  it('shows how far in you are, between the length and the size', () => {
+    expect(
+      sourceSubtitle(
+        source({
+          kind: 'youtube',
+          durationSeconds: 3771,
+          position: 2831,
+          sizeBytes: 0,
+          notePath: null,
+        })
+      )
+    ).toBe('Video · 1:02:51 · 47 min in');
   });
 });
 

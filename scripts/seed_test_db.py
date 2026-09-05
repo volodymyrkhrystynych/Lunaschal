@@ -1359,23 +1359,29 @@ def seed_study(db):
         '<p>The rollback journal is replaced by an append-only log.</p>\n',
     )
 
+    # `position` means whatever the row's `kind` says it means: page 2 of the
+    # PDF, seconds into the video. The web row leaves it null, which is the
+    # permanent state for an article — a sandboxed iframe's scroll is
+    # unreadable from outside it.
     rows = [
         # id, title, kind, source_url, file_path, content_type, size_bytes,
-        # duration, note_path, status, error, last_opened_at
+        # duration, note_path, status, error, last_opened_at, position
         (pdf_id, 'Attention Is All You Need', 'pdf', None, str(pdf_path),
-         'application/pdf', pdf_path.stat().st_size, None, pdf_note, 'ready', None, ts(1)),
+         'application/pdf', pdf_path.stat().st_size, None, pdf_note, 'ready', None,
+         ts(1), 2),
         (web_id, 'Write-Ahead Logging', 'web', 'https://www.sqlite.org/wal.html',
          str(web_path), 'text/html', web_path.stat().st_size, None, web_note,
-         'ready', None, ts(3)),
+         'ready', None, ts(3), None),
         (video_id, 'Backpropagation, step by step', 'youtube',
          'https://www.youtube.com/watch?v=Ilg3gGewQ5U', None, None, 0, 501,
-         None, 'error', 'ERROR: Requested format is not available', None),
+         None, 'error', 'ERROR: Requested format is not available', None, None),
     ]
     for row in rows:
         db.execute(
             'INSERT INTO study_sources (id, title, kind, source_url, file_path, content_type, '
             'size_bytes, duration_seconds, note_path, import_status, import_error, '
-            'last_opened_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'last_opened_at, position, created_at, updated_at) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (*row, ts(20), ts(1)),
         )
 

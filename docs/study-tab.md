@@ -9,12 +9,15 @@ a real archived article and a failed import to look at.
 **One real YouTube import has been run, and it found a defect the green suite could not**: yt-dlp's
 "best" is AV1, which Safari cannot decode on any 12.9" iPad Pro. Fixed. A PDF has still never been
 rendered in a real browser, and nothing has been opened on the iPad itself — see
-[What we do not know yet](#what-we-do-not-know-yet). Stages 2 onward are not started.
+[What we do not know yet](#what-we-do-not-know-yet).
 
 **Storage was corrected before Stage 2** (`feat/study-archive-videos`): downloaded videos now live on
 the external archive drive and nowhere else, since `data/` is mirrored twice nightly and a lecture is
 one `yt-dlp` away from being replaced. PDFs and archived pages stay on the SSD and keep being backed
 up. See [Where the bytes live](#where-the-bytes-live).
+
+**Stage 2 is built** (`feat/study-resume-position`): one `position REAL` column, a page for a PDF and
+seconds for a video, restored on open and shown in the library.
 
 This is the timeline. `backend/study/CLAUDE.md` documents how the built code works and what will
 bite someone changing it; this documents what is coming, in what order, and why that order.
@@ -87,31 +90,27 @@ cannot be played** — Piano's model, with the desk saying why.
 
 ---
 
-## Stage 2 — the save system _(sourced; called "a fairly big thing" in the brief)_
+## Stage 2 — the save system ✅ built _(sourced; called "a fairly big thing" in the brief)_
 
-**Resume where you left off.** Named in the original brief and deferred in the same sentence. This
-is the stage that turns Study from a viewer into somewhere you actually study, because the cost of
-closing a 400-page PDF or a two-hour lecture is currently "find your place again by hand."
+**Resume where you left off.** Named in the original brief and deferred in the same sentence — the
+stage that turns Study from a viewer into somewhere you actually study, because the cost of closing a
+400-page PDF or a two-hour lecture was "find your place again by hand."
 
-Scope, in the order it should be built:
+- **One column, `study_sources.position REAL`.** Its meaning comes from the row's existing `kind`: a
+  page number for `pdf`, seconds for `youtube`. A `position_kind` column would only repeat what
+  `kind` already answers. **Articles store nothing** — the archived page renders inside
+  `<iframe sandbox="">`, an opaque origin whose scroll offset cannot be read or set from outside, and
+  reaching in would weaken the layer that frame is there to be.
+- **Written cheaply and often**: debounced 1500 ms, client-driven, fire-and-forget, and deliberately
+  not invalidating any query. Flushed on leaving the desk. It does **not** bump `updated_at`.
+- **Restored on open**: a `pendingPageRef` consumed inside pdf.js's render loop as the matching
+  canvas is appended (the canvas does not exist at mount), and `loadedmetadata` for a video.
+- **Shown in the library**: `page 214`, `47 min in` — most of why the position is worth storing is
+  seeing it without opening the thing.
 
-- **Position per source.** A page number for a PDF, a timestamp for a video, a scroll offset for an
-  article. One nullable column plus a small `position_kind`, or a single JSON blob — the shapes are
-  different enough that one integer will not do.
-- **Write it cheaply and often.** Debounced, client-driven, fire-and-forget — this is the one write
-  in the feature where losing the last few seconds costs nothing. It must **not** go through the
-  save path notes use.
-- **Restore on open.** pdf.js already renders page-by-page with a real page number precisely so
-  this has something to hang on; the `<video>` element needs `currentTime` set once metadata loads.
-- **Show it in the library.** "page 214 of 380", "47 min in" — a progress hint is most of why the
-  position is worth storing at all.
-
-**Why second and not third:** it is the only deferred item the brief called out itself, it is
-cheap, and it compounds with everything after it. Paper pages on a source you cannot resume is a
-nicer version of a thing you still avoid opening.
-
-**Open:** whether "save system" also meant _the source archive itself_ (a durable library that
-survives a reinstall) rather than reading position. See [Open questions](#open-questions).
+The one thing that changed from the plan while building: zooming a PDF rebuilds every canvas and
+sends the scroller to the top, so the pending page is **re-armed on a zoom change**. Without that,
+zooming reported page 1 and overwrote the stored position with it.
 
 ---
 
@@ -171,7 +170,7 @@ these** — they are here so they are not re-derived from scratch, not because t
 
 ## Open questions
 
-Four things the brief left genuinely ambiguous. None block Stage 2; the first two should be settled
+Four things the brief left genuinely ambiguous; two are now settled. The first should be settled
 before Stage 3.
 
 1. **"a text editor that you can import from the notebook tab"** — Stage 1 read this as _notes are

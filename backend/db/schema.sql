@@ -1903,6 +1903,11 @@ CREATE TABLE IF NOT EXISTS study_sources (
         CHECK(import_status IN ('importing','ready','error')),
     import_error TEXT,
     last_opened_at INTEGER,
+    -- Where you left off. What the number *means* is decided by `kind`, which
+    -- already answers it: a page number for 'pdf', seconds for 'youtube',
+    -- unused for 'web' (an archived page renders inside sandbox="", so its
+    -- scroll position is unreadable by design).
+    position REAL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

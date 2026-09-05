@@ -20,9 +20,13 @@ const DEFAULT_ZOOM_INDEX = 3;
 
 interface Props {
   fileUrl: string;
+  /** The page to open on, from wherever this reader last left off. */
+  initialPage?: number;
+  /** Fires when the page under the top of the viewport changes. */
+  onPageChange?: (page: number) => void;
 }
 
-export function PdfViewer({ fileUrl }: Props) {
+export function PdfViewer({ fileUrl, initialPage, onPageChange }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const pagesRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<PDFDocumentProxy | null>(null);
@@ -31,6 +35,17 @@ export function PdfViewer({ fileUrl }: Props) {
   const [zoomIndex, setZoomIndex] = useState(DEFAULT_ZOOM_INDEX);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // The page we still owe the reader. Consumed *inside* the render loop, as
+  // the matching canvas is appended: the loop builds pages sequentially in an
+  // async IIFE, so `canvas[data-page="214"]` does not exist yet at load time
+  // and scrolling to it on mount would silently do nothing. Same problem
+  // Fanfic's Reader solves for chapter text.
+  const pendingPageRef = useRef<number | null>(
+    initialPage && initialPage > 1 ? Math.floor(initialPage) : null
+  );
+  // Read by the render effect, which must not re-run when the page changes.
+  const currentPageRef = useRef(1);
+  currentPageRef.current = currentPage;
 
   // Load the document once per file.
   useEffect(() => {
@@ -69,6 +84,13 @@ export function PdfViewer({ fileUrl }: Props) {
     if (!doc || !host || pageCount === 0) return;
 
     let cancelled = false;
+    // Re-arm the pending page across a zoom change. The loop tears every
+    // canvas down and rebuilds it, which sends the scroller back to the top —
+    // and the scroll handler would then report page 1 and overwrite the
+    // position with it. Zooming is not moving.
+    if (pendingPageRef.current === null && currentPageRef.current > 1) {
+      pendingPageRef.current = currentPageRef.current;
+    }
     host.replaceChildren();
     const scale = ZOOM_STEPS[zoomIndex];
     // Render at the device's real pixel density and scale back down in CSS,
@@ -94,6 +116,11 @@ export function PdfViewer({ fileUrl }: Props) {
         const context = canvas.getContext('2d');
         if (!context) continue;
         host.appendChild(canvas);
+        if (pendingPageRef.current === number) {
+          pendingPageRef.current = null;
+          scrollTo(canvas);
+          setCurrentPage(number);
+        }
         await page.render({ canvasContext: context, viewport }).promise;
       }
     })().catch((e: unknown) => {
@@ -120,17 +147,26 @@ export function PdfViewer({ fileUrl }: Props) {
         visible = Number(canvas.dataset.page ?? visible);
       } else break;
     }
+    // While a restore is still outstanding the pages under the viewport are
+    // whatever has rendered so far, not where the reader is. Reporting that
+    // would overwrite the very position we are on our way to.
+    if (pendingPageRef.current !== null || visible === currentPage) return;
     setCurrentPage(visible);
+    onPageChange?.(visible);
   };
 
-  const goToPage = (number: number) => {
+  const scrollTo = (canvas: HTMLCanvasElement) => {
     const host = pagesRef.current;
     const scroller = scrollRef.current;
     if (!host || !scroller) return;
-    const target = host.querySelector<HTMLCanvasElement>(
+    scroller.scrollTo({ top: canvas.offsetTop - host.offsetTop });
+  };
+
+  const goToPage = (number: number) => {
+    const target = pagesRef.current?.querySelector<HTMLCanvasElement>(
       `canvas[data-page="${number}"]`
     );
-    if (target) scroller.scrollTo({ top: target.offsetTop - host.offsetTop });
+    if (target) scrollTo(target);
   };
 
   if (error) {

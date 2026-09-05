@@ -5,13 +5,19 @@ import {
   type StudySource,
 } from '../../lib/study';
 import { PdfViewer } from './PdfViewer';
+import { VideoViewer } from './VideoViewer';
 
 interface Props {
   source: StudySource;
+  /**
+   * Where the reader has got to — a page number for a PDF, seconds for a
+   * video. Called often, so the desk's handler must be cheap.
+   */
+  onPosition?: (position: number) => void;
 }
 
 /** The left half of the desk: whatever this source is, rendered. */
-export function SourceViewer({ source }: Props) {
+export function SourceViewer({ source, onPosition }: Props) {
   const kind = viewerKindFor(source);
   const fileUrl = api.study.fileUrl(source.id);
 
@@ -53,19 +59,35 @@ export function SourceViewer({ source }: Props) {
     );
   }
 
-  if (kind === 'pdf') return <PdfViewer fileUrl={fileUrl} />;
-
-  if (kind === 'video') {
+  // `position` is one column whose meaning the row's `kind` decides: a page
+  // number here, seconds below.
+  if (kind === 'pdf') {
     return (
-      <div className="flex-1 flex items-center justify-center bg-black overflow-hidden">
-        {/* Seeking works because the file route answers Range requests
-            (send_file(..., conditional=True)). */}
-        <video src={fileUrl} controls className="max-h-full max-w-full" />
-      </div>
+      <PdfViewer
+        fileUrl={fileUrl}
+        initialPage={source.position ?? undefined}
+        onPageChange={onPosition}
+      />
     );
   }
 
-  // An archived page. It was sanitized with nh3 before it was ever written to
+  if (kind === 'video') {
+    return (
+      <VideoViewer
+        fileUrl={fileUrl}
+        initialTime={source.position ?? undefined}
+        onTimeChange={onPosition}
+      />
+    );
+  }
+
+  // An archived page — and the one kind that stores no position. The file is
+  // rendered inside `sandbox=""`, which puts the frame in an opaque origin: its
+  // scroll offset is unreadable and unsettable from out here, by design. Every
+  // way of reaching in weakens the second layer this frame exists to be, for a
+  // scroll offset.
+  //
+  // It was sanitized with nh3 before it was ever written to
   // disk, and it is *still* served into a sandboxed iframe: it is third-party
   // markup on our own origin, so one layer of "this is safe" is not a layer.
   // `allow-same-origin` is deliberately absent, which is what puts the frame in

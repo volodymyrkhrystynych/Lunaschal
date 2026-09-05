@@ -5,6 +5,7 @@ land synchronously; the two URL imports run on a daemon thread with an
 in-memory progress registry (backend/study/importer.py) and a persisted
 `import_status` that outlives it.
 """
+import math
 import threading
 import time
 
@@ -18,7 +19,8 @@ bp = Blueprint('study', __name__, url_prefix='/api/study')
 
 _LIST_COLS = (
     'id, title, kind, source_url, content_type, size_bytes, duration_seconds,'
-    ' note_path, import_status, import_error, last_opened_at, created_at, updated_at'
+    ' note_path, import_status, import_error, last_opened_at, position,'
+    ' created_at, updated_at'
 )
 
 # `file_path` is deliberately absent from _LIST_COLS: a server path is not the
@@ -179,6 +181,23 @@ def import_youtube():
     return _url_import('youtube', _start_youtube_import_bg)
 
 
+def _clean_position(value) -> float | None:
+    """A page number or a timestamp in seconds, or None to forget it.
+
+    Never negative, and never NaN/inf — a stored infinity would make the
+    restore seek somewhere the media cannot go and read as a broken file.
+    """
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return max(0.0, number)
+
+
 @bp.patch('/sources/<source_id>')
 def update_source(source_id):
     body = request.json or {}
@@ -191,10 +210,17 @@ def update_source(source_id):
         updates['note_path'] = (body.get('notePath') or '').strip() or None
     if body.get('touch'):
         updates['last_opened_at'] = int(time.time())
+    if 'position' in body:
+        updates['position'] = _clean_position(body.get('position'))
     if not updates:
         return jsonify({'error': 'Nothing to update'}), 400
 
-    updates['updated_at'] = int(time.time())
+    # A position write deliberately does not touch `updated_at`: where you are
+    # in a document is not an edit to it, and this write fires every few
+    # seconds of scrolling or playback. Anything ordering by "recently changed"
+    # would otherwise be reordered by reading.
+    if set(updates) - {'position'}:
+        updates['updated_at'] = int(time.time())
     db = get_db()
     build_update(db, 'study_sources', updates, 'id = ?', (source_id,))
     db.commit()

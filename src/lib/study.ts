@@ -18,6 +18,12 @@ export interface StudySource {
   importError: string | null;
   lastOpenedAt: string | null;
   /**
+   * Where the reader left off. What the number means is decided by `kind`: a
+   * page for a PDF, seconds for a video, and null forever for an article — a
+   * sandboxed iframe's scroll offset cannot be read from outside it.
+   */
+  position: number | null;
+  /**
    * Whether this source's bytes are reachable right now. Only ever false for a
    * video: those live on the external archive drive and nowhere else, so an
    * unplugged drive leaves the row listed and the file gone.
@@ -107,6 +113,27 @@ export function formatSize(bytes: number): string | null {
   return `${value >= 10 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
+/**
+ * How far in a source has been read — `page 214`, `47 min in`.
+ *
+ * Most of why a position is worth storing at all is being able to see it
+ * without opening the thing. Null for an article, which stores none, and for
+ * anything sitting at the very start: "page 1" is not progress.
+ */
+export function progressLabel(source: StudySource): string | null {
+  const at = source.position;
+  if (at === null || !Number.isFinite(at) || at <= 0) return null;
+  if (source.kind === 'pdf') {
+    const page = Math.floor(at);
+    return page > 1 ? `page ${page}` : null;
+  }
+  if (source.kind === 'youtube') {
+    const minutes = Math.floor(at / 60);
+    return minutes >= 1 ? `${minutes} min in` : null;
+  }
+  return null;
+}
+
 /** The line under a source in the library: kind, then whatever else it knows. */
 export function sourceSubtitle(source: StudySource): string {
   const bits: string[] = [
@@ -114,6 +141,8 @@ export function sourceSubtitle(source: StudySource): string {
   ];
   const duration = formatDuration(source.durationSeconds);
   if (duration) bits.push(duration);
+  const progress = progressLabel(source);
+  if (progress) bits.push(progress);
   const size = formatSize(source.sizeBytes);
   if (size) bits.push(size);
   if (source.notePath) bits.push(source.notePath);

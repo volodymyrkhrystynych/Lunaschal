@@ -8,11 +8,28 @@ import type { StudySource } from '../../lib/study';
 import { Study } from './Study';
 
 // pdf.js reaches for a Worker and a canvas 2d context, neither of which jsdom
-// has. The viewer's own rendering isn't what these tests are about.
+// has. Most of these tests are not about the viewer's own rendering, so the
+// document is empty by default and `pdfPages` opts a test into a real one.
+//
+// The 2d context stub is load-bearing, not tidiness: `PdfViewer` does
+// `if (!context) continue;`, so with jsdom's null context the render loop
+// appends nothing and a restore test would pass without restoring anything.
+let pdfPages = 0;
+
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
   getDocument: () => ({
-    promise: Promise.resolve({ numPages: 0, destroy: () => Promise.resolve() }),
+    promise: Promise.resolve({
+      get numPages() {
+        return pdfPages;
+      },
+      getPage: () =>
+        Promise.resolve({
+          getViewport: () => ({ width: 100, height: 140 }),
+          render: () => ({ promise: Promise.resolve() }),
+        }),
+      destroy: () => Promise.resolve(),
+    }),
     destroy: () => Promise.resolve(),
   }),
 }));
@@ -30,6 +47,7 @@ function source(overrides: Partial<StudySource> = {}): StudySource {
     importStatus: 'ready',
     importError: null,
     lastOpenedAt: null,
+    position: null,
     createdAt: '2026-09-04T10:00:00+00:00',
     updatedAt: '2026-09-04T10:00:00+00:00',
     ...overrides,
@@ -47,6 +65,10 @@ function renderStudy() {
 }
 
 beforeEach(() => {
+  pdfPages = 0;
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
+    {} as unknown as CanvasRenderingContext2D
+  );
   vi.spyOn(api.study, 'update').mockResolvedValue(source());
   // The note pane mounts the real Notebook editor, which reads its file.
   vi.spyOn(api.notebook.files, 'read').mockResolvedValue({ content: '' });
@@ -57,7 +79,11 @@ beforeEach(() => {
   } as never);
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  // `Object.defineProperty` is not a mock, so restoreAllMocks won't undo it.
+  delete (HTMLElement.prototype as { scrollTo?: unknown }).scrollTo;
+});
 
 describe('the Study library', () => {
   it('lists sources with what each one is', async () => {
@@ -145,7 +171,9 @@ describe('the Study library', () => {
     const importYoutube = vi
       .spyOn(api.study, 'importYoutube')
       .mockResolvedValue({ id: 's9', source: source({ kind: 'youtube' }) });
-    const remove = vi.spyOn(api.study, 'remove').mockResolvedValue(undefined);
+    const remove = vi
+      .spyOn(api.study, 'remove')
+      .mockResolvedValue({ success: true });
     renderStudy();
 
     await waitFor(() => expect(screen.getByText('Retry')).toBeTruthy());
@@ -219,5 +247,116 @@ describe('the Study desk', () => {
     expect(api.study.update).toHaveBeenCalledWith('s1', {
       notePath: 'study/attention-is-all-you-need-s1.md',
     });
+  });
+
+  it('opens a PDF on the page it was left on', async () => {
+    pdfPages = 6;
+    const saved = source({ position: 4 });
+    vi.spyOn(api.study, 'sources').mockResolvedValue([saved]);
+    vi.spyOn(api.study, 'source').mockResolvedValue(saved);
+    // jsdom lays nothing out, so give the canvases distinguishable offsets and
+    // record where the scroller was asked to go.
+    // jsdom implements no scrolling at all, so `scrollTo` has to be defined
+    // rather than spied on.
+    const scrolled: number[] = [];
+    Object.defineProperty(HTMLElement.prototype, 'scrollTo', {
+      configurable: true,
+      writable: true,
+      value: (arg: { top: number }) => scrolled.push(arg.top),
+    });
+    vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(
+      function (this: HTMLElement) {
+        const page = Number((this as HTMLCanvasElement).dataset?.page ?? 0);
+        return page * 200;
+      }
+    );
+    renderStudy();
+
+    await waitFor(() =>
+      expect(screen.getByText('Attention Is All You Need')).toBeTruthy()
+    );
+    fireEvent.click(screen.getByText('Attention Is All You Need'));
+
+    // Page 4's canvas sits at 800; the host div's own offsetTop is 0.
+    await waitFor(() => expect(scrolled).toContain(800));
+    await waitFor(() => expect(screen.getByText('4 / 6')).toBeTruthy());
+  });
+
+  it('resumes a video at the second it was left on', async () => {
+    const saved = source({
+      kind: 'youtube',
+      position: 1830.5,
+      durationSeconds: 3771,
+    });
+    vi.spyOn(api.study, 'sources').mockResolvedValue([saved]);
+    vi.spyOn(api.study, 'source').mockResolvedValue(saved);
+    renderStudy();
+
+    await waitFor(() =>
+      expect(screen.getByText('Attention Is All You Need')).toBeTruthy()
+    );
+    fireEvent.click(screen.getByText('Attention Is All You Need'));
+
+    const video = await waitFor(() => {
+      const el = document.querySelector('video');
+      if (!el) throw new Error('no video');
+      return el;
+    });
+    // jsdom has no media pipeline, but `duration` is readable and
+    // `currentTime` is a real settable property.
+    Object.defineProperty(video, 'duration', { value: 3771, writable: true });
+    fireEvent(video, new Event('loadedmetadata'));
+
+    expect(video.currentTime).toBe(1830.5);
+  });
+
+  it('writes one position however many pages go by', async () => {
+    vi.useFakeTimers();
+    try {
+      pdfPages = 6;
+      vi.spyOn(api.study, 'sources').mockResolvedValue([source()]);
+      vi.spyOn(api.study, 'source').mockResolvedValue(source());
+      vi.spyOn(HTMLElement.prototype, 'offsetTop', 'get').mockImplementation(
+        function (this: HTMLElement) {
+          const page = Number((this as HTMLCanvasElement).dataset?.page ?? 0);
+          return page * 200;
+        }
+      );
+      renderStudy();
+
+      await vi.waitFor(() =>
+        expect(screen.getByText('Attention Is All You Need')).toBeTruthy()
+      );
+      fireEvent.click(screen.getByText('Attention Is All You Need'));
+      const scroller = await vi.waitFor(() => {
+        const el =
+          document.querySelector('canvas')?.parentElement?.parentElement;
+        if (!el) throw new Error('no scroller');
+        return el;
+      });
+
+      // Six scroll events, walking down the document.
+      for (const top of [200, 400, 600, 800, 1000, 1200]) {
+        Object.defineProperty(scroller, 'scrollTop', {
+          value: top,
+          configurable: true,
+        });
+        fireEvent.scroll(scroller);
+      }
+      const before = vi
+        .mocked(api.study.update)
+        .mock.calls.filter(c => 'position' in (c[1] ?? {}));
+      expect(before).toHaveLength(0);
+
+      await vi.advanceTimersByTimeAsync(2000);
+
+      const writes = vi
+        .mocked(api.study.update)
+        .mock.calls.filter(c => 'position' in (c[1] ?? {}));
+      expect(writes).toHaveLength(1);
+      expect(writes[0][1].position).toBe(6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

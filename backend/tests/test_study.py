@@ -8,6 +8,7 @@ on directly (the backend/tests/test_fanfic_import.py pattern).
 import io
 import json
 import subprocess
+import time
 
 import pytest
 
@@ -433,6 +434,63 @@ def test_binding_a_note_and_touching_the_open_time(client):
     # An emptied path unbinds rather than storing ''.
     cleared = client.patch(f'/api/study/sources/{source_id}', json={'notePath': ''})
     assert cleared.get_json()['notePath'] is None
+
+
+def test_position_round_trips_and_means_what_the_kind_says(client):
+    """One column, two meanings — `kind` is what disambiguates it."""
+    pdf_id = _upload_pdf(client).get_json()['id']
+    assert client.get(f'/api/study/sources/{pdf_id}').get_json()['position'] is None
+
+    body = client.patch(
+        f'/api/study/sources/{pdf_id}', json={'position': 214}
+    ).get_json()
+    assert body['position'] == 214
+
+    # Seconds, for a video — fractional, because currentTime is.
+    assert client.patch(
+        f'/api/study/sources/{pdf_id}', json={'position': 2831.5}
+    ).get_json()['position'] == 2831.5
+
+    # Explicitly forgotten.
+    assert client.patch(
+        f'/api/study/sources/{pdf_id}', json={'position': None}
+    ).get_json()['position'] is None
+
+
+def test_a_nonsense_position_is_cleaned_rather_than_stored(client):
+    pdf_id = _upload_pdf(client).get_json()['id']
+
+    def patched(value):
+        return client.patch(
+            f'/api/study/sources/{pdf_id}', json={'position': value}
+        ).get_json()['position']
+
+    assert patched(-3) == 0
+    # A stored infinity would seek somewhere the media cannot go, and read as
+    # a broken file rather than as a bad number.
+    assert patched(float('inf')) is None
+    assert patched('halfway') is None
+
+
+def test_saving_a_position_is_not_an_edit_to_the_source(client):
+    """This write fires every few seconds of scrolling. If it bumped
+    `updated_at`, reading a document would reorder anything sorted by change."""
+    pdf_id = _upload_pdf(client).get_json()['id']
+    before = client.get(f'/api/study/sources/{pdf_id}').get_json()
+
+    time.sleep(1.1)
+    after = client.patch(
+        f'/api/study/sources/{pdf_id}', json={'position': 7}
+    ).get_json()
+
+    assert after['position'] == 7
+    assert after['updatedAt'] == before['updatedAt']
+
+    # A real edit alongside it still counts as one.
+    retitled = client.patch(
+        f'/api/study/sources/{pdf_id}', json={'position': 9, 'title': 'Renamed'}
+    ).get_json()
+    assert retitled['updatedAt'] != before['updatedAt']
 
 
 def test_delete_removes_the_row_and_the_directory(client, study_root):

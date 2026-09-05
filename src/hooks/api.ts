@@ -3687,7 +3687,13 @@ export const api = {
       }),
     update: (
       id: string,
-      updates: { title?: string; notePath?: string | null; touch?: boolean }
+      updates: {
+        title?: string;
+        notePath?: string | null;
+        touch?: boolean;
+        /** Page for a PDF, seconds for a video; null forgets it. */
+        position?: number | null;
+      }
     ) => patch<StudySource>(`/api/study/sources/${id}`, updates),
     remove: (id: string) =>
       del<{ success: boolean }>(`/api/study/sources/${id}`),
