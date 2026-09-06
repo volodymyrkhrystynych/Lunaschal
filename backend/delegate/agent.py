@@ -31,10 +31,8 @@ is the one deliberate exception — it is a single tool call from this loop's ow
 point of view, but internally runs a second, much deeper pass, because a
 question that actually needs that depth is worth the wait it costs.
 """
-import functools
 import logging
 from types import SimpleNamespace
-
 from backend.ai.chat import format_now_context
 from backend.ai.llm import chat_messages
 from backend.delegate import deep_research, limits
@@ -114,6 +112,10 @@ def run_events(task: str, *, checkpoint=None, max_turns: int = MAX_TOOL_TURNS,
     """
     deadline = limits.search_deadline(deadline)
 
+    def run_deep(name, args):
+        return deep_research.run_tool(name, args, checkpoint=checkpoint,
+                                      deadline=deadline)
+
     # deep_research runs its own nested pass, which needs the same checkpoint
     # and deadline this loop got — not the module-level DISPATCH entry, which
     # the shared loop calls with neither. Rebuilding this dict per call is what
@@ -121,9 +123,7 @@ def run_events(task: str, *, checkpoint=None, max_turns: int = MAX_TOOL_TURNS,
     # know this tool is any different from the rest.
     dispatch = {
         **DISPATCH,
-        'deep_research': SimpleNamespace(
-            run_tool=functools.partial(deep_research.run_tool, checkpoint=checkpoint,
-                                       deadline=deadline)),
+        'deep_research': SimpleNamespace(run_tool=run_deep),
     }
 
     result: dict = {}

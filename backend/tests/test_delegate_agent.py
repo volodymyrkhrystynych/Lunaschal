@@ -236,6 +236,14 @@ def test_the_model_is_also_offered_deep_research(monkeypatch):
     assert 'deep_research' in offered
 
 
+def test_the_delegate_is_web_only(monkeypatch):
+    calls = _script(monkeypatch, [_msg(content='Nothing to do.')])
+    agent.run('hello')
+
+    names = {tool['function']['name'] for tool in calls[0]['tools']}
+    assert names == {'web_search', 'web_fetch', 'deep_research'}
+
+
 def test_deep_research_receives_the_delegates_own_checkpoint_and_deadline(monkeypatch):
     """A long deep_research call has to cooperate with the same yield-to-the-
     user gate as the rest of the loop, or it would compete with the very chat

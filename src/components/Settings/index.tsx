@@ -22,6 +22,7 @@ import { LifeWikiSection } from './LifeWikiSection';
 import { BackupSection } from './BackupSection';
 import { FilesSection } from './FilesSection';
 import { TorrentSection } from './TorrentSection';
+import { KnowledgeSection } from './KnowledgeSection';
 import { LogsPanel } from './LogsPanel';
 import { CollapsibleSection } from './CollapsibleSection';
 import { shouldAutoExpand } from '../../lib/backup';
@@ -101,6 +102,10 @@ export function Settings() {
 
           <CollapsibleSection title="Torrents">
             <TorrentSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Knowledge Library">
+            <KnowledgeSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Model & VRAM">

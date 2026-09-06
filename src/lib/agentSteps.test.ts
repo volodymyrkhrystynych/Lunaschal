@@ -2,6 +2,43 @@ import { describe, it, expect } from 'vitest';
 import { stepLabel, parseAgentMeta, countChatTodoWrites } from './agentSteps';
 
 describe('stepLabel', () => {
+  it('labels offline library searches', () => {
+    expect(
+      stepLabel({
+        tool: 'local_knowledge_search',
+        arg: 'the moon',
+        ok: true,
+        count: 2,
+      })
+    ).toBe('Searched the offline library for "the moon" — 2 results');
+  });
+
+  it('labels batched offline searches without dumping every query', () => {
+    expect(
+      stepLabel({
+        tool: 'local_knowledge_search',
+        arg: 'Charlie and the Chocolate Factory',
+        queries: [
+          'Charlie and the Chocolate Factory',
+          'Charlie and the Chocolate Factory book',
+          'Charlie and the Chocolate Factory movie',
+        ],
+        ok: true,
+        count: 8,
+      })
+    ).toBe('Searched the offline library with 3 queries — 8 results');
+  });
+
+  it('labels the compressed web-research handoff', () => {
+    expect(
+      stepLabel({
+        tool: 'delegate',
+        arg: 'weather today',
+        ok: true,
+        count: 2,
+      })
+    ).toBe('Asked web research about "weather today" — 2 sources');
+  });
   it('describes a successful search with its result count', () => {
     expect(
       stepLabel({ tool: 'web_search', arg: 'fsrs', ok: true, count: 3 })

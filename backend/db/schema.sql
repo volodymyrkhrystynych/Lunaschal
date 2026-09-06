@@ -276,6 +276,25 @@ CREATE TABLE IF NOT EXISTS messages (
     finished_at INTEGER
 );
 
+-- Derived context summaries. The messages remain the source of truth; these
+-- rows only make an older span cheap enough to keep using in a long chat.
+CREATE TABLE IF NOT EXISTS chat_compactions (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK(kind IN ('rolling','break')),
+    source_message_ids TEXT NOT NULL,
+    content TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','done','error')),
+    carry_context INTEGER NOT NULL DEFAULT 1,
+    break_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_compactions_conversation
+    ON chat_compactions(conversation_id, created_at DESC);
+
 -- Photos attached to a chat message. The chat model is text-only
 -- (llama/presets.ini sets mmproj-auto = false on [qwen36]), so `description` --
 -- written by the CPU-only omni model in backend/ai/images.py -- is how the
@@ -367,6 +386,7 @@ CREATE TABLE IF NOT EXISTS settings (
     whisper_model TEXT,
     stt_device TEXT,
     voice_pipeline_enabled INTEGER DEFAULT 1,
+    knowledge_root TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

@@ -37,8 +37,6 @@ interface DelegateProposal {
   data: Record<string, unknown>;
 }
 
-const BREAK_METADATA = JSON.stringify({ break: true });
-
 export function ChatPanel() {
   const [input, setInput] = useState('');
   const [streamingContent, setStreamingContent] = useState('');
@@ -233,6 +231,9 @@ export function ChatPanel() {
     messages.length > 0 && isBreak(messages[messages.length - 1]);
   // Only real user/assistant turns count toward "is there anything to clear".
   const hasChat = messages.some(m => m.role !== 'system');
+  const hasCurrentSegment = contextMessages(messages).some(
+    m => m.role === 'user' || m.role === 'assistant'
+  );
   // The id of the last break marker, so only that divider carries the ref.
   const lastBreakId = [...messages].reverse().find(isBreak)?.id ?? null;
 
@@ -328,14 +329,17 @@ export function ChatPanel() {
   }, [isStreaming, liveMessageId, handedOff]);
 
   const startNewChat = async () => {
-    if (!conversationId || !hasChat || isStreaming) return;
+    if (!conversationId || !hasCurrentSegment || isStreaming) return;
     justBrokeRef.current = true;
-    await addMessage.mutateAsync({
-      convId: conversationId,
-      role: 'system',
-      content: '',
-      metadata: BREAK_METADATA,
-    });
+    await api.chat.startNewChat(conversationId, true);
+    await invalidateToday();
+  };
+
+  const startCleanSlate = async () => {
+    if (!conversationId || !hasCurrentSegment || isStreaming) return;
+    justBrokeRef.current = true;
+    await api.chat.startNewChat(conversationId, false);
+    await invalidateToday();
   };
 
   /**
@@ -382,29 +386,34 @@ export function ChatPanel() {
       convId = result.id;
     }
 
-    await addMessage.mutateAsync({
+    const addedMessage = await addMessage.mutateAsync({
       convId,
       role: 'user',
       content: userMessage,
       attachmentIds,
     });
 
-    // Only the current segment (since the last "New chat") is sent to the model,
-    // so the button acts as a true clear while history stays visible/saved.
+    // Only the raw current segment (since the last boundary) is sent. The
+    // backend may add New Chat's compact durable handoff; Clean slate adds
+    // none, while history stays visible and saved either way.
     // createdAt rides along so the backend can prefix each turn with when it
     // was sent — the model is otherwise blind to gaps in the conversation.
     // attachmentIds ride along too: the server expands them into the readings of
     // the photos, since the chat model cannot see an image itself.
     const chatMessages = [
       ...contextMessages(messages).map(m => ({
+        id: m.id,
         role: m.role,
         content: m.content,
+        metadata: m.metadata,
         createdAt: m.createdAt,
         attachmentIds: (m.attachments ?? []).map(a => a.id),
       })),
       {
+        id: addedMessage.id,
         role: 'user' as const,
         content: userMessage,
+        metadata: null,
         createdAt: new Date().toISOString(),
         attachmentIds,
       },
@@ -625,11 +634,19 @@ export function ChatPanel() {
         <NoteReviewButton />
         <button
           onClick={startNewChat}
-          disabled={!hasChat || isStreaming}
-          title="Clear the view and start a fresh chat (history stays saved above)"
+          disabled={!hasCurrentSegment || isStreaming}
+          title="Compact this chat and carry its durable context into a new one"
           className="px-3 py-1 text-sm rounded-lg border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           New chat
+        </button>
+        <button
+          onClick={startCleanSlate}
+          disabled={!hasCurrentSegment || isStreaming}
+          title="Start without carrying a summary from this chat"
+          className="px-3 py-1 text-sm rounded-lg border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          Clean slate
         </button>
       </div>
       <div
@@ -665,6 +682,12 @@ export function ChatPanel() {
               >
                 <div className="flex-1 h-px bg-white/10" />
                 New chat
+                {message.status === 'streaming' && <span>· compacting…</span>}
+                {message.status === 'error' && (
+                  <span title={message.error ?? undefined}>
+                    · context handoff unavailable
+                  </span>
+                )}
                 {formatMessageTime(message.createdAt) && (
                   <span>· {formatMessageTime(message.createdAt)}</span>
                 )}

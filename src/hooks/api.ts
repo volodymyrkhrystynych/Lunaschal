@@ -782,6 +782,34 @@ export interface AppSettings {
   torrentDefaultRetentionDays: number;
   torrentDefaultRatioLimit: number | null;
   torrentDefaultSeedingMinutes: number | null;
+  knowledgeRoot: string;
+}
+
+export interface KnowledgeArchive {
+  id: string;
+  filename: string;
+  title: string;
+  description?: string;
+  language?: string;
+  date?: string;
+  articleCount?: number | null;
+  size: number;
+  hasFulltextIndex?: boolean;
+  error?: string;
+}
+
+export interface KnowledgeSearchResult {
+  archiveId: string;
+  archiveTitle: string;
+  archiveDate: string;
+  path: string;
+  title: string;
+  snippet: string;
+}
+
+export interface KnowledgeConfig {
+  path: string;
+  exists: boolean;
 }
 
 export interface WhisperModel {
@@ -3413,6 +3441,11 @@ export const api = {
         attachmentIds?: string[];
       }
     ) => post<{ id: string }>(`/api/chat/conversations/${id}/messages`, data),
+    startNewChat: (id: string, carryContext = true) =>
+      post<{ id: string; compactionId: string; status: string }>(
+        `/api/chat/conversations/${id}/break`,
+        { carryContext }
+      ),
     // `coords` is the device's position, kept as a fallback for the photo's own
     // EXIF GPS — iOS strips that whenever an image goes through the clipboard or
     // a share sheet, which is exactly what paste and drop produce.
@@ -3503,6 +3536,22 @@ export const api = {
       put<NoteToSelf>(`/api/notes/${id}`, { content }),
     revisions: (id: string) =>
       get<NoteToSelfRevision[]>(`/api/notes/${id}/revisions`),
+  },
+
+  knowledge: {
+    config: () => get<KnowledgeConfig>('/api/knowledge/config'),
+    setConfig: (path: string) =>
+      put<KnowledgeConfig>('/api/knowledge/config', { path }),
+    archives: () => get<KnowledgeArchive[]>('/api/knowledge/archives'),
+    search: (query: string, limit = 20) =>
+      get<KnowledgeSearchResult[]>(
+        `/api/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`
+      ),
+    contentUrl: (archiveId: string, path: string) =>
+      `/api/knowledge/archives/${encodeURIComponent(archiveId)}/content/${path
+        .split('/')
+        .map(encodeURIComponent)
+        .join('/')}`,
   },
 
   files: {

@@ -24,12 +24,15 @@ export function FolderPicker({
   onClose,
   browse = api.backup.browse,
   title = 'Choose a backup folder',
+  showWritableWarnings = true,
 }: {
   initialPath: string;
   onSelect: (path: string) => void;
   onClose: () => void;
   browse?: (path: string) => Promise<BackupBrowse>;
   title?: string;
+  /** Read-only consumers such as the ZIM library do not care about writes. */
+  showWritableWarnings?: boolean;
 }) {
   const [path, setPath] = useState(initialPath || '/');
 
@@ -109,7 +112,7 @@ export function FolderPicker({
                   className="w-full text-left px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-white/5 flex items-center gap-2"
                 >
                   <span className="truncate">{entry.name}/</span>
-                  {!entry.writable && (
+                  {showWritableWarnings && !entry.writable && (
                     // Surfaced per row because an unwritable destination is the
                     // failure this panel exists to catch — better to see it
                     // before choosing than in the status afterwards.
@@ -134,7 +137,7 @@ export function FolderPicker({
         </div>
 
         <div className="p-3 border-t border-white/10 flex items-center gap-2">
-          {data && !data.writable && (
+          {showWritableWarnings && data && !data.writable && (
             <span className="text-xs text-amber-400">
               This folder isn’t writable.
             </span>

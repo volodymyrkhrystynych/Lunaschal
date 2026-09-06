@@ -25,6 +25,7 @@ import { Jobs } from './components/Jobs';
 import { Paper } from './components/Paper/Paper';
 import { Meetings } from './components/Meetings';
 import { Piano } from './components/Piano';
+import { Knowledge } from './components/Knowledge/Knowledge';
 import { api } from './hooks/api';
 import { useTodaySelfieStatus } from './hooks/useTodaySelfieStatus';
 import { useTodayCaloriesStatus } from './hooks/useTodayCaloriesStatus';
@@ -226,6 +227,8 @@ function AppShell() {
             onTargetConsumed={() => setFicTarget(null)}
           />
         );
+      case 'knowledge':
+        return <Knowledge />;
       case 'newspapers':
         return <Newspapers />;
       case 'torrent':
