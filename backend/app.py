@@ -79,6 +79,11 @@ def create_app():
     for bp in (auth_routes.bp, journal.bp, calendar.bp, learning.bp, settings.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp, transcriptions.bp, cookbook.bp, food.bp, fanfic.bp, newspapers.bp, meetings.bp, notebook.files_bp, notebook.bp, paper.bp, lifestyle.bp, ideas.bp, practice.bp, memory.bp, email.bp, notes.bp, weather.bp, jobs.bp, backup.bp, logs.bp, repos.bp, life_wiki.bp, piano.bp, torrent.bp, knowledge.bp):
         app.register_blueprint(bp)
 
+    # Unlike scheduler loops, this is crash recovery for durable rows. It is a
+    # no-op on the usual path and safe in tests, where no pending rows exist.
+    from backend.chat.compaction import recover_pending
+    recover_pending()
+
     @app.before_request
     def check_auth():
         if not NETWORK_MODE or is_localhost(request):

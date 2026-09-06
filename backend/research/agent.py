@@ -107,9 +107,10 @@ def deadline_from(seconds, outer: float | None = None) -> float | None:
 
 
 def gather_events(
-    system: str,
-    user: str,
+    system: str | None = None,
+    user: str | None = None,
     *,
+    initial_messages: list[dict] | None = None,
     tools: list[dict] | None = None,
     dispatch: dict | None = None,
     on_step=None,
@@ -117,6 +118,7 @@ def gather_events(
     max_turns: int = MAX_TOOL_TURNS,
     max_fetches: int = MAX_FETCHES,
     deadline: float | None = None,
+    ignore_unknown_tools: bool = False,
 ):
     """Generator form of the loop: yields ('step', event) as each tool call
     completes, then exactly one ('result', {...}) at the end.
@@ -133,16 +135,18 @@ def gather_events(
     for the old unbounded behaviour.
     """
     yield from _loop(
-        system, user, tools=tools, dispatch=dispatch, on_step=on_step,
+        system, user, initial_messages=initial_messages,
+        tools=tools, dispatch=dispatch, on_step=on_step,
         checkpoint=checkpoint, max_turns=max_turns, max_fetches=max_fetches,
-        deadline=deadline,
+        deadline=deadline, ignore_unknown_tools=ignore_unknown_tools,
     )
 
 
 def gather(
-    system: str,
-    user: str,
+    system: str | None = None,
+    user: str | None = None,
     *,
+    initial_messages: list[dict] | None = None,
     tools: list[dict] | None = None,
     dispatch: dict | None = None,
     on_step=None,
@@ -150,6 +154,7 @@ def gather(
     max_turns: int = MAX_TOOL_TURNS,
     max_fetches: int = MAX_FETCHES,
     deadline: float | None = None,
+    ignore_unknown_tools: bool = False,
 ) -> dict:
     """Blocking form, for the background worker where nothing is watching.
 
@@ -158,9 +163,10 @@ def gather(
     """
     result: dict = {}
     for kind, payload in gather_events(
-        system, user, tools=tools, dispatch=dispatch, on_step=on_step,
+        system, user, initial_messages=initial_messages,
+        tools=tools, dispatch=dispatch, on_step=on_step,
         checkpoint=checkpoint, max_turns=max_turns, max_fetches=max_fetches,
-        deadline=deadline,
+        deadline=deadline, ignore_unknown_tools=ignore_unknown_tools,
     ):
         if kind == 'result':
             result = payload
@@ -168,9 +174,10 @@ def gather(
 
 
 def _loop(
-    system: str,
-    user: str,
+    system: str | None,
+    user: str | None,
     *,
+    initial_messages: list[dict] | None = None,
     tools: list[dict] | None = None,
     dispatch: dict | None = None,
     on_step=None,
@@ -178,18 +185,28 @@ def _loop(
     max_turns: int = MAX_TOOL_TURNS,
     max_fetches: int = MAX_FETCHES,
     deadline: float | None = None,
+    ignore_unknown_tools: bool = False,
 ):
     tools = tools if tools is not None else ALL_TOOLS
     dispatch = dispatch if dispatch is not None else _DISPATCH
     on_step = on_step or _noop
     checkpoint = checkpoint or _noop
 
-    messages: list[dict] = [
-        {'role': 'system', 'content': system},
-        {'role': 'user', 'content': user},
-    ]
+    if initial_messages is not None:
+        # A caller such as Chat already has a role-correct transcript. Copy the
+        # dictionaries so appending tool turns here never mutates the prompt it
+        # will later use for the streamed answer.
+        messages = [dict(m) for m in initial_messages]
+    else:
+        if system is None or user is None:
+            raise ValueError('system and user are required without initial_messages')
+        messages = [
+            {'role': 'system', 'content': system},
+            {'role': 'user', 'content': user},
+        ]
     steps: list[dict] = []
     sources: list[dict] = []
+    evidence: list[dict] = []
     fetches = 0
     turns = 0
     truncated = True
@@ -213,6 +230,9 @@ def _loop(
             break
 
         tool_calls = getattr(msg, 'tool_calls', None)
+        if tool_calls and ignore_unknown_tools:
+            tool_calls = [call for call in tool_calls
+                          if call.function.name in dispatch]
         if not tool_calls:
             messages.append({'role': 'assistant', 'content': msg.content or ''})
             # A turn stopped at TURN_MAX_TOKENS also arrives with no tool calls.
@@ -272,6 +292,8 @@ def _loop(
             # list on its own event rather than as a single url/title pair.
             elif event.get('sources'):
                 sources.extend(event['sources'])
+            if event.get('evidence'):
+                evidence.append(event['evidence'])
 
             messages.append({
                 'role': 'tool',
@@ -286,6 +308,7 @@ def _loop(
         'messages': messages,
         'steps': steps,
         'sources': sources,
+        'evidence': evidence,
         'turns': turns,
         # True when the loop hit its turn budget rather than the model deciding
         # it had enough — the caller may want to say so.

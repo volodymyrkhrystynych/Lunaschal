@@ -122,6 +122,7 @@ def init_db() -> None:
     _ensure_research_settings(db)
     _ensure_timeout_settings(db)
     _ensure_message_finished_at(db)
+    _ensure_chat_compactions(db)
     # After both column sets exist: it reads one and writes the other.
     _migrate_websearch_search_to_research(db)
     _ensure_idea_assessment_columns(db)
@@ -1723,6 +1724,29 @@ def _ensure_conversation_mode(db: sqlite3.Connection) -> None:
     if 'mode' not in cols:
         db.execute("ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat'")
         db.commit()
+
+
+def _ensure_chat_compactions(db: sqlite3.Connection) -> None:
+    """Derived summaries for rolling context and New Chat handoffs."""
+    db.executescript(
+        '''CREATE TABLE IF NOT EXISTS chat_compactions (
+               id TEXT PRIMARY KEY,
+               conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+               kind TEXT NOT NULL CHECK(kind IN ('rolling','break')),
+               source_message_ids TEXT NOT NULL,
+               content TEXT,
+               status TEXT NOT NULL DEFAULT 'pending'
+                   CHECK(status IN ('pending','done','error')),
+               carry_context INTEGER NOT NULL DEFAULT 1,
+               break_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+               error TEXT,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+           );
+           CREATE INDEX IF NOT EXISTS idx_chat_compactions_conversation
+               ON chat_compactions(conversation_id, created_at DESC);'''
+    )
+    db.commit()
 
 
 def _ensure_torrent_settings(db: sqlite3.Connection) -> None:

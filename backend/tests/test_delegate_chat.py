@@ -1,6 +1,6 @@
 """The Chat tab's decide-act-answer turn, and its SSE framing.
 
-The model is faked at two seams: `_decision_calls` (the decision turn) and
+The model is faked at two seams: the shared gathering loop's tool turns and
 `chat_stream_events` (the answer). What's under test is the glue between them —
 what the tools stage, what crosses from the delegate into the answering prompt,
 and what reaches the browser.
@@ -12,6 +12,7 @@ hand-off.
 """
 import json
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -44,19 +45,43 @@ def answered(monkeypatch):
 
 
 def _decides(monkeypatch, calls):
-    monkeypatch.setattr(delegate_chat, '_decision_calls', lambda messages: list(calls))
+    responses = [
+        SimpleNamespace(content='', tool_calls=list(calls)),
+        SimpleNamespace(content='', tool_calls=None),
+    ]
+    seen = {'count': 0}
+
+    def fake_turn(messages, tools, max_tokens=None):
+        i = min(seen['count'], len(responses) - 1)
+        seen['count'] += 1
+        response = responses[i]
+        return response, 'tool_calls' if response.tool_calls else 'stop'
+
+    monkeypatch.setattr(delegate_chat.tool_loop, 'chat_tool_turn', fake_turn)
 
 
 def _no_tools(monkeypatch):
     _decides(monkeypatch, [])
 
 
+def _main_script(monkeypatch, responses):
+    seen = []
+
+    def fake_turn(messages, tools, max_tokens=None):
+        seen.append(list(messages))
+        response = responses[min(len(seen) - 1, len(responses) - 1)]
+        return response, 'tool_calls' if response.tool_calls else 'stop'
+
+    monkeypatch.setattr(delegate_chat.tool_loop, 'chat_tool_turn', fake_turn)
+    return seen
+
+
 def _delegates(monkeypatch, result, task='do the thing'):
-    _decides(monkeypatch, [_call('delegate', {'task': task})])
+    _decides(monkeypatch, [_call('delegate', {
+        'task': task, 'reason': 'current',
+    })])
     monkeypatch.setattr(
-        delegate_chat.agent, 'run_events',
-        lambda t, **kw: iter([('step', {'tool': 'web_search', 'ok': True}),
-                              ('result', result)]),
+        delegate_chat.agent, 'run', lambda t, **kw: result,
     )
 
 
@@ -69,7 +94,7 @@ def test_an_ordinary_message_runs_no_tools_at_all(monkeypatch, answered):
     events = _drain()
 
     assert [k for k, _ in events] == ['content', 'done']
-    assert events[-1][1] == {'steps': [], 'sources': [], 'proposals': [],
+    assert events[-1][1] == {'steps': [], 'sources': [], 'evidence': [], 'proposals': [],
                              'truncated': False, 'timedOut': False}
 
 
@@ -147,6 +172,109 @@ def test_only_the_summary_crosses_into_the_answering_prompt(monkeypatch, answere
     assert tool_messages[0]['content'] == 'FSRS 5 was released in July 2024.'
 
 
+def test_local_search_and_read_stay_on_the_main_agents_transcript(
+        monkeypatch, answered):
+    """The final-answering model sees the actual local results and passage,
+    rather than receiving another model's summary of them."""
+    _main_script(monkeypatch, [
+        SimpleNamespace(content='', tool_calls=[_call(
+            'local_knowledge_search', {'queries': [
+                'Charlie and the Chocolate Factory',
+                'Charlie and the Chocolate Factory book',
+            ]},
+        )]),
+        SimpleNamespace(content='', tool_calls=[_call(
+            'local_knowledge_read', {'archiveId': 'wiki', 'path': 'Charlie'},
+        )]),
+        SimpleNamespace(content='', tool_calls=None),
+    ])
+
+    def local(name, args):
+        if name == 'local_knowledge_search':
+            return ('Charlie — archiveId=wiki path=Charlie', {
+                'tool': name, 'arg': args['queries'][0],
+                'queries': args['queries'], 'ok': True, 'count': 1,
+            })
+        return ('# Charlie and the Chocolate Factory\nFirst published in 1964.', {
+            'tool': name, 'arg': 'Charlie and the Chocolate Factory', 'ok': True,
+            'sources': [{'url': '/api/knowledge/wiki/Charlie', 'title': 'Charlie'}],
+            'evidence': {'kind': 'offline_knowledge', 'title': 'Charlie',
+                         'excerpt': 'First published in 1964.'},
+        })
+
+    monkeypatch.setattr(delegate_chat.knowledge_tools, 'run_tool', local)
+    monkeypatch.setattr(delegate_chat.agent, 'run',
+                        lambda *_a, **_k: pytest.fail('web delegate was not needed'))
+
+    payload = _drain()[-1][1]
+
+    assert [s['tool'] for s in payload['steps']] == [
+        'local_knowledge_search', 'local_knowledge_read',
+    ]
+    assert payload['evidence'][0]['excerpt'] == 'First published in 1964.'
+    tool_text = '\n'.join(
+        m['content'] for m in answered['messages'] if m['role'] == 'tool'
+    )
+    assert 'First published in 1964' in tool_text
+
+
+def test_web_delegate_requires_local_attempt_unless_question_is_current(
+        monkeypatch, answered):
+    _main_script(monkeypatch, [
+        SimpleNamespace(content='', tool_calls=[_call(
+            'delegate', {'task': 'look it up', 'reason': 'local_insufficient'},
+        )]),
+        SimpleNamespace(content='', tool_calls=None),
+    ])
+    monkeypatch.setattr(delegate_chat.agent, 'run',
+                        lambda *_a, **_k: pytest.fail('delegate should be gated'))
+
+    payload = _drain()[-1][1]
+
+    assert payload['steps'][0]['error'] == 'offline library has not been searched'
+
+
+def test_web_delegate_requires_reading_a_local_hit(monkeypatch, answered):
+    _main_script(monkeypatch, [
+        SimpleNamespace(content='', tool_calls=[_call(
+            'local_knowledge_search', {'queries': ['the novel', 'novel title']},
+        )]),
+        SimpleNamespace(content='', tool_calls=[_call(
+            'delegate', {'task': 'the novel', 'reason': 'local_insufficient'},
+        )]),
+        SimpleNamespace(content='', tool_calls=None),
+    ])
+    monkeypatch.setattr(delegate_chat.knowledge_tools, 'run_tool', lambda name, args: (
+        'one result', {'tool': name, 'ok': True, 'count': 1},
+    ))
+    monkeypatch.setattr(delegate_chat.agent, 'run',
+                        lambda *_a, **_k: pytest.fail('local hit was not read'))
+
+    payload = _drain()[-1][1]
+
+    assert payload['steps'][-1]['error'] == 'offline search result has not been read'
+
+
+def test_an_inherently_current_question_can_go_directly_to_web(
+        monkeypatch, answered):
+    _main_script(monkeypatch, [
+        SimpleNamespace(content='', tool_calls=[_call(
+            'delegate', {'task': 'weather today', 'reason': 'current'},
+        )]),
+        SimpleNamespace(content='', tool_calls=None),
+    ])
+    monkeypatch.setattr(delegate_chat.agent, 'run', lambda *_a, **_k: {
+        'summary': 'Rain today.',
+        'sources': [{'url': 'https://weather.example', 'title': 'Weather'}],
+        'steps': [{'tool': 'web_search', 'ok': True}],
+    })
+
+    payload = _drain()[-1][1]
+
+    assert payload['steps'][0]['tool'] == 'delegate'
+    assert payload['sources'][0]['title'] == 'Weather'
+
+
 def test_the_transcript_keeps_a_well_formed_tool_exchange(monkeypatch, answered):
     """A tool result with no preceding assistant tool_call is a malformed
     history that llama-server's template renders wrong."""
@@ -195,7 +323,7 @@ def test_a_failed_decision_turn_still_produces_a_reply(monkeypatch, answered):
     def boom(messages, tools, max_tokens=None):
         raise RuntimeError('llama-server is down')
 
-    monkeypatch.setattr(delegate_chat, 'chat_tool_turn', boom)
+    monkeypatch.setattr(delegate_chat.tool_loop, 'chat_tool_turn', boom)
     events = _drain()
 
     assert [k for k, _ in events] == ['content', 'done']
@@ -211,12 +339,13 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
         seen['tools'] = tools
         return SimpleNamespace(content='', tool_calls=None), 'stop'
 
-    monkeypatch.setattr(delegate_chat, 'chat_tool_turn', fake_turn)
+    monkeypatch.setattr(delegate_chat.tool_loop, 'chat_tool_turn', fake_turn)
     _drain()
 
-    assert seen['max_tokens'] == delegate_chat.DECISION_MAX_TOKENS
+    assert seen['max_tokens'] == delegate_chat.tool_loop.TURN_MAX_TOKENS
     offered = {t['function']['name'] for t in seen['tools']}
-    assert offered == {'delegate', 'add_todos', 'propose_calendar_event',
+    assert offered == {'local_knowledge_search', 'local_knowledge_read',
+                       'delegate', 'add_todos', 'propose_calendar_event',
                        'propose_calorie_log', 'propose_food_log', 'propose_recipe',
                        'draft_flashcard', 'propose_flashcards',
                        'create_note_to_self', 'ask_user', 'remember',
@@ -233,7 +362,7 @@ def test_a_tool_call_the_model_invented_is_ignored(monkeypatch, answered):
             content='', tool_calls=[_call('propose_mortgage', {'x': 1})],
         ), 'tool_calls'
 
-    monkeypatch.setattr(delegate_chat, 'chat_tool_turn', fake_turn)
+    monkeypatch.setattr(delegate_chat.tool_loop, 'chat_tool_turn', fake_turn)
     events = _drain()
 
     assert events[-1][1]['steps'] == []
@@ -275,7 +404,7 @@ def test_tools_disabled_skips_the_decision_turn(monkeypatch, answered):
     def boom(*args, **kwargs):
         raise AssertionError('the decision turn must not run')
 
-    monkeypatch.setattr(delegate_chat, 'chat_tool_turn', boom)
+    monkeypatch.setattr(delegate_chat.tool_loop, 'chat_tool_turn', boom)
     events = list(delegate_chat.stream_reply(
         [{'role': 'user', 'content': 'hi'}], 'CUSTOM PROMPT', tools_enabled=False
     ))
@@ -514,7 +643,9 @@ def test_a_reply_that_runs_past_its_budget_keeps_what_streamed(client, monkeypat
 
     monkeypatch.setattr(delegate_chat, 'chat_stream_events', endless)
     monkeypatch.setattr(delegate_chat.limits, 'chat_deadline', lambda: 100)
-    clock = iter([50, 999, 999, 999])
+    # One deadline check belongs to the main tool-selection turn before answer
+    # streaming begins; the next two are after the first and second deltas.
+    clock = iter([50, 50, 999, 999])
     monkeypatch.setattr(delegate_chat.time, 'monotonic', lambda: next(clock))
 
     events = list(delegate_chat.stream_reply([{'role': 'user', 'content': 'hi'}]))
@@ -529,19 +660,22 @@ def test_the_delegate_is_handed_the_replys_deadline(client, monkeypatch):
     """The outer bound its own budget and its nested deep pass are both clamped
     to — without it the chat timeout is decorative."""
     seen = {}
-    _decides(monkeypatch, [_call('delegate', {'task': 'look it up'})])
+    _decides(monkeypatch, [_call('delegate', {
+        'task': 'look it up', 'reason': 'current',
+    })])
 
-    def fake_run_events(task, **kwargs):
+    def fake_run(task, **kwargs):
         seen['deadline'] = kwargs.get('deadline')
-        yield ('result', {'steps': [], 'sources': [], 'summary': 'found it'})
+        return {'steps': [], 'sources': [], 'summary': 'found it'}
 
-    monkeypatch.setattr(delegate_chat.agent, 'run_events', fake_run_events)
+    monkeypatch.setattr(delegate_chat.agent, 'run', fake_run)
     monkeypatch.setattr(delegate_chat, 'chat_stream_events',
                         lambda messages: iter([('content', 'ok')]))
-    monkeypatch.setattr(delegate_chat.limits, 'chat_deadline', lambda: 12345.0)
+    deadline = time.monotonic() + 60
+    monkeypatch.setattr(delegate_chat.limits, 'chat_deadline', lambda: deadline)
 
     list(delegate_chat.stream_reply([{'role': 'user', 'content': 'hi'}]))
-    assert seen['deadline'] == 12345.0
+    assert seen['deadline'] == deadline
 
 
 def test_with_the_timeout_off_nothing_is_cut_short(client, monkeypatch):

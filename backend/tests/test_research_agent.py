@@ -62,6 +62,22 @@ def test_a_plain_answer_ends_the_loop_immediately(monkeypatch):
     assert result['messages'][-1] == {'role': 'assistant', 'content': 'I already know this.'}
 
 
+def test_a_caller_can_start_the_shared_loop_from_a_chat_transcript(monkeypatch):
+    calls = _script(monkeypatch, [_msg(content='done')])
+    initial = [
+        {'role': 'system', 'content': 'chat system'},
+        {'role': 'user', 'content': 'earlier turn'},
+        {'role': 'assistant', 'content': 'earlier answer'},
+        {'role': 'user', 'content': 'decide tools'},
+    ]
+
+    result = agent.gather(initial_messages=initial)
+
+    assert calls[0]['messages'] == initial
+    assert result['messages'][:-1] == initial
+    assert result['messages'] is not initial
+
+
 def test_a_turn_cut_off_at_the_token_ceiling_is_not_a_finished_run(monkeypatch):
     """A truncated turn arrives with no tool calls, exactly like a finished one.
 

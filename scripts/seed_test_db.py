@@ -17,6 +17,7 @@ media dirs and rebuilds from scratch. Realistic-but-small — a handful of rows
 per feature, enough to click through every view, not exhaustive coverage
 (that's what backend/tests/ is for).
 """
+import json
 import os
 import shutil
 import sys
@@ -693,6 +694,17 @@ def seed_chat(db):
             'VALUES (?, ?, ?, ?, ?, ?, ?)',
             (message_id, conv_id, role, content, 'done', ts(2), ts(2)),
         )
+
+    db.execute(
+        'INSERT INTO chat_compactions (id, conversation_id, kind, source_message_ids, '
+        'content, status, carry_context, created_at, updated_at) '
+        "VALUES (?, ?, 'rolling', ?, ?, 'done', 1, ?, ?)",
+        (new_id(), conv_id, json.dumps(message_ids), json.dumps({
+            'summary': 'The user was considering a weekend trip from Toronto.',
+            'facts': [], 'decisions': [], 'openThreads': ['Choose a destination.'],
+            'sources': [],
+        }), ts(2), ts(2)),
+    )
 
     # A photo the user attached, already described. 'running' is avoided —
     # _reset_stale_chat_attachment_descriptions rewrites that to 'error'.

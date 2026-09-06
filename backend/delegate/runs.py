@@ -163,6 +163,7 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enable
                     # above it is real and was kept; it is just not finished.
                     'timedOut': bool(payload.get('timedOut')),
                     'sources': payload.get('sources', []),
+                    'evidence': payload.get('evidence', []),
                     'proposals': proposals,
                 })
                 build_update(db, 'messages', {

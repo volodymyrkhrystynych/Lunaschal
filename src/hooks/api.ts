@@ -3441,6 +3441,11 @@ export const api = {
         attachmentIds?: string[];
       }
     ) => post<{ id: string }>(`/api/chat/conversations/${id}/messages`, data),
+    startNewChat: (id: string, carryContext = true) =>
+      post<{ id: string; compactionId: string; status: string }>(
+        `/api/chat/conversations/${id}/break`,
+        { carryContext }
+      ),
     // `coords` is the device's position, kept as a fallback for the photo's own
     // EXIF GPS — iOS strips that whenever an image goes through the clipboard or
     // a share sheet, which is exactly what paste and drop produce.

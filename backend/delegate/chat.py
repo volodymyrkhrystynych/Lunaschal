@@ -8,19 +8,13 @@ message the user had never meant as a request at all. Here the decision happens
 before the reply, the model makes it, and a failure is a visible error on the
 stream.
 
-**The decision turn is separate from the answer, and its prose is discarded.**
+**The gathering turns are separate from the answer, and their prose is discarded.**
 llama-server rebuilds OpenAI `tool_calls` by running a grammar over the model's
 native call notation, and reassembling partial tool-call deltas across
-chunks is how an argument goes missing in production — so the turn that may
-carry a tool call cannot be streamed. It is capped hard (`DECISION_MAX_TOKENS`)
-and told to emit nothing when nothing needs doing, which keeps the cost of the
-common case to a couple of tokens rather than a whole discarded reply. The
-answer then streams in its own turn, off a prompt llama-server has already
-cached, so the restart costs generation and not prefill.
-
-**The decision turn is one round, not a loop.** Proposals are one-shot, and the
-delegate is itself a loop, so a second blocking turn would only double the dead
-air before the first token.
+chunks is how an argument goes missing in production, so tool-selection turns
+stay blocking and capped. They now use the shared bounded loop because local
+retrieval normally needs search -> read -> assess. The answer then streams in
+its own turn, off a prompt llama-server has already cached.
 
 **The `propose_*` tools are on this turn, not behind the delegate.** They were
 behind it, and the cost was exactly the detail the user cares about: the
@@ -34,16 +28,19 @@ date. What stays behind `delegate` is the work whose *output* is large — a
 import json
 import logging
 import time
+from types import SimpleNamespace
 
 from backend.ai.chat import (
     TIME_PREFIX_NOTE, build_chat_system_prompt, format_now_context, stamp_messages,
 )
-from backend.ai.llm import chat_stream_events, chat_tool_turn
-from backend.ai.mcp_client import serialize_tool_calls
+from backend.ai.llm import chat_stream_events
+from backend.chat import compaction
 from backend.chat.context import expand_attachments
 from backend.delegate import agent, limits, tools as proposal_tools
 from backend.lifewiki import tools as life_tools
 from backend.lifewiki.tools import LifeTools
+from backend.offline_knowledge import tools as knowledge_tools
+from backend.research import agent as tool_loop
 from backend.research import wiki as wiki_tools
 
 logger = logging.getLogger(__name__)
@@ -52,34 +49,16 @@ logger = logging.getLogger(__name__)
 def _out_of_time(deadline: float | None) -> bool:
     return deadline is not None and time.monotonic() >= deadline
 
-# Raised from 160 when the propose_* tools moved onto this turn: a delegate call
-# is one string, but a calendar event with a description and tags is several
-# times that, and a tool call truncated at the ceiling comes back with no
-# `tool_calls` at all — silently indistinguishable from the model deciding it
-# had nothing to do. Still a hard cap, because its job is to stop a model that
-# decided *not* to act from writing a whole reply we are about to throw away.
-#
-# 320 -> 512 when propose_food_log joined: dish, place, notes, calories, rating
-# and tags in one call is the largest argument set on this turn, and a food
-# message often stages that *and* asks a clarifying question in one breath.
-#
-# 512 -> 768 when propose_recipe joined: its `content` is a whole markdown
-# recipe (ingredients + numbered instructions), the largest single string any
-# tool here writes — larger than propose_food_log's notes field alone.
-DECISION_MAX_TOKENS = 768
-
 DELEGATE_TOOL = {
     'type': 'function',
     'function': {
         'name': 'delegate',
         'description': (
-            'Hand a lookup to a research delegate that can search and read the '
-            'web — quickly for a single fact, or with real depth for a broad '
-            'question. Call it when answering needs current or specific '
-            'information you are not confident about. Do not call it for '
-            'ordinary conversation, for anything you can answer confidently '
-            'yourself, or for recording something — the propose_ tools do that '
-            'directly.'
+            'Hand a lookup to the web research delegate — quickly for one '
+            'fact, or with real depth for a broad question. Use it after local '
+            'knowledge is insufficient, or immediately when the question is '
+            'inherently current. Do not use it for ordinary conversation or '
+            'for recording something.'
         ),
         'parameters': {
             'type': 'object',
@@ -92,8 +71,13 @@ DELEGATE_TOOL = {
                         'detail it needs.'
                     ),
                 },
+                'reason': {
+                    'type': 'string',
+                    'enum': ['local_insufficient', 'current'],
+                    'description': 'Why the internet is needed.',
+                },
             },
-            'required': ['task'],
+            'required': ['task', 'reason'],
         },
     },
 }
@@ -105,7 +89,7 @@ _LIFE_WIKI_TOOLS = [t for t in wiki_tools.TOOLS
                     if t['function']['name'] in ('wiki_read', 'wiki_search')]
 _LIFE_WIKI_NAMES = {t['function']['name'] for t in _LIFE_WIKI_TOOLS}
 
-TOOLS = ([DELEGATE_TOOL] + proposal_tools.TOOLS + life_tools.TOOLS
+TOOLS = (knowledge_tools.TOOLS + [DELEGATE_TOOL] + proposal_tools.TOOLS + life_tools.TOOLS
          + _LIFE_WIKI_TOOLS)
 
 DECISION_NOTE = """Right now your only job is to decide which of your tools this \
@@ -120,7 +104,19 @@ Where they clearly meant a detail but were too vague for you to act on it — \
 ask_user instead of guessing at it. Where they implied nothing, do not ask: \
 stage what they said and leave the rest empty.
 
-Use delegate when answering needs something looked up on the web.
+For a factual or reference question, call local_knowledge_search with two to \
+four complementary queries in one call: the clean entity or title, the user's \
+full question, and any plausible interpretations such as book versus movie. \
+Do not put a guessed answer into a query. Choose from the merged candidates, \
+then read the strongest one to three articles with local_knowledge_read. Search \
+results and titles are leads, not evidence. When the wording is ambiguous, read \
+the plausible meanings and either answer each explicitly or ask the user which \
+they meant. You see the local results yourself, so decide whether they actually \
+answer the user's question.
+
+Use delegate only when local evidence is absent, contradictory, stale for the \
+question, or too unspecific to support an answer. An inherently current question \
+may go directly to delegate with reason=current.
 
 Use search_conversations, search_journal or read_day when the answer is \
 something the user already told you or wrote down and you cannot see it in \
@@ -136,7 +132,7 @@ If the message needs none of this, write nothing at all: anything you type in \
 this turn is discarded."""
 
 ANSWER_INSTRUCTION = (
-    'Reply to the user now, in your own voice. If the delegate found '
+    'Reply to the user now, in your own voice. If the knowledge tools or web delegate found '
     'information, use it to actually answer the question — state the facts it '
     'found, in full, do not just gesture at having looked something up. If you '
     'staged anything, mention that in passing — a confirmation card is already '
@@ -170,51 +166,76 @@ def _system_prompt(messages: list[dict], system_prompt: str = '') -> str:
     return system
 
 
-def _decision_calls(messages: list[dict]) -> list:
-    """The decision turn. Returns every tool call it made, in order.
+def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
+    """Bind conversation-scoped tools and the nested web delegate for one run."""
+    local_state = {'searched': False, 'hits': 0, 'read': False}
+    action_calls: set[tuple[str, str]] = set()
 
-    Never raises: a decision turn that fails should cost the tools, not the
-    reply. The classifier's sin was swallowing failure *silently* — this logs it
-    and carries on to an ordinary answer, which is a real degradation the user
-    can still act in.
+    def run_local(name, args):
+        text, event = knowledge_tools.run_tool(name, args)
+        if name == 'local_knowledge_search':
+            local_state['searched'] = True
+            local_state['hits'] = event.get('count', 0) if event.get('ok') else 0
+        elif name == 'local_knowledge_read' and event.get('ok'):
+            local_state['read'] = True
+        return text, event
 
-    All of the calls, not just the first: a message can legitimately stage a
-    to-do and ask about a second one, and the old code kept only the first
-    `delegate` call and dropped everything else on the turn.
-    """
-    try:
-        # Appended as a user turn, not a system one: the same shape the Ideas
-        # discussion uses for its answer instruction, and the one a chat
-        # template actually attends to at the end of a conversation.
-        msg, finish_reason = chat_tool_turn(
-            messages + [{'role': 'user', 'content': DECISION_NOTE}],
-            TOOLS,
-            max_tokens=DECISION_MAX_TOKENS,
-        )
-    except Exception as e:
-        logger.warning('Decision turn failed, answering without tools: %s', e)
-        return []
+    def run_delegate(_name, args):
+        if args.get('reason') != 'current' and not local_state['searched']:
+            return (
+                'Search the offline library first, or mark this as an inherently current question.',
+                {'tool': 'delegate', 'arg': args.get('task'), 'ok': False,
+                 'error': 'offline library has not been searched'},
+            )
+        if (args.get('reason') != 'current' and local_state['hits']
+                and not local_state['read']):
+            return (
+                'Read the strongest local result before deciding it is insufficient.',
+                {'tool': 'delegate', 'arg': args.get('task'), 'ok': False,
+                 'error': 'offline search result has not been read'},
+            )
+        result = agent.run((args.get('task') or '').strip(), checkpoint=checkpoint,
+                           deadline=deadline)
+        delegate_steps = result.get('steps', [])
+        successful = [step for step in delegate_steps if step.get('ok')]
+        last_error = next((step.get('error') for step in reversed(delegate_steps)
+                           if step.get('error')), None)
+        return result.get('summary', ''), {
+            'tool': 'delegate',
+            'arg': args.get('task'),
+            'ok': bool(result.get('summary')) and bool(successful),
+            'error': None if successful else last_error,
+            'sources': result.get('sources', []),
+            'count': len(result.get('sources', [])),
+            'delegateSteps': delegate_steps,
+            'timedOut': bool(result.get('timedOut')),
+        }
 
-    calls = [c for c in (getattr(msg, 'tool_calls', None) or [])
-             if c.function.name in _KNOWN_TOOLS]
-    if finish_reason == 'length' and not calls:
-        # A turn cut off at the ceiling returns no tool_calls, which is
-        # otherwise indistinguishable from the model deciding it had nothing to
-        # do. Worth a line in the log, since it means a request went unactioned.
-        logger.warning('Decision turn hit the %d-token ceiling with no tool call',
-                       DECISION_MAX_TOKENS)
-    return calls
+    def run_proposal(name, args):
+        # A multi-turn gather can reconsider after seeing a search result. It
+        # must not perform the exact same write/stage twice while doing so — a
+        # safety property the old one-shot decision turn got for free.
+        key = (name, json.dumps(args, sort_keys=True, default=str))
+        if key in action_calls:
+            return 'That exact action already ran during this reply.', {
+                'tool': name, 'arg': args, 'ok': False,
+                'error': 'duplicate tool call ignored',
+            }
+        action_calls.add(key)
+        return proposal_tools.run_tool(name, args)
 
-
-def _args_of(call) -> dict:
-    try:
-        args = json.loads(call.function.arguments or '{}')
-    except json.JSONDecodeError:
-        return {}
-    return args if isinstance(args, dict) else {}
-
-
-_KNOWN_TOOLS = {t['function']['name'] for t in TOOLS}
+    dispatch = {
+        'local_knowledge_search': SimpleNamespace(run_tool=run_local),
+        'local_knowledge_read': SimpleNamespace(run_tool=run_local),
+        'delegate': SimpleNamespace(run_tool=run_delegate),
+    }
+    dispatch.update({name: life_wiki for name in _LIFE_WIKI_NAMES})
+    dispatch.update({name: life for name in life_tools.TOOL_NAMES})
+    proposal_dispatch = SimpleNamespace(run_tool=run_proposal)
+    dispatch.update({
+        tool['function']['name']: proposal_dispatch for tool in proposal_tools.TOOLS
+    })
+    return dispatch
 
 
 def stream_reply(messages: list[dict], system_prompt: str = '', *,
@@ -249,6 +270,16 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     deadline = limits.chat_deadline()
     timed_out = False
     system = _system_prompt(messages, system_prompt)
+    messages, rolling_context = compaction.compact_for_prompt(
+        messages, conversation_id,
+    )
+    context_blocks = [
+        compaction.handoff_context(conversation_id),
+        rolling_context,
+        compaction.evidence_context(conversation_id),
+    ]
+    if any(context_blocks):
+        system += '\n\n' + '\n\n'.join(x for x in context_blocks if x)
     # Photos become text before stamping, not after: stamp_messages flattens a
     # message to `[today 21:58] <content>`, so anything that must reach the model
     # has to already be in `content` by then.
@@ -265,57 +296,30 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     # WikiTools scope keeps the user's life out of a research turn.
     life_wiki = wiki_tools.WikiTools(kind=wiki_tools.LIFE_KIND)
 
-    calls = _decision_calls(conversation) if tools_enabled else []
-    results: list[tuple[object, str]] = []
-
-    for call in calls:
-        if call.function.name == 'delegate':
-            task = (_args_of(call).get('task') or '').strip()
-            result: dict = {}
-            for kind, payload in agent.run_events(task, checkpoint=checkpoint,
-                                                  deadline=deadline):
-                if kind == 'step':
-                    steps.append(payload)
-                    yield ('step', payload)
-                else:
-                    result = payload
-            sources += result.get('sources', [])
-            # Only the delegate's summary crosses over, never its whole
-            # transcript: that compression is the point of delegating, and it
-            # is what keeps this conversation's context flat as it grows.
-            results.append((call, result.get('summary', '')))
-        elif call.function.name in _LIFE_WIKI_NAMES:
-            text, event = life_wiki.run_tool(call.function.name, _args_of(call))
-        elif call.function.name in life_tools.TOOL_NAMES:
-            # Bound to the conversation rather than handed it per call, the same
-            # way WikiTools binds its repo: the shared loop dispatches by name
-            # and knows nothing about either scope.
-            text, event = life.run_tool(call.function.name, _args_of(call))
-        else:
-            text, event = proposal_tools.run_tool(call.function.name, _args_of(call))
-            steps.append(event)
-            yield ('step', event)
-            # ask_user's event deliberately carries no `proposal`, so asking can
-            # never put a card built on a guess in front of the user.
-            if event.get('proposal'):
-                proposals.append(event['proposal'])
-            results.append((call, text))
-
-    if results:
-        # The transcript keeps the *shape* of a tool exchange — one assistant
-        # message carrying every call, then one tool message per call — so the
-        # answering turn sees a well-formed history.
-        conversation.append({
-            'role': 'assistant',
-            'content': None,
-            'tool_calls': serialize_tool_calls([c for c, _ in results]),
-        })
-        for call, text in results:
-            conversation.append({
-                'role': 'tool',
-                'tool_call_id': call.id,
-                'content': text,
-            })
+    evidence: list[dict] = []
+    if tools_enabled:
+        gathered: dict = {}
+        dispatch = _main_dispatch(
+            life=life, life_wiki=life_wiki, checkpoint=checkpoint,
+            deadline=deadline,
+        )
+        for kind, payload in tool_loop.gather_events(
+                initial_messages=conversation + [
+                    {'role': 'user', 'content': DECISION_NOTE},
+                ],
+                tools=TOOLS, dispatch=dispatch, checkpoint=checkpoint,
+                max_turns=6, max_fetches=0, deadline=deadline,
+                ignore_unknown_tools=True):
+            if kind == 'step':
+                steps.append(payload)
+                if payload.get('proposal'):
+                    proposals.append(payload['proposal'])
+                yield ('step', payload)
+            else:
+                gathered = payload
+        conversation = gathered.get('messages', conversation)
+        sources = gathered.get('sources', [])
+        evidence = gathered.get('evidence', [])
 
     conversation.append({'role': 'user', 'content': ANSWER_INSTRUCTION})
     truncated = False
@@ -337,5 +341,6 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
             logger.info('Reply hit the chat deadline mid-stream; keeping what streamed')
             break
 
-    yield ('done', {'steps': steps, 'sources': sources, 'proposals': proposals,
+    yield ('done', {'steps': steps, 'sources': sources, 'evidence': evidence,
+                    'proposals': proposals,
                     'truncated': truncated, 'timedOut': timed_out})

@@ -10,6 +10,8 @@ export interface AgentStep {
   arg?: string;
   ok?: boolean;
   count?: number;
+  /** Query variants batched into one offline-library candidate search. */
+  queries?: string[];
   title?: string;
   error?: string;
   // The step ran out of wall-clock time (Settings → Research). On a
@@ -117,6 +119,20 @@ export function stepLabel(step: AgentStep): string {
         : `Web search unavailable${step.error ? `: ${step.error}` : ''}`;
     case 'web_fetch':
       return step.ok ? `Read ${target}` : `Could not read ${target}`;
+    case 'local_knowledge_search':
+      return step.ok
+        ? Array.isArray(step.queries) && step.queries.length > 1
+          ? `Searched the offline library with ${step.queries.length} queries — ${step.count ?? 0} results`
+          : `Searched the offline library for "${target}" — ${step.count ?? 0} results`
+        : `Offline library search unavailable${step.error ? `: ${step.error}` : ''}`;
+    case 'local_knowledge_read':
+      return step.ok
+        ? `Read offline article: ${target}`
+        : `Could not read offline article${step.error ? `: ${step.error}` : ''}`;
+    case 'delegate':
+      return step.ok
+        ? `Asked web research about "${target}" — ${step.count ?? 0} sources`
+        : `Web research unavailable${step.error ? `: ${step.error}` : ''}`;
     case 'deep_research': {
       const sources = `${step.count ?? 0} source${step.count === 1 ? '' : 's'}`;
       if (!step.ok)

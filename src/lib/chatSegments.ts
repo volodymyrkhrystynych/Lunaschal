@@ -2,8 +2,9 @@ import type { Message, ProposedTodo } from '../hooks/api';
 
 // The "New chat" button persists a break marker: a system message whose
 // metadata is {"break": true}. Break markers divide a day's chat into segments;
-// the AI only ever sees the current (last) segment, so pressing the button acts
-// as a true "clear" without discarding the visible/saved history.
+// the browser sends only the current (last) segment. The backend may prepend a
+// compact handoff for a New Chat boundary; a Clean slate marker suppresses it.
+// Either way, the raw visible/saved history is not discarded.
 
 export function isBreak(message: Message): boolean {
   if (message.role !== 'system' || !message.metadata) return false;

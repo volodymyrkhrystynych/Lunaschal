@@ -112,7 +112,12 @@ def _capture_stream(monkeypatch):
         yield ('content', 'ok')
 
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
-    monkeypatch.setattr('backend.delegate.chat._decision_calls', lambda messages: [])
+    monkeypatch.setattr(
+        'backend.research.agent.chat_tool_turn',
+        lambda messages, tools, max_tokens=None: (
+            type('Msg', (), {'content': '', 'tool_calls': None})(), 'stop'
+        ),
+    )
     monkeypatch.setattr('backend.delegate.chat.chat_stream_events', fake_stream_events)
     return captured
 

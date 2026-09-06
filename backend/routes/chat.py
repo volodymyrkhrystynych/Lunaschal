@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request, Response, send_file, stream_with_
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.chat import storage as chat_storage
+from backend.chat import compaction as chat_compaction
 from backend.day_boundary import day_key_for
 from backend.geo import coord_pair
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
@@ -168,6 +169,28 @@ def add_message(id):
     db.execute('UPDATE conversations SET updated_at=? WHERE id=?', (now, id))
     db.commit()
     return jsonify({'id': msg_id}), 201
+
+
+@bp.post('/conversations/<id>/break')
+def start_new_chat(id):
+    """Close the current segment and optionally carry a compact handoff.
+
+    The break is committed before the LLM job starts, so New Chat still works
+    when inference is unavailable. Its system-message status lets the existing
+    Chat poll notice when the background compaction finishes.
+    """
+    db = get_db()
+    exists = db.execute(
+        'SELECT 1 FROM conversations WHERE id=? AND writing_project_id IS NULL '
+        'AND idea_id IS NULL', (id,),
+    ).fetchone()
+    if not exists:
+        return jsonify({'error': 'Conversation not found'}), 404
+    body = request.get_json(silent=True) or {}
+    result = chat_compaction.create_break(
+        id, carry_context=body.get('carryContext', True) is not False,
+    )
+    return jsonify(result), 201
 
 
 # --- Photo attachments ---

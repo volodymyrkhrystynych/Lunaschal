@@ -11,6 +11,7 @@ vi.mock('../../hooks/api', () => ({
       today: vi.fn(),
       createConversation: vi.fn(),
       addMessage: vi.fn(),
+      startNewChat: vi.fn(),
       resolveProposal: vi.fn(),
     },
     settings: { get: vi.fn() },
@@ -99,6 +100,11 @@ beforeEach(() => {
   } as never);
   vi.mocked(api.chat.createConversation).mockResolvedValue({ id: 'c1' });
   vi.mocked(api.chat.addMessage).mockResolvedValue({ id: 'm1' });
+  vi.mocked(api.chat.startNewChat).mockResolvedValue({
+    id: 'break1',
+    compactionId: 'compact1',
+    status: 'pending',
+  });
 });
 
 afterEach(() => {
@@ -473,6 +479,13 @@ describe('the "New chat" spacer', () => {
     expect(spacer(container)).not.toBeNull();
   });
 
+  it('shows when the handoff is still being compacted', async () => {
+    withMessages([{ ...breakMsg, status: 'streaming' }]);
+    renderChat();
+
+    expect(await screen.findByText(/compacting/)).toBeTruthy();
+  });
+
   it('reclaims the space once the conversation has resumed', async () => {
     // Keyed on "a break exists anywhere", the spacer stayed for the rest of the
     // day — 60vh of empty transcript you could scroll into long after the
@@ -482,6 +495,30 @@ describe('the "New chat" spacer', () => {
     await screen.findByText('back again');
 
     expect(spacer(container)).toBeNull();
+  });
+
+  it('requests a durable handoff for New chat', async () => {
+    withMessages([userMsg]);
+    renderChat();
+    await screen.findByText('back again');
+
+    fireEvent.click(screen.getByRole('button', { name: 'New chat' }));
+
+    await waitFor(() =>
+      expect(api.chat.startNewChat).toHaveBeenCalledWith('c1', true)
+    );
+  });
+
+  it('can start a genuinely clean segment', async () => {
+    withMessages([userMsg]);
+    renderChat();
+    await screen.findByText('back again');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clean slate' }));
+
+    await waitFor(() =>
+      expect(api.chat.startNewChat).toHaveBeenCalledWith('c1', false)
+    );
   });
 });
 
