@@ -146,6 +146,16 @@ progression charts, chores promoted out of Tasks into their own section, daily s
 (archive now, timelapse export later), and a light manual calorie counter. Full design in
 [docs/lifestyle-tab.md](./lifestyle-tab.md).
 
+## Study tab
+
+New top-level tab, gated to large screens: a reading desk with the source on the left (PDF, an
+archived web page, or a YouTube video downloaded via `yt-dlp`) and notes on the right. **Stage 1 is
+built** on `feat/study-tab` — the split view, all three import kinds, and the Notebook vim editor
+as the notes half. Remaining stages, in order: **resume position** (page / timestamp / scroll
+offset, the "save system" the original brief deferred), **paper-style handwriting pages** as an
+alternative to the text editor, and a **draggable divider**. Full plan, including the open
+questions and what Stage 1's tests do not prove, in [docs/study-tab.md](./study-tab.md).
+
 ## Bug fixing
 
 General stability pass — lots of small bugs to track down and fix. (Add specific known bugs here as they're identified.)

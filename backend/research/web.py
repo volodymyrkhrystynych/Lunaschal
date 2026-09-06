@@ -328,8 +328,29 @@ def _search_searxng(query: str, base_url: str, limit: int) -> list[dict]:
     return results
 
 
-def web_fetch(url: str) -> dict:
-    """{url, title, text} for a public page. Raises UnsafeUrl when refused."""
+def fetch_public_page(
+    url: str,
+    *,
+    allowed_types: tuple[str, ...] | None = None,
+    max_bytes: int | None = None,
+) -> tuple[str, str]:
+    """(final_url, body) for a public page, following redirects by hand.
+
+    The guarded fetch on its own, with no interpretation of the body — the
+    Study tab's web import needs the HTML rather than `web_fetch`'s stripped
+    text, and a second copy of this redirect loop is exactly how a guard goes
+    missing (see the note about the retired websearch agent in CLAUDE.md).
+
+    Raises UnsafeUrl for a refused URL, a refused content type, or too many
+    hops. The byte cap truncates rather than raising, so a caller storing the
+    result is storing a possibly-partial page.
+
+    Both limits default at *call* time rather than in the signature, so
+    `monkeypatch.setattr(web, 'MAX_BYTES', …)` still bites — binding them as
+    default arguments froze them at import and silently disarmed the cap test.
+    """
+    allowed_types = _TEXT_TYPES if allowed_types is None else allowed_types
+    max_bytes = MAX_BYTES if max_bytes is None else max_bytes
     current = assert_public_url(url)
 
     for _ in range(MAX_REDIRECTS + 1):
@@ -352,7 +373,7 @@ def web_fetch(url: str) -> dict:
 
         resp.raise_for_status()
         content_type = (resp.headers.get('Content-Type') or '').split(';')[0].strip()
-        if content_type and content_type not in _TEXT_TYPES:
+        if content_type and content_type not in allowed_types:
             resp.close()
             raise UnsafeUrl(f'Refusing to read {content_type}; only text pages are fetched')
 
@@ -361,14 +382,20 @@ def web_fetch(url: str) -> dict:
         for chunk in resp.iter_content(8192):
             chunks.append(chunk)
             total += len(chunk)
-            if total > MAX_BYTES:
+            if total > max_bytes:
                 break
         resp.close()
         body = b''.join(chunks).decode(resp.encoding or 'utf-8', errors='replace')
-        text, title = strip_html_with_title(body, MAX_PAGE_CHARS)
-        return {'url': current, 'title': title, 'text': text}
+        return current, body
 
     raise UnsafeUrl(f'Too many redirects (more than {MAX_REDIRECTS})')
+
+
+def web_fetch(url: str) -> dict:
+    """{url, title, text} for a public page. Raises UnsafeUrl when refused."""
+    final_url, body = fetch_public_page(url)
+    text, title = strip_html_with_title(body, MAX_PAGE_CHARS)
+    return {'url': final_url, 'title': title, 'text': text}
 
 
 # --- Tool definitions for chat_with_tools ---

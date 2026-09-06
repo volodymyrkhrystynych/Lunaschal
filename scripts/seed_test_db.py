@@ -30,7 +30,8 @@ REQUIRED_ENV_VARS = [
     'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'RECIPE_ROOT',
     'CHAT_ROOT', 'PAPER_ROOT', 'JOBS_ROOT', 'NEWSPAPERS_ROOT',
     'NOTEBOOK_ROOT', 'EMAIL_MEDIA_ROOT', 'PIANO_ROOT', 'PIANO_ARCHIVE_ROOT',
-    'FILES_ROOT', 'TORRENT_ROOT', 'SHORTCUTS_PATH',
+    'FILES_ROOT', 'TORRENT_ROOT', 'STUDY_ROOT', 'STUDY_ARCHIVE_ROOT',
+    'SHORTCUTS_PATH',
 ]
 
 
@@ -106,6 +107,20 @@ def placeholder_audio(path: Path, seconds: float = 0.5) -> None:
 def placeholder_text(path: Path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding='utf-8')
+
+
+def placeholder_pdf(path: Path, pages: list[str]) -> None:
+    """A real multi-page PDF, because the Study tab renders it with pdf.js
+    rather than handing it to the browser — a stub file would fail to parse and
+    the viewer would show its error state instead of the feature."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    images = []
+    for label in pages:
+        img = Image.new('RGB', (1240, 1754), (250, 249, 246))  # A4 at 150dpi
+        draw = ImageDraw.Draw(img)
+        draw.text((620, 877), label, fill=(40, 40, 40), anchor='mm')
+        images.append(img)
+    images[0].save(path, 'PDF', save_all=True, append_images=images[1:])
 
 
 # journal_voice_drafts is the one media feature whose storage module keeps its
@@ -1291,6 +1306,113 @@ def seed_notebook(db, journal_ids):
     )
 
 
+def seed_study(db):
+    """Study sources plus the notebook notes they are bound to.
+
+    Three rows on purpose: they cover all three `kind`s and both terminal
+    `import_status` values, so the library, the desk and the failure state are
+    all reachable in the demo. The two `ready` rows get real files, because the
+    left pane parses what it is given — pdf.js for the PDF, a sandboxed iframe
+    for the article.
+
+    The YouTube row is deliberately `error`, not `ready`: seeding a playable
+    video would mean shipping one (or depending on ffmpeg being installed), and
+    a `ready` row pointing at bytes that do not exist demos worse than the
+    failure UI does. `importing` is not an option — it is an in-flight state and
+    `_reset_stale_study_imports` would rewrite it on the next start.
+
+    Its title and duration are still filled in, which is the honest shape of
+    that failure: yt-dlp's metadata pass succeeded and the download did not.
+
+    That choice has since acquired a second justification. Videos live on the
+    external archive drive and nowhere else, so a `ready` video row would mean
+    a seed run writing to `STUDY_ARCHIVE_ROOT` — and a seeder that touches the
+    archive is a seeder that can touch the real one when an env var is missed.
+
+    The article row is left in `note_mode='paper'` so the demo opens on the
+    handwriting half rather than only ever on the Notebook one. Its paper is an
+    ordinary `papers` row, which is the whole point of borrowing rather than
+    modelling: it is also listed in the Paper tab.
+    """
+    from backend.paper.storage import page_image_path
+    from backend.study.storage import source_file_path
+
+    notebook_root = Path(os.environ['NOTEBOOK_ROOT'])
+
+    pdf_id, web_id, video_id = str(ULID()), str(ULID()), str(ULID())
+
+    pdf_note = 'study/attention-is-all-you-need.md'
+    placeholder_text(
+        notebook_root / pdf_note,
+        '# Attention Is All You Need\n\n'
+        '- Self-attention replaces recurrence entirely.\n'
+        '- Positional encoding is what puts order back in.\n'
+        '- See also [[reference/knots]] for how a link renders.\n',
+    )
+    pdf_path = source_file_path(pdf_id, 'book', 'pdf', 'pdf')
+    placeholder_pdf(pdf_path, ['Attention Is All You Need', '2. Background', '3. Model Architecture'])
+
+    web_note = 'study/wal-mode.md'
+    placeholder_text(
+        notebook_root / web_note,
+        '# WAL mode\n\n- Readers do not block the writer.\n- One writer at a time.\n',
+    )
+    web_path = source_file_path(web_id, 'article', 'html', 'web')
+    placeholder_text(
+        web_path,
+        '<h1>Write-Ahead Logging</h1>\n'
+        '<p>WAL mode permits many simultaneous readers and one writer.</p>\n'
+        '<p>The rollback journal is replaced by an append-only log.</p>\n',
+    )
+
+    # `position` means whatever the row's `kind` says it means: page 2 of the
+    # PDF, seconds into the video. The web row leaves it null, which is the
+    # permanent state for an article — a sandboxed iframe's scroll is
+    # unreadable from outside it.
+    # A handwriting paper for the article row, created the way the desk creates
+    # one: an ordinary paper with a single blank page. The snapshot matters —
+    # it is the whole of what the Paper explorer grid shows.
+    study_paper_id = new_id()
+    db.execute(
+        'INSERT INTO papers (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)',
+        (study_paper_id, 'Write-Ahead Logging — worked through', ts(3), ts(3)),
+    )
+    study_page_id = new_id()
+    study_snapshot = page_image_path(study_paper_id, study_page_id)
+    placeholder_image(study_snapshot, 'WAL, by hand', size=(1000, 1400),
+                      color=(245, 245, 240))
+    db.execute(
+        'INSERT INTO paper_pages (id, paper_id, position, strokes, width, height, image_path, '
+        'created_at, updated_at) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)',
+        (study_page_id, study_paper_id, '[]', 1000, 1400, str(study_snapshot),
+         ts(3), ts(3)),
+    )
+
+    rows = [
+        # id, title, kind, source_url, file_path, content_type, size_bytes,
+        # duration, note_path, paper_id, note_mode, status, error,
+        # last_opened_at, position
+        (pdf_id, 'Attention Is All You Need', 'pdf', None, str(pdf_path),
+         'application/pdf', pdf_path.stat().st_size, None, pdf_note, None, 'note',
+         'ready', None, ts(1), 2),
+        (web_id, 'Write-Ahead Logging', 'web', 'https://www.sqlite.org/wal.html',
+         str(web_path), 'text/html', web_path.stat().st_size, None, web_note,
+         study_paper_id, 'paper', 'ready', None, ts(3), None),
+        (video_id, 'Backpropagation, step by step', 'youtube',
+         'https://www.youtube.com/watch?v=Ilg3gGewQ5U', None, None, 0, 501,
+         None, None, 'note', 'error',
+         'ERROR: Requested format is not available', None, None),
+    ]
+    for row in rows:
+        db.execute(
+            'INSERT INTO study_sources (id, title, kind, source_url, file_path, content_type, '
+            'size_bytes, duration_seconds, note_path, paper_id, note_mode, import_status, '
+            'import_error, last_opened_at, position, created_at, updated_at) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (*row, ts(20), ts(1)),
+        )
+
+
 def seed_files():
     """The Files/Editor tab is pure filesystem — it has no table of its own, so
     an otherwise fully-seeded demo still opens it on an empty tree. Writes a
@@ -1427,6 +1549,9 @@ def main() -> None:
     seed_practice(db)
     seed_notes(db)
     seed_notebook(db, journal_ids)
+    # After seed_notebook: a study source is bound to a note under the same
+    # NOTEBOOK_ROOT, so it writes into the tree that one has just created.
+    seed_study(db)
     seed_files()
     seed_memory(db)
     seed_infra(db)

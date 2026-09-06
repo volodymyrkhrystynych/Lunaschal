@@ -30,7 +30,11 @@ import type {
   PianoPiece,
   PianoToday,
 } from '../lib/piano';
+// Same reasoning again: the Study desk's shapes live beside the pure helpers
+// that read them.
+import type { NoteMode, StudyImportProgress, StudySource } from '../lib/study';
 
+export type { NoteMode, StudyImportProgress, StudySource };
 export type { SleepDay };
 export type { ServerLogEntry, ServerLogResponse, ServerLogUnit };
 export type { Torrent, VpnStatus };
@@ -3674,6 +3678,47 @@ export const api = {
           rating,
         }),
     },
+  },
+
+  study: {
+    sources: () => get<StudySource[]>('/api/study/sources'),
+    source: (id: string) => get<StudySource>(`/api/study/sources/${id}`),
+    /** The in-flight import's phase, or `{done: true}` once it has landed. */
+    status: (id: string) =>
+      get<StudyImportProgress>(`/api/study/sources/${id}/status`),
+    uploadPdf: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return upload<{ id: string; source: StudySource }>(
+        '/api/study/sources/pdf',
+        form
+      );
+    },
+    importWeb: (url: string) =>
+      post<{ id: string; source: StudySource }>('/api/study/sources/web', {
+        url,
+      }),
+    importYoutube: (url: string) =>
+      post<{ id: string; source: StudySource }>('/api/study/sources/youtube', {
+        url,
+      }),
+    update: (
+      id: string,
+      updates: {
+        title?: string;
+        notePath?: string | null;
+        touch?: boolean;
+        /** Page for a PDF, seconds for a video; null forgets it. */
+        position?: number | null;
+        /** An existing papers(id); '' or null unbinds it. */
+        paperId?: string | null;
+        noteMode?: NoteMode;
+      }
+    ) => patch<StudySource>(`/api/study/sources/${id}`, updates),
+    remove: (id: string) =>
+      del<{ success: boolean }>(`/api/study/sources/${id}`),
+    /** The stored file itself — a <video src>, an <iframe src>, or pdf.js's input. */
+    fileUrl: (id: string) => `/api/study/sources/${id}/file`,
   },
 
   shortcuts: {

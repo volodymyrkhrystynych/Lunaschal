@@ -1878,5 +1878,51 @@ CREATE TABLE IF NOT EXISTS torrents (
     updated_at INTEGER NOT NULL
 );
 
+-- Study sources: the thing on the left half of the Study desk. A book (PDF), a
+-- web page archived as sanitized HTML, or a YouTube video pulled down by
+-- yt-dlp. The bytes live under <STUDY_ROOT>/<id>/ and only the path is stored,
+-- the same layout fanfic/meetings/paper use.
+--
+-- `note_path` binds the source to a note in the Notebook's own file tree
+-- rather than duplicating an editor and a store: the right half of the desk is
+-- NotebookEditorPane over this path.
+CREATE TABLE IF NOT EXISTS study_sources (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK(kind IN ('pdf','web','youtube')),
+    source_url TEXT,
+    file_path TEXT,
+    content_type TEXT,
+    size_bytes INTEGER NOT NULL DEFAULT 0,
+    duration_seconds INTEGER,
+    note_path TEXT,
+    -- Mirrors fics.download_status/download_error: an import that dies with the
+    -- process leaves a row here, and _reset_stale_study_imports is what makes
+    -- it retryable rather than permanently 'importing'.
+    import_status TEXT NOT NULL DEFAULT 'ready'
+        CHECK(import_status IN ('importing','ready','error')),
+    import_error TEXT,
+    last_opened_at INTEGER,
+    -- Where you left off. What the number *means* is decided by `kind`, which
+    -- already answers it: a page number for 'pdf', seconds for 'youtube',
+    -- unused for 'web' (an archived page renders inside sandbox="", so its
+    -- scroll position is unreadable by design).
+    position REAL,
+    -- The right half of the desk has two note modes, and a source remembers
+    -- which one it was last studied with. 'note' is the Notebook file above;
+    -- 'paper' is a handwriting paper borrowed whole rather than modelled
+    -- again -- `paper_id` is an ordinary papers(id), so the same document is
+    -- reachable from the Paper tab and page creation comes with it. Nullable
+    -- and created lazily on the first switch, exactly as `note_path` is: a
+    -- source you only skimmed leaves no empty paper behind. ON DELETE SET NULL
+    -- because deleting the paper from the Paper tab must not take the source
+    -- with it, only the binding.
+    paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+    note_mode TEXT NOT NULL DEFAULT 'note' CHECK(note_mode IN ('note','paper')),
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_torrents_added ON torrents(added_at DESC);
 CREATE INDEX IF NOT EXISTS idx_torrents_completed ON torrents(completed_at);
+CREATE INDEX IF NOT EXISTS idx_study_sources_created ON study_sources(created_at DESC);

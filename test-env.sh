@@ -36,6 +36,11 @@ export FILES_ROOT="$SCRATCH/files"
 # the same directory torrent/docker-compose.yml bind-mounts into the client
 # as /downloads; here it is scratch, and no client is running against it.
 export TORRENT_ROOT="$SCRATCH/torrents"
+
+# Imported books, archived pages and downloaded videos. Study is large-screen
+# only, so it is one of the views a demo instance can most easily be judged on.
+export STUDY_ROOT="$SCRATCH/study"
+export STUDY_ARCHIVE_ROOT="$SCRATCH/study-archive"
 export SHORTCUTS_PATH="$SCRATCH/shortcuts.json"
 
 # Same idiom backend/tests/conftest.py uses: keep every daemon scheduler off

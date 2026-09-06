@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { MOBILE_QUERY } from '@/lib/breakpoints';
+import { LARGE_QUERY, MOBILE_QUERY } from '@/lib/breakpoints';
 
 /**
  * Subscribe to a CSS media query. Seeded synchronously from `matchMedia` so the
@@ -26,4 +26,9 @@ export function useMediaQuery(query: string): boolean {
 /** True on phone-width viewports (< 768px). */
 export function useIsMobile(): boolean {
   return useMediaQuery(MOBILE_QUERY);
+}
+
+/** True on viewports wide enough for a two-pane view (>= 1024px). */
+export function useIsLargeScreen(): boolean {
+  return useMediaQuery(LARGE_QUERY);
 }

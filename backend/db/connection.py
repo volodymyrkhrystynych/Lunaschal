@@ -190,12 +190,15 @@ def init_db() -> None:
     _ensure_practice_recall_columns(db)
     _ensure_piano_attempt_metrics(db)
     _ensure_learning_attempts_speech_requested(db)
+    _ensure_study_position(db)
+    _ensure_study_paper(db)
     _ensure_torrent_settings(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
     # own container and outlives this process, so Lunaschal never holds an
     # in-flight torrent state that a restart could orphan. See the comment on
     # the `torrents` table in schema.sql.
     _reset_stale_fic_downloads(db)
+    _reset_stale_study_imports(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
     _reset_stale_chat_attachment_descriptions(db)
@@ -618,6 +621,54 @@ def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
         "UPDATE fics SET download_status='error',"
         " download_error='Interrupted by an app restart — click Update to retry.'"
         " WHERE download_status='downloading'"
+    )
+    db.commit()
+
+
+def _ensure_study_position(db: sqlite3.Connection) -> None:
+    """Where you left off in a source. One column, not two: `kind` already says
+    whether the number is a page or a second."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(study_sources)')}
+    if 'position' not in cols:
+        db.execute('ALTER TABLE study_sources ADD COLUMN position REAL')
+        db.commit()
+
+
+def _ensure_study_paper(db: sqlite3.Connection) -> None:
+    """The second note mode: a handwriting paper beside the Notebook file.
+
+    `paper_id` is an ordinary papers(id) — Study borrows a whole paper rather
+    than modelling pages again, the way idea_sketches borrows a single
+    paper_pages row — so the ADD COLUMN must default to NULL, which is also
+    what SQLite requires of an added column carrying a REFERENCES clause.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(study_sources)')}
+    changed = False
+    if 'paper_id' not in cols:
+        db.execute(
+            'ALTER TABLE study_sources ADD COLUMN paper_id TEXT'
+            ' REFERENCES papers(id) ON DELETE SET NULL'
+        )
+        changed = True
+    if 'note_mode' not in cols:
+        db.execute(
+            "ALTER TABLE study_sources ADD COLUMN note_mode TEXT NOT NULL"
+            " DEFAULT 'note' CHECK(note_mode IN ('note','paper'))"
+        )
+        changed = True
+    if changed:
+        db.commit()
+
+
+def _reset_stale_study_imports(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_fic_downloads: a study import runs on a
+    daemon thread (and, for YouTube, a yt-dlp subprocess), neither of which
+    survives the process. Reset to 'error' rather than 'idle' — nothing re-arms
+    an import on its own, the library's Retry is what starts it again."""
+    db.execute(
+        "UPDATE study_sources SET import_status='error',"
+        " import_error='Interrupted by an app restart — retry the import.'"
+        " WHERE import_status='importing'"
     )
     db.commit()
 

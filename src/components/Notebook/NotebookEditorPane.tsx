@@ -43,6 +43,12 @@ interface Props {
    * index.md with no shortcut that works; true once you're actually editing,
    * so following a link or `:q`-ing back to the index keeps the cursor. */
   autoFocus?: boolean;
+  /** Where `:q` goes before it gives up the keyboard. The Notebook's home is
+   * its index; the Study desk's is the note bound to the open source, so `:q`
+   * there doesn't navigate the reading pane off to index.md. */
+  homePath?: string;
+  /** How that destination is named in the `:q` hint. */
+  homeLabel?: string;
   handle?: RefObject<NotebookPaneHandle | null>;
 }
 
@@ -195,6 +201,8 @@ export function NotebookEditorPane({
   onGoBack,
   onExit,
   autoFocus = false,
+  homePath = INDEX_PATH,
+  homeLabel = 'the index',
   handle,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -275,8 +283,8 @@ export function NotebookEditorPane({
   // editor the moment our handler returns (openDialog's `close()` calls
   // `me.focus()`), so blurring inline here would simply be undone.
   const goHome = () => {
-    if (filePath !== INDEX_PATH) {
-      void ensureAndOpen(INDEX_PATH);
+    if (filePath !== homePath) {
+      void ensureAndOpen(homePath);
       return;
     }
     setTimeout(() => viewRef.current?.contentDOM.blur(), 0);
@@ -436,7 +444,7 @@ export function NotebookEditorPane({
     cb.goBack = onGoBack;
     cb.find = query => void runFind(query);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onOpenPath, onGoBack, filePath]);
+  }, [onOpenPath, onGoBack, filePath, homePath]);
 
   useImperativeHandle(
     handle,
@@ -473,9 +481,9 @@ export function NotebookEditorPane({
           {/* `:q` is now the way out of the editor as well as the way back to
               the index, and neither is guessable from an empty page. */}
           <span className="text-xs text-[var(--color-text-muted)] hidden sm:inline">
-            {filePath === INDEX_PATH
+            {filePath === homePath
               ? ':q to leave the editor'
-              : ':q for the index'}
+              : `:q for ${homeLabel}`}
           </span>
           <label className="flex items-center gap-1.5 text-xs text-[var(--color-text-muted)] cursor-pointer select-none">
             <input

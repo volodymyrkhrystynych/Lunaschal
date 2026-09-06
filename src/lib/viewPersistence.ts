@@ -27,6 +27,7 @@ export const VIEWS = [
   'practice',
   'piano',
   'jobs',
+  'study',
 ] as const;
 
 export type View = (typeof VIEWS)[number];
