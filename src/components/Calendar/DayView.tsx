@@ -15,12 +15,10 @@ import {
   wallMinutesFromOffset,
   type EventTimeRange,
 } from '@/lib/calendarDayLayout';
+import { DEFAULT_DAY_ZOOM, type DayZoom } from '@/lib/calendarZoom';
 import { addDays, localDayKey } from '@/lib/dates';
 import { sleepBands } from '@/lib/sleep';
 import { DayEventLayer, type LaidOutEvent } from './DayEventLayer';
-
-/** 60px-tall hour rows. */
-const PX_PER_MINUTE = 1;
 
 /** Where the "+" button drops a new event on a day that isn't today, and where
  * such a day is scrolled to: 8am, a plausible start to a day. */
@@ -53,9 +51,18 @@ interface DayViewProps {
   date: string;
   onOpenEvent: (event: CalendarEvent) => void;
   onEditSleep: () => void;
+  /** Px per minute — 1 draws the original 60px hour rows. Owned by the
+   * Calendar so the zoom control can live in the shared day header, and so
+   * the choice survives a remount of this component. */
+  zoom?: DayZoom;
 }
 
-export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
+export function DayView({
+  date,
+  onOpenEvent,
+  onEditSleep,
+  zoom = DEFAULT_DAY_ZOOM,
+}: DayViewProps) {
   const queryClient = useQueryClient();
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrolledRef = useRef(false);
@@ -141,12 +148,26 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
     const targetOffset = offsetFromWallMinutes(
       isToday ? now.getHours() * 60 : DEFAULT_HOUR * 60
     );
-    scrollRef.current.scrollTop = Math.max(
-      0,
-      targetOffset * PX_PER_MINUTE - 120
-    );
+    // An hour of headroom above the target, in minutes rather than a fixed
+    // pixel count: at 3x a constant 120px would be forty minutes, so the same
+    // scroll would land somewhere different on each zoom level.
+    scrollRef.current.scrollTop = Math.max(0, (targetOffset - 60) * zoom);
     scrolledRef.current = true;
-  }, [date, events]);
+  }, [date, events, zoom]);
+
+  // Zooming rescales the timeline under a scroll position that is measured in
+  // pixels, so without this the view jumps to a different time of day every
+  // time the control is tapped. Held by the minute at the centre of the
+  // viewport, which is what the user is looking at.
+  const zoomRef = useRef(zoom);
+  useEffect(() => {
+    const el = scrollRef.current;
+    const previous = zoomRef.current;
+    zoomRef.current = zoom;
+    if (!el || previous === zoom) return;
+    const centreMinutes = (el.scrollTop + el.clientHeight / 2) / previous;
+    el.scrollTop = Math.max(0, centreMinutes * zoom - el.clientHeight / 2);
+  }, [zoom]);
 
   /** The calendar date an offset on this timeline stores against. */
   const dateAt = (offset: number) =>
@@ -245,9 +266,13 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
       )}
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto relative">
+        {/* Capped and centred rather than left to fill the window: on a
+            desktop the timeline is the same one the phone draws, and a
+            thousand pixels of empty row to the right of a 28px event line
+            only makes it harder to see which hour a line is in. */}
         <div
-          className="relative"
-          style={{ height: MINUTES_PER_DAY * PX_PER_MINUTE }}
+          className="relative w-full max-w-3xl mx-auto"
+          style={{ height: MINUTES_PER_DAY * zoom }}
         >
           {/* Drawn first so the hour grid and the events sit on top of them.
               A band is a surface, not a control: it takes a tap to open the
@@ -262,8 +287,8 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
               onClick={onEditSleep}
               className="absolute left-0 right-0 bg-black/30 text-left"
               style={{
-                top: band.startMinutes * PX_PER_MINUTE,
-                height: (band.endMinutes - band.startMinutes) * PX_PER_MINUTE,
+                top: band.startMinutes * zoom,
+                height: (band.endMinutes - band.startMinutes) * zoom,
               }}
             >
               <span className="absolute left-12 top-1 text-[10px] text-[var(--color-text-muted)]">
@@ -283,7 +308,7 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
               className={`absolute left-0 right-0 border-t pointer-events-none ${
                 h === 0 ? 'border-white/20' : 'border-white/5'
               }`}
-              style={{ top: i * 60 * PX_PER_MINUTE }}
+              style={{ top: i * 60 * zoom }}
             >
               <div className="w-12 shrink-0 -mt-2 text-[10px] text-[var(--color-text-muted)] text-right pr-1">
                 {/* The topmost rule sits on the scroll edge, where a label
@@ -307,7 +332,7 @@ export function DayView({ date, onOpenEvent, onEditSleep }: DayViewProps) {
           <div className="absolute left-12 right-2 top-0 bottom-0 pointer-events-none">
             <DayEventLayer
               events={laidOut}
-              pxPerMinute={PX_PER_MINUTE}
+              pxPerMinute={zoom}
               onOpenEvent={onOpenEvent}
               onCommit={handleCommit}
               onTranscribed={() =>

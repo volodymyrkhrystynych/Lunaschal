@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { DayView } from './DayView';
 import { api, type CalendarEvent, type SleepDay } from '../../hooks/api';
+import type { DayZoom } from '@/lib/calendarZoom';
 
 vi.mock('../../hooks/api', () => ({
   api: {
@@ -42,9 +43,13 @@ const sleepDay = (overrides: Partial<SleepDay> = {}): SleepDay => ({
   ...overrides,
 });
 
+/** Pinned to 1px per minute unless a test says otherwise, so the pixel
+ * arithmetic below reads as minutes. The shipped default is 2x — the zoom is
+ * its own test, at the bottom of this file. */
 function renderDay(
   sleep: SleepDay = sleepDay(),
-  byDate: Record<string, Partial<CalendarEvent>[]> = {}
+  byDate: Record<string, Partial<CalendarEvent>[]> = {},
+  zoom: DayZoom = 1
 ) {
   vi.mocked(api.calendar.sleep.get).mockResolvedValue(sleep);
   mockDays(byDate);
@@ -57,6 +62,7 @@ function renderDay(
     <QueryClientProvider client={client}>
       <DayView
         date={DATE}
+        zoom={zoom}
         onOpenEvent={onOpenEvent}
         onEditSleep={onEditSleep}
       />
@@ -268,5 +274,46 @@ describe('the 4am-to-4am timeline', () => {
     expect(midnight.closest('div')!.parentElement!.style.top).toBe('1200px');
     // 4am is the top edge, where a label would be clipped in half.
     expect(screen.queryByText('4am')).toBeNull();
+  });
+});
+
+describe('zoom', () => {
+  it('scales the whole timeline, so an hour stays an hour everywhere on it', async () => {
+    // The point of the control: at 1x a five-minute snap step is five pixels,
+    // which is what made a precise drop so hard to land.
+    renderDay(
+      sleepDay({ wakeAt: at(DATE, '07:20') }),
+      { [DATE]: [{ id: 'a', title: 'Gym', time: '09:00', endTime: '10:00' }] },
+      3
+    );
+    const band = await screen.findByTestId('sleep-band-morning');
+    expect(band.style.height).toBe('600px'); // 200 minutes at 3px each
+    const block = await screen.findByTestId('calendar-event-block');
+    expect(block.style.top).toBe('900px'); // 04:00 -> 09:00 is 300 minutes
+    expect(block.style.height).toBe('180px'); // one hour
+    expect(
+      screen.getByText('12am').closest('div')!.parentElement!.style.top
+    ).toBe('3600px'); // 20 hours below the 4am top
+  });
+
+  it('reads a drag in minutes rather than pixels at every level', async () => {
+    // The commit is the assertion that matters: a 90px drag is an hour and a
+    // half at 1x and half an hour at 3x, and the stored time has to follow the
+    // scale or a zoomed-in drag would fling the event across the day.
+    renderDay(
+      sleepDay(),
+      { [DATE]: [{ id: 'a', title: 'Gym', time: '09:00', endTime: '10:00' }] },
+      3
+    );
+    const line = await screen.findByTestId('calendar-event-line');
+    fireEvent.pointerDown(line, { pointerId: 1, clientY: 0 });
+    fireEvent.pointerMove(line, { pointerId: 1, clientY: 90 });
+    fireEvent.pointerUp(line, { pointerId: 1 });
+
+    await waitFor(() => expect(api.calendar.update).toHaveBeenCalled());
+    expect(api.calendar.update).toHaveBeenCalledWith('a', {
+      time: '09:30',
+      endTime: '10:30',
+    });
   });
 });

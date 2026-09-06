@@ -1,6 +1,10 @@
-// Pure geometry for the mobile Calendar day view's hour-grid timeline — no
-// DOM, unit-testable in the node environment, the same reason
+// Pure geometry for the Calendar day view's hour-grid timeline — no DOM,
+// unit-testable in the node environment, the same reason
 // src/lib/paperImages.ts exists.
+//
+// Everything here is in minutes and takes px-per-minute as an argument rather
+// than reading a constant: the view is zoomable (src/lib/calendarZoom.ts), so
+// there is no one pixel height for an hour to bake in.
 //
 // Two minute-spaces meet here and must not be confused:
 //

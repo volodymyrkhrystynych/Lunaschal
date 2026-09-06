@@ -21,16 +21,24 @@ import { localDayKey } from '@/lib/dates';
 // The shared splitter — Food's two views each grew a private copy of this and
 // a third would make the rule genuinely untraceable.
 import { parseTagsInput } from '@/lib/tags';
+import {
+  DAY_ZOOM_LEVELS,
+  getStoredZoom,
+  stepZoom,
+  storeZoom,
+  type DayZoom,
+} from '@/lib/calendarZoom';
 import { CategoryTagPicker, RepeatFields } from './EventFormFields';
 import { EventDetails } from './EventDetails';
 import { DayView } from './DayView';
 import { SleepEditor } from './SleepEditor';
 
-type ViewMode = 'month' | 'week';
-// Which screen the mobile layout shows: 'day' is the default hour-grid
-// timeline; 'month' is a date picker (the pre-existing agenda list) whose
-// only job now is choosing a day to jump into.
-type MobileView = 'day' | 'month';
+// 'day' is the hour-grid timeline: the phone's default screen, and now one of
+// the desktop's three, because it is the only view where an event can be
+// placed and re-timed by dragging it. 'month' doubles as the phone's date
+// picker (the pre-existing agenda list), whose job there is choosing a day to
+// jump into; 'week' is desktop-only, as it always was.
+type ViewMode = 'day' | 'month' | 'week';
 
 // A recurring series appears once per occurrence, all sharing the series id —
 // so the React key has to include the date the instance landed on.
@@ -54,8 +62,20 @@ const EMPTY_NEW_EVENT = {
 };
 
 export function Calendar() {
+  const isMobile = useIsMobile();
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [viewMode, setViewMode] = useState<ViewMode>('month');
+  // Persisted, and the draft key the retired `mobileView` used to own: which
+  // screen you were on is exactly the kind of thing a reclaimed mobile webview
+  // should come back to. The phone opens on the timeline; a desktop, which has
+  // room for a whole month at once, opens on the month it always did.
+  const [storedView, setViewMode] = useDraftState<ViewMode>(
+    'calendar:view',
+    isMobile ? 'day' : 'month'
+  );
+  // 'week' is desktop-only and has no toggle on a phone, so a value carried
+  // over from a wider screen would otherwise be a view with no way out of it.
+  const viewMode: ViewMode =
+    isMobile && storedView === 'week' ? 'month' : storedView;
   const [selectedDate, setSelectedDate] = useDraftState<string | null>(
     'calendar:date',
     null
@@ -73,15 +93,14 @@ export function Calendar() {
     'calendar:composing',
     false
   );
-  const isMobile = useIsMobile();
   const queryClient = useQueryClient();
 
   const todayISO = localDayKey();
-  const [mobileView, setMobileView] = useDraftState<MobileView>(
-    'calendar:mobile-view',
-    'day'
-  );
   const [dayDate, setDayDate] = useDraftState('calendar:day', todayISO);
+  // Its own key rather than a draft: a draft is an unsaved edit waiting to be
+  // committed or dropped, and this is a standing display preference with
+  // nothing to commit it to.
+  const [dayZoom, setDayZoom] = useState<DayZoom>(getStoredZoom);
   const [editingSleep, setEditingSleep] = useState(false);
 
   const year = currentDate.getFullYear();
@@ -172,7 +191,7 @@ export function Calendar() {
 
   const jumpToDay = (iso: string) => {
     setDayDate(iso);
-    setMobileView('day');
+    setViewMode('day');
   };
 
   const submitNewEvent = () => {
@@ -200,18 +219,49 @@ export function Calendar() {
     setShowNewEvent(false);
   };
 
-  const showingDayView = isMobile && mobileView === 'day';
+  const showingDayView = viewMode === 'day';
+
+  const changeZoom = (steps: number) => {
+    const next = stepZoom(dayZoom, steps);
+    setDayZoom(next);
+    storeZoom(next);
+  };
+
+  // The desktop's three-way switch. Rendered in the day header too, so leaving
+  // the timeline doesn't mean finding a different control than the one that
+  // got you there; the phone keeps its single "☰ Month" button instead, since
+  // it has no week view to switch to.
+  const viewToggle = (
+    <div className="hidden md:flex gap-2">
+      {(['day', 'month', 'week'] as ViewMode[]).map(v => (
+        <button
+          key={v}
+          // Switching to the timeline carries whichever date is selected in
+          // the month/week grid, so picking a day and then hitting Day opens
+          // that day rather than silently landing back on today.
+          onClick={() => {
+            if (v === 'day' && selectedDate) setDayDate(selectedDate);
+            setViewMode(v);
+          }}
+          className={`px-3 py-1 rounded text-sm ${viewMode === v ? 'bg-[var(--color-primary)] text-white' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
+        >
+          {v.charAt(0).toUpperCase() + v.slice(1)}
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
       {showingDayView ? (
-        <div className="flex items-center justify-between mb-4 shrink-0">
+        <div className="flex items-center justify-between mb-4 shrink-0 gap-2">
           <button
-            onClick={() => setMobileView('month')}
-            className="px-3 py-2 min-h-[44px] rounded text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-white/5"
+            onClick={() => setViewMode('month')}
+            className="md:hidden px-3 py-2 min-h-[44px] rounded text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-white/5"
           >
             ☰ Month
           </button>
+          {viewToggle}
           <div className="flex items-center gap-1">
             <button
               onClick={() => navigateDay(-1)}
@@ -234,36 +284,53 @@ export function Calendar() {
               →
             </button>
           </div>
-          {/* The way in on a day with no bands drawn — no activity recorded and
-              nothing set by hand — where there would otherwise be nothing to
-              tap. */}
-          <button
-            onClick={() => setEditingSleep(true)}
-            aria-label="Edit sleep times"
-            className="p-2 min-h-[44px] min-w-[44px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-          >
-            ☾
-          </button>
-        </div>
-      ) : (
-        <div className="flex items-center justify-end mb-4">
-          <div className="hidden md:flex gap-2">
-            {(['month', 'week'] as ViewMode[]).map(v => (
-              <button
-                key={v}
-                onClick={() => setViewMode(v)}
-                className={`px-3 py-1 rounded text-sm ${viewMode === v ? 'bg-[var(--color-primary)] text-white' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`}
-              >
-                {v.charAt(0).toUpperCase() + v.slice(1)}
-              </button>
-            ))}
+          <div className="flex items-center gap-1">
+            {/* How tall an hour is drawn. At 1x a five-minute step is five
+                pixels, which is why dropping an event on a precise time was
+                so hard; the levels trade that back against how much of the
+                day fits on screen. */}
+            <button
+              onClick={() => changeZoom(-1)}
+              disabled={dayZoom === DAY_ZOOM_LEVELS[0]}
+              aria-label="Shorter day"
+              className="p-2 min-h-[44px] min-w-[44px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-30"
+            >
+              −
+            </button>
+            <span
+              data-testid="calendar-day-zoom"
+              className="text-xs tabular-nums text-[var(--color-text-muted)] w-5 text-center"
+            >
+              {dayZoom}x
+            </span>
+            <button
+              onClick={() => changeZoom(1)}
+              disabled={dayZoom === DAY_ZOOM_LEVELS[DAY_ZOOM_LEVELS.length - 1]}
+              aria-label="Longer day"
+              className="p-2 min-h-[44px] min-w-[44px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-30"
+            >
+              +
+            </button>
+            {/* The way in on a day with no bands drawn — no activity recorded
+                and nothing set by hand — where there would otherwise be
+                nothing to tap. */}
+            <button
+              onClick={() => setEditingSleep(true)}
+              aria-label="Edit sleep times"
+              className="p-2 min-h-[44px] min-w-[44px] text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+            >
+              ☾
+            </button>
           </div>
         </div>
+      ) : (
+        <div className="flex items-center justify-end mb-4">{viewToggle}</div>
       )}
 
       {showingDayView ? (
         <DayView
           date={dayDate}
+          zoom={dayZoom}
           onOpenEvent={openEvent}
           onEditSleep={() => setEditingSleep(true)}
         />

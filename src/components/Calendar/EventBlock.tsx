@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { CalendarEvent } from '../../hooks/api';
 import { api } from '../../hooks/api';
@@ -7,6 +8,7 @@ import {
   parseCategoryTags,
 } from '@/lib/calendarCategories';
 import { EVENT_LINE_WIDTH_PX, RESIZE_CAP_PX } from '@/lib/calendarDayLayout';
+import { VOICE_EDIT_NOTICE_MS, voiceEditLabel } from '@/lib/calendarVoice';
 import { eventTimeLabel } from '@/lib/calendar';
 
 interface EventBlockProps {
@@ -48,14 +50,35 @@ export function EventBlock({
   const queryClient = useQueryClient();
   const categories = parseCategoryTags(event.categoryTags);
   const pending = !!event.description && !event.classifiedAt;
+  // What the last spoken sentence changed. The edit is applied with no
+  // confirm step, so without this the only feedback is the event quietly
+  // being somewhere else.
+  const [notice, setNotice] = useState<string | null>(null);
 
   const transcribe = useMutation({
-    mutationFn: (text: string) => api.calendar.transcribe(event.id, text),
-    onSuccess: () => {
+    // The occurrence is what a spoken time change is scoped to on a recurring
+    // series, matching how a drag on this same block already behaves.
+    mutationFn: (text: string) =>
+      api.calendar.transcribe(
+        event.id,
+        text,
+        event.isRecurring ? (event.occurrenceDate ?? event.date) : undefined
+      ),
+    onSuccess: result => {
+      setNotice(
+        voiceEditLabel(result.voiceEdit?.applied ?? []) ?? 'Nothing to change'
+      );
       queryClient.invalidateQueries({ queryKey: ['calendar'] });
       onTranscribed();
     },
+    onError: () => setNotice('Could not save that'),
   });
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), VOICE_EDIT_NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   const recorder = useRecorder(text => transcribe.mutate(text));
 
@@ -117,7 +140,9 @@ export function EventBlock({
       >
         <button
           type="button"
-          aria-label="Record for this event"
+          // Named for what it does now: the sentence is read as an edit to
+          // the event, not filed as a recording of it.
+          aria-label="Speak to update this event"
           data-testid="calendar-event-mic"
           // Offline gates starting, never stopping — see useRecorder.
           disabled={recorder.status !== 'recording' && !recorder.canTranscribe}
@@ -140,10 +165,22 @@ export function EventBlock({
           <div className="text-xs font-medium text-[var(--color-text)] truncate">
             {event.title}
           </div>
-          {eventTimeLabel(event) && (
-            <div className="text-[10px] text-[var(--color-text-muted)] truncate">
-              {eventTimeLabel(event)}
+          {/* Takes the time row's place rather than sitting beside it: the
+              label band is one line tall by design, and a second row here
+              would push into the next event's. */}
+          {notice ? (
+            <div
+              data-testid="calendar-event-voice-notice"
+              className="text-[10px] text-[var(--color-accent)] truncate"
+            >
+              {notice}
             </div>
+          ) : (
+            eventTimeLabel(event) && (
+              <div className="text-[10px] text-[var(--color-text-muted)] truncate">
+                {eventTimeLabel(event)}
+              </div>
+            )
           )}
         </div>
       </div>
