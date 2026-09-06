@@ -10,6 +10,10 @@ vi.mock('../../hooks/api', () => ({
     calendar: {
       listByRange: vi.fn(),
       listByWeek: vi.fn(),
+      listByDate: vi.fn(),
+      sleep: { get: vi.fn() },
+      moveOccurrence: vi.fn(),
+      transcribe: vi.fn(),
       tags: vi.fn(),
       get: vi.fn(),
       findRelatedJournals: vi.fn(),
@@ -64,6 +68,16 @@ beforeEach(() => {
   }));
   vi.mocked(api.calendar.listByRange).mockResolvedValue([]);
   vi.mocked(api.calendar.listByWeek).mockResolvedValue([]);
+  vi.mocked(api.calendar.listByDate).mockResolvedValue([]);
+  vi.mocked(api.calendar.sleep.get).mockResolvedValue({
+    date: '2026-02-15',
+    wakeAt: null,
+    sleepAt: null,
+    wakeSource: null,
+    sleepSource: null,
+    previousSleepAt: null,
+    nextWakeAt: null,
+  });
   vi.mocked(api.calendar.tags).mockResolvedValue([]);
   vi.mocked(api.calendar.findRelatedJournals).mockResolvedValue([]);
   vi.mocked(api.calendar.create).mockResolvedValue({ id: 'new' });
@@ -252,6 +266,31 @@ describe('recurring occurrences', () => {
 });
 
 describe('editing a recurring event', () => {
+  it('restores the selected event and its unsaved edit after a reload', async () => {
+    vi.mocked(api.calendar.listByRange).mockResolvedValue([event()]);
+    vi.mocked(api.calendar.get).mockResolvedValue(event());
+    const first = renderCalendar();
+    fireEvent.click(await screen.findByText(/Work/));
+    fireEvent.click(await screen.findByText('Edit'));
+    fireEvent.change(screen.getByDisplayValue('Work'), {
+      target: { value: 'Corrected calendar title' },
+    });
+    first.unmount();
+    const second = renderCalendar();
+    await screen.findByDisplayValue('Corrected calendar title');
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() =>
+      expect(api.calendar.update).toHaveBeenCalledWith(
+        'e1',
+        expect.objectContaining({ title: 'Corrected calendar title' })
+      )
+    );
+    await waitFor(() => expect(screen.queryByText('Save')).toBeNull());
+    second.unmount();
+    renderCalendar();
+    expect(screen.queryByDisplayValue('Corrected calendar title')).toBeNull();
+  });
+
   it('splits the series so past occurrences keep their old values', async () => {
     await openRecurringEvent();
     fireEvent.click(screen.getByText('Edit'));
@@ -701,5 +740,63 @@ describe('editing the repeat rule', () => {
         })
       )
     );
+  });
+});
+
+describe('the day timeline on a desktop', () => {
+  // The zoom is a standing preference, not a draft, so setup.ts's draft sweep
+  // does not clear it — left behind, it would decide the starting level of
+  // whatever test ran next.
+  beforeEach(() => localStorage.removeItem('lunaschal:calendarDayZoom'));
+  afterEach(() => localStorage.removeItem('lunaschal:calendarDayZoom'));
+
+  // It used to be reachable only on a phone, and it is the only view where an
+  // event can be placed and re-timed by dragging it.
+  it('is one of the three views the toggle offers', async () => {
+    renderCalendar();
+    await waitFor(() => expect(api.calendar.listByRange).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Day' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Day' }));
+    await waitFor(() => expect(api.calendar.listByDate).toHaveBeenCalled());
+    // The same header the phone gets, zoom control and all.
+    expect(screen.getByLabelText('Previous day')).toBeTruthy();
+    expect(screen.getByTestId('calendar-day-zoom')).toBeTruthy();
+  });
+
+  it('opens the day that was selected in the month grid', async () => {
+    // Otherwise picking a date and hitting Day silently lands on today.
+    const { container } = renderCalendar();
+    const cells = await waitFor(() => {
+      const found = container.querySelectorAll('[data-testid="month-cell"]');
+      expect(found).toHaveLength(42);
+      return found;
+    });
+    fireEvent.click(cells[3]); // Wednesday 2026-02-04
+    fireEvent.click(screen.getByRole('button', { name: 'Day' }));
+    await waitFor(() =>
+      expect(api.calendar.listByDate).toHaveBeenCalledWith('2026-02-04')
+    );
+  });
+
+  it('steps the zoom and stops at each end', async () => {
+    renderCalendar();
+    fireEvent.click(screen.getByRole('button', { name: 'Day' }));
+    const level = await screen.findByTestId('calendar-day-zoom');
+    expect(level.textContent).toBe('2x'); // the shipped default
+
+    fireEvent.click(screen.getByLabelText('Longer day'));
+    expect(level.textContent).toBe('3x');
+    // At the top of the range the control says so rather than wrapping round.
+    expect(
+      (screen.getByLabelText('Longer day') as HTMLButtonElement).disabled
+    ).toBe(true);
+
+    fireEvent.click(screen.getByLabelText('Shorter day'));
+    fireEvent.click(screen.getByLabelText('Shorter day'));
+    expect(level.textContent).toBe('1x');
+    expect(
+      (screen.getByLabelText('Shorter day') as HTMLButtonElement).disabled
+    ).toBe(true);
   });
 });

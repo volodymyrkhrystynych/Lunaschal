@@ -4,6 +4,7 @@ calendar_events row, following the same monkeypatch style as
 test_email_ai.py."""
 import time
 
+import pytest
 from ulid import ULID
 
 from backend.ai import calendar as calendar_ai
@@ -126,3 +127,62 @@ def test_prompt_text_includes_title_and_description():
     )
     assert 'Family walk' in text
     assert 'Walked around the block with the kids.' in text
+
+
+# --- parse_event_voice_edit: the day view's mic button ----------------------
+
+
+def _current(**overrides) -> dict:
+    current = {
+        'title': 'Gym', 'description': None,
+        'time': '09:00', 'endTime': '10:00', 'tags': ['fitness'],
+    }
+    current.update(overrides)
+    return current
+
+
+def test_parse_event_voice_edit_passes_the_bounded_schema(monkeypatch):
+    seen = {}
+
+    def fake_chat_json(text, system=None, schema=None):
+        seen['text'] = text
+        seen['schema'] = schema
+        return {'title': 'Dentist', 'description': None, 'time': '14:15',
+                'endTime': None, 'tags': None}
+
+    monkeypatch.setattr(calendar_ai, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(calendar_ai, 'chat_json', fake_chat_json)
+
+    edit = calendar_ai.parse_event_voice_edit(_current(), 'that was the dentist, quarter past two')
+
+    # The event as it stands has to be in the prompt: almost everything this
+    # call decides is relative to it.
+    assert 'Gym' in seen['text'] and '09:00' in seen['text'] and 'fitness' in seen['text']
+    assert 'date' not in seen['schema']['properties']
+    # The end time was not spoken, so the hour-long length came with it.
+    assert edit == {'title': 'Dentist', 'time': '14:15', 'endTime': '15:15'}
+
+
+def test_parse_event_voice_edit_unconfigured_makes_no_call(monkeypatch):
+    monkeypatch.setattr(calendar_ai, 'is_ai_configured', lambda: False)
+    monkeypatch.setattr(calendar_ai, 'chat_json', lambda *a, **k: pytest.fail('called'))
+    assert calendar_ai.parse_event_voice_edit(_current(), 'move it to two') == {}
+
+
+def test_parse_event_voice_edit_swallows_an_llm_failure(monkeypatch):
+    # The recording is already in hand by the time this runs; the caller's
+    # fallback is to keep it as the description, and it can only do that if
+    # this returns rather than raises.
+    monkeypatch.setattr(calendar_ai, 'is_ai_configured', lambda: True)
+
+    def boom(text, system=None, schema=None):
+        raise RuntimeError('llm unreachable')
+
+    monkeypatch.setattr(calendar_ai, 'chat_json', boom)
+    assert calendar_ai.parse_event_voice_edit(_current(), 'move it to two') == {}
+
+
+def test_parse_event_voice_edit_ignores_a_blank_transcript(monkeypatch):
+    monkeypatch.setattr(calendar_ai, 'is_ai_configured', lambda: True)
+    monkeypatch.setattr(calendar_ai, 'chat_json', lambda *a, **k: pytest.fail('called'))
+    assert calendar_ai.parse_event_voice_edit(_current(), '   ') == {}

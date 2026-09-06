@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDraftState } from '@/hooks/useDraftState';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import {
@@ -19,7 +20,7 @@ const shortDate = (iso: string) => iso.slice(5).replace('-', '/');
 
 function BodyWeightChart({ showHeading = true }: { showHeading?: boolean }) {
   const queryClient = useQueryClient();
-  const [value, setValue] = useState('');
+  const [value, setValue] = useDraftState('lifestyle:weight', '');
   const [error, setError] = useState<string | null>(null);
 
   const { data: logs = [] } = useQuery({

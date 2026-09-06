@@ -265,36 +265,133 @@ def get_event(id):
     return jsonify(event)
 
 
+def _stored_tags(raw) -> list:
+    """The tags column as a list, whatever state it is in. Guarded because the
+    only thing this route must never do is fail: the recording is already in
+    hand, and a legacy row with unparseable JSON is not a reason to drop it."""
+    try:
+        parsed = json.loads(raw) if raw else []
+    except (TypeError, ValueError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+#: Columns a spoken edit is allowed to write, keyed by the camelCase field
+#: backend/calendar_voice.py emits. `date` is absent by construction — see that
+#: module's docstring for why the mic button must not move an event off the day
+#: it was spoken at.
+_VOICE_EDIT_COLUMNS = {
+    'title': 'title', 'description': 'description',
+    'time': 'time', 'endTime': 'end_time', 'tags': 'tags',
+}
+
+
 @bp.post('/<id>/transcribe')
 def transcribe_event(id):
-    """Save an already-transcribed recording as the event's description and
-    queue AI category classification — no confirm step, matching the other
-    record-and-save-immediately voice paths in the app (e.g. the Journal
+    """Apply a spoken sentence to one event — no confirm step, matching the
+    other record-and-save-immediately voice paths in the app (e.g. the Journal
     button on the bottom SttPanel). `text` is transcribed client-side via the
     existing /api/transcribe endpoint before this is called.
+
+    The sentence is read as an edit (title/description/time/endTime/tags —
+    never the date) rather than being stored verbatim. When nothing usable
+    comes back — AI unconfigured, the model down, a sentence that asked for
+    nothing this may change — it falls through to what this endpoint has
+    always done and stores the transcript as the description, so the recording
+    is never the thing that gets lost.
+
+    A time change on one occurrence of a recurring series becomes an exception
+    row rather than an edit to the series, which is the same scoping a drag in
+    the day view already applies; the other fields belong to the series.
     """
     body = request.json or {}
     text = (body.get('text') or '').strip()
     if not text:
         return jsonify({'error': 'text required'}), 400
+    occurrence_date = body.get('occurrenceDate')
+    if occurrence_date is not None and not _valid_date(occurrence_date):
+        return jsonify({'error': 'occurrenceDate must be YYYY-MM-DD'}), 400
 
     db = get_db()
-    row = db.execute('SELECT id FROM calendar_events WHERE id=?', (id,)).fetchone()
+    row = db.execute('SELECT * FROM calendar_events WHERE id=?', (id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
 
-    build_update(
-        db, 'calendar_events',
-        {'description': text, 'classified_at': None, 'classification_error': None},
-        'id=?', (id,),
-    )
-    db.commit()
+    from backend.ai.calendar import classify_event_categories, parse_event_voice_edit
 
-    from backend.ai.calendar import classify_event_categories
-    run_bg(lambda: classify_event_categories(id))
+    current = {
+        'title': row['title'],
+        'description': row['description'],
+        'time': row['time'],
+        'endTime': row['end_time'],
+        'tags': _stored_tags(row['tags']),
+    }
+    edit = parse_event_voice_edit(current, text)
+    if not edit:
+        edit = {'description': text}
+
+    # Times on a single occurrence of a series go to an exception row; the rest
+    # of the edit is a property of the series and goes to the row itself.
+    occurrence_times = {}
+    is_series = row['repeat_freq'] in VALID_FREQS
+    if is_series and occurrence_date:
+        for field in ('time', 'endTime'):
+            if field in edit:
+                occurrence_times[field] = edit.pop(field)
+
+    # Iterated over the allowlist rather than over what came back, so the map
+    # is a gate and not just a rename: anything the parse did not filter —
+    # `date` above all — has no column to be written to.
+    updates = {
+        column: (tags_json(edit[field]) if field == 'tags' else edit[field])
+        for field, column in _VOICE_EDIT_COLUMNS.items()
+        if field in edit
+    }
+    if 'description' in updates:
+        # A new description is a new thing to classify; the old categories
+        # described text that is no longer there.
+        updates['classified_at'] = None
+        updates['classification_error'] = None
+
+    if updates:
+        build_update(db, 'calendar_events', updates, 'id=?', (id,))
+        db.commit()
+
+    if occurrence_times:
+        # Carried forward rather than left to default: _upsert_exception writes
+        # all three `new_*` columns, so omitting the date on an occurrence that
+        # a drag had already moved across the midnight rule would quietly move
+        # it back.
+        existing = db.execute(
+            'SELECT new_date, new_time, new_end_time FROM calendar_event_exceptions'
+            ' WHERE event_id=? AND date=?',
+            (id, occurrence_date),
+        ).fetchone()
+        _upsert_exception(id, occurrence_date, 'move', {
+            'date': existing['new_date'] if existing else None,
+            'time': occurrence_times.get(
+                'time', existing['new_time'] if existing else None),
+            'endTime': occurrence_times.get(
+                'endTime', existing['new_end_time'] if existing else None),
+        })
+
+    if 'description' in updates:
+        run_bg(lambda: classify_event_categories(id))
 
     updated = db.execute('SELECT * FROM calendar_events WHERE id=?', (id,)).fetchone()
-    return jsonify(row_to_dict(updated))
+    return jsonify({
+        **row_to_dict(updated),
+        # What the sentence actually moved, so the button can say so rather
+        # than leaving the user to spot the difference on the timeline. The
+        # occurrence-scoped times are named here too — they changed, they just
+        # did not change on this row.
+        'voiceEdit': {
+            'applied': sorted(
+                [f for f in edit if f in _VOICE_EDIT_COLUMNS] + list(occurrence_times)
+            ),
+            'transcript': text,
+        },
+    })
 
 
 @bp.post('')

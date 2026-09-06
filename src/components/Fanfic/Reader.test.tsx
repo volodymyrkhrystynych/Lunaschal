@@ -151,6 +151,23 @@ describe('Reader chapter sidebar', () => {
     Element.prototype.scrollTo = vi.fn();
   });
 
+  it('recovers commentary after remount and keeps each chapter separate', async () => {
+    const first = renderReader();
+    await screen.findByRole('heading', { name: 'Chapter 1' });
+    fireEvent.click(screen.getByText(/Commentary/));
+    fireEvent.change(screen.getByRole('textbox'), {
+      target: { value: 'My corrected thought' },
+    });
+    fireEvent.click(screen.getByText('Chapter 2'));
+    await screen.findByRole('heading', { name: 'Chapter 2' });
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('');
+    fireEvent.click(screen.getByText('Chapter 1'));
+    await screen.findByDisplayValue('My corrected thought');
+    first.unmount();
+    renderReader();
+    await screen.findByDisplayValue('My corrected thought');
+  });
+
   it('scrolls the newly selected chapter into view so it stays visible', async () => {
     renderReader();
     await screen.findByText('Chapter 1');

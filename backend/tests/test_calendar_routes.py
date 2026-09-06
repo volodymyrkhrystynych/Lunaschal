@@ -626,3 +626,153 @@ def test_a_client_supplied_id_replays_without_duplicating(client):
 
     events = client.get('/api/calendar?start=2026-08-01&end=2026-08-31').get_json()
     assert [e['title'] for e in events] == ['Dentist']
+
+
+# --- the day view's mic button: one spoken sentence as a bounded edit ---
+
+def transcribe(client, id, text='whatever was said', **body):
+    return client.post(f'/api/calendar/{id}/transcribe',
+                       data=json.dumps({'text': text, **body}),
+                       content_type='application/json')
+
+
+def stub_voice_edit(monkeypatch, edit):
+    """Stand in for the LLM. The parse itself is tested in test_calendar_ai.py
+    and test_calendar_voice.py; what these tests care about is what the route
+    does with what comes back."""
+    from backend.ai import calendar as calendar_ai
+    monkeypatch.setattr(calendar_ai, 'parse_event_voice_edit', lambda current, text: edit)
+    monkeypatch.setattr('backend.routes.calendar.run_bg', lambda fn: None)
+
+
+def test_transcribe_requires_text(client):
+    id = create_ok(client)
+    assert transcribe(client, id, text='   ').status_code == 400
+
+
+def test_transcribe_on_a_missing_event_is_404(client, monkeypatch):
+    stub_voice_edit(monkeypatch, {})
+    assert transcribe(client, 'nope').status_code == 404
+
+
+def test_transcribe_applies_a_parsed_edit_across_every_allowed_field(client, monkeypatch):
+    id = create_ok(client, time='09:00', endTime='10:00')
+    stub_voice_edit(monkeypatch, {
+        'title': 'Dentist', 'description': 'Filling on the lower left.',
+        'time': '14:15', 'endTime': '15:15', 'tags': ['health'],
+    })
+    resp = transcribe(client, id, 'that was the dentist at quarter past two')
+    assert resp.status_code == 200, resp.get_json()
+
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert event['title'] == 'Dentist'
+    assert event['description'] == 'Filling on the lower left.'
+    assert event['time'] == '14:15'
+    assert event['endTime'] == '15:15'
+    assert json.loads(event['tags']) == ['health']
+    assert resp.get_json()['voiceEdit']['applied'] == [
+        'description', 'endTime', 'tags', 'time', 'title'
+    ]
+
+
+def test_transcribe_never_moves_the_event_to_another_date(client, monkeypatch):
+    """The button lives on an event drawn on one day of the timeline; an event
+    that vanished off that screen would have nothing on it to undo with. The
+    schema cannot express a date, and the route ignores one anyway."""
+    id = create_ok(client, date='2026-07-01', time='09:00')
+    stub_voice_edit(monkeypatch, {'date': '2026-07-08', 'time': '11:00'})
+    assert transcribe(client, id, 'move this to next week').status_code == 200
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert event['date'] == '2026-07-01'
+    assert event['time'] == '11:00'
+
+
+def test_transcribe_falls_back_to_the_transcript_as_the_description(client, monkeypatch):
+    """AI off, model down, or a sentence that asked for nothing this may
+    change: the old behaviour is the floor, so a recording is never lost to a
+    parse that came back empty."""
+    id = create_ok(client)
+    stub_voice_edit(monkeypatch, {})
+    resp = transcribe(client, id, 'Walked around the block with the dog.')
+    assert resp.status_code == 200
+    event = client.get(f'/api/calendar/{id}').get_json()
+    assert event['description'] == 'Walked around the block with the dog.'
+    assert resp.get_json()['voiceEdit']['applied'] == ['description']
+
+
+def test_transcribe_queues_reclassification_only_when_the_description_changed(client, monkeypatch):
+    id = create_ok(client)
+    client.patch(f'/api/calendar/{id}', data=json.dumps({'categoryTags': ['work']}),
+                 content_type='application/json')
+    assert client.get(f'/api/calendar/{id}').get_json()['classifiedAt'] is not None
+
+    queued = []
+    from backend.ai import calendar as calendar_ai
+    monkeypatch.setattr(calendar_ai, 'parse_event_voice_edit', lambda c, t: {'time': '11:00'})
+    monkeypatch.setattr('backend.routes.calendar.run_bg', queued.append)
+
+    transcribe(client, id, 'move it to eleven')
+    # A retime says nothing new about what the event was, so the categories
+    # that were set stand and no model call is queued.
+    assert queued == []
+    assert client.get(f'/api/calendar/{id}').get_json()['classifiedAt'] is not None
+
+    monkeypatch.setattr(calendar_ai, 'parse_event_voice_edit',
+                        lambda c, t: {'description': 'Ran five kilometres.'})
+    transcribe(client, id, 'ran five kilometres')
+    assert len(queued) == 1
+    assert client.get(f'/api/calendar/{id}').get_json()['classifiedAt'] is None
+
+
+def test_transcribe_scopes_a_time_change_on_a_series_to_one_occurrence(client, monkeypatch):
+    """Same scoping a drag in the day view already applies: the clock belongs
+    to the occurrence, the name belongs to the series."""
+    id = create_ok(client, date='2026-07-01', time='09:00', endTime='10:00',
+                   repeatFreq='daily')
+    stub_voice_edit(monkeypatch, {'title': 'Standup', 'time': '11:00', 'endTime': '11:30'})
+    resp = transcribe(client, id, 'call it standup, it moved to eleven today',
+                      occurrenceDate='2026-07-02')
+    assert resp.status_code == 200, resp.get_json()
+    assert resp.get_json()['voiceEdit']['applied'] == ['endTime', 'time', 'title']
+
+    days = {e['date']: e for e in listing(client, '2026-07-01', '2026-07-03')}
+    # The series row keeps its own time; only the spoken occurrence moved.
+    assert days['2026-07-01']['time'] == '09:00'
+    assert days['2026-07-02']['time'] == '11:00'
+    assert days['2026-07-02']['endTime'] == '11:30'
+    assert days['2026-07-03']['time'] == '09:00'
+    # The rename is a property of the series, so every occurrence carries it.
+    assert {d['title'] for d in days.values()} == {'Standup'}
+
+
+def test_transcribe_keeps_a_date_an_earlier_drag_moved_the_occurrence_to(client, monkeypatch):
+    """The exception row carries all three `new_*` columns, so a voice retime —
+    which never sends a date — must carry forward the one a cross-midnight drag
+    already wrote, or it would quietly move the occurrence back."""
+    id = create_ok(client, date='2026-07-01', time='23:30', repeatFreq='daily')
+    client.patch(f'/api/calendar/{id}/occurrence/2026-07-02',
+                 data=json.dumps({'newDate': '2026-07-03', 'newTime': '00:30'}),
+                 content_type='application/json')
+
+    stub_voice_edit(monkeypatch, {'time': '01:00'})
+    transcribe(client, id, 'it was one in the morning', occurrenceDate='2026-07-02')
+
+    moved = [e for e in listing(client, '2026-07-01', '2026-07-04')
+             if e.get('occurrenceDate') == '2026-07-02']
+    assert len(moved) == 1
+    assert moved[0]['date'] == '2026-07-03'
+    assert moved[0]['time'] == '01:00'
+
+
+def test_transcribe_on_a_series_without_an_occurrence_edits_the_series(client, monkeypatch):
+    id = create_ok(client, date='2026-07-01', time='09:00', repeatFreq='daily')
+    stub_voice_edit(monkeypatch, {'time': '11:00'})
+    transcribe(client, id, 'these all move to eleven')
+    days = {e['date']: e for e in listing(client, '2026-07-01', '2026-07-03')}
+    assert {d['time'] for d in days.values()} == {'11:00'}
+
+
+def test_transcribe_rejects_a_malformed_occurrence_date(client, monkeypatch):
+    id = create_ok(client, repeatFreq='daily')
+    stub_voice_edit(monkeypatch, {'time': '11:00'})
+    assert transcribe(client, id, 'move it', occurrenceDate='07/02/2026').status_code == 400

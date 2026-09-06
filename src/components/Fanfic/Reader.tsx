@@ -35,6 +35,7 @@ import { useMasterDetail } from '@/hooks/useMasterDetail';
 import { MasterDetailBack } from '@/components/MasterDetailBack';
 import { useRecorder } from '../../hooks/useRecorder';
 import { captureFicCommentary } from '../../offline/recordingQueue';
+import { useDraftState } from '@/hooks/useDraftState';
 
 interface ReaderProps {
   ficId: string;
@@ -46,7 +47,10 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const [chapterId, setChapterId] = useState<string | null>(
     initialChapterId ?? null
   );
-  const [commentary, setCommentary] = useState('');
+  const [commentary, setCommentary] = useDraftState(
+    `fanfic:${ficId}:${chapterId ?? 'pdf'}:commentary`,
+    ''
+  );
   // What to show beside the Commentary header after a save. Two different
   // sentences, because the two halves of this panel finish differently: typed
   // commentary is an entry the moment it is saved, a recording is an entry with
@@ -54,7 +58,10 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const [commentarySaved, setCommentarySaved] = useState('');
   const [recordingNotice, setRecordingNotice] = useState('');
   const [recordingStarting, setRecordingStarting] = useState(false);
-  const [showCommentary, setShowCommentary] = useState(false);
+  const [showCommentary, setShowCommentary] = useDraftState(
+    `fanfic:${ficId}:commentary-open`,
+    false
+  );
   const [navVisible, setNavVisible] = useState(true);
   const [fontSize, setFontSize] = useState(getStoredReadingFontSize);
   const { isMobile, showList, showDetail, openDetail, openList } =
@@ -373,6 +380,12 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   }, [showFavorites, favorites.length]);
 
   const saveCommentary = useMutation({
+    // Capture this chapter's setter before a pending save can outlive a move
+    // to another chapter. Keep any further edits made while saving, too.
+    onMutate: (text: string) => ({
+      clearSaved: () =>
+        setCommentary(value => (value.trim() === text ? '' : value)),
+    }),
     mutationFn: async (text: string) => {
       // createFromVoice, not create: commentary is dictated as often as
       // typed (the mic button above appends into the same box either way),
@@ -387,8 +400,8 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
       );
       return entry;
     },
-    onSuccess: () => {
-      setCommentary('');
+    onSuccess: (_entry, _text, context) => {
+      context?.clearSaved();
       setCommentarySaved('saved to journal ✓');
       setTimeout(() => setCommentarySaved(''), 3000);
       queryClient.invalidateQueries({ queryKey: ['journal'] });

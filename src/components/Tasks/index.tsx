@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useDraftState } from '@/hooks/useDraftState';
 import { useQuery } from '@tanstack/react-query';
 import { api, TodoList } from '../../hooks/api';
 import { useDailyToggle, useTodoUpdate } from '../../offline/mutationDefaults';
@@ -35,7 +36,7 @@ export function TasksSection() {
   const [section, setSection] = useState<TaskSection>('daily');
   const [activeList, setActiveList] = useState<TodoList>('todo');
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useDraftState('todo:creating', false);
   // One toggle for the whole card: daily tasks and to-dos sit under one border,
   // so two independent 🗑 buttons would read as one control that half-works.
   const [showDelete, setShowDelete] = useState(false);

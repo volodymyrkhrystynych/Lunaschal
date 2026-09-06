@@ -161,6 +161,21 @@ describe('Journal keyboard editing', () => {
     Element.prototype.scrollIntoView = vi.fn();
   });
 
+  it('restores an unfinished correction after the whole view is recreated', async () => {
+    const first = renderJournal();
+    await screen.findByText('First entry');
+    openEditWithKeyboard();
+    fireEvent.change(screen.getByDisplayValue('First entry'), {
+      target: { value: 'Corrected transcript, still unsaved' },
+    });
+    first.unmount();
+    renderJournal();
+    const restored = await screen.findByDisplayValue(
+      'Corrected transcript, still unsaved'
+    );
+    expect(restored.tagName).toBe('TEXTAREA');
+  });
+
   it('D opens the selected entry for editing with the textarea focused', async () => {
     renderJournal();
     await screen.findByText('First entry');
@@ -287,6 +302,31 @@ describe('Journal new-entry keyboard save', () => {
       'Write your journal entry...'
     ) as HTMLTextAreaElement;
   }
+
+  it('restores a new entry draft and discards it on explicit Cancel', async () => {
+    const first = renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+    fireEvent.change(
+      screen.getByPlaceholderText('Write your journal entry...'),
+      {
+        target: { value: 'New entry correction' },
+      }
+    );
+    first.unmount();
+    const second = renderJournal();
+    await screen.findByDisplayValue('New entry correction');
+    fireEvent.click(screen.getByText('Cancel'));
+    second.unmount();
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+    expect(
+      (
+        screen.getByPlaceholderText(
+          'Write your journal entry...'
+        ) as HTMLTextAreaElement
+      ).value
+    ).toBe('');
+  });
 
   it('saves the entry when Enter is pressed', async () => {
     const textarea = await openNewEntry();

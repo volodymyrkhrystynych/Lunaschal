@@ -43,6 +43,7 @@ import {
   useBottomBarHidden,
   useImmersive,
 } from './components/ImmersiveContext';
+import { recordBrowserSignal } from './lib/browserDiagnostics';
 
 /**
  * The shell, wrapped so a view can ask for it to get out of the way. Split in
@@ -57,6 +58,10 @@ export default function App() {
 }
 
 function AppShell() {
+  useEffect(() => {
+    recordBrowserSignal('shell-mount');
+    return () => recordBrowserSignal('shell-unmount');
+  }, []);
   const isDesktopShell = useDesktopShell();
   // Set by the Paper editor on a tablet: no header, no sidebar, no bottom bar,
   // so the page is the screen and its own Back button is the way out.
@@ -114,6 +119,8 @@ function AppShell() {
     isError: authError,
     data: authStatus,
   });
+  useEffect(() => recordBrowserSignal('auth-gate', authGate), [authGate]);
+  useEffect(() => recordBrowserSignal('view', currentView), [currentView]);
 
   // Mounted regardless of currentView so the sidebar can flag a gap without
   // the user opening the Lifestyle/Newspapers tab; gated on 'app' so it

@@ -16,6 +16,10 @@ import { registerOfflineMutationDefaults } from './offline/mutationDefaults';
 import { resumeStoredRecordings } from './offline/recordingQueue';
 import { resumeStoredPhotos } from './offline/photoQueue';
 import './index.css';
+import { installBrowserDiagnostics } from './lib/browserDiagnostics';
+
+const stopDiagnostics = installBrowserDiagnostics();
+if (import.meta.hot) import.meta.hot.dispose(stopDiagnostics);
 
 applyFontSize(getStoredFontSize());
 

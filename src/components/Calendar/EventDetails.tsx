@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useDraftState } from '@/hooks/useDraftState';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import {
@@ -32,28 +32,31 @@ export function EventDetails({
   // 'view' -> 'confirmDelete' asks which occurrences to remove; 'edit' ->
   // 'confirmScope' asks the same about a change. Both questions only exist for
   // a recurring event.
-  const [mode, setMode] = useState<
+  const [mode, setMode] = useDraftState<
     'view' | 'confirmDelete' | 'edit' | 'confirmScope'
-  >('view');
-  const [draft, setDraft] = useState({
-    title: '',
-    description: '',
-    time: '',
-    endTime: '',
-    allDay: false,
-    // Comma-separated text while editing; the stored JSON array is parsed on
-    // the way in and split again on save.
-    tags: '',
-    // The grouping categories (leisure/work/exercise/family/outside/indoors)
-    // that make the Journal feed draw this event's border around entries in
-    // its time window — normally AI-assigned from a transcribed description,
-    // editable here so grouping doesn't have to wait on that.
-    categoryTags: [] as EventCategory[],
-    // The recurrence rule, editable here as well as at creation. Without it a
-    // mistyped repeat could only be corrected by deleting the series and
-    // typing the whole event again.
-    repeat: EMPTY_REPEAT as RepeatDraft,
-  });
+  >(`calendar:${eventId}:${occurrenceDate ?? ''}:mode`, 'view');
+  const [draft, setDraft, clearDraft] = useDraftState(
+    `calendar:${eventId}:${occurrenceDate ?? ''}:edit`,
+    {
+      title: '',
+      description: '',
+      time: '',
+      endTime: '',
+      allDay: false,
+      // Comma-separated text while editing; the stored JSON array is parsed on
+      // the way in and split again on save.
+      tags: '',
+      // The grouping categories (leisure/work/exercise/family/outside/indoors)
+      // that make the Journal feed draw this event's border around entries in
+      // its time window — normally AI-assigned from a transcribed description,
+      // editable here so grouping doesn't have to wait on that.
+      categoryTags: [] as EventCategory[],
+      // The recurrence rule, editable here as well as at creation. Without it a
+      // mistyped repeat could only be corrected by deleting the series and
+      // typing the whole event again.
+      repeat: EMPTY_REPEAT as RepeatDraft,
+    }
+  );
 
   const { data: event, isLoading } = useQuery({
     queryKey: ['calendar', 'event', eventId],
@@ -150,6 +153,8 @@ export function EventDetails({
       }
     },
     onSuccess: () => {
+      setMode('view');
+      clearDraft();
       queryClient.invalidateQueries({ queryKey: ['calendar'] });
       onClose();
     },
@@ -160,6 +165,13 @@ export function EventDetails({
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div className="bg-[var(--color-surface)] rounded-lg p-6 max-w-lg w-full mx-4">
           <div className="text-[var(--color-text-muted)]">Loading...</div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="mt-3 text-[var(--color-primary)]"
+          >
+            Close
+          </button>
         </div>
       </div>
     );
@@ -486,7 +498,10 @@ export function EventDetails({
           {mode === 'edit' && (
             <>
               <button
-                onClick={() => setMode('view')}
+                onClick={() => {
+                  setMode('view');
+                  clearDraft();
+                }}
                 className="px-3 py-1 text-sm text-[var(--color-text-muted)]"
               >
                 Cancel
