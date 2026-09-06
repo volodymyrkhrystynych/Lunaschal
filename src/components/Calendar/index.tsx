@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDraftState } from '@/hooks/useDraftState';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type CalendarEvent } from '../../hooks/api';
 import { useIsMobile } from '@/hooks/useMediaQuery';
@@ -55,20 +56,32 @@ const EMPTY_NEW_EVENT = {
 export function Calendar() {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [viewMode, setViewMode] = useState<ViewMode>('month');
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [selected, setSelected] = useState<{
+  const [selectedDate, setSelectedDate] = useDraftState<string | null>(
+    'calendar:date',
+    null
+  );
+  const [selected, setSelected] = useDraftState<{
     id: string;
     occurrenceDate: string;
-  } | null>(null);
-  const [newEvent, setNewEvent] = useState(EMPTY_NEW_EVENT);
+  } | null>('calendar:selected', null);
+  const [newEvent, setNewEvent] = useDraftState(
+    'calendar:new',
+    EMPTY_NEW_EVENT
+  );
   const [tagFilter, setTagFilter] = useState<string | null>(null);
-  const [showNewEvent, setShowNewEvent] = useState(false);
+  const [showNewEvent, setShowNewEvent] = useDraftState(
+    'calendar:composing',
+    false
+  );
   const isMobile = useIsMobile();
   const queryClient = useQueryClient();
 
   const todayISO = localDayKey();
-  const [mobileView, setMobileView] = useState<MobileView>('day');
-  const [dayDate, setDayDate] = useState(todayISO);
+  const [mobileView, setMobileView] = useDraftState<MobileView>(
+    'calendar:mobile-view',
+    'day'
+  );
+  const [dayDate, setDayDate] = useDraftState('calendar:day', todayISO);
   const [editingSleep, setEditingSleep] = useState(false);
 
   const year = currentDate.getFullYear();

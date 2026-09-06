@@ -252,6 +252,31 @@ describe('recurring occurrences', () => {
 });
 
 describe('editing a recurring event', () => {
+  it('restores the selected event and its unsaved edit after a reload', async () => {
+    vi.mocked(api.calendar.listByRange).mockResolvedValue([event()]);
+    vi.mocked(api.calendar.get).mockResolvedValue(event());
+    const first = renderCalendar();
+    fireEvent.click(await screen.findByText(/Work/));
+    fireEvent.click(await screen.findByText('Edit'));
+    fireEvent.change(screen.getByDisplayValue('Work'), {
+      target: { value: 'Corrected calendar title' },
+    });
+    first.unmount();
+    const second = renderCalendar();
+    await screen.findByDisplayValue('Corrected calendar title');
+    fireEvent.click(screen.getByText('Save'));
+    await waitFor(() =>
+      expect(api.calendar.update).toHaveBeenCalledWith(
+        'e1',
+        expect.objectContaining({ title: 'Corrected calendar title' })
+      )
+    );
+    await waitFor(() => expect(screen.queryByText('Save')).toBeNull());
+    second.unmount();
+    renderCalendar();
+    expect(screen.queryByDisplayValue('Corrected calendar title')).toBeNull();
+  });
+
   it('splits the series so past occurrences keep their old values', async () => {
     await openRecurringEvent();
     fireEvent.click(screen.getByText('Edit'));

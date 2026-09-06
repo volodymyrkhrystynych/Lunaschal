@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, memo } from 'react';
+import { useDraftState } from '@/hooks/useDraftState';
 import {
   useQuery,
   useInfiniteQuery,
@@ -122,10 +123,19 @@ export function Journal({
   const [copiedTranscriptionId, setCopiedTranscriptionId] = useState<
     string | null
   >(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editContent, setEditContent] = useState('');
-  const [editTitle, setEditTitle] = useState('');
-  const [showNewEntry, setShowNewEntry] = useState(false);
+  const [editingId, setEditingId] = useDraftState<string | null>(
+    'journal:editing',
+    null
+  );
+  const [editContent, setEditContent] = useDraftState(
+    'journal:edit:content',
+    ''
+  );
+  const [editTitle, setEditTitle] = useDraftState('journal:edit:title', '');
+  const [showNewEntry, setShowNewEntry] = useDraftState(
+    'journal:composing',
+    false
+  );
   // The compose box's own text and staged files live in NewEntryComposer, not
   // here. Keeping them on Journal meant every keystroke re-rendered the whole
   // feed — see the comment on that component.
@@ -326,7 +336,9 @@ export function Journal({
   // Held in state rather than read from the prop: the prop is consumed on
   // arrival (so returning to the tab later doesn't jump the feed again), while
   // the hunt below may still need a page or two to find the row.
-  const [targetEntryId, setTargetEntryId] = useState<string | null>(null);
+  // A recovered edit can be on an older page; reuse the linked-entry hunt to
+  // load and reveal it rather than leave its restored textarea off screen.
+  const [targetEntryId, setTargetEntryId] = useState<string | null>(editingId);
   const [highlightId, setHighlightId] = useState<string | null>(null);
   const targetPagesRef = useRef(0);
 
@@ -482,6 +494,8 @@ export function Journal({
   const submitEdit = (id: string) => {
     updateEntry.mutate({ id, content: editContent, title: editTitle });
     setEditingId(null);
+    setEditContent('');
+    setEditTitle('');
   };
 
   const deleteEntry = useMutation({
@@ -1095,7 +1109,7 @@ function NewEntryComposer({
   onSubmit: (content: string, files: StagedFile[]) => void;
   onCancel: () => void;
 }) {
-  const [content, setContent] = useState('');
+  const [content, setContent] = useDraftState('journal:new:content', '');
   // Files picked, pasted, dropped or recorded here, held until the entry they
   // belong to exists server-side.
   const [files, setFiles] = useState<StagedFile[]>([]);
@@ -1172,6 +1186,7 @@ function NewEntryComposer({
         autoFocus
         onKeyDown={e => {
           if (e.key === 'Escape') {
+            setContent('');
             onCancel();
             return;
           }
@@ -1278,6 +1293,7 @@ function NewEntryComposer({
               if (st.recordingId) void deleteRecording(st.recordingId);
             }
             setFiles([]);
+            setContent('');
             onCancel();
           }}
           className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"

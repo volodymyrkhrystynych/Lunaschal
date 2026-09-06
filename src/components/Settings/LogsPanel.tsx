@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { BrowserDiagnostics } from './BrowserDiagnostics';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { ServerLogResponse } from '../../hooks/api';
@@ -86,6 +87,7 @@ export function LogsPanel() {
 
   return (
     <div className="flex flex-col gap-3">
+      <BrowserDiagnostics />
       <p className="text-sm text-[var(--color-text-muted)]">
         The systemd journals for the server's units. Read-only.
       </p>

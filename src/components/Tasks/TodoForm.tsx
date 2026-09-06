@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
+import { useDraftState } from '@/hooks/useDraftState';
 import { RepeatUnit, TodoList } from '../../hooks/api';
 import { ulid } from '../../lib/ulid';
 import { useTodoCreate } from '../../offline/mutationDefaults';
@@ -13,12 +14,15 @@ interface TodoFormProps {
 // Tab cycles the fields, Ctrl+Enter creates from anywhere, Escape backs out
 // into item navigation. The form stays open after a create for rapid entry.
 export function TodoForm({ list, onCancel }: TodoFormProps) {
-  const [title, setTitle] = useState('');
-  const [notes, setNotes] = useState('');
-  const [dueInput, setDueInput] = useState('');
-  const [repeatN, setRepeatN] = useState('');
-  const [repeatUnit, setRepeatUnit] = useState<RepeatUnit>('week');
-  const [priority, setPriority] = useState(3);
+  const [title, setTitle] = useDraftState(`todo:${list}:title`, '');
+  const [notes, setNotes] = useDraftState(`todo:${list}:notes`, '');
+  const [dueInput, setDueInput] = useDraftState(`todo:${list}:due`, '');
+  const [repeatN, setRepeatN] = useDraftState(`todo:${list}:repeat-n`, '');
+  const [repeatUnit, setRepeatUnit] = useDraftState<RepeatUnit>(
+    `todo:${list}:repeat-unit`,
+    'week'
+  );
+  const [priority, setPriority] = useDraftState(`todo:${list}:priority`, 3);
   const refs = useRef<(HTMLInputElement | HTMLSelectElement | null)[]>([]);
 
   // Offline-queueable: optimistic insert + invalidation live in the registered

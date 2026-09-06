@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useDraftState } from '@/hooks/useDraftState';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, DailyTask } from '../../hooks/api';
 
@@ -25,10 +25,13 @@ export function DailyTasks({
   showDelete,
   onToggleDelete,
 }: DailyTasksProps) {
-  const [newTitle, setNewTitle] = useState('');
-  const [showAdd, setShowAdd] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState('');
+  const [newTitle, setNewTitle] = useDraftState('daily-task:new', '');
+  const [showAdd, setShowAdd] = useDraftState('daily-task:adding', false);
+  const [editingId, setEditingId] = useDraftState<string | null>(
+    'daily-task:editing',
+    null
+  );
+  const [editTitle, setEditTitle] = useDraftState('daily-task:edit-title', '');
   const queryClient = useQueryClient();
 
   const invalidate = () =>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useDraftState } from '@/hooks/useDraftState';
 import { TodoItem, TodoPayload } from '../../hooks/api';
 import {
   formatCompletedAt,
@@ -29,8 +29,11 @@ export function TodoRow({
   onUpdate,
   onDelete,
 }: TodoRowProps) {
-  const [editing, setEditing] = useState(false);
-  const [editTitle, setEditTitle] = useState('');
+  const [editing, setEditing] = useDraftState(`todo:${todo.id}:editing`, false);
+  const [editTitle, setEditTitle] = useDraftState(
+    `todo:${todo.id}:edit-title`,
+    ''
+  );
 
   const startEdit = () => {
     setEditing(true);
