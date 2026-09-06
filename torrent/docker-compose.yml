@@ -1,0 +1,89 @@
+# The torrent stack: qBittorrent whose *only* network is a ProtonVPN WireGuard
+# tunnel. Mirrors ../searxng/docker-compose.yml in shape — a Compose stack
+# supervised by a systemd --user oneshot (lunaschal-torrent.service).
+#
+# Why a container and not a network namespace: `ip netns add` needs root, and
+# every other Lunaschal unit is a --user unit owned by volodya. Docker is
+# already running here and already hosts SearXNG, so this introduces no new
+# operational surface and no root. See ../docs/torrent-tab.md.
+#
+# Why this cannot leak: qbittorrent below sets `network_mode: service:gluetun`,
+# so it does not have a network stack of its own — it shares gluetun's. There
+# is no enp42s0, no tailscale0 and no default route in that namespace, only the
+# WireGuard tun and gluetun's firewall. If the tunnel drops, the client has no
+# path to the internet at all. That is a structural property of the namespace,
+# not a setting that can be mis-toggled.
+#
+# Tailscale is unaffected: it runs on the *host*, and Lunaschal reaches the
+# WebUI over host loopback (127.0.0.1:8080), a hop that never leaves the
+# machine and so is neither tunnelled nor leaked.
+
+services:
+  gluetun:
+    # Pinned to a major. gluetun's firewall *is* the kill switch, and a major
+    # bump is exactly where its semantics would change — not something to
+    # discover from a silent `latest` pull. (SearXNG is unpinned because the
+    # worst case there is a bad search.)
+    image: qmcgaw/gluetun:v3
+    cap_add: [NET_ADMIN]
+    devices: ['/dev/net/tun:/dev/net/tun']
+    ports:
+      # Loopback ONLY. Publishing on 0.0.0.0 would put an unauthenticated-ish
+      # torrent WebUI on the LAN *and* on tailscale0, next to a Lunaschal that
+      # carefully requires a password. Everything remote goes through
+      # Lunaschal's own auth instead.
+      - '127.0.0.1:8080:8080' # qBittorrent WebUI
+      - '127.0.0.1:8000:8000' # gluetun control server (public IP, tunnel, forwarded port)
+    volumes:
+      - ./gluetun:/gluetun
+      - ./qbt-port-sync.sh:/qbt-port-sync.sh:ro
+    environment:
+      VPN_SERVICE_PROVIDER: protonvpn
+      VPN_TYPE: wireguard
+      # From account.proton.me/u/0/vpn/WireGuard — see .env.example.
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:?set WIREGUARD_PRIVATE_KEY in torrent/.env}
+      SERVER_COUNTRIES: ${SERVER_COUNTRIES:-Canada}
+      # NAT-PMP. PORT_FORWARD_ONLY makes gluetun refuse a server that cannot
+      # forward, rather than quietly connecting to one that can't — without a
+      # forwarded port you are unconnectable to most peers and seeding barely
+      # works, which is easy to misread as "the VPN is slow".
+      VPN_PORT_FORWARDING: 'on'
+      PORT_FORWARD_ONLY: 'on'
+      VPN_PORT_FORWARDING_UP_COMMAND: '/bin/sh /qbt-port-sync.sh {{PORTS}}'
+      HTTP_CONTROL_SERVER_ADDRESS: ':8000'
+      # Mandatory, and the single most confusing thing to omit. gluetun's
+      # firewall drops everything that is not the tunnel — including the
+      # replies to the published WebUI port, which arrive from the Docker
+      # bridge gateway rather than from loopback. Without this the WebUI is
+      # simply unreachable and it looks like the container failed to start.
+      FIREWALL_OUTBOUND_SUBNETS: 10.13.37.0/24
+      TZ: ${TZ:-America/Toronto}
+    restart: unless-stopped
+
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent
+    # The whole kill switch, in one line.
+    network_mode: 'service:gluetun'
+    depends_on: [gluetun]
+    environment:
+      # /media/expansion is exFAT mounted uid=1000,gid=1000. exFAT stores no
+      # POSIX ownership of its own, so a container running as anything else
+      # cannot write there at all.
+      PUID: 1000
+      PGID: 1000
+      TZ: ${TZ:-America/Toronto}
+      WEBUI_PORT: 8080
+    volumes:
+      - ./config:/config
+      - ${TORRENT_DOWNLOAD_DIR:-/media/expansion/torrents}:/downloads
+    restart: unless-stopped
+
+networks:
+  default:
+    ipam:
+      config:
+        # Pinned deliberately. FIREWALL_OUTBOUND_SUBNETS above has to name this
+        # subnet, and Compose's auto-assignment picks the next free /16 from
+        # Docker's default pool — which changes as other stacks come and go.
+        # A hardcoded subnet outside that pool can't drift or collide.
+        - subnet: 10.13.37.0/24

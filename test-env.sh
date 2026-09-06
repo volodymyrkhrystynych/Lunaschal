@@ -23,6 +23,19 @@ export JOBS_ROOT="$SCRATCH/jobs"
 export NEWSPAPERS_ROOT="$SCRATCH/newspapers"
 export NOTEBOOK_ROOT="$SCRATCH/notebook"
 export EMAIL_MEDIA_ROOT="$SCRATCH/email/media"
+export PIANO_ROOT="$SCRATCH/piano"
+# Without this the media archive resolves through settings.backup_path — i.e.
+# the real backup drive (backend/piano/archive.py:51).
+export PIANO_ARCHIVE_ROOT="$SCRATCH/piano-archive"
+# The Files/Editor tab falls back to this env var only while settings.files_root
+# is empty, which the seeder deliberately leaves unset (backend/files_config.py)
+# — so the scratch root travels with the checkout instead of being baked into
+# the seeded database as one machine's absolute path.
+export FILES_ROOT="$SCRATCH/files"
+# Downloads. In production this points at /media/expansion/torrents and is
+# the same directory torrent/docker-compose.yml bind-mounts into the client
+# as /downloads; here it is scratch, and no client is running against it.
+export TORRENT_ROOT="$SCRATCH/torrents"
 export SHORTCUTS_PATH="$SCRATCH/shortcuts.json"
 
 # Same idiom backend/tests/conftest.py uses: keep every daemon scheduler off

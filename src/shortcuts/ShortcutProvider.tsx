@@ -79,6 +79,7 @@ export type AppView =
   | 'lifestyle'
   | 'fanfic'
   | 'newspapers'
+  | 'torrent'
   | 'paper'
   | 'email'
   | 'practice'
@@ -103,6 +104,7 @@ export const VIEW_ORDER: AppView[] = [
   'food',
   'fanfic',
   'newspapers',
+  'torrent',
   'email',
   'jobs',
   'paper',

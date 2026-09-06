@@ -15,6 +15,10 @@ import type {
   ServerLogResponse,
   ServerLogUnit,
 } from '../lib/serverLogs';
+// Same reasoning as SleepDay above: the torrent shapes live next to the
+// formatting and sorting logic that consumes them, and the API client
+// re-exports them.
+import type { Torrent, VpnStatus } from '../lib/torrents';
 import type {
   PianoArchiveItem,
   PianoArchivePage,
@@ -29,6 +33,7 @@ import type {
 
 export type { SleepDay };
 export type { ServerLogEntry, ServerLogResponse, ServerLogUnit };
+export type { Torrent, VpnStatus };
 
 export interface JournalEntry {
   id: string;
@@ -763,6 +768,17 @@ export interface AppSettings {
   jobRejectionGraceDays: number;
   /** The key itself never leaves the server, so only its presence is exposed. */
   hasAdzunaCredentials: boolean;
+  /** qBittorrent's WebUI login, not ProtonVPN's — the WireGuard key is not
+   *  in the database at all, it lives in a gitignored torrent/.env. */
+  torrentClientUrl: string;
+  torrentUsername: string;
+  hasTorrentPassword: boolean;
+  torrentVpnUrl: string;
+  torrentRequireVpn: boolean;
+  /** 0 means keep forever, which is the default. */
+  torrentDefaultRetentionDays: number;
+  torrentDefaultRatioLimit: number | null;
+  torrentDefaultSeedingMinutes: number | null;
 }
 
 export interface WhisperModel {
@@ -2576,6 +2592,8 @@ export const api = {
           // hasAdzunaCredentials rather than the key.
           adzunaAppId?: string;
           adzunaAppKey?: string;
+          // Same: the GET returns hasTorrentPassword, never the password.
+          torrentPassword?: string;
         }
       >
     ) => patch<{ success: boolean }>('/api/settings/ai', data),
@@ -3812,6 +3830,97 @@ export const api = {
       del<{ success: boolean }>(`/api/tasks/chat-todos/${id}`),
     promote: (id: string, data: TodoPayload & { title: string }) =>
       post<{ id: string }>(`/api/tasks/chat-todos/${id}/promote`, data),
+  },
+
+  torrents: {
+    // The tunnel status rides along with the list: this is polled every 1.5s
+    // while anything is active, and the banner has to move with it.
+    list: () => get<{ torrents: Torrent[]; vpn: VpnStatus }>('/api/torrents'),
+    vpn: () => get<VpnStatus>('/api/torrents/vpn'),
+    status: () =>
+      get<{
+        available: boolean;
+        vpnConnected: boolean;
+        errored: number;
+        active: number;
+      }>('/api/torrents/status'),
+    add: (body: {
+      magnets?: string;
+      category?: string;
+      note?: string;
+      retentionDays?: number | null;
+      paused?: boolean;
+    }) =>
+      post<{
+        added: { infoHash: string; name: string }[];
+        errors: { input: string; error: string }[];
+      }>('/api/torrents', body),
+    addFiles: async (
+      files: File[],
+      body: { category?: string; note?: string } = {}
+    ) => {
+      const form = new FormData();
+      files.forEach(f => form.append('files', f, f.name));
+      Object.entries(body).forEach(([k, v]) => {
+        // null and undefined are both "don't send this field" — String(null)
+        // would post the literal text "null" and the server would reject it.
+        if (v !== undefined && v !== null && v !== '')
+          form.append(k, String(v));
+      });
+      const resp = await fetch('/api/torrents', {
+        method: 'POST',
+        body: form,
+        credentials: 'include',
+      });
+      const payload = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(payload.error || `HTTP ${resp.status}`);
+      return payload as {
+        added: { infoHash: string; name: string }[];
+        errors: { input: string; error: string }[];
+      };
+    },
+    pause: (hash: string) =>
+      post<{ ok: boolean }>(`/api/torrents/${hash}/pause`),
+    resume: (hash: string) =>
+      post<{ ok: boolean }>(`/api/torrents/${hash}/resume`),
+    recheck: (hash: string) =>
+      post<{ ok: boolean }>(`/api/torrents/${hash}/recheck`),
+    remove: (hash: string, deleteFiles: boolean) =>
+      del<{ ok: boolean }>(`/api/torrents/${hash}?deleteFiles=${deleteFiles}`),
+    update: (
+      hash: string,
+      body: {
+        note?: string;
+        retentionDays?: number | null;
+        category?: string;
+        ratioLimit?: number | null;
+        seedingMinutes?: number | null;
+        dlLimit?: number;
+        upLimit?: number;
+      }
+    ) => patch<{ ok: boolean }>(`/api/torrents/${hash}`, body),
+    files: (hash: string) =>
+      get<
+        {
+          index: number;
+          name: string;
+          size: number;
+          progress: number;
+          priority: number;
+        }[]
+      >(`/api/torrents/${hash}/files`),
+    // Not fetched — handed to the browser as a URL so range requests work and a
+    // large file never passes through JS.
+    fileUrl: (hash: string, index: number) =>
+      `/api/torrents/${hash}/files/${index}/download`,
+    categories: () => get<string[]>('/api/torrents/categories'),
+    createCategory: (name: string) =>
+      post<{ ok: boolean; name: string }>('/api/torrents/categories', { name }),
+    deleteCategory: (name: string) =>
+      del<{ ok: boolean }>(
+        `/api/torrents/categories/${encodeURIComponent(name)}`
+      ),
+    purge: () => post<{ purged: number }>('/api/torrents/purge'),
   },
 
   newspapers: {

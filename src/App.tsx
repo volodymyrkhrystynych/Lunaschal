@@ -19,6 +19,7 @@ import { Lifestyle } from './components/Lifestyle/Lifestyle';
 import { Fanfic } from './components/Fanfic/Fanfic';
 import type { FicTarget } from './components/Fanfic/Fanfic';
 import { Newspapers } from './components/Newspapers';
+import { Torrent } from './components/Torrent/TorrentList';
 import { Email } from './components/Email';
 import { Jobs } from './components/Jobs';
 import { Paper } from './components/Paper/Paper';
@@ -28,6 +29,7 @@ import { api } from './hooks/api';
 import { useTodaySelfieStatus } from './hooks/useTodaySelfieStatus';
 import { useTodayCaloriesStatus } from './hooks/useTodayCaloriesStatus';
 import { useTodayNewspapersStatus } from './hooks/useTodayNewspapersStatus';
+import { useTorrentStatus } from './hooks/useTorrentStatus';
 import { resolveAuthGate } from './lib/authGate';
 import { ShortcutProvider } from './shortcuts/ShortcutProvider';
 import { MOBILE_QUERY } from './lib/breakpoints';
@@ -101,6 +103,7 @@ function AppShell() {
     lowCalories && 'Under 1,500 calories logged today',
   ].filter((reason): reason is string => Boolean(reason));
   const newspapersNeedAttention = useTodayNewspapersStatus(authGate === 'app');
+  const torrentsNeedAttention = useTorrentStatus(authGate === 'app');
 
   const handleTranscribed = (text: string) => {
     if (currentView === 'files') {
@@ -225,6 +228,8 @@ function AppShell() {
         );
       case 'newspapers':
         return <Newspapers />;
+      case 'torrent':
+        return <Torrent />;
       case 'email':
         return <Email />;
       case 'jobs':
@@ -272,6 +277,7 @@ function AppShell() {
               onToggle={() => setSidebarOpen(!sidebarOpen)}
               lifestyleReasons={lifestyleReasons}
               newspapersNeedAttention={newspapersNeedAttention}
+              torrentsNeedAttention={torrentsNeedAttention}
             />
           )}
           <main className="flex-1 flex flex-col overflow-hidden">

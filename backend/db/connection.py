@@ -22,6 +22,7 @@ TIMESTAMP_COLS = frozenset({
     # it ever does, so this is a widening rather than a special case.
     'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
     'scanned_at', 'queued_at', 'last_run_at', 'triage_at', 'occurred_at',
+    'added_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -187,6 +188,11 @@ def init_db() -> None:
     _ensure_practice_recall_columns(db)
     _ensure_piano_attempt_metrics(db)
     _ensure_learning_attempts_speech_requested(db)
+    _ensure_torrent_settings(db)
+    # No _reset_stale_torrents() belongs below: the torrent client runs in its
+    # own container and outlives this process, so Lunaschal never holds an
+    # in-flight torrent state that a restart could orphan. See the comment on
+    # the `torrents` table in schema.sql.
     _reset_stale_fic_downloads(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
@@ -1708,6 +1714,46 @@ def _ensure_conversation_mode(db: sqlite3.Connection) -> None:
     if 'mode' not in cols:
         db.execute("ALTER TABLE conversations ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat'")
         db.commit()
+
+
+def _ensure_torrent_settings(db: sqlite3.Connection) -> None:
+    """How to reach the torrent client and the VPN container beside it.
+
+    Both default to loopback, which is where torrent/docker-compose.yml
+    publishes them — deliberately 127.0.0.1 and not 0.0.0.0, so the qBittorrent
+    WebUI is not sitting unauthenticated on the LAN and on tailscale0 next to a
+    Lunaschal that requires a password. Everything remote reaches it through
+    Lunaschal's own auth.
+
+    The credentials here are qBittorrent's WebUI login, not ProtonVPN's. The
+    WireGuard key never enters this database — it lives in a gitignored
+    torrent/.env beside the compose file that consumes it.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'torrent_client_url' not in cols:
+        db.execute(
+            "ALTER TABLE settings ADD COLUMN torrent_client_url TEXT DEFAULT 'http://127.0.0.1:8080'"
+        )
+    if 'torrent_username' not in cols:
+        db.execute("ALTER TABLE settings ADD COLUMN torrent_username TEXT DEFAULT ''")
+    if 'torrent_password' not in cols:
+        db.execute("ALTER TABLE settings ADD COLUMN torrent_password TEXT DEFAULT ''")
+    if 'torrent_vpn_url' not in cols:
+        db.execute(
+            "ALTER TABLE settings ADD COLUMN torrent_vpn_url TEXT DEFAULT 'http://127.0.0.1:8000'"
+        )
+    if 'torrent_require_vpn' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN torrent_require_vpn INTEGER DEFAULT 1')
+    # 0 is "keep forever" — see the note on torrents.retention_days.
+    if 'torrent_default_retention_days' not in cols:
+        db.execute(
+            'ALTER TABLE settings ADD COLUMN torrent_default_retention_days INTEGER DEFAULT 0'
+        )
+    if 'torrent_default_ratio_limit' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN torrent_default_ratio_limit REAL')
+    if 'torrent_default_seeding_minutes' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN torrent_default_seeding_minutes INTEGER')
+    db.commit()
 
 
 def _ensure_websearch_settings(db: sqlite3.Connection) -> None:

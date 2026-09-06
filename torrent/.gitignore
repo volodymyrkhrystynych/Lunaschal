@@ -1,0 +1,5 @@
+# Runtime state the containers create in place. qBittorrent's config/ holds the
+# WebUI password hash and the resume data for every active torrent; gluetun's
+# holds servers.json and the forwarded-port file. Neither belongs in git.
+config/
+gluetun/

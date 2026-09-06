@@ -91,6 +91,8 @@ click-through testing.
   green suite is the default completion bar.
 - Prefer fast isolated tests. Mock external AI providers and network calls.
 - Backend tests use pytest and an automatically isolated SQLite database.
+- After any schema change, run `.venv/bin/pytest backend/tests/test_seed_test_db.py`.
+  It fails until `scripts/seed_test_db.py` seeds every new table.
 - Frontend tests use Vitest. Pure logic belongs in `src/lib/`; `.test.tsx`
   component tests opt into jsdom with `// @vitest-environment jsdom`.
 - Do not defeat `pytest.ini`'s temporary-path retention or the batching in
@@ -115,6 +117,8 @@ npm run test:all
 npm run test:watch
 npm run format
 npm run format:check
+
+./test-env.sh    # demo instance on scratch data; never touches ./data/lunaschal.db
 ```
 
 ## High-value project invariants
@@ -129,6 +133,17 @@ details. Keep these especially important constraints in mind:
   supply tools and dispatch rather than copying the loop.
 - `backend/db/schema.sql` is the schema source of truth. New SQLite migrations
   follow the idempotent `_ensure_*` pattern in `backend/db/connection.py`.
+- Adding a table to `schema.sql` requires seeding it in `scripts/seed_test_db.py`
+  in the same change. That script fills every table so `./test-env.sh` can bring
+  up a demo instance with realistic data in every view, and
+  `backend/tests/test_seed_test_db.py` enforces it by deriving the table list
+  from `sqlite_master` — an unseeded table fails the suite. Never insert into the
+  six `*_fts` tables; use UPDATE or `INSERT OR REPLACE` for singleton rows
+  (`settings`, `job_profile`, `user_memory`, `piano_practice_preferences`); avoid
+  seeding in-flight states that `init_db()`'s orphan resets rewrite at startup;
+  keep every credential empty or obviously fake, since the seeder ships publicly;
+  and use the seeder's `today_key()` rather than a wall-clock date wherever a
+  route reads "today", because days roll over at 4am.
 - Database IDs are ULIDs. Database timestamps are Unix integers and are converted
   and camel-cased by `row_to_dict`.
 - Use shared normalization and validation helpers such as `backend/tags.py` and

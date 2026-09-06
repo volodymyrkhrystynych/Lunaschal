@@ -1821,3 +1821,42 @@ CREATE INDEX IF NOT EXISTS idx_media_archive_collection_updated
     ON media_archive_items(collection, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_media_archive_collection_favorite
     ON media_archive_items(collection, favorite, title COLLATE NOCASE);
+
+-- Torrents Lunaschal added, and only what qBittorrent has no concept of.
+--
+-- qBittorrent is the source of truth for every fact about a torrent — progress,
+-- speeds, category, share limits, where the files are — and it survives a
+-- Lunaschal restart on its own. So this table deliberately mirrors none of
+-- that: it holds the note you wrote and how long to keep the download, and
+-- everything else is read live from the client (see backend/torrent/merge.py).
+-- Nothing is duplicated, so nothing can drift.
+--
+-- That is also why there is no in-flight status column here and no
+-- _reset_stale_torrents() in connection.py. The other long-running features
+-- track work *this process* is doing, which a restart orphans; this work
+-- happens in a container that outlives Flask, so there is nothing of ours to
+-- strand. `name` is a snapshot kept only so a row still reads sensibly in the
+-- moment between the torrent leaving the client and the reconcile pass
+-- noticing.
+CREATE TABLE IF NOT EXISTS torrents (
+    id TEXT PRIMARY KEY,
+    info_hash TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    source TEXT NOT NULL CHECK(source IN ('magnet','file')),
+    magnet_uri TEXT,
+    note TEXT,
+    -- NULL or 0 means keep forever, which is the default. Retention is opt-in
+    -- per torrent: an aged-out download is gone from disk and usually out of
+    -- reach of the swarm, so it cannot be undone by re-running anything.
+    retention_days INTEGER,
+    added_at INTEGER NOT NULL,
+    -- Copied from the client the first time we see it finished, rather than
+    -- read live: retention is measured from it, and qBittorrent loses
+    -- completion_on whenever its config is rebuilt.
+    completed_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_torrents_added ON torrents(added_at DESC);
+CREATE INDEX IF NOT EXISTS idx_torrents_completed ON torrents(completed_at);

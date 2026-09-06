@@ -17,6 +17,7 @@ type View =
   | 'lifestyle'
   | 'fanfic'
   | 'newspapers'
+  | 'torrent'
   | 'paper'
   | 'email'
   | 'practice'
@@ -32,6 +33,8 @@ interface SidebarProps {
    *  selfie, low calories, …); the badge shows whenever this is non-empty. */
   lifestyleReasons?: string[];
   newspapersNeedAttention?: boolean;
+  /** The tunnel is down, or a torrent errored. */
+  torrentsNeedAttention?: boolean;
 }
 
 export const navItems: {
@@ -56,6 +59,7 @@ export const navItems: {
   { view: 'food', label: 'Food', icon: '🍽️' },
   { view: 'fanfic', label: 'Library', icon: '📚' },
   { view: 'newspapers', label: 'Newspapers', icon: '📰' },
+  { view: 'torrent', label: 'Torrents', icon: '🌊' },
   { view: 'email', label: 'Email', icon: '📧' },
   // Next to Email on purpose: the two halves of a job search are the
   // applications you sent and the replies they get back.
@@ -72,6 +76,7 @@ export function Sidebar({
   onToggle,
   lifestyleReasons,
   newspapersNeedAttention,
+  torrentsNeedAttention,
 }: SidebarProps) {
   const { level } = useShortcuts();
   const isMobile = useIsMobile();
@@ -125,6 +130,15 @@ export function Sidebar({
                   ❗
                 </span>
               )}
+            {item.view === 'torrent' && torrentsNeedAttention && (
+              <span
+                style={{ color: '#f0b429' }}
+                title="The VPN tunnel is down, or a torrent errored"
+                aria-label="The VPN tunnel is down, or a torrent errored"
+              >
+                ❗
+              </span>
+            )}
             {item.view === 'newspapers' && newspapersNeedAttention && (
               <span
                 style={{ color: '#f0b429' }}

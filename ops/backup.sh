@@ -79,7 +79,11 @@ RSYNC_FLAGS=(-rt --modify-window=1)
 #                    A checkout plus its graphify graph and cache is tens of MB
 #                    per repo, rsynced nightly, for bytes that are one
 #                    `git clone` away. The rows that matter are in the DB.
-MEDIA_EXCLUDES=(--exclude='lunaschal.db*' --exclude='repos/')
+# repos/ are one `git clone` away. torrents/ is the dev-default download
+# root: in production TORRENT_ROOT points at /media/expansion/torrents and
+# is outside data/ entirely, but a dev run would otherwise rsync every
+# downloaded file into the nightly snapshot.
+MEDIA_EXCLUDES=(--exclude='lunaschal.db*' --exclude='repos/' --exclude='torrents/')
 
 # Delete the dated DB directories that have aged out. The caller passes the name
 # of a function that removes one snapshot, so the local and remote destinations
