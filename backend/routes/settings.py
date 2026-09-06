@@ -146,7 +146,7 @@ def get_settings():
         # columns, same as the job ones above. The qBittorrent WebUI
         # password never comes back out — only whether one is set. The
         # ProtonVPN key is not here at all: it lives in torrent/.env.
-        'torrentClientUrl': s.get('torrent_client_url') or 'http://127.0.0.1:8080',
+        'torrentClientUrl': s.get('torrent_client_url') or 'http://127.0.0.1:8081',
         'torrentUsername': s.get('torrent_username') or '',
         'hasTorrentPassword': bool(s.get('torrent_password')),
         'torrentVpnUrl': s.get('torrent_vpn_url') or 'http://127.0.0.1:8000',
@@ -216,10 +216,14 @@ def update_ai():
         'jobRejectionGraceDays': 'job_rejection_grace_days',
         'adzunaAppId': 'adzuna_app_id',
         'adzunaAppKey': 'adzuna_app_key',
-        'torrentClientUrl': 'torrent_client_url',
+        # No torrentClientUrl / torrentVpnUrl here on purpose. Those are not
+        # settings — they are where torrent/docker-compose.yml publishes, and a
+        # writable field for them is a false affordance: it looks like the fix
+        # for a port conflict while being unable to move what Docker binds.
+        # The GET still reports them so the panel can show where Lunaschal
+        # looks; the column stays the source of truth for a non-default setup.
         'torrentUsername': 'torrent_username',
         'torrentPassword': 'torrent_password',
-        'torrentVpnUrl': 'torrent_vpn_url',
         'torrentRequireVpn': 'torrent_require_vpn',
         'torrentDefaultRetentionDays': 'torrent_default_retention_days',
         'torrentDefaultRatioLimit': 'torrent_default_ratio_limit',

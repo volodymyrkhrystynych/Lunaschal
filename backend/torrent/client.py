@@ -68,7 +68,12 @@ class _Client:
             raise TorrentClientError(
                 'qBittorrent refused the login — too many failed attempts, or the IP is banned.'
             )
-        if resp.status_code != 200 or resp.text.strip() != 'Ok.':
+        # Success is spelled two ways depending on the build: older qBittorrent
+        # answers 200 with the body "Ok.", 5.x answers 204 with no body at all.
+        # A bad password is 200 "Fails.". Checking for the literal "Ok." alone
+        # therefore rejects a *successful* login on current images.
+        body = resp.text.strip()
+        if not resp.ok or body == 'Fails.' or (body and body != 'Ok.'):
             raise TorrentClientError('qBittorrent rejected the username or password.')
         self._authed_url = base
 

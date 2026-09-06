@@ -10,7 +10,9 @@ is rsynced to the backup drive nightly, and scripts/seed_test_db.py ships in a
 public repo.
 """
 
-DEFAULT_CLIENT_URL = 'http://127.0.0.1:8080'
+# 8081, not qBittorrent's usual 8080: llama-server owns :8080 in this project
+# (backend/ai/provider.py defaults llama_url there), so 8080 can never work.
+DEFAULT_CLIENT_URL = 'http://127.0.0.1:8081'
 DEFAULT_VPN_URL = 'http://127.0.0.1:8000'
 
 

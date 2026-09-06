@@ -66,7 +66,13 @@ def _fetch() -> dict:
         }
 
     ip = _try_paths(base, ['/v1/publicip/ip']) or {}
-    forwarded = _try_paths(base, ['/v1/portforwarded', '/v1/openvpn/portforwarded']) or {}
+    # /v1/portforward is the current name. The other two are older spellings:
+    # /v1/portforwarded 404s outright, and /v1/openvpn/portforwarded only works
+    # because requests follows its 301 — gluetun warns that route stops being
+    # publicly reachable after v3.40, so asking for the real one first matters.
+    forwarded = _try_paths(
+        base, ['/v1/portforward', '/v1/portforwarded', '/v1/openvpn/portforwarded']
+    ) or {}
 
     state = (status.get('status') or '').lower()
     port = forwarded.get('port') or forwarded.get('ports')

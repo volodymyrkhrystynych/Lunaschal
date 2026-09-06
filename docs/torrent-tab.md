@@ -22,7 +22,7 @@ Three layers, and only the middle one is ours:
 
 ```
 phone ──Tailscale──► Lunaschal :5000 ──loopback──► qBittorrent ──WireGuard──► peers
-        (host)         (host)          127.0.0.1     (netns)       (ProtonVPN)
+        (host)         (host)        127.0.0.1:8081   (netns)       (ProtonVPN)
 ```
 
 Tailscale is untouched by any of this. It runs on the host and carries only your
@@ -56,39 +56,64 @@ operational surface. `torrent/` mirrors `searxng/` deliberately.
 ## Setup
 
 1. Generate a WireGuard config at `account.proton.me/u/0/vpn/WireGuard` with
-   **NAT-PMP (Port Forwarding)** ticked, on a P2P server. Copy the `PrivateKey`.
+   **NAT-PMP (Port Forwarding)** ticked. Copy the `PrivateKey`. Platform is
+   irrelevant (pick GNU/Linux) and **so is the server you choose** — gluetun
+   discards the endpoint from the file and picks its own, and
+   `PORT_FORWARD_ONLY=on` is what actually restricts it to P2P /
+   port-forwarding servers. The only thing read out of that file is the one
+   `PrivateKey` line, and the features you tick are baked into it at
+   generation time — forget NAT-PMP and you regenerate rather than toggle.
+   Leave NetShield off: it is DNS-based and gluetun runs its own DNS.
 2. `cp torrent/.env.example torrent/.env` and paste it in. The file is gitignored
    (the bare `.env` line in the root `.gitignore` matches at any depth).
 3. `ln -sf ~/workspace/Lunaschal/torrent/lunaschal-torrent.service ~/.config/systemd/user/`
    then `systemctl --user daemon-reload && systemctl --user enable --now lunaschal-torrent`
 4. Read qBittorrent's generated temporary password out of its log
-   (`docker logs qbittorrent 2>&1 | grep -i 'temporary password'`), set a real one
+   (`docker logs torrent-qbittorrent-1 2>&1 | grep -i 'temporary password'`), set a
+   real one
    in its WebUI, and put the credentials in **Settings → Torrents**.
 
 Verify before trusting it:
 
 ```bash
-curl -s 127.0.0.1:8000/v1/publicip/ip          # must be a Proton IP, not yours
-docker exec qbittorrent curl -s ifconfig.me    # the same Proton IP
-docker stop gluetun                            # the client should lose all connectivity
+curl -s 127.0.0.1:8000/v1/publicip/ip     # must be a Proton IP, not yours
+curl -s 127.0.0.1:8000/v1/portforward     # a port, not 0 — proves NAT-PMP took
+docker exec torrent-qbittorrent-1 wget -qO- ifconfig.me   # the same Proton IP
+docker stop torrent-gluetun-1             # the client loses all connectivity
 ```
 
-## Three details that will otherwise cost an afternoon
+If gluetun logs that no server was found, that is `SERVER_COUNTRIES` combined
+with `PORT_FORWARD_ONLY=on` matching nothing — widen it in `torrent/.env`.
 
-- **`FIREWALL_OUTBOUND_SUBNETS` is mandatory.** gluetun drops everything that is
-  not the tunnel, including the replies to the published WebUI port — those
-  arrive from the Docker bridge gateway, not from loopback. Omit it and the
-  WebUI is unreachable in a way that looks like a container that failed to start.
-  The compose file pins the network's subnet (`10.13.37.0/24`) rather than
-  letting Compose auto-assign, so the firewall rule cannot drift out of step.
+## Four details that will otherwise cost an afternoon
+
+- **The published port is 8081, and both sides of the mapping must be the same
+  number.** qBittorrent's usual 8080 is llama-server's port on this machine
+  (`llama/start-llama.sh`), so Docker refuses to bind it and the stack dies
+  before the tunnel is even attempted. And it has to be `8081:8081`, not
+  `8081:8080`: qBittorrent validates the `Host` header against its own
+  configured port, so a mismatched pair answers every request with a 401 that
+  reads exactly like a wrong password.
+- **`FIREWALL_OUTBOUND_SUBNETS` is mandatory**, and the single most confusing
+  thing to omit. gluetun drops everything that is not the tunnel, including the
+  replies to the published WebUI port — those arrive from the Docker bridge
+  gateway, not from loopback. Omit it and the WebUI is unreachable in a way that
+  looks like a container that failed to start. The compose file pins the
+  network's subnet (`10.13.37.0/24`) rather than letting Compose auto-assign, so
+  the firewall rule cannot drift out of step.
 - **`PUID`/`PGID` must be 1000.** `/media/expansion` is exFAT mounted
   `uid=1000,gid=1000` and stores no POSIX ownership of its own.
 - **Two different auth paths, on purpose.** gluetun's port-forward hook runs
-  _inside_ the shared namespace, so its call to `127.0.0.1:8080` genuinely is
+  _inside_ the shared namespace, so its call to `127.0.0.1:8081` genuinely is
   localhost and qBittorrent's localhost-bypass covers it. Lunaschal's calls
   arrive from the bridge, are not localhost, and authenticate with stored
   credentials. Only gluetun and qBittorrent live in that namespace, so the
   bypass grants nothing else.
+
+Worth knowing alongside these: qBittorrent 5.x answers a successful
+`/auth/login` with **204 and an empty body**, where older builds answered `200
+"Ok."`. A client that accepts only `"Ok."` rejects a valid login — see
+`backend/torrent/client.py`.
 
 ## Port forwarding
 
@@ -98,6 +123,15 @@ and seeding barely works — a failure that reads as "the VPN is slow" rather th
 as a misconfiguration. `torrent/qbt-port-sync.sh` runs as gluetun's
 `VPN_PORT_FORWARDING_UP_COMMAND` and pushes the new port into `listen_port`,
 retrying while qBittorrent's WebUI comes up (gluetun usually wins that race).
+
+## The two URLs in Settings are read-only
+
+Settings → Torrents _shows_ the WebUI and control-server addresses but will
+not let you edit them, and `PATCH /api/settings/ai` ignores them. They are not
+settings: they are where `torrent/docker-compose.yml` publishes. An editable
+field there is a false affordance — it looks like the fix for a port conflict
+while being unable to move what Docker binds, which is a genuinely confusing
+half hour. Change a port in the compose file and restart the stack.
 
 ## What the database stores, and what it deliberately does not
 

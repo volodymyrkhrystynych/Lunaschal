@@ -770,9 +770,12 @@ export interface AppSettings {
   hasAdzunaCredentials: boolean;
   /** qBittorrent's WebUI login, not ProtonVPN's — the WireGuard key is not
    *  in the database at all, it lives in a gitignored torrent/.env. */
+  /** Read-only: where the compose file publishes. PATCH ignores it — see the
+   *  note in backend/routes/settings.py's field map. */
   torrentClientUrl: string;
   torrentUsername: string;
   hasTorrentPassword: boolean;
+  /** Read-only, same as torrentClientUrl. */
   torrentVpnUrl: string;
   torrentRequireVpn: boolean;
   /** 0 means keep forever, which is the default. */

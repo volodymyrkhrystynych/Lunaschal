@@ -23,19 +23,15 @@ export function TorrentSection() {
     retry: false,
   });
 
-  const [clientUrl, setClientUrl] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [vpnUrl, setVpnUrl] = useState('');
   const [requireVpn, setRequireVpn] = useState(true);
   const [retention, setRetention] = useState('0');
   const [ratio, setRatio] = useState('');
 
   useEffect(() => {
     if (!settings) return;
-    setClientUrl(settings.torrentClientUrl ?? '');
     setUsername(settings.torrentUsername ?? '');
-    setVpnUrl(settings.torrentVpnUrl ?? '');
     setRequireVpn(settings.torrentRequireVpn ?? true);
     setRetention(String(settings.torrentDefaultRetentionDays ?? 0));
     setRatio(
@@ -49,12 +45,10 @@ export function TorrentSection() {
   const save = useMutation({
     mutationFn: () =>
       api.settings.updateAI({
-        torrentClientUrl: clientUrl,
         torrentUsername: username,
         // Only send it when the field was actually typed into, or saving any
         // other field here would blank a working password.
         ...(password ? { torrentPassword: password } : {}),
-        torrentVpnUrl: vpnUrl,
         torrentRequireVpn: requireVpn,
         torrentDefaultRetentionDays: Number(retention) || 0,
         torrentDefaultRatioLimit: ratio === '' ? null : Number(ratio),
@@ -74,17 +68,30 @@ export function TorrentSection() {
         {summary.headline} — {summary.detail}
       </div>
 
-      <label className="flex flex-col gap-1">
-        <span className="text-xs text-[var(--color-text-muted)]">
-          qBittorrent WebUI URL
-        </span>
-        <input
-          value={clientUrl}
-          onChange={e => setClientUrl(e.target.value)}
-          placeholder="http://127.0.0.1:8080"
-          className="rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1"
-        />
-      </label>
+      {/* Read-only on purpose. These are not settings — they are where the
+          containers publish, fixed by torrent/docker-compose.yml. Editing them
+          here could never move the port Docker binds, so an input box is a
+          false affordance: it looks like the fix for a port conflict and is
+          not. Change the compose file (and restart the stack) instead. */}
+      <div className="rounded border border-white/10 bg-[var(--color-bg)] px-2 py-2 space-y-1">
+        <div className="flex justify-between gap-2">
+          <span className="text-xs text-[var(--color-text-muted)]">
+            qBittorrent WebUI
+          </span>
+          <code className="text-xs">{settings?.torrentClientUrl ?? '—'}</code>
+        </div>
+        <div className="flex justify-between gap-2">
+          <span className="text-xs text-[var(--color-text-muted)]">
+            gluetun control server
+          </span>
+          <code className="text-xs">{settings?.torrentVpnUrl ?? '—'}</code>
+        </div>
+        <div className="text-xs text-[var(--color-text-muted)] pt-1">
+          Fixed by <code>torrent/docker-compose.yml</code>. To change a port,
+          edit the compose file and{' '}
+          <code>systemctl --user restart lunaschal-torrent</code>.
+        </div>
+      </div>
 
       <div className="grid grid-cols-2 gap-2">
         <label className="flex flex-col gap-1">
@@ -110,18 +117,6 @@ export function TorrentSection() {
           />
         </label>
       </div>
-
-      <label className="flex flex-col gap-1">
-        <span className="text-xs text-[var(--color-text-muted)]">
-          gluetun control server
-        </span>
-        <input
-          value={vpnUrl}
-          onChange={e => setVpnUrl(e.target.value)}
-          placeholder="http://127.0.0.1:8000"
-          className="rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1"
-        />
-      </label>
 
       <label className="flex items-start gap-2">
         <input

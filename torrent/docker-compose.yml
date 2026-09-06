@@ -15,7 +15,7 @@
 # not a setting that can be mis-toggled.
 #
 # Tailscale is unaffected: it runs on the *host*, and Lunaschal reaches the
-# WebUI over host loopback (127.0.0.1:8080), a hop that never leaves the
+# WebUI over host loopback (127.0.0.1:8081), a hop that never leaves the
 # machine and so is neither tunnelled nor leaked.
 
 services:
@@ -32,7 +32,13 @@ services:
       # torrent WebUI on the LAN *and* on tailscale0, next to a Lunaschal that
       # carefully requires a password. Everything remote goes through
       # Lunaschal's own auth instead.
-      - '127.0.0.1:8080:8080' # qBittorrent WebUI
+      # Host 8081, not 8080: llama-server owns 127.0.0.1:8080 on this machine
+      # (llama/start-llama.sh, LLAMA_PORT), and Docker fails the whole stack
+      # with "address already in use" before the tunnel is even attempted.
+      # Both sides must be the SAME number: qBittorrent validates the Host
+      # header against its own configured port, so a 8081->8080 remap makes
+      # every request a 401 that reads exactly like a wrong password.
+      - '127.0.0.1:8081:8081' # qBittorrent WebUI
       - '127.0.0.1:8000:8000' # gluetun control server (public IP, tunnel, forwarded port)
     volumes:
       - ./gluetun:/gluetun
@@ -72,7 +78,7 @@ services:
       PUID: 1000
       PGID: 1000
       TZ: ${TZ:-America/Toronto}
-      WEBUI_PORT: 8080
+      WEBUI_PORT: 8081
     volumes:
       - ./config:/config
       - ${TORRENT_DOWNLOAD_DIR:-/media/expansion/torrents}:/downloads

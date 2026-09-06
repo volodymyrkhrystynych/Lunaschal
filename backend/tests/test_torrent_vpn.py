@@ -104,3 +104,33 @@ def test_the_cache_collapses_a_burst_of_polls(monkeypatch):
     vpn.status()
     vpn.status()
     assert calls['n'] == first
+
+
+def test_asks_for_the_current_portforward_route_first(monkeypatch):
+    """gluetun serves /v1/portforward; /v1/portforwarded 404s and
+    /v1/openvpn/portforwarded only works via a 301 that gluetun says stops
+    being publicly reachable after v3.40."""
+    asked = []
+
+    def fake_get(url, timeout=None):
+        asked.append(url.rsplit('/v1', 1)[-1])
+        if '/v1/vpn/status' in url:
+            return Resp(payload={'status': 'running'})
+        if url.endswith('/v1/portforward'):
+            return Resp(payload={'port': 35228, 'ports': [35228]})
+        if '/v1/publicip/ip' in url:
+            return Resp(payload={'public_ip': '1.2.3.4'})
+        return Resp(status=404)
+
+    monkeypatch.setattr(requests, 'get', fake_get)
+    assert vpn.status(use_cache=False)['forwardedPort'] == 35228
+    assert '/portforward' in asked
+    # The deprecated spellings were never needed.
+    assert '/portforwarded' not in asked
+
+
+def test_a_ports_list_is_accepted_as_well_as_a_single_port(monkeypatch):
+    route({'/v1/vpn/status': Resp(payload={'status': 'running'}),
+           '/v1/publicip/ip': Resp(payload={'public_ip': '1.2.3.4'}),
+           '/v1/portforward': Resp(payload={'ports': [35228]})}, monkeypatch)
+    assert vpn.status(use_cache=False)['forwardedPort'] == 35228

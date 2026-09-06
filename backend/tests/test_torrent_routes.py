@@ -352,3 +352,59 @@ def test_an_explicit_null_retention_means_keep_forever(client, fake_client):
     client.post('/api/torrents', json={'magnets': MAGNET, 'retentionDays': None})
     row = get_db().execute('SELECT retention_days FROM torrents').fetchone()
     assert row['retention_days'] is None
+
+
+def test_the_client_and_vpn_urls_are_not_writable_through_settings(client):
+    """They are not settings — they are where torrent/docker-compose.yml
+    publishes. A writable field looks like the fix for a port conflict while
+    being unable to move what Docker binds, which is exactly the confusion
+    this avoids."""
+    before = get_db().execute('SELECT torrent_client_url FROM settings').fetchone()[0]
+    client.patch('/api/settings/ai', json={
+        'torrentClientUrl': 'http://127.0.0.1:9999',
+        'torrentVpnUrl': 'http://127.0.0.1:9998',
+    })
+    after = get_db().execute(
+        'SELECT torrent_client_url, torrent_vpn_url FROM settings'
+    ).fetchone()
+    assert after['torrent_client_url'] == before
+    assert after['torrent_vpn_url'] != 'http://127.0.0.1:9998'
+
+
+def test_the_torrent_credentials_are_still_writable(client):
+    """Only the URLs are locked down — the WebUI login still has to be
+    settable, since qBittorrent generates it on first start."""
+    client.patch('/api/settings/ai',
+                 json={'torrentUsername': 'admin', 'torrentPassword': 'hunter2'})
+    row = get_db().execute(
+        'SELECT torrent_username, torrent_password FROM settings'
+    ).fetchone()
+    assert row['torrent_username'] == 'admin'
+    assert row['torrent_password'] == 'hunter2'
+
+
+def test_a_settings_row_stuck_on_the_broken_8080_default_is_repointed(client):
+    """The column first shipped defaulting to :8080, which llama-server owns —
+    Docker refuses to publish the WebUI there and the stack never starts. The
+    migration repoints exactly that value and leaves a deliberate choice alone."""
+    from backend.db.connection import _ensure_torrent_settings
+
+    db = get_db()
+    db.execute("UPDATE settings SET torrent_client_url='http://127.0.0.1:8080'")
+    db.commit()
+    _ensure_torrent_settings(db)
+    assert db.execute(
+        'SELECT torrent_client_url FROM settings'
+    ).fetchone()[0] == 'http://127.0.0.1:8081'
+
+
+def test_the_repoint_does_not_touch_a_deliberately_chosen_url(client):
+    from backend.db.connection import _ensure_torrent_settings
+
+    db = get_db()
+    db.execute("UPDATE settings SET torrent_client_url='http://nas.local:9091'")
+    db.commit()
+    _ensure_torrent_settings(db)
+    assert db.execute(
+        'SELECT torrent_client_url FROM settings'
+    ).fetchone()[0] == 'http://nas.local:9091'

@@ -10,7 +10,7 @@
 # automatically instead of left as a setting to remember.
 #
 # This runs *inside gluetun's network namespace*, which qBittorrent shares. So
-# 127.0.0.1:8080 here genuinely is loopback and qBittorrent's "bypass
+# 127.0.0.1:8081 here genuinely is loopback and qBittorrent's "bypass
 # authentication for clients on localhost" covers it — no credentials needed.
 # Lunaschal's own calls arrive from the Docker bridge instead, are not
 # localhost, and authenticate properly. That split is deliberate: the only
@@ -30,7 +30,9 @@ case "$PORT" in
     ;;
 esac
 
-QBT="http://127.0.0.1:8080"
+# 8081, matching WEBUI_PORT in docker-compose.yml — see the Host-header
+# note there. Inside gluetun's namespace this really is loopback.
+QBT="http://127.0.0.1:8081"
 
 # gluetun can win the race — the NAT-PMP lease often lands before qBittorrent's
 # WebUI is listening, and a single attempt would then silently drop the port

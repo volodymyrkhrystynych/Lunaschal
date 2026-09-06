@@ -1732,7 +1732,7 @@ def _ensure_torrent_settings(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'torrent_client_url' not in cols:
         db.execute(
-            "ALTER TABLE settings ADD COLUMN torrent_client_url TEXT DEFAULT 'http://127.0.0.1:8080'"
+            "ALTER TABLE settings ADD COLUMN torrent_client_url TEXT DEFAULT 'http://127.0.0.1:8081'"
         )
     if 'torrent_username' not in cols:
         db.execute("ALTER TABLE settings ADD COLUMN torrent_username TEXT DEFAULT ''")
@@ -1753,6 +1753,17 @@ def _ensure_torrent_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN torrent_default_ratio_limit REAL')
     if 'torrent_default_seeding_minutes' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN torrent_default_seeding_minutes INTEGER')
+
+    # The column first shipped defaulting to :8080, which can never work here —
+    # llama-server owns that port (backend/ai/provider.py defaults llama_url to
+    # it), so Docker refuses to publish the WebUI there and the whole stack
+    # fails to start. Repoint a row still carrying that exact value; anything
+    # the user has since chosen deliberately is left alone, so this is a no-op
+    # after it has run once.
+    db.execute(
+        "UPDATE settings SET torrent_client_url='http://127.0.0.1:8081'"
+        " WHERE torrent_client_url='http://127.0.0.1:8080'"
+    )
     db.commit()
 
 

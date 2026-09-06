@@ -167,3 +167,32 @@ def test_cleared_share_limits_send_the_use_global_sentinel(monkeypatch):
     assert captured['seedingTimeLimit'] == -2
     # Required by qBittorrent 4.6+; omitting it is a 400 on those builds.
     assert captured['inactiveSeedingTimeLimit'] == -2
+
+
+def test_a_204_with_no_body_is_a_successful_login(fresh):
+    """qBittorrent 5.x answers /auth/login with 204 and an empty body; older
+    builds answer 200 "Ok.". Accepting only "Ok." rejected a *successful*
+    login on a current image, which surfaced as "rejected the username or
+    password" in the logs while the credentials were correct."""
+    fresh._session = FakeSession(script=[
+        FakeResponse(status=204, text=''),   # login
+        FakeResponse(payload=[], text=''),   # the call
+    ])
+    resp = fresh.request('GET', 'torrents/info', cfg=CFG)
+    assert resp.status_code == 200
+
+
+def test_a_wrong_password_is_still_rejected(fresh):
+    """The 204 fix must not turn every response into a success — qBittorrent
+    signals bad credentials with 200 and the body "Fails.", not a 4xx."""
+    fresh._session = FakeSession(script=[FakeResponse(status=200, text='Fails.')])
+    with pytest.raises(torrent_client.TorrentClientError, match='username or password'):
+        fresh.request('GET', 'torrents/info', cfg=CFG)
+
+
+def test_the_default_client_url_avoids_llama_servers_port():
+    """8080 is qBittorrent's usual port and llama-server's actual one here
+    (backend/ai/provider.py defaults llama_url to it), so Docker cannot publish
+    the WebUI there and the whole stack fails to start."""
+    from backend.torrent.config import DEFAULT_CLIENT_URL
+    assert '8080' not in DEFAULT_CLIENT_URL
