@@ -191,6 +191,7 @@ def init_db() -> None:
     _ensure_piano_attempt_metrics(db)
     _ensure_learning_attempts_speech_requested(db)
     _ensure_study_position(db)
+    _ensure_study_paper(db)
     _ensure_torrent_settings(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
     # own container and outlives this process, so Lunaschal never holds an
@@ -630,6 +631,32 @@ def _ensure_study_position(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(study_sources)')}
     if 'position' not in cols:
         db.execute('ALTER TABLE study_sources ADD COLUMN position REAL')
+        db.commit()
+
+
+def _ensure_study_paper(db: sqlite3.Connection) -> None:
+    """The second note mode: a handwriting paper beside the Notebook file.
+
+    `paper_id` is an ordinary papers(id) — Study borrows a whole paper rather
+    than modelling pages again, the way idea_sketches borrows a single
+    paper_pages row — so the ADD COLUMN must default to NULL, which is also
+    what SQLite requires of an added column carrying a REFERENCES clause.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(study_sources)')}
+    changed = False
+    if 'paper_id' not in cols:
+        db.execute(
+            'ALTER TABLE study_sources ADD COLUMN paper_id TEXT'
+            ' REFERENCES papers(id) ON DELETE SET NULL'
+        )
+        changed = True
+    if 'note_mode' not in cols:
+        db.execute(
+            "ALTER TABLE study_sources ADD COLUMN note_mode TEXT NOT NULL"
+            " DEFAULT 'note' CHECK(note_mode IN ('note','paper'))"
+        )
+        changed = True
+    if changed:
         db.commit()
 
 

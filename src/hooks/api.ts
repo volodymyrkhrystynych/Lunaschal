@@ -32,9 +32,9 @@ import type {
 } from '../lib/piano';
 // Same reasoning again: the Study desk's shapes live beside the pure helpers
 // that read them.
-import type { StudyImportProgress, StudySource } from '../lib/study';
+import type { NoteMode, StudyImportProgress, StudySource } from '../lib/study';
 
-export type { StudyImportProgress, StudySource };
+export type { NoteMode, StudyImportProgress, StudySource };
 export type { SleepDay };
 export type { ServerLogEntry, ServerLogResponse, ServerLogUnit };
 export type { Torrent, VpnStatus };
@@ -3693,6 +3693,9 @@ export const api = {
         touch?: boolean;
         /** Page for a PDF, seconds for a video; null forgets it. */
         position?: number | null;
+        /** An existing papers(id); '' or null unbinds it. */
+        paperId?: string | null;
+        noteMode?: NoteMode;
       }
     ) => patch<StudySource>(`/api/study/sources/${id}`, updates),
     remove: (id: string) =>

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
-import type { StudySource } from '../../lib/study';
+import type { NoteMode, StudySource } from '../../lib/study';
+import type { PaperEditorHandle } from '../Paper/PaperEditor';
 import { SourceViewer } from './SourceViewer';
 import { StudyNotePane } from './StudyNotePane';
+import { StudyPaperPane } from './StudyPaperPane';
 
 // Long enough that a flick through twenty pages is one write, short enough
 // that closing the tab a moment later still lands. NotebookEditorPane's save
@@ -24,6 +26,7 @@ interface Props {
  * in src/lib/ beside paperImages.ts, not in here).
  */
 export function StudyDesk({ sourceId, initial, onBack }: Props) {
+  const queryClient = useQueryClient();
   const { data: source } = useQuery({
     queryKey: ['study', 'source', sourceId],
     queryFn: () => api.study.source(sourceId),
@@ -67,6 +70,44 @@ export function StudyDesk({ sourceId, initial, onBack }: Props) {
     [sourceId]
   );
 
+  // Which pane the right half shows. Held locally as well as on the row so the
+  // toggle is instant: the PATCH is the *memory* of the choice, not the choice
+  // itself, and it is deliberately not invalidating anything (see below).
+  const [mode, setMode] = useState<NoteMode | null>(null);
+  const noteMode = mode ?? source?.noteMode ?? 'note';
+  useEffect(() => setMode(null), [sourceId]);
+
+  // The paper pane's way of writing the open page to the device. Leaving the
+  // desk unmounts it, and a passive cleanup runs after React has already
+  // detached the canvas — so the commit has to happen here, before we stop
+  // rendering it, or the last strokes are lost.
+  const paperRef = useRef<PaperEditorHandle | null>(null);
+
+  const switchMode = useCallback(
+    (next: NoteMode) => {
+      // Switching away from the paper unmounts it just as leaving the desk
+      // does, so it gets the same commit first.
+      if (next !== 'paper') void paperRef.current?.commitLocal();
+      setMode(next);
+      // Same fire-and-forget lane as the position write: which pane you had
+      // open is a preference, and the server does not bump `updated_at` for it.
+      void api.study
+        .update(sourceId, { noteMode: next })
+        .then(updated =>
+          queryClient.setQueryData(['study', 'source', sourceId], updated)
+        )
+        .catch(() => {});
+    },
+    [sourceId, queryClient]
+  );
+
+  const leave = useCallback(() => {
+    // Fired, not awaited: the commit is local-only (two IndexedDB writes and a
+    // canvas snapshot), and Back must not sit waiting on it.
+    void paperRef.current?.commitLocal();
+    onBack();
+  }, [onBack]);
+
   // Leaving the desk is the one moment the exact position matters, so the
   // pending write is flushed rather than dropped with the timer.
   useEffect(
@@ -95,7 +136,7 @@ export function StudyDesk({ sourceId, initial, onBack }: Props) {
       <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b border-white/10 bg-[var(--color-surface)]">
         <button
           type="button"
-          onClick={onBack}
+          onClick={leave}
           className="px-2 py-0.5 rounded hover:bg-white/10 text-[var(--color-text)]"
         >
           ‹ Sources
@@ -113,6 +154,20 @@ export function StudyDesk({ sourceId, initial, onBack }: Props) {
             {source.sourceUrl}
           </a>
         )}
+        <div className="ml-auto flex items-center gap-1 shrink-0">
+          <ModeButton
+            active={noteMode === 'note'}
+            onClick={() => switchMode('note')}
+          >
+            ⌨ Notes
+          </ModeButton>
+          <ModeButton
+            active={noteMode === 'paper'}
+            onClick={() => switchMode('paper')}
+          >
+            ✎ Paper
+          </ModeButton>
+        </div>
       </div>
       <div className="flex-1 flex overflow-hidden">
         <div className="w-1/2 flex flex-col overflow-hidden">
@@ -120,9 +175,38 @@ export function StudyDesk({ sourceId, initial, onBack }: Props) {
         </div>
         <div className="w-px bg-white/10 shrink-0" />
         <div className="flex-1 flex flex-col overflow-hidden">
-          <StudyNotePane source={source} />
+          {noteMode === 'paper' ? (
+            <StudyPaperPane source={source} handleRef={paperRef} />
+          ) : (
+            <StudyNotePane source={source} />
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={
+        active
+          ? 'px-2 py-0.5 rounded text-xs bg-[var(--color-primary)] text-[var(--color-bg)]'
+          : 'px-2 py-0.5 rounded text-xs hover:bg-white/10 text-[var(--color-text-muted)]'
+      }
+    >
+      {children}
+    </button>
   );
 }

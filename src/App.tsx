@@ -39,7 +39,11 @@ import { getStoredView, setStoredView, type View } from './lib/viewPersistence';
 import { visibleNavItems } from './lib/navVisibility';
 import { useDesktopShell } from './hooks/useDesktopShell';
 import { useIsLargeScreen } from './hooks/useMediaQuery';
-import { ImmersiveProvider, useImmersive } from './components/ImmersiveContext';
+import {
+  ImmersiveProvider,
+  useBottomBarHidden,
+  useImmersive,
+} from './components/ImmersiveContext';
 
 /**
  * The shell, wrapped so a view can ask for it to get out of the way. Split in
@@ -59,6 +63,7 @@ function AppShell() {
   // Set by the Paper editor on a tablet: no header, no sidebar, no bottom bar,
   // so the page is the screen and its own Back button is the way out.
   const immersive = useImmersive();
+  const bottomBarHidden = useBottomBarHidden();
   const [currentView, setCurrentView] = useState<View>(
     () => getStoredView() ?? 'chat'
   );
@@ -308,7 +313,7 @@ function AppShell() {
         {/* The one piece of chrome immersive mode keeps: whether the backend is
          * reachable is exactly what a page being drawn on offline needs to say. */}
         <OfflineIndicator />
-        {!immersive && (
+        {!bottomBarHidden && (
           <SttPanel
             onTranscribed={handleTranscribed}
             onMeetingUploaded={() => setCurrentView('meetings')}

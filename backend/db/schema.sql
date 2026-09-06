@@ -1908,6 +1908,17 @@ CREATE TABLE IF NOT EXISTS study_sources (
     -- unused for 'web' (an archived page renders inside sandbox="", so its
     -- scroll position is unreadable by design).
     position REAL,
+    -- The right half of the desk has two note modes, and a source remembers
+    -- which one it was last studied with. 'note' is the Notebook file above;
+    -- 'paper' is a handwriting paper borrowed whole rather than modelled
+    -- again -- `paper_id` is an ordinary papers(id), so the same document is
+    -- reachable from the Paper tab and page creation comes with it. Nullable
+    -- and created lazily on the first switch, exactly as `note_path` is: a
+    -- source you only skimmed leaves no empty paper behind. ON DELETE SET NULL
+    -- because deleting the paper from the Paper tab must not take the source
+    -- with it, only the binding.
+    paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
+    note_mode TEXT NOT NULL DEFAULT 'note' CHECK(note_mode IN ('note','paper')),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );

@@ -19,8 +19,8 @@ bp = Blueprint('study', __name__, url_prefix='/api/study')
 
 _LIST_COLS = (
     'id, title, kind, source_url, content_type, size_bytes, duration_seconds,'
-    ' note_path, import_status, import_error, last_opened_at, position,'
-    ' created_at, updated_at'
+    ' note_path, paper_id, note_mode, import_status, import_error,'
+    ' last_opened_at, position, created_at, updated_at'
 )
 
 # `file_path` is deliberately absent from _LIST_COLS: a server path is not the
@@ -49,6 +49,15 @@ def _attach_availability(source: dict, archive) -> dict:
     if not archive.available:
         source['fileUnavailableReason'] = archive.reason or 'The archive is unavailable.'
     return source
+
+
+def _paper_exists(paper_id: str) -> bool:
+    return (
+        get_db()
+        .execute('SELECT 1 FROM papers WHERE id=?', (paper_id,))
+        .fetchone()
+        is not None
+    )
 
 
 def _archive_state():
@@ -212,14 +221,32 @@ def update_source(source_id):
         updates['last_opened_at'] = int(time.time())
     if 'position' in body:
         updates['position'] = _clean_position(body.get('position'))
+    if 'paperId' in body:
+        # Same shape as notePath above: '' unbinds rather than storing ''.
+        paper_id = (body.get('paperId') or '').strip() or None
+        if paper_id and not _paper_exists(paper_id):
+            # The column carries a real foreign key, so an unknown id would
+            # otherwise surface as an IntegrityError and a 500. The client
+            # creates the paper first and binds it second; a failure between
+            # those two is a 400 it can retry, not a crash.
+            return jsonify({'error': 'No such paper'}), 400
+        updates['paper_id'] = paper_id
+    if 'noteMode' in body:
+        mode = (body.get('noteMode') or '').strip()
+        if mode not in ('note', 'paper'):
+            return jsonify({'error': 'Unknown note mode'}), 400
+        updates['note_mode'] = mode
     if not updates:
         return jsonify({'error': 'Nothing to update'}), 400
 
-    # A position write deliberately does not touch `updated_at`: where you are
-    # in a document is not an edit to it, and this write fires every few
-    # seconds of scrolling or playback. Anything ordering by "recently changed"
-    # would otherwise be reordered by reading.
-    if set(updates) - {'position'}:
+    # A position or note-mode write deliberately does not touch `updated_at`.
+    # Where you are in a document is not an edit to it — and the position write
+    # fires every few seconds of scrolling or playback — while which half of
+    # the desk you had open is a view preference, flipped every time you glance
+    # at the other pane. Anything ordering by "recently changed" would
+    # otherwise be reordered by reading. Binding a paper *is* an edit, and is
+    # not on this list, exactly as binding a note is not.
+    if set(updates) - {'position', 'note_mode'}:
         updates['updated_at'] = int(time.time())
     db = get_db()
     build_update(db, 'study_sources', updates, 'id = ?', (source_id,))

@@ -1328,7 +1328,13 @@ def seed_study(db):
     external archive drive and nowhere else, so a `ready` video row would mean
     a seed run writing to `STUDY_ARCHIVE_ROOT` — and a seeder that touches the
     archive is a seeder that can touch the real one when an env var is missed.
+
+    The article row is left in `note_mode='paper'` so the demo opens on the
+    handwriting half rather than only ever on the Notebook one. Its paper is an
+    ordinary `papers` row, which is the whole point of borrowing rather than
+    modelling: it is also listed in the Paper tab.
     """
+    from backend.paper.storage import page_image_path
     from backend.study.storage import source_file_path
 
     notebook_root = Path(os.environ['NOTEBOOK_ROOT'])
@@ -1363,25 +1369,46 @@ def seed_study(db):
     # PDF, seconds into the video. The web row leaves it null, which is the
     # permanent state for an article — a sandboxed iframe's scroll is
     # unreadable from outside it.
+    # A handwriting paper for the article row, created the way the desk creates
+    # one: an ordinary paper with a single blank page. The snapshot matters —
+    # it is the whole of what the Paper explorer grid shows.
+    study_paper_id = new_id()
+    db.execute(
+        'INSERT INTO papers (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)',
+        (study_paper_id, 'Write-Ahead Logging — worked through', ts(3), ts(3)),
+    )
+    study_page_id = new_id()
+    study_snapshot = page_image_path(study_paper_id, study_page_id)
+    placeholder_image(study_snapshot, 'WAL, by hand', size=(1000, 1400),
+                      color=(245, 245, 240))
+    db.execute(
+        'INSERT INTO paper_pages (id, paper_id, position, strokes, width, height, image_path, '
+        'created_at, updated_at) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)',
+        (study_page_id, study_paper_id, '[]', 1000, 1400, str(study_snapshot),
+         ts(3), ts(3)),
+    )
+
     rows = [
         # id, title, kind, source_url, file_path, content_type, size_bytes,
-        # duration, note_path, status, error, last_opened_at, position
+        # duration, note_path, paper_id, note_mode, status, error,
+        # last_opened_at, position
         (pdf_id, 'Attention Is All You Need', 'pdf', None, str(pdf_path),
-         'application/pdf', pdf_path.stat().st_size, None, pdf_note, 'ready', None,
-         ts(1), 2),
+         'application/pdf', pdf_path.stat().st_size, None, pdf_note, None, 'note',
+         'ready', None, ts(1), 2),
         (web_id, 'Write-Ahead Logging', 'web', 'https://www.sqlite.org/wal.html',
          str(web_path), 'text/html', web_path.stat().st_size, None, web_note,
-         'ready', None, ts(3), None),
+         study_paper_id, 'paper', 'ready', None, ts(3), None),
         (video_id, 'Backpropagation, step by step', 'youtube',
          'https://www.youtube.com/watch?v=Ilg3gGewQ5U', None, None, 0, 501,
-         None, 'error', 'ERROR: Requested format is not available', None, None),
+         None, None, 'note', 'error',
+         'ERROR: Requested format is not available', None, None),
     ]
     for row in rows:
         db.execute(
             'INSERT INTO study_sources (id, title, kind, source_url, file_path, content_type, '
-            'size_bytes, duration_seconds, note_path, import_status, import_error, '
-            'last_opened_at, position, created_at, updated_at) '
-            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            'size_bytes, duration_seconds, note_path, paper_id, note_mode, import_status, '
+            'import_error, last_opened_at, position, created_at, updated_at) '
+            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (*row, ts(20), ts(1)),
         )
 

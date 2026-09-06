@@ -19,6 +19,9 @@ up. See [Where the bytes live](#where-the-bytes-live).
 **Stage 2 is built** (`feat/study-resume-position`): one `position REAL` column, a page for a PDF and
 seconds for a video, restored on open and shown in the library.
 
+**Stage 3 is built** (`feat/study-handwriting-pane`): the right half toggles between the Notebook
+editor and a handwriting paper, and the source remembers which one it was last studied with.
+
 This is the timeline. `backend/study/CLAUDE.md` documents how the built code works and what will
 bite someone changing it; this documents what is coming, in what order, and why that order.
 
@@ -114,29 +117,35 @@ zooming reported page 1 and overwrote the stored position with it.
 
 ---
 
-## Stage 3 — paper pages on the right _(sourced)_
+## Stage 3 — paper pages on the right ✅ built _(sourced)_
 
 **A handwriting page as an alternative to the text editor.** From the brief: the right side is
 _either_ a vim editor _or_ "a paper style page", and — unlike the editor, which "can have unlimited
 length, so there's no need for more pages" — the paper side needs "the opportunity to create new
 pages."
 
-- **A toggle, not a replacement.** Both note modes live; the source remembers which one it was last
-  studied with.
-- **Reuse `paper_pages`, do not re-model.** There is already precedent: `idea_sketches` borrows a
-  single `paper_pages` row rather than owning storage. Study should borrow a whole `paper` (a
-  document with ordered pages), since page creation is the explicit requirement.
-- **`＋ Page` and prev/next**, matching `PaperEditor`'s existing navigation.
+- **A toggle, not a replacement.** `⌨ Notes` / `✎ Paper` in the desk header; `study_sources.note_mode`
+  remembers the choice, and like `position` it does **not** bump `updated_at` — which pane you had
+  open is not an edit to the source.
+- **A whole paper, borrowed.** `paper_id` is an ordinary `papers` row, so `＋ Page`, prev/next, the
+  tool palette, pictures and the manual-save contract all came with it, and the paper is listed in
+  the Paper tab like any other. `ON DELETE SET NULL`: deleting it there costs the source its
+  binding, not its existence. Made lazily on the first switch, exactly as the note is.
+- **The editor gained an `embedded` mode**, which is two subtractions (no `‹ Back`, no "to journal")
+  and one addition (`PaperEditorHandle.commitLocal`).
 
-**Why third:** it is the largest of the sourced stages by some margin. `PaperEditor` carries its
-own manual-save contract, IndexedDB page store, staged-picture handling and immersive mode, and
-`backend/paper/CLAUDE.md` documents a long list of ways that machinery bites — a half-width paper
-pane inside another view is new ground for all of it. Doing it after Stage 2 means the cheap win
-ships first.
+Both halves of the tension the plan flagged were resolved, and neither the way the plan guessed:
 
-**Known tension to resolve before starting:** Paper's immersive mode hides the app chrome on a
-coarse pointer, and Paper never syncs except on an explicit Save. Neither behaviour obviously
-survives being one half of a split view. This needs a decision, not a discovery mid-build.
+- **Immersive mode is now two claims, not one.** A full claim would have hidden the sidebar while a
+  PDF was being read on the _other_ half of the split. On the screens Study runs on the header is
+  already `md:hidden` and the sidebar is already a left-hand column, so the only chrome actually
+  crossing under the page is the bottom Transcribe/Journal/Record strip — and `useHideBottomBar`
+  takes just that. Worth about 5% more page height on a 12.9" iPad; the sidebar stays.
+- **Manual save survives unchanged**, but the desk had to learn to commit. `PaperEditor` has no
+  unmount commit and **cannot** have one: a passive effect's cleanup runs after React has detached
+  the canvas ref. In the Paper tab that was invisible, because `‹ Back` is the only way out and it
+  commits. In the desk both `‹ Sources` and the mode toggle unmount the editor, so `StudyDesk` calls
+  the handle first — without it, up to two seconds of ink went missing on the way out.
 
 ---
 
@@ -202,6 +211,13 @@ Honest list of what Stage 1's green suite does _not_ prove:
   build emits the worker chunk correctly, which is a different claim.
 - **Nothing has been read on an actual iPad**, which is half the reason the tab is gated to large
   screens at all.
+- **No paper has been written on inside the desk.** Stage 3's tests mock `PaperEditor` deliberately
+  — what they check is the desk's half of the contract (which pane, what it tells the server, that
+  it commits before unmounting), and `PaperEditor.test.tsx` covers the editor's own 1,400 lines. The
+  join has never been exercised with a real stylus at half width, and two things about it are only
+  arguments so far: that an A4 page contain-fitted into ~683pt is still usable to write on, and that
+  the toolbar (which scrolls sideways rather than wrapping) is reachable there. Both are answerable
+  in five minutes on the iPad and by nothing else.
 - **The real archive drive has never been written to, or unplugged.** `feat/study-archive-videos`
   exists to stop a video import filling the root partition when the drive is absent, and the test
   that proves it uses a fake root under `tmp_path` — so what is verified is the logic, not the

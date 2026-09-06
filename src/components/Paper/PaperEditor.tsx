@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { usePaperPageAdd, MUTATION_KEYS } from '@/offline/mutationDefaults';
 import { getPageSave, listPageSaves, storePageSave } from '@/offline/pageStore';
@@ -15,7 +22,10 @@ import {
   enqueuePaperWrite,
   insertPendingPaperImage,
 } from '@/offline/mutationDefaults';
-import { useImmersiveView } from '@/components/ImmersiveContext';
+import {
+  useHideBottomBar,
+  useImmersiveView,
+} from '@/components/ImmersiveContext';
 import { isTouchDevice } from '@/lib/deviceInput';
 import { ulid } from '@/lib/ulid';
 import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval';
@@ -103,19 +113,50 @@ const NO_STAGED_IMAGES: StagedImages = {
   deletes: [],
 };
 
-interface PaperEditorProps {
-  paperId: string;
-  onBack: () => void;
+/** What an embedding view can ask the editor to do on its way out. */
+export interface PaperEditorHandle {
+  /** Write the open page to *this device* — strokes, snapshot, staged picture
+   *  work. Never touches the network; see `commitLocal` below. */
+  commitLocal: () => Promise<void>;
 }
 
-export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
+interface PaperEditorProps {
+  paperId: string;
+  /** Omitted by an embedding view that owns navigation itself, which also
+   *  takes the toolbar's `‹ Back` away. */
+  onBack?: () => void;
+  /**
+   * Mounted as half of another view rather than as the Paper tab.
+   *
+   * Two things follow. The chrome claim drops to the bottom bar alone — a full
+   * immersive claim would strip navigation away from the other half of the
+   * split as well — and the paper-level buttons that belong to the Paper tab
+   * (Back, "to journal") go, because the paper is bound to whatever is
+   * embedding it and moving it out from under that is not an offer to make.
+   */
+  embedded?: boolean;
+  /** Lets the embedding view commit the open page before it unmounts this. */
+  ref?: React.Ref<PaperEditorHandle>;
+}
+
+export function PaperEditor({
+  paperId,
+  onBack,
+  embedded = false,
+  ref,
+}: PaperEditorProps) {
   // On a tablet the page *is* the screen: no ☰ header, no sidebar rail, no
   // Transcribe/Journal/Record bar along the bottom. Those are wasted height
   // beside an A4 page and a row of tap targets a resting palm can hit, and the
   // toolbar's own Back button is the way out. Gated on a coarse primary pointer
   // rather than a width: an iPad is wider than the mobile breakpoint, and a
   // desktop with a mouse has room for the chrome and expects it.
-  useImmersiveView(isTouchDevice());
+  //
+  // Embedded, only the bottom strip goes: the page is half the screen, so the
+  // sidebar is not in its way and the view around it still needs to be
+  // navigable while the pen is down.
+  useImmersiveView(!embedded && isTouchDevice());
+  useHideBottomBar(embedded);
   const queryClient = useQueryClient();
   const canvasRef = useRef<PaperCanvasHandle>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -515,8 +556,20 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     // Local only. Leaving a page is not a decision to sync it — that is what
     // Save is for — and on bad wifi the upload used to make Back feel broken.
     await commitLocal();
-    onBack();
+    onBack?.();
   };
+
+  // The same commit, for a view that owns its own way out. Nothing here can be
+  // hung off an unmount: a passive effect's cleanup runs after React has
+  // already detached the canvas ref, so there would be no canvas left to read
+  // the strokes from. The embedding view calls this *before* it stops
+  // rendering us — otherwise up to LOCAL_COMMIT_DELAY_MS of ink is lost, which
+  // in the Paper tab cannot happen because `‹ Back` is the only way out.
+  useImperativeHandle(
+    ref,
+    () => ({ commitLocal: () => commitRef.current() }),
+    []
+  );
 
   /** Append a page and jump to it. `pages.length` is the pre-insert count, which
    * is exactly the index the new page lands on. */
@@ -1162,20 +1215,28 @@ export function PaperEditor({ paperId, onBack }: PaperEditorProps) {
     <div className="flex-1 flex flex-col overflow-hidden">
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-white/10 shrink-0 overflow-x-auto overscroll-x-contain">
-        <button onClick={handleBack} className={btn}>
-          ‹ Back
-        </button>
-        <button
-          onClick={() => setArchive.mutate(!archiveRequested)}
-          className={toolBtn(archiveRequested)}
-          title={
-            archiveRequested
-              ? 'Flagged to move to the Journal at 4am — tap to keep here'
-              : 'Move this paper to the Journal (happens at 4am)'
-          }
-        >
-          📓 {archiveRequested ? 'To journal ✓' : 'To journal'}
-        </button>
+        {/* Both belong to the paper as a document rather than to the page on
+         * screen, so an embedding view does without them: it owns the way out,
+         * and a paper bound to a study source has no business wandering off
+         * into the Journal at 4am. */}
+        {!embedded && (
+          <>
+            <button onClick={handleBack} className={btn}>
+              ‹ Back
+            </button>
+            <button
+              onClick={() => setArchive.mutate(!archiveRequested)}
+              className={toolBtn(archiveRequested)}
+              title={
+                archiveRequested
+                  ? 'Flagged to move to the Journal at 4am — tap to keep here'
+                  : 'Move this paper to the Journal (happens at 4am)'
+              }
+            >
+              📓 {archiveRequested ? 'To journal ✓' : 'To journal'}
+            </button>
+          </>
+        )}
         <button
           onClick={() => {
             setSelectMode(v => !v);

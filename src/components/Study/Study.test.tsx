@@ -48,6 +48,8 @@ function source(overrides: Partial<StudySource> = {}): StudySource {
     importError: null,
     lastOpenedAt: null,
     position: null,
+    paperId: null,
+    noteMode: 'note' as const,
     createdAt: '2026-09-04T10:00:00+00:00',
     updatedAt: '2026-09-04T10:00:00+00:00',
     ...overrides,

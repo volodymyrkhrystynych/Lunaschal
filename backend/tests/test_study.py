@@ -11,6 +11,7 @@ import subprocess
 import time
 
 import pytest
+from ulid import ULID
 
 from backend.db.connection import get_db
 from backend.research.web import UnsafeUrl
@@ -491,6 +492,107 @@ def test_saving_a_position_is_not_an_edit_to_the_source(client):
         f'/api/study/sources/{pdf_id}', json={'position': 9, 'title': 'Renamed'}
     ).get_json()
     assert retitled['updatedAt'] != before['updatedAt']
+
+
+def test_the_note_mode_and_its_paper_round_trip(client):
+    """The desk's right half has two modes, and a source remembers which one it
+    was last studied with. The paper is an ordinary `papers` row, borrowed
+    whole rather than modelled again."""
+    source_id = _upload_pdf(client).get_json()['id']
+    fresh = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert fresh['noteMode'] == 'note'
+    assert fresh['paperId'] is None
+
+    paper_id = str(ULID())
+    get_db().execute(
+        'INSERT INTO papers (id, title, created_at, updated_at) VALUES (?,?,?,?)',
+        (paper_id, 'Worked through', 0, 0),
+    )
+    get_db().commit()
+
+    bound = client.patch(
+        f'/api/study/sources/{source_id}',
+        json={'paperId': paper_id, 'noteMode': 'paper'},
+    ).get_json()
+    assert bound['paperId'] == paper_id
+    assert bound['noteMode'] == 'paper'
+
+    # Back to the text editor, without unbinding the paper it already has.
+    back = client.patch(
+        f'/api/study/sources/{source_id}', json={'noteMode': 'note'}
+    ).get_json()
+    assert back['noteMode'] == 'note'
+    assert back['paperId'] == paper_id
+
+
+def test_an_unknown_paper_is_refused_rather_than_crashing(client):
+    """`paper_id` is a real foreign key, so an id the papers table has never
+    heard of would otherwise surface as an IntegrityError and a 500."""
+    source_id = _upload_pdf(client).get_json()['id']
+
+    res = client.patch(
+        f'/api/study/sources/{source_id}', json={'paperId': str(ULID())}
+    )
+    assert res.status_code == 400
+    assert client.get(f'/api/study/sources/{source_id}').get_json()['paperId'] is None
+
+    assert (
+        client.patch(
+            f'/api/study/sources/{source_id}', json={'noteMode': 'sideways'}
+        ).status_code
+        == 400
+    )
+
+
+def test_deleting_the_paper_unbinds_the_source_rather_than_deleting_it(client):
+    """ON DELETE SET NULL: the paper is reachable from the Paper tab like any
+    other, so it can be deleted there — and that must cost the source its
+    binding, not its existence."""
+    source_id = _upload_pdf(client).get_json()['id']
+    paper_id = str(ULID())
+    get_db().execute(
+        'INSERT INTO papers (id, title, created_at, updated_at) VALUES (?,?,?,?)',
+        (paper_id, 'Worked through', 0, 0),
+    )
+    get_db().commit()
+    client.patch(
+        f'/api/study/sources/{source_id}',
+        json={'paperId': paper_id, 'noteMode': 'paper'},
+    )
+
+    assert client.delete(f'/api/paper/{paper_id}').status_code == 200
+
+    row = client.get(f'/api/study/sources/{source_id}').get_json()
+    assert row['paperId'] is None
+    # The mode is left alone: the desk creates a fresh paper on the next visit
+    # rather than silently moving the user back to the text editor.
+    assert row['noteMode'] == 'paper'
+
+
+def test_switching_note_mode_is_not_an_edit_to_the_source(client):
+    """Which half of the desk you had open is a view preference, flipped every
+    time you glance at the other pane — not a change to the source."""
+    source_id = _upload_pdf(client).get_json()['id']
+    before = client.get(f'/api/study/sources/{source_id}').get_json()
+
+    time.sleep(1.1)
+    after = client.patch(
+        f'/api/study/sources/{source_id}', json={'noteMode': 'paper'}
+    ).get_json()
+    assert after['noteMode'] == 'paper'
+    assert after['updatedAt'] == before['updatedAt']
+
+    # Binding a paper *is* an edit, exactly as binding a note is.
+    paper_id = str(ULID())
+    get_db().execute(
+        'INSERT INTO papers (id, title, created_at, updated_at) VALUES (?,?,?,?)',
+        (paper_id, 'Worked through', 0, 0),
+    )
+    get_db().commit()
+    bound = client.patch(
+        f'/api/study/sources/{source_id}', json={'paperId': paper_id}
+    ).get_json()
+    assert bound['updatedAt'] != before['updatedAt']
 
 
 def test_delete_removes_the_row_and_the_directory(client, study_root):

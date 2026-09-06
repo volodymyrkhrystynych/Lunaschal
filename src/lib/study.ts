@@ -2,6 +2,8 @@
 // so they test in the node environment (the convention src/lib/ exists for).
 
 export type StudyKind = 'pdf' | 'web' | 'youtube';
+/** The right half of the desk: a Notebook file, or a handwriting paper. */
+export type NoteMode = 'note' | 'paper';
 export type StudyImportStatus = 'importing' | 'ready' | 'error';
 
 export interface StudySource {
@@ -23,6 +25,15 @@ export interface StudySource {
    * sandboxed iframe's scroll offset cannot be read from outside it.
    */
   position: number | null;
+  /**
+   * The handwriting paper bound to this source, or null until one is made. An
+   * ordinary `papers` row — Study borrows a whole paper rather than modelling
+   * pages again, so it is listed in the Paper tab like any other and page
+   * creation comes with it.
+   */
+  paperId: string | null;
+  /** Which half of the desk the right pane last showed for this source. */
+  noteMode: NoteMode;
   /**
    * Whether this source's bytes are reachable right now. Only ever false for a
    * video: those live on the external archive drive and nowhere else, so an

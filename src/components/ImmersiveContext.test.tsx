@@ -4,6 +4,8 @@ import { render, screen, act } from '@testing-library/react';
 import { useState } from 'react';
 import {
   ImmersiveProvider,
+  useBottomBarHidden,
+  useHideBottomBar,
   useImmersive,
   useImmersiveView,
 } from './ImmersiveContext';
@@ -14,6 +16,15 @@ function Chrome() {
 
 function Claimer({ enabled }: { enabled: boolean }) {
   useImmersiveView(enabled);
+  return null;
+}
+
+function BottomBar() {
+  return <div>{useBottomBarHidden() ? 'no bar' : 'bar'}</div>;
+}
+
+function BottomClaimer({ enabled }: { enabled: boolean }) {
+  useHideBottomBar(enabled);
   return null;
 }
 
@@ -79,5 +90,51 @@ describe('immersive mode', () => {
       </ImmersiveProvider>
     );
     expect(screen.getByText('chrome')).toBeTruthy();
+  });
+});
+
+describe('the bottom-bar-only claim', () => {
+  it('takes the bar without taking the sidebar', async () => {
+    // The Study desk's paper pane: half the screen is still a PDF or a video
+    // being read, and stripping navigation off that half to give an A4 page
+    // 5% more height is a bad trade.
+    render(
+      <ImmersiveProvider>
+        <Chrome />
+        <BottomBar />
+        <BottomClaimer enabled />
+      </ImmersiveProvider>
+    );
+
+    expect(screen.getByText('chrome')).toBeTruthy();
+    expect(screen.getByText('no bar')).toBeTruthy();
+  });
+
+  it('is implied by the full claim, so the shell reads one flag per piece', () => {
+    render(
+      <ImmersiveProvider>
+        <BottomBar />
+        <Claimer enabled />
+      </ImmersiveProvider>
+    );
+    expect(screen.getByText('no bar')).toBeTruthy();
+  });
+
+  it('is counted and released on its own', async () => {
+    function Harness2() {
+      const [on, setOn] = useState(true);
+      return (
+        <ImmersiveProvider>
+          <BottomBar />
+          {on && <BottomClaimer enabled />}
+          <button onClick={() => setOn(false)}>release</button>
+        </ImmersiveProvider>
+      );
+    }
+    render(<Harness2 />);
+    expect(screen.getByText('no bar')).toBeTruthy();
+
+    await act(async () => screen.getByText('release').click());
+    expect(screen.getByText('bar')).toBeTruthy();
   });
 });
