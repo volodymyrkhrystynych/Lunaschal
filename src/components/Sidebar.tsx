@@ -22,7 +22,8 @@ type View =
   | 'email'
   | 'practice'
   | 'piano'
-  | 'jobs';
+  | 'jobs'
+  | 'knowledge';
 
 interface SidebarProps {
   currentView: View;
@@ -58,6 +59,7 @@ export const navItems: {
   { view: 'calendar', label: 'Calendar', icon: '📅' },
   { view: 'food', label: 'Food', icon: '🍽️' },
   { view: 'fanfic', label: 'Library', icon: '📚' },
+  { view: 'knowledge', label: 'Knowledge', icon: '🌐' },
   { view: 'newspapers', label: 'Newspapers', icon: '📰' },
   { view: 'torrent', label: 'Torrents', icon: '🌊' },
   { view: 'email', label: 'Email', icon: '📧' },

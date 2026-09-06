@@ -154,6 +154,7 @@ def get_settings():
         'torrentDefaultRetentionDays': s.get('torrent_default_retention_days') or 0,
         'torrentDefaultRatioLimit': s.get('torrent_default_ratio_limit'),
         'torrentDefaultSeedingMinutes': s.get('torrent_default_seeding_minutes'),
+        'knowledgeRoot': s.get('knowledge_root') or '',
     })
 
 

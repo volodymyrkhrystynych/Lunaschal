@@ -19,6 +19,7 @@ export const VIEWS = [
   'food',
   'lifestyle',
   'fanfic',
+  'knowledge',
   'newspapers',
   'torrent',
   'paper',

@@ -139,6 +139,7 @@ def init_db() -> None:
     _ensure_workday_board_facets(db)
     _ensure_backup_settings(db)
     _ensure_files_settings(db)
+    _ensure_knowledge_settings(db)
     _ensure_llm_generation_settings(db)
     # Must run after the two above: it drops the graded reasoning_effort columns
     # they used to own, reading their values first.
@@ -989,6 +990,14 @@ def _ensure_files_settings(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'files_root' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN files_root TEXT')
+    db.commit()
+
+
+def _ensure_knowledge_settings(db: sqlite3.Connection) -> None:
+    """Directory containing user-managed, read-only Kiwix ZIM archives."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'knowledge_root' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN knowledge_root TEXT')
     db.commit()
 
 
