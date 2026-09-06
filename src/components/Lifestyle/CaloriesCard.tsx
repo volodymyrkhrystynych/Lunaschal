@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useDraftState } from '@/hooks/useDraftState';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import { parseCalorieEntry } from '@/lib/lifestyle';
@@ -17,7 +18,7 @@ import { CARD } from './card';
  */
 export function CaloriesCard() {
   const queryClient = useQueryClient();
-  const [text, setText] = useState('');
+  const [text, setText] = useDraftState('lifestyle:calories', '');
   const [error, setError] = useState<string | null>(null);
 
   const { data: day } = useQuery({

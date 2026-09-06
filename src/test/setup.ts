@@ -13,6 +13,15 @@ afterEach(cleanup);
 // makes it visible. Each test starts online.
 beforeEach(() => onlineManager.setOnline(true));
 
+// Draft storage survives component unmounts (including simulated reloads), but
+// a separate test represents a fresh user's session.
+beforeEach(() => {
+  if (typeof localStorage === 'undefined') return;
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith('lunaschal:draft:v1:')) localStorage.removeItem(key);
+  }
+});
+
 // jsdom has no matchMedia; components now call useIsMobile() on mount. Default to
 // desktop (matches: false) so existing component tests render as before. Tests
 // that exercise mobile behavior override window.matchMedia with their own mock.
