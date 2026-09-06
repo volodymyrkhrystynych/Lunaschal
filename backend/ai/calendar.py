@@ -16,6 +16,11 @@ import time
 
 from backend.ai.llm import chat_json
 from backend.ai.provider import is_ai_configured
+from backend.calendar_voice import (
+    VOICE_EDIT_SCHEMA,
+    VOICE_EDIT_SYSTEM,
+    normalize_voice_edit,
+)
 from backend.db.connection import build_update, get_db
 
 EVENT_CATEGORIES = ('leisure', 'work', 'exercise', 'family', 'outside', 'indoors')
@@ -83,3 +88,43 @@ def classify_event_categories(event_id: str) -> None:
     except Exception as e:
         build_update(db, 'calendar_events', {'classification_error': str(e)}, 'id=?', (event_id,))
         db.commit()
+
+
+def _voice_edit_prompt(current: dict, transcript: str) -> str:
+    """What the model sees: the entry as it stands, then what was said.
+
+    The current state is spelled out rather than left implicit because most of
+    what this call decides is *relative* — "half an hour later", "add work to
+    that" — and none of it is answerable without the values being moved from.
+    """
+    lines = [
+        f"Title: {current.get('title') or '(untitled)'}",
+        f"Start: {current.get('time') or '(none)'}",
+        f"End: {current.get('endTime') or '(none)'}",
+        f"Tags: {', '.join(current.get('tags') or []) or '(none)'}",
+        f"Description: {current.get('description') or '(none)'}",
+    ]
+    return '\n'.join(lines) + f'\n\nWhat the user just said:\n{transcript}'
+
+
+def parse_event_voice_edit(current: dict, transcript: str) -> dict:
+    """One spoken sentence -> the fields of a calendar entry it asks to change.
+
+    Returns {} for everything that isn't a usable edit — AI unconfigured, the
+    model unreachable, a generation that validated down to nothing — because
+    the caller's floor is the behaviour this button has always had: store the
+    transcript as the description. Never raises, for the same reason
+    ai/workouts.py's parse never does: the recording is the thing that must not
+    be lost, and it is already in hand by the time this runs.
+    """
+    if not transcript.strip() or not is_ai_configured():
+        return {}
+    try:
+        data = chat_json(
+            _voice_edit_prompt(current, transcript),
+            system=VOICE_EDIT_SYSTEM,
+            schema=VOICE_EDIT_SCHEMA,
+        )
+    except Exception:
+        return {}
+    return normalize_voice_edit(data, current)

@@ -350,6 +350,15 @@ export interface CalendarEvent {
   linkedJournals?: JournalEntry[];
 }
 
+/** What a spoken sentence at an event actually moved. `applied` is empty when
+ * the sentence changed nothing at all — a plain narration whose text matched
+ * the description already, or a request the voice edit refuses (moving the
+ * event to another day). */
+export interface VoiceEditResult {
+  applied: ('title' | 'description' | 'time' | 'endTime' | 'tags')[];
+  transcript: string;
+}
+
 export interface CalendarRepeat {
   repeatFreq?: 'daily' | 'weekly' | 'monthly' | 'yearly' | null;
   repeatInterval?: number | null;
@@ -3189,13 +3198,21 @@ export const api = {
       post<{ id: string }>(`/api/calendar/${id}/link`, { journalEntryId }),
     unlinkJournal: (id: string, journalEntryId: string) =>
       del<{ success: boolean }>(`/api/calendar/${id}/link/${journalEntryId}`),
-    // Saves an already-transcribed recording as the event's description and
-    // queues AI category classification — no confirm step. `text` comes from
-    // /api/transcribe, run client-side first (same as every other useRecorder
-    // caller). Returns the updated event immediately; categoryTags/
-    // classifiedAt land once the background classification finishes.
-    transcribe: (id: string, text: string) =>
-      post<CalendarEvent>(`/api/calendar/${id}/transcribe`, { text }),
+    // Applies a spoken sentence to an event — no confirm step. `text` comes
+    // from /api/transcribe, run client-side first (same as every other
+    // useRecorder caller). The server reads it as an edit to the title, time,
+    // description or tags (never the date, see backend/calendar_voice.py) and
+    // falls back to storing it as the description when nothing usable comes
+    // back, so the old behaviour is the floor rather than a separate path.
+    // `occurrenceDate` scopes a time change on a recurring series to that one
+    // occurrence, exactly as dragging it does. Returns the updated event
+    // immediately; categoryTags/classifiedAt land once the background
+    // classification finishes.
+    transcribe: (id: string, text: string, occurrenceDate?: string) =>
+      post<CalendarEvent & { voiceEdit: VoiceEditResult }>(
+        `/api/calendar/${id}/transcribe`,
+        { text, ...(occurrenceDate ? { occurrenceDate } : {}) }
+      ),
     // Wake/sleep for a day. Derived from when the user was active unless they
     // set it by hand; `set` takes the whole manual state, so omitting an end
     // hands it back to the derived value, and `clear` releases both.
