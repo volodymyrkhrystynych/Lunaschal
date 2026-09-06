@@ -2,7 +2,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { api } from '../../hooks/api';
 import type { StudySource } from '../../lib/study';
 import { Study } from './Study';
@@ -66,7 +72,50 @@ function renderStudy() {
   return render(<Study />, { wrapper: Wrapper });
 }
 
+// The desk only exists at >=1024px now (Study.tsx), and src/test/setup.ts's
+// default matchMedia answers `false` to everything — so without this every
+// desk test would be looking at the library instead.
+//
+// The stub keeps its listeners rather than dropping them, because that is the
+// only way a *resize* can be simulated: `useMediaQuery`'s effect keys on the
+// query string, so re-rendering re-reads nothing. A change event is what a
+// dragged window boundary actually looks like to it.
+let large = true;
+const mediaListeners = new Set<{
+  query: string;
+  fire: (matches: boolean) => void;
+}>();
+
+function setViewport(size: 'large' | 'small') {
+  large = size === 'large';
+  window.matchMedia = ((query: string) => {
+    const matches = () => (large ? query.includes('min-width') : false);
+    return {
+      get matches() {
+        return matches();
+      },
+      media: query,
+      onchange: null,
+      addEventListener: (_: string, cb: (e: MediaQueryListEvent) => void) => {
+        mediaListeners.add({
+          query,
+          fire: m => cb({ matches: m } as MediaQueryListEvent),
+        });
+      },
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+  }) as typeof window.matchMedia;
+  for (const l of mediaListeners) {
+    l.fire(large ? l.query.includes('min-width') : false);
+  }
+}
+
 beforeEach(() => {
+  mediaListeners.clear();
+  setViewport('large');
   pdfPages = 0;
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
     {} as unknown as CanvasRenderingContext2D
@@ -360,5 +409,77 @@ describe('the Study desk', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Study on a screen too small for the desk', () => {
+  // Below 1024px the tab is an import queue and nothing else: somewhere to
+  // drop a YouTube link from the phone you found it on. It used to be hidden
+  // entirely, which took the queueing half away along with the reading half.
+  beforeEach(() => setViewport('small'));
+
+  it('still offers every way in', async () => {
+    vi.spyOn(api.study, 'sources').mockResolvedValue([]);
+    renderStudy();
+
+    await waitFor(() => expect(screen.getByText('📕 Upload PDF')).toBeTruthy());
+    expect(screen.getByText('🌐 Import website')).toBeTruthy();
+    expect(screen.getByText('🎬 Import YouTube')).toBeTruthy();
+    expect(await screen.findByText(/read it at the desk/)).toBeTruthy();
+  });
+
+  it('imports a YouTube link the same way the wide screen does', async () => {
+    vi.spyOn(api.study, 'sources').mockResolvedValue([]);
+    const importYoutube = vi
+      .spyOn(api.study, 'importYoutube')
+      .mockResolvedValue({ id: 'new', source: source({ id: 'new' }) });
+    renderStudy();
+
+    await waitFor(() =>
+      expect(screen.getByText('🎬 Import YouTube')).toBeTruthy()
+    );
+    fireEvent.click(screen.getByText('🎬 Import YouTube'));
+    fireEvent.change(screen.getByLabelText('YouTube URL'), {
+      target: { value: 'https://youtu.be/abc' },
+    });
+    fireEvent.click(screen.getByText('Import'));
+
+    await waitFor(() =>
+      expect(importYoutube).toHaveBeenCalledWith('https://youtu.be/abc')
+    );
+  });
+
+  it('does not offer a row as something to press', async () => {
+    vi.spyOn(api.study, 'sources').mockResolvedValue([source()]);
+    renderStudy();
+
+    const title = await screen.findByText('Attention Is All You Need');
+    // Not a disabled button — no button at all. A row that looks pressable and
+    // is not would be the whole list here.
+    expect(title.closest('button')).toBeNull();
+    // The delete control is still reachable: it no longer waits for a hover
+    // that a touch screen cannot give it.
+    expect(
+      screen.getByLabelText('Delete Attention Is All You Need')
+    ).toBeTruthy();
+  });
+
+  it('closes the desk when the window is dragged narrow', async () => {
+    // A desk left open behind the library holds a source the library can
+    // meanwhile delete, and re-widening into something you had left is worse
+    // than one extra tap.
+    setViewport('large');
+    vi.spyOn(api.study, 'sources').mockResolvedValue([source()]);
+    renderStudy();
+
+    fireEvent.click(await screen.findByText('Attention Is All You Need'));
+    await waitFor(() => expect(screen.getByText('‹ Sources')).toBeTruthy());
+
+    // Narrowing fires the media query's own change event, which is what a
+    // dragged window boundary does in a real browser.
+    await act(async () => setViewport('small'));
+
+    await waitFor(() => expect(screen.queryByText('‹ Sources')).toBeNull());
+    expect(screen.getByText('📕 Upload PDF')).toBeTruthy();
   });
 });

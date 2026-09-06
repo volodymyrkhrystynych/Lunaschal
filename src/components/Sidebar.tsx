@@ -1,5 +1,5 @@
 import { useShortcuts } from '../shortcuts/ShortcutProvider';
-import { useIsLargeScreen, useIsMobile } from '@/hooks/useMediaQuery';
+import { useIsMobile } from '@/hooks/useMediaQuery';
 import { useDesktopShell } from '@/hooks/useDesktopShell';
 import { visibleNavItems } from '@/lib/navVisibility';
 
@@ -46,14 +46,12 @@ export const navItems: {
   icon: string;
   /** Needs the native PyWebView shell — see src/lib/navVisibility.ts. */
   desktopOnly?: boolean;
-  /** Needs a viewport wide enough for two panes — see src/lib/navVisibility.ts. */
-  largeOnly?: boolean;
 }[] = [
   { view: 'learning', label: 'Learning', icon: '🧠' },
   { view: 'practice', label: 'Practice', icon: '⌨️' },
-  // Study is a split reading desk: half source, half notes. It is unusable at
-  // phone or Pocket 2 width, so it is hidden rather than squeezed.
-  { view: 'study', label: 'Study', icon: '📖', largeOnly: true },
+  // Study is a split reading desk on a wide screen and an import queue on a
+  // narrow one — the tab is everywhere, the desk is not. See Study.tsx.
+  { view: 'study', label: 'Study', icon: '📖' },
   { view: 'piano', label: 'Piano', icon: '🎹', desktopOnly: true },
   { view: 'chat', label: 'Chat', icon: '💬' },
   { view: 'journal', label: 'Journal', icon: '📓' },
@@ -91,7 +89,6 @@ export function Sidebar({
   const { level } = useShortcuts();
   const isMobile = useIsMobile();
   const isDesktopShell = useDesktopShell();
-  const isLargeScreen = useIsLargeScreen();
 
   // On mobile, picking a view also closes the overlay drawer; on desktop the
   // sidebar stays pinned.
@@ -116,51 +113,49 @@ export function Sidebar({
 
   const nav = (
     <nav className="p-2 flex-1 overflow-y-auto">
-      {visibleNavItems(navItems, { isDesktopShell, isLargeScreen }).map(
-        item => (
-          <button
-            key={item.view}
-            onClick={() => handleNav(item.view)}
-            className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors min-h-[44px] md:min-h-0 ${
-              currentView === item.view
-                ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
-                : 'text-[var(--color-text)] hover:bg-white/10'
-            } ${currentView === item.view && level === 0 ? 'ring-1 ring-[var(--color-primary)]' : ''}`}
-          >
-            <span>{item.icon}</span>
-            <span>{item.label}</span>
-            {item.view === 'lifestyle' &&
-              lifestyleReasons &&
-              lifestyleReasons.length > 0 && (
-                <span
-                  style={{ color: '#f0b429' }}
-                  title={lifestyleReasons.join(' · ')}
-                  aria-label={lifestyleReasons.join(' · ')}
-                >
-                  ❗
-                </span>
-              )}
-            {item.view === 'torrent' && torrentsNeedAttention && (
+      {visibleNavItems(navItems, { isDesktopShell }).map(item => (
+        <button
+          key={item.view}
+          onClick={() => handleNav(item.view)}
+          className={`w-full flex items-center gap-2 px-3 py-2 rounded text-left transition-colors min-h-[44px] md:min-h-0 ${
+            currentView === item.view
+              ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
+              : 'text-[var(--color-text)] hover:bg-white/10'
+          } ${currentView === item.view && level === 0 ? 'ring-1 ring-[var(--color-primary)]' : ''}`}
+        >
+          <span>{item.icon}</span>
+          <span>{item.label}</span>
+          {item.view === 'lifestyle' &&
+            lifestyleReasons &&
+            lifestyleReasons.length > 0 && (
               <span
                 style={{ color: '#f0b429' }}
-                title="The VPN tunnel is down, or a torrent errored"
-                aria-label="The VPN tunnel is down, or a torrent errored"
+                title={lifestyleReasons.join(' · ')}
+                aria-label={lifestyleReasons.join(' · ')}
               >
                 ❗
               </span>
             )}
-            {item.view === 'newspapers' && newspapersNeedAttention && (
-              <span
-                style={{ color: '#f0b429' }}
-                title="Today's front pages haven't all synced yet"
-                aria-label="Today's front pages haven't all synced yet"
-              >
-                ❗
-              </span>
-            )}
-          </button>
-        )
-      )}
+          {item.view === 'torrent' && torrentsNeedAttention && (
+            <span
+              style={{ color: '#f0b429' }}
+              title="The VPN tunnel is down, or a torrent errored"
+              aria-label="The VPN tunnel is down, or a torrent errored"
+            >
+              ❗
+            </span>
+          )}
+          {item.view === 'newspapers' && newspapersNeedAttention && (
+            <span
+              style={{ color: '#f0b429' }}
+              title="Today's front pages haven't all synced yet"
+              aria-label="Today's front pages haven't all synced yet"
+            >
+              ❗
+            </span>
+          )}
+        </button>
+      ))}
     </nav>
   );
 

@@ -4,36 +4,31 @@ import { navItems } from '../components/Sidebar';
 import { VIEW_ORDER } from '../shortcuts/ShortcutProvider';
 import { VIEWS } from './viewPersistence';
 
-const DESKTOP_BIG = { isDesktopShell: true, isLargeScreen: true };
-const DESKTOP_SMALL = { isDesktopShell: true, isLargeScreen: false };
-const BROWSER_BIG = { isDesktopShell: false, isLargeScreen: true };
-const PHONE = { isDesktopShell: false, isLargeScreen: false };
+const DESKTOP = { isDesktopShell: true };
+const BROWSER = { isDesktopShell: false };
 
-const viewsOn = (gates: { isDesktopShell: boolean; isLargeScreen: boolean }) =>
+const viewsOn = (gates: { isDesktopShell: boolean }) =>
   visibleNavItems(navItems, gates).map(item => item.view);
 
-describe('the two device gates are independent', () => {
+describe('the one device gate', () => {
   it('keeps an ungated view everywhere', () => {
-    for (const gates of [DESKTOP_BIG, DESKTOP_SMALL, BROWSER_BIG, PHONE]) {
+    for (const gates of [DESKTOP, BROWSER]) {
       expect(viewsOn(gates)).toContain('chat');
     }
   });
 
-  it('gates Piano on the native shell, not on size', () => {
-    // The Pocket 2 runs the desktop app on a small screen: Piano stays.
-    expect(viewsOn(DESKTOP_SMALL)).toContain('piano');
-    // A browser tab on a big monitor is not the shell: Piano is gone.
-    expect(viewsOn(BROWSER_BIG)).not.toContain('piano');
+  it('gates Piano on the native shell', () => {
+    expect(viewsOn(DESKTOP)).toContain('piano');
+    // A browser tab is not the shell, however big the monitor.
+    expect(viewsOn(BROWSER)).not.toContain('piano');
   });
 
-  it('gates Study on size, not on the native shell', () => {
-    // This is the case the whole gate exists for: the desktop app on the
-    // Pocket 2 satisfies `desktopOnly` and must still not offer Study.
-    expect(viewsOn(DESKTOP_SMALL)).not.toContain('study');
-    expect(viewsOn(PHONE)).not.toContain('study');
-    // A wide browser tab (or a 12" iPad) gets it without the native shell.
-    expect(viewsOn(BROWSER_BIG)).toContain('study');
-    expect(viewsOn(DESKTOP_BIG)).toContain('study');
+  it('does not gate Study at all any more', () => {
+    // It used to be hidden below 1024px, which took the import queue away
+    // with the reading desk. The tab is everywhere now and narrows itself —
+    // the size decision lives in Study.tsx, not in this list.
+    expect(viewsOn(DESKTOP)).toContain('study');
+    expect(viewsOn(BROWSER)).toContain('study');
   });
 });
 
@@ -53,11 +48,9 @@ describe('the three view registries agree', () => {
 });
 
 describe('isViewAvailable', () => {
-  it('refuses an item failing either gate', () => {
-    expect(isViewAvailable({ largeOnly: true }, DESKTOP_SMALL)).toBe(false);
-    expect(isViewAvailable({ desktopOnly: true }, BROWSER_BIG)).toBe(false);
-    expect(
-      isViewAvailable({ desktopOnly: true, largeOnly: true }, DESKTOP_BIG)
-    ).toBe(true);
+  it('refuses an item that needs the shell outside it', () => {
+    expect(isViewAvailable({ desktopOnly: true }, BROWSER)).toBe(false);
+    expect(isViewAvailable({ desktopOnly: true }, DESKTOP)).toBe(true);
+    expect(isViewAvailable({}, BROWSER)).toBe(true);
   });
 });

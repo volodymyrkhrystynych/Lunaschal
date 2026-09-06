@@ -4,21 +4,23 @@
 // copies of the same filter expression, and a third caller was about to make it
 // three.
 //
-// The two gates mean different things and neither implies the other:
+// There is exactly one gate, and it is about the *shell*, not the screen:
 //   desktopOnly — running inside the PyWebView window (Piano needs the native
 //                 shell), true on any machine that runs the app, tiny ones too.
-//   largeOnly   — the viewport is wide enough for the view to work at all
-//                 (Study's two panes), true of a browser tab on a big monitor
-//                 and false of the GPD Pocket 2 running that same native shell.
+//
+// There used to be a second, `largeOnly`, which hid Study below 1024px. It is
+// gone on purpose: a tab that vanishes on the phone cannot be used to *queue*
+// anything, and importing a video is exactly the half of Study that wants
+// doing from wherever you found the link. Study now exists everywhere and
+// shows less where there is less room — the size question belongs inside a
+// view, not to the list of views. See src/components/Study/Study.tsx.
 
 export interface NavGateable {
   desktopOnly?: boolean;
-  largeOnly?: boolean;
 }
 
 export interface DeviceGates {
   isDesktopShell: boolean;
-  isLargeScreen: boolean;
 }
 
 export function isViewAvailable(
@@ -26,7 +28,6 @@ export function isViewAvailable(
   gates: DeviceGates
 ): boolean {
   if (item.desktopOnly && !gates.isDesktopShell) return false;
-  if (item.largeOnly && !gates.isLargeScreen) return false;
   return true;
 }
 

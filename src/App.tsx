@@ -38,7 +38,6 @@ import { MOBILE_QUERY } from './lib/breakpoints';
 import { getStoredView, setStoredView, type View } from './lib/viewPersistence';
 import { visibleNavItems } from './lib/navVisibility';
 import { useDesktopShell } from './hooks/useDesktopShell';
-import { useIsLargeScreen } from './hooks/useMediaQuery';
 import {
   ImmersiveProvider,
   useBottomBarHidden,
@@ -59,7 +58,6 @@ export default function App() {
 
 function AppShell() {
   const isDesktopShell = useDesktopShell();
-  const isLargeScreen = useIsLargeScreen();
   // Set by the Paper editor on a tablet: no header, no sidebar, no bottom bar,
   // so the page is the screen and its own Back button is the way out.
   const immersive = useImmersive();
@@ -71,15 +69,15 @@ function AppShell() {
     setStoredView(currentView);
   }, [currentView]);
 
-  const availableViews = visibleNavItems(navItems, {
-    isDesktopShell,
-    isLargeScreen,
-  }).map(item => item.view);
+  const availableViews = visibleNavItems(navItems, { isDesktopShell }).map(
+    item => item.view
+  );
 
   // A gated view the last session left behind renders nothing at all on a
-  // device that can't show it — a phone whose stored view is 'study' (or
-  // 'piano') came up to a blank <main> with no way back except the sidebar.
-  // Fall back to the default rather than leaving the shell empty.
+  // device that can't show it — a phone whose stored view is 'piano' came up
+  // to a blank <main> with no way back except the sidebar. Fall back to the
+  // default rather than leaving the shell empty. Study is no longer one of
+  // these: it exists on every device and narrows itself instead.
   const viewAvailable = availableViews.includes(currentView);
   useEffect(() => {
     if (!viewAvailable) setCurrentView('chat');
@@ -216,7 +214,7 @@ function AppShell() {
       case 'piano':
         return isDesktopShell ? <Piano /> : null;
       case 'study':
-        return isLargeScreen ? <Study /> : null;
+        return <Study />;
       case 'settings':
         return <Settings />;
       case 'files':

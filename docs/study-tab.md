@@ -56,6 +56,7 @@ The half that had to exist before any of the rest is worth anything.
 - **Desk**: fixed 50/50 vertical split. Left is the source; right is the Notebook vim editor bound
   to a `.md` note.
 - **Gate**: hidden below 1024px — absent from the sidebar and skipped by `nav.up/down`.
+  _Superseded_ — see [Everywhere, but smaller](#everywhere-but-smaller).
 
 Three decisions worth carrying forward:
 
@@ -65,7 +66,8 @@ Three decisions worth carrying forward:
    interpretation of _"a text editor that you can import from the notebook tab"_ — see
    [Open questions](#open-questions), it may not be what was meant.
 2. **`largeOnly` is a different gate from Piano's `desktopOnly`.** The Pocket 2 satisfies the
-   native-shell one. Both now run through one pure `visibleNavItems`.
+   native-shell one. Both now run through one pure `visibleNavItems`. _(`largeOnly` has since been
+   removed — the size question moved inside the view. `visibleNavItems` stays.)_
 3. **The web import reuses the SSRF guard by factoring, not copying.** `fetch_public_page` is now
    the guarded fetch on its own and `web_fetch` is that plus the strip — one redirect loop in the
    codebase.
@@ -90,6 +92,34 @@ Two consequences that are decisions, not bugs. With the drive unplugged, **an im
 rather than falling back to the SSD (a `mkdir -p` onto an unmounted mountpoint followed by a 279 MB
 download is the one failure that looks like success), and **a video already imported is listed but
 cannot be played** — Piano's model, with the desk saying why.
+
+---
+
+## Everywhere, but smaller
+
+Not a stage — the second correction that came out of using the thing, and the answer to Stage 1's
+`largeOnly` gate.
+
+Hiding the tab below 1024px treated Study as one feature. It is two: **reading** something beside
+your notes, which genuinely needs two panes, and **collecting** the thing in the first place, which
+needs a text field and is most wanted on the phone you found the link on. The gate took the second
+away along with the first, so a YouTube lecture spotted on a phone had to be remembered until you
+were back at a big screen.
+
+So the size question moved out of the nav list and into the view:
+
+- **`largeOnly` is gone from `navVisibility.ts`.** Piano's `desktopOnly` is the only nav gate left —
+  a gate with no users rots, and this one now has none. "Which tabs exist" is a question about the
+  device; "how much of this tab works" is a question about the window, and they were being answered
+  in the same place.
+- **Below 1024px, Study is `StudyLibrary` alone**: upload a PDF, archive a page, pull down a video,
+  see what is importing, retry a failure, delete. Everything except opening one to read.
+- **A row there is a `<div>`, not a disabled button.** On a phone every row would be a control that
+  looks pressable and is not.
+- **Narrowing the window closes an open desk** rather than hiding it behind the library — a desk
+  held in state is a source the library can meanwhile delete.
+- **The delete `✕` no longer waits for a hover**, which a touch screen cannot give it. It was
+  `opacity-0 group-hover:opacity-100`: invisible on exactly the devices this change is for.
 
 ---
 
@@ -190,7 +220,8 @@ before Stage 3.
    [Where the bytes live](#where-the-bytes-live). Videos are deliberately _not_ durable.
 3. **The 1024px threshold is a guess** at the Pocket 2's CSS width, which depends on its OS
    scaling. One constant in `src/lib/breakpoints.ts`. A 12.9" iPad in _portrait_ reports exactly
-   1024, so the boundary is tight on purpose.
+   1024, so the boundary is tight on purpose. Less costly to get wrong now than it was: below the
+   line the tab still exists, so a bad guess loses the desk rather than the whole feature.
 4. **Whether a source should ever be deleted automatically.** Downloaded lectures are the largest
    files the app stores. Jobs has a retention sweep; nothing here does, by choice for now.
 
