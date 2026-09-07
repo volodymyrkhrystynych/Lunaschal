@@ -14,7 +14,7 @@ Seven jobs on three cadences, sorted by what each one costs:
   verdict, so it runs every tick too and the obvious noise never survives long
   enough to cost a model call.
 - **The triage drain and the queue drain** are the only parts that touch the
-  model, so they are the only parts that defer through `backend/ai/priority.py`
+  model, so they are the only parts that defer through `backend/ai/service.py`
   — the same moment-to-moment yielding `research_scheduler` does, rather than
   an hour window. The queue runs first: a resume was explicitly asked for by
   tapping Queue, and triage is speculative work over postings nobody has looked

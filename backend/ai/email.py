@@ -4,7 +4,7 @@ Same idiom as backend/ai/journal.py's tag classification — closed-vocab
 tuples double as the JSON-schema enum, so an off-vocabulary value can't be
 emitted at all, not just discouraged in the prompt.
 
-Runs on backend.ai.background's single-worker executor after each new email
+Runs on the llm_jobs worker (backend/ai/jobs.py) after each new email
 lands (see backend/email/sync.py), so a slow LLM call never stalls the next
 Gmail API page or poll tick. classified_at IS NULL is the "still pending"
 state — for both never-attempted and previously-failed rows — so a crash
@@ -104,7 +104,7 @@ def _prompt_text(row) -> str:
 def classify_email(email_id: str) -> None:
     """Load the row, classify category (and job sub-status iff category is
     'job_application'), write the result back — or classification_error if
-    something failed. Meant for run_bg(); never raises."""
+    something failed. Meant for the job queue (backend/ai/jobs.py); never raises."""
     db = get_db()
     try:
         row = db.execute('SELECT * FROM emails WHERE id=?', (email_id,)).fetchone()
@@ -142,9 +142,9 @@ def classify_email(email_id: str) -> None:
 def sweep_unclassified() -> int:
     """Re-enqueue anything left classified_at IS NULL by a prior crash.
     Returns the number enqueued."""
-    from backend.ai.background import run_bg
+    from backend.ai import jobs
     db = get_db()
     rows = db.execute('SELECT id FROM emails WHERE classified_at IS NULL').fetchall()
     for row in rows:
-        run_bg(lambda eid=row['id']: classify_email(eid))
+        jobs.enqueue('email.classify', row['id'])
     return len(rows)

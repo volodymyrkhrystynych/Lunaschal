@@ -134,7 +134,10 @@ def test_sweep_unclassified_reenqueues_pending_rows(client, monkeypatch):
     db.commit()
 
     enqueued = []
-    monkeypatch.setattr('backend.ai.background.run_bg', lambda fn: enqueued.append(fn))
+    from backend.ai import jobs as llm_jobs
+    monkeypatch.setattr(llm_jobs, 'enqueue',
+                        lambda kind, target_id=None, payload=None, **k:
+                            enqueued.append((kind, target_id)))
 
     count = email_ai.sweep_unclassified()
 

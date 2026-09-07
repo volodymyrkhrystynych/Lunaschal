@@ -24,8 +24,8 @@ def chat_root(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def sync_bg(monkeypatch):
-    monkeypatch.setattr(chat_routes, 'run_bg', lambda fn: fn())
+def sync_bg(run_jobs_sync):
+    """Run queued enrichment inline so upload -> description is deterministic."""
 
 
 @pytest.fixture(autouse=True)

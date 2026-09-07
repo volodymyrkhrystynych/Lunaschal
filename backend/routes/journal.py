@@ -12,7 +12,8 @@ from backend.ai.journal import (
     polish_journal_entry,
     generate_journal_metadata,
 )
-from backend.ai.background import run_bg
+from backend.ai import jobs
+from backend.ai.service import PAUSED_MESSAGE
 from backend.journal import storage, voice_drafts
 from backend.tags import tags_json
 
@@ -325,6 +326,11 @@ def polish_entry(id):
     except PolishUnavailable as e:
         # Leave `content` exactly as it is. Writing the raw transcript back here
         # is what used to make an offline llama-server look like a broken button.
+        # Both are 503, but a *paused* GPU is a state the user can fix from
+        # Settings, so it is flagged for the banner rather than reported as
+        # another way the model is broken.
+        if getattr(e, 'paused', False):
+            return jsonify({'error': PAUSED_MESSAGE, 'inferencePaused': True}), 503
         return jsonify({'error': f'Polish unavailable: {e}'}), 503
     db = get_db()
     db.execute(
@@ -461,7 +467,7 @@ def merge_entry(id):
     )[0])
 
 
-def _polish_bg(journal_id: str, raw_content: str) -> None:
+def _polish_bg(journal_id: str, raw_content: str, *, now: bool = False) -> None:
     def _run():
         try:
             polished = polish_journal_entry(
@@ -484,7 +490,11 @@ def _polish_bg(journal_id: str, raw_content: str) -> None:
             _notify_subscribers(journal_id)
         except Exception as e:
             print(f'Background polish failed for {journal_id}: {e}')
-    run_bg(_run)
+
+    if now:
+        _run()
+    else:
+        jobs.enqueue('journal.polish', journal_id, {'raw_content': raw_content})
 
 
 # --- Attachments -------------------------------------------------------------
@@ -1084,7 +1094,8 @@ def _do_attachment_audio_description(path: str, name: str) -> str:
     return describe_audio(p, hint=name)
 
 
-def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str, name: str) -> None:
+def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str,
+                            name: str, *, now: bool = False) -> None:
     def _run():
         try:
             text = _do_attachment_audio_description(path, name)
@@ -1103,7 +1114,12 @@ def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str, name: 
             _notify_subscribers(entry_id)
         except Exception as e:
             print(f'Failed to record audio description result for {attachment_id}: {e}')
-    run_bg(_run)
+
+    if now:
+        _run()
+    else:
+        jobs.enqueue('journal.describe_audio', attachment_id,
+                     {'entry_id': entry_id, 'path': path, 'name': name})
 
 
 def _do_attachment_audio(path: str) -> str:
@@ -1114,7 +1130,7 @@ def _do_attachment_audio(path: str) -> str:
     for Parakeet, internally for Whisper) and ffmpeg reads the audio track out of
     a container without caring that there are also video frames in it.
 
-    This runs on `run_bg` with nobody waiting on it, so the multi-backend cost
+    This runs on the job queue with nobody waiting on it, so the multi-backend cost
     is free here in a way it isn't on the interactive path — but the switch is
     still shared, because a user who turned the LLM pass off did so to stop the
     app spending model time on transcripts, and that reason doesn't stop
@@ -1170,7 +1186,7 @@ def _deliver_idea_transcript(entry_id: str, text: str) -> None:
 
 def _transcribe_attachment_bg(
     attachment_id: str, entry_id: str, kind: str, path: str, name: str,
-    *, into_entry: bool = False,
+    *, into_entry: bool = False, now: bool = False,
 ) -> None:
     def _run():
         try:
@@ -1208,7 +1224,13 @@ def _transcribe_attachment_bg(
                 _generate_metadata_bg(entry_id, text)
         except Exception as e:
             print(f'Failed to record transcription result for {attachment_id}: {e}')
-    run_bg(_run)
+
+    if now:
+        _run()
+    else:
+        jobs.enqueue('journal.transcribe_attachment', attachment_id,
+                     {'entry_id': entry_id, 'kind': kind, 'path': path,
+                      'name': name, 'into_entry': into_entry})
 
 
 # --- Voice drafts -------------------------------------------------------------
@@ -1359,7 +1381,8 @@ def _attachments_settled(entry_id: str, expected: int) -> bool:
 
 
 def _generate_metadata_bg(
-    journal_id: str, content: str, *, expect_attachments: int = 0
+    journal_id: str, content: str, *, expect_attachments: int = 0,
+    now: bool = False,
 ) -> None:
     def _run():
         try:
@@ -1379,8 +1402,12 @@ def _generate_metadata_bg(
             _notify_subscribers(journal_id)
         except Exception as e:
             print(f'Background metadata generation failed for {journal_id}: {e}')
+
+    if now:
+        _run()
+        return
     if expect_attachments <= 0:
-        run_bg(_run)
+        jobs.enqueue('journal.metadata', journal_id, {'content': content})
         return
 
     stop = threading.Event()
@@ -1403,14 +1430,14 @@ def _generate_metadata_bg(
                     return
             if stop.is_set():
                 return
-            run_bg(_run)
+            jobs.enqueue('journal.metadata', journal_id, {'content': content})
         finally:
             with _metadata_waiters_lock:
                 _metadata_waiters.pop(waiter, None)
 
-    # A plain daemon thread, deliberately NOT `run_bg`. That queue has a single
-    # worker shared with the captioning jobs this is waiting for, so a job that
-    # blocked on them would head-of-line block the very work that unblocks it —
+    # A plain daemon thread, deliberately NOT a queued job. That queue has a
+    # single worker shared with the captioning jobs this is waiting for, so a job
+    # that blocked on them would head-of-line block the work that unblocks it —
     # a guaranteed deadlock until the cap expired. Nothing here touches a model;
     # it sleeps and reads one indexed row set.
     #

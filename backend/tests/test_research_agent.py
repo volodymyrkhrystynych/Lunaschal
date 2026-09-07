@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.ai import priority
+from backend.ai import service
 from backend.research import agent
 
 
@@ -47,9 +47,9 @@ def _script(monkeypatch, responses, finish_reasons=None):
 
 @pytest.fixture(autouse=True)
 def clean_gate():
-    priority.reset()
+    service.reset()
     yield
-    priority.reset()
+    service.reset()
 
 
 def test_a_plain_answer_ends_the_loop_immediately(monkeypatch):
@@ -276,26 +276,25 @@ def test_cancelling_stops_the_loop(client, monkeypatch):
         agent.gather('sys', 'q', checkpoint=checkpoint)
 
 
-def test_the_standard_checkpoint_waits_for_the_user_to_finish():
-    """The whole point of the gate: background turns park while a human waits."""
-    token = priority.begin('chat.stream')
-    released = threading.Event()
+def test_the_checkpoint_no_longer_waits_for_the_user():
+    """Yielding to a human moved to backend/ai/service.py.
 
-    def finish():
-        priority.end(token)
-        released.set()
+    The checkpoint used to poll an advisory flag until the user went quiet.
+    Now the next turn's `slot()` blocks against the real state of the lane, so
+    this must return promptly even with an interactive call in flight —
+    otherwise a run would park twice, once here and once at the queue.
+    """
+    with service.slot(lane=service.GPU, label='chat.stream'):
+        started = time.monotonic()
+        agent.make_checkpoint(gate=True)()
+        assert time.monotonic() - started < 0.5
 
-    threading.Timer(0.05, finish).start()
-    agent.make_checkpoint(gate=True)()
-    assert released.is_set()
 
-
-def test_cancellation_is_checked_after_waiting():
-    """A run cancelled while parked stops at the next step rather than firing
-    one more model call."""
-    priority.begin('chat.stream')  # never released, so wait times out
+def test_cancellation_is_honoured_between_steps():
+    """A cancelled run stops at the next step rather than firing one more
+    model call."""
     cancel = threading.Event()
-    threading.Timer(0.05, cancel.set).start()
+    cancel.set()
 
     with pytest.raises(agent.Cancelled):
         agent.make_checkpoint(cancel=cancel, gate=True)()

@@ -8,8 +8,8 @@ waits for them to land and settle before asking for a title.
 
 Two things this has to get right, and one it has to survive:
 
-- It must not deadlock. The captioning jobs run on `run_bg`'s single shared
-  worker, so the wait cannot itself be a `run_bg` job — it would head-of-line
+- It must not deadlock. The captioning jobs run on the job queue's single
+  shared worker, so the wait cannot itself be a queued job — it would head-of-line
   block the very work it is waiting for.
 - It must not wait forever on an upload that never comes (a failed request, a
   closed tab). The cap is what turns "no title, ever" into "a title from the
@@ -23,6 +23,7 @@ import pytest
 from PIL import Image
 
 from backend.ai import images as images_ai
+from backend.ai import jobs as llm_jobs_mod
 from backend.routes import journal as journal_routes
 
 
@@ -45,10 +46,9 @@ def _fast_wait(monkeypatch):
 
 
 @pytest.fixture
-def inline_bg(monkeypatch):
-    """Run `run_bg` jobs on the caller's thread. The wait itself is a real
+def inline_bg(run_jobs_sync):
+    """Run queued jobs on the caller's thread. The wait itself is a real
     thread either way — that is the behaviour under test."""
-    monkeypatch.setattr(journal_routes, 'run_bg', lambda fn: fn())
 
 
 def _jpeg():
@@ -159,15 +159,18 @@ def test_an_entry_with_no_attachments_does_not_wait_at_all(
 def test_the_wait_does_not_occupy_the_shared_background_worker(client, monkeypatch):
     """The deadlock guard, asserted directly.
 
-    `run_bg` has one worker and the captioning jobs queue on it. If the wait ran
-    there, it would block them for the full cap and then generate a title from
-    captions that could never have been written.
+    The job queue has one worker and the captioning jobs go on it. If the wait
+    ran there, it would block them for the full cap and then generate a title
+    from captions that could never have been written.
     """
     monkeypatch.setattr(
         images_ai, 'get_provider_config', lambda: {'llama_vision_model': 'qwen36'}
     )
+    from backend.ai import jobs as llm_jobs
     queued = []
-    monkeypatch.setattr(journal_routes, 'run_bg', queued.append)
+    monkeypatch.setattr(llm_jobs, 'enqueue',
+                        lambda kind, target_id=None, payload=None, **k:
+                            queued.append((kind, target_id)))
 
     client.post(
         '/api/journal', json={'content': 'Waiting.', 'pendingAttachments': 1}
@@ -192,7 +195,7 @@ def test_attachments_settled_needs_both_the_count_and_the_status(client, monkeyp
     monkeypatch.setattr(
         images_ai, 'get_provider_config', lambda: {'llama_vision_model': 'qwen36'}
     )
-    monkeypatch.setattr(journal_routes, 'run_bg', lambda fn: None)
+    monkeypatch.setattr(llm_jobs_mod, 'enqueue', lambda *a, **k: None)
     entry_id = client.post('/api/journal', json={'content': 'A day.'}).get_json()['id']
 
     # Nothing uploaded yet: two promised, none present.
@@ -217,7 +220,7 @@ def test_the_context_is_photos_only(client, monkeypatch):
     """Audio and video have their own description column and their own consumer.
     A speech transcript is already the entry's text on the dictation path, and
     feeding it back would title the entry from a copy of itself."""
-    monkeypatch.setattr(journal_routes, 'run_bg', lambda fn: None)
+    monkeypatch.setattr(llm_jobs_mod, 'enqueue', lambda *a, **k: None)
     entry_id = client.post('/api/journal', json={'content': 'A day.'}).get_json()['id']
     client.post(
         f'/api/journal/{entry_id}/attachments',
@@ -240,7 +243,7 @@ def test_the_context_is_photos_only(client, monkeypatch):
 def test_a_waiting_thread_can_be_cancelled_and_drained(client, monkeypatch):
     """The contract `conftest.py` relies on, pinned.
 
-    This waiter is a bare daemon thread — it cannot go on `run_bg`'s single
+    This waiter is a bare daemon thread — it cannot go on the job queue's single
     worker without deadlocking against the captioning jobs it waits for — so it
     is covered by none of the app's `wait_idle`s. It polls the module-global
     SQLite connection, and a test that closes that connection while the thread
@@ -248,7 +251,7 @@ def test_a_waiting_thread_can_be_cancelled_and_drained(client, monkeypatch):
     pytest batch with it. That happened, which is why this exists.
     """
     monkeypatch.setattr(journal_routes, '_METADATA_WAIT_SECONDS', 60.0)
-    monkeypatch.setattr(journal_routes, 'run_bg', lambda fn: None)
+    monkeypatch.setattr(llm_jobs_mod, 'enqueue', lambda *a, **k: None)
 
     client.post(
         '/api/journal', json={'content': 'Waiting.', 'pendingAttachments': 3}
@@ -268,10 +271,12 @@ def test_a_waiting_thread_can_be_cancelled_and_drained(client, monkeypatch):
 
 def test_a_cancelled_wait_does_not_go_on_to_generate(client, monkeypatch):
     """Cancelling means abandon, not hurry up. Queueing the job anyway would put
-    it on `run_bg` after the suite had already drained that queue."""
+    it on the job queue after the suite had already drained it."""
     monkeypatch.setattr(journal_routes, '_METADATA_WAIT_SECONDS', 60.0)
     queued = []
-    monkeypatch.setattr(journal_routes, 'run_bg', queued.append)
+    monkeypatch.setattr(llm_jobs_mod, 'enqueue',
+                        lambda kind, target_id=None, payload=None, **k:
+                            queued.append((kind, target_id)))
 
     client.post(
         '/api/journal', json={'content': 'Waiting.', 'pendingAttachments': 3}
@@ -291,7 +296,7 @@ def test_a_finished_waiter_removes_itself_from_the_registry(client, monkeypatch)
     """Otherwise the registry grows for the life of the process, holding a
     reference to every thread that ever waited — and `wait_metadata_idle` walks
     it on every call."""
-    monkeypatch.setattr(journal_routes, 'run_bg', lambda fn: None)
+    monkeypatch.setattr(llm_jobs_mod, 'enqueue', lambda *a, **k: None)
 
     client.post('/api/journal', json={'content': 'A day.', 'pendingAttachments': 1})
     journal_routes.cancel_metadata_waits()

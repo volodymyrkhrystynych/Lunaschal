@@ -238,7 +238,7 @@ fine anyway.
 ## Scheduling
 
 `jobs/scheduler` is the first daemon loop in the app that needs **no llama slot at all** — the
-linkage sweep is pure string matching. So it does not go through `backend/ai/priority.py` and does
+linkage sweep is pure string matching. So it does not go through `backend/ai/service.py` and does
 not need a window to itself; it sweeps every tick (300 s), which means a rejection that lands at
 09:00 shows on the application by 09:05 rather than tomorrow.
 
@@ -301,7 +301,8 @@ inventory legally. The `jobs.source` enum has no `linkedin` or `indeed` value fo
 
 ### Why the score is not the model's
 
-The plan had been LLM match-scoring deferred through `backend/ai/priority.py`. Building it made the
+The plan had been LLM match-scoring deferred through the model service (then
+`backend/ai/priority.py`, now `backend/ai/service.py`). Building it made the
 cost obvious: two hundred postings is two hundred model calls, tens of seconds each, and the feed
 stays unsorted for hours after a sync. Worse, the sort order would then change between refreshes.
 

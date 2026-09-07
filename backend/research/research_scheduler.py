@@ -3,7 +3,7 @@
 Unlike the other four daemons in this app, this one has **no hour window**. The
 repo scan, the briefing and the title sweep are scheduled at night because they
 should not compete with the user; this one instead defers moment to moment via
-backend/ai/priority.py, which is what "runs whenever it likes but yields to
+backend/ai/service.py, which is what "runs whenever it likes but yields to
 anything the user asks for" actually requires. A nightly window would be the
 wrong shape: research is long, interruptible, and worth doing while the user is
 awake and about to look at the answer.
@@ -19,9 +19,10 @@ import time
 from backend.db.connection import get_db
 
 _POLL_SECONDS = 120
-# How long the user must have been idle before background work starts. Longer
-# than priority.IDLE_GRACE because starting a multi-minute research pass the
-# instant a chat finishes is more intrusive than starting one model call.
+# How long the user must have been idle before background work starts. The
+# broker already keeps a research turn out of a chat message's way, so this is
+# the coarser judgement it cannot make: starting a multi-minute pass the instant
+# a chat finishes only earns it a preemption on the next message.
 QUIET_SECONDS = 30.0
 
 DEFAULT_ENABLED = False
@@ -43,7 +44,7 @@ def tick(now: int | None = None) -> tuple[str, str] | None:
     Split out from the loop so the whole decision is testable without threads —
     the loop below is then only sleep-and-call.
     """
-    from backend.ai import priority
+    from backend.ai import service
     from backend.research import worker
     from backend.research.research_job import plan_next, run_task
 
@@ -53,7 +54,7 @@ def tick(now: int | None = None) -> tuple[str, str] | None:
         return None
     # Don't queue behind the user. Returning rather than blocking keeps the
     # poll interval meaningful and lets `enabled` be re-read next tick.
-    if priority.active() or priority.idle_seconds() < QUIET_SECONDS:
+    if service.interactive_active() or service.idle_seconds() < QUIET_SECONDS:
         return None
 
     task = plan_next(now)

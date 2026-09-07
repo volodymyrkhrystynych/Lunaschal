@@ -12,7 +12,7 @@ import time
 import pytest
 from ulid import ULID
 
-from backend.ai import priority
+from backend.ai import service
 from backend.db.connection import get_db
 from backend.jobs import sync, triager
 
@@ -35,9 +35,8 @@ def clean_worker(client):
 
 
 @pytest.fixture(autouse=True)
-def quiet_priority():
-    priority._marks.clear()
-    priority._released_at = time.monotonic() - 3600
+def quiet_lane():
+    service.reset()
     yield
 
 
@@ -417,11 +416,8 @@ def test_triage_status_counts_the_backlog(client):
 def test_drain_defers_while_the_user_is_waiting(client):
     db = get_db()
     make_job(db)
-    token = priority.begin('chat')
-    try:
+    with service.slot(lane=service.GPU, label='chat'):
         assert triager.drain_once() is None
-    finally:
-        priority.end(token)
 
 
 def test_drain_does_nothing_when_disabled(client):

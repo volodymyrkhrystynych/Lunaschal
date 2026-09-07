@@ -25,6 +25,7 @@ import { TorrentSection } from './TorrentSection';
 import { KnowledgeSection } from './KnowledgeSection';
 import { LogsPanel } from './LogsPanel';
 import { CollapsibleSection } from './CollapsibleSection';
+import { InferenceSection } from './InferenceSection';
 import { shouldAutoExpand } from '../../lib/backup';
 
 export function Settings() {
@@ -56,6 +57,11 @@ export function Settings() {
 
   return (
     <div className="flex-1 overflow-y-auto p-4">
+      {/* Above the tabs, not inside a CollapsibleSection: this is app-wide
+          state every tab depends on, and it is the one control people open
+          Settings specifically to reach. */}
+      <InferenceSection />
+
       <div className="flex items-center gap-4 mb-6">
         <div className="flex gap-1">
           {(['general', 'tags', 'shortcuts', 'logs'] as const).map(tab => (

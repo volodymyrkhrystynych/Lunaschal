@@ -1474,6 +1474,9 @@ def seed_infra(db):
         'stt_backend = ?, tts_backend = ?, whisper_model = ?, stt_device = ?, '
         'voice_pipeline_enabled = 0, nudge_enabled = 0, briefing_enabled = 0, '
         'email_sync_enabled = 0, research_enabled = 0, jobs_paused = 1, '
+        # Never seed a paused demo: the switch lives at the top of Settings and
+        # an instance that boots with inference off looks broken, not idle.
+        'inference_paused = 0, '
         'weather_default_lat = ?, weather_default_lon = ?, weather_default_label = ?, '
         'backup_retention_days = 14, llm_thinking = 0, updated_at = ? WHERE id = 1',
         ('llama', 'http://localhost:8080', 'qwen36', 'faster-whisper', 'kokoro', 'base', 'cpu',
@@ -1482,6 +1485,29 @@ def seed_infra(db):
     # files_root is deliberately left empty so backend/routes/files.py falls
     # through to the FILES_ROOT env var test-env.sh exports — otherwise the
     # demo database would pin one machine's absolute path.
+
+    # The durable queue for background model work. A `done` row and an `error`
+    # row, never a `running` one — that is an in-flight state init_db()'s orphan
+    # reset rewrites on the next start (see the seeding rules in CLAUDE.md). A
+    # `pending` row is safe and worth having: it is what the Settings panel's
+    # "waiting" count is drawn from.
+    db.execute(
+        'INSERT INTO llm_jobs (id, kind, target_id, payload, status, attempts, '
+        'created_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (new_id(), 'journal.polish', new_id(), '{"raw_content": "a dictated note"}',
+         'done', 1, ts(2), ts(2), ts(2)),
+    )
+    db.execute(
+        'INSERT INTO llm_jobs (id, kind, target_id, payload, status, attempts, '
+        'error, created_at, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (new_id(), 'food.structure', new_id(), '{"text": "two eggs and toast"}',
+         'error', 1, 'model returned an empty response', ts(1), ts(1), ts(1)),
+    )
+    db.execute(
+        'INSERT INTO llm_jobs (id, kind, target_id, payload, status, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        (new_id(), 'calendar.classify', new_id(), '{}', 'pending', ts(0)),
+    )
 
     db.execute(
         'INSERT INTO mcp_servers (id, name, transport, command, args, env, created_at, updated_at) '

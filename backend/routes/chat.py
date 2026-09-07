@@ -9,8 +9,8 @@ from backend.chat import compaction as chat_compaction
 from backend.day_boundary import day_key_for
 from backend.geo import coord_pair
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
-from backend.ai import priority
-from backend.ai.background import run_bg
+from backend.ai import jobs
+from backend.ai.service import InferencePaused, PAUSED_MESSAGE
 from backend.ai.provider import chat_vision_enabled, is_ai_configured
 from backend.ai.chat_title import generate_conversation_title
 from backend.delegate import chat as delegate_chat
@@ -347,7 +347,7 @@ def _do_read_attachment(path: str) -> str:
     return read_chat_photo(p)
 
 
-def _read_attachment_bg(attachment_id: str, path: str) -> None:
+def _read_attachment_bg(attachment_id: str, path: str, *, now: bool = False) -> None:
     """Read the photo into text on the shared background worker.
 
     Fire-and-forget by design: a failure costs this turn the picture, never the
@@ -370,7 +370,10 @@ def _read_attachment_bg(attachment_id: str, path: str) -> None:
         except Exception as e:
             logger.warning('Failed to record photo description for %s: %s', attachment_id, e)
 
-    run_bg(_run)
+    if now:
+        _run()
+    else:
+        jobs.enqueue('chat.read_attachment', attachment_id, {'path': path})
 
 
 @bp.post('/conversations/<id>/attachments')
@@ -851,7 +854,7 @@ def resolve_proposal(message_id, proposal_id):
     # thread opens its own connection and would otherwise race the write.
     if action == 'accept' and proposal.get('kind') == 'food' and proposal.get('result', {}).get('id'):
         from backend.food.recipe_match import check_homemade_recipe_match
-        run_bg(lambda: check_homemade_recipe_match(proposal['result']['id']))
+        jobs.enqueue('food.recipe_match', proposal['result']['id'])
 
     return jsonify({'proposal': proposal})
 
@@ -947,11 +950,6 @@ def stream():
     # would leave the window between "user pressed Enter" and "first token"
     # looking idle to background work. Released in the generator's finally,
     # which also runs on GeneratorExit when the client disconnects mid-stream.
-    # One mark spans the whole turn, delegate sub-loop included — the user is
-    # waiting on all of it, the same way ideas.discuss holds one across both its
-    # blocking gather and its streamed answer.
-    token = priority.begin('chat.stream')
-
     def generate():
         try:
             # A caller-supplied systemPrompt means this is not the Chat tab —
@@ -962,12 +960,13 @@ def stream():
             ):
                 yield _format_event(kind, payload)
             yield 'data: [DONE]\n\n'
+        except InferencePaused:
+            # The SSE response is already 200 by the time this can happen, so a
+            # 503 is not available — the flag on the frame is what lets the
+            # client show the Resume banner instead of a red error.
+            yield f'data: {json.dumps({"error": PAUSED_MESSAGE, "inferencePaused": True})}\n\n'
         except Exception as e:
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
-        finally:
-            # Must not yield here — that would raise "generator ignored
-            # GeneratorExit". priority.end only touches a dict under a lock.
-            priority.end(token)
 
     return Response(
         stream_with_context(generate()),

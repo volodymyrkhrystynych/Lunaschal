@@ -265,9 +265,9 @@ def test_rescoring_re_ranks_the_feed_against_the_current_profile(client, profile
     assert client.get('/api/jobs/feed').get_json()[0]['matchScore'] > before
 
 
-def test_the_rationale_releases_its_priority_mark(client, profile, monkeypatch):
+def test_the_rationale_releases_its_lane_slot(client, profile, monkeypatch):
     """A leaked mark makes background work defer to a call that already ended."""
-    from backend.ai import priority
+    from backend.ai import service
 
     def boom(*a, **k):
         raise RuntimeError('model exploded')
@@ -278,7 +278,7 @@ def test_the_rationale_releases_its_priority_mark(client, profile, monkeypatch):
     with pytest.raises(RuntimeError):
         client.post(f'/api/jobs/{job_id}/rationale')
 
-    assert priority.active() is False
+    assert service.interactive_active() is False
 
 
 # --------------------------------------------------------------------------

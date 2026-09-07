@@ -12,7 +12,8 @@ import time
 from flask import Blueprint, Response, jsonify, request, stream_with_context
 from ulid import ULID
 
-from backend.ai.background import run_bg
+from backend.ai import jobs
+from backend.ai.service import InferencePaused, PAUSED_MESSAGE
 from backend.ai.provider import is_ai_configured
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.routes.paper import page_image_url
@@ -212,7 +213,8 @@ def delete_idea(idea_id):
     return jsonify({'success': True})
 
 
-def _enrich_idea_bg(idea_id: str, raw_content: str, *, polish: bool = True) -> None:
+def _enrich_idea_bg(idea_id: str, raw_content: str, *, polish: bool = True,
+                    now: bool = False) -> None:
     """Background counterpart to journal.py's `_polish_bg`, doing two passes on
     a freshly captured idea: fill in `content` from `raw_content`, then name it.
 
@@ -256,7 +258,12 @@ def _enrich_idea_bg(idea_id: str, raw_content: str, *, polish: bool = True) -> N
             (title, int(time.time()), idea_id),
         )
         db.commit()
-    run_bg(_run)
+
+    if now:
+        _run()
+    else:
+        jobs.enqueue('ideas.enrich', idea_id,
+                     {'raw_content': raw_content, 'polish': polish})
 
 
 # --- Ideas captured as audio -------------------------------------------------
@@ -412,13 +419,11 @@ def delete_sketch(sketch_id):
 def assess_idea_route(idea_id):
     """Judge the idea against the current repo snapshot. Synchronous: it is one
     grammar-constrained call, and the user is watching."""
-    from backend.ai import priority
     from backend.research.assess import run_assessment
 
     if not is_ai_configured():
         return jsonify({'error': 'AI provider not configured'}), 400
-    with priority.interactive('ideas.assess'):
-        result = run_assessment(idea_id)
+    result = run_assessment(idea_id)
     if result is None:
         return jsonify({'error': 'Not found'}), 404
     return jsonify(_assessment_payload(result)), 201
@@ -571,7 +576,6 @@ def discuss(idea_id):
     final answer streams. Tool events go out as they happen so the 30-90s of
     gathering is legible instead of a spinner.
     """
-    from backend.ai import priority
     from backend.ai.llm import chat_stream_deltas
     from backend.research import agent, discuss as ctx
     from backend.research.code import files_read as code_files
@@ -623,10 +627,6 @@ def discuss(idea_id):
         repo_name=(repo or {}).get('name', ''),
     )
 
-    # Acquired in the view, released in the generator's finally — see the same
-    # shape in backend/routes/chat.py.
-    token = priority.begin('ideas.discuss')
-
     def generate():
         answer = ''
         steps: list[dict] = []
@@ -671,10 +671,13 @@ def discuss(idea_id):
             get_db().commit()
             yield f'data: {json.dumps({"done": True, "messageId": message_id, "sources": sources})}\n\n'
             yield 'data: [DONE]\n\n'
+        except InferencePaused:
+            # The SSE response is already 200 by the time this can happen, so a
+            # 503 is not available — the flag on the frame is what lets the
+            # client show the Resume banner instead of a red error.
+            yield f'data: {json.dumps({"error": PAUSED_MESSAGE, "inferencePaused": True})}\n\n'
         except Exception as e:
             yield f'data: {json.dumps({"error": str(e)})}\n\n'
-        finally:
-            priority.end(token)
 
     return Response(
         stream_with_context(generate()),
@@ -703,7 +706,6 @@ def get_plan(plan_id):
 def create_plan(idea_id):
     """Generate a spec for a coding agent. Blocking — it is one long call and
     the user pressed the button."""
-    from backend.ai import priority
     from backend.research import assess, discuss as ctx, plan as plan_mod
     from backend.research import plan_files
     from backend.research.idea_text import display_title
@@ -741,8 +743,7 @@ def create_plan(idea_id):
         )
     prompt += '\n\n# Your task\n\nWrite the implementation spec for this idea.'
 
-    with priority.interactive('ideas.plan'):
-        spec = plan_mod.generate_spec(prompt, plan_mod.build_schema(len(candidates)))
+    spec = plan_mod.generate_spec(prompt, plan_mod.build_schema(len(candidates)))
     if spec is None:
         return jsonify({'error': 'The model returned no usable plan'}), 502
 

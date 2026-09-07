@@ -2,7 +2,7 @@
 recurring series into concrete occurrences across the range/date/week reads."""
 import json
 
-from backend.ai import background as ai_background
+from backend.ai import jobs as llm_jobs
 
 
 def create(client, **body):
@@ -642,7 +642,8 @@ def stub_voice_edit(monkeypatch, edit):
     does with what comes back."""
     from backend.ai import calendar as calendar_ai
     monkeypatch.setattr(calendar_ai, 'parse_event_voice_edit', lambda current, text: edit)
-    monkeypatch.setattr('backend.routes.calendar.run_bg', lambda fn: None)
+    monkeypatch.setattr(llm_jobs, 'enqueue',
+                        lambda *a, **k: None)
 
 
 def test_transcribe_requires_text(client):
@@ -709,7 +710,9 @@ def test_transcribe_queues_reclassification_only_when_the_description_changed(cl
     queued = []
     from backend.ai import calendar as calendar_ai
     monkeypatch.setattr(calendar_ai, 'parse_event_voice_edit', lambda c, t: {'time': '11:00'})
-    monkeypatch.setattr('backend.routes.calendar.run_bg', queued.append)
+    monkeypatch.setattr(llm_jobs, 'enqueue',
+                        lambda kind, target_id=None, payload=None, **k:
+                            queued.append((kind, target_id)))
 
     transcribe(client, id, 'move it to eleven')
     # A retime says nothing new about what the event was, so the categories

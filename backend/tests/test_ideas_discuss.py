@@ -187,9 +187,9 @@ def test_the_question_survives_a_failure_mid_answer(client, monkeypatch):
     assert [r['role'] for r in rows] == ['user']
 
 
-def test_discuss_releases_the_priority_mark(client, monkeypatch):
-    from backend.ai import priority
-    priority.reset()
+def test_discuss_releases_its_lane_slot(client, monkeypatch):
+    from backend.ai import service
+    service.reset()
     _stub_agent(monkeypatch)
     _stub_stream(monkeypatch)
     idea_id = _idea(client)
@@ -199,7 +199,7 @@ def test_discuss_releases_the_priority_mark(client, monkeypatch):
 
     _sse(client.post(f'/api/ideas/{idea_id}/discuss',
                      json={'conversationId': conversation_id, 'message': 'q'}))
-    assert not priority.active()
+    assert not service.interactive_active()
 
 
 def test_discuss_validates_its_input(client):

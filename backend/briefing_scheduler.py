@@ -54,6 +54,17 @@ def run_nightly() -> None:
     loss than no plan for the day. So the pass is wrapped separately from the
     call it exists to improve.
     """
+    from backend.ai import service
+
+    # The largest single consumer of the card in the app, and until now the only
+    # scheduler that asked nobody's permission for it. P2 means a chat message
+    # takes the lane back mid-pass, and a paused GPU skips the night entirely —
+    # the sources it reads are still there tomorrow.
+    with service.background():
+        _run_nightly()
+
+
+def _run_nightly() -> None:
     import time as _time
 
     from backend.lifewiki.job import DEFAULT_BUDGET_SECONDS, run_life_wiki_pass

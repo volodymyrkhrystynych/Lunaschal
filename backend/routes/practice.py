@@ -3,7 +3,6 @@ import time
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 
-from backend.ai import priority
 from backend.ai.practice import grade_recall
 from backend.db.connection import get_db, mapping_to_dict, row_to_dict
 from backend.practice.explanations import explanation_for
@@ -154,14 +153,13 @@ def submit_recall():
     submitted = body.get('submitted')
     submitted = submitted if isinstance(submitted, str) else ''
 
-    with priority.interactive('practice.recall'):
-        graded = grade_recall(
-            title=snippet['title'],
-            task=snippet['prompt'],
-            language=snippet['language'],
-            reference=snippet['code'],
-            submitted=submitted,
-        )
+    graded = grade_recall(
+        title=snippet['title'],
+        task=snippet['prompt'],
+        language=snippet['language'],
+        reference=snippet['code'],
+        submitted=submitted,
+    )
 
     passed = 1 if graded['passed'] else 0
     db = get_db()

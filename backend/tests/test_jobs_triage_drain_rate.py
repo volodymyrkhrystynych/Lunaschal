@@ -17,12 +17,12 @@ from backend.jobs import scheduler, triager
 
 
 @pytest.fixture(autouse=True)
-def _quiet_priority():
+def _quiet_lane():
     """No interactive call in flight unless a test says otherwise."""
-    from backend.ai import priority
-    priority.reset()
+    from backend.ai import service
+    service.reset()
     yield
-    priority.reset()
+    service.reset()
 
 
 def _drain(sequence, **kwargs):
@@ -88,15 +88,12 @@ def test_a_wedged_generation_releases_the_tick():
 
 def test_an_interactive_call_stands_the_drain_down_between_generations(client):
     """A chat message still parks the drain, now checked per generation."""
-    from backend.ai import priority
+    from backend.ai import service
 
     client.post('/api/jobs', json={'title': 'Engineer', 'company': 'Acme',
                                    'description': 'python'})
-    token = priority.begin('chat.stream')
-    try:
+    with service.slot(lane=service.GPU, label='chat.stream'):
         assert triager.drain_while_idle() == {'submitted': 0, 'stopped': 'idle'}
-    finally:
-        priority.end(token)
 
 
 def test_the_drain_stops_mid_loop_when_the_user_comes_back():
@@ -153,7 +150,7 @@ def test_a_real_drain_walks_the_whole_backlog_one_generation_at_a_time(client):
     lock *before* handing the work to the executor, so `wait_idle` after a
     successful `drain_once` genuinely waits for that generation rather than
     returning while the worker is still starting. If it did not, the loop would
-    stack every posting onto the executor and no priority check would happen
+    stack every posting onto the executor and no lane check would happen
     between them.
     """
     from backend.db.connection import get_db

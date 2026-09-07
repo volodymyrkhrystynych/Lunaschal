@@ -1,6 +1,6 @@
 """Tests for backend/email/sync.py::sync_account. Every gmail_client HTTP
 call is monkeypatched — no real network — matching test_newspapers.py's
-style. run_bg is monkeypatched to run synchronously so classification side
+style. Queued jobs run synchronously here so classification side
 effects (stubbed out here) are observable in the same test."""
 import time
 
@@ -19,11 +19,10 @@ def configured_oauth_client(client):
 
 
 @pytest.fixture(autouse=True)
-def run_bg_sync(monkeypatch):
-    """run_bg normally fires classify_email on a background thread — run it
-    inline instead so tests can assert on its effects deterministically, and
-    stub classify_email itself out (it's covered by test_email_ai.py)."""
-    monkeypatch.setattr('backend.email.sync.run_bg', lambda fn: fn())
+def run_bg_sync(monkeypatch, run_jobs_sync):
+    """Classification is normally a queued job — run it inline instead so
+    tests can assert on its effects deterministically, and stub classify_email
+    itself out (it's covered by test_email_ai.py)."""
     classified = []
     monkeypatch.setattr(
         'backend.ai.email.classify_email', lambda eid: classified.append(eid)

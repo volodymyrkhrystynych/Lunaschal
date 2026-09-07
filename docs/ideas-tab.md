@@ -227,30 +227,31 @@ which are still open) are stitched in from real rows rather than paraphrased.
 Open questions are upserted by a normalized `question_key`, so a re-run never resurrects one the
 user already answered — and answered ones are fed back into the next prompt as settled context.
 
-## The priority gate
+## The model service
 
-`backend/ai/priority.py`. llama-server serves two 24K slots off one set of CPU threads holding the
-routed expert tensors. A second concurrent generation does not _block_ an interactive chat message
-— it gets the other slot — but it roughly halves its token rate, because both contend for the same
-memory-bound expert GEMVs. So this is a **throughput gate, not a mutex**: background work parks
-while a human is waiting and resumes shortly after.
+`backend/ai/service.py`, and it replaced an advisory gate (`priority.py`) that only some callers
+consulted. llama-server serves two slots off one set of CPU threads holding the routed expert
+tensors, so a second concurrent generation does not _block_ an interactive chat message — but it
+roughly halves its token rate. Research runs at **P2**, and a P2 is admitted only when no P1 is
+running or waiting.
 
-- **Nothing preempts a generation already in flight.** That is why `chat_with_tools` gained an
-  optional `max_tokens` and the research loop passes a small ceiling: **turn length is the
-  granularity at which background work can yield.** Uncapped, a runaway turn could overlap a chat
-  message for up to the 1800 s client timeout.
-- **The mark is acquired in the view and released in the SSE generator's `finally`.** Acquiring
-  inside the generator is wrong — the body doesn't run until Werkzeug pulls the first item, so the
-  window between "user pressed Enter" and "first token" would look idle. Releasing outside it is
-  wrong too — on client disconnect Werkzeug drops its reference, CPython closes the generator, and
-  only a `finally` inside it runs. (That `finally` must not `yield`, or it raises
-  `RuntimeError: generator ignored GeneratorExit`.)
-- **`MARK_TTL` is the backstop.** `GeneratorExit` is reliable but not guaranteed _prompt_. A leaked
-  mark expires, and `wait_for_idle` returns False on timeout with the caller proceeding anyway. The
-  worst case is deferral, never starvation.
-- **`run_bg` marks its work interactive** in one place, because journal polish and friends were
-  triggered by a user action seconds earlier.
-- **Long agent runs get their own executor**, never `run_bg`. That queue is one FIFO worker shared
+- **A generation in flight _is_ preempted now.** The service sets the call's cancel event, the
+  caller closes its HTTP response, and llama-server answers the client disconnect by cancelling the
+  task and freeing the slot. So the GPU comes back within a token rather than at the end of the
+  turn. `chat_with_tools`'s `max_tokens` ceiling still matters, but for a different reason: a
+  preempted turn is redone from the start, so turn length is now the size of what gets thrown away.
+- **This is why every request is a stream**, blocking ones included. A blocking `create()` sits
+  inside the SDK with no way for another thread to interrupt it — there would be nothing to cancel.
+- **`make_checkpoint` no longer waits.** Yielding to a human happens at `slot()`, against the real
+  state of the lane, rather than by polling a flag. What remains in the checkpoint is cancellation,
+  which is the part only the run knows.
+- **The slot is released in the SSE generator's `finally`**, which runs on the `GeneratorExit` that
+  a client disconnect raises. (That `finally` must not `yield`, or it raises
+  `RuntimeError: generator ignored GeneratorExit`.) `ENTRY_TTL` is the backstop: a leaked slot
+  stops counting against capacity, so the worst case is brief over-subscription, never starvation.
+- **A repeatedly preempted job escalates.** `llm_jobs.cancels` counts preemptions and past
+  `MAX_CANCELS` the job runs non-preemptibly, so a busy day defers a pass rather than starving it.
+- **Long agent runs get their own executor**, never the shared `llm_jobs` queue. That is one FIFO worker shared
   by journal polish, metadata, attachment transcription, food structuring, workout parsing and
   attempt grading; a multi-minute pass there would head-of-line block seven user-visible flows.
 

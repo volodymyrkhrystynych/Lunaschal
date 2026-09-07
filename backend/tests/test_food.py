@@ -37,9 +37,8 @@ def food_root(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def sync_bg(monkeypatch):
+def sync_bg(run_jobs_sync):
     """Run the background structuring inline so create->structure is deterministic."""
-    monkeypatch.setattr(food, 'run_bg', lambda fn: fn())
 
 
 def _create(client, text='', media=None, **fields):

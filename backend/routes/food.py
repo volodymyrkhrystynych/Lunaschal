@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
-from backend.ai.background import run_bg
+from backend.ai import jobs
 from backend.ai.food import parse_food_entry
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.food import storage
@@ -334,9 +334,9 @@ def create_entry():
     # structure but a dish was given directly, still run the match check on
     # its own — it only needs dish/place/notes, not the raw note.
     if text:
-        run_bg(lambda: structure_food_entry(entry_id, text))
+        jobs.enqueue('food.structure', entry_id, {'text': text})
     elif dish:
-        run_bg(lambda: check_homemade_recipe_match(entry_id))
+        jobs.enqueue('food.recipe_match', entry_id)
 
     row = db.execute('SELECT * FROM food_entries WHERE id=?', (entry_id,)).fetchone()
     return jsonify(_entry_dict(db, row)), 201

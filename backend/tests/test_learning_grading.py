@@ -1,6 +1,6 @@
 """Grading pipeline: claim caching, embedding gate, rating mapping, voice path.
 
-Grading runs on the background worker now, so these drive it through
+Grading runs on the job queue now, so these drive it through
 POST /attempts with run_bg made synchronous, then read the graded attempt back.
 """
 import json
@@ -8,7 +8,7 @@ import struct
 
 import pytest
 
-from backend.ai import background, learning_generation, learning_grading
+from backend.ai import jobs as llm_jobs, learning_generation, learning_grading
 from backend.learning import dedup
 from backend.routes import learning as learning_routes
 
@@ -33,9 +33,8 @@ def _grade(client, card_id, answer, **extra):
 
 
 @pytest.fixture(autouse=True)
-def inline_bg(monkeypatch):
+def inline_bg(run_jobs_sync):
     """Run background grading inline so tests can assert on the result."""
-    monkeypatch.setattr(background, 'run_bg', lambda fn: fn())
 
 
 @pytest.fixture
@@ -145,7 +144,7 @@ def test_grade_after_rating_is_a_noop(client, stub_llm, monkeypatch):
     from backend.learning.attempts import grade_attempt
 
     cid = _make_card(client)
-    monkeypatch.setattr(background, 'run_bg', lambda fn: None)  # defer the grade
+    monkeypatch.setattr(llm_jobs, 'enqueue', lambda *a, **k: None)  # defer the grade
     client.post('/api/learning/attempts',
                 json={'cardId': cid, 'mode': 'answered', 'answer': 'x'})
     attempt_id = get_db().execute(

@@ -1,7 +1,7 @@
 """Importing and refreshing a registered repository.
 
 Both jobs run on the research worker (backend/research/worker.py), never on
-`run_bg`: a first clone of a large repo is minutes of network, and run_bg's
+the shared llm_jobs queue: a first clone of a large repo is minutes of network, and that queue's
 single FIFO queue is shared with journal polish, attachment transcription and
 five other flows the user triggered seconds earlier.
 

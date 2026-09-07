@@ -320,8 +320,8 @@ def create_break(conversation_id: str, *, carry_context: bool = True) -> dict:
                (now, conversation_id))
     db.commit()
     if status == 'pending':
-        from backend.ai.background import run_bg
-        run_bg(lambda: run_pending(compaction_id))
+        from backend.ai import jobs
+        jobs.enqueue('chat.compaction', compaction_id)
     return {'id': break_id, 'compactionId': compaction_id, 'status': status}
 
 
@@ -397,6 +397,6 @@ def recover_pending() -> None:
                     (row['break_message_id'],),
                 )
     db.commit()
-    from backend.ai.background import run_bg
+    from backend.ai import jobs
     for row in rows:
-        run_bg(lambda compaction_id=row['id']: run_pending(compaction_id))
+        jobs.enqueue('chat.compaction', row['id'])

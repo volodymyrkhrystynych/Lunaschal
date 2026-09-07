@@ -202,6 +202,30 @@ def test_unconfigured_ai_still_finishes(env, monkeypatch):
     m = _get(env['client'], meeting_id)
     assert m['status'] == 'done'
     assert m['summary'] is None
+    # The transcript is safe either way, but the phase must still say the
+    # summary never happened — `phase='done'` would make this row identical to
+    # a meeting that was summarised, erasing the only reason to offer a retry.
+    assert m['phase'] == 'summarized_pending'
+
+
+def test_a_paused_gpu_leaves_the_meeting_asking_to_be_summarised(env, monkeypatch):
+    """Transcription is CPU work and completes; only the summary is deferred."""
+    from backend.ai import service
+
+    def _paused(text):
+        raise service.InferencePaused('GPU inference is paused')
+
+    meeting_id = _insert_meeting()
+    _write_track(storage.mic_path(meeting_id))
+    monkeypatch.setattr('backend.ai.meetings.summarize_meeting', _paused)
+
+    pipeline._run(meeting_id)
+
+    m = _get(env['client'], meeting_id)
+    assert m['status'] == 'done'          # not an error — nothing broke
+    assert m['summary'] is None
+    assert m['phase'] == 'summarized_pending'
+    assert m['transcriptText']            # the expensive half survived
 
 
 def test_diarize_returns_none_without_token(client, monkeypatch, tmp_path):

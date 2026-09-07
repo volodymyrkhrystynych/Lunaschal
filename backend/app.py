@@ -65,6 +65,23 @@ def create_app():
     from backend.db.connection import init_db
     init_db()
 
+    from backend.ai.service import InferencePaused, PAUSED_MESSAGE
+
+    @app.errorhandler(InferencePaused)
+    def _inference_paused(e):
+        """One place, rather than a try/except in forty routes.
+
+        503 and not 500: the model is deliberately switched off, which is a
+        temporary condition the caller can fix, and the machine-readable flag is
+        what lets the UI offer Resume instead of showing a stack trace. Nothing
+        the user typed is lost on this path — the entry, transcript, idea or
+        message is written before the model is ever consulted.
+        """
+        return jsonify({
+            'error': PAUSED_MESSAGE,
+            'inferencePaused': True,
+        }), 503
+
     from backend.auth import NETWORK_MODE, COOKIE_NAME, is_localhost, decode_token
     from backend.routes import journal, calendar, learning, settings, chat, files, writing, stt, tasks, curated_tags, shortcuts, transcriptions, cookbook, food, fanfic, newspapers, meetings, notebook, paper, lifestyle, ideas, practice, memory, email, notes, weather, jobs, backup, logs, repos, life_wiki, piano, torrent, knowledge, study
     from backend.routes.settings import _get_settings, _set_sleep_inhibitor, measure_base_gpu_vram
@@ -114,7 +131,15 @@ def create_app():
     # them keeps its threads for the life of the process. A process that builds
     # many apps — the test suite builds one per test — piles up two threads per
     # app until thread creation fails and Python aborts, so the suite opts out.
+    # Registers every llm_jobs handler. Imported unconditionally, outside the
+    # scheduler guard: the test suite skips the daemon loops but still enqueues
+    # jobs, and a kind with no handler is recorded as a permanent error rather
+    # than retried — so an unregistered registry fails quietly and for good.
+    from backend.ai import job_handlers  # noqa: F401
+
     if not os.environ.get('LUNASCHAL_NO_SCHEDULERS'):
+        from backend.ai.jobs import start_job_worker
+        start_job_worker()
         from backend.chat_title_scheduler import start_title_scheduler
         start_title_scheduler()
         from backend.notebook_diary_scheduler import start_notebook_diary_scheduler

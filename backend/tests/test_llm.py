@@ -6,9 +6,14 @@ schema-less calls and thinking models that leak a <think> block or a ```json
 fence, either of which makes a bare json.loads blow up with an opaque
 "Expecting value" error.
 """
+import json
+
 import pytest
 
 from backend.ai import llm
+from backend.tests.streamfakes import (
+    FakeClient, chunk, text_stream, tool_call_delta,
+)
 from backend.ai.llm import (
     _parse_json_response, _request_kwargs, EmptyCompletion,
 )
@@ -94,24 +99,22 @@ def test_no_request_carries_a_context_window():
         assert 'num_ctx' not in kwargs.get('extra_body', {})
 
 
-class _FakeCompletions:
-    """Minimal stand-in for client.chat.completions, capturing the call."""
-
-    def __init__(self, captured, content='{"ok": true}'):
-        self.captured = captured
-        self.content = content
-
-    def create(self, **kwargs):
-        self.captured.clear()
-        self.captured.update(kwargs)
-        message = type('M', (), {'content': self.content})()
-        choice = type('C', (), {'message': message})()
-        return type('R', (), {'choices': [choice]})()
-
-
 def _stub_client(monkeypatch, captured, content='{"ok": true}'):
-    completions = _FakeCompletions(captured, content)
-    client = type('Client', (), {'chat': type('Chat', (), {'completions': completions})()})()
+    """Point llm at a fake that streams `content` back as one delta.
+
+    Every completion is issued with stream=True now — that is what lets a
+    background call be abandoned mid-generation — so the double streams too.
+    `captured` is filled with the kwargs of the most recent request.
+    """
+    client = FakeClient(text_stream(content))
+    real_create = client.completions.create
+
+    def capture(**kwargs):
+        captured.clear()
+        captured.update(kwargs)
+        return real_create(**kwargs)
+
+    client.completions.create = capture
     monkeypatch.setattr(llm, 'get_llama_client', lambda *a, **k: client)
     monkeypatch.setattr(llm, 'get_provider_config', lambda: {'llama_model': 'qwen36'})
     monkeypatch.setattr(llm, 'get_model', lambda *a, **k: 'qwen36')
@@ -172,3 +175,107 @@ def test_chat_messages_applies_default_generation_opts(client, monkeypatch):
     assert llm.chat_text('hello') == 'hello there'
     assert captured['max_tokens'] == 1234
     assert captured['extra_body']['chat_template_kwargs']['enable_thinking'] is True
+
+
+# --- Reassembling a tool turn from stream deltas ---
+#
+# The one genuinely fiddly part of issuing every request as a stream. A
+# non-streamed response handed us `message.tool_calls` whole; now the name
+# arrives in one chunk and the arguments as a run of JSON fragments, and the
+# tool loop (backend/research/agent.py) still expects `tc.function.arguments`
+# to be a complete JSON string it can json.loads.
+
+def _tool_stub(monkeypatch, chunks):
+    client = FakeClient(chunks)
+    monkeypatch.setattr(llm, 'get_llama_client', lambda *a, **k: client)
+    monkeypatch.setattr(llm, 'get_provider_config', lambda: {'llama_model': 'qwen36'})
+    monkeypatch.setattr(llm, 'get_model', lambda *a, **k: 'qwen36')
+    return client
+
+
+def test_tool_call_arguments_are_reassembled_across_chunks(monkeypatch):
+    _tool_stub(monkeypatch, [
+        chunk(tool_calls=[tool_call_delta(0, id='call_1', name='web_search')]),
+        chunk(tool_calls=[tool_call_delta(0, arguments='{"query": ')]),
+        chunk(tool_calls=[tool_call_delta(0, arguments='"otters"}')]),
+        chunk(finish_reason='tool_calls'),
+    ])
+
+    message, finish_reason = llm.chat_tool_turn(
+        [{'role': 'user', 'content': 'hi'}], tools=[{'type': 'function'}])
+
+    assert finish_reason == 'tool_calls'
+    assert len(message.tool_calls) == 1
+    call = message.tool_calls[0]
+    assert call.id == 'call_1'
+    assert call.function.name == 'web_search'
+    assert json.loads(call.function.arguments) == {'query': 'otters'}
+
+
+def test_two_tool_calls_stay_separate_and_keep_their_order(monkeypatch):
+    """Keyed by the delta's index — interleaved fragments must not merge."""
+    _tool_stub(monkeypatch, [
+        chunk(tool_calls=[tool_call_delta(0, id='a', name='read_file')]),
+        chunk(tool_calls=[tool_call_delta(1, id='b', name='list_dir')]),
+        chunk(tool_calls=[tool_call_delta(0, arguments='{"path": "x"}')]),
+        chunk(tool_calls=[tool_call_delta(1, arguments='{"path": "y"}')]),
+    ])
+
+    message, _ = llm.chat_tool_turn([{'role': 'user', 'content': 'hi'}],
+                                    tools=[{'type': 'function'}])
+
+    assert [c.function.name for c in message.tool_calls] == ['read_file', 'list_dir']
+    assert [json.loads(c.function.arguments)['path'] for c in message.tool_calls] == ['x', 'y']
+
+
+def test_a_turn_with_no_tool_calls_reports_none_not_an_empty_list(monkeypatch):
+    """The tool loop tests `if not tool_calls`, and appends a plain assistant
+    message when there are none — an empty list would work, but None is what a
+    real response carries and what serialize_tool_calls is never handed."""
+    _tool_stub(monkeypatch, [chunk('I am done.'), chunk(finish_reason='stop')])
+
+    message, finish_reason = llm.chat_tool_turn(
+        [{'role': 'user', 'content': 'hi'}], tools=[{'type': 'function'}])
+
+    assert message.tool_calls is None
+    assert message.content == 'I am done.'
+    assert finish_reason == 'stop'
+
+
+def test_a_truncated_tool_turn_is_distinguishable_from_a_finished_one(monkeypatch):
+    """A turn cut off at the ceiling has no tool_calls either — reading that as
+    'the model is finished' is how a run cut off mid-sentence reported success."""
+    _tool_stub(monkeypatch, [chunk('half a th'), chunk(finish_reason='length')])
+
+    _message, finish_reason = llm.chat_tool_turn(
+        [{'role': 'user', 'content': 'hi'}], tools=[{'type': 'function'}])
+
+    assert finish_reason == 'length'
+
+
+def test_a_tool_call_fragment_with_no_name_is_dropped(monkeypatch):
+    """Arguments for a call whose name never arrived cannot be dispatched, and
+    a nameless entry would crash serialize_tool_calls rather than be ignored."""
+    _tool_stub(monkeypatch, [
+        chunk(tool_calls=[tool_call_delta(0, arguments='{"a": 1}')]),
+    ])
+
+    message, _ = llm.chat_tool_turn([{'role': 'user', 'content': 'hi'}],
+                                    tools=[{'type': 'function'}])
+
+    assert message.tool_calls is None
+
+
+def test_the_blocking_helpers_still_ask_for_a_stream(monkeypatch):
+    """Not cosmetic: a blocking create() cannot be abandoned from another
+    thread, so preemption would be impossible without this."""
+    client = _tool_stub(monkeypatch, [chunk('{"ok": true}')])
+    llm.chat_json('hi')
+    assert client.calls[0]['stream'] is True
+
+
+def test_the_stream_is_closed_after_a_blocking_call(monkeypatch):
+    """Closing is what frees the llama-server slot."""
+    client = _tool_stub(monkeypatch, [chunk('{"ok": true}')])
+    llm.chat_json('hi')
+    assert client.completions.streams[0].closed is True

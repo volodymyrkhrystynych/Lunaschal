@@ -15,6 +15,9 @@ import type {
   ServerLogResponse,
   ServerLogUnit,
 } from '../lib/serverLogs';
+// And again for the model service's own log: the event shapes live beside the
+// formatting that reads them, in src/lib/inferenceActivity.ts.
+import type { InferenceActivity } from '../lib/inferenceActivity';
 // Same reasoning as SleepDay above: the torrent shapes live next to the
 // formatting and sorting logic that consumes them, and the API client
 // re-exports them.
@@ -847,6 +850,24 @@ export interface GpuVram {
   /** Live total, and the share held by llama-server. */
   usedMb?: number | null;
   llmMb?: number;
+}
+
+/** The GPU inference switch — see backend/ai/service.py. */
+export interface InferenceState {
+  /** True while the GPU lane is off and the chat model is unloaded. */
+  paused: boolean;
+  /** Unix seconds, or null when running. */
+  pausedSince: number | null;
+  /** The router alias the switch unloads (the only one on the card). */
+  model: string;
+  /** What the router says about it: unloaded | loading | loaded | ... */
+  modelStatus: string | null;
+  /** Background jobs waiting in llm_jobs. */
+  queueDepth: number;
+  lanes: Record<string, unknown>;
+  /** Only on a pause response: whether the router took the unload. */
+  unloaded?: boolean;
+  unloadError?: string | null;
 }
 
 /** Health of the nightly backup job — see backend/routes/backup.py. */
@@ -2653,6 +2674,17 @@ export const api = {
       post<{ networkCode: string }>('/api/settings/regenerate-code'),
     llamaModels: () => get<LlamaModel[]>('/api/settings/llama-models'),
     gpuVram: () => get<GpuVram>('/api/settings/gpu-vram'),
+    inference: () => get<InferenceState>('/api/settings/inference'),
+    // Not part of updateAI: pausing has a side effect on the router, so it is
+    // its own endpoint rather than a settings field.
+    pauseInference: () => post<InferenceState>('/api/settings/inference/pause'),
+    resumeInference: () =>
+      post<InferenceState>('/api/settings/inference/resume'),
+    // What the service has been doing — the broker's ring buffer plus the
+    // durable llm_jobs rows. Read on demand (Settings → Logs), never polled
+    // from the always-visible pause panel.
+    inferenceActivity: (limit = 100) =>
+      get<InferenceActivity>(`/api/settings/inference/activity?limit=${limit}`),
   },
 
   journal: {

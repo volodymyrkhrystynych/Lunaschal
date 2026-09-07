@@ -462,19 +462,19 @@ def test_a_mid_stream_failure_reaches_the_browser(client, monkeypatch):
     assert events[-1]['error'] == 'llama-server died'
 
 
-def test_the_priority_mark_is_released_after_the_turn(client, monkeypatch):
+def test_the_lane_slot_is_released_after_the_turn(client, monkeypatch):
     """Held across the delegate sub-loop *and* the streamed answer, then
     released — a leaked mark defers background work for a whole MARK_TTL."""
-    from backend.ai import priority
+    from backend.ai import service
 
-    priority.reset()
+    service.reset()
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.delegate_chat.stream_reply',
         lambda messages, system_prompt, tools_enabled=True, **_kw: iter([('content', 'hi')]),
     )
     _post(client, {'messages': []})
-    assert priority.active() is False
+    assert service.interactive_active() is False
 
 
 def _new_conversation(db):

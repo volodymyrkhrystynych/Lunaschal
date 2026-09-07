@@ -172,27 +172,60 @@ def generate_journal_metadata(content: str, context: str | None = None) -> dict:
     return {}
 
 
+def _is_paused(e: Exception) -> bool:
+    """Whether this failure was the GPU switch rather than a broken model."""
+    from backend.ai.service import InferencePaused
+    return isinstance(e, InferencePaused)
+
+
+class ClassificationUnavailable(Exception):
+    """The model could not be asked, so the answer is unknown — not "no".
+
+    This distinction is the whole point. `classify_entry_for_tag` used to
+    swallow every failure and return False, which meant an unconfigured, dead
+    or paused model produced a *confidently empty* tag: the scan completed,
+    reported progress, matched nothing, and left no trace of why. Raising
+    instead lets the caller stop and keep its place, so the entries it has not
+    judged are still waiting rather than silently marked as not matching.
+    """
+
+
 def classify_entry_for_tag(content: str, tag_name: str) -> bool:
-    """Returns True if the entry relates to tag_name."""
+    """True if the entry relates to tag_name.
+
+    Raises `ClassificationUnavailable` when the model could not be reached, so
+    a caller can tell "no" apart from "no answer".
+    """
     if not content.strip():
         return False
+    if not is_ai_configured():
+        raise ClassificationUnavailable('AI is not configured')
+    system = "You are a strict binary classifier. Reply ONLY with 'yes' or 'no', nothing else."
+    user = f"Does this journal entry relate to the topic \'{tag_name}\'?\n\n{content}"
     try:
-        if not is_ai_configured():
-            return False
-        system = "You are a strict binary classifier. Reply ONLY with 'yes' or 'no', nothing else."
-        user = f"Does this journal entry relate to the topic '{tag_name}'?\n\n{content}"
         result = chat_text(user, system=system)
-        return result.lower().strip().startswith('yes')
     except Exception as e:
-        print(f'Tag classification failed for "{tag_name}": {e}')
-
-    return False
+        raise ClassificationUnavailable(str(e) or 'Classification failed') from e
+    return result.lower().strip().startswith('yes')
 
 
 class PolishUnavailable(Exception):
     """The polish could not be produced — no AI configured, or the call to it
     failed. Distinct from "the model returned the text unchanged", which is a
-    successful polish that happened to need no edits."""
+    successful polish that happened to need no edits.
+
+    `paused` marks the specific case where the GPU was deliberately switched
+    off. A paused model is deliberately *not* a separate exception type here:
+    every caller that degrades to raw text (the voice-draft pipeline, the
+    background polish) must keep degrading, or a clip recorded during a pause
+    would fail instead of becoming an entry. The flag exists so the one caller
+    with a user in front of it — the manual Polish button — can say "paused"
+    rather than "unavailable", and offer Resume.
+    """
+
+    def __init__(self, message, *, paused: bool = False):
+        super().__init__(message)
+        self.paused = paused
 
 
 # Built on _SYSTEM's formatting rules, with one instruction block spliced in
@@ -281,7 +314,7 @@ def merge_voice_draft(candidates: list[dict], context: str | None = None) -> str
         result = chat_text(prompt, system=_MERGE_SYSTEM)
     except Exception as e:
         logger.error('Voice draft merge failed: %s', e)
-        raise PolishUnavailable(str(e)) from e
+        raise PolishUnavailable(str(e), paused=_is_paused(e)) from e
     cleaned = _clean_polish_output(result)
     if not cleaned:
         raise PolishUnavailable('model returned an empty merge')
@@ -317,7 +350,7 @@ def polish_journal_entry(raw_text: str, context: str | None = None) -> str:
         result = chat_text(prompt, system=_SYSTEM)
     except Exception as e:
         logger.error('Journal polish failed: %s', e)
-        raise PolishUnavailable(str(e)) from e
+        raise PolishUnavailable(str(e), paused=_is_paused(e)) from e
     cleaned = _clean_polish_output(result)
     if not cleaned:
         raise PolishUnavailable('model returned an empty polish')

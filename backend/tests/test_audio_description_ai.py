@@ -5,45 +5,16 @@ the caption path by monkeypatching it directly instead."""
 import pytest
 
 from backend.ai import audio_description as audio_ai
+from backend.ai import llm as llm_mod
+from backend.tests.streamfakes import FakeClient, text_stream
 
 
-class _FakeMessage:
-    def __init__(self, content):
-        self.content = content
-
-
-class _FakeChoice:
-    def __init__(self, content):
-        self.message = _FakeMessage(content)
-
-
-class _FakeResponse:
-    def __init__(self, content):
-        self.choices = [_FakeChoice(content)]
-
-
-class _FakeCompletions:
+# `_describe_one` goes through backend/ai/llm.py's one request path now, so the
+# client is stubbed there and it streams — see streamfakes.
+class _FakeClient(FakeClient):
     def __init__(self, content=None, error=None):
-        self._content = content
-        self._error = error
-        self.calls = []
-
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        if self._error:
-            raise self._error
-        return _FakeResponse(self._content)
-
-
-class _FakeChat:
-    def __init__(self, completions):
-        self.completions = completions
-
-
-class _FakeClient:
-    def __init__(self, content=None, error=None):
-        self.completions = _FakeCompletions(content, error)
-        self.chat = _FakeChat(self.completions)
+        super().__init__(text_stream(content) if content is not None else [],
+                         error=error)
 
 
 @pytest.fixture(autouse=True)
@@ -103,7 +74,7 @@ def test_describe_audio_returns_the_model_text_and_sends_the_hint(monkeypatch, t
         audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     client = _FakeClient(content='  A dog barks twice.  ')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     p = tmp_path / 'clip.wav'
     p.write_bytes(b'\x00')
@@ -132,7 +103,7 @@ def test_describe_audio_turns_thinking_off(monkeypatch, tmp_path):
         audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     client = _FakeClient(content='A dog barks twice.')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     p = tmp_path / 'clip.wav'
     p.write_bytes(b'\x00')
@@ -147,7 +118,7 @@ def test_describe_audio_wraps_client_errors(monkeypatch, tmp_path):
         audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     client = _FakeClient(error=RuntimeError('connection refused'))
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     p = tmp_path / 'clip.wav'
     p.write_bytes(b'\x00')
@@ -160,7 +131,7 @@ def test_describe_audio_raises_on_empty_result(monkeypatch, tmp_path):
         audio_ai, 'get_provider_config', lambda: {'llama_audio_model': 'gemma4-12b-omni'}
     )
     client = _FakeClient(content='   ')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     p = tmp_path / 'clip.wav'
     p.write_bytes(b'\x00')
@@ -215,7 +186,7 @@ def test_a_long_recording_is_sliced_described_and_reduced(monkeypatch, tmp_path,
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(content='A dog barks.')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     reduced = []
     monkeypatch.setattr(
@@ -253,7 +224,7 @@ def test_reduce_uses_the_chat_model_not_the_audio_one(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(content='A dog barks.')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
     monkeypatch.setattr('backend.ai.llm.chat_text', lambda prompt, system=None: 'Summary.')
 
     p = tmp_path / 'walk.m4a'
@@ -271,7 +242,7 @@ def test_a_failed_summary_falls_back_to_the_window_notes(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(content='A dog barks.')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     def _boom(prompt, system=None):
         raise RuntimeError('llama-server is down')
@@ -291,7 +262,7 @@ def test_one_unreadable_window_does_not_cost_the_others(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 3.0)
     client = _FakeClient(content='A dog barks.')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     real_create = client.completions.create
 
@@ -317,7 +288,7 @@ def test_a_recording_that_fails_every_window_still_raises(monkeypatch, tmp_path)
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(error=RuntimeError('exceeds the available context size'))
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     p = tmp_path / 'walk.m4a'
     p.write_bytes(b'\x00')
@@ -333,7 +304,7 @@ def test_a_sampled_description_says_so(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: 3.0 * 60 * 60)
     client = _FakeClient(content='Traffic noise.')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
     monkeypatch.setattr('backend.ai.llm.chat_text', lambda prompt, system=None: 'A long drive.')
 
     p = tmp_path / 'drive.mp4'
@@ -351,7 +322,7 @@ def test_a_fully_covered_recording_says_nothing_about_sampling(monkeypatch, tmp_
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: WINDOW * 2.0)
     client = _FakeClient(content='A dog barks.')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
     monkeypatch.setattr('backend.ai.llm.chat_text', lambda prompt, system=None: 'A walk.')
 
     p = tmp_path / 'walk.m4a'
@@ -367,7 +338,7 @@ def test_an_unprobeable_file_still_gets_one_whole_file_call(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(audio_ai, '_probe_duration', lambda path: None)
     client = _FakeClient(content='A dog barks.')
-    monkeypatch.setattr(audio_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     p = tmp_path / 'clip.wav'
     p.write_bytes(b'\x00')

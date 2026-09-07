@@ -22,9 +22,8 @@ def chat_root(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def sync_bg(monkeypatch):
+def sync_bg(run_jobs_sync):
     """Run the photo-reading job inline so upload -> description is deterministic."""
-    monkeypatch.setattr(chat_routes, 'run_bg', lambda fn: fn())
 
 
 @pytest.fixture(autouse=True)

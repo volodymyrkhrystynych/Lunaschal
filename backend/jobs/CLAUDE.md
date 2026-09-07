@@ -379,11 +379,13 @@ iCIMS…) are **named in the result** rather than reported as "nothing found".
 ## The resume queue
 
 `queue.py` is a single-slot worker in the shape of `research/worker.py`,
-deliberately not on `backend.ai.background`'s shared FIFO — twenty queued
+deliberately not on the shared `llm_jobs` queue — twenty queued
 resumes there would head-of-line block journal polish and every other
 seconds-after-a-tap flow. It is the only part of the jobs scheduler that
 touches the model, so it is the only part that defers through
-`backend/ai/priority.py`.
+`backend/ai/service.py`. The drain runs under `service.background()`, so a
+chat message preempts a tailoring pass mid-generation and the application
+simply stays queued.
 
 The **triage** drain works the same way with one difference that matters at
 scale: `triager.drain_while_idle` keeps judging for up to
@@ -601,7 +603,7 @@ of them standing.
   `assert_public_url` on every redirect hop is load-bearing, not decorative.
 - The linkage and sync sweeps make **no model calls**, which is why the
   scheduler runs both every five minutes without touching
-  `backend/ai/priority.py`. Only the queue drain asks the gate.
+  `backend/ai/service.py`. Only the queue drain asks the gate.
 - **Queued is a column, not a status.** `applications.status` has a baked-in
   `CHECK(...)` and SQLite cannot ALTER a constraint, so a tenth status would
   mean rebuilding the table. `queued_at` says the same thing for one line.

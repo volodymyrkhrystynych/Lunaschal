@@ -18,52 +18,28 @@ import pytest
 from PIL import Image
 
 from backend.ai import images as images_ai
+from backend.ai import llm as llm_mod
 from backend.ai.images import VisionUnavailable
+from backend.tests.streamfakes import FakeClient, text_stream
 
 
-class _FakeMessage:
-    def __init__(self, content):
-        self.content = content
-
-
-class _FakeChoice:
-    def __init__(self, content):
-        self.message = _FakeMessage(content)
-
-
-class _FakeResponse:
-    def __init__(self, content):
-        self.choices = [_FakeChoice(content)]
-
-
-class _FakeCompletions:
+# The request goes through backend/ai/llm.py's one path now, so the client is
+# stubbed there rather than on this module, and it streams — see streamfakes.
+class _FakeClient(FakeClient):
     def __init__(self, content=None, error=None):
-        self._content = content
-        self._error = error
-        self.calls = []
-
-    def create(self, **kwargs):
-        self.calls.append(kwargs)
-        if self._error:
-            raise self._error
-        return _FakeResponse(self._content)
-
-
-class _FakeChat:
-    def __init__(self, completions):
-        self.completions = completions
-
-
-class _FakeClient:
-    def __init__(self, content=None, error=None):
-        self.completions = _FakeCompletions(content, error)
-        self.chat = _FakeChat(self.completions)
+        super().__init__(text_stream(content) if content is not None else [],
+                         error=error)
 
 
 @pytest.fixture
 def configured(monkeypatch):
     monkeypatch.setattr(
         images_ai, 'get_provider_config', lambda: {'llama_vision_model': 'gemma4-12b-omni'}
+    )
+    # llm._complete reads the config too, to build the client. Stubbed so these
+    # stay unit tests of the captioning path rather than of the settings table.
+    monkeypatch.setattr(
+        llm_mod, 'get_provider_config', lambda: {'llama_url': 'http://localhost:8080'}
     )
 
 
@@ -110,7 +86,7 @@ def test_caption_turns_thinking_off(configured, monkeypatch, tmp_path):
     description" — indistinguishable from a model that could not see the image.
     """
     client = _FakeClient(content='A red circle beside a blue rectangle.')
-    monkeypatch.setattr(images_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     images_ai.caption_image(_png(tmp_path))
 
@@ -120,7 +96,7 @@ def test_caption_turns_thinking_off(configured, monkeypatch, tmp_path):
 
 def test_caption_sends_the_image_and_the_hint(configured, monkeypatch, tmp_path):
     client = _FakeClient(content='  A leaking pipe under a sink.  ')
-    monkeypatch.setattr(images_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
     p = _png(tmp_path)
 
     result = images_ai.caption_image(p, hint='the leak under the sink')
@@ -139,7 +115,7 @@ def test_a_big_photo_is_downscaled_before_it_is_sent(configured, monkeypatch, tm
     prompt eval through a CPU-resident projector, for a caption that gains
     nothing from the pixels."""
     client = _FakeClient(content='A wall.')
-    monkeypatch.setattr(images_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     images_ai.caption_image(_png(tmp_path, size=(5712, 4284)))
 
@@ -154,7 +130,7 @@ def test_exif_orientation_is_baked_in(configured, monkeypatch, tmp_path):
     photo arrives on its side — and the model says so mid-caption instead of
     describing the picture. Rotate here or not at all."""
     client = _FakeClient(content='Upright.')
-    monkeypatch.setattr(images_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     # Orientation 6: stored landscape, displayed rotated 90° clockwise.
     p = tmp_path / 'sideways.jpg'
@@ -172,7 +148,7 @@ def test_an_empty_description_is_an_error_not_an_empty_caption(
     configured, monkeypatch, tmp_path
 ):
     client = _FakeClient(content='   ')
-    monkeypatch.setattr(images_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     with pytest.raises(VisionUnavailable, match='empty description'):
         images_ai.caption_image(_png(tmp_path))
@@ -188,7 +164,7 @@ def test_heic_is_sent_now_that_it_is_re_encoded(configured, monkeypatch, tmp_pat
     """
     pillow_heif = pytest.importorskip('pillow_heif')
     client = _FakeClient(content='A beach.')
-    monkeypatch.setattr(images_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
 
     p = tmp_path / 'holiday.heic'
     pillow_heif.from_pillow(Image.new('RGB', (32, 24), 'green')).save(p)
@@ -201,7 +177,7 @@ def test_a_file_that_is_not_an_image_is_refused(configured, monkeypatch, tmp_pat
     """A `file` attachment renamed, or a truncated upload. It must not reach the
     model, and the message must not read like a model failure."""
     client = _FakeClient(content='never reached')
-    monkeypatch.setattr(images_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
     p = tmp_path / 'notes.png'
     p.write_bytes(b'this is not a png')
 
@@ -212,7 +188,7 @@ def test_a_file_that_is_not_an_image_is_refused(configured, monkeypatch, tmp_pat
 
 def test_an_unreadable_extension_names_the_fix(configured, monkeypatch, tmp_path):
     client = _FakeClient(content='never reached')
-    monkeypatch.setattr(images_ai, 'get_llama_client', lambda: client)
+    monkeypatch.setattr(llm_mod, 'get_llama_client', lambda *a, **k: client)
     p = tmp_path / 'scan.tiff'
     p.write_bytes(b'whatever')
 
@@ -228,8 +204,8 @@ def test_a_missing_file_is_reported_as_such(configured, tmp_path):
 
 def test_client_errors_are_wrapped(configured, monkeypatch, tmp_path):
     monkeypatch.setattr(
-        images_ai, 'get_llama_client',
-        lambda: _FakeClient(error=RuntimeError('connection refused'))
+        llm_mod, 'get_llama_client',
+        lambda *a, **k: _FakeClient(error=RuntimeError('connection refused'))
     )
     with pytest.raises(VisionUnavailable, match='connection refused'):
         images_ai.caption_image(_png(tmp_path))
@@ -244,8 +220,8 @@ def test_an_alias_the_router_does_not_know_is_named_in_the_error(
     Settings problem and has to read like one.
     """
     monkeypatch.setattr(
-        images_ai, 'get_llama_client',
-        lambda: _FakeClient(error=RuntimeError(
+        llm_mod, 'get_llama_client',
+        lambda *a, **k: _FakeClient(error=RuntimeError(
             "Error code: 400 - {'error': {'code': 400, 'message': \"model"
             " 'gemma4-12b-omni' not found\", 'type': 'invalid_request_error'}}"
         ))
@@ -262,8 +238,8 @@ def test_a_model_that_will_not_fit_says_so(configured, monkeypatch, tmp_path):
     reports `failed to load` after llama.cpp's device-memory probe hits
     `CUDA error: out of memory`."""
     monkeypatch.setattr(
-        images_ai, 'get_llama_client',
-        lambda: _FakeClient(error=RuntimeError(
+        llm_mod, 'get_llama_client',
+        lambda *a, **k: _FakeClient(error=RuntimeError(
             'Error code: 500 - model name=gemma4-12b-omni failed to load'
         ))
     )

@@ -15,9 +15,8 @@ def lifestyle_root(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def sync_bg(monkeypatch):
+def sync_bg(run_jobs_sync):
     """Run the background parse inline so create -> structured sets is deterministic."""
-    monkeypatch.setattr(lifestyle, 'run_bg', lambda fn: fn())
 
 
 @pytest.fixture(autouse=True)

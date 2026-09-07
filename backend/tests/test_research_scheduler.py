@@ -1,9 +1,10 @@
 """The loop that feeds the research worker: what's due, and when it may run."""
 import time
+from contextlib import ExitStack
 
 import pytest
 
-from backend.ai import priority
+from backend.ai import service
 from backend.db.connection import get_db
 from backend.research import research_scheduler as sched, worker
 from backend.research.research_job import (
@@ -13,13 +14,13 @@ from backend.research.research_job import (
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
-    priority.reset()
+    service.reset()
     worker.reset()
     yield
     worker.cancel()
     worker.wait_idle()
     worker.reset()
-    priority.reset()
+    service.reset()
 
 
 @pytest.fixture
@@ -178,10 +179,11 @@ def test_tick_defers_while_the_user_is_waiting(client, snapshot, monkeypatch):
     """The whole point: background work yields to an interactive call."""
     monkeypatch.setattr(sched, 'research_enabled', lambda: True)
     _idea(client)
-    token = priority.begin('chat.stream')
+    held = ExitStack()
+    held.enter_context(service.slot(lane=service.GPU, label='chat.stream'))
     assert sched.tick() is None
 
-    priority.end(token)
+    held.close()
     # Still inside the quiet period straight after the call ends.
     monkeypatch.setattr(sched, 'QUIET_SECONDS', 3600.0)
     assert sched.tick() is None

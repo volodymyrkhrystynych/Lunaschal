@@ -70,6 +70,46 @@ def isolated_db(tmp_path, _schema_template):
 
 
 @pytest.fixture
+def run_jobs_sync(monkeypatch):
+    """Run queued background model work inline instead of on the worker.
+
+    Replaces the old per-module `monkeypatch.setattr(mod, 'run_bg', ...)`. The
+    row is still written, so a test may assert the job was queued *and* see its
+    effect — which the run_bg patches could not do, since that queue kept no
+    record of anything.
+    """
+    from backend.ai import jobs
+    from backend.ai import job_handlers  # noqa: F401  (registers the handlers)
+
+    real = jobs.enqueue
+
+    def immediate(kind, target_id=None, payload=None, *, commit=True):
+        job_id = real(kind, target_id, payload, commit=commit)
+        if job_id is not None:
+            jobs.process_one(job_id)
+        return job_id
+
+    monkeypatch.setattr(jobs, 'enqueue', immediate)
+    return jobs
+
+
+@pytest.fixture
+def queued_jobs(monkeypatch):
+    """Record what would be queued, without running any of it."""
+    from backend.ai import jobs
+
+    recorded = []
+
+    def record(kind, target_id=None, payload=None, *, commit=True):
+        recorded.append({'kind': kind, 'target_id': target_id,
+                         'payload': payload or {}})
+        return None
+
+    monkeypatch.setattr(jobs, 'enqueue', record)
+    return recorded
+
+
+@pytest.fixture
 def client(isolated_db):
     """Reuses `isolated_db`'s already-copied schema DB rather than pointing at
     a second fresh path — this used to write a full extra ~1MB copy of the
@@ -91,7 +131,7 @@ def client(isolated_db):
             yield c
     finally:
         # Four things run jobs on background threads against this same
-        # module-global connection — the research worker, run_bg's queue
+        # module-global connection — the research worker, the llm_jobs worker
         # (journal polish, metadata, transcription, workout parsing…), a chat
         # reply generating via backend/delegate/runs.py, and the voice-draft
         # pipeline's own executor (backend/journal/voice_drafts.py). A test
@@ -99,7 +139,7 @@ def client(isolated_db):
         # the connection underneath a thread mid-query segfaults the
         # interpreter rather than raising. Stop the work before taking its
         # database away.
-        from backend.ai import background
+        from backend.ai import jobs as llm_jobs
         from backend.delegate import runs
         from backend.research import worker
         from backend.journal import voice_drafts
@@ -108,13 +148,13 @@ def client(isolated_db):
         worker.cancel()
         worker.wait_idle(timeout=15.0)
         # Not an executor: the journal's title-metadata wait is a bare daemon
-        # thread (it cannot share `background`'s single worker with the
-        # captioning jobs it waits on without deadlocking), so it needs draining
-        # by name. It polls the connection closed below — this is the one that
-        # actually segfaulted a run.
+        # thread (it cannot share the job worker with the captioning jobs it
+        # waits on without deadlocking), so it needs draining by name. It polls
+        # the connection closed below — this is the one that actually
+        # segfaulted a run.
         journal_routes.cancel_metadata_waits()
         journal_routes.wait_metadata_idle(timeout=15.0)
-        background.wait_idle(timeout=15.0)
+        llm_jobs.reset()
         runs.wait_idle(timeout=15.0)
         voice_drafts.wait_idle(timeout=15.0)
         job_queue.wait_idle(timeout=15.0)

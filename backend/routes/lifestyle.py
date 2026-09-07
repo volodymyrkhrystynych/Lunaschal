@@ -19,7 +19,7 @@ from types import SimpleNamespace
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
-from backend.ai.background import run_bg
+from backend.ai import jobs
 from backend.ai.workouts import parse_workout
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.day_boundary import DAY_ROLLOVER_HOUR, day_bounds, day_key_for
@@ -261,7 +261,7 @@ def create_workout():
     db.commit()
 
     if raw_text:
-        run_bg(lambda: structure_workout(session_id, raw_text))
+        jobs.enqueue('lifestyle.structure_workout', session_id, {'text': raw_text})
 
     row = db.execute(
         f'SELECT {_SESSION_COLS} FROM workout_sessions WHERE id=?', (session_id,)
@@ -320,7 +320,7 @@ def update_workout(session_id):
     db.commit()
 
     if reparse_text:
-        run_bg(lambda: structure_workout(session_id, reparse_text))
+        jobs.enqueue('lifestyle.structure_workout', session_id, {'text': reparse_text})
     return jsonify({'success': True})
 
 
@@ -339,7 +339,7 @@ def reparse_workout(session_id):
     text = row['raw_text']
     build_update(db, 'workout_sessions', {'parse_status': 'pending'}, 'id=?', (session_id,))
     db.commit()
-    run_bg(lambda: structure_workout(session_id, text))
+    jobs.enqueue('lifestyle.structure_workout', session_id, {'text': text})
     return jsonify({'success': True})
 
 

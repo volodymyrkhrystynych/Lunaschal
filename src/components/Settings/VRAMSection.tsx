@@ -244,7 +244,8 @@ export function VRAMSection() {
               release it. Whisper needs {whisperVram.toLocaleString()} MB on top
               — with {effectiveTotalMb.toLocaleString()} MB total, whichever
               loads second will likely fail. Use Parakeet (CPU), switch Whisper
-              to CPU, or unload the model first.
+              to CPU, or unload the model with the GPU inference switch at the
+              top of Settings.
             </p>
           )}
       </div>

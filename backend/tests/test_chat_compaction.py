@@ -80,10 +80,9 @@ def test_a_later_turn_reuses_the_saved_rolling_summary(monkeypatch):
     assert 'Compare editions' in context
 
 
-def test_new_chat_is_committed_even_when_compaction_fails(monkeypatch):
+def test_new_chat_is_committed_even_when_compaction_fails(monkeypatch, run_jobs_sync):
     db = _conversation()
     _message(db, 'm1', 'user', 'remember this')
-    monkeypatch.setattr('backend.ai.background.run_bg', lambda fn: fn())
     monkeypatch.setattr(compaction, 'summarize',
                         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError('offline')))
 
@@ -98,10 +97,9 @@ def test_new_chat_is_committed_even_when_compaction_fails(monkeypatch):
     assert compacted['status'] == 'error'
 
 
-def test_new_chat_handoff_and_clean_slate(monkeypatch):
+def test_new_chat_handoff_and_clean_slate(monkeypatch, run_jobs_sync):
     db = _conversation()
     _message(db, 'm1', 'user', 'remember this')
-    monkeypatch.setattr('backend.ai.background.run_bg', lambda fn: fn())
     monkeypatch.setattr(compaction, 'summarize', lambda *_a, **_k: _summary())
 
     compaction.create_break('c1', carry_context=True)
@@ -127,10 +125,9 @@ def test_recent_offline_evidence_is_available_on_followups():
     assert 'archiveId' in context
 
 
-def test_new_chat_route_queues_a_handoff(client, monkeypatch):
+def test_new_chat_route_queues_a_handoff(client, monkeypatch, run_jobs_sync):
     db = _conversation()
     _message(db, 'm1', 'user', 'remember this')
-    monkeypatch.setattr('backend.ai.background.run_bg', lambda fn: fn())
     monkeypatch.setattr(compaction, 'summarize', lambda *_a, **_k: _summary())
 
     response = client.post('/api/chat/conversations/c1/break', json={
@@ -152,10 +149,9 @@ def test_new_chat_route_rejects_an_unrelated_conversation(client):
     assert response.status_code == 404
 
 
-def test_startup_retries_a_failed_handoff(monkeypatch):
+def test_startup_retries_a_failed_handoff(monkeypatch, run_jobs_sync):
     db = _conversation()
     _message(db, 'm1', 'user', 'remember this')
-    monkeypatch.setattr('backend.ai.background.run_bg', lambda fn: fn())
     attempts = {'count': 0}
 
     def flaky(*_args, **_kwargs):

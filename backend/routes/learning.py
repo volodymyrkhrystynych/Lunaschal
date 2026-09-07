@@ -821,18 +821,18 @@ def _attempt_to_dict(row) -> dict:
 _grading_queued: set[str] = set()
 
 
-def _queue_grade(attempt_id: str) -> None:
-    from backend.ai.background import run_bg
+def _queue_grade(attempt_id: str, *, now: bool = False) -> None:
+    from backend.ai import jobs
     from backend.learning.attempts import grade_attempt
     _grading_queued.add(attempt_id)
 
-    def _run():
-        try:
-            grade_attempt(attempt_id)
-        finally:
-            _grading_queued.discard(attempt_id)
-
-    run_bg(_run)
+    if not now:
+        jobs.enqueue('learning.grade_attempt', attempt_id)
+        return
+    try:
+        grade_attempt(attempt_id)
+    finally:
+        _grading_queued.discard(attempt_id)
 
 
 @bp.post('/attempts')

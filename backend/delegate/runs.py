@@ -23,7 +23,6 @@ import time
 
 from ulid import ULID
 
-from backend.ai import priority
 from backend.db.connection import build_update, get_db
 from backend.delegate import chat as delegate_chat
 
@@ -42,7 +41,7 @@ _FLUSH_INTERVAL = 0.5
 _MAX_THINKING = 20_000
 _THINKING_TRUNCATED = '\n\n[reasoning truncated]'
 
-# Tracked the same way backend/ai/background.py tracks its executor's pending
+# Tracked the same way backend/ai/jobs.py tracks its worker's in-flight
 # futures: not for production (the module-global connection outlives every
 # run), but so a test's `client` fixture can wait for a run to actually finish
 # before closing the connection out from under it — the same "outlived its own
@@ -98,7 +97,6 @@ def _append_thinking(current: str, delta: str) -> str:
 def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enabled: bool,
           q: "queue.Queue", done: "threading.Event | None" = None,
           conversation_id: str | None = None) -> None:
-    token = priority.begin('chat.stream')
     db = get_db()
     content = ''
     thinking = ''
@@ -184,7 +182,6 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enable
         db.commit()
         q.put(('error', str(e)))
     finally:
-        priority.end(token)
         q.put(('_end', None))
         if done is not None:
             done.set()

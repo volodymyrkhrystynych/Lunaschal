@@ -14,7 +14,7 @@ import time
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
-from backend.ai import job_match, priority
+from backend.ai import job_match
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.jobs import (
     analytics, build, career_watch, company_research, cover_letter, distance, ingest, interview, linker, outcomes, profile as profile_mod, queue as queue_mod, render, report, resume_review,
@@ -154,12 +154,9 @@ def import_profile():
     if not lines:
         return jsonify({'error': 'Nothing readable in that document.'}), 400
 
-    # The user is watching this one, so it takes a mark rather than deferring.
-    token = priority.begin('resume-import')
-    try:
-        preview = resume_import.import_resume(lines)
-    finally:
-        priority.end(token)
+    # Runs on the request thread, so backend/ai/service.py sees it as P1 and
+    # background work stands aside for it.
+    preview = resume_import.import_resume(lines)
 
     if preview is None:
         return jsonify({
@@ -913,7 +910,7 @@ def edit_resume(version_id):
     once the application has been sent, `resume_versions` is evidence of what
     the employer received and stops being editable.
 
-    No model call, so no `priority` gate: this renders exactly what it is
+    No model call, so no lane slot: this renders exactly what it is
     given, which is the whole point of an edit route existing beside `tailor`.
     """
     db = get_db()
@@ -1746,11 +1743,7 @@ def triage_job(job_id):
     Interactive, so it runs inline rather than through the worker — the user is
     looking at the result. Measured at 3-8 seconds against a full posting.
     """
-    token = priority.begin('job-triage')
-    try:
-        result = triager.process_one(job_id)
-    finally:
-        priority.end(token)
+    result = triager.process_one(job_id)
     if not result['ok'] and result.get('error') == 'Not found':
         return jsonify({'error': 'Not found'}), 404
     row = get_db().execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
@@ -1904,15 +1897,9 @@ def job_rationale(job_id):
     job = {'title': row['title'], 'company': row['company'],
            'location': row['location'], 'description': row['description']}
 
-    # The user is waiting on this one, so it takes an interactive mark rather
-    # than deferring to it.
-    token = priority.begin('job-rationale')
-    try:
-        assessment = job_match.assess_match(
-            job, profile_mod.profile_text(loaded)[:4000], reasons
-        )
-    finally:
-        priority.end(token)
+    assessment = job_match.assess_match(
+        job, profile_mod.profile_text(loaded)[:4000], reasons
+    )
 
     if assessment is None:
         return jsonify({'error': 'The local model is unavailable.'}), 503

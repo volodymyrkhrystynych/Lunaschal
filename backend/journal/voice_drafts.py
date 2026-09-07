@@ -1,14 +1,14 @@
 """Voice clips recorded via the STT listener's Journal hotkey, before they
 become an entry.
 
-Deliberately NOT `backend.ai.background.run_bg`. That is a single FIFO worker
+Deliberately NOT the shared llm_jobs queue (backend/ai/jobs.py). That is a single FIFO worker
 shared by journal polish, journal metadata, attachment transcription, food
 structuring, workout parsing and learning-attempt grading — all triggered by
 something the user did seconds ago. Processing a draft is three sequential CPU
 transcriptions plus an LLM call, more like backend/research/worker.py's
 minutes-long jobs than a quick polish pass; putting it on the shared queue
 would head-of-line block every one of those flows. So: its own single-worker
-executor, same shape as backend/ai/background.py's, just not shared with it.
+executor, same shape as backend/ai/jobs.py's worker, just not shared with it.
 
 Files live under ./data/journal_drafts/<draft_id>/ (JOURNAL_DRAFTS_ROOT) — a
 separate root from backend/journal/storage.py's journal_attachments layout,
@@ -67,7 +67,7 @@ def _forget(future) -> None:
 
 def wait_idle(timeout: float = 10.0) -> bool:
     """Block until queued draft processing drains. True if it did, False on
-    timeout. For tests and shutdown — mirrors backend/ai/background.py's
+    timeout. For tests and shutdown — mirrors backend/ai/jobs.py's
     wait_idle, for this feature's own executor (see module docstring)."""
     with _pending_lock:
         pending = list(_pending)
@@ -346,17 +346,33 @@ def _process_draft_inner(draft_id: str) -> None:
     primary = stt_routes.pick_primary(candidates, stt_routes._get_active_stt_backend())
     raw_text = primary['text']
 
+    # The transcription above is CPU work and always runs. Only the merge is a
+    # model call, and it is P2 — the audio is already saved, which is exactly
+    # the rule that makes this deferrable.
+    from backend.ai import service
+
+    merged = None
     try:
-        content_text = merge_voice_draft(candidates, context=_memory_context())
+        with service.background():
+            merged = merge_voice_draft(candidates, context=_memory_context())
     except PolishUnavailable as e:
         # Same fallback create_entry uses for a plain single-model transcript:
         # save the raw text now, unpolished. The existing manual Polish button
         # on the entry works normally afterward — raw_content is a plain
-        # single transcript either way.
+        # single transcript either way. `PolishUnavailable` is what a paused
+        # GPU arrives as too (backend/ai/journal.py turns any model failure
+        # into it), which is why a recording made during a pause still becomes
+        # an entry rather than an error.
         logger.warning('Voice draft merge unavailable for %s: %s', draft_id, e)
-        content_text = raw_text
+    content_text = merged or raw_text
 
     entry_id = _create_entry(content_text, raw_text)
+    if merged is None:
+        # The clip is transcribed and the entry exists; only the polish is
+        # missing. Queue it so the promise the pause switch makes — "it will
+        # run when you turn inference back on" — holds for dictation too.
+        from backend.ai import jobs
+        jobs.enqueue('journal.polish', entry_id, {'raw_content': raw_text})
     # Recorded immediately, separately from _finish_done below, so a crash
     # between here and _promote_attachment still lets a retry recognize the
     # entry already exists instead of creating a duplicate.

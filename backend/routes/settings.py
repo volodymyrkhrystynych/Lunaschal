@@ -90,6 +90,10 @@ def get_settings():
         'voicePipelineEnabled': bool(s.get('voice_pipeline_enabled', 1)),
         'transcribePolishEnabled': bool(s.get('transcribe_polish_enabled', 1)),
         'preventSleep': bool(s.get('prevent_sleep', 0)),
+        # Read-only here: the switch has a side effect on the router, so it
+        # is written through /inference/pause rather than PATCH /ai.
+        'inferencePaused': bool(s.get('inference_paused', 0)),
+        'inferencePausedAt': s.get('inference_paused_at'),
         'meetingEchoCancel': bool(s.get('meeting_echo_cancel', 0)),
         'nudgeEnabled': bool(s.get('nudge_enabled', 1)),
         'nudgeIntervalMinutes': s.get('nudge_interval_minutes') or 45,
@@ -320,6 +324,144 @@ def llama_models():
         return jsonify(models)
     except Exception:
         return jsonify([])
+
+
+def _router_post(path: str, body: dict, timeout: float = 10.0) -> tuple[bool, str | None]:
+    """POST to llama-server's router. Returns (ok, error) — never raises.
+
+    A router that is down, or that has already unloaded the model, is not a
+    failure of the thing the caller is doing: the pause flag is the state that
+    matters, and the unload is an optimisation on top of it.
+    """
+    s = _get_settings()
+    llama_url = (s.get('llama_url') if s else None) or 'http://localhost:8080'
+    try:
+        req = urllib.request.Request(
+            f'{llama_url}{path}', data=json.dumps(body).encode(),
+            headers={'Content-Type': 'application/json'}, method='POST')
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True, None
+    except Exception as e:
+        return False, str(e) or 'Request failed'
+
+
+def _inference_state() -> dict:
+    from backend.ai import jobs, service
+    from backend.ai.provider import get_model
+
+    alias = get_model()
+    model_status = None
+    for m in llama_models().get_json() or []:
+        if m.get('name') == alias:
+            model_status = m.get('status')
+    s = _get_settings() or {}
+    return {
+        'paused': bool(s.get('inference_paused')),
+        'pausedSince': s.get('inference_paused_at'),
+        'model': alias,
+        'modelStatus': model_status,
+        'queueDepth': jobs.pending_count(),
+        'lanes': service.status(),
+    }
+
+
+@bp.get('/inference')
+def get_inference():
+    return jsonify(_inference_state())
+
+
+@bp.post('/inference/pause')
+def pause_inference():
+    """Free the card: stop admitting GPU work, then unload the chat model.
+
+    The flag goes down **first**, and the order is the whole trick. The router
+    loads on demand, so between an unload and the gate taking effect any queued
+    call naming the alias would pull 22 GB straight back onto the card — and the
+    unload would look like it silently failed.
+    """
+    from backend.ai import service
+
+    db = get_db()
+    db.execute('UPDATE settings SET inference_paused=1, inference_paused_at=?,'
+               ' updated_at=? WHERE id=1', (int(time.time()), int(time.time())))
+    db.commit()
+    service.invalidate_pause_cache()
+
+    from backend.ai.provider import get_model
+    alias = get_model()
+    ok, error = _router_post('/models/unload', {'model': alias})
+    # Recorded after the unload so the one line carries the whole outcome. A
+    # pause is the most useful thing to see above a run of refusals: without it
+    # the log reads as the app inexplicably declining to work.
+    service.note('pause', f'{alias} unloaded' if ok
+                 else f'{alias} not unloaded: {error}')
+    return jsonify({**_inference_state(), 'unloaded': ok, 'unloadError': error})
+
+
+@bp.post('/inference/resume')
+def resume_inference():
+    """Switch the lane back on and wake the queue.
+
+    Deliberately no `/models/load`: the next real request reloads the model
+    lazily, and spending tens of seconds pulling 22 GB onto the card because
+    somebody pressed a button is a surprise, not a service.
+    """
+    from backend.ai import jobs, service
+
+    db = get_db()
+    db.execute('UPDATE settings SET inference_paused=0, inference_paused_at=NULL,'
+               ' updated_at=? WHERE id=1', (int(time.time()),))
+    db.commit()
+    service.invalidate_pause_cache()
+    service.note('resume', f'{jobs.pending_count()} job(s) queued')
+    jobs.wake()
+    return jsonify(_inference_state())
+
+
+@bp.get('/inference/activity')
+def inference_activity():
+    """Everything the model service has done lately, for Settings -> Logs.
+
+    Two halves, answering two different questions. The **events** are the
+    broker's own ring buffer (backend/ai/service.py): what ran, what waited and
+    for how long, what was preempted for what, what was refused while paused.
+    That is the only record of a call which never touched the database, and it
+    is the half a dev run can show at all — there is no `systemd --user` journal
+    outside production.
+
+    The **jobs** are `llm_jobs` rows, which outlive a restart. They are what you
+    want when the question is not "what is happening now" but "why is
+    yesterday's entry still unpolished" — a row sitting in `error` with its
+    message is the answer, and no amount of scrolling a ring buffer would find
+    it a day later.
+    """
+    from backend.ai import jobs, service
+    from backend.db.connection import row_to_dict
+
+    try:
+        limit = int(request.args.get('limit', 100))
+    except (TypeError, ValueError):
+        limit = 100
+    limit = max(1, min(limit, service.EVENT_LIMIT))
+
+    db = get_db()
+    rows = db.execute(
+        'SELECT id, kind, target_id, status, attempts, cancels, error,'
+        ' created_at, started_at, finished_at FROM llm_jobs'
+        ' ORDER BY created_at DESC LIMIT ?', (limit,)).fetchall()
+    counts = {r['status']: r['n'] for r in db.execute(
+        'SELECT status, COUNT(*) AS n FROM llm_jobs GROUP BY status').fetchall()}
+
+    return jsonify({
+        'events': service.recent_events(limit),
+        'counters': service.counters(),
+        'lanes': service.status(),
+        'jobs': [row_to_dict(r) for r in rows],
+        'jobCounts': counts,
+        # The registry, so a job stuck on a `kind` nothing handles is visible as
+        # exactly that rather than as a mysteriously failing row.
+        'handlers': sorted(jobs.known_kinds()),
+    })
 
 
 _gpu_base_vram_mb: int | None = None
