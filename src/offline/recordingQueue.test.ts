@@ -15,6 +15,7 @@ vi.mock('idb-keyval', () => ({
 }));
 
 const createRecording = vi.fn();
+const createFoodRecording = vi.fn();
 vi.mock('../hooks/api', async () => {
   const actual =
     await vi.importActual<typeof import('../hooks/api')>('../hooks/api');
@@ -22,6 +23,7 @@ vi.mock('../hooks/api', async () => {
     ...actual,
     api: {
       journal: { createRecording: (...a: unknown[]) => createRecording(...a) },
+      food: { createRecording: (...a: unknown[]) => createFoodRecording(...a) },
     },
   };
 });
@@ -29,7 +31,6 @@ vi.mock('../hooks/api', async () => {
 const { ApiError } = await import('../hooks/api');
 const {
   appendChunk,
-  assignRecordingEntry,
   beginRecording,
   finalizeRecording,
   getRecording,
@@ -38,9 +39,7 @@ const {
 const { MUTATION_KEYS, registerOfflineMutationDefaults } =
   await import('./mutationDefaults');
 const {
-  attachRecordingToEntry,
-  captureFicCommentary,
-  captureIdeaRecording,
+  enqueueFoodRecording,
   enqueueRecordingUpload,
   handleFinishedRecording,
   resumeStoredRecordings,
@@ -63,16 +62,28 @@ function client() {
     defaultOptions: { mutations: { networkMode: 'always', retry: false } },
   });
   registerOfflineMutationDefaults(qc);
-  const key = MUTATION_KEYS.journalRecording;
-  qc.setMutationDefaults(key, { ...qc.getMutationDefaults(key), retry: false });
+  // Both recording mutations carry their own retry policy; without clearing
+  // each one a failing test waits out the production backoff instead of
+  // observing the first failure.
+  for (const key of [
+    MUTATION_KEYS.journalRecording,
+    MUTATION_KEYS.foodRecording,
+  ]) {
+    qc.setMutationDefaults(key, {
+      ...qc.getMutationDefaults(key),
+      retry: false,
+    });
+  }
   return qc;
 }
 
 async function storedRecording(
   mode: 'audio' | 'transcribe' = 'audio',
   opts: {
+    entryId?: string;
     idea?: { id: string; repoId?: string };
     fic?: { ficId: string; chapterId?: string };
+    food?: { id: string };
   } = {}
 ) {
   const rec = await beginRecording(mode, 'audio/mp4', opts);
@@ -83,6 +94,7 @@ async function storedRecording(
 beforeEach(() => {
   idb.clear();
   createRecording.mockReset();
+  createFoodRecording.mockReset();
 });
 
 describe('uploading a stored recording', () => {
@@ -165,16 +177,17 @@ describe('what happens to a finished recording', () => {
   });
 });
 
-describe('attaching a recording to an entry that already exists', () => {
-  // The Journal's Transcribe button records while an entry is open, so the clip
-  // belongs on that entry rather than on a new one of its own. It goes through
-  // the same durable queue: `POST /api/journal/recordings` does INSERT OR IGNORE
-  // on the entry, so an id that already exists means "attach to this".
+describe('sending a staged clip', () => {
+  // What `useClipStage.commit` calls for every clip a composer staged. The
+  // entry, idea, fic or meal it belongs to was decided when recording started
+  // and is stored beside the audio; this is where it is handed over.
   it('uploads against the entry id, not the recording id', async () => {
-    const rec = await storedRecording('audio');
+    const rec = await storedRecording('transcribe');
     createRecording.mockResolvedValue({ id: 'entry-7', attachment: {} });
 
-    await attachRecordingToEntry(client(), rec, 'entry-7');
+    await enqueueRecordingUpload(client(), rec.id, 'Recording', {
+      entryId: 'entry-7',
+    });
 
     expect(createRecording).toHaveBeenCalledTimes(1);
     const opts = createRecording.mock.calls[0][1];
@@ -182,157 +195,85 @@ describe('attaching a recording to an entry that already exists', () => {
     // The attachment keeps the recording's own id — that is what makes a replay
     // of this upload a no-op instead of a second copy of the file.
     expect(opts.attachmentId).toBe(rec.id);
-  });
-
-  it('does not ask the server to transcribe it a second time', async () => {
-    // The text was already fetched in the browser and put in the draft; a
-    // server-side pass would burn another CPU transcription and write into the
-    // entry body underneath an open editor.
-    const rec = await storedRecording('audio');
-    createRecording.mockResolvedValue({ id: 'entry-7', attachment: {} });
-
-    await attachRecordingToEntry(client(), rec, 'entry-7');
-
-    expect(createRecording.mock.calls[0][1]).toMatchObject({
-      transcribe: false,
-    });
+    // Several clips can share one entry id, so the server is what appends their
+    // transcripts in order.
+    expect(opts.transcribe).toBe(true);
   });
 
   it('lets go of the audio only once the server has it', async () => {
-    const rec = await storedRecording('audio');
+    const rec = await storedRecording('transcribe');
     createRecording.mockRejectedValue(new Error('offline'));
 
     await expect(
-      attachRecordingToEntry(client(), rec, 'entry-7')
+      enqueueRecordingUpload(client(), rec.id, 'Recording', {
+        entryId: 'entry-7',
+      })
     ).rejects.toThrow();
 
     expect(await listRecordings()).toHaveLength(1);
   });
 
-  it('writes the entry id to the store, so a rescue can still find it', async () => {
-    // A clip whose upload fails is picked up by the boot sweep on the next
-    // launch — from the store, not from the mutation's variables, which died
-    // with the tab. Without this it is rescued as a bare entry of its own,
-    // beside the one whose words it was recorded with.
-    const rec = await storedRecording('audio');
-    createRecording.mockRejectedValue(new Error('offline'));
+  it('carries the idea it is also being captured as', async () => {
+    const rec = await storedRecording('transcribe', {
+      idea: { id: 'idea-1', repoId: 'repo-1' },
+    });
+    createRecording.mockResolvedValue({ id: 'entry-7', attachment: {} });
+
+    await enqueueRecordingUpload(client(), rec.id, 'Idea', {
+      entryId: 'entry-7',
+      idea: rec.idea,
+    });
+
+    expect(createRecording.mock.calls[0][1]).toMatchObject({
+      ideaId: 'idea-1',
+      repoId: 'repo-1',
+    });
+  });
+
+  it('carries the fic and chapter it is commentary on', async () => {
+    const rec = await storedRecording('transcribe', {
+      fic: { ficId: 'fic-1', chapterId: 'ch-1' },
+    });
+    createRecording.mockResolvedValue({ id: 'entry-7', attachment: {} });
+
+    await enqueueRecordingUpload(client(), rec.id, 'Commentary', {
+      entryId: 'entry-7',
+      fic: rec.fic,
+    });
+
+    expect(createRecording.mock.calls[0][1]).toMatchObject({
+      ficId: 'fic-1',
+      chapterId: 'ch-1',
+    });
+  });
+
+  it('sends a meal clip to the food route instead, with its position', async () => {
+    // A meal is not a journal entry — it is a food_entries row the feed borrows
+    // — so its audio is food media rather than a journal attachment.
+    const rec = await storedRecording('transcribe', { food: { id: 'meal-1' } });
+    createFoodRecording.mockResolvedValue({ id: 'meal-1', media: {} });
+
+    await enqueueFoodRecording(client(), rec.id, 'meal-1', 1);
+
+    expect(createRecording).not.toHaveBeenCalled();
+    expect(createFoodRecording.mock.calls[0][1]).toMatchObject({
+      id: 'meal-1',
+      mediaId: rec.id,
+      position: 1,
+    });
+    // Confirmed stored, so the audio may go.
+    expect(await listRecordings()).toHaveLength(0);
+  });
+
+  it('keeps a meal clip when the upload fails', async () => {
+    const rec = await storedRecording('transcribe', { food: { id: 'meal-1' } });
+    createFoodRecording.mockRejectedValue(new Error('offline'));
 
     await expect(
-      attachRecordingToEntry(client(), rec, 'entry-7')
+      enqueueFoodRecording(client(), rec.id, 'meal-1', 0)
     ).rejects.toThrow();
 
-    expect((await getRecording(rec.id))?.entryId).toBe('entry-7');
-  });
-});
-
-describe('recording an idea', () => {
-  // The Ideas tab's Record button: one upload, which the server turns into a
-  // journal entry, its attachment, and the idea — all from one transcription.
-  it('uploads the clip with the idea it is also being captured as', async () => {
-    const rec = await storedRecording('transcribe', {
-      idea: { id: 'idea-9', repoId: 'repo-2' },
-    });
-    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
-
-    await captureIdeaRecording(client(), rec);
-
-    expect(createRecording).toHaveBeenCalledTimes(1);
-    expect(createRecording.mock.calls[0][1]).toMatchObject({
-      id: rec.id,
-      attachmentId: rec.id,
-      ideaId: 'idea-9',
-      repoId: 'repo-2',
-      // The server transcribes it — into the entry and into the idea.
-      transcribe: true,
-    });
-    expect(await listRecordings()).toEqual([]);
-  });
-
-  it('keeps the audio, and the idea link, when the upload fails', async () => {
-    const rec = await storedRecording('transcribe', { idea: { id: 'idea-9' } });
-    createRecording.mockRejectedValue(new Error('Failed to fetch'));
-
-    await expect(captureIdeaRecording(client(), rec)).rejects.toThrow();
-
-    const after = (await getRecording(rec.id))!;
-    expect(after.idea).toEqual({ id: 'idea-9' });
-  });
-
-  it('still knows it was an idea after the app was killed mid-recording', async () => {
-    // The idea id is written to the store with the first chunk precisely so the
-    // startup sweep can find it: a resumed upload that had forgotten it would
-    // file the clip as a plain journal entry and lose the idea entirely.
-    const rec = await beginRecording('transcribe', 'audio/mp4', {
-      idea: { id: 'idea-9' },
-    });
-    await appendChunk(rec.id, new Blob(['half a thought']));
-    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
-
-    await resumeStoredRecordings(client());
-    await vi.waitFor(() => expect(createRecording).toHaveBeenCalledTimes(1));
-
-    expect(createRecording.mock.calls[0][1]).toMatchObject({
-      ideaId: 'idea-9',
-    });
-  });
-});
-
-describe('commentary recorded in the fanfic reader', () => {
-  // The reader's Commentary microphone: the clip becomes a journal entry that
-  // is linked to the chapter it was spoken over, and the transcript is written
-  // onto that entry by the server afterwards.
-  it('uploads the clip with the fic and chapter it is commentary on', async () => {
-    const rec = await storedRecording('transcribe', {
-      fic: { ficId: 'fic-1', chapterId: 'ch-4' },
-    });
-    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
-
-    await captureFicCommentary(client(), rec);
-
-    expect(createRecording).toHaveBeenCalledTimes(1);
-    expect(createRecording.mock.calls[0][1]).toMatchObject({
-      id: rec.id,
-      attachmentId: rec.id,
-      ficId: 'fic-1',
-      chapterId: 'ch-4',
-      // The link rides along with the upload rather than following in a second
-      // request, so a dropped connection cannot land the audio and lose the
-      // chapter it was about.
-      transcribe: true,
-    });
-    expect(await listRecordings()).toEqual([]);
-  });
-
-  it('sends no chapter for a PDF fic, which has none', async () => {
-    const rec = await storedRecording('transcribe', {
-      fic: { ficId: 'fic-1' },
-    });
-    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
-
-    await captureFicCommentary(client(), rec);
-
-    expect(createRecording.mock.calls[0][1]).toMatchObject({ ficId: 'fic-1' });
-    expect(createRecording.mock.calls[0][1].chapterId).toBeUndefined();
-  });
-
-  it('still knows which chapter it was after the app was killed mid-recording', async () => {
-    // Same reason as the idea case above: a resumed upload that has forgotten
-    // its fic files the commentary as a plain journal entry, with nothing left
-    // saying which chapter it was a reaction to.
-    const rec = await beginRecording('transcribe', 'audio/mp4', {
-      fic: { ficId: 'fic-1', chapterId: 'ch-4' },
-    });
-    await appendChunk(rec.id, new Blob(['half a thought']));
-    createRecording.mockResolvedValue({ id: rec.id, attachment: {} });
-
-    await resumeStoredRecordings(client());
-    await vi.waitFor(() => expect(createRecording).toHaveBeenCalledTimes(1));
-
-    expect(createRecording.mock.calls[0][1]).toMatchObject({
-      ficId: 'fic-1',
-      chapterId: 'ch-4',
-      name: 'Commentary',
-    });
+    expect(await listRecordings()).toHaveLength(1);
   });
 });
 
@@ -364,12 +305,12 @@ describe('picking up recordings from a previous session', () => {
   });
 
   it('puts a rescued clip back on its entry rather than making a new one', async () => {
-    // The composer's Transcribe button records into a draft, so the entry id is
-    // not minted until Save. A rescue that has forgotten it files the clip as a
-    // journal entry of its own, next to the entry it was recorded alongside —
-    // the audio survives, detached from the words.
-    const rec = await storedRecording('audio');
-    await assignRecordingEntry(rec.id, 'entry-7');
+    // A composer stages clips and sends them together, so the entry id is
+    // minted at the first chunk and written beside the audio. A rescue that has
+    // forgotten it files the clip as a journal entry of its own, next to the
+    // entry it was recorded alongside — the audio survives, detached from the
+    // words. This is the reason the id is minted then rather than at Save.
+    const rec = await storedRecording('transcribe', { entryId: 'entry-7' });
     createRecording.mockResolvedValue({ id: 'entry-7', attachment: {} });
 
     await resumeStoredRecordings(client());
@@ -378,5 +319,23 @@ describe('picking up recordings from a previous session', () => {
     const opts = createRecording.mock.calls[0][1];
     expect(opts.id).toBe('entry-7');
     expect(opts.attachmentId).toBe(rec.id);
+  });
+
+  it('sends a rescued meal clip to the food route, not the journal', async () => {
+    // Filing it as a journal entry would put the words in a different tab from
+    // the photograph of the plate they were spoken over.
+    const rec = await storedRecording('transcribe', { food: { id: 'meal-1' } });
+    createFoodRecording.mockResolvedValue({ id: 'meal-1', media: {} });
+
+    await resumeStoredRecordings(client());
+    await vi.waitFor(() =>
+      expect(createFoodRecording).toHaveBeenCalledTimes(1)
+    );
+
+    expect(createRecording).not.toHaveBeenCalled();
+    expect(createFoodRecording.mock.calls[0][1]).toMatchObject({
+      id: 'meal-1',
+      mediaId: rec.id,
+    });
   });
 });

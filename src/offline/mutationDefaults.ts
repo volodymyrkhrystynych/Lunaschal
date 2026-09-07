@@ -79,6 +79,7 @@ export const MUTATION_KEYS = {
   ideaCreate: ['ideas', 'create'] as const,
   calorieLog: ['lifestyle', 'calories', 'create'] as const,
   foodCreate: ['food', 'create'] as const,
+  foodRecording: ['food', 'recording'] as const,
   selfieUpload: ['lifestyle', 'selfie', 'upload'] as const,
   paperCreate: ['paper', 'create'] as const,
   paperPageAdd: ['paper', 'page', 'add'] as const,
@@ -151,6 +152,22 @@ const JOURNAL_LANE = { scope: { id: 'journal' } };
  * reconstructable from these vars alone. The id is enough: the blob is fetched
  * from recordingStore inside the mutationFn.
  */
+/**
+ * One staged voice clip on its way to a meal.
+ *
+ * `id` is the clip's id in `recordingStore` *and* the id the `food_media` row
+ * is stored under, which is what makes a replay a no-op — the same trick
+ * `JournalRecordingVars` plays. `foodId` is the meal, minted by the composer
+ * before the first chunk so a clip rescued by the boot sweep still knows which
+ * plate it was spoken over.
+ */
+export interface FoodRecordingVars {
+  id: string;
+  foodId: string;
+  /** Record order, so the transcripts read in the order they were spoken. */
+  position?: number;
+}
+
 export interface JournalRecordingVars {
   id: string;
   name?: string;
@@ -264,6 +281,13 @@ export interface FoodCreateVars {
   text?: string;
   latitude?: number;
   longitude?: number;
+  /**
+   * How many voice clips the composer is about to upload against this id. A
+   * plain number, which is what keeps it replayable: these vars are
+   * structured-cloned into IndexedDB, and the clips themselves live in
+   * `recordingStore` with their own queued mutations.
+   */
+  pendingClips?: number;
 }
 export interface SelfieUploadVars {
   photoId: string;
@@ -814,9 +838,56 @@ const jobDecideCfg = (qc: QueryClient): Cfg<void, JobDecideVars> => ({
   },
 });
 
+/**
+ * The food log's half of the durable recording path.
+ *
+ * Deliberately a separate mutation from `journalRecording` rather than a flag
+ * on it: the two speak to different routes and settle different caches, and
+ * the shared part — never let go of the audio until the server confirms it —
+ * is `recordingStore`, not this config.
+ */
+const foodRecordingCfg = (
+  qc: QueryClient
+): Cfg<unknown, FoodRecordingVars> => ({
+  ...ONLINE,
+  retry: (failureCount, error) => !isTerminal(error) && failureCount < 5,
+  retryDelay: attempt => Math.min(30_000, 1000 * 2 ** attempt),
+  mutationFn: async vars => {
+    const rec = await getRecording(vars.id);
+    if (!rec) throw new Error('That recording is no longer on this device.');
+    const blob = await assembleBlob(vars.id);
+    if (!blob || blob.size === 0) {
+      // Nothing was ever captured (permission revoked before the first chunk).
+      // No audio to protect, so clear it rather than leaving an un-uploadable
+      // row in the pending list forever.
+      await deleteRecording(vars.id);
+      throw new Error('That recording was empty.');
+    }
+    try {
+      const res = await api.food.createRecording(blob, {
+        id: vars.foodId,
+        mediaId: vars.id,
+        position: vars.position,
+      });
+      // Confirmed stored. The only place this audio may be let go of.
+      await deleteRecording(vars.id);
+      return res;
+    } catch (e) {
+      await markAttempt(
+        vars.id,
+        e instanceof Error ? e.message : 'Upload failed',
+        isTerminal(e)
+      );
+      throw e;
+    }
+  },
+  onSettled: () => qc.invalidateQueries({ queryKey: ['food'] }),
+});
+
 export function registerOfflineMutationDefaults(qc: QueryClient): void {
   const pairs: Array<[readonly unknown[], Cfg<unknown, never>]> = [
     [MUTATION_KEYS.foodCreate, foodCreateCfg(qc) as Cfg<unknown, never>],
+    [MUTATION_KEYS.foodRecording, foodRecordingCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.paperCreate, paperCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.paperPageAdd, paperPageAddCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.paperPageSave, paperPageSaveCfg(qc) as Cfg<unknown, never>],
@@ -1028,6 +1099,7 @@ const foodCreateCfg = (qc: QueryClient): Cfg<FoodEntry, FoodCreateVars> => ({
       const entry = await api.food.create({
         id: vars.id,
         text: vars.text,
+        pendingClips: vars.pendingClips,
         latitude: vars.latitude,
         longitude: vars.longitude,
         media: stored.flatMap(p => (p ? [p.blob] : [])),

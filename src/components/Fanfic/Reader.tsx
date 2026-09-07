@@ -33,8 +33,9 @@ import {
 } from '../../lib/fontSize';
 import { useMasterDetail } from '@/hooks/useMasterDetail';
 import { MasterDetailBack } from '@/components/MasterDetailBack';
-import { useRecorder } from '../../hooks/useRecorder';
-import { captureFicCommentary } from '../../offline/recordingQueue';
+import { useClipStage } from '../../hooks/useClipStage';
+import { ClipStrip } from '../ClipRecorder';
+import { clipButtonLabel } from '../../lib/clipStage';
 import { useDraftState } from '@/hooks/useDraftState';
 
 interface ReaderProps {
@@ -56,8 +57,6 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   // commentary is an entry the moment it is saved, a recording is an entry with
   // its text still on the way.
   const [commentarySaved, setCommentarySaved] = useState('');
-  const [recordingNotice, setRecordingNotice] = useState('');
-  const [recordingStarting, setRecordingStarting] = useState(false);
   const [showCommentary, setShowCommentary] = useDraftState(
     `fanfic:${ficId}:commentary-open`,
     false
@@ -76,58 +75,6 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
       // Reading remains available if this best-effort history write fails.
     });
   }, [ficId]);
-
-  // Speak the commentary instead of typing it. This is the Journal button's
-  // contract, not a dictation box's: **stopping the recording is the save**.
-  // The clip goes to the durable store, is uploaded as a journal entry linked
-  // to this chapter, and the transcript, the polish and the title all arrive
-  // on that entry minutes later on their own.
-  //
-  // It used to transcribe in the browser, append the text to the box below and
-  // post that — which meant the audio lived only in memory, so a failed
-  // transcription (or a locked phone mid-thought) lost the commentary outright.
-  // Reacting to a chapter is the case that most wants to stay hands-free: you
-  // are mid-read, not looking at the box. So no transcript comes back here; the
-  // textarea is left alone for what was typed into it.
-  const recorder = useRecorder(() => undefined, undefined, {
-    onNotice: setRecordingNotice,
-    onRecording: rec => {
-      // Not awaited — see captureFicCommentary. The audio is on disk until the
-      // server confirms it, and the entry is already in the journal feed from
-      // the upload's optimistic insert.
-      void captureFicCommentary(queryClient, rec).catch(() => undefined);
-      setCommentarySaved('recording saved — the transcript follows ✓');
-      setTimeout(() => setCommentarySaved(''), 3000);
-    },
-  });
-
-  const toggleRecording = () => {
-    if (recorder.status === 'recording') {
-      recorder.stop();
-      return;
-    }
-    if (recorder.status !== 'idle' || recordingStarting) return;
-    setRecordingNotice('');
-    // The chapter is captured here, at the first chunk, and stored beside the
-    // audio: W/S moves the reader on while a thought is still being spoken, and
-    // resolving the link at upload time would file the commentary under
-    // whatever chapter was open by then. A PDF fic has no chapters to link to.
-    // getUserMedia and the first IndexedDB write both happen before the shared
-    // recorder can report `recording`. Reflect that setup immediately: without
-    // it the browser's microphone indicator came on while this button still
-    // looked untouched, and another tap was silently ignored by useRecorder's
-    // duplicate-start guard.
-    setRecordingStarting(true);
-    void recorder
-      .start('transcribe', {
-        durable: true,
-        fic: {
-          ficId,
-          ...(!isPdf && chapterId ? { chapterId } : {}),
-        },
-      })
-      .finally(() => setRecordingStarting(false));
-  };
 
   // Opening a fic (even by mouse) puts keyboard focus inside the reader so
   // W/S move between chapters instead of switching app tabs.
@@ -156,6 +103,23 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   );
 
   const isPdf = fic?.sourceType === 'pdf';
+
+  // Speak the commentary instead of typing it — or as well as.
+  //
+  // Stopping stages a clip and nothing else, so a reaction can be spoken in two
+  // or three goes and sent with whatever was typed beside it, under one entry.
+  // The chapter is captured at the first chunk and stored beside the audio: W/S
+  // moves the reader on while a thought is still being spoken, and resolving
+  // the link at upload time would file the commentary under whatever chapter
+  // was open by then. A PDF fic has no chapters to link to.
+  //
+  // No transcript comes back here; the textarea is left alone for what was
+  // typed into it, and the server writes the spoken half onto the entry.
+  const clips = useClipStage({
+    kind: 'fic',
+    ficId,
+    ...(!isPdf && chapterId ? { chapterId } : {}),
+  });
 
   // Desktop keeps the power-user `navVisible` collapse; mobile shows exactly one
   // of chapter list / reading pane. PDFs have no chapter list, so force the pane.
@@ -382,17 +346,16 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   const saveCommentary = useMutation({
     // Capture this chapter's setter before a pending save can outlive a move
     // to another chapter. Keep any further edits made while saving, too.
-    onMutate: (text: string) => ({
+    onMutate: ({ text }: { text: string; id: string }) => ({
       clearSaved: () =>
         setCommentary(value => (value.trim() === text ? '' : value)),
     }),
-    mutationFn: async (text: string) => {
-      // createFromVoice, not create: commentary is dictated as often as
-      // typed (the mic button above appends into the same box either way),
+    mutationFn: async ({ text, id }: { text: string; id: string }) => {
+      // createFromVoice, not create: commentary is dictated as often as typed,
       // and sending it as raw_content is what queues Journal's background
-      // polish — a misheard character name gets fixed the same way any
-      // other journal entry's does, instead of the commentary skipping it.
-      const entry = await api.journal.createFromVoice(text);
+      // polish — a misheard character name gets fixed the same way any other
+      // journal entry's does, instead of the commentary skipping it.
+      const entry = await api.journal.createFromVoice(text, id);
       await api.fanfic.linkJournal(
         ficId,
         entry.id,
@@ -407,6 +370,27 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
       queryClient.invalidateQueries({ queryKey: ['journal'] });
     },
   });
+
+  /**
+   * Send the commentary: the typed line, the clips, or both.
+   *
+   * A clip-only send skips the mutation entirely — there is no text to post,
+   * and `create_recording_entry` makes the entry and the fic link on its own
+   * from what rides along with the audio.
+   */
+  const sendCommentary = () => {
+    const text = commentary.trim();
+    if (!text && clips.clips.length === 0) return;
+    // Claimed here, not inside the mutation: `mutationFn` runs asynchronously,
+    // by which time `reset()` below has cleared the stage and `claimId` would
+    // mint a *second* id — the typed half would land on an entry of its own,
+    // beside the clips it was written with.
+    const id = clips.claimId();
+    if (text) saveCommentary.mutate({ text, id });
+    else setCommentarySaved('recording saved — the transcript follows ✓');
+    void clips.commit();
+    clips.reset();
+  };
 
   const groups = useMemo(
     () => groupChaptersByCategory(chapters ?? []),
@@ -797,7 +781,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                       if (e.key === 'Enter' && !e.shiftKey) {
                         e.preventDefault();
                         if (commentary.trim() && !saveCommentary.isPending) {
-                          saveCommentary.mutate(commentary.trim());
+                          sendCommentary();
                           e.currentTarget.blur();
                         }
                       }
@@ -814,56 +798,45 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                       {(saveCommentary.error as Error).message}
                     </div>
                   )}
-                  {recordingNotice && (
-                    <p className="mb-2 text-xs text-[var(--color-text-muted)]">
-                      {recordingNotice}
-                    </p>
-                  )}
-                  {recorder.error && (
-                    <p className="mb-2 text-xs text-red-400">
-                      {recorder.error}
-                    </p>
-                  )}
-                  <div className="flex justify-end gap-2">
-                    {recorder.status === 'recording' && (
+                  <ClipStrip stage={clips} testId="fanfic-commentary" />
+                  <div className="flex justify-end gap-2 mt-2">
+                    {clips.recording && (
                       <span className="mr-auto self-center text-xs text-[var(--color-text-muted)]">
-                        Stop to save — it transcribes itself.
+                        Stop when you pause — you can add another clip.
                       </span>
                     )}
                     <button
-                      onClick={toggleRecording}
-                      // Not gated on being online any more: the clip is stored
-                      // on the device and uploaded when the server is back, so
+                      onClick={clips.toggle}
+                      // Not gated on being online: the clip is stored on the
+                      // device and uploaded when the server is back, so
                       // commentary on a chapter read offline is still kept.
                       // Only the moment it is being handed over is blocked, and
                       // while recording this button is the only way to stop.
-                      disabled={
-                        recorder.status === 'saving' || recordingStarting
-                      }
+                      disabled={clips.busy}
+                      data-testid="fanfic-commentary-record"
                       title={
-                        recordingStarting
+                        clips.starting
                           ? 'Starting microphone'
-                          : recorder.status === 'recording'
+                          : clips.recording
                             ? 'Stop recording'
-                            : 'Record commentary — it saves and transcribes itself'
+                            : 'Record commentary — it is sent with the rest'
                       }
                       className={`px-3 py-1 rounded disabled:opacity-50 ${
-                        recorder.status === 'recording'
+                        clips.recording
                           ? 'bg-red-600 hover:bg-red-700 text-white'
                           : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
                       }`}
                     >
-                      {recordingStarting
-                        ? 'Starting…'
-                        : recorder.status === 'recording'
-                          ? '■ Stop'
-                          : recorder.status === 'saving'
-                            ? 'Saving…'
-                            : '🎤'}
+                      {clipButtonLabel(clips.status, clips.starting)}
                     </button>
                     <button
-                      onClick={() => saveCommentary.mutate(commentary.trim())}
-                      disabled={!commentary.trim() || saveCommentary.isPending}
+                      onClick={sendCommentary}
+                      // Never gated on the recorder: a stopped clip is staged,
+                      // and one still recording is stopped by its own button.
+                      disabled={
+                        (!commentary.trim() && clips.clips.length === 0) ||
+                        saveCommentary.isPending
+                      }
                       className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
                     >
                       {saveCommentary.isPending ? 'Saving…' : 'Save to journal'}

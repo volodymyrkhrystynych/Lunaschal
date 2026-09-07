@@ -1,10 +1,16 @@
 import { useState } from 'react';
+import { MealClips, visualMedia } from './MealClips';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { FoodEntry } from '../../hooks/api';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { useListSelection } from '../../shortcuts/useListSelection';
-import { ratingStars, foodTitle, mapLink } from '../../lib/food';
+import {
+  ratingStars,
+  foodTitle,
+  mapLink,
+  hasRunningMealTranscript,
+} from '../../lib/food';
 import { groupByFoodDay } from '../../lib/foodDay';
 import { FoodCapture } from './FoodCapture';
 
@@ -113,9 +119,11 @@ function FoodEntryCard({
         selected ? 'border-[var(--color-primary)]' : 'border-white/10'
       }`}
     >
-      {entry.media.length > 0 && (
+      <MealClips media={entry.media} />
+
+      {visualMedia(entry.media).length > 0 && (
         <div className="flex gap-2 overflow-x-auto mb-3 pb-1">
-          {entry.media.map(m =>
+          {visualMedia(entry.media).map(m =>
             m.kind === 'video' ? (
               <video
                 key={m.id}
@@ -285,6 +293,10 @@ export function FoodLog() {
   const { data: entries, isLoading } = useQuery({
     queryKey: ['food', 'list', { tag: selectedTag }],
     queryFn: () => api.food.list({ tag: selectedTag ?? undefined }),
+    // Only while a clip is being transcribed: the result arrives on a
+    // background worker with nothing on this side to invalidate from.
+    refetchInterval: q =>
+      hasRunningMealTranscript(q.state.data) ? 4000 : false,
   });
 
   const { next, prev, isSelected, scrollSelectedIntoView } = useListSelection(

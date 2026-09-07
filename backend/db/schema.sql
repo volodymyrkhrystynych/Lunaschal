@@ -562,10 +562,17 @@ CREATE INDEX IF NOT EXISTS idx_food_entries_created ON food_entries(created_at D
 CREATE TABLE IF NOT EXISTS food_media (
     id TEXT PRIMARY KEY,
     entry_id TEXT NOT NULL REFERENCES food_entries(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,                   -- 'image' | 'video'
+    kind TEXT NOT NULL,                   -- 'image' | 'video' | 'audio'
     path TEXT NOT NULL,
     mime TEXT,
     position INTEGER NOT NULL DEFAULT 0,
+    -- Audio only: what was said over the plate. Transcribed in the background
+    -- after the upload, then appended to food_entries.raw_content so the
+    -- existing structuring pass reads it like anything typed. The clip stays —
+    -- it is media of the meal, the same as the photograph.
+    transcript TEXT,
+    transcript_status TEXT NOT NULL DEFAULT 'idle',   -- idle|running|done|error
+    transcript_error TEXT,
     created_at INTEGER NOT NULL
 );
 
@@ -1056,6 +1063,13 @@ CREATE TABLE IF NOT EXISTS ideas (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL DEFAULT '',
     raw_content TEXT NOT NULL DEFAULT '',
+    -- The transcript half of raw_content, as last delivered. An idea can be
+    -- typed and spoken in the same capture, and each new clip arrives as a
+    -- longer version of the whole spoken passage rather than as its own line —
+    -- so this records where the typed text ends, letting the spoken half be
+    -- replaced without touching what the user wrote. See
+    -- apply_recording_transcript in backend/routes/ideas.py.
+    recording_text TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'new'
         CHECK(status IN ('new','researching','ready','planned','building','shipped','parked')),

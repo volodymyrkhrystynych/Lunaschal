@@ -1,7 +1,10 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { MUTATION_KEYS, type JournalRecordingVars } from './mutationDefaults';
 import {
-  assignRecordingEntry,
+  MUTATION_KEYS,
+  type FoodRecordingVars,
+  type JournalRecordingVars,
+} from './mutationDefaults';
+import {
   finalizeRecording,
   listRecordings,
   type RecordingFic,
@@ -55,15 +58,40 @@ export function enqueueRecordingUpload(
   });
 }
 
+/**
+ * The food log's clip upload, which does not go through the journal at all.
+ *
+ * A meal is not a journal entry — it is a `food_entries` row the feed borrows —
+ * so its audio is a `food_media` row rather than a journal attachment. Same
+ * durability contract, different route.
+ */
+export function enqueueFoodRecording(
+  qc: QueryClient,
+  id: string,
+  foodId: string,
+  position?: number
+): Promise<unknown> {
+  const mutation = qc
+    .getMutationCache()
+    .build<unknown, Error, FoodRecordingVars, unknown>(qc, {
+      mutationKey: MUTATION_KEYS.foodRecording,
+    });
+  return mutation.execute({ id, foodId, position });
+}
+
 /** True if this recording already has a live or paused upload in flight. */
 function alreadyQueued(qc: QueryClient, id: string): boolean {
   return qc
     .getMutationCache()
     .getAll()
     .some(m => {
-      if (m.options.mutationKey?.[0] !== 'journal') return false;
-      if (m.options.mutationKey?.[1] !== 'recording') return false;
-      const vars = m.state.variables as JournalRecordingVars | undefined;
+      const [group, kind] = m.options.mutationKey ?? [];
+      // Both recording mutations, because the boot sweep is what would
+      // otherwise queue a food clip a second time under the journal route.
+      if (group !== 'journal' && group !== 'food') return false;
+      if (kind !== 'recording') return false;
+      const vars = m.state.variables as
+        JournalRecordingVars | FoodRecordingVars | undefined;
       return vars?.id === id && m.state.status === 'pending';
     });
 }
@@ -88,79 +116,6 @@ export async function handleFinishedRecording(
 }
 
 /**
- * The same policy, aimed at an entry that already exists.
- *
- * The Journal's Transcribe button records while an entry is open for editing,
- * so the clip belongs on *that* entry rather than on a new one of its own. It
- * goes through the identical durable queue — same mutation, same idempotency,
- * same "never let go of the audio until the server confirms it" — because
- * `POST /api/journal/recordings` does `INSERT OR IGNORE` on the entry: handed
- * an id that already exists, it skips the insert and attaches the file to what
- * is there.
- *
- * The transcript is not the server's job here. It was already fetched in the
- * browser and appended to the draft the user is looking at
- * (`deliverTranscript`), so the stored recording's mode is `audio` and the
- * upload carries `transcribe=false` — a second server-side pass would burn
- * another CPU transcription and write the text into the entry body underneath
- * an open editor.
- */
-export async function attachRecordingToEntry(
-  qc: QueryClient,
-  rec: StoredRecording,
-  entryId: string,
-  opts: { name?: string } = {}
-): Promise<void> {
-  // Written to the store before the upload is queued, so the boot sweep can
-  // put a rescued clip back on this entry rather than filing it as a new one.
-  await assignRecordingEntry(rec.id, entryId);
-  await enqueueRecordingUpload(qc, rec.id, opts.name ?? DEFAULT_NAME, {
-    entryId,
-  });
-}
-
-/**
- * The Ideas tab's Record button: the same durable journal upload, carrying the
- * id of the idea the clip is also being captured as.
- *
- * Deliberately not awaited by its caller. The other two are — their buttons sit
- * in a panel that shows "Saving…" — but stopping the recording *is* the save
- * here, and the idea is already on screen from the optimistic insert. Waiting
- * would park the button on "Saving…" for as long as the phone stays offline,
- * over a recording that is safely on disk.
- */
-export function captureIdeaRecording(
-  qc: QueryClient,
-  rec: StoredRecording,
-  opts: { name?: string } = {}
-): Promise<unknown> {
-  return enqueueRecordingUpload(qc, rec.id, opts.name ?? IDEA_NAME, {
-    idea: rec.idea,
-  });
-}
-
-/**
- * The fanfic reader's Commentary microphone: the same durable journal upload,
- * carrying the fic and chapter the clip is commentary on.
- *
- * Deliberately not awaited, like the Ideas capture and for the same reason —
- * stopping the recording *is* the save. It used to be the opposite: the clip
- * was transcribed in the browser, the text appended to the commentary box and
- * posted as a plain journal entry, so the audio existed only in memory and a
- * transcription failure took the thought with it. Now the recording lands
- * first and the transcript arrives on the entry minutes later.
- */
-export function captureFicCommentary(
-  qc: QueryClient,
-  rec: StoredRecording,
-  opts: { name?: string } = {}
-): Promise<unknown> {
-  return enqueueRecordingUpload(qc, rec.id, opts.name ?? COMMENTARY_NAME, {
-    fic: rec.fic,
-  });
-}
-
-/**
  * Pick up recordings left on the device by a previous session.
  *
  * `resumePausedMutations()` only knows about mutations React Query itself saw
@@ -179,6 +134,13 @@ export async function resumeStoredRecordings(qc: QueryClient): Promise<void> {
     // Never finalized: the app died mid-recording. Close it and upload the
     // prefix — a truncated recording still carries most of what was said.
     if (!rec.finalized) await finalizeRecording(rec.id, { recovered: true });
+    // A meal's clip goes to the food route or nowhere: filing it as a journal
+    // entry would put the words in a different tab from the photograph of the
+    // plate they were spoken over.
+    if (rec.food) {
+      void enqueueFoodRecording(qc, rec.id, rec.food.id).catch(() => undefined);
+      continue;
+    }
     void enqueueRecordingUpload(
       qc,
       rec.id,

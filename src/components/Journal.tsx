@@ -12,16 +12,6 @@ import {
   useJournalCreate,
   useJournalUpdate,
 } from '../offline/mutationDefaults';
-import {
-  attachRecordingToEntry,
-  enqueueRecordingUpload,
-  handleFinishedRecording,
-} from '../offline/recordingQueue';
-import {
-  assembleBlob,
-  assignRecordingEntry,
-  deleteRecording,
-} from '../offline/recordingStore';
 import { storePhoto } from '../offline/photoStore';
 import { enqueueJournalAttachment } from '../offline/photoQueue';
 import { buildFeed, type FeedItem } from '../lib/journalFeed';
@@ -40,7 +30,6 @@ import {
   defaultNameFor,
   filesFromTransfer,
   isVoiceOnlyEntry,
-  recordingFilename,
   rejectedFilesMessage,
 } from '../lib/journalAttachments';
 import { AttachmentButtons } from './AttachmentButtons';
@@ -55,10 +44,19 @@ import type {
   FoodJournalItem,
   TaskEvent,
 } from '../hooks/api';
-import { ratingStars, foodTitle, mapLink, parseTags } from '../lib/food';
+import {
+  ratingStars,
+  foodTitle,
+  mapLink,
+  parseTags,
+  hasRunningMealTranscript,
+} from '../lib/food';
 import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
-import { useRecorder } from '../hooks/useRecorder';
+import { useClipStage } from '../hooks/useClipStage';
+import { ClipStrip } from './ClipRecorder';
+import { MealClips, visualMedia } from './Food/MealClips';
+import { clipButtonLabel } from '../lib/clipStage';
 
 interface JournalProps {
   /** Navigate to the fanfic reader (chip on entries linked to a fic chapter). */
@@ -89,14 +87,13 @@ const JOURNAL_PAGE_SIZE = 50;
 /**
  * A file waiting in the compose box for the entry it belongs to to exist.
  *
- * `recordingId` is set only for a clip recorded here. It is the id of the copy
- * still sitting in IndexedDB: the audio is not let go of until the upload after
- * Save confirms it landed, so a tab that dies between the two leaves the
- * recording recoverable (`resumeStoredRecordings`) rather than gone.
+ * Pictures and pasted files only. A clip recorded here never becomes one of
+ * these — it stays in `recordingStore` and is tracked by `useClipStage`, which
+ * is what lets it be uploaded straight from the device rather than being read
+ * back into a `File` first.
  */
 interface StagedFile {
   file: File;
-  recordingId?: string;
 }
 
 // Long enough to swallow a burst of typing, short enough that a pause feels
@@ -143,42 +140,20 @@ export function Journal({
     null
   );
   const [showDelete, setShowDelete] = useState(false);
-  // Dictation into the entry being edited. Only one entry is editable at a
-  // time, so one recorder serves the whole list. The transcript is appended
-  // rather than submitted (the BrainDump/IdeaCapture pattern) — it can be
-  // corrected, or a second thought added, before Save.
-  // Durable: this is a journal entry being spoken, so the audio is held on the
-  // device until something confirms it landed. If transcription fails it is
-  // saved as an audio entry rather than dropped (see recordingQueue).
-  const [recorderNotice, setRecorderNotice] = useState('');
-  // The entry id is read through a ref, not closed over: `onRecording` is
-  // installed once and fires minutes later, and by then `editingId` may have
-  // moved on — the audio has to land on the entry that was open when Record was
-  // pressed, not whichever one is open when it finishes uploading.
-  const editingIdRef = useRef<string | null>(null);
-  editingIdRef.current = editingId;
-  const editRecorder = useRecorder(
-    text => setEditContent(prev => (prev ? `${prev}\n${text}` : text)),
-    undefined,
-    {
-      durable: true,
-      // Both halves: the text comes back here and is appended to the textarea
-      // so it can be corrected before Save, and the clip itself is kept as an
-      // attachment on the entry rather than being thrown away once it has been
-      // read. See the button's own comment.
-      deliverTranscript: true,
-      onNotice: setRecorderNotice,
-      onRecording: rec => {
-        const entryId = editingIdRef.current;
-        // No entry to hang it on (the editor was closed mid-recording): fall
-        // back to the standing policy, which is a recording entry of its own.
-        // Never drop the audio.
-        return entryId
-          ? attachRecordingToEntry(queryClient, rec, entryId)
-          : handleFinishedRecording(queryClient, rec);
-      },
-    }
-  );
+  // Recording into the entry being edited. Only one entry is editable at a
+  // time, so one stage serves the whole list — it reads the open entry's id
+  // out of the target on every call rather than caching it, because "which
+  // entry is open" changes underneath a long-lived hook.
+  //
+  // It used to fetch the transcript in the browser and append it to the
+  // textarea before the clip was even stored, so a second thought had to wait
+  // out a CPU transcription of the first. Now stopping stages the clip, the
+  // clips go up when the editor closes, and the server appends their
+  // transcripts to the entry in order.
+  const editClips = useClipStage({
+    kind: 'journal',
+    entryId: editingId ?? undefined,
+  });
   const [polishingFor, setPolishingFor] = useState<string | null>(null);
   const [polishError, setPolishError] = useState<{
     id: string;
@@ -289,6 +264,10 @@ export function Journal({
     queryKey: ['food', 'journal'],
     queryFn: () => api.food.journal(),
     enabled: foodVisible,
+    // Same reason as the Food log's own list: a meal clip's transcript lands on
+    // a background worker, with nothing on this side to invalidate from.
+    refetchInterval: q =>
+      hasRunningMealTranscript(q.state.data) ? 4000 : false,
   });
 
   // Task completions/deletions surface as small notifications in the feed.
@@ -418,8 +397,12 @@ export function Journal({
   const createEntry = useJournalCreate();
   const updateEntry = useJournalUpdate();
 
-  const submitNewEntry = (content: string, staged: StagedFile[]) => {
-    const id = ulid();
+  const submitNewEntry = (
+    id: string,
+    content: string,
+    staged: StagedFile[],
+    clipCount: number
+  ) => {
     // Fired first, so it is first into JOURNAL_LANE and the entry exists before
     // anything is hung off it — online *and* on a queue replayed after a
     // reload, where the two would otherwise race.
@@ -428,8 +411,9 @@ export function Journal({
       content,
       // Tells the server files are coming, so the title waits for their
       // captions instead of being generated from the text alone milliseconds
-      // from now.
-      pendingAttachments: staged.length || undefined,
+      // from now. Clips count too: a title generated before the recordings
+      // have been transcribed is a title for an entry that was still empty.
+      pendingAttachments: staged.length + clipCount || undefined,
     });
     setStagedUploadError(null);
     setShowNewEntry(false);
@@ -454,21 +438,6 @@ export function Journal({
    */
   const queueStagedFiles = async (entryId: string, files: StagedFile[]) => {
     for (const staged of files) {
-      // A recording is already durable — it has been in `recordingStore` since
-      // the moment it was captured — so it goes up its own idempotent route
-      // rather than being copied into the photo store as well. Carrying
-      // `entryId` is also what stops a rescued clip from arriving as an entry
-      // of its own: the boot sweep reads it back off the stored recording.
-      if (staged.recordingId) {
-        await assignRecordingEntry(staged.recordingId, entryId);
-        void enqueueRecordingUpload(
-          queryClient,
-          staged.recordingId,
-          defaultNameFor(staged.file.name),
-          { entryId }
-        );
-        continue;
-      }
       try {
         const attachmentId = ulid();
         await storePhoto(attachmentId, staged.file, 'journal', entryId);
@@ -491,11 +460,26 @@ export function Journal({
     }
   };
 
-  const submitEdit = (id: string) => {
-    updateEntry.mutate({ id, content: editContent, title: editTitle });
+  /**
+   * Close the editor, sending whatever was recorded into it.
+   *
+   * Clips commit on Cancel as well as Save, deliberately. The entry already
+   * exists, so there is nothing for a clip to be "not saved" into — and
+   * discarding a recording because the text edit beside it was abandoned is
+   * exactly the kind of silent audio loss the durable path exists to refuse. A
+   * clip that really is unwanted is thrown away from its own chip.
+   */
+  const closeEditor = () => {
+    void editClips.commit();
+    editClips.reset();
     setEditingId(null);
     setEditContent('');
     setEditTitle('');
+  };
+
+  const submitEdit = (id: string) => {
+    updateEntry.mutate({ id, content: editContent, title: editTitle });
+    closeEditor();
   };
 
   const deleteEntry = useMutation({
@@ -563,7 +547,7 @@ export function Journal({
     },
     drillOut: () => {
       if (!editingId) return false;
-      setEditingId(null);
+      closeEditor();
       return true;
     },
   });
@@ -760,7 +744,7 @@ export function Journal({
                 onChange={e => setEditTitle(e.target.value)}
                 placeholder="Entry title..."
                 onKeyDown={e => {
-                  if (e.key === 'Escape') setEditingId(null);
+                  if (e.key === 'Escape') closeEditor();
                 }}
                 className="w-full bg-transparent text-[var(--color-text)] font-medium focus:outline-none border border-white/10 rounded p-2 mb-2"
               />
@@ -770,7 +754,7 @@ export function Journal({
                 rows={4}
                 autoFocus
                 onKeyDown={e => {
-                  if (e.key === 'Escape') setEditingId(null);
+                  if (e.key === 'Escape') closeEditor();
                 }}
                 className="w-full bg-transparent text-[var(--color-text)] resize-none focus:outline-none border border-white/10 rounded p-2"
               />
@@ -778,59 +762,38 @@ export function Journal({
             {isVoiceOnlyEntry(entry) && (
               <MergeIntoPicker
                 entry={entry}
-                onMerged={() => setEditingId(null)}
+                // Through closeEditor like every other way out, so a clip
+                // recorded before the merge is handed over rather than left
+                // staged under whichever entry is opened next.
+                onMerged={closeEditor}
               />
             )}
-            {editRecorder.error && (
-              <p className="mt-2 text-xs text-red-400">{editRecorder.error}</p>
-            )}
-            {!editRecorder.error && recorderNotice && (
-              <p className="mt-2 text-xs text-amber-300">{recorderNotice}</p>
-            )}
+            <ClipStrip stage={editClips} testId="journal-edit" />
             <div className="flex items-center gap-2 mt-2">
-              {/* `start('audio')` even though this button transcribes: the
-                  stored mode is what decides whether the *server* transcribes
-                  the upload too, and it must not — the text is fetched here and
-                  put in the textarea above so it can be corrected before Save.
-                  The clip is kept regardless; transcribing it is no longer a
-                  reason to throw it away. */}
               <button
                 type="button"
-                onClick={() => {
-                  if (editRecorder.status === 'recording') editRecorder.stop();
-                  else if (editRecorder.status === 'idle')
-                    void editRecorder.start('audio');
-                }}
-                disabled={
-                  editRecorder.status === 'transcribing' ||
-                  editRecorder.status === 'saving'
-                }
-                title={
-                  editRecorder.canTranscribe
-                    ? 'Record — the audio is attached to this entry and transcribed into it'
-                    : 'Offline — the recording is kept and uploaded later, but there is no transcript until the server is back'
-                }
+                onClick={editClips.toggle}
+                // Only while a clip is being closed out. Recording works
+                // offline — the audio is stored and uploaded later — so being
+                // offline no longer greys this out.
+                disabled={editClips.busy}
+                data-testid="journal-edit-record"
+                title="Record — the clip is attached to this entry and transcribed into it once you close the editor"
                 aria-label={
-                  editRecorder.status === 'recording'
+                  editClips.recording
                     ? 'Stop recording'
-                    : 'Transcribe into this entry'
+                    : 'Record into this entry'
                 }
                 className={`px-2 py-1 rounded text-sm ${
-                  editRecorder.status === 'recording'
+                  editClips.recording
                     ? 'bg-red-500/25 text-red-300'
                     : 'bg-white/10 text-[var(--color-text)] hover:bg-white/15'
                 } disabled:opacity-50`}
               >
-                {editRecorder.status === 'recording'
-                  ? '■ Stop'
-                  : editRecorder.status === 'transcribing'
-                    ? 'Transcribing…'
-                    : editRecorder.status === 'saving'
-                      ? 'Saving…'
-                      : '● Transcribe'}
+                {clipButtonLabel(editClips.status, editClips.starting)}
               </button>
               <button
-                onClick={() => setEditingId(null)}
+                onClick={closeEditor}
                 className="ml-auto px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
               >
                 Cancel
@@ -1106,7 +1069,12 @@ function NewEntryComposer({
   onSubmit,
   onCancel,
 }: {
-  onSubmit: (content: string, files: StagedFile[]) => void;
+  onSubmit: (
+    id: string,
+    content: string,
+    files: StagedFile[],
+    clipCount: number
+  ) => void;
   onCancel: () => void;
 }) {
   const [content, setContent] = useDraftState('journal:new:content', '');
@@ -1116,36 +1084,15 @@ function NewEntryComposer({
   const [error, setError] = useState<string | null>(null);
   const [recorderNotice, setRecorderNotice] = useState('');
 
-  // The composer's Transcribe button. Same two halves as the one in edit mode:
-  // the text is appended to the draft below, and the clip is kept.
+  // The composer's Record button. Stopping stages the clip and nothing else —
+  // the entry's id is minted at the first chunk, so every clip in this session
+  // lands on the same entry and the server transcribes them into it in order.
   //
-  // It can only be *staged*, not uploaded, because the entry it belongs to does
-  // not exist yet — which is also why the transcript has to come back to the
-  // browser rather than being written server-side. The stored recording stays
-  // in IndexedDB until the upload after Save confirms it landed; see
-  // `uploadStagedFiles`.
-  const recorder = useRecorder(
-    text => setContent(prev => (prev ? `${prev}\n${text}` : text)),
-    undefined,
-    {
-      durable: true,
-      deliverTranscript: true,
-      onNotice: setRecorderNotice,
-      onRecording: async rec => {
-        const blob = await assembleBlob(rec.id);
-        if (!blob || blob.size === 0) return;
-        const name = recordingFilename(rec.mimeType);
-        setError(null);
-        setFiles(current => [
-          ...current,
-          {
-            file: new File([blob], name, { type: rec.mimeType }),
-            recordingId: rec.id,
-          },
-        ]);
-      },
-    }
-  );
+  // It used to fetch the transcript in the browser first, blocking on
+  // `POST /api/transcribe` before the clip was even staged, because the entry
+  // did not exist yet and there was nowhere server-side for the text to go.
+  // Minting the id up front is what removed that constraint.
+  const clips = useClipStage({ kind: 'journal' });
 
   const stage = (transfer: DataTransfer | null, e: React.SyntheticEvent) => {
     const { accepted, rejected } = filesFromTransfer(transfer);
@@ -1163,10 +1110,15 @@ function NewEntryComposer({
   const submit = () => {
     // A photo with no words is a real entry — and the one that most needs its
     // title generated from a caption. So is a recording with no words typed.
-    if (!content.trim() && files.length === 0) return;
-    onSubmit(content, files);
+    if (!content.trim() && files.length === 0 && clips.clips.length === 0)
+      return;
+    onSubmit(clips.claimId(), content, files, clips.clips.length);
+    // Not awaited: the clips are on the device, and the queue lands them behind
+    // the create in JOURNAL_LANE whenever the backend is next reachable.
+    void clips.commit();
     setContent('');
     setFiles([]);
+    clips.reset();
   };
 
   return (
@@ -1209,46 +1161,27 @@ function NewEntryComposer({
         extra={
           <button
             type="button"
-            onClick={() => {
-              if (recorder.status === 'recording') recorder.stop();
-              else if (recorder.status === 'idle') void recorder.start('audio');
-            }}
-            disabled={
-              recorder.status === 'transcribing' || recorder.status === 'saving'
-            }
+            onClick={clips.toggle}
+            // Only while a clip is being closed out into IndexedDB. Recording
+            // needs no backend and staging does not either, so nothing here is
+            // gated on being online any more.
+            disabled={clips.busy}
             data-testid="journal-new-entry-transcribe"
-            title={
-              recorder.canTranscribe
-                ? 'Record — the audio is attached to the entry and transcribed into it'
-                : 'Offline — the recording is kept and attached on save, but there is no transcript until the server is back'
-            }
+            title="Record — the clip is attached to the entry and transcribed into it after you save"
             aria-label={
-              recorder.status === 'recording'
-                ? 'Stop recording'
-                : 'Transcribe into this entry'
+              clips.recording ? 'Stop recording' : 'Record into this entry'
             }
             className={`px-2 py-1 text-xs rounded border ${
-              recorder.status === 'recording'
+              clips.recording
                 ? 'border-red-500/40 bg-red-500/25 text-red-300'
                 : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20'
             } disabled:opacity-50`}
           >
-            {recorder.status === 'recording'
-              ? '■ Stop'
-              : recorder.status === 'transcribing'
-                ? 'Transcribing…'
-                : recorder.status === 'saving'
-                  ? 'Saving…'
-                  : '● Transcribe'}
+            {clipButtonLabel(clips.status, clips.starting)}
           </button>
         }
       />
-      {recorder.error && (
-        <p className="mt-2 text-xs text-red-400">{recorder.error}</p>
-      )}
-      {!recorder.error && recorderNotice && (
-        <p className="mt-2 text-xs text-amber-300">{recorderNotice}</p>
-      )}
+      <ClipStrip stage={clips} testId="journal-new-entry" />
       {error && (
         <div className="mt-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
           {error}
@@ -1263,15 +1196,9 @@ function NewEntryComposer({
             >
               {s.file.name || 'attachment'}
               <button
-                onClick={() => {
-                  // Discarding a staged recording is one of the two places the
-                  // audio may be let go of without the server having seen it —
-                  // the user said to.
-                  if (s.recordingId) void deleteRecording(s.recordingId);
-                  setFiles(current =>
-                    current.filter((_, index) => index !== i)
-                  );
-                }}
+                onClick={() =>
+                  setFiles(current => current.filter((_, index) => index !== i))
+                }
                 aria-label={`Remove ${s.file.name || 'attachment'}`}
                 className="text-red-400 hover:text-red-300"
               >
@@ -1287,11 +1214,11 @@ function NewEntryComposer({
       <div className="flex justify-end gap-2 mt-2">
         <button
           onClick={() => {
-            // Cancelling is an explicit discard, so the stored audio goes with
-            // it rather than being rescued into an entry of its own later.
-            for (const st of files) {
-              if (st.recordingId) void deleteRecording(st.recordingId);
-            }
+            // Cancelling discards the staged clips too — the entry they were
+            // recorded for is being abandoned, and unlike edit mode there is no
+            // existing row for them to belong to.
+            for (const clip of clips.clips) clips.remove(clip.id);
+            clips.reset();
             setFiles([]);
             setContent('');
             onCancel();
@@ -1302,7 +1229,9 @@ function NewEntryComposer({
         </button>
         <button
           onClick={submit}
-          disabled={!content.trim() && files.length === 0}
+          disabled={
+            !content.trim() && files.length === 0 && clips.clips.length === 0
+          }
           className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
         >
           Save
@@ -1760,9 +1689,11 @@ const JournalFoodItem = memo(function JournalFoodItem({
         </div>
       )}
 
-      {food.media.length > 0 && (
+      <MealClips media={food.media} />
+
+      {visualMedia(food.media).length > 0 && (
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {food.media.map(m =>
+          {visualMedia(food.media).map(m =>
             m.kind === 'video' ? (
               <video
                 key={m.id}

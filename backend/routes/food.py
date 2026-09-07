@@ -29,13 +29,27 @@ def _media_url(media_id: str) -> str:
 
 def _entry_media(db, entry_id: str) -> list[dict]:
     rows = db.execute(
-        'SELECT id, kind, position FROM food_media WHERE entry_id=? ORDER BY position ASC, created_at ASC',
+        'SELECT id, kind, position, transcript, transcript_status, transcript_error'
+        ' FROM food_media WHERE entry_id=? ORDER BY position ASC, created_at ASC',
         (entry_id,),
     ).fetchall()
-    return [
-        {'id': r['id'], 'kind': r['kind'], 'position': r['position'], 'url': _media_url(r['id'])}
-        for r in rows
-    ]
+    return [_media_dict(r) for r in rows]
+
+
+def _media_dict(r) -> dict:
+    d = {
+        'id': r['id'],
+        'kind': r['kind'],
+        'position': r['position'],
+        'url': _media_url(r['id']),
+    }
+    # Only for a clip: a photo carrying transcript fields would render an empty
+    # "Transcript" block under every picture.
+    if r['kind'] == 'audio':
+        d['transcript'] = r['transcript']
+        d['transcriptStatus'] = r['transcript_status']
+        d['transcriptError'] = r['transcript_error']
+    return d
 
 
 def _linked_recipe(db, recipe_id: str | None) -> dict | None:
@@ -79,7 +93,10 @@ def _parse_tags_field(raw) -> list | None:
 # --- Media persistence ---
 
 
-def _save_media_file(entry_id: str, file, position: int, media_id: str | None = None):
+def _save_media_file(
+    entry_id: str, file, position: int, media_id: str | None = None,
+    *, kind: str | None = None,
+):
     """Persist one upload. Returns (public_dict, disk_path, kind), or None if the
     type isn't allowed. The public dict is what the client sees; disk_path/kind
     are for server-side use (EXIF). HEIC/HEIF is transcoded to JPEG so it renders
@@ -115,7 +132,10 @@ def _save_media_file(entry_id: str, file, position: int, media_id: str | None = 
     else:
         file.save(path)
 
-    kind = storage.kind_for_ext(ext)
+    # An explicit kind beats the extension. The recordings route below knows it
+    # is holding a voice memo, and `recording.webm` on its own does not say so:
+    # webm carries either, and an ambiguous container is read as video.
+    kind = kind or storage.kind_for_ext(ext)
     now = int(time.time())
     get_db().execute(
         'INSERT OR IGNORE INTO food_media(id, entry_id, kind, path, mime, position, created_at)'
@@ -206,6 +226,160 @@ def structure_food_entry(entry_id: str, text: str) -> None:
     check_homemade_recipe_match(entry_id)
 
 
+# --- Meal recordings -----------------------------------------------------------
+#
+# A clip spoken over the plate. It mirrors POST /api/journal/recordings beat for
+# beat, because the contract is the same one: the phone holds the audio until
+# the server confirms it and re-POSTs on every reconnect, so both ids come from
+# the client and a replay must be a no-op — checked before the file is read, so
+# a retry does not stream the recording to disk again to discover it was
+# already there.
+#
+# The entry is created if it is not there yet. A clip can outrun the meal it
+# belongs to (the composer sends the create first, but a boot sweep after a
+# crash sends only the clip), and the alternative to INSERT OR IGNORE is a 404
+# that strands the audio.
+
+def _transcribe_media_bg(media_id: str, entry_id: str, path: str, *, now: bool = False) -> None:
+    """Transcribe one meal clip, then fold it into the entry's raw text.
+
+    The transcript is appended rather than assigned, and only the first time
+    this clip produces one: several clips can be staged against one meal, and a
+    re-run must refresh the clip's own text without pasting it into the entry
+    twice — the same rule the journal's attachments follow.
+    """
+    def _run():
+        from backend.routes import stt as stt_routes
+
+        try:
+            p = storage.resolve_stored_path(path)
+            if p is None or not p.is_file():
+                raise RuntimeError('The recording is missing')
+            text = stt_routes.transcribe_file(p)
+            status, error = 'done', None
+        except Exception as e:
+            text, status, error = None, 'error', str(e) or 'Failed'
+            print(f'Meal clip transcription failed for {media_id}: {e}')
+
+        try:
+            db = get_db()
+            prior = db.execute(
+                'SELECT transcript FROM food_media WHERE id=?', (media_id,)
+            ).fetchone()
+            first_time = not (prior and prior['transcript'])
+            updates = {'transcript_status': status, 'transcript_error': error}
+            if text is not None:
+                updates['transcript'] = text
+            build_update(db, 'food_media', updates, 'id=?', (media_id,))
+            if text is not None and first_time:
+                _append_entry_text(db, entry_id, text)
+            db.commit()
+        except Exception as e:
+            print(f'Failed to record meal transcription for {media_id}: {e}')
+            return
+
+        # Structure whatever the entry now says — including on the failure path,
+        # where the meal may still have been typed or photographed. Re-running
+        # per clip rather than waiting for the last one, for the reason the
+        # journal does the same: it is not knowable here that another clip is
+        # coming, and the shared FIFO worker means the version enqueued from the
+        # last clip is the one that writes last.
+        row = get_db().execute(
+            'SELECT raw_content FROM food_entries WHERE id=?', (entry_id,)
+        ).fetchone()
+        body = (row['raw_content'] or '').strip() if row else ''
+        if body:
+            jobs.enqueue('food.structure', entry_id, {'text': body})
+
+    if now:
+        _run()
+    else:
+        jobs.enqueue('food.transcribe_media', media_id,
+                     {'entry_id': entry_id, 'path': path})
+
+
+def _append_entry_text(db, entry_id: str, text: str) -> None:
+    """Add a clip's transcript to the end of a meal's raw note.
+
+    A blank line between clips, not a space — the gap is the pause that was
+    taken, and it is the only thing distinguishing "one thought, said twice"
+    from a run-on sentence.
+    """
+    row = db.execute(
+        'SELECT raw_content FROM food_entries WHERE id=?', (entry_id,)
+    ).fetchone()
+    if row is None:
+        return
+    existing = (row['raw_content'] or '').strip()
+    merged = f'{existing}\n\n{text}' if existing else text
+    db.execute(
+        'UPDATE food_entries SET raw_content=?, updated_at=? WHERE id=?',
+        (merged, int(time.time()), entry_id),
+    )
+
+
+@bp.post('/recordings')
+def create_recording():
+    audio = request.files.get('audio')
+    if audio is None or not audio.filename:
+        return jsonify({'error': 'Missing audio file'}), 400
+    entry_id = (request.form.get('id') or '').strip()
+    media_id = (request.form.get('mediaId') or '').strip()
+    if not entry_id or not media_id:
+        return jsonify({'error': 'id and mediaId are required'}), 400
+
+    db = get_db()
+    # Before the file is read: a replay must not stream the recording to disk
+    # again only to discover the row is already there.
+    existing = db.execute(
+        'SELECT id, kind, position, transcript, transcript_status, transcript_error'
+        ' FROM food_media WHERE id=?',
+        (media_id,),
+    ).fetchone()
+    if existing:
+        return jsonify({'id': entry_id, 'media': _media_dict(existing)}), 201
+
+    now = int(time.time())
+    db.execute(
+        'INSERT OR IGNORE INTO food_entries(id, raw_content, created_at, updated_at)'
+        ' VALUES (?,?,?,?)',
+        (entry_id, None, now, now),
+    )
+
+    try:
+        position = int(request.form.get('position'))
+    except (TypeError, ValueError):
+        position = _next_media_position(db, entry_id)
+
+    res = _save_media_file(entry_id, audio, position, media_id, kind='audio')
+    if res is None:
+        # Nothing was written, so the entry this request may have just created
+        # would be an empty meal nobody asked for. Only roll it back if it is
+        # still empty — a replay arriving beside a real meal must not delete it.
+        db.execute(
+            'DELETE FROM food_entries WHERE id=? AND raw_content IS NULL'
+            " AND dish IS NULL AND notes IS NULL"
+            ' AND NOT EXISTS (SELECT 1 FROM food_media WHERE entry_id=?)',
+            (entry_id, entry_id),
+        )
+        db.commit()
+        return jsonify({'error': 'Unsupported audio type'}), 400
+
+    db.execute(
+        "UPDATE food_media SET transcript_status='running' WHERE id=?", (media_id,)
+    )
+    db.execute('UPDATE food_entries SET updated_at=? WHERE id=?', (now, entry_id))
+    db.commit()
+    _transcribe_media_bg(media_id, entry_id, str(res[1]))
+
+    row = db.execute(
+        'SELECT id, kind, position, transcript, transcript_status, transcript_error'
+        ' FROM food_media WHERE id=?',
+        (media_id,),
+    ).fetchone()
+    return jsonify({'id': entry_id, 'media': _media_dict(row)}), 201
+
+
 # --- Entries ---
 
 @bp.get('')
@@ -286,7 +460,17 @@ def create_entry():
     latitude = parse_coord(form.get('latitude'))
     longitude = parse_coord(form.get('longitude'))
 
-    if not text and not files and not dish and not notes:
+    # Clips are not in this request — they go up one at a time through
+    # /recordings, and may not have landed yet. The count is what says an
+    # otherwise-empty create is a meal that was spoken rather than a mistake;
+    # without it a capture that was only talked over is refused, and the
+    # location and capture time it carries go with it.
+    try:
+        pending_clips = int(form.get('pendingClips') or 0)
+    except (TypeError, ValueError):
+        pending_clips = 0
+
+    if not text and not files and not dish and not notes and pending_clips <= 0:
         return jsonify({'error': 'provide text, media, or details'}), 400
 
     now = int(time.time())
@@ -295,12 +479,23 @@ def create_entry():
     # the same entry afterwards (POST /<id>/media) whichever order they land in.
     entry_id = (form.get('id') or '').strip() or str(ULID())
     db = get_db()
-    db.execute(
+    cur = db.execute(
         'INSERT OR IGNORE INTO food_entries(id, raw_content, dish, place, notes, rating, tags, '
         'latitude, longitude, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         (entry_id, text or None, dish, place, notes, rating, tags_json(tags) if tags else None,
          latitude, longitude, now, now),
     )
+    if cur.rowcount == 0 and text:
+        # A clip from the same capture can get here first — the meal's id is
+        # minted at the first chunk, so /recordings may already have opened this
+        # row, empty. A plain INSERT OR IGNORE would then drop what was typed
+        # beside the audio. Only a row that is still empty is filled in; a real
+        # replay finds text and is left alone.
+        db.execute(
+            'UPDATE food_entries SET raw_content=?, updated_at=? WHERE id=?'
+            " AND COALESCE(raw_content, '')=''",
+            (text, now, entry_id),
+        )
 
     # Ids for the photos, positionally, when the client minted them (an offline
     # capture does). Sent as a JSON array so one field covers any number of them.

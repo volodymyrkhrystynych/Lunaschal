@@ -294,22 +294,41 @@ def create_recording_idea(idea_id: str, repo_id=None) -> None:
 
 
 def apply_recording_transcript(idea_id: str, text: str) -> None:
-    """Give a dictated idea the transcript of its recording, then name it.
+    """Give a dictated idea the text of its recordings, then name it.
 
-    Guarded on the idea still being empty, which covers both ways this can
-    arrive late: the idea was deleted while the transcription ran (no row, no
-    update), or its text has already been written — by an earlier run, or by the
-    user typing into the detail pane while waiting. A transcript is never worth
-    overwriting either of those with.
+    `text` is the whole journal entry the clips were transcribed into — every
+    clip so far, in the order they were spoken — not one clip's transcript. So
+    this **assigns** rather than appends: a second clip arrives as a longer
+    version of the same string, and appending it would repeat the first.
+
+    What it must not overwrite is anything the user typed. A capture that was
+    typed *and* spoken creates the idea with the typed line already in
+    `raw_content`, and someone can also type into the detail pane while the
+    transcription runs — so the typed text is kept and the transcript joins it,
+    once. A deleted idea takes no update at all: there is no row.
     """
     db = get_db()
-    cur = db.execute(
-        "UPDATE ideas SET raw_content=?, updated_at=? WHERE id=? AND raw_content=''",
-        (text, int(time.time()), idea_id),
+    row = db.execute(
+        'SELECT raw_content, recording_text FROM ideas WHERE id=?', (idea_id,)
+    ).fetchone()
+    if row is None:
+        return
+    typed = (row['raw_content'] or '')
+    heard = row['recording_text'] or ''
+    if heard:
+        # Everything after the typed line came from an earlier delivery of this
+        # same entry; replace that half rather than stacking a longer copy of it
+        # on top.
+        typed = typed[: len(typed) - len(heard)].rstrip()
+    merged = f'{typed}\n\n{text}' if typed.strip() else text
+    if merged == (row['raw_content'] or ''):
+        return
+    db.execute(
+        'UPDATE ideas SET raw_content=?, recording_text=?, updated_at=? WHERE id=?',
+        (merged, text, int(time.time()), idea_id),
     )
     db.commit()
-    if cur.rowcount:
-        _enrich_idea_bg(idea_id, text)
+    _enrich_idea_bg(idea_id, merged)
 
 
 @bp.post('/voice')
@@ -327,11 +346,22 @@ def create_from_voice():
     # polishes an already-polished idea, which is a no-op in practice.
     id = body.get('id') or str(ULID())
     db = get_db()
-    db.execute(
+    cur = db.execute(
         'INSERT OR IGNORE INTO ideas(id, title, raw_content, content, status,'
         ' repo_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
         (id, '', raw_content, '', 'new', _resolve_repo_id(body.get('repoId')), now, now),
     )
+    if cur.rowcount == 0:
+        # A clip recorded in the same capture can get here first: the id is
+        # minted at the first chunk, so `create_recording_idea` may already have
+        # opened this idea, empty, and a plain INSERT OR IGNORE would drop the
+        # line typed beside the audio. Filling in an idea that is still empty is
+        # not the same as overwriting one — a replay finds text and stops.
+        db.execute(
+            "UPDATE ideas SET raw_content=?, updated_at=? WHERE id=?"
+            " AND raw_content=''",
+            (raw_content, now, id),
+        )
     db.commit()
     _enrich_idea_bg(id, raw_content)
     return jsonify({'id': id}), 201

@@ -66,6 +66,12 @@ def _food_structure(target_id, payload):
     structure_food_entry(target_id, payload['text'])
 
 
+@jobs.handler('food.transcribe_media')
+def _food_transcribe_media(target_id, payload):
+    from backend.routes.food import _transcribe_media_bg
+    _transcribe_media_bg(target_id, payload['entry_id'], payload['path'], now=True)
+
+
 @jobs.handler('food.recipe_match')
 def _food_recipe_match(target_id, payload):
     from backend.food.recipe_match import check_homemade_recipe_match

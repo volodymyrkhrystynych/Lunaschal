@@ -9,15 +9,8 @@ import {
 import { Journal } from './Journal';
 import { ShortcutProvider } from '../shortcuts/ShortcutProvider';
 import { api, type JournalEntry } from '../hooks/api';
-import {
-  attachRecordingToEntry,
-  enqueueRecordingUpload,
-  handleFinishedRecording,
-} from '../offline/recordingQueue';
-import {
-  assignRecordingEntry,
-  deleteRecording,
-} from '../offline/recordingStore';
+import { enqueueRecordingUpload } from '../offline/recordingQueue';
+import { deleteRecording } from '../offline/recordingStore';
 import { storePhoto } from '../offline/photoStore';
 import { enqueueJournalAttachment } from '../offline/photoQueue';
 
@@ -80,17 +73,25 @@ vi.mock('../hooks/api', () => ({
   },
 }));
 
-// The Transcribe buttons. The microphone plumbing is covered by useRecorder's
-// own test; what matters here is that pressing one delivers *both* halves — the
-// text to the textarea and the stored recording to whatever keeps the audio.
-// `start` does both, so a test can drive the whole thing by clicking the real
-// button and never has to reach for a particular hook instance (there are two
-// live at once once the composer is open).
-const STORED_RECORDING = { id: 'rec-1', mimeType: 'audio/webm' };
+// The Record buttons. The microphone plumbing is covered by useRecorder's own
+// test; what matters here is that pressing one *stages* a clip — and only
+// stages it. `start` delivers the stored recording synchronously, so a test can
+// drive the whole thing by clicking the real button and never has to reach for
+// a particular hook instance (there are two live at once once the composer is
+// open).
+const STORED_RECORDING = {
+  id: 'rec-1',
+  mimeType: 'audio/webm',
+  startedAt: 1_000,
+  endedAt: 43_000,
+};
+/** The options each `start()` was called with, newest last. */
+const recorderStarts: Array<Record<string, unknown>> = [];
+let nextRecordingId = 0;
 
 vi.mock('../hooks/useRecorder', () => ({
   useRecorder: (
-    onTranscript: (text: string) => void,
+    _onTranscript: unknown,
     _onAudio: unknown,
     options: {
       onRecording?: (rec: typeof STORED_RECORDING) => void | Promise<void>;
@@ -99,23 +100,22 @@ vi.mock('../hooks/useRecorder', () => ({
     status: 'idle',
     canTranscribe: true,
     error: '',
-    start: vi.fn(async () => {
-      onTranscript('and one more thing');
-      await options.onRecording?.(STORED_RECORDING);
+    start: vi.fn(async (_mode: string, opts: Record<string, unknown> = {}) => {
+      recorderStarts.push(opts);
+      const id = nextRecordingId ? `rec-${nextRecordingId + 1}` : 'rec-1';
+      nextRecordingId += 1;
+      await options.onRecording?.({ ...STORED_RECORDING, id });
     }),
     stop: vi.fn(),
   }),
 }));
 
 vi.mock('../offline/recordingQueue', () => ({
-  attachRecordingToEntry: vi.fn().mockResolvedValue(undefined),
   enqueueRecordingUpload: vi.fn().mockResolvedValue(undefined),
-  handleFinishedRecording: vi.fn().mockResolvedValue(undefined),
+  enqueueFoodRecording: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../offline/recordingStore', () => ({
-  assembleBlob: vi.fn(async () => new Blob(['audio'], { type: 'audio/webm' })),
-  assignRecordingEntry: vi.fn().mockResolvedValue(undefined),
   deleteRecording: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -224,64 +224,83 @@ describe('Journal keyboard editing', () => {
   });
 });
 
-describe('Journal edit-mode Transcribe', () => {
+describe('Journal edit-mode recording', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    recorderStarts.length = 0;
+    nextRecordingId = 0;
     vi.mocked(api.journal.list).mockResolvedValue(ENTRIES);
     vi.stubGlobal('EventSource', FakeEventSource);
     Element.prototype.scrollIntoView = vi.fn();
   });
 
-  const pressTranscribe = () =>
-    fireEvent.click(screen.getByLabelText('Transcribe into this entry'));
+  const pressRecord = () =>
+    fireEvent.click(screen.getByLabelText('Record into this entry'));
 
-  it('appends the transcript to the entry being edited rather than replacing it', async () => {
+  it('stages the clip instead of writing into the draft', async () => {
+    // The whole point of the change. Recording used to fetch a transcript in
+    // the browser and paste it into the textarea, which meant waiting out a CPU
+    // transcription before a second thought could be recorded.
     renderJournal();
     await screen.findByText('First entry');
     openEditWithKeyboard();
 
-    // Held by reference: getByDisplayValue collapses the newline the
-    // transcript is appended on, so the assertion reads the value directly.
     const textarea = screen.getByDisplayValue(
       'First entry'
     ) as HTMLTextAreaElement;
-    pressTranscribe();
+    pressRecord();
 
-    await waitFor(() =>
-      expect(textarea.value).toBe('First entry\nand one more thing')
-    );
-    // Dictating is not saving — the entry only changes when Save is pressed.
+    expect(await screen.findByText('Clip 1 · 0:42')).toBeTruthy();
+    expect(textarea.value).toBe('First entry');
+    // Staging is not saving — nothing has been uploaded, and the entry has not
+    // changed.
+    expect(enqueueRecordingUpload).not.toHaveBeenCalled();
     expect(api.journal.update).not.toHaveBeenCalled();
   });
 
-  it('keeps the audio, attaching it to the entry being edited', async () => {
-    // The point of the rename. It used to transcribe and drop the recording;
-    // now the clip is kept as an attachment on that same entry.
+  it('records against the entry that is open, from the first chunk', async () => {
     renderJournal();
     await screen.findByText('First entry');
     openEditWithKeyboard();
 
-    pressTranscribe();
+    pressRecord();
 
-    await waitFor(() =>
-      expect(attachRecordingToEntry).toHaveBeenCalledWith(
-        expect.anything(),
-        STORED_RECORDING,
-        'e1'
-      )
-    );
-    // Not the make-a-new-entry policy — that is for a recording with no entry
-    // to belong to.
-    expect(handleFinishedRecording).not.toHaveBeenCalled();
+    await waitFor(() => expect(recorderStarts).toHaveLength(1));
+    // Written beside the audio, so a clip rescued on a later boot lands back on
+    // this entry rather than arriving as one of its own.
+    expect(recorderStarts[0]).toMatchObject({ durable: true, entryId: 'e1' });
   });
 
-  it('reads Transcribe, not Record', async () => {
+  it('uploads the clips when the editor closes, Cancel included', async () => {
+    // The entry already exists, so there is nothing for a clip to be "not
+    // saved" into — discarding a recording because the text edit beside it was
+    // abandoned is the silent audio loss the durable path exists to refuse.
+    renderJournal();
+    await screen.findByText('First entry');
+    openEditWithKeyboard();
+    pressRecord();
+    await screen.findByText('Clip 1 · 0:42');
+
+    fireEvent.click(screen.getByText('Cancel'));
+
+    await waitFor(() =>
+      expect(enqueueRecordingUpload).toHaveBeenCalledWith(
+        expect.anything(),
+        'rec-1',
+        'Recording',
+        { entryId: 'e1' }
+      )
+    );
+    expect(api.journal.update).not.toHaveBeenCalled();
+  });
+
+  it('reads Record, not Transcribe', async () => {
     renderJournal();
     await screen.findByText('First entry');
     openEditWithKeyboard();
 
-    expect(screen.getByText('● Transcribe')).toBeTruthy();
-    expect(screen.queryByText('● Record')).toBeNull();
+    expect(screen.getByText('● Record')).toBeTruthy();
+    expect(screen.queryByText('● Transcribe')).toBeNull();
   });
 });
 
@@ -449,8 +468,9 @@ describe('Journal new-entry attachments', () => {
   const uploadMock = api.journal.attachments.upload as ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
+    recorderStarts.length = 0;
+    nextRecordingId = 0;
     vi.mocked(deleteRecording).mockClear();
-    vi.mocked(assignRecordingEntry).mockClear();
     vi.mocked(enqueueRecordingUpload).mockClear();
     vi.mocked(storePhoto).mockClear();
     vi.mocked(storePhoto).mockResolvedValue(
@@ -475,15 +495,15 @@ describe('Journal new-entry attachments', () => {
     return textarea;
   }
 
-  it('offers Transcribe in the compose box too', async () => {
+  it('offers a record button in the compose box too', async () => {
     renderJournal();
     fireEvent.click(await screen.findByText('+ New Entry'));
 
     expect(screen.getByTestId('journal-new-entry-transcribe')).toBeTruthy();
-    expect(screen.getByText('● Transcribe')).toBeTruthy();
+    expect(screen.getByText('● Record')).toBeTruthy();
   });
 
-  it('puts the transcript in the draft and stages the recording alongside it', async () => {
+  it('stages the clip and leaves the draft alone', async () => {
     renderJournal();
     fireEvent.click(await screen.findByText('+ New Entry'));
     const textarea = screen.getByPlaceholderText(
@@ -493,70 +513,89 @@ describe('Journal new-entry attachments', () => {
 
     fireEvent.click(screen.getByTestId('journal-new-entry-transcribe'));
 
-    // The text lands in the box the user is typing in — there is no entry yet
-    // for a server-side transcript to be written into.
-    await waitFor(() =>
-      expect(textarea.value).toBe('a thought\nand one more thing')
-    );
-    // …and the audio is staged like any other attachment, named after what
-    // MediaRecorder actually produced.
-    expect(await screen.findByText('recording.webm')).toBeTruthy();
+    // A chip, not text in the box: the transcript is the server's job now, and
+    // waiting for it here is what made the composer feel stuck.
+    expect(await screen.findByText('Clip 1 · 0:42')).toBeTruthy();
+    expect(textarea.value).toBe('a thought');
     expect(uploadMock).not.toHaveBeenCalled();
   });
 
-  it('queues the recorded audio on save against the entry it was recorded in', async () => {
-    // The clip is already durable — it has been in recordingStore since it was
-    // captured — so saving hands it to its own idempotent route rather than
-    // POSTing the blob a second time. Carrying `entryId` (and writing it to the
-    // store) is what stops a clip rescued on a later boot from arriving as a
-    // bare entry of its own beside the words it was recorded with.
+  it('takes several clips, and sends them in the order they were spoken', async () => {
+    // Order is the whole reason `commit` awaits one upload at a time: the
+    // server appends each transcript to the entry as it lands, so a parallel
+    // send would make the running order the network's decision.
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+    const textarea = screen.getByPlaceholderText(
+      'Write your journal entry...'
+    ) as HTMLTextAreaElement;
+
+    fireEvent.click(screen.getByTestId('journal-new-entry-transcribe'));
+    await screen.findByText('Clip 1 · 0:42');
+    fireEvent.click(screen.getByTestId('journal-new-entry-transcribe'));
+    await screen.findByText('Clip 2 · 0:42');
+
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    const entryId = await waitFor(() => createMock.mock.calls[0][0].id);
+    await waitFor(() =>
+      expect(enqueueRecordingUpload).toHaveBeenCalledTimes(2)
+    );
+    expect(vi.mocked(enqueueRecordingUpload).mock.calls.map(c => c[1])).toEqual(
+      ['rec-1', 'rec-2']
+    );
+    // Both against the one entry the composer minted, and the create says how
+    // many are coming so the title waits for them.
+    expect(vi.mocked(enqueueRecordingUpload).mock.calls[0][3]).toEqual({
+      entryId,
+    });
+    expect(createMock.mock.calls[0][0].pendingAttachments).toBe(2);
+  });
+
+  it('mints the entry id at the first chunk, not at save', async () => {
+    // `resumeStoredRecordings` sweeps the device at boot and uploads what it
+    // finds, so a clip that has forgotten its entry is filed as a bare one of
+    // its own. Minting early is what keeps a composer killed mid-thought
+    // landing its clip in the right place.
     renderJournal();
     fireEvent.click(await screen.findByText('+ New Entry'));
     const textarea = screen.getByPlaceholderText(
       'Write your journal entry...'
     ) as HTMLTextAreaElement;
     fireEvent.click(screen.getByTestId('journal-new-entry-transcribe'));
-    await screen.findByText('recording.webm');
+    await screen.findByText('Clip 1 · 0:42');
+
+    const recordedAgainst = recorderStarts[0].entryId;
+    expect(recordedAgainst).toEqual(expect.any(String));
     expect(enqueueRecordingUpload).not.toHaveBeenCalled();
 
     fireEvent.keyDown(textarea, { key: 'Enter' });
 
-    const entryId = await waitFor(() => createMock.mock.calls[0][0].id);
-    await waitFor(() =>
-      expect(assignRecordingEntry).toHaveBeenCalledWith('rec-1', entryId)
-    );
-    expect(enqueueRecordingUpload).toHaveBeenCalledWith(
-      expect.anything(),
-      'rec-1',
-      'recording',
-      { entryId }
-    );
-    // Never copied into the photo store as well, and never POSTed directly.
+    await waitFor(() => expect(createMock).toHaveBeenCalled());
+    expect(createMock.mock.calls[0][0].id).toBe(recordedAgainst);
+    // Never copied into the photo store, and never POSTed directly.
     expect(storePhoto).not.toHaveBeenCalled();
     expect(uploadMock).not.toHaveBeenCalled();
-    // And the audio is still on the device: only the queue may let go of it,
-    // and only once the server has confirmed it.
-    expect(deleteRecording).not.toHaveBeenCalled();
   });
 
-  it('discards the audio when a staged recording is removed by hand', async () => {
+  it('discards the audio when a staged clip is removed by hand', async () => {
     renderJournal();
     fireEvent.click(await screen.findByText('+ New Entry'));
     fireEvent.click(screen.getByTestId('journal-new-entry-transcribe'));
-    await screen.findByText('recording.webm');
+    await screen.findByText('Clip 1 · 0:42');
 
-    fireEvent.click(screen.getByLabelText('Remove recording.webm'));
+    fireEvent.click(screen.getByLabelText('Discard Clip 1 · 0:42'));
 
-    expect(screen.queryByText('recording.webm')).toBeNull();
+    expect(screen.queryByText('Clip 1 · 0:42')).toBeNull();
     // An explicit discard is one of the few places the audio may go.
     await waitFor(() => expect(deleteRecording).toHaveBeenCalledWith('rec-1'));
   });
 
-  it('a recording alone is enough to save — no typed words needed', async () => {
+  it('a clip alone is enough to save — no typed words needed', async () => {
     renderJournal();
     fireEvent.click(await screen.findByText('+ New Entry'));
     fireEvent.click(screen.getByTestId('journal-new-entry-transcribe'));
-    await screen.findByText('recording.webm');
+    await screen.findByText('Clip 1 · 0:42');
 
     const save = screen.getByText('Save') as HTMLButtonElement;
     expect(save.disabled).toBe(false);
