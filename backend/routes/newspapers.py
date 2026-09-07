@@ -6,6 +6,9 @@ from backend.newspapers.storage import PAPERS, resolve_stored_path
 
 bp = Blueprint('newspapers', __name__, url_prefix='/api/newspapers')
 
+# Register full-issue endpoints on the same newspaper blueprint.
+from backend.routes import newspaper_issues  # noqa: E402,F401
+
 
 @bp.post('/sync')
 def do_sync():

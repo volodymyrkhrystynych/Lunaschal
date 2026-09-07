@@ -1,7 +1,12 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { shiftDateISO, isFutureDate, todayISO } from '../lib/newspapers';
+const NewspaperReader = lazy(() =>
+  import('./NewspaperReader').then(module => ({
+    default: module.NewspaperReader,
+  }))
+);
 
 function formatDisplayDate(date: string) {
   return new Date(`${date}T00:00:00Z`).toLocaleDateString('en-US', {
@@ -50,6 +55,47 @@ export function Newspapers() {
     null
   );
   const queryClient = useQueryClient();
+  const [reading, setReading] = useState(false);
+  const archive = useQuery({
+    queryKey: ['newspaper-issues'],
+    queryFn: api.newspapers.issues,
+  });
+  const issue = archive.data?.issues.find(item => item.date === selectedDate);
+  const subscriber = useQuery({
+    queryKey: ['pressreader'],
+    queryFn: api.newspapers.pressreader,
+    refetchInterval: 5000,
+  });
+  const job = subscriber.data?.jobs.find(item => item.date === selectedDate);
+  const downloading = job?.status === 'queued' || job?.status === 'downloading';
+  const download = useMutation({
+    mutationFn: api.newspapers.downloadIssue,
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['pressreader'] }),
+  });
+  const requestedToday = useRef<string | null>(null);
+  const queueDownload = download.mutate;
+  useEffect(() => {
+    if (
+      !subscriber.data?.sessionSaved ||
+      !archive.data ||
+      requestedToday.current === today
+    )
+      return;
+    requestedToday.current = today;
+    const todayJob = subscriber.data.jobs.find(item => item.date === today);
+    if (
+      !archive.data.issues.some(item => item.date === today) &&
+      todayJob?.status !== 'queued' &&
+      todayJob?.status !== 'downloading'
+    ) {
+      queueDownload(today);
+    }
+  }, [subscriber.data, archive.data, today, queueDownload]);
+  useEffect(() => {
+    if (job?.status === 'complete')
+      void queryClient.invalidateQueries({ queryKey: ['newspaper-issues'] });
+  }, [job?.status, job?.date, queryClient]);
 
   const { data: pages, isLoading } = useQuery({
     queryKey: ['newspapers', selectedDate],
@@ -71,6 +117,71 @@ export function Newspapers() {
 
   return (
     <div className="flex-1 flex flex-col p-4 overflow-hidden">
+      <div className="flex flex-wrap items-center gap-3 mb-3 text-sm">
+        <button
+          className="p-2 border border-white/20 rounded disabled:opacity-50"
+          disabled={
+            !!issue ||
+            downloading ||
+            download.isPending ||
+            !subscriber.data?.sessionSaved
+          }
+          onClick={() => download.mutate(selectedDate)}
+        >
+          {downloading ? 'Downloading issue…' : 'Download Toronto Star issue'}
+        </button>
+        {job?.error && !issue && <span role="status">{job.error}</span>}
+        {(download.error || subscriber.error) && (
+          <span role="alert">
+            {(download.error || subscriber.error)?.message}
+          </span>
+        )}
+        {subscriber.data &&
+          (!subscriber.data.sessionSaved ||
+            job?.status === 'sign-in-required') && (
+            <span>
+              One-time subscription sign-in is needed on the server before
+              automatic downloads can run.
+            </span>
+          )}
+        <a
+          className="underline"
+          href={`https://torontostar.pressreader.com/toronto-star/${selectedDate.replaceAll('-', '')}/page/1`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open subscriber edition
+        </a>
+      </div>
+      <div className="flex flex-wrap items-center gap-3 mb-3 text-sm">
+        <span>Issue date: {selectedDate}</span>
+        <select
+          aria-label="Archived issues"
+          value=""
+          onChange={event => {
+            if (event.target.value) setSelectedDate(event.target.value);
+          }}
+          className="bg-[var(--color-bg)] p-2"
+        >
+          <option value="">
+            Archive ({archive.data?.issues.length ?? 0} issues)
+          </option>
+          {archive.data?.issues.map(item => (
+            <option key={item.date} value={item.date}>
+              {item.date} · {(item.byteSize / 1024 / 1024).toFixed(1)} MB
+            </option>
+          ))}
+        </select>
+        {issue && (
+          <button
+            className="p-2 border border-white/20 rounded"
+            onClick={() => setReading(true)}
+          >
+            Read Toronto Star PDF
+          </button>
+        )}
+        {archive.error && <span role="alert">{archive.error.message}</span>}
+      </div>
       {sync.isPending && (
         <div className="flex items-center justify-end mb-4">
           <span className="text-sm text-[var(--color-text-muted)]">
@@ -120,12 +231,16 @@ export function Newspapers() {
                 <img
                   src={page.imageUrl}
                   alt={`${page.label} front page, ${page.date}`}
-                  onClick={() =>
+                  onClick={() => {
+                    if (page.paper === 'toronto-star' && issue) {
+                      setReading(true);
+                      return;
+                    }
                     setLightbox({
                       src: page.imageUrl!,
                       alt: `${page.label} front page, ${page.date}`,
-                    })
-                  }
+                    });
+                  }}
                   className="w-full max-w-md rounded-lg border border-white/10 cursor-zoom-in hover:opacity-90 transition-opacity"
                 />
               ) : (
@@ -144,6 +259,11 @@ export function Newspapers() {
           alt={lightbox.alt}
           onClose={() => setLightbox(null)}
         />
+      )}
+      {reading && issue && (
+        <Suspense fallback={<p>Loading PDF reader…</p>}>
+          <NewspaperReader issue={issue} onClose={() => setReading(false)} />
+        </Suspense>
       )}
     </div>
   );

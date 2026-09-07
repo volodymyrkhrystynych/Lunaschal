@@ -26,6 +26,7 @@ import { KnowledgeSection } from './KnowledgeSection';
 import { LogsPanel } from './LogsPanel';
 import { CollapsibleSection } from './CollapsibleSection';
 import { InferenceSection } from './InferenceSection';
+import { NewspapersSection } from './NewspapersSection';
 import { shouldAutoExpand } from '../../lib/backup';
 
 export function Settings() {
@@ -108,6 +109,10 @@ export function Settings() {
 
           <CollapsibleSection title="Torrents">
             <TorrentSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Newspapers">
+            <NewspapersSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Knowledge Library">

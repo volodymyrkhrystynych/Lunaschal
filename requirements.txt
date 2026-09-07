@@ -6,6 +6,7 @@ openai>=1.0
 google-generativeai>=0.8
 python-ulid>=3.0
 requests>=2.31
+pypdf>=6.0
 PyJWT>=2.8
 soundfile>=0.12.1
 numpy>=2.0.0

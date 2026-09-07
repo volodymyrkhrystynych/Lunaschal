@@ -373,6 +373,7 @@ CREATE INDEX IF NOT EXISTS idx_assistant_observations_pending
     ON assistant_observations(folded_at, created_at);
 
 CREATE TABLE IF NOT EXISTS settings (
+    newspapers_auto_download INTEGER NOT NULL DEFAULT 0,
     id INTEGER PRIMARY KEY DEFAULT 1,
     ai_provider TEXT DEFAULT 'openai',
     ai_model TEXT,
@@ -705,6 +706,28 @@ CREATE INDEX IF NOT EXISTS idx_fic_bookmarks_fic ON fic_bookmarks(fic_id, create
 -- At most one continue bookmark per fic; creating a new one replaces the old.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_fic_bookmarks_continue
     ON fic_bookmarks(fic_id) WHERE type = 'continue';
+
+CREATE TABLE IF NOT EXISTS newspaper_downloads (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'downloading', 'complete', 'failed', 'sign-in-required')),
+    attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS newspaper_issues (
+    id TEXT PRIMARY KEY,
+    date TEXT NOT NULL UNIQUE,
+    pdf_path TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    page_count INTEGER NOT NULL,
+    markup TEXT NOT NULL DEFAULT '[]',
+    revision INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS newspaper_frontpages (
     id TEXT PRIMARY KEY,
