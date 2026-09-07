@@ -6,6 +6,7 @@ import {
   beginRecording,
   finalizeRecording,
   type RecordingFic,
+  type RecordingFood,
   type RecordingIdea,
   type RecordingMode,
   type StoredRecording,
@@ -292,7 +293,18 @@ export function useRecorder(
 
   const start = async (
     mode: RecorderMode = 'transcribe',
-    opts: { durable?: boolean; idea?: RecordingIdea; fic?: RecordingFic } = {}
+    opts: {
+      durable?: boolean;
+      /**
+       * The entry these clips will land on, when the caller minted it up front
+       * — a composer staging several of them does. Written with the first
+       * chunk for the same reason `idea` and `fic` are.
+       */
+      entryId?: string;
+      idea?: RecordingIdea;
+      fic?: RecordingFic;
+      food?: RecordingFood;
+    } = {}
   ) => {
     // A second tap while the first start is still waiting on the permission
     // prompt used to open a second recorder over a second getUserMedia: one
@@ -410,13 +422,14 @@ export function useRecorder(
         // Created before the first chunk so there is somewhere to put it.
         const storedMode: RecordingMode =
           mode === 'audio' ? 'audio' : 'transcribe';
-        // `idea` and `fic` are written now, with the first chunk, rather than
-        // when the recording stops: an app killed mid-recording is exactly the
-        // case where the resumed upload has to still know what this clip was
-        // for.
+        // The target is written now, with the first chunk, rather than when
+        // the recording stops: an app killed mid-recording is exactly the case
+        // where the resumed upload has to still know what this clip was for.
         recording = await beginRecording(storedMode, mimeType, {
+          entryId: opts.entryId,
           idea: opts.idea,
           fic: opts.fic,
+          food: opts.food,
         });
       }
 

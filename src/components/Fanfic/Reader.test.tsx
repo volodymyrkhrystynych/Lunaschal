@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Reader } from './Reader';
 import { ShortcutProvider } from '../../shortcuts/ShortcutProvider';
 import { api } from '../../hooks/api';
-import { captureFicCommentary } from '../../offline/recordingQueue';
+import { enqueueRecordingUpload } from '../../offline/recordingQueue';
 import { installFakeMediaRecorder } from '../../test/mediaRecorder';
 import type {
   Fic,
@@ -78,9 +78,10 @@ const { CHAPTERS, FIC } = vi.hoisted(() => {
 
 // The durable upload queue is exercised in its own tests. What this file is
 // about is what the reader hands it: which fic and chapter the clip is
-// commentary on.
+// commentary on, and when.
 vi.mock('../../offline/recordingQueue', () => ({
-  captureFicCommentary: vi.fn().mockResolvedValue(undefined),
+  enqueueRecordingUpload: vi.fn().mockResolvedValue(undefined),
+  enqueueFoodRecording: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../hooks/api', () => ({
@@ -505,16 +506,16 @@ describe('Reader commentary microphone', () => {
     fireEvent.click(await screen.findByTitle(startChapter));
     await screen.findByRole('heading', { name: startChapter });
     fireEvent.click(screen.getByText(/Commentary/));
-    fireEvent.click(screen.getByRole('button', { name: '🎤' }));
+    fireEvent.click(screen.getByTestId('fanfic-commentary-record'));
     const stop = await screen.findByRole('button', { name: '■ Stop' });
     fake.emit();
     return { fake, stop };
   };
 
-  const lastCapture = () =>
-    (captureFicCommentary as unknown as ReturnType<typeof vi.fn>).mock.calls.at(
-      -1
-    );
+  const lastUpload = () =>
+    (
+      enqueueRecordingUpload as unknown as ReturnType<typeof vi.fn>
+    ).mock.calls.at(-1);
 
   it('shows feedback while the microphone is still starting', async () => {
     installFakeMediaRecorder();
@@ -536,7 +537,7 @@ describe('Reader commentary microphone', () => {
     fireEvent.click(await screen.findByTitle('Chapter 1'));
     await screen.findByRole('heading', { name: 'Chapter 1' });
     fireEvent.click(screen.getByText(/Commentary/));
-    fireEvent.click(screen.getByRole('button', { name: '🎤' }));
+    fireEvent.click(screen.getByTestId('fanfic-commentary-record'));
 
     const starting = screen.getByRole('button', { name: 'Starting…' });
     expect((starting as HTMLButtonElement).disabled).toBe(true);
@@ -546,12 +547,11 @@ describe('Reader commentary microphone', () => {
     await screen.findByRole('button', { name: '■ Stop' });
   });
 
-  // Stopping is the save. The clip goes to the durable store and is uploaded as
-  // a journal entry carrying the fic and chapter; the transcript is written onto
-  // that entry by the server, minutes later. Nothing is transcribed here, which
-  // is the point — the audio used to exist only in memory, so a failed
-  // transcription took the commentary with it.
-  it('saves the recording as a chapter-linked journal entry, transcript to follow', async () => {
+  // Stopping stages the clip and nothing else. Nothing is transcribed here,
+  // which is the point — the audio used to exist only in memory, so a failed
+  // transcription took the commentary with it — and nothing is uploaded either,
+  // so a second thought can be recorded and sent with the first.
+  it('stages the clip on stop, and sends nothing yet', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const { fake } = await record();
 
@@ -559,16 +559,34 @@ describe('Reader commentary microphone', () => {
       await fake.stop();
     });
 
-    await waitFor(() => expect(captureFicCommentary).toHaveBeenCalled());
-    const rec = lastCapture()?.[1];
-    expect(rec.fic).toEqual({ ficId: 'fic1', chapterId: 'ch1' });
-    // 'transcribe' is what tells the upload to ask the server for a transcript
-    // once the audio has landed.
-    expect(rec.mode).toBe('transcribe');
+    expect(await screen.findByTestId('fanfic-commentary-clip')).toBeTruthy();
+    expect(enqueueRecordingUpload).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalledWith(
       '/api/transcribe',
       expect.anything()
     );
+    expect(api.journal.createFromVoice).not.toHaveBeenCalled();
+  });
+
+  it('sends the clip as chapter-linked commentary when Save is pressed', async () => {
+    const { fake } = await record();
+    await act(async () => {
+      await fake.stop();
+    });
+    await screen.findByTestId('fanfic-commentary-clip');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save to journal' }));
+
+    await waitFor(() => expect(enqueueRecordingUpload).toHaveBeenCalled());
+    const [, , name, opts] = lastUpload()!;
+    expect(name).toBe('Commentary');
+    expect(opts).toMatchObject({
+      fic: { ficId: 'fic1', chapterId: 'ch1' },
+      entryId: expect.any(String),
+    });
+    // A clip with nothing typed beside it needs no journal POST at all: the
+    // recordings route creates the entry and the fic link from what rides
+    // along with the audio.
     expect(api.journal.createFromVoice).not.toHaveBeenCalled();
     await screen.findByText(/transcript follows/);
   });
@@ -586,15 +604,18 @@ describe('Reader commentary microphone', () => {
     await act(async () => {
       await fake.stop();
     });
+    await screen.findByTestId('fanfic-commentary-clip');
+    fireEvent.click(screen.getByRole('button', { name: 'Save to journal' }));
 
-    await waitFor(() => expect(captureFicCommentary).toHaveBeenCalled());
-    expect(lastCapture()?.[1].fic).toEqual({ ficId: 'fic1', chapterId: 'ch1' });
+    await waitFor(() => expect(enqueueRecordingUpload).toHaveBeenCalled());
+    expect(lastUpload()![3]).toMatchObject({
+      fic: { ficId: 'fic1', chapterId: 'ch1' },
+    });
   });
 
-  // The two halves of the panel are now separate entries: the mic no longer
-  // feeds the textarea, so a half-typed note is not swept into the recording's
-  // entry — nor emptied out from under the user.
-  it('leaves typed commentary in the box alone', async () => {
+  // The mic does not feed the textarea, so a half-typed note is neither swept
+  // into the recording nor emptied out from under the user while it is staged.
+  it('leaves typed commentary in the box alone while a clip is staged', async () => {
     const { fake } = await record();
     fireEvent.change(screen.getByPlaceholderText(/Your thoughts on/), {
       target: { value: 'ch3 spoiler:' },
@@ -604,7 +625,7 @@ describe('Reader commentary microphone', () => {
       await fake.stop();
     });
 
-    await waitFor(() => expect(captureFicCommentary).toHaveBeenCalled());
+    await screen.findByTestId('fanfic-commentary-clip');
     expect(
       (screen.getByPlaceholderText(/Your thoughts on/) as HTMLTextAreaElement)
         .value
@@ -612,8 +633,33 @@ describe('Reader commentary microphone', () => {
     expect(api.journal.createFromVoice).not.toHaveBeenCalled();
   });
 
-  // The typed half is unchanged: it still posts the text as a journal entry and
-  // links it in a second call.
+  // Typed and spoken land on *one* entry, under the id the clip was recorded
+  // against — that is what the create's client-supplied id is for.
+  it('sends the typed half and the clips together, under one entry', async () => {
+    const { fake } = await record();
+    await act(async () => {
+      await fake.stop();
+    });
+    await screen.findByTestId('fanfic-commentary-clip');
+    fireEvent.change(screen.getByPlaceholderText(/Your thoughts on/), {
+      target: { value: 'loved this chapter' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save to journal' }));
+
+    await waitFor(() =>
+      expect(api.journal.createFromVoice).toHaveBeenCalledWith(
+        'loved this chapter',
+        expect.any(String)
+      )
+    );
+    const entryId = vi.mocked(api.journal.createFromVoice).mock.calls[0][1];
+    await waitFor(() => expect(enqueueRecordingUpload).toHaveBeenCalled());
+    expect(lastUpload()![3]).toMatchObject({ entryId });
+  });
+
+  // The typed-only path is unchanged: it still posts the text as a journal
+  // entry and links it in a second call.
   it('still saves typed commentary through the Save button', async () => {
     renderReader();
     fireEvent.click(await screen.findByText(/Commentary/));
@@ -624,7 +670,8 @@ describe('Reader commentary microphone', () => {
 
     await waitFor(() =>
       expect(api.journal.createFromVoice).toHaveBeenCalledWith(
-        'loved this chapter'
+        'loved this chapter',
+        expect.any(String)
       )
     );
     await waitFor(() =>

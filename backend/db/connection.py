@@ -177,6 +177,7 @@ def init_db() -> None:
     _ensure_paper_archive_requested(db)
     _ensure_food_location(db)
     _ensure_food_recipe_match_status(db)
+    _ensure_food_media_transcript(db)
     _ensure_hf_token(db)
     _ensure_weather_settings(db)
     _ensure_meeting_speaker_names(db)
@@ -532,6 +533,30 @@ def _ensure_food_location(db: sqlite3.Connection) -> None:
     db.commit()
 
 
+def _ensure_food_media_transcript(db: sqlite3.Connection) -> None:
+    """Meal clips: the transcript and its status, beside the photos.
+
+    Same three columns `journal_attachments` carries, for the same reason — a
+    transcription that failed has to be distinguishable from one that has not
+    been asked for, or the only honest thing the UI can say is nothing.
+    """
+    if not db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='food_media'"
+    ).fetchone():
+        return
+    cols = {r[1] for r in db.execute('PRAGMA table_info(food_media)')}
+    if 'transcript' not in cols:
+        db.execute('ALTER TABLE food_media ADD COLUMN transcript TEXT')
+    if 'transcript_status' not in cols:
+        db.execute(
+            "ALTER TABLE food_media ADD COLUMN transcript_status TEXT NOT NULL"
+            " DEFAULT 'idle'"
+        )
+    if 'transcript_error' not in cols:
+        db.execute('ALTER TABLE food_media ADD COLUMN transcript_error TEXT')
+    db.commit()
+
+
 def _ensure_food_recipe_match_status(db: sqlite3.Connection) -> None:
     """NULL = not checked yet for a homemade/existing-recipe match; 'proposed'
     = a link was offered in chat; 'none' = checked, nothing to offer. Purely an
@@ -718,6 +743,11 @@ def _reset_stale_attachment_transcripts(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE journal_attachments SET description_status='idle'"
         " WHERE description_status='running'"
+    )
+    # The food log's meal clips ride the same queue and die the same way.
+    db.execute(
+        "UPDATE food_media SET transcript_status='idle'"
+        " WHERE transcript_status='running'"
     )
     db.commit()
 
@@ -992,6 +1022,14 @@ def _ensure_idea_assessment_columns(db: sqlite3.Connection) -> None:
         # an idea with no repo is a plain product thought and keeps working
         # exactly as before, it just gets no code tools.
         db.execute('ALTER TABLE ideas ADD COLUMN repo_id TEXT REFERENCES repos(id)')
+    if 'recording_text' not in cols:
+        # The spoken half of raw_content, so a second clip can replace it
+        # without disturbing anything typed alongside it. Empty for every idea
+        # that predates staged clips, which is exactly right: nothing of theirs
+        # came from a recording that is still arriving.
+        db.execute(
+            "ALTER TABLE ideas ADD COLUMN recording_text TEXT NOT NULL DEFAULT ''"
+        )
     db.commit()
 
 

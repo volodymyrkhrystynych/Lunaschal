@@ -262,6 +262,55 @@ describe('JournalAttachments', () => {
     expect(laterDescription?.open).toBe(true);
   });
 
+  it('shows a new transcript once, then minimizes it on later loads', () => {
+    // The asymmetry this closes: image captions and recording descriptions were
+    // already collapsible, while the speech transcript — reliably the longest
+    // of the three — rendered fully expanded above the clip forever.
+    const recording = attachment({
+      transcript: 'Went for a walk this morning and thought about the deploy.',
+      transcriptStatus: 'done',
+    });
+
+    const first = renderIt([recording], false);
+    const firstTranscript = screen.getByText('Transcript').closest('details');
+    expect(firstTranscript?.open).toBe(true);
+    expect(
+      localStorage.getItem('journal-attachment-description-seen:a1:transcript')
+    ).toBe('true');
+    first.unmount();
+
+    renderIt([recording], false);
+    const laterTranscript = screen.getByText('Transcript').closest('details');
+    expect(laterTranscript?.open).toBe(false);
+
+    fireEvent.click(screen.getByText('Transcript'));
+    expect(laterTranscript?.open).toBe(true);
+  });
+
+  it('remembers the transcript and the description separately', () => {
+    // One clip carries both — what was said, and what else was audible. A
+    // shared key would make opening either close the other on the next load.
+    const recording = attachment({
+      transcript: 'The words.',
+      transcriptStatus: 'done',
+      description: 'A dog barking.',
+      descriptionStatus: 'done',
+    });
+
+    const first = renderIt([recording], false);
+    fireEvent.click(screen.getByText('Transcript'));
+    first.unmount();
+
+    renderIt([recording], false);
+    expect(screen.getByText('Transcript').closest('details')?.open).toBe(false);
+    expect(
+      screen.getByText('Recording description').closest('details')?.open
+    ).toBe(false);
+    expect(
+      localStorage.getItem('journal-attachment-description-seen:a1:recording')
+    ).toBe('true');
+  });
+
   describe('picture sharing', () => {
     afterEach(() => {
       vi.unstubAllGlobals();

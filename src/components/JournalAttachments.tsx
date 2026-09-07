@@ -5,6 +5,7 @@ import { useAttachmentUpload } from '../hooks/useAttachmentUpload';
 import { ImageLightbox, useLightbox } from './ImageLightbox';
 import { mapLink } from '../lib/food';
 import { AttachmentButtons } from './AttachmentButtons';
+import { CollapsibleText } from './CollapsibleText';
 import {
   canDescribeAudio,
   canTranscribe,
@@ -312,6 +313,14 @@ const KIND_ICONS: Record<JournalAttachment['kind'], string> = {
 
 const DESCRIPTION_SEEN_KEY_PREFIX = 'journal-attachment-description-seen:';
 
+/**
+ * An attachment's AI-written text, collapsed once it has been read.
+ *
+ * `descriptionKind` is part of the storage key, not decoration: one recording
+ * can carry both a transcript (what was said) and a description (what else was
+ * audible), and a shared key would make opening either of them close the other
+ * on the next load.
+ */
 function AttachmentDescription({
   attachmentId,
   descriptionKind,
@@ -319,40 +328,17 @@ function AttachmentDescription({
   children,
 }: {
   attachmentId: string;
-  descriptionKind: 'image' | 'recording';
+  descriptionKind: 'image' | 'recording' | 'transcript';
   label: string;
   children: string;
 }) {
-  const storageKey = `${DESCRIPTION_SEEN_KEY_PREFIX}${attachmentId}:${descriptionKind}`;
-  const [isOpen, setIsOpen] = useState(() => {
-    try {
-      return localStorage.getItem(storageKey) !== 'true';
-    } catch {
-      // Storage can be unavailable in private/restricted browser contexts. In
-      // that case, prefer showing the description instead of hiding new text.
-      return true;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(storageKey, 'true');
-    } catch {
-      // Persistence is a convenience; the description remains usable without it.
-    }
-  }, [storageKey]);
-
   return (
-    <details
-      open={isOpen}
-      onToggle={event => setIsOpen(event.currentTarget.open)}
-      className="bg-white/5 rounded text-sm text-[var(--color-text-muted)]"
+    <CollapsibleText
+      storageKey={`${DESCRIPTION_SEEN_KEY_PREFIX}${attachmentId}:${descriptionKind}`}
+      label={label}
     >
-      <summary className="cursor-pointer select-none px-3 py-2">
-        {label}
-      </summary>
-      <div className="px-3 pb-2 whitespace-pre-wrap italic">{children}</div>
-    </details>
+      {children}
+    </CollapsibleText>
   );
 }
 
@@ -622,9 +608,13 @@ function AttachmentRow({
       )}
 
       {a.transcript && a.kind !== 'image' && (
-        <div className="px-3 py-2 bg-white/5 rounded text-sm text-[var(--color-text-muted)] whitespace-pre-wrap italic">
+        <AttachmentDescription
+          attachmentId={a.id}
+          descriptionKind="transcript"
+          label="Transcript"
+        >
           {a.transcript}
-        </div>
+        </AttachmentDescription>
       )}
 
       {a.descriptionStatus === 'error' && a.descriptionError && (

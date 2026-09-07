@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useRecorder } from '../../hooks/useRecorder';
+import { useClipStage } from '../../hooks/useClipStage';
+import { ClipStrip } from '../ClipRecorder';
 import { ulid } from '../../lib/ulid';
 import { useFoodCreate } from '../../offline/mutationDefaults';
 import { storePhoto } from '../../offline/photoStore';
@@ -33,11 +34,12 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
   const videoRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
-  const { status, error, start, stop, canTranscribe } = useRecorder(t =>
-    setText(prev => (prev ? `${prev} ${t}` : t))
-  );
-  const recording = status === 'recording';
-  const transcribing = status === 'transcribing';
+  // Stopping a clip stages it and nothing else: no transcription runs here, so
+  // "Log it" is never waiting on one. Before this, the mic held the audio in
+  // memory, blocked on `POST /api/transcribe`, and then threw the recording
+  // away — and because `canSubmit` never checked the transcribing state, a meal
+  // logged while it ran was saved without the sentence that described it.
+  const clips = useClipStage({ kind: 'food' });
 
   // Revoke object URLs on unmount to avoid leaking blobs.
   useEffect(
@@ -83,7 +85,10 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
   });
 
   const submit = async () => {
-    const entryId = ulid();
+    // The meal's id was minted at the first clip, if there was one, so the
+    // clips already carry it — `claimId` mints one only for a meal that was
+    // typed or photographed with nothing spoken.
+    const entryId = clips.claimId();
     const photos = media.map(m => ({ id: ulid(), file: m.file }));
     // The blobs go to the device first: a queued upload that refers to a photo
     // nothing stored is an upload that can only fail.
@@ -105,16 +110,27 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
       text: text.trim() || undefined,
       latitude: pos?.latitude,
       longitude: pos?.longitude,
+      pendingClips: clips.clips.length || undefined,
     });
+    // Not awaited: the clips are on the device and the queue will land them,
+    // pausing for as long as the phone has no signal. Waiting here would park
+    // the composer on an upload that is allowed to take hours.
+    void clips.commit();
     // Cleared on send, not on the server's answer: the entry is already saved
     // as far as this device is concerned.
     media.forEach(m => URL.revokeObjectURL(m.url));
     setText('');
     setMedia([]);
+    clips.reset();
     onDone?.();
   };
 
-  const canSubmit = (text.trim() || media.length > 0) && !create.isPending;
+  // Deliberately not gated on the recorder: a clip that has been stopped is
+  // staged, and one still being recorded is stopped by its own button. What is
+  // NOT here is the old `transcribing` hole — there is nothing to wait for.
+  const canSubmit =
+    (text.trim() || media.length > 0 || clips.clips.length > 0) &&
+    !create.isPending;
 
   return (
     <div className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
@@ -128,29 +144,28 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
         />
         <button
           type="button"
-          onClick={() => (recording ? stop() : void start())}
-          // Gated only when idle, so a live recording can always be stopped.
-          disabled={!recording && (transcribing || !canTranscribe)}
-          title={
-            !canTranscribe
-              ? 'Offline — dictation needs the server'
-              : recording
-                ? 'Stop recording'
-                : 'Dictate'
-          }
+          onClick={clips.toggle}
+          // Only while a clip is being closed out. Recording needs no backend —
+          // the audio is stored and uploaded later — so being offline does not
+          // gate it, and while recording this is the only way to stop.
+          disabled={clips.busy}
+          data-testid="food-capture-record"
+          title={clips.recording ? 'Stop recording' : 'Record a clip'}
           className={`absolute top-2 right-2 w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
-            recording
+            clips.recording
               ? 'bg-red-500 text-white animate-pulse'
               : 'bg-white/10 text-[var(--color-text)] hover:bg-white/20'
           } disabled:opacity-50`}
         >
-          {transcribing ? '…' : '🎤'}
+          {clips.busy ? '…' : '🎤'}
         </button>
       </div>
 
-      {(error || saveError) && (
+      <ClipStrip stage={clips} testId="food-capture" />
+
+      {saveError && (
         <div className="mt-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded text-sm text-red-400">
-          {error || saveError}
+          {saveError}
         </div>
       )}
 

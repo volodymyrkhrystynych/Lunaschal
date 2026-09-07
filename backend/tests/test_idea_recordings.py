@@ -228,12 +228,19 @@ def test_the_transcript_is_polished_and_titled_like_any_dictated_idea(
     assert idea['title'] == 'Habit grid'
 
 
-def test_a_transcript_never_overwrites_what_the_user_typed_meanwhile(
+def test_a_transcript_joins_what_the_user_typed_rather_than_replacing_it(
     client, monkeypatch
 ):
     """The idea is open in the detail pane while the clip is transcribing, and
     typing into it saves immediately. The transcript arriving afterwards must
-    not take that away."""
+    not take that away — and must not be thrown away either.
+
+    It used to be dropped outright whenever `raw_content` was non-empty, which
+    was defensible while the only way to fill it was to type over a pending
+    recording. It is not any more: a capture can be typed *and* spoken in one
+    go, so an idea whose body is non-empty is the ordinary case, and dropping
+    the transcript there loses the half that cannot be retyped.
+    """
     jobs = _run_pending_bg(monkeypatch)
     _transcribes(monkeypatch)
 
@@ -246,7 +253,31 @@ def test_a_transcript_never_overwrites_what_the_user_typed_meanwhile(
     jobs[0]()
 
     idea = client.get(f'/api/ideas/{idea_id}').get_json()
-    assert idea['rawContent'] == 'Typed while waiting'
+    assert idea['rawContent'] == (
+        'Typed while waiting\n\nA grid of habits in the day view.'
+    )
+
+
+def test_a_second_clip_replaces_the_spoken_half_rather_than_repeating_it(
+    client, monkeypatch
+):
+    """Each delivery carries the whole journal entry — every clip so far — not
+    one clip's transcript. So the spoken half is *replaced* on each arrival, and
+    `recording_text` is what says where the typed half ends."""
+    _run_pending_bg(monkeypatch)
+    _transcribes(monkeypatch)
+
+    idea_id = str(ULID())
+    _record(client, idea_id=idea_id)
+    client.patch(f'/api/ideas/{idea_id}', json={'rawContent': 'Typed first'})
+
+    from backend.routes.ideas import apply_recording_transcript
+
+    apply_recording_transcript(idea_id, 'One.')
+    apply_recording_transcript(idea_id, 'One.\n\nTwo.')
+
+    idea = client.get(f'/api/ideas/{idea_id}').get_json()
+    assert idea['rawContent'] == 'Typed first\n\nOne.\n\nTwo.'
 
 
 def test_a_failed_transcription_leaves_the_idea_empty_and_says_so(
@@ -353,3 +384,41 @@ def test_a_replay_links_an_idea_the_first_call_never_got_to_write(client):
     _record(client, idea_id=idea_id, id=entry_id, attachment_id=attachment_id)
     assert client.get(f'/api/ideas/{idea_id}').status_code == 200
     assert client.get(f'/api/journal/{entry_id}').get_json()['ideaId'] == idea_id
+
+
+def test_a_clip_that_lands_before_the_create_does_not_swallow_the_typed_line(
+    client, monkeypatch
+):
+    """The idea's id is minted at the first chunk, so the capture's two halves
+    can arrive in either order. `create_from_voice` used to be a plain
+    INSERT OR IGNORE, which meant a clip getting there first silently dropped
+    the line typed beside it."""
+    jobs = _run_pending_bg(monkeypatch)
+    _transcribes(monkeypatch)
+    idea_id = str(ULID())
+
+    _record(client, idea_id=idea_id)
+    assert client.get(f'/api/ideas/{idea_id}').get_json()['rawContent'] == ''
+
+    client.post(
+        '/api/ideas/voice', json={'id': idea_id, 'rawContent': 'Typed with it'}
+    )
+    jobs[0]()
+
+    idea = client.get(f'/api/ideas/{idea_id}').get_json()
+    assert idea['rawContent'] == (
+        'Typed with it\n\nA grid of habits in the day view.'
+    )
+
+
+def test_a_replayed_voice_create_leaves_a_real_idea_alone(client):
+    idea_id = str(ULID())
+    client.post(
+        '/api/ideas/voice', json={'id': idea_id, 'rawContent': 'The real one'}
+    )
+    client.post(
+        '/api/ideas/voice', json={'id': idea_id, 'rawContent': 'A replay of it'}
+    )
+
+    idea = client.get(f'/api/ideas/{idea_id}').get_json()
+    assert idea['rawContent'] == 'The real one'

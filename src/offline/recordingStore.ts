@@ -64,6 +64,18 @@ export interface RecordingFic {
   chapterId?: string;
 }
 
+/**
+ * The meal this clip was recorded for — the Food tab's record button.
+ *
+ * Stored beside the audio for the reason `RecordingIdea` and `RecordingFic`
+ * are, plus the one specific to food: a clip that arrives having forgotten its
+ * meal becomes a journal entry, which is a different tab from the one it was
+ * spoken into and has no photograph of the plate next to it.
+ */
+export interface RecordingFood {
+  id: string;
+}
+
 export interface StoredRecording {
   id: string;
   mode: RecordingMode;
@@ -81,12 +93,16 @@ export interface StoredRecording {
   /** Terminal failure (a 4xx). Stop retrying, but never throw the audio away. */
   failed: boolean;
   /**
-   * The entry this clip is to be attached to, when it belongs to one that
-   * already exists — the composer's Transcribe button, whose entry id is not
-   * minted until Save.
+   * The entry this clip is to be attached to.
+   *
+   * Written when the recording starts, not when the composer is submitted: a
+   * composer stages several clips and commits them together, so the entry id
+   * is minted at the first chunk and every clip in that session carries it —
+   * and so does the clip recorded straight into an entry that already exists,
+   * which passes the open entry's id instead of minting one.
    *
    * Stored beside the audio rather than only in the upload's variables for the
-   * same reason `idea` and `fic` are: the boot sweep finds an orphaned
+   * same reason `idea`, `fic` and `food` are: the boot sweep finds an orphaned
    * recording by enumerating this store, and one that has forgotten its entry
    * is filed as a brand-new journal entry of its own — the clip survives, but
    * detached from the words it was recorded with.
@@ -96,6 +112,8 @@ export interface StoredRecording {
   idea?: RecordingIdea;
   /** Set when the clip is fic commentary; absent for journal recordings. */
   fic?: RecordingFic;
+  /** Set when the clip is a food log capture; absent for journal recordings. */
+  food?: RecordingFood;
 }
 
 const META_PREFIX = 'rec:';
@@ -159,14 +177,21 @@ async function writeMeta(meta: StoredRecording): Promise<void> {
 export function beginRecording(
   mode: RecordingMode,
   mimeType: string,
-  opts: { idea?: RecordingIdea; fic?: RecordingFic } = {}
+  opts: {
+    entryId?: string;
+    idea?: RecordingIdea;
+    fic?: RecordingFic;
+    food?: RecordingFood;
+  } = {}
 ): Promise<StoredRecording> {
   const meta: StoredRecording = {
     id: ulid(),
     mode,
     mimeType,
+    ...(opts.entryId ? { entryId: opts.entryId } : {}),
     ...(opts.idea ? { idea: opts.idea } : {}),
     ...(opts.fic ? { fic: opts.fic } : {}),
+    ...(opts.food ? { food: opts.food } : {}),
     startedAt: Date.now(),
     endedAt: null,
     chunkCount: 0,
@@ -179,24 +204,6 @@ export function beginRecording(
   return enqueue(async () => {
     await writeMeta(meta);
     return meta;
-  });
-}
-
-/**
- * Point a stored recording at the entry it is to be attached to.
- *
- * Separate from `beginRecording` because the composer does not know the id
- * until Save: the clip is recorded into a draft, and the entry it becomes part
- * of is minted when that draft is submitted.
- */
-export function assignRecordingEntry(
-  id: string,
-  entryId: string
-): Promise<void> {
-  return enqueue(async () => {
-    const meta = await readMeta(id);
-    if (!meta) return;
-    await writeMeta({ ...meta, entryId });
   });
 }
 

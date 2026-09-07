@@ -223,15 +223,42 @@ def create_journal_entry(
     against this id. Attachments necessarily arrive *after* the entry — they
     need its id — so without this the title would always be generated from the
     text alone, before any photo had been captioned. Given it, metadata waits.
+
+    A composer mints its entry id at the first recorded chunk, so a clip can
+    reach `create_recording_entry` *before* this does — the boot sweep after a
+    crash sends only the clip, and an offline queue can replay in either order.
+    That leaves a row already here, created empty by the recording route, and a
+    plain `INSERT OR IGNORE` would silently drop the words typed alongside the
+    audio. So an existing row that is still empty is filled in instead; one that
+    already has text is a genuine replay and is left alone.
     """
     id = entry_id or str(ULID())
-    cur = get_db().execute(
+    db = get_db()
+    cur = db.execute(
         'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
         (id, content, raw_content, title, tags_json(tags), created_at, created_at),
     )
-    get_db().commit()
+    db.commit()
     if cur.rowcount == 0:
-        return None
+        if not content.strip():
+            return None
+        adopted = db.execute(
+            "UPDATE journal_entries SET content=?, raw_content=?, updated_at=?"
+            " WHERE id=? AND content='' AND COALESCE(raw_content, '')=''",
+            (content, raw_content, created_at, id),
+        )
+        db.commit()
+        if not adopted.rowcount:
+            return None
+        # Deliberately falls through: the entry now has the text it was created
+        # with, so it still needs its polish and its title. Its clips' own
+        # transcripts append after this, and their passes re-run over the lot.
+        _notify_subscribers(id)
+        if polish and raw_content:
+            _polish_bg(id, raw_content)
+        if not title or not tags:
+            _generate_metadata_bg(id, content, expect_attachments=pending_attachments)
+        return id
     _notify_subscribers(id)
     if polish and raw_content:
         _polish_bg(id, raw_content)
@@ -1123,18 +1150,11 @@ def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str,
 
 
 def _do_attachment_audio(path: str) -> str:
-    """Transcribe an audio *or video* attachment, taking the same
-    cross-checked path POST /api/transcribe does.
+    """Transcribe an audio *or video* attachment.
 
-    Video needs no special handling: every backend goes through ffmpeg (directly
-    for Parakeet, internally for Whisper) and ffmpeg reads the audio track out of
-    a container without caring that there are also video frames in it.
-
-    This runs on the job queue with nobody waiting on it, so the multi-backend cost
-    is free here in a way it isn't on the interactive path — but the switch is
-    still shared, because a user who turned the LLM pass off did so to stop the
-    app spending model time on transcripts, and that reason doesn't stop
-    applying in the background.
+    The work itself lives in `stt.transcribe_file`, shared with the food log's
+    meal clips — this resolves the stored path first, which is journal-specific
+    (`storage.resolve_stored_path` refuses a path outside JOURNAL_ROOT).
     """
     # Imported here rather than at module scope: the STT module pulls in numpy
     # and (for the local backend) torch, and the journal blueprint is imported
@@ -1144,17 +1164,7 @@ def _do_attachment_audio(path: str) -> str:
     p = storage.resolve_stored_path(path)
     if p is None or not p.is_file():
         raise RuntimeError('The recording is missing')
-
-    content = p.read_bytes()
-    if stt_routes._get_transcribe_polish_enabled():
-        result = stt_routes.transcribe_multi(content, p.name, None)
-    else:
-        stt_routes._load_stt()
-        result = stt_routes._do_transcribe(content, p.name, None)
-    text = (result.get('text') or '').strip()
-    if not text:
-        raise RuntimeError('No speech found in the recording')
-    return text
+    return stt_routes.transcribe_file(p)
 
 
 def _do_attachment_caption(path: str, name: str) -> str:
@@ -1184,6 +1194,39 @@ def _deliver_idea_transcript(entry_id: str, text: str) -> None:
     apply_recording_transcript(row['idea_id'], text)
 
 
+def _append_entry_text(db, entry_id: str, text: str) -> None:
+    """Add a clip's transcript to the end of an entry's body.
+
+    Both columns move together: `raw_content` is what the polish pass reads and
+    `content` is what the feed shows until that pass replaces it, so an entry
+    whose polish has not run yet still reads correctly.
+
+    A blank line between clips, not a space — the gap is the pause the user
+    took, and it is the only thing distinguishing "one thought, said twice"
+    from a run-on sentence.
+    """
+    row = db.execute(
+        'SELECT content, raw_content FROM journal_entries WHERE id=?', (entry_id,)
+    ).fetchone()
+    if row is None:
+        return
+    existing = (row['raw_content'] or row['content'] or '').strip()
+    merged = f'{existing}\n\n{text}' if existing else text
+    db.execute(
+        'UPDATE journal_entries SET content=?, raw_content=?, updated_at=? WHERE id=?',
+        (merged, merged, int(time.time()), entry_id),
+    )
+
+
+def _entry_raw_text(entry_id: str) -> str | None:
+    row = get_db().execute(
+        'SELECT content, raw_content FROM journal_entries WHERE id=?', (entry_id,)
+    ).fetchone()
+    if row is None:
+        return None
+    return row['raw_content'] or row['content'] or None
+
+
 def _transcribe_attachment_bg(
     attachment_id: str, entry_id: str, kind: str, path: str, name: str,
     *, into_entry: bool = False, now: bool = False,
@@ -1203,25 +1246,52 @@ def _transcribe_attachment_bg(
 
         try:
             db = get_db()
+            # Whether this attachment has ever produced a transcript before.
+            # Read *before* the update, because it is what decides between
+            # appending to the entry and merely refreshing the clip's own text:
+            # re-running Transcribe on a clip must not paste it into the entry
+            # a second time.
+            prior = db.execute(
+                'SELECT transcript FROM journal_attachments WHERE id=?',
+                (attachment_id,),
+            ).fetchone()
+            first_time = not (prior and prior['transcript'])
+
             updates = {'transcript_status': status, 'transcript_error': error}
             if text is not None:
                 updates['transcript'] = text
             build_update(db, 'journal_attachments', updates, 'id=?', (attachment_id,))
-            if text is not None and into_entry:
-                db.execute(
-                    'UPDATE journal_entries SET content=?, raw_content=?, updated_at=? WHERE id=?',
-                    (text, text, int(time.time()), entry_id),
-                )
+
+            merge = text is not None and into_entry and first_time
+            if merge:
+                # Appended, not assigned. A composer stages several clips
+                # against one entry and they are uploaded in record order, so
+                # the entry reads as one passage with a blank line where each
+                # pause was — the transcript of a second thought used to
+                # overwrite the first.
+                _append_entry_text(db, entry_id, text)
             db.commit()
             _notify_subscribers(entry_id)
-            if text is not None and into_entry:
+
+            if merge:
+                # The whole entry so far, not this clip alone: polish and
+                # titling both read the body, and handing them one clip out of
+                # three titles the entry after its first sentence.
+                body = _entry_raw_text(entry_id) or text
+                # Re-run per clip rather than waiting for the last one. It is
+                # not possible to know here that a later clip is coming — its
+                # upload may not have reached the server yet, so "no attachment
+                # is still running" can be true in the gap between two of them,
+                # and a pass skipped on that basis would never happen at all.
+                # Running again is safe because these three jobs share one FIFO
+                # worker: the version enqueued from the last clip is the last
+                # one to write, and it is the one that saw the whole text.
+                #
                 # The idea first: it is the tab the recording was made in, so
-                # it is the one being watched. All four passes share the single
-                # background worker, so this is purely about which finishes
-                # first.
-                _deliver_idea_transcript(entry_id, text)
-                _polish_bg(entry_id, text)
-                _generate_metadata_bg(entry_id, text)
+                # it is the one being watched.
+                _deliver_idea_transcript(entry_id, body)
+                _polish_bg(entry_id, body)
+                _generate_metadata_bg(entry_id, body)
         except Exception as e:
             print(f'Failed to record transcription result for {attachment_id}: {e}')
 

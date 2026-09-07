@@ -646,6 +646,38 @@ def _log_transcription(result: dict, form) -> None:
         logger.exception('Failed to log transcription')
 
 
+def transcribe_file(path, *, language: str | None = None) -> str:
+    """Transcribe a stored audio/video file, taking the same cross-checked path
+    `POST /api/transcribe` does. Raises rather than returning empty.
+
+    Video needs no special handling: every backend goes through ffmpeg
+    (directly for Parakeet, internally for Whisper) and ffmpeg reads the audio
+    track out of a container without caring that there are also video frames in
+    it.
+
+    This is the one entry point for "there is a file on disk, transcribe it" —
+    the journal's attachments and the food log's meal clips both come through
+    here. It runs on the job queue with nobody waiting, so the multi-backend
+    cost is free in a way it is not on the interactive path, but the switch is
+    still shared: a user who turned the LLM pass off did so to stop the app
+    spending model time on transcripts, and that reason does not stop applying
+    in the background.
+    """
+    p = Path(path)
+    if not p.is_file():
+        raise RuntimeError('The recording is missing')
+    content = p.read_bytes()
+    if _get_transcribe_polish_enabled():
+        result = transcribe_multi(content, p.name, language)
+    else:
+        _load_stt()
+        result = _do_transcribe(content, p.name, language)
+    text = (result.get('text') or '').strip()
+    if not text:
+        raise RuntimeError('No speech found in the recording')
+    return text
+
+
 @bp.post('/api/transcribe')
 def transcribe():
     if 'audio' not in request.files:

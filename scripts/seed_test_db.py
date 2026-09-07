@@ -358,6 +358,20 @@ def seed_food(db, recipe_id):
         (media_id, entry_ids[-1], 'image', str(img_path), 'image/jpeg', ts(3)),
     )
 
+    # A meal that was talked over as well as photographed. 'done', never
+    # 'running': an in-flight state is rewritten by init_db()'s orphan reset on
+    # the next start, so seeding one shows a status that cannot last.
+    clip_id = new_id()
+    clip_path = media_path(entry_ids[-1], clip_id, 'wav')
+    placeholder_audio(clip_path)
+    db.execute(
+        'INSERT INTO food_media (id, entry_id, kind, path, mime, position, '
+        'transcript, transcript_status, created_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)',
+        (clip_id, entry_ids[-1], 'audio', str(clip_path), 'audio/wav',
+         'Ordered the pad thai again. Still the best on the street.',
+         'done', ts(3)),
+    )
+
     today = today_key()
     for description, calories in [('Oatmeal and coffee', 420), ('Lentil soup', 380), ('Pad thai', 700)]:
         db.execute(

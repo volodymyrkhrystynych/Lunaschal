@@ -1,9 +1,8 @@
 import { useRef, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
-import { ulid } from '../../lib/ulid';
 import { useIdeaCreate } from '../../offline/mutationDefaults';
-import { useRecorder } from '../../hooks/useRecorder';
-import { captureIdeaRecording } from '../../offline/recordingQueue';
+import { useClipStage } from '../../hooks/useClipStage';
+import { ClipStrip } from '../ClipRecorder';
+import { clipButtonLabel } from '../../lib/clipStage';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 
 interface IdeaCaptureProps {
@@ -17,80 +16,52 @@ interface IdeaCaptureProps {
 }
 
 /**
- * Capture box at the top of the list pane: type an idea, or record one.
+ * Capture box at the top of the list pane: type an idea, record one, or both.
  *
- * The two halves are deliberately different. Typing is a small edit loop —
- * write, correct, Save. Recording is the Journal button's contract instead:
- * **stopping the recording is the save**. The clip goes to the durable store
- * and is uploaded as a journal entry carrying the idea's id, the idea appears
- * in the list immediately with no text in it, and the transcript, the cleanup
- * and the title all arrive minutes later on their own.
+ * Recording stages a clip and nothing else — stop, think, record again, and
+ * Save sends the lot: the typed line and every clip, under one idea. The idea's
+ * id is minted at the first chunk, so a phone that dies mid-thought still files
+ * the audio as *this* idea rather than as a stray journal entry.
  *
- * It used to work the other way — dictation appended to the textarea and you
- * pressed Save — which is fine at a desk and wrong everywhere an idea actually
- * turns up. It meant holding the thought while the transcription ran, then
- * needing a second deliberate action; anything that interrupted the phone in
- * between lost the recording outright, because it only ever existed in memory.
+ * It has been through both extremes. Dictation used to append to the textarea
+ * and block on the transcription, which is fine at a desk and wrong everywhere
+ * an idea actually turns up; then stopping the recording *was* the save, which
+ * fixed the waiting but allowed exactly one clip and no words beside it.
  */
 export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
   const [text, setText] = useState('');
-  const [notice, setNotice] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const qc = useQueryClient();
 
   // Queued, not posted: an idea captured with no backend in reach is still an
-  // idea. The id is minted here so the optimistic row and the eventual server
-  // row are the same row, and `onCreated` can open it before it has been sent.
+  // idea. The id is minted client-side so the optimistic row and the eventual
+  // server row are the same row, and `onCreated` can open it before it has
+  // been sent.
   const create = useIdeaCreate();
-
-  const recorder = useRecorder(
-    // No transcript comes back here: in durable mode the audio is uploaded and
-    // the server transcribes it into both the entry and the idea.
-    () => undefined,
-    undefined,
-    {
-      onNotice: setNotice,
-      onRecording: rec => {
-        // Not awaited — see captureIdeaRecording. The idea is already in the
-        // list from the optimistic insert, and the audio is on disk until the
-        // server confirms it, so there is nothing left to wait for.
-        void captureIdeaRecording(qc, rec).catch(() => undefined);
-        if (rec.idea) onCreated(rec.idea.id);
-      },
-    }
-  );
-
-  const toggleRecording = () => {
-    if (recorder.status === 'recording') {
-      recorder.stop();
-      return;
-    }
-    if (recorder.status !== 'idle') return;
-    setNotice('');
-    // The idea's id is minted before the first chunk and stored beside the
-    // audio, so a phone that dies mid-recording still knows, on the way back
-    // up, that this clip was an idea.
-    void recorder.start('transcribe', {
-      durable: true,
-      idea: { id: ulid(), ...(repoId ? { repoId } : {}) },
-    });
-  };
+  const clips = useClipStage({ kind: 'idea', ...(repoId ? { repoId } : {}) });
 
   useShortcutScope(1, {
     create: () => textareaRef.current?.focus(),
-    record: toggleRecording,
+    record: clips.toggle,
   });
 
   const submit = () => {
     const trimmed = text.trim();
-    if (!trimmed || create.isPending) return;
-    const id = ulid();
-    create.mutate({ id, rawContent: trimmed, ...(repoId ? { repoId } : {}) });
+    if ((!trimmed && clips.clips.length === 0) || create.isPending) return;
+    // Whatever the clips were recorded under, so the idea the transcripts are
+    // delivered to is the one this create makes.
+    const id = clips.claimId();
+    create.mutate({
+      id,
+      // An idea that is only spoken starts empty; the transcript fills it in,
+      // exactly as it did when stopping was the save.
+      rawContent: trimmed,
+      ...(repoId ? { repoId } : {}),
+    });
+    void clips.commit();
     setText('');
+    clips.reset();
     onCreated(id);
   };
-
-  const busy = recorder.status !== 'idle';
 
   return (
     <div className="p-3 border-b border-white/10 shrink-0">
@@ -112,44 +83,40 @@ export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
       <div className="flex items-center gap-2 mt-2">
         <button
           type="button"
-          onClick={toggleRecording}
+          onClick={clips.toggle}
           // Gated only while the recorder is finishing one off: recording works
           // offline (the clip is stored and uploaded later), and while
           // recording this button is the only way to stop.
-          disabled={recorder.status === 'saving'}
-          aria-label={
-            recorder.status === 'recording'
-              ? 'Stop recording'
-              : 'Record an idea'
-          }
+          disabled={clips.busy}
+          data-testid="idea-capture-record"
+          aria-label={clips.recording ? 'Stop recording' : 'Record an idea'}
           className={`px-2 py-1 rounded text-sm ${
-            recorder.status === 'recording'
+            clips.recording
               ? 'bg-red-500/25 text-red-300'
               : 'bg-white/10 text-[var(--color-text)] hover:bg-white/15'
           } disabled:opacity-50`}
         >
-          {recorder.status === 'recording' ? '■ Stop' : '● Record'}
+          {clipButtonLabel(clips.status, clips.starting)}
         </button>
         <button
           type="button"
           onClick={submit}
-          disabled={!text.trim() || create.isPending || busy}
+          // Never gated on the recorder: a stopped clip is staged, and a clip
+          // still recording is stopped by its own button.
+          disabled={
+            (!text.trim() && clips.clips.length === 0) || create.isPending
+          }
           className="px-2 py-1 rounded text-sm bg-[var(--color-primary)]/20 text-[var(--color-primary)] hover:bg-[var(--color-primary)]/30 disabled:opacity-40"
         >
           {create.isPending ? 'Saving…' : 'Save idea'}
         </button>
-        {recorder.status === 'recording' && (
+        {clips.recording && (
           <span className="text-xs text-[var(--color-text-muted)]">
-            Stop to save — it transcribes itself.
+            Stop when you pause — you can add another clip.
           </span>
         )}
       </div>
-      {notice && (
-        <p className="mt-2 text-xs text-[var(--color-text-muted)]">{notice}</p>
-      )}
-      {recorder.error && (
-        <p className="mt-2 text-xs text-red-400">{recorder.error}</p>
-      )}
+      <ClipStrip stage={clips} testId="idea-capture" />
       {create.isError && (
         <p className="mt-2 text-xs text-red-400">
           {create.error instanceof Error

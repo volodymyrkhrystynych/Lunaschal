@@ -46,7 +46,11 @@ const recorderState = {
 };
 interface StartCall {
   mode?: string;
-  opts?: { durable?: boolean; idea?: { id: string; repoId?: string } };
+  opts?: {
+    durable?: boolean;
+    entryId?: string;
+    idea?: { id: string; repoId?: string };
+  };
 }
 let startCalls: StartCall[] = [];
 let finishRecording: (() => void) | null = null;
@@ -63,7 +67,13 @@ vi.mock('../../hooks/useRecorder', () => ({
       // plain dictation (the discussion and decision boxes) delivers text.
       if (opts?.durable) {
         finishRecording = () =>
-          options.onRecording?.({ id: 'rec-1', idea: opts?.idea });
+          options.onRecording?.({
+            id: 'rec-1',
+            idea: opts?.idea,
+            entryId: opts?.entryId,
+            startedAt: 1_000,
+            endedAt: 19_000,
+          });
       } else {
         onTranscript('a spoken idea');
       }
@@ -74,12 +84,17 @@ vi.mock('../../hooks/useRecorder', () => ({
 
 // The durable upload queue. Its own behaviour is covered in
 // src/offline/recordingQueue.test.ts; here it only has to be observable.
-const captureIdeaRecording = vi.fn();
+const enqueueRecordingUpload = vi.fn();
 vi.mock('../../offline/recordingQueue', () => ({
-  captureIdeaRecording: (...args: unknown[]) => {
-    captureIdeaRecording(...args);
+  enqueueRecordingUpload: (...args: unknown[]) => {
+    enqueueRecordingUpload(...args);
     return Promise.resolve();
   },
+  enqueueFoodRecording: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../offline/recordingStore', () => ({
+  deleteRecording: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../shortcuts/ShortcutProvider', () => ({
@@ -249,7 +264,7 @@ describe('IdeaCapture', () => {
   beforeEach(() => {
     startCalls = [];
     finishRecording = null;
-    captureIdeaRecording.mockClear();
+    enqueueRecordingUpload.mockClear();
   });
 
   it('records durably, with the idea id minted before the first chunk', async () => {
@@ -268,25 +283,63 @@ describe('IdeaCapture', () => {
     expect(startCalls[0]!.opts?.idea?.id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
   });
 
-  it('stopping the recording is the save, and opens the idea', async () => {
+  it('stages the clip on stop — nothing is sent until Save', async () => {
+    renderIt();
+    await screen.findByText('Habit tracking');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
+    finishRecording!();
+
+    // A chip, and nothing else. Stopping used to *be* the save, which meant one
+    // clip per idea and no way to type a line beside what was just said.
+    expect(await screen.findByTestId('idea-capture-clip')).toBeTruthy();
+    expect(enqueueRecordingUpload).not.toHaveBeenCalled();
+    expect(api.ideas.createFromVoice).not.toHaveBeenCalled();
+  });
+
+  it('sends the clips and the typed line together, under one idea', async () => {
     renderIt();
     await screen.findByText('Habit tracking');
 
     fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
     const ideaId = startCalls[0]!.opts!.idea!.id;
     finishRecording!();
+    await screen.findByTestId('idea-capture-clip');
+    fireEvent.change(screen.getByPlaceholderText(/Capture an idea/), {
+      target: { value: 'and the bit I forgot to say' },
+    });
 
-    // Queued as one durable upload — no text was transcribed in the browser,
-    // and nothing was posted to the ideas endpoints.
-    await waitFor(() => expect(captureIdeaRecording).toHaveBeenCalled());
-    const rec = captureIdeaRecording.mock.calls[0]![1] as {
-      idea?: { id: string };
-    };
-    expect(rec.idea?.id).toBe(ideaId);
-    expect(api.ideas.createFromVoice).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /Save idea/ }));
 
-    // ...and the idea it will become is already open.
+    // The idea is created under the id the clip was recorded against, so the
+    // transcript arrives at the idea the typed line is already in.
+    await waitFor(() =>
+      expect(api.ideas.createFromVoice).toHaveBeenCalledWith(
+        'and the bit I forgot to say',
+        ideaId,
+        undefined
+      )
+    );
+    await waitFor(() => expect(enqueueRecordingUpload).toHaveBeenCalled());
+    expect(enqueueRecordingUpload.mock.calls[0]![3]).toMatchObject({
+      idea: { id: ideaId },
+    });
+    // ...and the idea it will become is open.
     await waitFor(() => expect(api.ideas.get).toHaveBeenCalledWith(ideaId));
+  });
+
+  it('a clip alone is enough to save — no typed words needed', async () => {
+    renderIt();
+    await screen.findByText('Habit tracking');
+
+    const save = screen.getByRole('button', { name: /Save idea/ });
+    expect(save.hasAttribute('disabled')).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
+    finishRecording!();
+    await screen.findByTestId('idea-capture-clip');
+
+    expect(save.hasAttribute('disabled')).toBe(false);
   });
 
   it('files the recording under the repo the list is filtered to', async () => {

@@ -2112,9 +2112,13 @@ export interface PaperPageContent {
 
 export interface FoodMedia {
   id: string;
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'audio';
   position: number;
   url: string;
+  /** Audio only: what was said, once the background pass has run. */
+  transcript?: string | null;
+  transcriptStatus?: 'idle' | 'running' | 'done' | 'error';
+  transcriptError?: string | null;
 }
 
 export interface FoodEntry {
@@ -2751,9 +2755,14 @@ export const api = {
       pendingAttachments?: number;
     }) => post<{ id: string }>('/api/journal', data),
     // Mirrors the STT_JOURNAL_KEY voice shortcut (stt/listener.py): save the
-    // raw transcript immediately, polish it in the background.
-    createFromVoice: (rawContent: string) =>
-      post<{ id: string }>('/api/journal', { raw_content: rawContent }),
+    // raw transcript immediately, polish it in the background. `id` is passed
+    // when clips were recorded against the same entry (the fanfic reader's
+    // commentary box) so the two halves converge on one row.
+    createFromVoice: (rawContent: string, id?: string) =>
+      post<{ id: string }>('/api/journal', {
+        raw_content: rawContent,
+        ...(id ? { id } : {}),
+      }),
     // The bottom bar's Record button: keep the recording itself as the entry,
     // no speech-to-text. One request so a rejected upload leaves no empty entry
     // behind; the clip lands as the entry's first attachment.
@@ -3043,9 +3052,17 @@ export const api = {
       // second meal or a second copy of the picture.
       id?: string;
       mediaIds?: string[];
+      /**
+       * How many voice clips are on their way up through /api/food/recordings.
+       * Only the count: it is what lets a meal that was spoken and neither
+       * typed nor photographed be created at all, carrying its GPS with it.
+       */
+      pendingClips?: number;
     }) => {
       const form = new FormData();
       if (data.id) form.set('id', data.id);
+      if (data.pendingClips)
+        form.set('pendingClips', String(data.pendingClips));
       if (data.mediaIds?.length)
         form.set('mediaIds', JSON.stringify(data.mediaIds));
       if (data.text) form.set('text', data.text);
@@ -3070,6 +3087,30 @@ export const api = {
         )
       );
       return upload<FoodEntry>('/api/food', form);
+    },
+    /**
+     * One staged voice clip for a meal.
+     *
+     * Its own route rather than a `media` field on `create`, for the reason
+     * `POST /api/journal/recordings` is its own route: the phone holds the
+     * audio until the server confirms it and re-POSTs on every reconnect, so
+     * both ids are client-minted and the entry is created if it is not there
+     * yet. A clip that arrives before the meal it belongs to still lands.
+     */
+    createRecording: (
+      audio: Blob,
+      opts: { id: string; mediaId: string; position?: number }
+    ) => {
+      const form = new FormData();
+      form.append('audio', audio, recordingFilename(audio.type));
+      form.append('id', opts.id);
+      form.append('mediaId', opts.mediaId);
+      if (opts.position !== undefined)
+        form.append('position', String(opts.position));
+      return upload<{ id: string; media: FoodMedia }>(
+        '/api/food/recordings',
+        form
+      );
     },
     update: (
       id: string,

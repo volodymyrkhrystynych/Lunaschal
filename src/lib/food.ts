@@ -53,3 +53,20 @@ export function parseTags(tags: string | null | undefined): string[] {
     return [];
   }
 }
+
+/**
+ * True while any meal clip on screen is still being transcribed — the two food
+ * views poll on it.
+ *
+ * A meal is refetched on its own invalidation, but a transcript lands minutes
+ * later on a background worker with nothing to invalidate from: without this,
+ * the clip sits under "Transcribing…" until something else happens to refresh
+ * the list.
+ */
+export function hasRunningMealTranscript(
+  entries: Array<{ media: Array<{ transcriptStatus?: string }> }> | undefined
+): boolean {
+  return (entries ?? []).some(e =>
+    e.media.some(m => m.transcriptStatus === 'running')
+  );
+}
