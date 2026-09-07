@@ -497,12 +497,12 @@ def seed_jobs(db, email_ids):
         'headline = ?, summary = ?, work_authorization = ?, salary_expectation = ?, '
         'notice_period = ?, availability_date = ?, relocation_willingness = ?, '
         'allowed_locations = ?, remote_only = ?, soft_salary_floor = ?, max_distance_km = ?, '
-        'soft_preferences = ?, updated_at = ? WHERE id = 1',
+        'max_posting_age_days = ?, soft_preferences = ?, updated_at = ? WHERE id = 1',
         ('Jordan Rivera', 'jordan.rivera@example.com', '555-0100', 'Toronto, ON',
          '["https://example.com/jordan", "https://github.com/example"]',
          'Backend engineer', 'Backend engineer with 6 years building data-heavy web services.',
          'Canadian citizen', '$140,000 CAD', '2 weeks', 'Immediately', 'Not willing to relocate',
-         'Toronto, ON\nRemote (Canada)', 0, 130000.0, 50.0,
+         'Toronto, ON\nRemote (Canada)', 0, 130000.0, 50.0, 60,
          'Prefers small teams and product work over pure platform.', ts(30)),
     )
     role_id = new_id()

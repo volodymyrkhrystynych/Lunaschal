@@ -22,6 +22,28 @@ def test_stale_means_submitted_without_a_linked_reply(client):
     assert rows[0]['daysWaiting'] >= 11
 
 
+def test_ghosting_an_application_removes_it_from_the_waiting_list(client):
+    """Closing one has to end its wait, or the panel never empties.
+
+    `stale_applications` used to return `status IN ('submitted','ghosted')`,
+    so `mark_ghosted_applications` closed an application at 60 days without
+    removing it from "Waiting 10+ days" — whose own copy promises exactly that.
+    Every application ever sent accumulated there: 795 rows, 732 of them
+    already ghosted, the oldest waiting 5,716 days.
+    """
+    app_id = _application(client)
+    now = int(time.time())
+    db = get_db()
+    db.execute("UPDATE applications SET status='submitted', applied_at=? WHERE id=?",
+               (now - 61 * outcomes.DAY, app_id))
+    db.commit()
+    assert [r['id'] for r in outcomes.stale_applications(db, days=10, now=now)] == [app_id]
+
+    outcomes.mark_ghosted_applications(db, now=now)
+
+    assert outcomes.stale_applications(db, days=10, now=now) == []
+
+
 def test_two_months_without_a_linked_reply_is_automatically_ghosted(client):
     app_id = _application(client)
     now = int(time.time())

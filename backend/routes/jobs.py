@@ -101,12 +101,15 @@ def update_profile():
     # value clears the column to NULL and a number is stored as a number.
     if 'maxDistanceKm' in body:
         updates['max_distance_km'] = _coerce_float(body['maxDistanceKm'])
+    if 'maxPostingAgeDays' in body:
+        age = _coerce_float(body['maxPostingAgeDays'])
+        updates['max_posting_age_days'] = None if age is None else int(age)
     db = get_db()
     build_update(db, 'job_profile', updates, 'id=1')
     preference_keys = {
         'avoidClearanceRoles',
         'softSalaryFloor', 'softPreferences', 'companyBlacklist',
-        'maxDistanceKm',
+        'maxDistanceKm', 'maxPostingAgeDays',
     }
     if preference_keys.intersection(body):
         # A hard gate or annotation changed, so cached verdicts no longer

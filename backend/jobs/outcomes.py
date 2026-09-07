@@ -36,6 +36,19 @@ SCHEMA = {
 
 def stale_applications(db, *, days: int = DEFAULT_STALE_DAYS,
                        now: int | None = None) -> list[dict]:
+    """Submitted applications still waiting on a reply, oldest first.
+
+    **`ghosted` is excluded, and that is the whole point of the status test.**
+    It used to be included, which made the list a place applications entered
+    and never left: `mark_ghosted_applications` closes one at 60 days, but
+    closing it did not remove it here, so the "Waiting 10+ days" panel — whose
+    own copy promises "it is marked ghosted automatically after 60 days" —
+    accumulated every application ever sent. It reached 795 rows of which 732
+    were already ghosted, the oldest a university application waiting 5,716
+    days. Nothing is hidden by the exclusion: `ghosted` is a terminal outcome
+    with its own "No reply" group on the pipeline board, and this list is for
+    the ones a follow-up could still move.
+    """
     now = int(time.time()) if now is None else now
     cutoff = now - max(1, min(days, 365)) * DAY
     rows = db.execute(
@@ -44,7 +57,7 @@ def stale_applications(db, *, days: int = DEFAULT_STALE_DAYS,
                j.company, j.title, j.url AS job_url,
                CAST((? - a.applied_at) / 86400 AS INTEGER) AS days_waiting
         FROM applications a JOIN jobs j ON j.id=a.job_id
-        WHERE a.status IN ('submitted','ghosted')
+        WHERE a.status='submitted'
           AND a.applied_at IS NOT NULL AND a.applied_at <= ?
           AND NOT EXISTS (
               SELECT 1 FROM job_email_links l JOIN emails e ON e.id=l.email_id
@@ -60,7 +73,10 @@ def mark_ghosted_applications(db, *, days: int = GHOST_AFTER_DAYS,
                               now: int | None = None) -> dict:
     """Close submitted applications that have received no linked reply.
 
-    This is deliberately the same evidence rule as ``stale_applications``.
+    Deliberately the same *evidence* rule as ``stale_applications`` — no reply
+    linked at or after the submission — differing only in the status it acts
+    on, since that function reports what is still waiting and this one is what
+    stops the waiting.
     Acknowledged applications already have a reply, while later stages must
     never be overwritten by an age-based sweep.
     """

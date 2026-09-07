@@ -379,6 +379,37 @@ def process_one(job_id: str) -> dict:
         # would be indistinguishable from one that was.
         return {'ok': False, 'state': STATE_PENDING, 'error': 'AI unavailable'}
 
+    # The gate once more, now that the model has said where the work happens.
+    #
+    # `work_location` and the inferred `distance_km` are both written by
+    # `_store` — *after* the `hard_gate` above has already run — so the first
+    # pass judged a row whose `work_location` was still empty. That is exactly
+    # the pair `distance.is_fully_remote` reads, and an empty `work_location`
+    # counts as "not contradicted", so any posting the board flagged `remote=1`
+    # passed at every radius. Cohere's Ottawa roles are flagged remote and then
+    # say hybrid in the body: 352 km away, kept. The column exists precisely to
+    # catch "Remote that means three days in an office", and it was landing one
+    # step too late to ever reach the gate that consults it.
+    #
+    # So re-gate against the row as it will actually be stored. No model call
+    # and no second fetch — the same pure function over a dict — which is why
+    # this is cheap enough to do unconditionally.
+    if verdict.get('relevant'):
+        settled = dict(job)
+        settled['work_location'] = verdict.get('workLocation') or ''
+        if settled.get('distance_km') is None:
+            inferred = distance.resolve_keys(verdict.get('cities'))
+            if inferred is not None:
+                settled['distance_km'] = inferred.km
+        late_reason = preferences.hard_gate(settled, loaded)
+        if late_reason:
+            # Stored through the same writer, so `work_location` and the
+            # inferred distance still land: the row must not come back looking
+            # unjudged the next time the sweep sees it.
+            _store(db, job_id, {**verdict, 'relevant': False,
+                                'reason': f'profile: {late_reason}'})
+            return {'ok': True, 'state': STATE_REJECTED, 'error': None}
+
     _store(db, job_id, verdict)
     return {
         'ok': True,

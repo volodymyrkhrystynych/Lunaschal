@@ -284,6 +284,13 @@ export function ProfileEditor() {
             }
           />
           <Field
+            label="Max posting age (days)"
+            value={profile.maxPostingAgeDays?.toString() ?? ''}
+            onCommit={v =>
+              patchContact.mutate({ maxPostingAgeDays: v ? Number(v) : null })
+            }
+          />
+          <Field
             label="Soft preferences (comma-separated)"
             value={profile.softPreferences}
             onCommit={v => patchContact.mutate({ softPreferences: v })}

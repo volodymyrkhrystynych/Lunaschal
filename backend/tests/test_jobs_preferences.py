@@ -1,3 +1,6 @@
+import time
+from datetime import datetime, timezone
+
 from backend.jobs import preferences
 
 
@@ -115,3 +118,51 @@ def test_the_radius_gate_does_not_raise_on_a_null_distance():
     """`None > max_km` would TypeError, and this runs over every pending row."""
     preferences.hard_gate({'location': 'Somewhere', 'description': ''},
                           loaded(maxDistanceKm=200))
+
+
+# --------------------------------------------------------------------------
+# Posting age
+# --------------------------------------------------------------------------
+
+def test_the_posting_age_gate_rejects_only_past_the_limit():
+    old = {'posted_at': int(time.time()) - 90 * 86400, 'location': 'Toronto'}
+    fresh = {'posted_at': int(time.time()) - 5 * 86400, 'location': 'Toronto'}
+    assert 'days old' in preferences.hard_gate(old, loaded(maxPostingAgeDays=60))
+    assert preferences.hard_gate(fresh, loaded(maxPostingAgeDays=60)) == ''
+
+
+def test_an_unset_posting_age_limit_is_inert():
+    """The whole feature switches off by leaving the field empty."""
+    ancient = {'posted_at': int(time.time()) - 5000 * 86400}
+    assert preferences.hard_gate(ancient, loaded()) == ''
+    assert preferences.hard_gate(ancient, loaded(maxPostingAgeDays=None)) == ''
+    assert preferences.hard_gate(ancient, loaded(maxPostingAgeDays='')) == ''
+
+
+def test_a_posting_with_no_date_is_kept():
+    """Silence is missing information about a posting, not a stale posting.
+
+    Same three-valued discipline as the distance gate: only positive evidence
+    of age rejects, or the gate would hide every row whose board omits a date.
+    """
+    assert preferences.hard_gate({'location': 'Toronto'},
+                                 loaded(maxPostingAgeDays=60)) == ''
+    assert preferences.hard_gate({'posted_at': None},
+                                 loaded(maxPostingAgeDays=60)) == ''
+    assert preferences.hard_gate({'posted_at': 'not a date'},
+                                 loaded(maxPostingAgeDays=60)) == ''
+
+
+def test_the_age_gate_reads_both_row_shapes():
+    """`run_gate_sweep` passes a raw sqlite row; the routes pass an API dict.
+
+    `posted_at` is in `row_to_dict`'s TIMESTAMP_COLS, so the camelCase shape
+    carries an ISO string rather than an int — and a gate that understood only
+    one of the two would silently pass everything on the other path.
+    """
+    stamp = int(time.time()) - 90 * 86400
+    iso = datetime.fromtimestamp(stamp, tz=timezone.utc).isoformat()
+    assert 'days old' in preferences.hard_gate(
+        {'posted_at': stamp}, loaded(maxPostingAgeDays=60))
+    assert 'days old' in preferences.hard_gate(
+        {'postedAt': iso}, loaded(maxPostingAgeDays=60))
