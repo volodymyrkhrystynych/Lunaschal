@@ -129,11 +129,25 @@ _BASE_SCHEMA: dict = {
             'maxItems': 4,
             'items': {
                 'type': 'object',
+                # `detail` is declared FIRST, and the order is load-bearing.
+                # llama.cpp builds an object rule by concatenating the required
+                # properties in declaration order with no alternation
+                # (`json-schema-to-grammar.cpp`, and `json` there is
+                # `ordered_json`, so the schema's own order survives). Whichever
+                # key is listed first is therefore the one the model must emit
+                # first. With `kind` leading, and thinking off for this call, the
+                # model had to name a flag from a closed enum before writing a
+                # single word about the posting — so it guessed, then used
+                # `detail` as the only free text it had to reason in, sometimes
+                # talking itself out of the flag it had already committed to
+                # ("...I will leave flags empty", under kind='unpaid', on a
+                # $175-385k role). Writing the observation first and labelling it
+                # second is the ordinary way round.
                 'properties': {
-                    'kind': {'type': 'string', 'enum': list(FLAG_KINDS)},
                     'detail': {'type': 'string'},
+                    'kind': {'type': 'string', 'enum': list(FLAG_KINDS)},
                 },
-                'required': ['kind', 'detail'],
+                'required': ['detail', 'kind'],
                 'additionalProperties': False,
             },
         },

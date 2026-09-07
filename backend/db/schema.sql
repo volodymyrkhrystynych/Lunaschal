@@ -1424,6 +1424,9 @@ CREATE TABLE IF NOT EXISTS job_profile (
     -- Nullable like soft_salary_floor: NULL is "no restriction", which is a
     -- different thing from a radius of 0.
     max_distance_km REAL,
+    -- How old a posting may be, in days. Nullable for the same reason as the
+    -- radius: NULL is "no limit", which is not the same as 0 days.
+    max_posting_age_days INTEGER,
     soft_preferences TEXT NOT NULL DEFAULT '',
     company_blacklist TEXT,
     created_at INTEGER NOT NULL,

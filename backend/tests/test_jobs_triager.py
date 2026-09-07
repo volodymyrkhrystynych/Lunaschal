@@ -501,3 +501,82 @@ def test_the_gate_skips_postings_already_applied_to(client):
 
     assert triager.run_gate_sweep(db)['scanned'] == 0
     assert state_of(db, job_id)['triage_state'] == 'pending'
+
+
+# --------------------------------------------------------------------------
+# The gate reads two columns the model itself writes
+# --------------------------------------------------------------------------
+
+def _remote_flagged_ottawa_job(db):
+    """A posting the board calls remote, 352 km away, with a radius set.
+
+    Cohere's real rows: `remote=1` on the board, "hybrid" in the body.
+    """
+    job_id = make_job(db, title='Forward Deployed Engineer')
+    db.execute(
+        "UPDATE jobs SET remote=1, location='Ottawa', distance_km=352.4,"
+        " distance_precision='city' WHERE id=?", (job_id,))
+    db.execute('UPDATE job_profile SET max_distance_km=200 WHERE id=1')
+    db.commit()
+    return job_id
+
+
+def _verdict(work_location, **extra):
+    return lambda *a, **k: {
+        'relevant': True, 'reason': '', 'fit': 'strong',
+        'summary': 'Deploys agents for enterprise clients.',
+        'flags': [], 'missingMustHaves': [],
+        'workLocation': work_location, **extra,
+    }
+
+
+def test_a_remote_flag_the_body_contradicts_is_rejected_on_distance(client, monkeypatch):
+    """`work_location` has to reach the gate that reads it.
+
+    `hard_gate` runs before the model, when `work_location` is still empty —
+    and `distance.is_fully_remote` treats empty as "not contradicted", so a
+    board's `remote=1` passed at every radius. The model then said "hybrid",
+    `_store` wrote it, and nothing looked again: 352 km, kept.
+    """
+    db = get_db()
+    job_id = _remote_flagged_ottawa_job(db)
+    monkeypatch.setattr('backend.ai.job_triage.triage_posting', _verdict('hybrid'))
+
+    assert triager.process_one(job_id)['state'] == 'rejected'
+    row = state_of(db, job_id)
+    assert row['triage_state'] == 'rejected'
+    assert '200 km radius' in row['triage_reason']
+    # The column still lands, or the next sweep sees an unjudged row and the
+    # whole thing repeats.
+    assert row['work_location'] == 'hybrid'
+
+
+def test_a_genuinely_remote_posting_is_still_kept_at_any_distance(client, monkeypatch):
+    """The control. Fully remote is in range at any radius, Ottawa or not."""
+    db = get_db()
+    job_id = _remote_flagged_ottawa_job(db)
+    monkeypatch.setattr('backend.ai.job_triage.triage_posting', _verdict('remote'))
+
+    assert triager.process_one(job_id)['state'] == 'kept'
+    assert state_of(db, job_id)['work_location'] == 'remote'
+
+
+def test_a_distance_inferred_from_the_model_cities_also_gates(client, monkeypatch):
+    """The second column `_store` writes after the gate has already run.
+
+    A row with no reading passes as `unknown` (which fails open by design);
+    `_store_inferred_distance` then fills `distance_km` from the model's own
+    city picks. Without a re-gate that number is never tested against anything.
+    """
+    db = get_db()
+    job_id = make_job(db, title='Backend Engineer')
+    db.execute("UPDATE jobs SET remote=0, location='NY or SF' WHERE id=?", (job_id,))
+    db.execute('UPDATE job_profile SET max_distance_km=200 WHERE id=1')
+    db.commit()
+    monkeypatch.setattr('backend.ai.job_triage.triage_posting',
+                        _verdict('onsite', cities=['new york']))
+
+    assert triager.process_one(job_id)['state'] == 'rejected'
+    row = state_of(db, job_id)
+    assert row['distance_km'] is not None and row['distance_km'] > 200
+    assert '200 km radius' in row['triage_reason']

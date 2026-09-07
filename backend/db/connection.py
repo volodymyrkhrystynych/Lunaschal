@@ -1104,6 +1104,10 @@ def _ensure_job_settings(db: sqlite3.Connection) -> None:
     # itself" and would empty the feed.
     if 'max_distance_km' not in profile_cols:
         db.execute('ALTER TABLE job_profile ADD COLUMN max_distance_km REAL')
+    # Nullable for the same reason: NULL means "no age limit", where 0 would
+    # mean "nothing posted before today" and would empty the feed.
+    if 'max_posting_age_days' not in profile_cols:
+        db.execute('ALTER TABLE job_profile ADD COLUMN max_posting_age_days INTEGER')
     db.commit()
 
     app_cols = {r[1] for r in db.execute('PRAGMA table_info(applications)')}

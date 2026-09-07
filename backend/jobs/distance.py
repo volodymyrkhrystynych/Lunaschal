@@ -445,18 +445,22 @@ def is_fully_remote(job) -> bool:
     Canada" posting that turns out to want two days a week in an office is
     *not* fully remote and has to be judged on its distance like anything else.
     """
-    remote = _field(job, 'remote')
+    remote = field(job, 'remote')
     if not remote:
         return False
-    return (_field(job, 'work_location') or '') not in ('onsite', 'hybrid')
+    return (field(job, 'work_location') or '') not in ('onsite', 'hybrid')
 
 
-def _field(job, snake: str):
+def field(job, snake: str):
     """One column, whichever case the caller's row happens to use.
 
     `triager.run_gate_sweep` hands `preferences.hard_gate` a raw sqlite row
     (snake_case) while other callers pass an API-shaped dict (camelCase).
     `soft_flags` already hedges the same way for `salary_max`.
+
+    Public rather than `_field` because `preferences` reads `posted_at` through
+    it: the two modules face the same pair of row shapes, and a second private
+    copy of this would be a second thing to keep in step.
     """
     if snake in job:
         return job[snake]
@@ -488,14 +492,14 @@ def verdict(job, max_km: float) -> str:
     if is_fully_remote(job):
         return 'in_range'
 
-    km = _field(job, 'distance_km')
+    km = field(job, 'distance_km')
     if km is not None:
         try:
             return 'in_range' if float(km) <= max_km else 'out_of_range'
         except (TypeError, ValueError):
             pass
 
-    if max_km <= IN_RANGE_CEILING_KM and names_a_far_region(_field(job, 'location') or ''):
+    if max_km <= IN_RANGE_CEILING_KM and names_a_far_region(field(job, 'location') or ''):
         return 'out_of_range'
     return 'unknown'
 

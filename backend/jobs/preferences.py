@@ -1,7 +1,11 @@
 """Hard job gates and non-rejecting soft preference annotations."""
 import re
+import time
+from datetime import datetime
 
 from backend.jobs import distance
+
+DAY = 86400
 
 
 def _norm(value: str) -> str:
@@ -16,6 +20,24 @@ def past_employers(loaded: dict) -> set[str]:
         if role.get('company') and end and end not in ('present', 'current', 'now'):
             out.add(_norm(role['company']))
     return out
+
+
+def _epoch(value) -> int | None:
+    """`posted_at` as a unix int, from either row shape.
+
+    `posted_at` is in `row_to_dict`'s TIMESTAMP_COLS, so an API-shaped dict
+    carries `postedAt` as an ISO string while the raw sqlite row the gate sweep
+    passes carries an int. Anything unreadable is None — which the caller
+    treats as "no date given", never as old.
+    """
+    if value in (None, ''):
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    try:
+        return int(datetime.fromisoformat(str(value)).timestamp())
+    except (TypeError, ValueError):
+        return None
 
 
 def hard_gate(job: dict, loaded: dict) -> str:
@@ -43,6 +65,22 @@ def hard_gate(job: dict, loaded: dict) -> str:
     if max_km not in (None, '') and distance.verdict(job, float(max_km)) == 'out_of_range':
         return (f"location {job.get('location')} is beyond your "
                 f"{float(max_km):g} km radius")
+
+    # How old the posting is. Same shape as the radius above and for the same
+    # reason: an unset preference is inert, and a posting that never said when
+    # it went up is missing information rather than stale, so it is kept.
+    #
+    # Nothing else ages a posting out — there is no retention sweep over
+    # `jobs`, so a row entered the feed and stayed until dismissed by hand.
+    # That is why two thirds of the feed was a month or more old.
+    max_age_days = profile.get('maxPostingAgeDays')
+    if max_age_days not in (None, ''):
+        posted = _epoch(distance.field(job, 'posted_at'))
+        if posted is not None:
+            age_days = int((time.time() - posted) // DAY)
+            if age_days > int(max_age_days):
+                return (f'posting is {age_days} days old, past your '
+                        f'{int(max_age_days)}-day limit')
 
     body = _norm(f"{job.get('title') or ''} {job.get('location') or ''} {job.get('description') or ''}")
 

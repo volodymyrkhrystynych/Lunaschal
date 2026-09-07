@@ -1401,6 +1401,9 @@ export interface JobProfileContact {
   /** Commute radius in km from the anchor in `backend/jobs/distance.py`.
    *  null means no restriction, which is a different thing from 0. */
   maxDistanceKm: number | null;
+  /** How old a posting may be, in days. null means no limit, which is a
+   *  different thing from 0. */
+  maxPostingAgeDays: number | null;
 }
 
 export interface ProfileBullet {

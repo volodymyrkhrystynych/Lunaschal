@@ -487,3 +487,38 @@ def test_a_nonsense_radius_clears_it_rather_than_failing_the_save(client):
     response = client.patch('/api/jobs/profile', json={'maxDistanceKm': 'soon'})
     assert response.status_code == 200
     assert response.get_json()['profile']['maxDistanceKm'] is None
+
+
+def test_the_posting_age_limit_round_trips(client):
+    response = client.patch('/api/jobs/profile', json={'maxPostingAgeDays': 60})
+    assert response.status_code == 200
+    assert response.get_json()['profile']['maxPostingAgeDays'] == 60
+
+
+def test_the_posting_age_limit_distinguishes_unset_from_zero(client):
+    """Same `field_map` hazard as the radius, and the same opposite meanings:
+    null is "any age", 0 would reject everything posted before today."""
+    zeroed = client.patch('/api/jobs/profile', json={'maxPostingAgeDays': 0})
+    assert zeroed.get_json()['profile']['maxPostingAgeDays'] == 0
+
+    cleared = client.patch('/api/jobs/profile', json={'maxPostingAgeDays': None})
+    assert cleared.get_json()['profile']['maxPostingAgeDays'] is None
+
+
+def test_the_posting_age_limit_defaults_to_unset(client):
+    assert client.get('/api/jobs/profile').get_json()[
+        'profile']['maxPostingAgeDays'] is None
+
+
+def test_changing_the_posting_age_limit_resets_cached_verdicts(client):
+    """It is a hard gate, so verdicts reached under the old value are stale."""
+    job = client.post('/api/jobs', json={
+        'title': 'Engineer', 'company': 'Acme', 'description': 'Build.'}).get_json()
+    db = get_db()
+    db.execute("UPDATE jobs SET triage_state='kept' WHERE id=?", (job['id'],))
+    db.commit()
+
+    client.patch('/api/jobs/profile', json={'maxPostingAgeDays': 60})
+
+    assert db.execute('SELECT triage_state FROM jobs WHERE id=?',
+                      (job['id'],)).fetchone()['triage_state'] == 'pending'
