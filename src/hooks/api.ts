@@ -727,6 +727,7 @@ export interface AppSettings {
   sttPasteKey: string | null;
   sttVoiceKey: string | null;
   sttJournalKey: string | null;
+  sttScreenshotKey: string | null;
   sttBackend: string | null;
   ttsBackend: string | null;
   whisperModel: string | null;
@@ -2703,6 +2704,7 @@ export const api = {
       sttPasteKey?: string;
       sttVoiceKey?: string;
       sttJournalKey?: string;
+      sttScreenshotKey?: string;
     }) => patch<{ success: boolean }>('/api/settings/ai', data),
     regenerateCode: () =>
       post<{ networkCode: string }>('/api/settings/regenerate-code'),

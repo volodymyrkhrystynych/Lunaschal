@@ -207,6 +207,7 @@ export function ShortcutProvider({
       settings.sttPasteKey,
       settings.sttVoiceKey,
       settings.sttJournalKey,
+      settings.sttScreenshotKey,
     ].filter((k): k is string => typeof k === 'string' && k.length > 0);
   }, [settings]);
   const sttCombosRef = useRef<string[]>([]);

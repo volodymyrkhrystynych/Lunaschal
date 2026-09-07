@@ -382,6 +382,7 @@ CREATE TABLE IF NOT EXISTS settings (
     llama_url TEXT DEFAULT 'http://localhost:8080',
     llama_model TEXT,
     network_code TEXT,
+    stt_screenshot_key TEXT,
     stt_backend TEXT,
     tts_backend TEXT,
     whisper_model TEXT,
