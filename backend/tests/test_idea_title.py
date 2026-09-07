@@ -11,9 +11,8 @@ from backend.routes import ideas as ideas_routes
 
 
 @pytest.fixture(autouse=True)
-def _sync_bg(monkeypatch):
+def _sync_bg(run_jobs_sync):
     """Run the background job inline, so its writes can be asserted on."""
-    monkeypatch.setattr(ideas_routes, 'run_bg', lambda fn: fn())
 
 
 # --- backend/ai/idea_title.py ------------------------------------------------

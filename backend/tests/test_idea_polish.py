@@ -8,10 +8,9 @@ from backend.routes import ideas as ideas_routes
 
 
 @pytest.fixture(autouse=True)
-def _sync_bg(monkeypatch):
+def _sync_bg(run_jobs_sync):
     """Run the background polish job inline instead of on a thread, so its
     DB write can be asserted on without a race."""
-    monkeypatch.setattr(ideas_routes, 'run_bg', lambda fn: fn())
 
 
 # --- backend/ai/idea_polish.py -----------------------------------------------

@@ -32,7 +32,9 @@ import io
 import logging
 from pathlib import Path
 
-from backend.ai.provider import get_llama_client, get_provider_config
+from backend.ai.llm import _complete
+from backend.ai.provider import get_provider_config
+from backend.ai.service import InferencePaused, Preempted
 
 logger = logging.getLogger(__name__)
 
@@ -186,9 +188,13 @@ def describe_image(path: Path, *, system: str, prompt: str, max_tokens: int = _M
         raise VisionUnavailable('The image file is missing')
 
     try:
-        client = get_llama_client()
-        resp = client.chat.completions.create(
+        # Goes through backend/ai/llm.py's one request path, so this call queues
+        # and pauses like every other — it used to build its own request and was
+        # therefore invisible to admission control, which mattered the moment
+        # `_repoint_vision_at_qwen36` could put it on the GPU alias.
+        message, _ = _complete(
             model=model,
+            label='describe_image',
             messages=[
                 {'role': 'system', 'content': system},
                 {'role': 'user', 'content': [
@@ -203,14 +209,19 @@ def describe_image(path: Path, *, system: str, prompt: str, max_tokens: int = _M
             # "The model returned an empty description" with nothing to suggest
             # the model saw the image perfectly well. Measured, not assumed —
             # the same request with thinking on returns '' and with it off
-            # returns the caption. This call builds its own request rather than
-            # going through backend/ai/llm.py, which is why it has to say so
-            # itself; see `_request_kwargs` there for the same reasoning.
+            # returns the caption. This call builds its own request kwargs
+            # rather than using `_request_kwargs`, which is why it has to say so
+            # itself; see that function in llm.py for the same reasoning.
             extra_body={'chat_template_kwargs': {'enable_thinking': False}},
             timeout=600,
         )
-        text = (resp.choices[0].message.content or '').strip()
+        text = (message.content or '').strip()
     except VisionUnavailable:
+        raise
+    except (InferencePaused, Preempted):
+        # Not a vision failure and not this module's to describe: the caller
+        # needs the real exception so a paused job stays queued and a preempted
+        # one is retried, rather than being recorded as a broken attachment.
         raise
     except Exception as e:
         logger.error('Image captioning failed: %s', e)

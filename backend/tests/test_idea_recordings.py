@@ -30,14 +30,23 @@ def _isolated_media_root(tmp_path, monkeypatch):
 
 
 def _run_pending_bg(monkeypatch):
-    """Capture background jobs instead of queueing them, so a test can run them
-    synchronously and assert on what they wrote. Both modules queue onto the
-    same single worker, and both are patched: the transcription job is journal's
-    and the polish/title job it fans out to is ideas'."""
-    jobs = []
-    monkeypatch.setattr(journal_routes, 'run_bg', jobs.append)
-    monkeypatch.setattr(ideas_routes, 'run_bg', jobs.append)
-    return jobs
+    """Hold queued jobs back so a test can run them synchronously and assert on
+    what they wrote. One patch covers both modules now: journal's transcription
+    job and the ideas polish/title job it fans out to go on the same queue."""
+    from backend.ai import job_handlers  # noqa: F401  (registers handlers)
+    from backend.ai import jobs as llm_jobs
+
+    captured = []
+    real = llm_jobs.enqueue
+
+    def capture(kind, target_id=None, payload=None, *, commit=True):
+        job_id = real(kind, target_id, payload, commit=commit)
+        if job_id is not None:
+            captured.append(lambda jid=job_id: llm_jobs.process_one(jid))
+        return job_id
+
+    monkeypatch.setattr(llm_jobs, 'enqueue', capture)
+    return captured
 
 
 def _record(client, *, idea_id=None, attachment_id=None, id=None,

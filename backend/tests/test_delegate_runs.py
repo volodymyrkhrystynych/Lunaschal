@@ -182,10 +182,10 @@ def test_run_marks_error_on_exception_and_keeps_partial_content(client, monkeypa
     assert kinds == ['content', 'error', '_end']
 
 
-def test_run_releases_the_priority_mark_even_on_failure(client, monkeypatch):
-    from backend.ai import priority
+def test_run_releases_its_lane_slot_even_on_failure(client, monkeypatch):
+    from backend.ai import service
 
-    priority.reset()
+    service.reset()
     db = get_db()
     conv_id = _new_conversation(db)
     msg_id = _new_streaming_message(db, conv_id)
@@ -197,7 +197,7 @@ def test_run_releases_the_priority_mark_even_on_failure(client, monkeypatch):
     monkeypatch.setattr(runs.delegate_chat, 'stream_reply', boom)
     runs._run(msg_id, [], '', True, queue.Queue())
 
-    assert priority.active() is False
+    assert service.interactive_active() is False
 
 
 def test_start_runs_on_a_real_thread_and_finishes_the_row(client, monkeypatch):
@@ -253,7 +253,7 @@ def test_start_creates_the_row_as_streaming_before_the_thread_finishes(client, m
     # Let the thread finish and drain it fully before the test (and the
     # `client` fixture's connection teardown) proceeds — an outstanding
     # thread mid-write when the connection closes segfaults the interpreter
-    # rather than raising (same hazard backend/ai/background.py's own
+    # rather than raising (same hazard backend/ai/jobs.py's own
     # wait_idle guards against).
     release.set()
     while True:

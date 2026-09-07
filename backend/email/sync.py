@@ -23,7 +23,7 @@ import time
 
 from ulid import ULID
 
-from backend.ai.background import run_bg
+from backend.ai import jobs
 from backend.db.connection import get_db
 from backend.email import gmail_client, imap_client, images, media, outlook_client
 from backend.email.sanitize import sanitize_email_html
@@ -66,7 +66,7 @@ def _enqueue_classification(row_id: str) -> None:
     that produced it.
     """
     from backend.ai.email import classify_email
-    run_bg(lambda eid=row_id: classify_email(eid))
+    jobs.enqueue('email.classify', row_id)
 
 
 def _get_oauth_settings(db) -> dict | None:

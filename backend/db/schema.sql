@@ -1929,3 +1929,42 @@ CREATE TABLE IF NOT EXISTS study_sources (
 CREATE INDEX IF NOT EXISTS idx_torrents_added ON torrents(added_at DESC);
 CREATE INDEX IF NOT EXISTS idx_torrents_completed ON torrents(completed_at);
 CREATE INDEX IF NOT EXISTS idx_study_sources_created ON study_sources(created_at DESC);
+
+-- The durable queue for background model work (backend/ai/jobs.py).
+--
+-- Replaces an in-memory ThreadPoolExecutor whose queue died with the process.
+-- That was tolerable while every job ran within seconds of being submitted; it
+-- stopped being tolerable once inference could be *paused* for an evening, at
+-- which point "queued" has to mean something that survives a restart.
+--
+-- A job is data, not a captured closure: `kind` names a handler registered in
+-- backend/ai/job_handlers.py and `payload` carries its arguments as JSON. That
+-- is the whole reason a job can outlive the process that created it.
+CREATE TABLE IF NOT EXISTS llm_jobs (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    -- The row being enriched. Nullable because a few jobs act on nothing in
+    -- particular, but where it exists it is what makes a duplicate detectable.
+    target_id TEXT,
+    payload TEXT,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK(status IN ('pending','running','done','error')),
+    -- Times this job was preempted mid-generation for an interactive call.
+    -- Past a threshold the worker runs it non-preemptibly, so a busy day
+    -- cannot starve it forever -- see backend/ai/jobs.py.
+    cancels INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    started_at INTEGER,
+    finished_at INTEGER
+);
+
+-- Drains oldest-first, and only ever looks at pending rows.
+CREATE INDEX IF NOT EXISTS idx_llm_jobs_pending
+    ON llm_jobs(status, created_at);
+-- One pending job per (kind, target). A double-tapped save, or a retry button
+-- pressed twice, must not queue the same polish twice; a *finished* job of the
+-- same shape is fine, which is why this is partial rather than a plain UNIQUE.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_jobs_unique_pending
+    ON llm_jobs(kind, target_id) WHERE status = 'pending';

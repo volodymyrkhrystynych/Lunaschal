@@ -64,8 +64,8 @@ flowchart LR
             AI_MISC["journal · writing · meetings<br/>recipes · food · workouts · images"]
             AI_IDEAS["repo_context · idea_assessment<br/>idea_research"]
             MCP["mcp_client.py"]
-            BG["background.py<br/>run_bg — 1 shared worker"]
-            PRIORITY["priority.py<br/>interactive-first gate"]
+            BG["jobs.py + job_handlers.py<br/>llm_jobs — durable P2 queue"]
+            PRIORITY["service.py<br/>P1/P2 lanes · preemption · pause"]
         end
         subgraph PKGS["Feature packages"]
             P_LEARN["learning/<br/>FSRS scheduler + dedup<br/>deferred attempt grading"]

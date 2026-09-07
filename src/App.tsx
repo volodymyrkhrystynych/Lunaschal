@@ -10,6 +10,7 @@ import { Settings } from './components/Settings';
 import { Editor } from './components/Editor';
 import { Notebook } from './components/Notebook/Notebook';
 import { SttPanel } from './components/Editor/SttPanel';
+import { InferencePausedBanner } from './components/InferencePausedBanner';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { Login } from './components/Login';
 import { Writing } from './components/Writing';
@@ -315,6 +316,9 @@ function AppShell() {
             {renderView()}
           </main>
         </div>
+        {/* Settings owns the switch, but the consequence is felt in every
+         * view — so the state is said here rather than only where it is set. */}
+        <InferencePausedBanner />
         {/* The one piece of chrome immersive mode keeps: whether the backend is
          * reachable is exactly what a page being drawn on offline needs to say. */}
         <OfflineIndicator />

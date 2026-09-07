@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserDiagnostics } from './BrowserDiagnostics';
+import { InferenceActivity } from './InferenceActivity';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { ServerLogResponse } from '../../hooks/api';
@@ -88,6 +89,10 @@ export function LogsPanel() {
   return (
     <div className="flex flex-col gap-3">
       <BrowserDiagnostics />
+      {/* Above the journal viewer on purpose: it answers the same question
+          with far less noise, and it is the only half of this tab that works
+          on a dev run, where there is no systemd --user journal to read. */}
+      <InferenceActivity />
       <p className="text-sm text-[var(--color-text-muted)]">
         The systemd journals for the server's units. Read-only.
       </p>

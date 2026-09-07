@@ -10,6 +10,7 @@ different embedding model would silently invalidate every stored vector. Without
 that entry the request errors, `embed_answer` swallows it, and the dedup hint and
 grading gate silently disable.
 """
+from backend.ai import service
 from backend.ai.provider import (
     EMBED_MODEL, get_llama_client, get_provider_config, is_ai_configured,
 )
@@ -18,7 +19,14 @@ from backend.ai.provider import (
 def generate_embedding(text: str) -> list[float]:
     c = get_provider_config()
     client = get_llama_client(c)
-    result = client.embeddings.create(model=EMBED_MODEL, input=text)
+    # Held under a lane slot like every other model call, but deliberately not
+    # cancellable: an embedding is not a generation, there is nothing to stream
+    # and nothing to abandon partway. [embed] is CPU-resident, so this never
+    # competes with the chat model for the card and the GPU pause leaves it
+    # working — which is the point, since Learning's dedup gate runs while a
+    # card is on screen.
+    with service.slot(lane=service.lane_for(EMBED_MODEL), label='embedding'):
+        result = client.embeddings.create(model=EMBED_MODEL, input=text)
     return result.data[0].embedding
 
 

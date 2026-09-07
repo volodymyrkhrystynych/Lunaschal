@@ -5,7 +5,7 @@ render. Same idiom as backend/ai/email.py's classify_email: a closed-vocab
 tuple doubles as the JSON-schema enum, so an off-vocabulary category can't be
 emitted at all.
 
-Runs on backend.ai.background's single-worker executor right after a
+Runs on the llm_jobs worker (backend/ai/jobs.py) right after a
 transcription is saved (backend/routes/calendar.py's transcribe_event), so a
 slow LLM call never blocks the recording itself. classified_at IS NULL is the
 "still pending" state, for both never-classified and previously-failed
@@ -58,7 +58,7 @@ def _prompt_text(row) -> str:
 def classify_event_categories(event_id: str) -> None:
     """Load the event, classify its (already-saved) description into 1-3
     categories, write the result back — or classification_error if something
-    failed. Meant for run_bg(); never raises."""
+    failed. Meant for the job queue (backend/ai/jobs.py); never raises."""
     db = get_db()
     try:
         row = db.execute('SELECT * FROM calendar_events WHERE id=?', (event_id,)).fetchone()

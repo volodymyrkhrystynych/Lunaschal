@@ -5,7 +5,7 @@ Modelled on backend/jobs/scheduler.py: a pure `tick()` carrying its own
 loop that never lets one bad pass kill it.
 
 Needs no llama slot — nothing here calls a model — so it never consults
-backend/ai/priority.py and sweeps on every tick. Only the destructive half keeps
+backend/ai/service.py and sweeps on every tick. Only the destructive half keeps
 to a window.
 """
 

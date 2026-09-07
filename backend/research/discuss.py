@@ -212,7 +212,7 @@ def build_gather_request(context: str, history: list[dict], question: str) -> st
     The tool loop gets the conversation flattened into a single message rather
     than a real multi-turn history: it only needs to know what to look up, and
     a flat brief keeps the turn short, which is what makes the loop
-    interruptible (see backend/ai/priority.py).
+    interruptible (see backend/ai/service.py).
     """
     parts = [context] if context else []
     if history:

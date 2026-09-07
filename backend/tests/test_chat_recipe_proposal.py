@@ -19,12 +19,9 @@ from backend.routes import food as food_routes
 
 
 @pytest.fixture(autouse=True)
-def sync_bg(monkeypatch):
+def sync_bg(monkeypatch, run_jobs_sync):
     # Both routes' background hooks: creating a food entry below can trigger
     # structure_food_entry -> check_homemade_recipe_match on food.py's own
-    # run_bg, independent of chat.py's.
-    monkeypatch.setattr(chat_routes, 'run_bg', lambda fn: fn())
-    monkeypatch.setattr(food_routes, 'run_bg', lambda fn: fn())
     # No AI configured in tests; keep the incidental background work quiet and
     # deterministic rather than letting it hit a real (refused) connection.
     monkeypatch.setattr(food_routes, 'parse_food_entry', lambda text, **kwargs: None)

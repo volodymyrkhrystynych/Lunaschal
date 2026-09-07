@@ -65,11 +65,22 @@ def _upload(client, entry_id, *, filename='memo.m4a', data=b'\x00' * 2048,
 
 
 def _run_pending_bg(monkeypatch):
-    """Capture the background job instead of queueing it, so the test can run it
-    synchronously and assert on what it wrote."""
-    jobs = []
-    monkeypatch.setattr(journal_routes, 'run_bg', jobs.append)
-    return jobs
+    """Hold the queued job back so the test can run it synchronously and assert
+    on what it wrote. Each entry is a zero-arg callable that runs one job."""
+    from backend.ai import job_handlers  # noqa: F401  (registers handlers)
+    from backend.ai import jobs as llm_jobs
+
+    captured = []
+    real = llm_jobs.enqueue
+
+    def capture(kind, target_id=None, payload=None, *, commit=True):
+        job_id = real(kind, target_id, payload, commit=commit)
+        if job_id is not None:
+            captured.append(lambda jid=job_id: llm_jobs.process_one(jid))
+        return job_id
+
+    monkeypatch.setattr(llm_jobs, 'enqueue', capture)
+    return captured
 
 
 # --- upload ------------------------------------------------------------------

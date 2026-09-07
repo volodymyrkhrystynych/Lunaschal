@@ -191,8 +191,14 @@ def _hint_suffix(hint: str | None) -> str:
 
 
 def _describe_one(client, model: str, audio_b64: str, prompt: str) -> str:
-    resp = client.chat.completions.create(
+    # `client` is now unused — the request goes through backend/ai/llm.py's one
+    # path so it queues and pauses like every other call — but the parameter
+    # stays so `describe_audio`'s two call sites are untouched.
+    from backend.ai.llm import _complete
+
+    message, _ = _complete(
         model=model,
+        label='describe_audio',
         messages=[
             {'role': 'system', 'content': _SYSTEM},
             {'role': 'user', 'content': [
@@ -205,12 +211,12 @@ def _describe_one(client, model: str, audio_b64: str, prompt: str) -> str:
         # worse here: _MAX_TOKENS is 300 per window, so reasoning would eat the
         # budget of every window in a long recording and `_reduce` would be
         # handed nothing to summarise. Gemma 4's template defaults it on, and
-        # this call bypasses backend/ai/llm.py's `_request_kwargs`, so it has to
-        # set it here.
+        # this call goes through `_complete` but builds its own request kwargs
+        # rather than `_request_kwargs`, so it has to set it here.
         extra_body={'chat_template_kwargs': {'enable_thinking': False}},
         timeout=_TIMEOUT,
     )
-    return (resp.choices[0].message.content or '').strip()
+    return (message.content or '').strip()
 
 
 def _reduce(notes: list[str], hint: str | None) -> str:

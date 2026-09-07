@@ -4,7 +4,7 @@ from datetime import date as dt, datetime, timedelta
 from flask import Blueprint, jsonify, request
 from ulid import ULID
 from backend import sleep
-from backend.ai.background import run_bg
+from backend.ai import jobs
 from backend.ai.calendar import EVENT_CATEGORIES
 from backend.calendar_query import events_in_range
 from backend.calendar_recurrence import VALID_FREQS, format_byweekday
@@ -376,7 +376,7 @@ def transcribe_event(id):
         })
 
     if 'description' in updates:
-        run_bg(lambda: classify_event_categories(id))
+        jobs.enqueue('calendar.classify', id)
 
     updated = db.execute('SELECT * FROM calendar_events WHERE id=?', (id,)).fetchone()
     return jsonify({

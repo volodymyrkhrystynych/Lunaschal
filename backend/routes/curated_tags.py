@@ -6,7 +6,7 @@ from flask import Blueprint, jsonify, request
 from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
-from backend.ai.journal import classify_entry_for_tag
+from backend.ai.journal import ClassificationUnavailable, classify_entry_for_tag
 
 bp = Blueprint('curated_tags', __name__, url_prefix='/api/curated-tags')
 
@@ -88,28 +88,63 @@ def scan_status(tag_id):
 
 
 def _start_scan_bg(tag_id: str, tag_name: str) -> None:
+    """Judge every journal entry against a new tag, one model call each.
+
+    Two things this loop has to get right, and it used to get both wrong.
+
+    **A model that cannot answer must stop the scan, not finish it.**
+    `classify_entry_for_tag` swallowed every failure and returned False, so an
+    unconfigured, dead or paused model produced a scan that completed, reported
+    full progress, and matched nothing — a wrong answer wearing a finished
+    scan's clothes. It now raises, and the loop stands down with `stopped` set
+    so the UI can say why and offer to run it again.
+
+    **It is background work.** One model call per entry, unbounded by anything
+    but the size of the journal, with nobody waiting: that is the definition of
+    P2. Under `service.background()` each call yields to a chat message and the
+    whole scan stands down while the GPU is paused.
+    """
     def _run():
+        from backend.ai import service
+
         db = get_db()
         entry_ids = [r[0] for r in db.execute(
             'SELECT id FROM journal_entries ORDER BY created_at DESC'
         ).fetchall()]
         with _scan_lock:
-            _scan_progress[tag_id] = {'total': len(entry_ids), 'processed': 0, 'done': False}
+            _scan_progress[tag_id] = {'total': len(entry_ids), 'processed': 0,
+                                      'done': False}
         for eid in entry_ids:
             with _scan_lock:
                 if tag_id not in _scan_progress:
                     return  # tag deleted — abort
-            row = db.execute('SELECT content FROM journal_entries WHERE id=?', (eid,)).fetchone()
+            row = db.execute('SELECT content FROM journal_entries WHERE id=?',
+                             (eid,)).fetchone()
             if row:
                 try:
-                    if classify_entry_for_tag(row['content'], tag_name):
-                        db.execute(
-                            'INSERT OR IGNORE INTO journal_entry_curated_tags(entry_id, tag_id) VALUES(?,?)',
-                            (eid, tag_id),
-                        )
-                        db.commit()
+                    with service.background():
+                        matched = classify_entry_for_tag(row['content'], tag_name)
+                except (ClassificationUnavailable, service.InferencePaused,
+                        service.Preempted) as e:
+                    # Unknown, not "no". Leave the rest unjudged and say so —
+                    # marching on would write a definitive empty result for
+                    # entries the model never saw.
+                    print(f'Tag scan for "{tag_name}" stood down at {eid}: {e}')
+                    with _scan_lock:
+                        if tag_id in _scan_progress:
+                            _scan_progress[tag_id]['done'] = True
+                            _scan_progress[tag_id]['stopped'] = str(e) or 'unavailable'
+                    return
                 except Exception as e:
+                    # A genuine per-entry failure: skip this one and carry on.
                     print(f'Tag scan error for entry {eid}: {e}')
+                    matched = False
+                if matched:
+                    db.execute(
+                        'INSERT OR IGNORE INTO journal_entry_curated_tags(entry_id, tag_id) VALUES(?,?)',
+                        (eid, tag_id),
+                    )
+                    db.commit()
             with _scan_lock:
                 if tag_id in _scan_progress:
                     _scan_progress[tag_id]['processed'] += 1

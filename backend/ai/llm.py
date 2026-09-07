@@ -21,6 +21,7 @@ import json
 import logging
 import re
 
+from backend.ai import service
 from backend.ai.provider import get_llama_client, get_model, get_provider_config
 
 logger = logging.getLogger(__name__)
@@ -142,6 +143,146 @@ def _content(message) -> str:
     return getattr(message, 'content', None) or ''
 
 
+# --------------------------------------------------------------------------
+# Every request below is issued as a *stream*, even the blocking ones.
+#
+# That is not about latency — it is the only way a call can be abandoned. A
+# blocking `create()` sits inside the SDK until the whole generation is done,
+# with no way for another thread to interrupt it, so a background call could
+# not be preempted for an interactive one however much the broker wanted to.
+# Streaming lets us stop iterating and close the response, which llama-server
+# sees as a client disconnect and answers by cancelling the task and freeing
+# the slot (backend/ai/service.py has the reference).
+#
+# The blocking helpers reassemble the deltas and return the same shapes they
+# always did, so no caller can tell the difference.
+# --------------------------------------------------------------------------
+
+class _ToolFunction:
+    __slots__ = ('name', 'arguments')
+
+    def __init__(self, name: str, arguments: str):
+        self.name = name
+        self.arguments = arguments
+
+
+class _ToolCall:
+    __slots__ = ('id', 'type', 'function')
+
+    def __init__(self, id: str, function: _ToolFunction):
+        self.id = id
+        self.type = 'function'
+        self.function = function
+
+
+class _Message:
+    """The subset of an OpenAI assistant message this app actually reads.
+
+    Rebuilt from stream deltas rather than taken whole, so it has to mirror
+    `serialize_tool_calls` (backend/ai/mcp_client.py) and the tool loop's
+    `msg.content` / `msg.tool_calls` access exactly.
+    """
+    __slots__ = ('content', 'reasoning_content', 'tool_calls')
+
+    def __init__(self, content, reasoning_content, tool_calls):
+        self.content = content
+        self.reasoning_content = reasoning_content
+        self.tool_calls = tool_calls or None
+
+
+def _iter_stream(stream, cancel):
+    """Yield chunks, abandoning the request if `cancel` fires.
+
+    Closing the stream is what actually frees the llama-server slot, so it
+    happens in a `finally` — an exception on our side must not leave a
+    generation running on the card with nobody reading it.
+    """
+    try:
+        for chunk in stream:
+            if cancel is not None and cancel.is_set():
+                raise service.Preempted('cancelled for an interactive call')
+            yield chunk
+    finally:
+        try:
+            stream.close()
+        except Exception:
+            pass
+
+
+def _collect(stream, cancel) -> tuple[_Message, str | None]:
+    """Drain a stream into one assistant message plus its finish reason."""
+    content: list[str] = []
+    reasoning: list[str] = []
+    # Keyed by the delta's `index`, which is how the OpenAI wire format ties
+    # argument fragments back to the call they belong to. Ordered dict, so the
+    # calls come out in the order the model asked for them.
+    calls: dict[int, dict] = {}
+    finish_reason = None
+
+    for chunk in _iter_stream(stream, cancel):
+        if not chunk.choices:
+            continue
+        choice = chunk.choices[0]
+        finish_reason = choice.finish_reason or finish_reason
+        delta = choice.delta
+        if delta is None:
+            continue
+
+        text = getattr(delta, 'content', None)
+        if text:
+            content.append(text)
+        think = getattr(delta, 'reasoning_content', None)
+        if think:
+            reasoning.append(think)
+
+        for position, tc in enumerate(getattr(delta, 'tool_calls', None) or []):
+            index = getattr(tc, 'index', None)
+            if index is None:
+                index = position
+            slot_ = calls.setdefault(index, {'id': None, 'name': None, 'arguments': ''})
+            if getattr(tc, 'id', None):
+                slot_['id'] = tc.id
+            fn = getattr(tc, 'function', None)
+            if fn is not None:
+                if getattr(fn, 'name', None):
+                    slot_['name'] = fn.name
+                # Arguments arrive as a stream of JSON fragments; concatenating
+                # them is the whole reassembly.
+                if getattr(fn, 'arguments', None):
+                    slot_['arguments'] += fn.arguments
+
+    tool_calls = [
+        _ToolCall(c['id'] or f'call_{i}', _ToolFunction(c['name'] or '', c['arguments']))
+        for i, c in sorted(calls.items())
+        if c['name']
+    ]
+    return (
+        _Message(''.join(content), ''.join(reasoning) or None, tool_calls),
+        finish_reason,
+    )
+
+
+def _complete(*, messages: list[dict], label: str, model: str | None = None,
+              tools: list[dict] | None = None, timeout: float = _TIMEOUT,
+              **request_kwargs) -> tuple[_Message, str | None]:
+    """One blocking generation, issued as a stream and held under a lane slot.
+
+    Every chat completion in the app comes through here — including the
+    multimodal ones in `images.py` and `audio_description.py`, which used to
+    build their own requests and so were invisible to admission control.
+    """
+    c = get_provider_config()
+    client = get_llama_client(c)
+    alias = model or get_model(c)
+    extra = {'tools': tools} if tools else {}
+    with service.slot(lane=service.lane_for(alias), label=label) as cancel:
+        stream = client.chat.completions.create(
+            model=alias, messages=messages, stream=True, timeout=timeout,
+            **extra, **request_kwargs,
+        )
+        return _collect(stream, cancel)
+
+
 def chat_json(prompt: str, system: str | None = None, model: str | None = None,
               max_tokens: int = JSON_MAX_TOKENS, thinking: bool = False,
               schema: dict | None = None) -> dict:
@@ -155,15 +296,11 @@ def chat_json(prompt: str, system: str | None = None, model: str | None = None,
     Thinking is off by default: for these structured calls it only adds latency,
     and the answer is machine-read rather than shown to the user.
     """
-    c = get_provider_config()
-    client = get_llama_client(c)
-    resp = client.chat.completions.create(
-        model=model or get_model(c),
-        messages=_messages(prompt, system),
-        timeout=_TIMEOUT,
+    message, _ = _complete(
+        messages=_messages(prompt, system), model=model, label='chat_json',
         **_request_kwargs(thinking=thinking, max_tokens=max_tokens, schema=schema),
     )
-    return _parse_json_response(_content(resp.choices[0].message))
+    return _parse_json_response(_content(message))
 
 
 def chat_text(prompt: str, system: str | None = None) -> str:
@@ -174,13 +311,11 @@ def chat_text(prompt: str, system: str | None = None) -> str:
 def chat_messages(messages: list[dict]) -> str:
     """Blocking plain-text completion over a prebuilt message list (default
     model's thinking/token settings)."""
-    c = get_provider_config()
-    client = get_llama_client(c)
-    resp = client.chat.completions.create(
-        model=get_model(c), messages=messages, timeout=_TIMEOUT,
+    message, _ = _complete(
+        messages=messages, label='chat_messages',
         **_request_kwargs(**default_generation_opts()),
     )
-    return _content(resp.choices[0].message)
+    return _content(message)
 
 
 def chat_stream_deltas(messages: list[dict]):
@@ -246,53 +381,59 @@ def chat_stream_events(messages: list[dict]):
     """
     c = get_provider_config()
     client = get_llama_client(c)
-    stream = client.chat.completions.create(
-        model=get_model(c), messages=messages, stream=True, timeout=_TIMEOUT,
-        **_request_kwargs(**default_generation_opts()),
-    )
+    alias = get_model(c)
     buffer = ''
     state = 'content'
     dropped = False
     finish_reason = None
-    for chunk in stream:
-        if not chunk.choices:
-            continue
-        finish_reason = chunk.choices[0].finish_reason or finish_reason
-        delta = chunk.choices[0].delta
-
-        reasoning = getattr(delta, 'reasoning_content', None)
-        if reasoning:
-            yield ('thinking', reasoning)
-
-        text = getattr(delta, 'content', None)
-        if not text:
-            continue
-
-        buffer += text
-        # Hold back anything that could still turn out to be a partial tag, so
-        # a '<' that begins '<think>' is never emitted as answer text.
-        while buffer:
-            exits = _EXITS[state]
-            hit = None
-            for marker, nxt in exits:
-                at = buffer.find(marker)
-                if at >= 0 and (hit is None or at < hit[0]):
-                    hit = (at, marker, nxt)
-            if hit:
-                at, marker, nxt = hit
-                head, buffer = buffer[:at], buffer[at + len(marker):]
-                if head and state != 'tool_call':
-                    yield (state, head)
-                dropped = dropped or nxt == 'tool_call'
-                state = nxt
+    # The slot is held for the generator's whole life, not just the request:
+    # the caller is still reading tokens off it. The `with` unwinds on
+    # GeneratorExit too, so an SSE client that disconnects mid-reply releases
+    # the lane instead of holding it until the TTL sweep.
+    with service.slot(lane=service.lane_for(alias), label='chat_stream') as cancel:
+        stream = client.chat.completions.create(
+            model=alias, messages=messages, stream=True, timeout=_TIMEOUT,
+            **_request_kwargs(**default_generation_opts()),
+        )
+        for chunk in _iter_stream(stream, cancel):
+            if not chunk.choices:
                 continue
-            # Any of this state's markers could be the one starting here, so the
-            # longest possible partial is what has to be held back.
-            keep = max(_partial_tag_len(buffer, m) for m, _ in exits)
-            emit, buffer = (buffer[:-keep], buffer[-keep:]) if keep else (buffer, '')
-            if emit and state != 'tool_call':
-                yield (state, emit)
-            break
+            finish_reason = chunk.choices[0].finish_reason or finish_reason
+            delta = chunk.choices[0].delta
+
+            reasoning = getattr(delta, 'reasoning_content', None)
+            if reasoning:
+                yield ('thinking', reasoning)
+
+            text = getattr(delta, 'content', None)
+            if not text:
+                continue
+
+            buffer += text
+            # Hold back anything that could still turn out to be a partial tag,
+            # so a '<' that begins '<think>' is never emitted as answer text.
+            while buffer:
+                exits = _EXITS[state]
+                hit = None
+                for marker, nxt in exits:
+                    at = buffer.find(marker)
+                    if at >= 0 and (hit is None or at < hit[0]):
+                        hit = (at, marker, nxt)
+                if hit:
+                    at, marker, nxt = hit
+                    head, buffer = buffer[:at], buffer[at + len(marker):]
+                    if head and state != 'tool_call':
+                        yield (state, head)
+                    dropped = dropped or nxt == 'tool_call'
+                    state = nxt
+                    continue
+                # Any of this state's markers could be the one starting here, so
+                # the longest possible partial is what has to be held back.
+                keep = max(_partial_tag_len(buffer, m) for m, _ in exits)
+                emit, buffer = (buffer[:-keep], buffer[-keep:]) if keep else (buffer, '')
+                if emit and state != 'tool_call':
+                    yield (state, emit)
+                break
 
     # An unclosed <tool_call> takes the rest of the reply with it, the same way
     # an unclosed <think> stays reasoning: half a call is no more printable than
@@ -323,14 +464,10 @@ def chat_tool_turn(messages: list[dict], tools: list[dict], max_tokens: int | No
     model deciding it is finished unless you look. `'length'` means truncated,
     `'stop'` means done.
     """
-    c = get_provider_config()
-    client = get_llama_client(c)
-    resp = client.chat.completions.create(
-        model=get_model(c), messages=messages, tools=tools, timeout=_TIMEOUT,
+    return _complete(
+        messages=messages, tools=tools, label='chat_tool_turn',
         **_request_kwargs(thinking=False, max_tokens=max_tokens),
     )
-    choice = resp.choices[0]
-    return choice.message, choice.finish_reason
 
 
 def chat_with_tools(messages: list[dict], tools: list[dict], max_tokens: int | None = None):
@@ -343,9 +480,10 @@ def chat_with_tools(messages: list[dict], tools: list[dict], max_tokens: int | N
     llama/presets.ini, set globally for exactly this reason).
 
     `max_tokens` defaults to unbounded, as it always has — verification wants a
-    whole case. Background loops should pass a small ceiling: nothing preempts a
-    generation once it starts, so the turn length *is* the granularity at which
-    background work can yield to an interactive chat message (backend/ai/priority.py).
+    whole case. Background loops should still pass a small ceiling. A generation
+    *is* now preemptible (backend/ai/service.py cancels it mid-stream for an
+    interactive call), but preemption throws the turn away and re-runs it, so a
+    short turn is the difference between losing seconds and losing minutes.
     Anything that caps it should call `chat_tool_turn` instead and check why the
     turn ended.
     """

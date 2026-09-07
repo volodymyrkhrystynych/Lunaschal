@@ -321,16 +321,18 @@ def _loop(
 
 
 def make_checkpoint(cancel=None, gate: bool = True):
-    """The standard checkpoint: yield to the user, then honour cancellation.
+    """The standard checkpoint: honour cancellation between steps.
 
-    Order matters — checking cancellation *after* waiting means a run cancelled
-    while parked stops at the next step rather than firing one more model call.
+    It used to also park here until the user went quiet. That job moved to
+    backend/ai/service.py: the next turn's `slot()` blocks until no interactive
+    call is running or waiting, so the wait now happens where the queue is,
+    against the real state of the lane, rather than against an advisory flag
+    this function had to poll. `gate` is kept as a parameter because callers
+    pass it, but yielding to the user is no longer optional or this function's
+    business — what remains here is the part only the caller knows: whether
+    *this run* has been cancelled.
     """
-    from backend.ai import priority
-
     def checkpoint():
-        if gate:
-            priority.wait_for_idle(cancel=cancel)
         if cancel is not None and cancel.is_set():
             raise Cancelled('research run cancelled')
 

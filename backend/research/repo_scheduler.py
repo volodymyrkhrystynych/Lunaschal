@@ -115,8 +115,15 @@ def _run_one(repo: dict, job, code_wiki, cancel) -> dict:
     if not pulled.get('ok'):
         return {'pulled': False, 'error': pulled.get('error')}
 
-    snapshot = run_repo_snapshot(repo_id=repo['id'])
-    written = code_wiki.run_code_wiki(repo['id'], cancel=cancel)
+    # The pull and the graph rebuild make no model call and are left alone; only
+    # the two stages below reach llama-server, and both are P2 — a code note
+    # nobody has asked for tonight yields to a chat message, and is simply not
+    # written while the GPU is paused. `plan_modules` re-derives its targets
+    # from the snapshot each night, so a skipped one is picked up on the next.
+    from backend.ai import service
+    with service.background():
+        snapshot = run_repo_snapshot(repo_id=repo['id'])
+        written = code_wiki.run_code_wiki(repo['id'], cancel=cancel)
     return {
         'pulled': True,
         'snapshot': bool(snapshot),

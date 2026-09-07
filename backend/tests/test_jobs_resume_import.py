@@ -331,15 +331,15 @@ def test_preview_is_503_when_the_model_is_down(client, monkeypatch):
     assert get_db().execute('SELECT COUNT(*) AS c FROM profile_roles').fetchone()['c'] == 0
 
 
-def test_preview_releases_its_priority_mark(client, monkeypatch):
-    from backend.ai import priority
+def test_preview_releases_its_lane_slot(client, monkeypatch):
+    from backend.ai import service
 
     monkeypatch.setattr(resume_import, 'is_ai_configured', lambda: True)
     monkeypatch.setattr(resume_import, 'chat_json',
                         lambda *a, **k: (_ for _ in ()).throw(RuntimeError('boom')))
     client.post('/api/jobs/profile/import', json={'text': RESUME_TEXT})
 
-    assert priority.active() is False
+    assert service.interactive_active() is False
 
 
 def test_commit_writes_the_reviewed_structure(client, stub_model):

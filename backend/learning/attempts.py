@@ -2,7 +2,7 @@
 
 An attempt is written to the DB the instant the user submits an answer, so the
 session survives leaving the view; the AI grade lands on the row afterwards.
-The work runs on `backend.ai.background`'s single-worker executor, which is what
+The work runs on the `llm_jobs` queue (`backend/ai/jobs.py`), which is what
 keeps it below chat in priority: chat generates inline on a request thread,
 while every background grade queues behind one shared worker.
 """

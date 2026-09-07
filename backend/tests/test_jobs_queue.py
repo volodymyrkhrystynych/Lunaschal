@@ -10,7 +10,7 @@ import time
 
 import pytest
 
-from backend.ai import priority
+from backend.ai import service
 from backend.db.connection import get_db
 from backend.jobs import build, queue
 
@@ -33,12 +33,11 @@ def clean_worker(client):
 
 
 @pytest.fixture(autouse=True)
-def quiet_priority():
-    """No interactive marks in flight, and long past any grace period."""
-    priority._marks.clear()
-    priority._released_at = time.monotonic() - 3600
+def quiet_lane():
+    """An empty lane: nothing running, and no interactive call on record."""
+    service.reset()
     yield
-    priority._marks.clear()
+    service.reset()
 
 
 @pytest.fixture
@@ -261,16 +260,14 @@ def test_only_one_application_runs_at_a_time(client, profile, jobs_root, monkeyp
 def test_the_drain_defers_while_the_user_is_busy(client, profile):
     """A tailoring pass is minutes of the model; it waits for a quiet machine."""
     application_id = queue_job(client, make_job(client))['id']
-    token = priority.begin('chat')
-    try:
+    with service.slot(lane=service.GPU, label='chat'):
         assert queue.drain_once() is None
-    finally:
-        priority.end(token)
 
 
 def test_the_drain_defers_during_the_grace_period(client, profile):
     queue_job(client, make_job(client))
-    priority._released_at = time.monotonic()   # a chat just finished
+    # A chat just finished, so the lane is not yet 'quiet'.
+    service._lanes[service.GPU].released_at = time.monotonic()
     assert queue.drain_once() is None
 
 
@@ -291,11 +288,8 @@ def test_the_manual_drain_ignores_the_idle_gate(client, profile, jobs_root, monk
     stub_tailor(monkeypatch)
     application_id = queue_job(client, make_job(client))['id']
 
-    token = priority.begin('chat')
-    try:
+    with service.slot(lane=service.GPU, label='chat'):
         response = client.post('/api/jobs/queue/drain').get_json()
-    finally:
-        priority.end(token)
 
     assert response['submitted'] == application_id
     queue.wait_idle(timeout=5)

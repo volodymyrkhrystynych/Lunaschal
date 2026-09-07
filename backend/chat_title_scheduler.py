@@ -21,7 +21,20 @@ _POLL_SECONDS = 300
 
 def run_title_sweep() -> int:
     """Title every dated chat that still lacks one and has real messages.
-    Returns how many titles were written. Already-titled chats are left alone."""
+    Returns how many titles were written. Already-titled chats are left alone.
+
+    P2 throughout: the conversations are already saved and nobody is waiting on
+    their names, so every call in here yields to a chat message and is dropped
+    entirely while the GPU is paused — the untitled rows are still there
+    tomorrow night, which is the whole queue this sweep needs.
+    """
+    from backend.ai import service
+
+    with service.background():
+        return _run_title_sweep()
+
+
+def _run_title_sweep() -> int:
     db = get_db()
     rows = db.execute(
         '''SELECT c.id FROM conversations c

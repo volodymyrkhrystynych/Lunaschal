@@ -1,12 +1,12 @@
 """The research executor.
 
-Deliberately NOT `backend.ai.background.run_bg`. That is a single FIFO worker
+Deliberately NOT the shared llm_jobs queue. That is a single FIFO worker
 shared by journal polish, journal metadata, attachment transcription, food
 structuring, workout parsing and learning-attempt grading — all triggered by
 something the user did seconds ago. A research pass is minutes of tool turns;
 putting it on that queue would head-of-line block every one of those flows,
 with no way to jump the queue because ThreadPoolExecutor has no priority and
-run_bg discards the Future so nothing can even be cancelled.
+the shared queue discards the Future so nothing can even be cancelled.
 
 So: its own single worker, plus a cancel Event, plus an in-memory progress
 registry — the same arrangement the fanfic downloader uses, and for the same
@@ -90,12 +90,18 @@ def submit(kind: str, fn, target: str | None = None) -> bool:
     _cancel.clear()
 
     def _run():
+        from backend.ai import service
         from backend.research.agent import Cancelled
         started = time.monotonic()
         error = None
         cancelled = False
         try:
-            fn(_cancel)
+            # P2 for the whole pass: an idea nobody asked about tonight is the
+            # definition of work that can wait. Preemption lands as Preempted
+            # out of the turn in flight, which `run_task` treats like any other
+            # failed turn — the run is re-planned on a later tick.
+            with service.background():
+                fn(_cancel)
         except Cancelled:
             cancelled = True
         except Exception as e:

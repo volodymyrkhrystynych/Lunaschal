@@ -15,7 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.ai import priority
+from backend.ai import service
 from backend.delegate import agent
 from backend.research import agent as shared
 
@@ -61,9 +61,9 @@ def _script(monkeypatch, responses, finish_reasons=None):
 
 @pytest.fixture(autouse=True)
 def clean_gate():
-    priority.reset()
+    service.reset()
     yield
-    priority.reset()
+    service.reset()
 
 
 def test_the_summary_is_the_models_own_closing_message(monkeypatch):

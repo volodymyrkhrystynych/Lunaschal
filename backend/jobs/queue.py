@@ -6,7 +6,7 @@ thirty seconds for a model. So `POST /api/jobs/<id>/queue` writes `queued_at`
 and returns, and this worker does the slow half: tailor, render PDF, render
 DOCX, mark `ready`.
 
-Deliberately its own single-slot worker rather than `backend.ai.background`'s
+Deliberately its own single-slot worker rather than the shared `llm_jobs` queue's
 shared FIFO, for the reason `backend/research/worker.py` gives at length: a
 queue of twenty resumes on that executor would head-of-line block journal
 polish, food structuring and every other seconds-after-a-tap flow.
@@ -136,10 +136,12 @@ def submit(application_id: str) -> bool:
         _current = {'applicationId': application_id, 'startedAt': int(time.time())}
 
     def _run():
+        from backend.ai import service
         started = time.monotonic()
         error = None
         try:
-            result = process_one(application_id)
+            with service.background():
+                result = process_one(application_id)
             error = result.get('error')
         except Exception as e:
             error = str(e)
@@ -157,14 +159,14 @@ def drain_once() -> str | None:
     Returns the id submitted, or None. Every gate is a question rather than a
     block, so the tick stays cheap and the answers are re-read next time.
     """
-    from backend.ai import priority
+    from backend.ai import service
     from backend.db.connection import get_db
 
     with _lock:
         if _current is not None:
             return None
     # Don't queue behind the user — a tailoring pass is minutes of the model.
-    if priority.active() or priority.idle_seconds() < QUIET_SECONDS:
+    if service.interactive_active() or service.idle_seconds() < QUIET_SECONDS:
         return None
 
     pending = next_queued(get_db())

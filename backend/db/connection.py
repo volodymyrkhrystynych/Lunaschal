@@ -193,6 +193,7 @@ def init_db() -> None:
     _ensure_study_position(db)
     _ensure_study_paper(db)
     _ensure_torrent_settings(db)
+    _ensure_inference_pause_settings(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
     # own container and outlives this process, so Lunaschal never holds an
     # in-flight torrent state that a restart could orphan. See the comment on
@@ -204,6 +205,36 @@ def init_db() -> None:
     _reset_stale_chat_attachment_descriptions(db)
     _reset_stale_message_runs(db)
     _reset_stale_voice_drafts(db)
+    _reset_stale_llm_jobs(db)
+
+
+def _ensure_inference_pause_settings(db: sqlite3.Connection) -> None:
+    """Whether the GPU lane is switched off, and since when.
+
+    On `settings` rather than in memory because a pause is measured in hours —
+    a gaming evening outlives at least one Flask reload, and coming back from a
+    restart with 22 GB quietly reloaded onto the card is exactly the failure the
+    switch exists to prevent. See backend/ai/service.py.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'inference_paused' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN inference_paused INTEGER DEFAULT 0')
+    if 'inference_paused_at' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN inference_paused_at INTEGER')
+    db.commit()
+
+
+def _reset_stale_llm_jobs(db: sqlite3.Connection) -> None:
+    """A job that was mid-flight when the process died goes back in the queue.
+
+    Safe because every handler is re-runnable: the work is an enrichment of a
+    row that is already saved, so the worst case of running one twice is that
+    it is written twice. Leaving it `running` would be the real bug — a status
+    no worker will ever move again, on work nothing will ever do.
+    """
+    db.execute("UPDATE llm_jobs SET status='pending', started_at=NULL"
+               " WHERE status='running'")
+    db.commit()
 
 
 def _ensure_network_code(db: sqlite3.Connection) -> None:

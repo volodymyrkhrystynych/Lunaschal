@@ -229,13 +229,27 @@ def _run(meeting_id: str) -> None:
         _set_phase(meeting_id, 'summarizing',
                    segments=json.dumps(segments), transcript_text=text)
 
+        # P2: the transcript is already committed above, and nobody is waiting
+        # on the summary — so it yields to a chat message and is skipped
+        # entirely while the GPU is paused.
+        from backend.ai import service
         from backend.ai.meetings import summarize_meeting
-        summary = summarize_meeting(text)
+        try:
+            with service.background():
+                summary = summarize_meeting(text)
+        except (service.InferencePaused, service.Preempted):
+            summary = None
 
         if summary is not None:
             _set_phase(meeting_id, 'done', status='done', summary=summary)
         else:
-            _set_phase(meeting_id, 'done', status='done')
+            # Deliberately NOT 'done'. The transcript is safe either way, but
+            # marking the meeting finished when the summary never happened
+            # erases the only signal that it still needs one — the row then
+            # looks exactly like a meeting the user chose not to summarise.
+            # `POST /api/meetings/<id>/summarize` is the retry, and this is
+            # what tells the UI to offer it.
+            _set_phase(meeting_id, 'summarized_pending', status='done')
         logger.info('Meeting %s: transcription pipeline finished', meeting_id)
     except _Paused:
         logger.info('Meeting %s: transcription paused', meeting_id)

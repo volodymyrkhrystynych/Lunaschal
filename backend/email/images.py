@@ -3,7 +3,7 @@
 Deliberately the lowest-priority network work in the app. Nothing waits on
 it: the mail is already readable, the classifier reads text, and an image
 that arrives an hour late costs nothing. So this runs on its own slow daemon
-loop with a per-request delay, rather than on backend/ai/background.py's
+loop with a per-request delay, rather than on backend/ai/jobs.py's
 executor (which is for work a user triggered seconds ago) or inside the sync
 path (where it would stall the import of the next message behind a CDN).
 

@@ -5,7 +5,7 @@ attempt row's lifecycle — saved on answer, resumed on return, deleted on ratin
 """
 import pytest
 
-from backend.ai import background
+from backend.ai import jobs as llm_jobs
 from backend.routes import learning as learning_routes
 
 
@@ -24,7 +24,9 @@ def _answer(client, card_id, answer='my answer', **extra):
 def no_bg(monkeypatch):
     """Record what the route queues instead of running it."""
     queued = []
-    monkeypatch.setattr(background, 'run_bg', queued.append)
+    monkeypatch.setattr(llm_jobs, 'enqueue',
+                        lambda kind, target_id=None, payload=None, **k:
+                            queued.append((kind, target_id)))
     learning_routes._grading_queued.clear()
     yield queued
     learning_routes._grading_queued.clear()

@@ -12,7 +12,7 @@ Two loops, because the two layers cost wildly different things:
   enough to reach the model.
 - **`drain_once`** is a single-slot worker for what the gate could not decide.
   It is the only part that touches the model, so it is the only part that
-  defers through `backend/ai/priority.py` — the moment-to-moment yielding
+  defers through `backend/ai/service.py` — the moment-to-moment yielding
   `research_scheduler` does, rather than an hour window. A posting synced at
   09:00 should not sit unsummarised until 02:00.
 
@@ -68,9 +68,9 @@ GATE_BATCH = 2000
 #
 # So the drain keeps going while the machine is idle. The gate that makes this
 # safe is unchanged and is simply re-read every iteration instead of once every
-# five minutes: `drain_once` returns None the moment `priority.active()` is
-# true, so a chat message still stands the drain down between generations. What
-# changes is only the sleeping.
+# five minutes: `drain_once` returns None the moment
+# `service.interactive_active()` is true, so a chat message still stands the
+# drain down between generations. What changes is only the sleeping.
 #
 # Bounded rather than unbounded so one tick cannot run for hours while linkage,
 # sync and the purge wait behind it. Set to 0 to restore one-per-tick exactly.
@@ -467,10 +467,15 @@ def submit(job_id: str) -> bool:
         _current = {'jobId': job_id, 'startedAt': _now()}
 
     def _run():
+        from backend.ai import service
         started = time.monotonic()
         error = None
         try:
-            error = process_one(job_id).get('error')
+            # Only the *worker* is P2. `process_one` is also called straight
+            # from the route, on a request thread, where the default P1 is
+            # right — the user is holding the response open for it.
+            with service.background():
+                error = process_one(job_id).get('error')
         except Exception as e:
             error = str(e)
             logger.warning('Triage worker crashed on %s: %s', job_id, e)
@@ -487,7 +492,7 @@ def drain_once() -> str | None:
     Every gate is a question rather than a block, so the tick stays cheap and
     the answers are re-read next time.
     """
-    from backend.ai import priority
+    from backend.ai import service
     from backend.db.connection import get_db
 
     with _lock:
@@ -497,7 +502,7 @@ def drain_once() -> str | None:
     db = get_db()
     if not is_enabled(db):
         return None
-    if priority.active() or priority.idle_seconds() < QUIET_SECONDS:
+    if service.interactive_active() or service.idle_seconds() < QUIET_SECONDS:
         return None
 
     pending = next_pending(db)
@@ -510,7 +515,7 @@ def drain_while_idle(budget_seconds: float | None = None) -> dict:
     """Judge postings back to back for as long as the machine stays idle.
 
     Every iteration goes through `drain_once`, so all four of its gates —
-    another pass already running, triage switched off, `priority.active()`, and
+    another pass already running, triage switched off, `service.interactive_active()`, and
     an empty queue — are re-read between every generation. None of the deferral
     behaviour changes; the loop only removes the five-minute sleep between two
     four-second calls.
