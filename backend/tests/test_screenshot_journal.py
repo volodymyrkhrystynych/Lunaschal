@@ -1,5 +1,6 @@
 """Capture failures, offline recovery, and real journal replay without a display."""
 import io
+import json
 import sqlite3
 from pathlib import Path
 from unittest.mock import Mock
@@ -20,7 +21,13 @@ def capture(monkeypatch, tmp_path):
     monkeypatch.setattr(screenshots.shutil, 'which', lambda _: '/usr/bin/grim')
     def run(args, **kwargs):
         if args[0] == 'grim':
+            assert args[1:3] == ['-o', 'DP-2']
             Path(args[-1]).write_bytes(buf.getvalue())
+        if args[0] == 'hyprctl':
+            return Mock(stdout=json.dumps([
+                {'name': 'DP-1', 'focused': False},
+                {'name': 'DP-2', 'focused': True},
+            ]), returncode=0)
         return Mock(stdout='', returncode=0)
 
     monkeypatch.setattr(screenshots.subprocess, 'run', run)
@@ -57,10 +64,38 @@ def test_failed_capture_creates_no_entry(capture, monkeypatch):
 
 
 def test_invalid_capture_cleans_partial_file(capture, monkeypatch):
+    monkeypatch.setattr(screenshots, 'focused_monitor', lambda: 'DP-2')
     monkeypatch.setattr(screenshots.subprocess, 'run', lambda *a, **kw: None)
     capture.capture()
     capture.session.post.assert_not_called()
     assert not list(capture.root.iterdir())
+
+
+@pytest.mark.parametrize('monitors', [[], [{'name': 'DP-1', 'focused': False}],
+    [{'name': '', 'focused': True}],
+    [{'name': 'DP-1', 'focused': True}, {'name': 'DP-2', 'focused': True}]])
+def test_unknown_focus_never_captures_all_screens(capture, monkeypatch, monitors):
+    run = Mock(return_value=Mock(stdout=json.dumps(monitors)))
+    monkeypatch.setattr(screenshots.subprocess, 'run', run)
+    capture.capture()
+    assert run.call_count == 1
+    assert run.call_args.args[0] == ['hyprctl', '-j', 'monitors']
+    capture.session.post.assert_not_called()
+    assert not capture.root.exists()
+
+
+def test_focus_is_queried_again_for_each_capture(capture, monkeypatch):
+    outputs = iter(['DP-1', 'DP-2'])
+    grim_calls = []
+    def run(args, **kwargs):
+        if args[0] == 'hyprctl':
+            return Mock(stdout=json.dumps([{'name': next(outputs), 'focused': True}]))
+        grim_calls.append(args)
+        Path(args[-1]).write_bytes(b'\x89PNG\r\n\x1a\n')
+    monkeypatch.setattr(screenshots.subprocess, 'run', run)
+    capture.capture()
+    capture.capture()
+    assert [args[2] for args in grim_calls] == ['DP-1', 'DP-2']
 
 
 def test_lost_upload_response_replays_without_duplicate_entry_or_photo(

@@ -106,8 +106,8 @@ export function ShortcutsSection() {
           Screenshot to journal
         </p>
         <p className="text-xs text-[var(--color-text-muted)] mb-2">
-          Capture the full desktop and save it to a new journal entry. Requires
-          grim on the computer running the listener (Wayland).
+          Capture only the focused monitor and save it to a new journal entry.
+          Requires Hyprland and grim on the computer running the listener.
         </p>
         <KeyRecorder value={screenshotKey} onChange={setScreenshotKey} />
         {screenshotKey && (

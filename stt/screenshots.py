@@ -1,5 +1,6 @@
 """Global screenshot capture with a durable, idempotent journal upload queue."""
 import datetime
+import json
 import logging
 import os
 from pathlib import Path
@@ -10,6 +11,18 @@ import threading
 from ulid import ULID
 
 logger = logging.getLogger(__name__)
+
+
+def focused_monitor():
+    """Resolve Hyprland's focused output; never fall back to all monitors."""
+    result = subprocess.run(['hyprctl', '-j', 'monitors'], check=True,
+                            timeout=5, capture_output=True, text=True)
+    monitors = json.loads(result.stdout)
+    names = [monitor.get('name') for monitor in monitors
+             if monitor.get('focused') is True]
+    if len(names) != 1 or not isinstance(names[0], str) or not names[0]:
+        raise RuntimeError('Could not identify the focused monitor.')
+    return names[0]
 
 
 def notify(message):
@@ -39,12 +52,13 @@ class ScreenshotJournal:
         try:
             if not shutil.which('grim'):
                 raise RuntimeError('Install grim to capture the Wayland desktop.')
+            output = focused_monitor()
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             ident = str(ULID())
             temporary = self.root / f'{ident}.part'
             # Reserve a private file before invoking the capture tool.
             temporary.touch(mode=0o600)
-            subprocess.run(['grim', '-t', 'png', str(temporary)],
+            subprocess.run(['grim', '-o', output, '-t', 'png', str(temporary)],
                            check=True, timeout=15, capture_output=True)
             with temporary.open('rb') as file:
                 if file.read(8) != b'\x89PNG\r\n\x1a\n':
