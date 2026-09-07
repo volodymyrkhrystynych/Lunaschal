@@ -28,7 +28,7 @@ from pathlib import Path
 REQUIRED_ENV_VARS = [
     'DATABASE_URL', 'FANFIC_ROOT', 'MEETINGS_ROOT', 'JOURNAL_ROOT',
     'JOURNAL_DRAFTS_ROOT', 'LIFESTYLE_ROOT', 'FOOD_ROOT', 'RECIPE_ROOT',
-    'CHAT_ROOT', 'PAPER_ROOT', 'JOBS_ROOT', 'NEWSPAPERS_ROOT',
+    'CHAT_ROOT', 'PAPER_ROOT', 'JOBS_ROOT', 'NEWSPAPERS_ROOT', 'NEWSPAPERS_ARCHIVE_ROOT',
     'NOTEBOOK_ROOT', 'EMAIL_MEDIA_ROOT', 'PIANO_ROOT', 'PIANO_ARCHIVE_ROOT',
     'FILES_ROOT', 'TORRENT_ROOT', 'STUDY_ROOT', 'STUDY_ARCHIVE_ROOT',
     'SHORTCUTS_PATH',
@@ -439,8 +439,10 @@ def seed_fanfic(db, journal_ids):
 
 def seed_newspapers(db):
     from backend.newspapers.storage import build_path
+    from backend.newspapers.issues import issue_path
+    from pypdf import PdfWriter
 
-    today = time.strftime('%Y-%m-%d')
+    today = today_key()
     for paper in ('toronto-star', 'nyt'):
         path = build_path(paper, today, 'image/jpeg')
         placeholder_image(path, paper, size=(800, 1000))
@@ -448,6 +450,19 @@ def seed_newspapers(db):
             'INSERT INTO newspaper_frontpages (id, paper, date, image_path, created_at) VALUES (?, ?, ?, ?, ?)',
             (new_id(), paper, today, str(path), ts(0)),
         )
+    path = issue_path(today)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.write(str(path))
+    db.execute(
+        "INSERT INTO newspaper_downloads (id, date, status, created_at, updated_at) VALUES (?, ?, 'complete', ?, ?)",
+        (new_id(), today, ts(0), ts(0)),
+    )
+    db.execute(
+        'INSERT INTO newspaper_issues (id, date, pdf_path, byte_size, page_count, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+        (new_id(), today, str(path), path.stat().st_size, 1, ts(0)),
+    )
 
 
 def seed_torrents(db):

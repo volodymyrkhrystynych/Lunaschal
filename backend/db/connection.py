@@ -107,6 +107,7 @@ def init_db() -> None:
     _init_messages_fts(db)
     _drop_vector_tables(db)
     _ensure_network_code(db)
+    _ensure_newspaper_downloads(db)
     _ensure_writing_project_id(db)
     _ensure_conversation_day_key(db)
     _ensure_conversation_mode(db)
@@ -1832,6 +1833,14 @@ def _ensure_chat_compactions(db: sqlite3.Connection) -> None:
            CREATE INDEX IF NOT EXISTS idx_chat_compactions_conversation
                ON chat_compactions(conversation_id, created_at DESC);'''
     )
+    db.commit()
+
+
+def _ensure_newspaper_downloads(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'newspapers_auto_download' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN newspapers_auto_download INTEGER NOT NULL DEFAULT 0')
+    db.execute("UPDATE newspaper_downloads SET status='queued', error='Interrupted; retrying after restart' WHERE status='downloading'")
     db.commit()
 
 

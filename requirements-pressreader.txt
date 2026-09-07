@@ -1,0 +1,2 @@
+# Optional: subscriber issue downloads; manual PDF import needs only requirements.txt.
+playwright>=1.51,<2

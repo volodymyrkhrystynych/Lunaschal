@@ -1322,6 +1322,36 @@ export interface FrontPage {
   imageUrl: string | null;
 }
 
+export interface NewspaperIssue {
+  date: string;
+  byteSize: number;
+  pageCount: number;
+  pdfUrl: string;
+}
+
+export interface NewspaperDownload {
+  date: string;
+  status: 'queued' | 'downloading' | 'complete' | 'failed' | 'sign-in-required';
+  error: string;
+}
+
+export interface PressReaderStatus {
+  sessionSaved: boolean;
+  autoDownload: boolean;
+  jobs: NewspaperDownload[];
+}
+
+export interface NewspaperStroke {
+  page: number;
+  tool: 'pen' | 'highlight';
+  points: [number, number][];
+}
+
+export interface NewspaperMarkup {
+  revision: number;
+  strokes: NewspaperStroke[];
+}
+
 export interface SyncResult {
   paper: string;
   status: 'downloaded' | 'already-saved' | 'error';
@@ -4073,6 +4103,24 @@ export const api = {
   },
 
   newspapers: {
+    pressreader: () => get<PressReaderStatus>('/api/newspapers/pressreader'),
+    setAutoDownload: (autoDownload: boolean) =>
+      put<PressReaderStatus>('/api/newspapers/pressreader', { autoDownload }),
+    downloadIssue: (date: string) =>
+      post<NewspaperDownload>(`/api/newspapers/issues/${date}/download`),
+    issues: () =>
+      get<{ issues: NewspaperIssue[]; archivePath: string }>(
+        '/api/newspapers/issues'
+      ),
+    uploadIssue: (date: string, file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return upload<NewspaperIssue>(`/api/newspapers/issues/${date}`, form);
+    },
+    markup: (date: string) =>
+      get<NewspaperMarkup>(`/api/newspapers/issues/${date}/markup`),
+    saveMarkup: (date: string, body: NewspaperMarkup) =>
+      put<{ revision: number }>(`/api/newspapers/issues/${date}/markup`, body),
     getByDate: (date: string) =>
       get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
     sync: () => post<SyncResult[]>('/api/newspapers/sync'),

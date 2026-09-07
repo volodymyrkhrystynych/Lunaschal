@@ -140,6 +140,8 @@ def create_app():
     if not os.environ.get('LUNASCHAL_NO_SCHEDULERS'):
         from backend.ai.jobs import start_job_worker
         start_job_worker()
+        from backend.newspapers.scheduler import start_newspaper_scheduler
+        start_newspaper_scheduler()
         from backend.chat_title_scheduler import start_title_scheduler
         start_title_scheduler()
         from backend.notebook_diary_scheduler import start_notebook_diary_scheduler
