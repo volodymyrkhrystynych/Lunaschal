@@ -587,6 +587,17 @@ const journalRecordingCfg = (
   // reader shows no list of its own commentary to go stale.
 });
 
+/**
+ * How many attempts a journal attachment gives an entry that is not there.
+ *
+ * Only the boot sweep and a fresh enqueue spend one — `ONLINE.retry` retries
+ * network failures alone, and an offline device pauses the mutation rather than
+ * failing it — so this is roughly "app launches", not "requests". Generous
+ * enough for a create still paused in the queue across a couple of reloads,
+ * small enough that a create which is never coming stops being asked about.
+ */
+const MISSING_ENTRY_ATTEMPTS = 5;
+
 /** Driven through `enqueueJournalAttachment` rather than a `use*` hook: the
  *  callers hand a file to the queue and walk away, and the boot sweep has no
  *  component to hang a hook off at all. */
@@ -620,7 +631,20 @@ const journalAttachmentCfg = (
       // problem that fixes itself the moment the create goes through, and
       // nothing else carries a journal attachment — so it stays queueable and
       // the boot sweep tries again.
-      const missingEntry = e instanceof ApiError && e.status === 404;
+      //
+      // But only so many times. That reasoning holds while the create is still
+      // coming; it is simply false once the create has failed for good, and
+      // nothing here can tell the two apart — a terminally failed mutation is
+      // not in the cache to be asked, least of all after the reload that runs
+      // the sweep. Unbounded, the difference showed up as a photo re-POSTing a
+      // 404 on every single app launch, forever, which is what one refused
+      // save actually cost. So a 404 buys the create a few launches and then
+      // the photo is retired like any other refusal: kept on the device, not
+      // retried, and clearable with `clearFailure` if the entry ever appears.
+      const missingEntry =
+        e instanceof ApiError &&
+        e.status === 404 &&
+        stored.meta.attempts < MISSING_ENTRY_ATTEMPTS;
       await markPhotoAttempt(
         vars.attachmentId,
         e instanceof Error ? e.message : 'Upload failed',

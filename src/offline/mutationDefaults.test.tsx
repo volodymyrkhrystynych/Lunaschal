@@ -29,6 +29,7 @@ import {
   finalizeRecording,
 } from './recordingStore';
 import { getPhoto, listPhotos, storePhoto } from './photoStore';
+import { enqueueJournalAttachment, resumeStoredPhotos } from './photoQueue';
 import type {
   CalorieDay,
   DailyTask,
@@ -607,6 +608,112 @@ describe('photos, which are the thing that cannot be retyped', () => {
     expect(stored?.blob).toBeTruthy();
     expect(stored?.meta.failed).toBe(true);
     expect(stored?.meta.lastError).toMatch(/too large/);
+  });
+
+  it('keeps trying a journal photo whose entry has not landed yet', async () => {
+    // A 404 here is the one 4xx that is not the file's fault: the entry's own
+    // create shares JOURNAL_LANE and may still be queued ahead of it. Retiring
+    // the photo now would throw it away over a problem about to fix itself.
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'Not found' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = makeClient();
+    await storePhoto(
+      'p3',
+      new File(['pixels'], 'plate.jpg', { type: 'image/jpeg' }),
+      'journal',
+      'e-not-yet'
+    );
+
+    await enqueueJournalAttachment(qc, 'p3', 'e-not-yet').catch(() => {});
+
+    const stored = await getPhoto('p3');
+    expect(stored?.blob).toBeTruthy();
+    expect(stored?.meta.failed).toBe(false);
+  });
+
+  it('stops asking after an entry that is never coming', async () => {
+    // The create can also have failed for good, and nothing here can tell that
+    // apart from one still queued — a terminally failed mutation is not in the
+    // cache to be asked, least of all after the reload that runs the boot
+    // sweep. Unbounded, that showed up as a photo re-POSTing a 404 on every
+    // app launch forever. The photo is still never destroyed.
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'Not found' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = makeClient();
+    await storePhoto(
+      'p4',
+      new File(['pixels'], 'plate.jpg', { type: 'image/jpeg' }),
+      'journal',
+      'e-never'
+    );
+
+    // Each pass is one launch's worth: ONLINE.retry only retries a NetworkError,
+    // so a 404 costs exactly one attempt.
+    for (let i = 0; i < 6; i++) {
+      await enqueueJournalAttachment(qc, 'p4', 'e-never').catch(() => {});
+    }
+
+    const stored = await getPhoto('p4');
+    expect(stored?.meta.failed).toBe(true);
+    expect(stored?.blob).toBeTruthy();
+    // Retired, which is the state the boot sweep reads: it skips a failed
+    // photo, so the launches after this one cost no request at all.
+    const calls = fetchMock.mock.calls.length;
+    await resumeStoredPhotos(qc);
+    expect(fetchMock.mock.calls.length).toBe(calls);
+  });
+
+  it('does not let a failing sweep upload escape as an unhandled rejection', async () => {
+    // The boot sweep runs with nothing awaiting it, so a rejection it lets go
+    // of is an `Uncaught (in promise) ApiError` in the console on every single
+    // launch. The journal branch was the only one of the five not catching,
+    // which is how one orphaned attachment made itself heard.
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'Not found' }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const qc = makeClient();
+    await storePhoto(
+      'p5',
+      new File(['pixels'], 'plate.jpg', { type: 'image/jpeg' }),
+      'journal',
+      'e-orphan'
+    );
+
+    // Reached through globalThis and typed locally: this project's tsconfig
+    // carries no @types/node, and the rejection is only observable here.
+    const { process: proc } = globalThis as unknown as {
+      process: {
+        on(event: string, fn: (reason: unknown) => void): void;
+        off(event: string, fn: (reason: unknown) => void): void;
+      };
+    };
+    const escaped: unknown[] = [];
+    const onRejection = (reason: unknown) => escaped.push(reason);
+    proc.on('unhandledRejection', onRejection);
+    try {
+      await resumeStoredPhotos(qc);
+      // Long enough for the runtime to decide a rejection has no handler.
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } finally {
+      proc.off('unhandledRejection', onRejection);
+    }
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(escaped).toEqual([]);
   });
 });
 

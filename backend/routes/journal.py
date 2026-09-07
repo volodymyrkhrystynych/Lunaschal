@@ -273,13 +273,35 @@ def create_entry():
     raw_content = body.get('raw_content', '').strip()
     content = body.get('content', '').strip()
 
+    try:
+        pending = int(body.get('pendingAttachments') or 0)
+    except (TypeError, ValueError):
+        pending = 0
+    # Clamped: this only ever delays a title, but an unbounded value from the
+    # wire would park a thread on a condition that can never become true until
+    # the cap ran out.
+    pending = max(0, min(pending, 20))
+
     if raw_content:
         # STT path: save immediately with raw text, polish in background
         content = raw_content
-    elif not content:
-        return jsonify({'error': 'content required'}), 400
     else:
         raw_content = None
+        # An entry whose whole content is a photograph is a real entry, and the
+        # composer offers Save for one: its button is enabled on a staged file
+        # with no text at all. Refusing it here used to 400 that save, and the
+        # cost did not stop at the error -- the photo is queued behind the
+        # create in JOURNAL_LANE, so it then POSTed against an entry id that
+        # would never exist, and its 404 is deliberately treated as "the create
+        # is still coming" rather than terminal. One rejected save left a file
+        # retrying forever, once per app launch.
+        #
+        # `pending` is what makes the empty body legible: it says files are on
+        # their way to this id, which is the same promise that already makes
+        # title generation wait for their captions. Empty with nothing coming is
+        # still an accident and still refused.
+        if not content and not pending:
+            return jsonify({'error': 'content required'}), 400
 
     title = body.get('title') or None
     tags = body.get('tags') or None
@@ -289,14 +311,6 @@ def create_entry():
     # idempotently: create_journal_entry's INSERT OR IGNORE makes a duplicate
     # a no-op, and a None return means we've already saved this entry.
     id = body.get('id') or str(ULID())
-    try:
-        pending = int(body.get('pendingAttachments') or 0)
-    except (TypeError, ValueError):
-        pending = 0
-    # Clamped: this only ever delays a title, but an unbounded value from the
-    # wire would park a thread on a condition that can never become true until
-    # the cap ran out.
-    pending = max(0, min(pending, 20))
     create_journal_entry(
         content, raw_content, now,
         title=title, tags=tags, entry_id=id, polish=True,

@@ -952,3 +952,46 @@ def test_an_upload_to_a_missing_entry_is_still_a_404(client):
     res = _upload(client, str(ULID()), attachment_id=str(ULID()))
 
     assert res.status_code == 404
+
+
+# --- an entry whose whole content is the photograph -------------------------
+#
+# The composer enables Save on a staged file with no text (`disabled={!content
+# .trim() && files.length === 0 && ...}` in Journal.tsx), so a photo-only entry
+# is a save the UI offers. The backend used to refuse it, and the refusal did
+# not stop at a 400: the photo is queued behind the create in JOURNAL_LANE, so
+# it went on to POST against an id that would never exist, and the attachment
+# route's 404 is read client-side as "the create is still coming" rather than as
+# a refusal. One rejected save left a file re-POSTing a 404 once per app launch,
+# indefinitely.
+
+
+def test_an_entry_can_be_created_from_its_attachments_alone(client):
+    res = client.post('/api/journal', json={
+        'id': str(ULID()), 'content': '', 'pendingAttachments': 1,
+    })
+
+    assert res.status_code == 201
+
+
+def test_the_photo_of_a_text_less_entry_lands_on_it(client):
+    # The whole chain the 400 used to break, in order: create, then the file
+    # that was staged with it.
+    entry = str(ULID())
+    client.post('/api/journal', json={
+        'id': entry, 'content': '', 'pendingAttachments': 1,
+    })
+
+    res = _upload(client, entry, filename='plate.jpg', data=_exif_jpeg(),
+                  mime='image/jpeg', attachment_id=str(ULID()))
+
+    assert res.status_code == 201
+    assert len(client.get(f'/api/journal/{entry}/attachments').get_json()) == 1
+
+
+def test_an_empty_entry_with_nothing_coming_is_still_refused(client):
+    # `pendingAttachments` is what makes an empty body legible. Without it an
+    # empty save is an accident, and stays a 400.
+    res = client.post('/api/journal', json={'id': str(ULID()), 'content': ''})
+
+    assert res.status_code == 400

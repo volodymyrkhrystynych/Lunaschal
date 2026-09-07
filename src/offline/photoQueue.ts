@@ -82,7 +82,14 @@ export async function resumeStoredPhotos(qc: QueryClient): Promise<void> {
         photo.id,
         photo.targetId,
         defaultNameFor(photo.filename)
-      );
+      ).catch(() => {
+        // Swallowed like every other branch here: the failure is already
+        // recorded on the stored photo by the mutation, and this one was the
+        // only branch that let the rejection escape. A sweep runs at boot with
+        // nothing awaiting it, so an escaping rejection is an `Uncaught (in
+        // promise)` in the console on every launch — which is exactly how a
+        // single orphaned attachment announced itself.
+      });
       continue;
     }
 
