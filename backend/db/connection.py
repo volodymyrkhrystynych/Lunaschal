@@ -260,6 +260,9 @@ def _ensure_network_code(db: sqlite3.Connection) -> None:
 
 def _ensure_stt_shortcuts(db: sqlite3.Connection) -> None:
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'stt_screenshot_key' not in cols:
+        db.execute('ALTER TABLE settings ADD COLUMN stt_screenshot_key TEXT')
+        db.commit()
     if 'stt_paste_key' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN stt_paste_key TEXT')
         db.commit()

@@ -12,6 +12,7 @@ export function ShortcutsSection() {
   const [pasteKey, setPasteKey] = useState<string | null>(null);
   const [voiceKey, setVoiceKey] = useState<string | null>(null);
   const [journalKey, setJournalKey] = useState<string | null>(null);
+  const [screenshotKey, setScreenshotKey] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -19,6 +20,7 @@ export function ShortcutsSection() {
       setPasteKey(settings.sttPasteKey ?? null);
       setVoiceKey(settings.sttVoiceKey ?? null);
       setJournalKey(settings.sttJournalKey ?? null);
+      setScreenshotKey(settings.sttScreenshotKey ?? null);
     }
   }, [settings]);
 
@@ -28,6 +30,7 @@ export function ShortcutsSection() {
         sttPasteKey: pasteKey ?? undefined,
         sttVoiceKey: voiceKey ?? undefined,
         sttJournalKey: journalKey ?? undefined,
+        sttScreenshotKey: screenshotKey ?? '',
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['settings'] });
@@ -96,6 +99,25 @@ export function ShortcutsSection() {
             env: <code>STT_JOURNAL_KEY</code>
           </p>
         </div>
+      </div>
+
+      <div>
+        <p className="text-sm text-[var(--color-text)] mb-1.5">
+          Screenshot to journal
+        </p>
+        <p className="text-xs text-[var(--color-text-muted)] mb-2">
+          Capture the full desktop and save it to a new journal entry. Requires
+          grim on the computer running the listener (Wayland).
+        </p>
+        <KeyRecorder value={screenshotKey} onChange={setScreenshotKey} />
+        {screenshotKey && (
+          <button
+            className="ml-3 text-sm text-[var(--color-text-muted)]"
+            onClick={() => setScreenshotKey('')}
+          >
+            Disable screenshot shortcut
+          </button>
+        )}
       </div>
 
       <label className="flex items-center gap-3 cursor-pointer select-none pt-1">

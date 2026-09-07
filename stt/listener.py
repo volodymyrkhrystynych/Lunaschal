@@ -40,6 +40,7 @@ import scipy.io.wavfile as wavfile
 import sounddevice as sd
 from ulid import ULID
 import soundfile as sf
+from screenshots import ScreenshotJournal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -89,18 +90,18 @@ def _notify_state(recording: bool, transcribing: bool, mode: str | None = None) 
         pass  # never block the listener for a UI notification
 
 
-def _fetch_shortcut_settings() -> tuple[str | None, str | None, str | None]:
-    """Fetch sttPasteKey / sttVoiceKey / sttJournalKey from the Flask settings API on startup."""
+def _fetch_shortcut_settings() -> tuple[str | None, str | None, str | None, str | None]:
+    """Fetch global shortcut bindings from the settings API on startup."""
     try:
         import json as _json
         r = _SESSION.get(LUNASCHAL_URL + '/api/settings', timeout=3)
         data = _json.loads(r.content)
         if data:
             return (data.get('sttPasteKey'), data.get('sttVoiceKey'),
-                    data.get('sttJournalKey'))
+                    data.get('sttJournalKey'), data.get('sttScreenshotKey'))
     except Exception:
         pass
-    return None, None, None
+    return None, None, None, None
 
 
 def _fetch_nudge_settings() -> tuple[bool | None, int | None]:
@@ -116,7 +117,10 @@ def _fetch_nudge_settings() -> tuple[bool | None, int | None]:
     return None, None
 
 
-_api_paste, _api_voice, _api_journal = _fetch_shortcut_settings()
+_api_paste, _api_voice, _api_journal, _api_screenshot = _fetch_shortcut_settings()
+SCREENSHOT_KEY = (_api_screenshot if _api_screenshot is not None
+                  else os.environ.get('STT_SCREENSHOT_KEY'))
+_screenshots = ScreenshotJournal(_SESSION, LUNASCHAL_URL)
 PASTE_KEY   = _api_paste   or os.environ.get("STT_PASTE_KEY")    # None if not configured; may be a combo "KEY_LEFTCTRL+KEY_F1"
 VOICE_KEY   = _api_voice   or os.environ.get("STT_VOICE_KEY")    # None if not configured; may be a combo
 JOURNAL_KEY = _api_journal or os.environ.get("STT_JOURNAL_KEY")  # None if not configured; record → journal entry
@@ -874,11 +878,13 @@ def _monitor_device(device: InputDevice) -> None:
     paste_combo   = _parse_combo(PASTE_KEY)
     voice_combo   = _parse_combo(VOICE_KEY)
     journal_combo = _parse_combo(JOURNAL_KEY)
+    screenshot_combo = _parse_combo(SCREENSHOT_KEY)
 
     held: set[int] = set()            # all keys currently pressed on this device
     paste_active: set[int]   = set()  # combo keys still held after paste trigger
     voice_active: set[int]   = set()  # combo keys still held after voice trigger
     journal_active: set[int] = set()  # combo keys still held after journal trigger
+    screenshot_active: set[int] = set()
 
     try:
         for event in device.read_loop():
@@ -889,6 +895,11 @@ def _monitor_device(device: InputDevice) -> None:
 
             if key_event.keystate == 1:  # key down
                 held.add(code)
+
+                if (screenshot_combo and not screenshot_active
+                        and code in screenshot_combo and screenshot_combo <= held):
+                    screenshot_active = set(screenshot_combo)
+                    threading.Thread(target=_screenshots.capture, daemon=True).start()
 
                 # Fire paste combo when the pressed key completes the set
                 if paste_combo and code in paste_combo and paste_combo <= held:
@@ -911,6 +922,7 @@ def _monitor_device(device: InputDevice) -> None:
 
             elif key_event.keystate == 0:  # key up
                 held.discard(code)
+                screenshot_active.discard(code)
 
                 if code in paste_active:
                     paste_active.discard(code)
@@ -935,7 +947,7 @@ def _monitor_device(device: InputDevice) -> None:
 def _find_keyboards() -> list[InputDevice]:
     # Collect all ecodes from all combo keys across both shortcuts
     needed: set[int] = set()
-    for combo in (PASTE_KEY, VOICE_KEY, JOURNAL_KEY):
+    for combo in (PASTE_KEY, VOICE_KEY, JOURNAL_KEY, SCREENSHOT_KEY):
         needed |= _parse_combo(combo)
 
     if not needed:
@@ -972,6 +984,7 @@ def main() -> None:
     print("Lunaschal Voice Input")
     print(f"  STT/TTS service : {STT_URL}")
     print(f"  Lunaschal server: {LUNASCHAL_URL}")
+    print(f"  Screenshot: {_display_combo(SCREENSHOT_KEY)} → save screen to journal")
     if PASTE_KEY:
         print(f"  {_display_combo(PASTE_KEY)}: record → paste transcription at cursor")
     else:
@@ -998,7 +1011,7 @@ def main() -> None:
     if keyboards:
         for kb in keyboards:
             print(f"  Keyboard: {kb.name}  ({kb.path})")
-    elif PASTE_KEY or VOICE_KEY or JOURNAL_KEY:
+    elif PASTE_KEY or VOICE_KEY or JOURNAL_KEY or SCREENSHOT_KEY:
         print("✗ No keyboard devices found. Are you in the 'input' group?")
         print("  Run: sudo usermod -a -G input $USER  then log out/in")
         sys.exit(1)
@@ -1020,6 +1033,7 @@ def main() -> None:
     print("\nWaiting for shortcut…\n")
 
     threading.Thread(target=_wake_word_loop, daemon=True).start()
+    threading.Thread(target=_screenshots.retry_loop, daemon=True).start()
     if NUDGE_ENABLED:
         threading.Thread(target=_nudge_loop, daemon=True).start()
 
