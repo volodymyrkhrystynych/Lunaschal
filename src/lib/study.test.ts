@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   formatDuration,
   formatSize,
+  isSourceRowFor,
   noteSlugFor,
   sourceSubtitle,
   viewerKindFor,
@@ -129,6 +130,15 @@ describe('noteSlugFor', () => {
     expect(a).not.toBe(b);
   });
 
+  // The row reaching this can come from the persisted query cache, which is
+  // only as well-formed as whatever was written into it -- and a poisoned entry
+  // is what turned a missing title into a blank app.
+  it('falls back to the id when there is no title at all', () => {
+    expect(noteSlugFor(null, 'abcdefGHIJKL')).toBe('study/ghijkl.md');
+    expect(noteSlugFor(undefined, 'abcdefGHIJKL')).toBe('study/ghijkl.md');
+    expect(noteSlugFor('', 'abcdefGHIJKL')).toBe('study/ghijkl.md');
+  });
+
   it('still produces a usable path for a title that slugs to nothing', () => {
     // Non-ASCII is dropped rather than transliterated, so the id carries it.
     expect(noteSlugFor('注意力就是一切', 'abcdefGHIJKL')).toBe(
@@ -178,5 +188,25 @@ describe('sourceSubtitle', () => {
         })
       )
     ).toBe('Video · 1:02:51 · study/lecture.md');
+  });
+});
+
+describe('isSourceRowFor', () => {
+  // The guard on every cache write the desk and its panes make: a response
+  // that is not the row we asked about must not replace the row we have.
+  it('accepts the row it asked about', () => {
+    expect(isSourceRowFor(source({ id: 's1' }), 's1')).toBe(true);
+  });
+
+  it('rejects a row of nulls, which is what poisoned the cache', () => {
+    const nulls = Object.fromEntries(Object.keys(source()).map(k => [k, null]));
+    expect(isSourceRowFor(nulls, 's1')).toBe(false);
+  });
+
+  it('rejects a different source, an error body, and nothing at all', () => {
+    expect(isSourceRowFor(source({ id: 's2' }), 's1')).toBe(false);
+    expect(isSourceRowFor({ error: 'Not found' }, 's1')).toBe(false);
+    expect(isSourceRowFor(null, 's1')).toBe(false);
+    expect(isSourceRowFor(undefined, 's1')).toBe(false);
   });
 });

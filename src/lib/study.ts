@@ -75,6 +75,27 @@ export function offlineReason(source: StudySource): string {
   return source.fileUnavailableReason || DRIVE_OFFLINE_MESSAGE;
 }
 
+/**
+ * Whether a PATCH response really is the source it was asked about, and so is
+ * safe to seed the query cache with in place of it.
+ *
+ * The desk and both panes answer an update by writing the row that comes back
+ * straight into the cache, which is cheaper than a refetch and normally exact.
+ * It is also the only path by which something that is *not* a source can get
+ * cached — and that cache is persisted, so a bad row outlives the session that
+ * wrote it and is rehydrated into the next one. Matching the id is the cheap
+ * check that this is the row we asked about; anything else is dropped and the
+ * cache keeps what it had.
+ */
+export function isSourceRowFor(
+  value: unknown,
+  id: string
+): value is StudySource {
+  return (
+    !!value && typeof value === 'object' && (value as StudySource).id === id
+  );
+}
+
 // Notes for the Study tab live in one folder of the notebook rather than a
 // store of their own, so they are reachable from the Notebook tab, its index
 // and `:find` like any other note.
@@ -86,9 +107,18 @@ export const STUDY_NOTE_DIR = 'study';
  * Non-ASCII is dropped rather than transliterated, so a title with no Latin
  * characters at all would slug to nothing — hence the id fallback, which is
  * also what keeps two same-named sources from sharing one note.
+ *
+ * The title is typed as a string and is `NOT NULL` in the schema, and this
+ * still does not trust it: the row this is called with can come from the
+ * *persisted* query cache, which is only as well-formed as whatever was
+ * written into it. A slug is not worth throwing over — a titleless source
+ * already has the id fallback that gives it a usable path.
  */
-export function noteSlugFor(title: string, id: string): string {
-  const slug = title
+export function noteSlugFor(
+  title: string | null | undefined,
+  id: string
+): string {
+  const slug = (title ?? '')
     .toLowerCase()
     .replace(/['’]/g, '')
     .replace(/[^a-z0-9]+/g, '-')

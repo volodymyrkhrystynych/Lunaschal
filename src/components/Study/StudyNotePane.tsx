@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
-import { noteSlugFor, type StudySource } from '../../lib/study';
+import { isSourceRowFor, noteSlugFor, type StudySource } from '../../lib/study';
 import { NotebookEditorPane } from '../Notebook/NotebookEditorPane';
 
 interface Props {
@@ -30,7 +30,9 @@ export function StudyNotePane({ source }: Props) {
   const bindNote = useMutation({
     mutationFn: (notePath: string) => api.study.update(source.id, { notePath }),
     onSuccess: updated => {
-      queryClient.setQueryData(['study', 'source', source.id], updated);
+      if (isSourceRowFor(updated, source.id)) {
+        queryClient.setQueryData(['study', 'source', source.id], updated);
+      }
       queryClient.invalidateQueries({ queryKey: ['study', 'sources'] });
     },
   });

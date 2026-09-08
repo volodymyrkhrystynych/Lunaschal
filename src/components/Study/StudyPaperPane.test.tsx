@@ -205,3 +205,62 @@ describe('binding the paper', () => {
     await waitFor(() => expect(boundWith()).toHaveLength(1));
   });
 });
+
+// The desk is handed its row by `initialData` and by the *persisted* query
+// cache, so what it renders has never necessarily been near the network. A
+// row of nulls -- a real one, seen in the wild -- used to read as "a source
+// with no note and no paper": the note pane slugged `null.toLowerCase()` and
+// took the whole app down with it, and on the other mode the paper pane made a
+// second, orphaned paper.
+describe('a row of nulls where a source should be', () => {
+  const nulls = Object.fromEntries(
+    Object.keys(source()).map(k => [k, null])
+  ) as unknown as StudySource;
+
+  it('waits for a real source instead of taking the app down', async () => {
+    const errors: unknown[] = [];
+    const onError = (e: ErrorEvent) => errors.push(e.error ?? e.message);
+    window.addEventListener('error', onError);
+    try {
+      render(
+        <QueryClientProvider
+          client={
+            new QueryClient({ defaultOptions: { queries: { retry: false } } })
+          }
+        >
+          <StudyDesk sourceId="s1" initial={nulls} onBack={() => {}} />
+        </QueryClientProvider>
+      );
+      await waitFor(() => expect(screen.getByText('Loading…')).toBeTruthy());
+      await act(async () => {
+        await new Promise(r => setTimeout(r, 20));
+      });
+    } finally {
+      window.removeEventListener('error', onError);
+    }
+
+    expect(errors).toEqual([]);
+    // Neither pane ran, so nothing was created against a source that isn't one.
+    expect(api.notebook.files.ensure).not.toHaveBeenCalled();
+    expect(api.paper.create).not.toHaveBeenCalled();
+  });
+
+  it('never lets one into the cache from an update response', async () => {
+    vi.mocked(api.study.update).mockResolvedValue(nulls);
+    renderDesk(source({ noteMode: 'note', notePath: 'study/wal.md' }));
+    await waitFor(() => expect(screen.getByText('✎ Paper')).toBeTruthy());
+
+    fireEvent.click(screen.getByText('✎ Paper'));
+
+    // The PATCH answered with rubbish; the desk keeps the source it had, so
+    // the title is still on screen and the pane still has its paper to make.
+    await waitFor(() =>
+      expect(api.study.update).toHaveBeenCalledWith('s1', {
+        noteMode: 'paper',
+      })
+    );
+    await waitFor(() =>
+      expect(screen.getByText('Write-Ahead Logging')).toBeTruthy()
+    );
+  });
+});

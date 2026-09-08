@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { ulid } from '../../lib/ulid';
 import { usePaperCreate } from '../../offline/mutationDefaults';
-import type { StudySource } from '../../lib/study';
+import { isSourceRowFor, type StudySource } from '../../lib/study';
 import { PaperEditor, type PaperEditorHandle } from '../Paper/PaperEditor';
 
 interface Props {
@@ -41,7 +41,9 @@ export function StudyPaperPane({ source, handleRef }: Props) {
   const bindPaper = useMutation({
     mutationFn: (paperId: string) => api.study.update(source.id, { paperId }),
     onSuccess: updated => {
-      queryClient.setQueryData(['study', 'source', source.id], updated);
+      if (isSourceRowFor(updated, source.id)) {
+        queryClient.setQueryData(['study', 'source', source.id], updated);
+      }
       queryClient.invalidateQueries({ queryKey: ['study', 'sources'] });
     },
   });

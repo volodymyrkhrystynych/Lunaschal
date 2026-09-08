@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
-import type { NoteMode, StudySource } from '../../lib/study';
+import {
+  isSourceRowFor,
+  type NoteMode,
+  type StudySource,
+} from '../../lib/study';
 import type { PaperEditorHandle } from '../Paper/PaperEditor';
 import { SourceViewer } from './SourceViewer';
 import { StudyNotePane } from './StudyNotePane';
@@ -93,9 +97,10 @@ export function StudyDesk({ sourceId, initial, onBack }: Props) {
       // open is a preference, and the server does not bump `updated_at` for it.
       void api.study
         .update(sourceId, { noteMode: next })
-        .then(updated =>
-          queryClient.setQueryData(['study', 'source', sourceId], updated)
-        )
+        .then(updated => {
+          if (!isSourceRowFor(updated, sourceId)) return;
+          queryClient.setQueryData(['study', 'source', sourceId], updated);
+        })
         .catch(() => {});
     },
     [sourceId, queryClient]
@@ -123,7 +128,15 @@ export function StudyDesk({ sourceId, initial, onBack }: Props) {
     [sourceId]
   );
 
-  if (!source) {
+  // `!source.id`, not just `!source`. `initialData` and the persisted cache
+  // both hand this query a row without going near the network, so what arrives
+  // here is not guaranteed to be a source at all — and every pane below treats
+  // whatever it is given as one, reading `notePath` and `paperId` to decide
+  // whether to *create* a note or a paper. A row of nulls therefore reads as a
+  // source that has neither, and the panes make a second, orphaned copy of
+  // both. An id is the one field a real row always has, so it is the thing to
+  // check; without it this is still loading.
+  if (!source?.id) {
     return (
       <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
         Loading…
