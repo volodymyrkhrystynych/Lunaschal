@@ -1,27 +1,22 @@
-// Pure, node-testable logic for the Paper drawing view. Keeping this out of the
-// canvas component lets it be unit-tested without a real 2D context (jsdom has
-// none). See src/lib/paper.test.ts.
+// Pure, node-testable logic for the Paper drawing view: everything that is
+// specific to an A4 sheet — its coordinate space, the contain-fit that puts it
+// on screen, the local buffer codec and the floating tool panel's placement.
+//
+// The stroke model itself (strokes, undo/redo, the eraser, simplification,
+// pressure) lives in src/lib/ink.ts and is shared with the newspaper reader's
+// markup layer. It is re-exported here so the Paper components can keep
+// importing everything they need from one place.
+//
+// See src/lib/paper.test.ts.
 
-export interface StrokePoint {
-  x: number;
-  y: number;
-  pressure: number;
-}
+import {
+  parseStrokeArray,
+  type Size,
+  type Stroke,
+  type StrokeTool,
+} from './ink';
 
-export type StrokeTool = 'pen' | 'highlighter' | 'eraser';
-
-export const STROKE_TOOLS: readonly StrokeTool[] = [
-  'pen',
-  'highlighter',
-  'eraser',
-];
-
-export interface Stroke {
-  tool: StrokeTool;
-  /** Base stroke width in page units (pen pressure modulates around it). */
-  size: number;
-  points: StrokePoint[];
-}
+export * from './ink';
 
 /** A page is always A4 portrait, and every stored coordinate lives in this fixed
  * space — units are tenths of a millimetre, so 2100 × 2970 is 210 mm × 297 mm.
@@ -36,9 +31,6 @@ export const PAGE_WIDTH = 2100;
 export const PAGE_HEIGHT = 2970;
 export const PAGE_ASPECT = PAGE_WIDTH / PAGE_HEIGHT;
 
-/** Fallback width when a stored stroke has a missing/invalid size. */
-export const DEFAULT_STROKE_SIZE = 8;
-
 /** Selectable widths per tool (Small / Medium / Large), in page units. Roughly
  * 2 page units per CSS pixel at the size a page renders on a laptop. */
 export const TOOL_SIZES: Record<StrokeTool, readonly number[]> = {
@@ -46,250 +38,6 @@ export const TOOL_SIZES: Record<StrokeTool, readonly number[]> = {
   highlighter: [28, 44, 68],
   eraser: [32, 60, 100],
 };
-
-/** Diameter, in CSS pixels, of the dot that previews a stroke width in the tool
- * panel. Page units are about twice a CSS pixel, and anything past 18px stops
- * fitting the button. */
-export function sizeDotPx(size: number): number {
-  return Math.min(size / 2, 18);
-}
-
-/** Undo/redo model: the current strokes plus snapshots of previous states.
- * Snapshots let an erase operation — which can modify many strokes at once —
- * be undone as a single action, unlike the old per-stroke stack. */
-export interface StrokeState {
-  strokes: Stroke[];
-  history: Stroke[][];
-  redo: Stroke[][];
-}
-
-export const emptyStrokeState = (): StrokeState => ({
-  strokes: [],
-  history: [],
-  redo: [],
-});
-
-/** Commit a finished stroke. Any pending redo history is discarded, matching
- * the usual undo/redo contract (a new edit forks the timeline). */
-export function commitStroke(state: StrokeState, stroke: Stroke): StrokeState {
-  return {
-    strokes: [...state.strokes, stroke],
-    history: [...state.history, state.strokes],
-    redo: [],
-  };
-}
-
-export function undo(state: StrokeState): StrokeState {
-  const prev = state.history[state.history.length - 1];
-  if (!prev) return state;
-  return {
-    strokes: prev,
-    history: state.history.slice(0, -1),
-    redo: [...state.redo, state.strokes],
-  };
-}
-
-export function redo(state: StrokeState): StrokeState {
-  const next = state.redo[state.redo.length - 1];
-  if (!next) return state;
-  return {
-    strokes: next,
-    history: [...state.history, state.strokes],
-    redo: state.redo.slice(0, -1),
-  };
-}
-
-/** Squared distance from point (px,py) to segment a-b. */
-function dist2ToSegment(
-  px: number,
-  py: number,
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number
-): number {
-  const dx = bx - ax;
-  const dy = by - ay;
-  const l2 = dx * dx + dy * dy;
-  if (l2 === 0) return (px - ax) ** 2 + (py - ay) ** 2;
-  let t = ((px - ax) * dx + (py - ay) * dy) / l2;
-  t = Math.max(0, Math.min(1, t));
-  const cx = ax + t * dx;
-  const cy = ay + t * dy;
-  return (px - cx) ** 2 + (py - cy) ** 2;
-}
-
-/** Is a point within `radius` logical pixels of any segment of the eraser? */
-function pointHitByEraser(
-  px: number,
-  py: number,
-  eraser: Stroke,
-  radius: number
-): boolean {
-  const r2 = radius * radius;
-  const pts = eraser.points;
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
-    if (dist2ToSegment(px, py, a.x, a.y, b.x, b.y) <= r2) return true;
-  }
-  if (pts.length === 1) {
-    const a = pts[0];
-    const dx = px - a.x;
-    const dy = py - a.y;
-    if (dx * dx + dy * dy <= r2) return true;
-  }
-  return false;
-}
-
-/** Remove the portion of a stroke that falls under the eraser, splitting what
- * remains into one or more contiguous kept pieces. Preserves the original
- * stroke's tool and size. */
-function eraseFromStroke(
-  stroke: Stroke,
-  eraser: Stroke,
-  radius: number
-): Stroke[] {
-  const out: Stroke[] = [];
-  let run: StrokePoint[] = [];
-  for (const p of stroke.points) {
-    if (pointHitByEraser(p.x, p.y, eraser, radius)) {
-      if (run.length) {
-        out.push({ ...stroke, points: run });
-        run = [];
-      }
-    } else {
-      run.push(p);
-    }
-  }
-  if (run.length) out.push({ ...stroke, points: run });
-  return out;
-}
-
-/** Erase all parts of existing strokes that pass under the given eraser stroke.
- * The eraser stroke itself is not stored; only its effect on existing ink is.
- * Radius defaults to the eraser's own size / 2 (diameter = size). */
-export function eraseStroke(
-  state: StrokeState,
-  eraser: Stroke,
-  radius = eraser.size / 2
-): StrokeState {
-  const newStrokes = state.strokes.flatMap(s =>
-    eraseFromStroke(s, eraser, radius)
-  );
-  return {
-    strokes: newStrokes,
-    history: [...state.history, state.strokes],
-    redo: [],
-  };
-}
-
-/** Minimum distance, in page units, between two consecutive stored points.
- * Pointer events fire far denser than the ink needs, and every dropped point is
- * ~40 bytes off the save payload. Two page units is a fifth of a millimetre —
- * the same effective density the old CSS-pixel space got from 1. */
-export const MIN_POINT_DISTANCE = 2;
-
-/** Decimal places kept for coordinates (a tenth of a page unit is a hundredth
- * of a millimetre, well below what any display can resolve) and for pressure. */
-const COORD_DECIMALS = 1;
-const PRESSURE_DECIMALS = 2;
-
-const roundTo = (value: number, decimals: number): number => {
-  const f = 10 ** decimals;
-  return Math.round(value * f) / f;
-};
-
-const cleanPressure = (pressure: number): number =>
-  Number.isFinite(pressure)
-    ? roundTo(Math.min(Math.max(pressure, 0), 1), PRESSURE_DECIMALS)
-    : 0.5;
-
-/** Reduce a freshly drawn stroke to what's worth storing: coordinates rounded
- * to a tenth of a pixel and points closer together than `minDistance` dropped.
- * The first and last points are always kept so the stroke's extent is exact.
- *
- * Applied when a stroke is committed, so the in-memory state, the IndexedDB
- * buffer, and the upload all share the same compact representation. Without
- * this a densely written page serializes to megabytes of JSON. */
-export function simplifyStroke(
-  stroke: Stroke,
-  minDistance = MIN_POINT_DISTANCE
-): Stroke {
-  const pts = stroke.points;
-  const out: StrokePoint[] = [];
-  for (let i = 0; i < pts.length; i++) {
-    const p: StrokePoint = {
-      x: roundTo(pts[i].x, COORD_DECIMALS),
-      y: roundTo(pts[i].y, COORD_DECIMALS),
-      pressure: cleanPressure(pts[i].pressure),
-    };
-    const last = out[out.length - 1];
-    if (last) {
-      const far = Math.hypot(p.x - last.x, p.y - last.y) >= minDistance;
-      // Keep the final point regardless of distance (it defines where the
-      // stroke ends) unless rounding made it an exact duplicate.
-      const isLast = i === pts.length - 1;
-      if (!far && !isLast) continue;
-      if (!far && p.x === last.x && p.y === last.y) continue;
-    }
-    out.push(p);
-  }
-  return { ...stroke, points: out };
-}
-
-export function serializeStrokes(strokes: Stroke[]): string {
-  return JSON.stringify(strokes);
-}
-
-/** Parse strokes JSON defensively — returns [] for anything malformed so a
- * corrupt row can never crash the editor. */
-export function parseStrokes(json: string | null | undefined): Stroke[] {
-  if (!json) return [];
-  let raw: unknown;
-  try {
-    raw = JSON.parse(json);
-  } catch {
-    return [];
-  }
-  return parseStrokeArray(raw);
-}
-
-/** The already-decoded half of `parseStrokes`, so a stroke array nested inside
- * another JSON document doesn't have to be re-stringified to be validated. */
-export function parseStrokeArray(raw: unknown): Stroke[] {
-  if (!Array.isArray(raw)) return [];
-  const out: Stroke[] = [];
-  for (const s of raw) {
-    if (!s || typeof s !== 'object') continue;
-    const points = (s as { points?: unknown }).points;
-    if (!Array.isArray(points)) continue;
-    const clean: StrokePoint[] = [];
-    for (const p of points) {
-      if (!p || typeof p !== 'object') continue;
-      const { x, y, pressure } = p as Record<string, unknown>;
-      if (typeof x === 'number' && typeof y === 'number') {
-        clean.push({
-          x,
-          y,
-          pressure: typeof pressure === 'number' ? pressure : 0.5,
-        });
-      }
-    }
-    if (clean.length > 0) {
-      const rawTool = (s as { tool?: unknown }).tool;
-      const tool: StrokeTool =
-        rawTool === 'highlighter' || rawTool === 'eraser' ? rawTool : 'pen';
-      const rawSize = (s as { size?: unknown }).size;
-      const size =
-        typeof rawSize === 'number' && rawSize > 0
-          ? rawSize
-          : DEFAULT_STROKE_SIZE;
-      out.push({ tool, size, points: clean });
-    }
-  }
-  return out;
-}
 
 export type SwipeDirection = 'next' | 'prev';
 
@@ -319,45 +67,7 @@ export function resolveSwipe(
   return { index: 0, createPage: false };
 }
 
-/** Whether a pointer displacement is a decisive horizontal swipe (used to flip
- * pages with a finger). Must be mostly horizontal and clear the threshold. */
-export function isHorizontalSwipe(
-  dx: number,
-  dy: number,
-  threshold = 60
-): boolean {
-  return Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy);
-}
-
-/** Whether a pointer displacement + duration reads as a deliberate tap rather
- * than a drag. Used for the two-finger-tap eraser toggle: Apple Pencil's
- * double-tap is not exposed to any browser, so an on-canvas gesture is the only
- * way to switch tools without reaching for the toolbar. */
-export function isTap(
-  dx: number,
-  dy: number,
-  durationMs: number,
-  maxMove = 14,
-  maxMs = 320
-): boolean {
-  return Math.hypot(dx, dy) <= maxMove && durationMs <= maxMs;
-}
-
-/** Map pen pressure to a stroke width. Pressure 0 still leaves a visible line;
- * full pressure reaches `base`. Mouse events (no pressure) report 0.5. */
-export function strokeWidth(base: number, pressure: number): number {
-  const p = Number.isFinite(pressure)
-    ? Math.min(Math.max(pressure, 0), 1)
-    : 0.5;
-  return base * (0.35 + 0.65 * p);
-}
-
 // --- Page geometry ---------------------------------------------------------
-
-export interface Size {
-  width: number;
-  height: number;
-}
 
 export interface PageBox {
   /** On-screen size of the page, in CSS pixels. Always in PAGE_ASPECT. */
