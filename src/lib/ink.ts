@@ -32,6 +32,49 @@ export interface Stroke {
    * around it). */
   size: number;
   points: StrokePoint[];
+  /** Absent means "whatever this surface calls ink", which is why it is
+   * optional rather than defaulted at parse time: every stroke written before
+   * there was a colour picker has none, and Paper's default is black while the
+   * newspaper's is blue. Resolving it against the surface's palette at paint
+   * time is what lets both histories keep the colour they were drawn in. */
+  color?: string;
+}
+
+/** What a surface calls ink when a stroke does not say. */
+export interface InkPalette {
+  ink: string;
+  highlight: string;
+  highlightAlpha: number;
+}
+
+/** The colour a stroke is actually painted in. */
+export function strokeColor(stroke: Stroke, palette: InkPalette): string {
+  if (stroke.color) return stroke.color;
+  return stroke.tool === 'highlighter' ? palette.highlight : palette.ink;
+}
+
+/** Offered in the tool panel. Deliberately short: these are picked with a
+ * stylus on a tablet, and a fifth swatch costs a row. */
+export const PEN_COLORS: readonly string[] = [
+  '#111111',
+  '#1756ad',
+  '#c0392b',
+  '#1e8449',
+];
+
+export const HIGHLIGHTER_COLORS: readonly string[] = [
+  '#ffe14d',
+  '#7dffb0',
+  '#ff9ad5',
+  '#8fd3ff',
+];
+
+/** The swatches a tool offers, or none for one that has no colour (the eraser
+ * removes ink rather than laying any down). */
+export function colorsFor(tool: StrokeTool): readonly string[] {
+  if (tool === 'pen') return PEN_COLORS;
+  if (tool === 'highlighter') return HIGHLIGHTER_COLORS;
+  return [];
 }
 
 /** Fallback width when a stored stroke has a missing/invalid size. */
@@ -43,10 +86,15 @@ export interface Size {
 }
 
 /** Diameter, in CSS pixels, of the dot that previews a stroke width in the tool
- * panel. Page units are about twice a CSS pixel, and anything past 18px stops
- * fitting the button. */
-export function sizeDotPx(size: number): number {
-  return Math.min(size / 2, 18);
+ * panel. Anything past 18px stops fitting the button.
+ *
+ * `unitsPerPx` is the surface's own scale: an A4 page unit is about half a CSS
+ * pixel (the default, which is what Paper has always used), while the
+ * newspaper's units are thousandths of a page width and a size-2 pen would
+ * otherwise preview as a 1px speck. `minPx` keeps the smallest width visible
+ * as a dot rather than a dust mote. */
+export function sizeDotPx(size: number, unitsPerPx = 2, minPx = 0): number {
+  return Math.min(Math.max(size / unitsPerPx, minPx), 18);
 }
 
 /** Undo/redo model: the current strokes plus snapshots of previous states.
@@ -280,7 +328,13 @@ export function parseStrokeArray(raw: unknown): Stroke[] {
         typeof rawSize === 'number' && rawSize > 0
           ? rawSize
           : DEFAULT_STROKE_SIZE;
-      out.push({ tool, size, points: clean });
+      const rawColor = (s as { color?: unknown }).color;
+      const color = typeof rawColor === 'string' ? rawColor : undefined;
+      out.push(
+        color
+          ? { tool, size, points: clean, color }
+          : { tool, size, points: clean }
+      );
     }
   }
   return out;

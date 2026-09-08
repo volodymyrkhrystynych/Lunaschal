@@ -13,10 +13,12 @@ import {
   serializeBuffer,
   serializeStrokes,
   simplifyStroke,
+  strokeColor,
   strokeWidth,
   toPageSpace,
   toPageSpaceStrokes,
   undo as undoState,
+  type InkPalette,
   type Stroke,
   type StrokePoint,
   type StrokeState,
@@ -26,9 +28,13 @@ import {
 import type { PageImage } from '@/lib/paperImages';
 
 const PAGE_BG = '#ffffff';
-const INK = '#111111';
-const HIGHLIGHT = '#ffe14d';
-const HIGHLIGHT_ALPHA = 0.4;
+/** What this surface calls ink when a stroke does not say — which is every
+ * stroke drawn before there was a colour picker. */
+const PAPER_PALETTE: InkPalette = {
+  ink: '#111111',
+  highlight: '#ffe14d',
+  highlightAlpha: 0.4,
+};
 const SWIPE_THRESHOLD = 60;
 
 // Stylus hardware buttons, as reported by PointerEvent. The inverted "eraser
@@ -83,6 +89,9 @@ interface PaperCanvasProps {
   tool: StrokeTool;
   /** Base width for the active tool, in logical pixels. */
   size: number;
+  /** Colour for new strokes. Stored on each stroke, so changing the pen colour
+   * never restyles ink already on the page. */
+  color?: string;
   onSwipe: (direction: SwipeDirection) => void;
   /** Two-finger tap on the page — toggles the eraser (see isTap). */
   onToggleEraser?: () => void;
@@ -103,6 +112,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       initialSize,
       tool,
       size,
+      color,
       onSwipe,
       onToggleEraser,
       onStateChange,
@@ -119,6 +129,8 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     toolRef.current = tool;
     const sizeRef = useRef(size);
     sizeRef.current = size;
+    const colorRef = useRef(color);
+    colorRef.current = color;
     // Read through a ref so the paint helpers never close over a stale list.
     const imagesRef = useRef<PageImage[]>(images ?? []);
     imagesRef.current = images ?? [];
@@ -175,9 +187,6 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       return c.clientWidth / PAGE_WIDTH;
     };
 
-    const paintOf = (tool: StrokeTool) =>
-      tool === 'eraser' ? PAGE_BG : tool === 'highlighter' ? HIGHLIGHT : INK;
-
     // Draw a full stroke. Pen tapers with pen pressure per segment; the eraser
     // paints the page background at a constant width; the highlighter is one
     // translucent flat pass (a single path so overlapping segments don't stack
@@ -185,7 +194,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
     const drawStroke = (ctx: CanvasRenderingContext2D, stroke: Stroke) => {
       const s = scale();
       const pts = stroke.points;
-      const paint = paintOf(stroke.tool);
+      const paint = strokeColor(stroke, PAPER_PALETTE);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.strokeStyle = paint;
@@ -193,7 +202,7 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
 
       if (stroke.tool === 'highlighter') {
         ctx.save();
-        ctx.globalAlpha = HIGHLIGHT_ALPHA;
+        ctx.globalAlpha = PAPER_PALETTE.highlightAlpha;
         ctx.lineWidth = stroke.size * s;
         ctx.beginPath();
         ctx.moveTo(pts[0].x * s, pts[0].y * s);
@@ -481,10 +490,17 @@ export const PaperCanvas = forwardRef<PaperCanvasHandle, PaperCanvasProps>(
       }
       // Pen / mouse: draw (or erase).
       canvasRef.current?.setPointerCapture(native.pointerId);
+      const drawn = penButtonTool(native) ?? toolRef.current;
       const stroke: Stroke = {
-        tool: penButtonTool(native) ?? toolRef.current,
+        tool: drawn,
         size: sizeRef.current,
         points: [toLogical(native)],
+        // The eraser removes ink rather than laying any down, so it carries no
+        // colour — and neither does a stroke left at the surface's default,
+        // which is what keeps every pre-picker page rendering as it always has.
+        ...(drawn !== 'eraser' && colorRef.current
+          ? { color: colorRef.current }
+          : {}),
       };
       drawingRef.current = { pointerId: native.pointerId, stroke };
       if (stroke.tool === 'eraser') {

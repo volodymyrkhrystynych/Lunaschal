@@ -32,8 +32,10 @@ import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval';
 import { api, type PaperPageContent } from '../../hooks/api';
 import {
   fitPageBox,
+  HIGHLIGHTER_COLORS,
   PAGE_WIDTH,
   parseStrokes,
+  PEN_COLORS,
   resolveSwipe,
   saveStatusLabel,
   TOOL_SIZES,
@@ -169,6 +171,14 @@ export function PaperEditor({
     eraser: 1,
   });
   const currentSize = TOOL_SIZES[tool][sizeIndex[tool]];
+  // ...and its own colour, for the same reason: reaching for the highlighter
+  // should not silently change what the pen writes in.
+  const [color, setColor] = useState<Record<StrokeTool, string>>({
+    pen: PEN_COLORS[0],
+    highlighter: HIGHLIGHTER_COLORS[0],
+    eraser: '',
+  });
+  const currentColor = color[tool];
   const [canvasState, setCanvasState] = useState({
     canUndo: false,
     canRedo: false,
@@ -1401,6 +1411,7 @@ export function PaperEditor({
               initialSize={initialSize}
               tool={tool}
               size={currentSize}
+              color={currentColor}
               onSwipe={navigate}
               onToggleEraser={toggleEraser}
               onStateChange={setCanvasState}
@@ -1456,6 +1467,8 @@ export function PaperEditor({
           tool={tool}
           onToolChange={setTool}
           sizeIndex={sizeIndex[tool]}
+          color={currentColor}
+          onColorChange={next => setColor(c => ({ ...c, [tool]: next }))}
           onSizeIndexChange={i =>
             setSizeIndex(prev => ({ ...prev, [tool]: i }))
           }

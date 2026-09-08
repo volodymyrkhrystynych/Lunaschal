@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, waitFor } from '@testing-library/react';
 import { createRef } from 'react';
 import { PaperCanvas, type PaperCanvasHandle } from './PaperCanvas';
 import { PAGE_HEIGHT, PAGE_WIDTH, type Stroke } from '@/lib/paper';
@@ -58,7 +58,10 @@ const stroke = (x: number): Stroke => ({
   ],
 });
 
-function renderCanvas(initialStrokes: Stroke[]) {
+function renderCanvas(
+  initialStrokes: Stroke[],
+  over: Partial<React.ComponentProps<typeof PaperCanvas>> = {}
+) {
   const ref = createRef<PaperCanvasHandle>();
   const view = render(
     <PaperCanvas
@@ -69,9 +72,37 @@ function renderCanvas(initialStrokes: Stroke[]) {
       tool="pen"
       size={4}
       onSwipe={() => {}}
+      {...over}
     />
   );
   return { ...view, ref };
+}
+
+/** Draw one stroke with a pen, the way a stylus would. */
+function drawOn(canvas: Element, over: Record<string, unknown> = {}) {
+  const at = (name: string, x: number, y: number) => {
+    const event = new Event(name, { bubbles: true });
+    Object.assign(event, {
+      pointerType: 'pen',
+      pointerId: 7,
+      isPrimary: true,
+      button: 0,
+      buttons: 1,
+      pressure: 0.5,
+      clientX: x,
+      clientY: y,
+      ...over,
+    });
+    fireEvent(canvas, event);
+  };
+  at('pointerdown', 10, 10);
+  at('pointermove', 40, 60);
+  at('pointerup', 40, 60);
+}
+
+async function savedStrokes(ref: { current: PaperCanvasHandle | null }) {
+  const data = await ref.current!.getSaveData();
+  return JSON.parse(data!.strokes) as Stroke[];
 }
 
 describe('a picture changing elsewhere never wipes a stroke in progress', () => {
@@ -224,5 +255,42 @@ describe('adopting content that arrives after mount', () => {
     const after = await ref.current!.getSaveData();
     expect(after).not.toBeNull();
     expect(after!.strokes).toBe(dirty!.strokes);
+  });
+});
+
+describe('the colour a stroke is drawn in', () => {
+  it('is stored on the stroke, not on the page', async () => {
+    // Colour has to travel with the stroke: changing the pen colour must
+    // restyle nothing already written, and a page holds strokes of several
+    // colours at once.
+    const { container, ref } = renderCanvas([], { color: '#c0392b' });
+    await waitFor(() => expect(ref.current).toBeTruthy());
+    drawOn(container.querySelector('canvas')!);
+    const [drawn] = await savedStrokes(ref);
+    expect(drawn.color).toBe('#c0392b');
+  });
+
+  it('is left off a stroke drawn at the surface default', async () => {
+    // Absent means "whatever this surface calls ink". Every stroke written
+    // before there was a picker has no colour, and writing one in now would
+    // make those two states indistinguishable.
+    const { container, ref } = renderCanvas([]);
+    await waitFor(() => expect(ref.current).toBeTruthy());
+    drawOn(container.querySelector('canvas')!);
+    const [drawn] = await savedStrokes(ref);
+    expect(drawn.color).toBeUndefined();
+  });
+
+  it('is left off an eraser stroke, which lays down no ink', async () => {
+    const { container, ref } = renderCanvas([stroke(100)], {
+      tool: 'eraser',
+      size: 60,
+      color: '#c0392b',
+    });
+    await waitFor(() => expect(ref.current).toBeTruthy());
+    drawOn(container.querySelector('canvas')!);
+    // The eraser is consumed rather than stored, so nothing it touched can
+    // have picked up a colour from it.
+    for (const s of await savedStrokes(ref)) expect(s.color).toBeUndefined();
   });
 });
