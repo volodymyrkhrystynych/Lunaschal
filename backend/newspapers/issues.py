@@ -99,6 +99,23 @@ def public_issue(row):
             'pdfUrl': f"/api/newspapers/issues/{row['date']}/pdf"}
 
 
+def marked_pages(markup):
+    """Page numbers carrying at least one stroke, for the Journal feed's stat.
+
+    Reads the stored markup rather than a counter column: the count is a pure
+    function of the strokes, and a column would be one more thing every write
+    path had to remember to keep true.
+    """
+    try:
+        strokes = json.loads(markup or '[]')
+    except ValueError:
+        return set()
+    if not isinstance(strokes, list):
+        return set()
+    return {s['page'] for s in strokes
+            if isinstance(s, dict) and type(s.get('page')) is int}
+
+
 def validate_markup(data, pages):
     if not isinstance(data, list) or len(data) > 10000:
         raise ValueError('Invalid markup')

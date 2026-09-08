@@ -11,17 +11,18 @@ def archive(monkeypatch, tmp_path):
     monkeypatch.setenv('NEWSPAPERS_ARCHIVE_ROOT', str(tmp_path / 'archive'))
 
 
-def pdf():
+def pdf(pages=1):
     output = BytesIO()
     writer = PdfWriter()
-    writer.add_blank_page(width=612, height=792)
+    for _ in range(pages):
+        writer.add_blank_page(width=612, height=792)
     writer.write(output)
     output.seek(0)
     return output
 
 
-def upload(client, date='2026-09-01'):
-    return client.post(f'/api/newspapers/issues/{date}', data={'file': (pdf(), 'star.pdf')})
+def upload(client, date='2026-09-01', pages=1):
+    return client.post(f'/api/newspapers/issues/{date}', data={'file': (pdf(pages), 'star.pdf')})
 
 
 def test_archive_immutable_and_range_requests(client):
@@ -101,3 +102,35 @@ def test_passwordless_encryption_is_normalized_but_passwords_are_rejected(client
         assert not stored.is_encrypted
         assert len(stored.pages) == 1
         assert float(stored.pages[0].mediabox.width) == 612
+
+
+def test_journal_feed_counts_marked_pages_for_every_archived_issue(client):
+    """The Journal card carries an issue whether it was written on or not, and
+    its stat counts pages touched, not strokes drawn."""
+    assert upload(client, '2026-09-01', pages=4).status_code == 201
+    assert upload(client, '2026-09-02', pages=3).status_code == 201
+    strokes = [
+        {'page': 1, 'tool': 'pen', 'points': [[0.1, 0.2], [0.3, 0.4]]},
+        {'page': 1, 'tool': 'highlight', 'points': [[0.5, 0.5], [0.6, 0.5]]},
+        {'page': 3, 'tool': 'pen', 'points': [[0.2, 0.2]]},
+    ]
+    assert client.put('/api/newspapers/issues/2026-09-01/markup',
+                      json={'revision': 0, 'strokes': strokes}).status_code == 200
+    feed = client.get('/api/newspapers/issues/journal').json
+    assert [(item['date'], item['markedPages'], item['pageCount']) for item in feed] == [
+        ('2026-09-02', 0, 3),
+        ('2026-09-01', 2, 4),
+    ]
+    assert feed[1]['pdfUrl'] == '/api/newspapers/issues/2026-09-01/pdf'
+    assert feed[0]['archivedAt'].startswith('20')
+
+
+def test_journal_feed_is_empty_before_anything_is_archived(client):
+    assert client.get('/api/newspapers/issues/journal').json == []
+
+
+@pytest.mark.parametrize('markup', ['', 'not json', '{"page": 1}', '[{"tool": "pen"}]', '[3]'])
+def test_marked_pages_survives_unreadable_markup(markup):
+    """The count is derived on read, so it must never be the thing that 500s the
+    journal feed — every row predating the column defaults to '[]'."""
+    assert issues.marked_pages(markup) == set()

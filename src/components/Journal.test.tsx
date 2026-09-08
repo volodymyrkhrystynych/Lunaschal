@@ -67,6 +67,7 @@ vi.mock('../hooks/api', () => ({
       },
     },
     curatedTags: { list: vi.fn().mockResolvedValue([]) },
+    newspapers: { journalIssues: vi.fn().mockResolvedValue([]) },
     transcriptions: { list: vi.fn().mockResolvedValue([]), delete: vi.fn() },
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
     settings: { get: vi.fn().mockResolvedValue({}) },
@@ -1111,5 +1112,40 @@ describe('an entry that was recorded as an idea', () => {
     await screen.findByText('A grid of habits in the day view.');
 
     await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+  });
+});
+
+describe('archived newspapers in the feed', () => {
+  const issue = {
+    date: '2026-07-02',
+    archivedAt: '2026-07-02T06:00:00Z',
+    byteSize: 1000,
+    pageCount: 40,
+    markedPages: 0,
+    pdfUrl: '/api/newspapers/issues/2026-07-02/pdf',
+  };
+
+  it('shows how much of the paper has been marked up', async () => {
+    vi.mocked(api.newspapers.journalIssues).mockResolvedValue([
+      { ...issue, markedPages: 7 },
+    ]);
+    renderJournal();
+    expect(await screen.findByText(/7 of 40 pages marked up/)).toBeTruthy();
+  });
+
+  it('still lists an issue that was never opened', async () => {
+    vi.mocked(api.newspapers.journalIssues).mockResolvedValue([issue]);
+    renderJournal();
+    expect(await screen.findByText(/40 pages · not marked up/)).toBeTruthy();
+  });
+
+  it('keeps the card out of a search, where the feed is entries only', async () => {
+    vi.mocked(api.newspapers.journalIssues).mockResolvedValue([issue]);
+    renderJournal();
+    await screen.findByText(/not marked up/);
+    fireEvent.change(screen.getByPlaceholderText(/Search/i), {
+      target: { value: 'first' },
+    });
+    await waitFor(() => expect(screen.queryByText(/not marked up/)).toBeNull());
   });
 });

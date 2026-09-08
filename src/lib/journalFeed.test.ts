@@ -7,6 +7,7 @@ import type {
   JournalPaper,
   FoodJournalItem,
   TaskEvent,
+  JournalNewspaper,
 } from '../hooks/api';
 
 function entry(id: string, createdAt: string): JournalEntry {
@@ -86,12 +87,26 @@ function taskEvent(
   };
 }
 
+// The feed has no id of its own — one issue per date is the whole table's
+// unique key, so the date is the id.
+function newspaper(date: string, archivedAt: string): JournalNewspaper {
+  return {
+    date,
+    archivedAt,
+    byteSize: 1000,
+    pageCount: 40,
+    markedPages: 3,
+    pdfUrl: `/api/newspapers/issues/${date}/pdf`,
+  };
+}
+
 function idOf(i: FeedItem): string {
   if (i.kind === 'entry') return i.entry.id;
   if (i.kind === 'transcription') return i.transcription.id;
   if (i.kind === 'paper') return i.paper.id;
   if (i.kind === 'food') return i.food.id;
   if (i.kind === 'taskEvent') return i.taskEvent.id;
+  if (i.kind === 'newspaper') return i.newspaper.date;
   return i.conversation.id;
 }
 
@@ -266,5 +281,52 @@ describe('buildFeed', () => {
     const events = [taskEvent('k1', '2026-07-08T12:00:00')];
     const feed = buildFeed(entries, [], [], [], [], events);
     expect(feed.map(i => i.kind)).toEqual(['entry', 'taskEvent']);
+  });
+
+  it('interleaves newspapers by archivedAt across all seven sources', () => {
+    const entries = [
+      entry('e1', '2026-07-08T12:00:00'),
+      entry('e2', '2026-07-04T12:00:00'),
+    ];
+    const papers = [
+      newspaper('2026-07-07', '2026-07-07T06:00:00'),
+      newspaper('2026-07-03', '2026-07-03T06:00:00'),
+    ];
+    const feed = buildFeed(entries, [], [], [], [], [], papers);
+    expect(feed.map(idOf)).toEqual(['e1', '2026-07-07', 'e2', '2026-07-03']);
+  });
+
+  it('keeps newspaper items non-selectable (no entryIndex)', () => {
+    const papers = [newspaper('2026-07-07', '2026-07-07T06:00:00')];
+    const feed = buildFeed([], [], [], [], [], [], papers);
+    expect(feed).toEqual([{ kind: 'newspaper', newspaper: papers[0] }]);
+  });
+
+  it('lets entries win a tie against a newspaper', () => {
+    const entries = [entry('e1', '2026-07-08T12:00:00')];
+    const papers = [newspaper('2026-07-08', '2026-07-08T12:00:00')];
+    const feed = buildFeed(entries, [], [], [], [], [], papers);
+    expect(feed.map(i => i.kind)).toEqual(['entry', 'newspaper']);
+  });
+
+  it('orders every source against every other in one pass', () => {
+    const feed = buildFeed(
+      [entry('e1', '2026-07-08T09:00:00')],
+      [transcription('t1', '2026-07-08T08:00:00')],
+      [conversation('c1', '2026-07-08T07:00:00')],
+      [paper('p1', '2026-07-08T06:00:00')],
+      [food('f1', '2026-07-08T05:00:00')],
+      [taskEvent('k1', '2026-07-08T04:00:00')],
+      [newspaper('2026-07-08', '2026-07-08T03:00:00')]
+    );
+    expect(feed.map(idOf)).toEqual([
+      'e1',
+      't1',
+      'c1',
+      'p1',
+      'f1',
+      'k1',
+      '2026-07-08',
+    ]);
   });
 });

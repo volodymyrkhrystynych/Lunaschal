@@ -467,15 +467,23 @@ def seed_newspapers(db):
     path = issue_path(today)
     path.parent.mkdir(parents=True, exist_ok=True)
     writer = PdfWriter()
-    writer.add_blank_page(width=612, height=792)
+    for _ in range(4):
+        writer.add_blank_page(width=612, height=792)
     writer.write(str(path))
     db.execute(
         "INSERT INTO newspaper_downloads (id, date, status, created_at, updated_at) VALUES (?, ?, 'complete', ?, ?)",
         (new_id(), today, ts(0), ts(0)),
     )
+    # Marked on two of its four pages: the Journal feed's card reads that stat
+    # off the markup, so an unmarked issue would demo the empty half only.
+    markup = json.dumps([
+        {'page': 1, 'tool': 'highlight', 'points': [[0.12, 0.30], [0.78, 0.30]]},
+        {'page': 3, 'tool': 'pen', 'points': [[0.20, 0.55], [0.35, 0.62], [0.48, 0.51]]},
+    ], separators=(',', ':'))
     db.execute(
-        'INSERT INTO newspaper_issues (id, date, pdf_path, byte_size, page_count, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        (new_id(), today, str(path), path.stat().st_size, 1, ts(0)),
+        'INSERT INTO newspaper_issues (id, date, pdf_path, byte_size, page_count, markup, revision, created_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        (new_id(), today, str(path), path.stat().st_size, 4, markup, 1, ts(0)),
     )
 
 

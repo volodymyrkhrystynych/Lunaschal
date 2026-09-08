@@ -1,4 +1,12 @@
-import { useState, useEffect, useMemo, useRef, memo } from 'react';
+import {
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  memo,
+  lazy,
+  Suspense,
+} from 'react';
 import { useDraftState } from '@/hooks/useDraftState';
 import {
   useQuery,
@@ -39,6 +47,7 @@ import { MessageMarkdown } from './MessageMarkdown';
 import type {
   DatedConversation,
   JournalEntry,
+  JournalNewspaper,
   JournalPaper,
   JournalVoiceDraft,
   FoodJournalItem,
@@ -57,6 +66,16 @@ import { useClipStage } from '../hooks/useClipStage';
 import { ClipStrip } from './ClipRecorder';
 import { MealClips, visualMedia } from './Food/MealClips';
 import { clipButtonLabel } from '../lib/clipStage';
+
+// Opened straight from the feed rather than by sending the user to the
+// Newspapers tab to find the day again — the reader is a full-screen overlay
+// with no tab of its own, so the journal can host it as well as anything.
+// Lazy because it pulls in pdf.js, which the journal otherwise never loads.
+const NewspaperReader = lazy(() =>
+  import('./NewspaperReader').then(module => ({
+    default: module.NewspaperReader,
+  }))
+);
 
 interface JournalProps {
   /** Navigate to the fanfic reader (chip on entries linked to a fic chapter). */
@@ -269,6 +288,17 @@ export function Journal({
     refetchInterval: q =>
       hasRunningMealTranscript(q.state.data) ? 4000 : false,
   });
+
+  // Archived newspaper issues interleave too, each a link into the reader.
+  const newspapersVisible = !searchQuery && !selectedCuratedTagId;
+  const { data: journalNewspapers } = useQuery({
+    queryKey: ['newspapers', 'journal'],
+    queryFn: () => api.newspapers.journalIssues(),
+    enabled: newspapersVisible,
+  });
+  const [readingIssue, setReadingIssue] = useState<JournalNewspaper | null>(
+    null
+  );
 
   // Task completions/deletions surface as small notifications in the feed.
   const taskEventsVisible = !searchQuery && !selectedCuratedTagId;
@@ -568,7 +598,8 @@ export function Journal({
         conversationsVisible ? (chatConversations ?? []) : [],
         papersVisible ? (journalPapers ?? []) : [],
         foodVisible ? (journalFood ?? []) : [],
-        taskEventsVisible ? (taskEvents ?? []) : []
+        taskEventsVisible ? (taskEvents ?? []) : [],
+        newspapersVisible ? (journalNewspapers ?? []) : []
       ),
     [
       entries,
@@ -582,6 +613,8 @@ export function Journal({
       journalFood,
       taskEventsVisible,
       taskEvents,
+      newspapersVisible,
+      journalNewspapers,
     ]
   );
   // Calendar events whose window covers a run of feedItems, rendered as a
@@ -619,6 +652,15 @@ export function Journal({
     }
     if (item.kind === 'food') {
       return <JournalFoodItem key={item.food.id} food={item.food} />;
+    }
+    if (item.kind === 'newspaper') {
+      return (
+        <JournalNewspaperItem
+          key={`newspaper-${item.newspaper.date}`}
+          newspaper={item.newspaper}
+          onOpen={() => setReadingIssue(item.newspaper)}
+        />
+      );
     }
     if (item.kind === 'taskEvent') {
       return (
@@ -1048,6 +1090,22 @@ export function Journal({
           </div>
         )}
       </div>
+
+      {readingIssue && (
+        <Suspense fallback={null}>
+          <NewspaperReader
+            issue={readingIssue}
+            onClose={() => {
+              setReadingIssue(null);
+              // The marked-page count on the card is now stale by exactly the
+              // marks just made.
+              void queryClient.invalidateQueries({
+                queryKey: ['newspapers', 'journal'],
+              });
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -1574,6 +1632,42 @@ const JournalPaperItem = memo(function JournalPaperItem({
 
       <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
     </div>
+  );
+});
+
+// An archived newspaper issue in the journal feed: the day's paper, how much of
+// it has been written on, and a way back into the reader. Every archived issue
+// gets one, marked or not — the feed is the record of the day, and "the paper
+// arrived and I never opened it" is part of that record.
+const JournalNewspaperItem = memo(function JournalNewspaperItem({
+  newspaper,
+  onOpen,
+}: {
+  newspaper: JournalNewspaper;
+  onOpen: () => void;
+}) {
+  const dayLabel = formatDay(newspaper.date + 'T00:00:00');
+  const marked = newspaper.markedPages;
+  return (
+    <button
+      onClick={onOpen}
+      className="w-full text-left p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5 hover:border-[var(--color-primary)] transition-colors"
+    >
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[var(--color-text)] truncate">
+          📰 Toronto Star — {dayLabel}
+        </span>
+        <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+          {marked
+            ? `${marked} of ${newspaper.pageCount} page${
+                newspaper.pageCount === 1 ? '' : 's'
+              } marked up`
+            : `${newspaper.pageCount} page${
+                newspaper.pageCount === 1 ? '' : 's'
+              } · not marked up`}
+        </span>
+      </div>
+    </button>
   );
 });
 
