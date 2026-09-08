@@ -53,8 +53,29 @@ export function installBrowserDiagnostics() {
     recordBrowserSignal('pagehide', `persisted=${e.persisted}`);
   const onVisibility = () =>
     recordBrowserSignal('visibility', document.visibilityState);
-  const onError = () => recordBrowserSignal('error');
-  const onRejection = () => recordBrowserSignal('unhandledrejection');
+  // The stored entry stays detail-free (see the note at the top of this file),
+  // but the failure is *printed* with its stack. QtWebEngine -- what the
+  // desktop window runs -- reports an uncaught error to its log as the bare
+  // message, `js: Uncaught TypeError: ...`, with no file, line or stack of its
+  // own; against a minified bundle that names nothing at all. The console is
+  // the shell's log, so one extra line there is the difference between a
+  // reproducible crash and an unfindable one.
+  const onError = (e: ErrorEvent) => {
+    recordBrowserSignal('error');
+    const stack = (e.error as Error | undefined)?.stack;
+    console.error(
+      '[uncaught]',
+      stack ?? `${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`
+    );
+  };
+  const onRejection = (e: PromiseRejectionEvent) => {
+    recordBrowserSignal('unhandledrejection');
+    const reason: unknown = e.reason;
+    console.error(
+      '[unhandled rejection]',
+      (reason as Error | undefined)?.stack ?? String(reason)
+    );
+  };
   window.addEventListener('pageshow', onShow);
   window.addEventListener('pagehide', onHide);
   document.addEventListener('visibilitychange', onVisibility);
