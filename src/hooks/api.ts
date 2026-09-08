@@ -2553,6 +2553,38 @@ async function send<T>(
   return r.json();
 }
 
+/** `send`, but the rejection carries the HTTP status.
+ *
+ * `send` throws a plain `Error`, so a caller cannot tell *which* refusal it
+ * got. That is deliberate for the offline queue — `mutationDefaults`'s
+ * `isTerminal` treats an `ApiError` 4xx as permanent and drops the mutation, so
+ * promoting every JSON write to `ApiError` would silently change what the queue
+ * retries. This is the opt-in for the routes that genuinely need the status,
+ * and only those. */
+async function sendWithStatus<T>(
+  method: string,
+  url: string,
+  body?: unknown,
+  timeoutMs = WRITE_TIMEOUT_MS
+): Promise<T> {
+  const r = await fetchWithTimeout(
+    url,
+    {
+      method,
+      credentials: 'include',
+      headers:
+        body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    },
+    timeoutMs
+  );
+  if (!r.ok) {
+    const b = await r.json().catch(() => ({}));
+    throw new ApiError(b.error || `HTTP ${r.status}`, r.status);
+  }
+  return r.json();
+}
+
 const post = <T>(url: string, body?: unknown) => send<T>('POST', url, body);
 const patch = <T>(url: string, body: unknown) => send<T>('PATCH', url, body);
 const put = <T>(url: string, body: unknown) => send<T>('PUT', url, body);
@@ -4171,8 +4203,16 @@ export const api = {
       get<JournalNewspaper[]>('/api/newspapers/issues/journal'),
     markup: (date: string) =>
       get<NewspaperMarkup>(`/api/newspapers/issues/${date}/markup`),
+    // Status-carrying on purpose: a 409 here means another reader has moved the
+    // markup on, and the reader has to stop re-sending its stale revision and
+    // offer the server copy. Anything less than the status cannot tell that
+    // apart from a transient failure.
     saveMarkup: (date: string, body: NewspaperMarkup) =>
-      put<{ revision: number }>(`/api/newspapers/issues/${date}/markup`, body),
+      sendWithStatus<{ revision: number }>(
+        'PUT',
+        `/api/newspapers/issues/${date}/markup`,
+        body
+      ),
     getByDate: (date: string) =>
       get<FrontPage[]>(`/api/newspapers/frontpages/${date}`),
     sync: () => post<SyncResult[]>('/api/newspapers/sync'),

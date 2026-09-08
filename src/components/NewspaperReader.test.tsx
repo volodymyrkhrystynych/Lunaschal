@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { api } from '../hooks/api';
+import { ApiError, api } from '../hooks/api';
 import { NewspaperReader } from './NewspaperReader';
 
 vi.mock('pdfjs-dist', () => ({
@@ -12,7 +12,15 @@ vi.mock('pdfjs-dist', () => ({
   }),
 }));
 vi.mock('../hooks/api', () => ({
-  ApiError: class extends Error {},
+  // Carries a status, like the real one: the reader has to tell a 409 (another
+  // reader moved the markup on) from any other refusal, and a bare Error cannot.
+  ApiError: class extends Error {
+    status: number;
+    constructor(message: string, status: number) {
+      super(message);
+      this.status = status;
+    }
+  },
   api: { newspapers: { markup: vi.fn(), saveMarkup: vi.fn() } },
 }));
 
@@ -247,6 +255,36 @@ describe('newspaper markup recovery', () => {
         revision: 3,
         strokes: [],
       })
+    );
+  });
+});
+
+describe('a conflicting save', () => {
+  // The server answers 409 when another reader has already moved the markup on
+  // (newspaper_issues.py's compare-and-swap on `revision`). Until this was
+  // fixed the reader could not see that: `saveMarkup` went through the plain
+  // `send`, which throws an `Error` with no status, so `e instanceof ApiError`
+  // was never true. The conflict flag stayed false, "Use server copy" never
+  // appeared, and the 1.5 s autosave re-sent the same stale revision forever.
+  it('offers the server copy and stops re-sending the stale revision', async () => {
+    vi.mocked(api.newspapers.saveMarkup).mockRejectedValue(
+      new ApiError('Markup changed in another reader.', 409)
+    );
+    const { pointer } = await openPage();
+    fireEvent.click(screen.getByText('Pen'));
+    pointer('pointerdown', 'pen', 10, 20);
+    pointer('pointerup', 'pen', 10, 20);
+
+    fireEvent.click(screen.getByText('Save now'));
+    await screen.findByText('Use server copy');
+    const attempts = vi.mocked(api.newspapers.saveMarkup).mock.calls.length;
+
+    // Every later save is refused before it reaches the network, so the loop
+    // cannot keep hammering a request the server has already decided on.
+    fireEvent.click(screen.getByText('Save now'));
+    fireEvent.click(screen.getByText('Save now'));
+    await waitFor(() =>
+      expect(api.newspapers.saveMarkup).toHaveBeenCalledTimes(attempts)
     );
   });
 });
