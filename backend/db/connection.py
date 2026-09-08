@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from ulid import ULID
+
 _DB_PATH = os.environ.get('DATABASE_URL', './data/lunaschal.db')
 _conn: sqlite3.Connection | None = None
 
@@ -208,6 +210,7 @@ def init_db() -> None:
     _reset_stale_message_runs(db)
     _reset_stale_voice_drafts(db)
     _reset_stale_llm_jobs(db)
+    _requeue_jobs_lost_to_a_pause(db)
 
 
 def _ensure_inference_pause_settings(db: sqlite3.Connection) -> None:
@@ -236,6 +239,63 @@ def _reset_stale_llm_jobs(db: sqlite3.Connection) -> None:
     """
     db.execute("UPDATE llm_jobs SET status='pending', started_at=NULL"
                " WHERE status='running'")
+    db.commit()
+
+
+def _requeue_jobs_lost_to_a_pause(db: sqlite3.Connection) -> None:
+    """Put back the enrichment jobs that a paused GPU silently threw away.
+
+    `InferencePaused` is an ordinary `Exception`, and the feature functions the
+    job worker calls wrap their model call in `except Exception` so a failed
+    enrichment cannot break the row it was enriching. So a pause was recorded as
+    a permanent failure on the attachment, the handler returned normally, and
+    the worker marked the job `done` — leaving nothing pending to run when the
+    switch went back on. backend/ai/service.py's `deferred_reason` stops that
+    happening again; this repairs the rows it already happened to.
+
+    Matched on the wording rather than on a status alone, so an attachment that
+    failed for a real reason keeps its error and its Transcribe button. Latched,
+    because it is a repair of a finite historical set and not a sweep: the fixed
+    worker cannot produce another one.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    if 'paused_jobs_requeued' in cols:
+        return
+    db.execute('ALTER TABLE settings ADD COLUMN paused_jobs_requeued'
+               ' INTEGER NOT NULL DEFAULT 0')
+
+    now = int(time.time())
+    for status_col, error_col, kind in (
+        ('transcript_status', 'transcript_error', 'journal.transcribe_attachment'),
+        ('description_status', 'description_error', 'journal.describe_audio'),
+    ):
+        rows = db.execute(
+            'SELECT id, entry_id, kind, path, name FROM journal_attachments'
+            f' WHERE {status_col} = ? AND {error_col} LIKE ?',
+            ('error', 'GPU inference is paused%'),
+        ).fetchall()
+        for row in rows:
+            payload = {'entry_id': row['entry_id'], 'path': row['path'],
+                       'name': row['name']}
+            if kind == 'journal.transcribe_attachment':
+                # `into_entry` is False on the repair for the same reason the
+                # Transcribe button leaves it False: appending a caption to an
+                # entry is something the original upload decides, and doing it
+                # now would paste text into an entry the user has since read.
+                payload.update({'kind': row['kind'], 'into_entry': False})
+            db.execute(
+                'INSERT OR IGNORE INTO llm_jobs (id, kind, target_id, payload,'
+                " status, created_at) VALUES (?,?,?,?,'pending',?)",
+                (str(ULID()), kind, row['id'], json.dumps(payload), now),
+            )
+            db.execute(
+                f'UPDATE journal_attachments SET {status_col}=?, {error_col}=NULL'
+                ' WHERE id=?',
+                ('idle', row['id']),
+            )
+        if rows:
+            print(f'Requeued {len(rows)} {kind} job(s) lost to a paused GPU')
+
     db.commit()
 
 

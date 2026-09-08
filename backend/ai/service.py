@@ -274,6 +274,50 @@ def current_preemptible() -> bool:
     return getattr(_local, 'preemptible', True)
 
 
+# ------------------------------------------------------- deferral, out of band
+#
+# `InferencePaused` and `Preempted` mean "run this again later", not "this
+# failed" — but they are ordinary `Exception`s travelling up through code
+# written before either of them existed. Thirty-odd feature functions wrap their
+# model call in `except Exception` on purpose, so that a background enrichment
+# can never break the row it was enriching, and every one of them turns the
+# retry signal into a permanent error. That is not hypothetical: it is how an
+# evening of paused screenshot captions came to be recorded as failures while
+# their job rows were marked `done`, leaving nothing to run at resume.
+#
+# Deriving the two from `BaseException`, the way `KeyboardInterrupt` is, would
+# fix all thirty at a stroke and is the wrong fix. Flask's
+# `full_dispatch_request` catches `Exception` and nothing wider, so the
+# `errorhandler` for this class registered in backend/app.py would stop firing,
+# and every paused interactive route would answer a Werkzeug 500 instead of the
+# 503 carrying the flag the UI reads to offer Resume.
+#
+# So the signal travels *beside* the exception rather than as it. A thread that
+# was refused a slot leaves a mark here, and a caller that swallows the
+# exception cannot swallow the mark. backend/ai/jobs.py reads it after a handler
+# returns and requeues on it, which is what makes a job survive being handled
+# defensively. Nothing else should need this: raising is still the contract, and
+# this is the backstop for callers that predate it.
+
+
+def _mark_deferred(reason: str) -> None:
+    _local.deferred = reason
+
+
+def deferred_reason() -> str | None:
+    """Why this thread's last model call did not run, or None if it did.
+
+    `'paused'` or `'preempted'`. Read after a call that returned normally, to
+    find out whether it actually returned an answer.
+    """
+    return getattr(_local, 'deferred', None)
+
+
+def clear_deferral() -> None:
+    """Forget any mark, before running work whose outcome is about to be judged."""
+    _local.deferred = None
+
+
 @contextmanager
 def background(*, preemptible: bool = True):
     """Mark this thread's model calls as P2 for the duration.
@@ -384,6 +428,7 @@ def slot(*, lane: str, label: str, priority: Priority | None = None,
     if lane == GPU and is_paused():
         logger.info('Refused %s: GPU inference is paused', label)
         _record('refused', lane=lane, label=label, priority=int(priority))
+        _mark_deferred('paused')
         raise InferencePaused('GPU inference is paused')
 
     with _cond:
@@ -427,11 +472,13 @@ def slot(*, lane: str, label: str, priority: Priority | None = None,
         yield entry.cancel
     except Preempted:
         outcome = 'preempted'
+        _mark_deferred('preempted')
         raise
     except InferencePaused:
         # The lane was paused mid-call — the stream was already open when the
         # switch went down. Distinct from `refused`, which never started.
         outcome = 'paused'
+        _mark_deferred('paused')
         raise
     except GeneratorExit:
         # A streaming caller was closed before it finished — an SSE client that
@@ -537,4 +584,7 @@ def reset() -> None:
         _events.clear()
         for key in _counters:
             _counters[key] = 0
+    # Thread-local, so this only clears the caller's own mark — which is the
+    # one a test carries between cases when it runs the worker inline.
+    clear_deferral()
     invalidate_pause_cache()

@@ -192,6 +192,40 @@ this switch does not release.
   Deliberately no automatic retry: a failing job retried in a loop is how a
   broken model call becomes a busy loop against llama-server.
 
+### The first two are detected twice, and the second way is the one that fires
+
+Both of those exceptions mean _run this again later_. Both are also ordinary
+`Exception`s, travelling up through code written long before either existed —
+and ten of the fourteen job handlers wrap their model call in
+`except Exception` on purpose, so that a failed enrichment can never break the
+row it was enriching. Those catches swallow the retry signal.
+
+That is not a hypothetical. An evening's screenshots were captioned with the
+GPU paused; each caption was recorded as a permanent failure on the attachment,
+each handler returned normally, and the worker marked every job `done`. Turning
+the switch back on found an empty queue.
+
+The obvious fix — deriving the two from `BaseException`, the way
+`KeyboardInterrupt` is — is the wrong one. Flask's `full_dispatch_request`
+catches `Exception` and nothing wider, so `@app.errorhandler(InferencePaused)`
+would stop firing and every paused interactive route would answer a Werkzeug
+500 instead of the 503 carrying the flag the UI reads to offer Resume.
+
+So the signal also travels **beside** the exception. `slot()` records `'paused'`
+or `'preempted'` on a thread-local as it raises; `process_one` clears it before
+calling a handler and reads it back after the handler returns normally,
+requeueing on it. A handler can swallow the exception. It cannot swallow the
+mark. `deferred_reason()` in `backend/ai/service.py` is the whole mechanism.
+
+Raising is still the contract. `backend/ai/images.py` already re-raised both,
+and the two callers that record a per-row status now do too — the journal
+attachment path and the chat photo read, which share a vision alias that
+`_repoint_vision_at_qwen36` puts on the GPU lane. Their rows are left alone
+while the job waits, so they read `idle` after an upload and `running` after a
+retry rather than carrying an error the user has to clear. The mark is the
+backstop underneath that: for the callers written before either exception
+existed, and for the next one nobody remembers to guard.
+
 ## Seeing what it did — Settings → Logs
 
 Everything above makes a call that _doesn't_ happen a normal outcome. Before

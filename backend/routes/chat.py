@@ -10,7 +10,7 @@ from backend.day_boundary import day_key_for
 from backend.geo import coord_pair
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.ai import jobs
-from backend.ai.service import InferencePaused, PAUSED_MESSAGE
+from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
 from backend.ai.provider import chat_vision_enabled, is_ai_configured
 from backend.ai.chat_title import generate_conversation_title
 from backend.delegate import chat as delegate_chat
@@ -357,6 +357,15 @@ def _read_attachment_bg(attachment_id: str, path: str, *, now: bool = False) -> 
     def _run():
         try:
             text, status, error = _do_read_attachment(path), 'done', None
+        except (InferencePaused, Preempted):
+            # The photo read runs on whatever `llama_vision_model` points at,
+            # and `_repoint_vision_at_qwen36` points it at the chat model — so
+            # this is GPU-lane work that a pause really does stop. Neither
+            # exception is a failure of this photo: the llm_jobs row is what
+            # remembers, and the worker requeues it. Recording 'error' here
+            # would tell the composer the model refused to read a picture it
+            # was never shown.
+            raise
         except Exception as e:
             text, status, error = None, 'error', str(e) or 'Failed'
             logger.warning('Reading chat photo %s failed: %s', attachment_id, e)

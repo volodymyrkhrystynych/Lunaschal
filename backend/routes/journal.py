@@ -13,7 +13,7 @@ from backend.ai.journal import (
     generate_journal_metadata,
 )
 from backend.ai import jobs
-from backend.ai.service import PAUSED_MESSAGE
+from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
 from backend.journal import storage, voice_drafts
 from backend.tags import tags_json
 
@@ -1141,6 +1141,19 @@ def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str,
         try:
             text = _do_attachment_audio_description(path, name)
             status, error = 'done', None
+        except (InferencePaused, Preempted):
+            # Neither is a failure of this attachment, and neither is this
+            # function's to record: the llm_jobs row is what remembers, and the
+            # worker requeues it. Writing 'error' here — which is what the
+            # catch-all below did — turned "the GPU is off for the evening" into
+            # a permanent failure with a job marked `done` behind it, which is
+            # how an evening of screenshots ended up with no captions and
+            # nothing queued to make them. Leaving the row alone means it reads
+            # `idle` after an upload and `running` after the retry button, and
+            # `_reset_stale_attachment_transcripts` turns the second into the
+            # first on the next restart — all three of which are true while the
+            # job waits, and none of which is an error the user must clear.
+            raise
         except Exception as e:
             text, status, error = None, 'error', str(e) or 'Failed'
             print(f'Attachment audio description failed for {attachment_id}: {e}')
@@ -1254,6 +1267,19 @@ def _transcribe_attachment_bg(
             else:
                 text = _do_attachment_caption(path, name)
             status, error = 'done', None
+        except (InferencePaused, Preempted):
+            # Neither is a failure of this attachment, and neither is this
+            # function's to record: the llm_jobs row is what remembers, and the
+            # worker requeues it. Writing 'error' here — which is what the
+            # catch-all below did — turned "the GPU is off for the evening" into
+            # a permanent failure with a job marked `done` behind it, which is
+            # how an evening of screenshots ended up with no captions and
+            # nothing queued to make them. Leaving the row alone means it reads
+            # `idle` after an upload and `running` after the retry button, and
+            # `_reset_stale_attachment_transcripts` turns the second into the
+            # first on the next restart — all three of which are true while the
+            # job waits, and none of which is an error the user must clear.
+            raise
         except Exception as e:
             text, status, error = None, 'error', str(e) or 'Failed'
             print(f'Attachment transcription failed for {attachment_id}: {e}')
