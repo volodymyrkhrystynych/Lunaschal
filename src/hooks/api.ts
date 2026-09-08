@@ -1351,8 +1351,21 @@ export interface PressReaderStatus {
 
 export interface NewspaperStroke {
   page: number;
-  tool: 'pen' | 'highlight';
-  points: [number, number][];
+  /** 'highlight' is what the column has always held. The client's shared ink
+   * model calls the same tool 'highlighter'; the server accepts both and
+   * stores this one, so the column cannot go bimodal on a version skew. */
+  tool: string;
+  /** Normalised to 0..1 of the page, with the pen pressure the point was drawn
+   * at where there was one. Strokes written before the reader had a
+   * pressure-sensitive pen are plain pairs, and stay readable as such. */
+  points: ([number, number] | [number, number, number])[];
+  /** Base width in thousandths of the page's width — the unit the reader has
+   * always drawn in, and so resolution- and aspect-independent. Absent on
+   * anything written before there were selectable widths. */
+  size?: number;
+  /** Absent means "whatever this reader calls ink", which is every stroke
+   * written before there was a colour picker. */
+  color?: string;
 }
 
 export interface NewspaperMarkup {

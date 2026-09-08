@@ -70,7 +70,8 @@ async function openPage() {
     <NewspaperReader issue={issue} onClose={vi.fn()} />
   );
   await screen.findByText('Save now');
-  const svg = container.querySelector('svg')!;
+  // The markup layer, not the tool panel's own icons.
+  const svg = container.querySelector('[aria-label="Page 1"] svg')!;
   const captured = new Set<number>();
   svg.setPointerCapture = id => {
     captured.add(id);
@@ -102,13 +103,17 @@ async function openPage() {
     svg.parentElement!.dispatchEvent(event);
     return event.defaultPrevented;
   }
-  return { svg, pointer, touchMove };
+  /** The tools moved into the floating panel, where they are icons with
+   * accessible names rather than text. */
+  const pick = (name: string) =>
+    fireEvent.click(screen.getByRole('button', { name }));
+  return { svg, pointer, touchMove, pick };
 }
 
 describe('newspaper pencil and finger input', () => {
   it('records Pencil coordinates and ignores finger pointers entirely', async () => {
-    const { svg, pointer } = await openPage();
-    fireEvent.click(screen.getByText('Pen'));
+    const { svg, pointer, pick } = await openPage();
+    pick('Pen');
     pointer('pointerdown', 'touch', 10, 20);
     pointer('pointermove', 'touch', 10, 40);
     pointer('pointerup', 'touch', 10, 40);
@@ -124,10 +129,15 @@ describe('newspaper pencil and finger input', () => {
           {
             page: 1,
             tool: 'pen',
+            // Pressure rides along as a third coordinate; a pointer with none
+            // reports 0.5, as a mouse does. The width is the medium pen and the
+            // colour the one this reader has always drawn in.
             points: [
-              [0.1, 0.1],
-              [0.4, 0.3],
+              [0.1, 0.1, 0.5],
+              [0.4, 0.3, 0.5],
             ],
+            size: 3,
+            color: '#1756ad',
           },
         ],
       })
@@ -135,14 +145,14 @@ describe('newspaper pencil and finger input', () => {
   });
 
   it('cancels a stylus touch so the Pencil writes instead of scrolling', async () => {
-    const { touchMove } = await openPage();
-    fireEvent.click(screen.getByText('Pen'));
+    const { touchMove, pick } = await openPage();
+    pick('Pen');
     expect(touchMove('stylus')).toBe(true);
   });
 
   it('leaves finger scrolling to the browser while marking', async () => {
-    const { touchMove } = await openPage();
-    fireEvent.click(screen.getByText('Highlight'));
+    const { touchMove, pick } = await openPage();
+    pick('Highlighter');
     expect(touchMove('direct')).toBe(false);
     // A palm beside the nib must not scroll either, but only two fingers can
     // pinch-zoom, so a stylus riding along with a finger is not cancelled.
@@ -151,13 +161,15 @@ describe('newspaper pencil and finger input', () => {
 
   it('lets the Pencil scroll again in Read mode', async () => {
     const { touchMove } = await openPage();
-    expect(screen.getByText('Read').getAttribute('aria-pressed')).toBe('true');
+    expect(
+      screen.getByRole('button', { name: 'Read' }).getAttribute('aria-pressed')
+    ).toBe('true');
     expect(touchMove('stylus')).toBe(false);
   });
 
   it('holds every touch off while a stroke is in progress', async () => {
-    const { pointer, touchMove } = await openPage();
-    fireEvent.click(screen.getByText('Pen'));
+    const { pointer, touchMove, pick } = await openPage();
+    pick('Pen');
     pointer('pointerdown', 'pen', 10, 20);
     // A resting palm would otherwise drag the page out from under the nib.
     expect(touchMove('direct')).toBe(true);
@@ -170,8 +182,8 @@ describe('newspaper pencil and finger input', () => {
     // gives it back. A stroke used to write a long status *and* reveal a close
     // button, so the bar changed height twice per stroke — which is unusable
     // to write against.
-    const { pointer } = await openPage();
-    fireEvent.click(screen.getByText('Pen'));
+    const { pointer, pick } = await openPage();
+    pick('Pen');
     pointer('pointerdown', 'pen', 10, 20);
     pointer('pointerup', 'pen', 10, 20);
     expect(screen.queryByText('Close with local draft')).toBeNull();
@@ -198,10 +210,22 @@ describe('newspaper markup recovery', () => {
     );
     render(<NewspaperReader issue={issue} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByText('Save now'));
+    // Read in the old shape, written back in the current one: an unpressured
+    // point becomes full pressure, which is the width it was always drawn at.
     await waitFor(() =>
       expect(api.newspapers.saveMarkup).toHaveBeenCalledWith(issue.date, {
         revision: 0,
-        strokes: [stroke],
+        strokes: [
+          {
+            page: 1,
+            tool: 'pen',
+            points: [
+              [0.1, 0.2, 1],
+              [0.3, 0.4, 1],
+            ],
+            size: 2,
+          },
+        ],
       })
     );
     await waitFor(() => expect(localStorage.getItem(draftKey)).toBeNull());
@@ -241,21 +265,38 @@ describe('newspaper markup recovery', () => {
     expect(localStorage.getItem(draftKey)).not.toBeNull();
   });
 
-  it('saves undo as a new revision', async () => {
+  it('undoes a stroke made in this session, and saves the result', async () => {
+    const { pointer, pick } = await openPage();
+    pick('Pen');
+    pointer('pointerdown', 'pen', 10, 20);
+    pointer('pointermove', 'pen', 40, 60);
+    pointer('pointerup', 'pen', 40, 60);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
+    fireEvent.click(screen.getByText('Save now'));
+    await waitFor(() =>
+      expect(api.newspapers.saveMarkup).toHaveBeenCalledWith(issue.date, {
+        revision: 0,
+        strokes: [],
+      })
+    );
+  });
+
+  it('cannot rewind markup made in an earlier sitting', async () => {
+    // Undo used to be `strokes.slice(0, -1)` over the whole issue, so it could
+    // peel a stroke off the stored record — including one on a page that was
+    // not even on screen. It is a session history now, like the Paper editor's,
+    // and the eraser is the answer for ink from an earlier sitting. That the
+    // eraser is page-local is the other half of the fix.
     vi.mocked(api.newspapers.markup).mockResolvedValue({
       revision: 3,
       strokes: [stroke],
     } as never);
     render(<NewspaperReader issue={issue} onClose={vi.fn()} />);
     await screen.findByText('Save now');
-    fireEvent.click(screen.getByText('Undo'));
-    fireEvent.click(screen.getByText('Save now'));
-    await waitFor(() =>
-      expect(api.newspapers.saveMarkup).toHaveBeenCalledWith(issue.date, {
-        revision: 3,
-        strokes: [],
-      })
-    );
+    expect(
+      screen.getByRole('button', { name: 'Undo' }).hasAttribute('disabled')
+    ).toBe(true);
   });
 });
 
@@ -270,8 +311,8 @@ describe('a conflicting save', () => {
     vi.mocked(api.newspapers.saveMarkup).mockRejectedValue(
       new ApiError('Markup changed in another reader.', 409)
     );
-    const { pointer } = await openPage();
-    fireEvent.click(screen.getByText('Pen'));
+    const { pointer, pick } = await openPage();
+    pick('Pen');
     pointer('pointerdown', 'pen', 10, 20);
     pointer('pointerup', 'pen', 10, 20);
 
@@ -286,5 +327,54 @@ describe('a conflicting save', () => {
     await waitFor(() =>
       expect(api.newspapers.saveMarkup).toHaveBeenCalledTimes(attempts)
     );
+  });
+});
+
+describe('the eraser the reader never had', () => {
+  it('rubs out a stroke and saves what survived', async () => {
+    const { svg, pointer, pick } = await openPage();
+    pick('Pen');
+    pointer('pointerdown', 'pen', 10, 20);
+    pointer('pointermove', 'pen', 40, 60);
+    pointer('pointerup', 'pen', 40, 60);
+    expect(svg.querySelectorAll('polyline')).toHaveLength(1);
+
+    pick('Eraser');
+    // Scrubbed straight over the stroke that was just drawn.
+    pointer('pointerdown', 'pen', 10, 20);
+    pointer('pointermove', 'pen', 40, 60);
+    pointer('pointerup', 'pen', 40, 60);
+    expect(svg.querySelectorAll('polyline')).toHaveLength(0);
+
+    fireEvent.click(screen.getByText('Save now'));
+    await waitFor(() =>
+      expect(api.newspapers.saveMarkup).toHaveBeenCalledWith(issue.date, {
+        revision: 0,
+        strokes: [],
+      })
+    );
+  });
+
+  it('does not spend an undo step on a scrub that touched nothing', async () => {
+    const { pointer, pick } = await openPage();
+    pick('Eraser');
+    pointer('pointerdown', 'pen', 10, 20);
+    pointer('pointermove', 'pen', 40, 60);
+    pointer('pointerup', 'pen', 40, 60);
+    expect(
+      screen.getByRole('button', { name: 'Undo' }).hasAttribute('disabled')
+    ).toBe(true);
+  });
+
+  it('never lays down ink of its own', async () => {
+    // The eraser stroke is consumed, not stored: it removes what it crossed and
+    // leaves nothing behind, so it can work over a transparent page.
+    const { svg, pointer, pick } = await openPage();
+    pick('Eraser');
+    pointer('pointerdown', 'pen', 10, 20);
+    pointer('pointermove', 'pen', 40, 60);
+    expect(svg.querySelectorAll('polyline')).toHaveLength(0);
+    pointer('pointerup', 'pen', 40, 60);
+    expect(svg.querySelectorAll('polyline')).toHaveLength(0);
   });
 });

@@ -6,32 +6,89 @@ import {
   ApiError,
   type NewspaperIssue,
   type NewspaperMarkup,
-  type NewspaperStroke,
 } from '../hooks/api';
+import {
+  eraseStroke,
+  simplifyStroke,
+  strokeColor,
+  type Stroke,
+} from '@/lib/ink';
+import {
+  canRedo,
+  canUndo,
+  commitOn,
+  countPoints,
+  countStrokes,
+  emptyMarkup,
+  fromWire,
+  inkSpaceFor,
+  MAX_POINTS,
+  MAX_POINTS_PER_STROKE,
+  MAX_STROKES,
+  NEWSPAPER_PALETTE,
+  NEWSPAPER_TOOL_SIZES,
+  redoLast,
+  setStrokesOn,
+  strokesOn,
+  toInkStroke,
+  toWire,
+  toWireStroke,
+  undoLast,
+  type IssueMarkup,
+} from '@/lib/newspaperMarkup';
+import {
+  InkToolPanel,
+  READ_TOOL,
+  DEFAULT_TOOLS,
+  type PanelTool,
+} from '@/components/ink/InkToolPanel';
+import { HIGHLIGHTER_COLORS, PEN_COLORS } from '@/lib/ink';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-type Tool = 'read' | NewspaperStroke['tool'];
+
 // Safari alone reports what made a touch, and it is the only browser an Apple
 // Pencil reaches us through; elsewhere the field is simply absent.
 type StylusTouch = Touch & { touchType?: 'direct' | 'stylus' };
+
+/** Reading is the fourth option here and the default: the Pencil scrolls like a
+ * finger until a marking tool is chosen. */
+const TOOLS = [READ_TOOL, ...DEFAULT_TOOLS];
+const PANEL_KEY = 'lunaschal:newspaperToolPanel';
+/** Ink units are thousandths of a page width; the panel's preview dots want
+ * CSS pixels. A floor keeps the smallest pen visible as a dot. */
+const DOT_UNITS_PER_PX = 0.3;
+const DOT_MIN_PX = 5;
+/** Points closer than this add nothing at any zoom a page is read at. */
+const MIN_POINT_DISTANCE = 1.5;
 
 function Page({
   pdf,
   number,
   tool,
+  size,
+  color,
   strokes,
-  onStroke,
+  onCommit,
+  onErase,
 }: {
   pdf: pdfjs.PDFDocumentProxy;
   number: number;
-  tool: Tool;
-  strokes: NewspaperStroke[];
-  onStroke: (stroke: NewspaperStroke) => void;
+  /** null in Read mode: nothing marks, and every touch belongs to the browser. */
+  tool: PanelTool;
+  size: number;
+  color: string;
+  /** This page's strokes, in stored (normalised) space. */
+  strokes: Stroke[];
+  onCommit: (page: number, stroke: Stroke) => void;
+  onErase: (page: number, survivors: Stroke[]) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const drawing = useRef<NewspaperStroke | null>(null);
-  const [preview, setPreview] = useState<NewspaperStroke | null>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const drawing = useRef<Stroke | null>(null);
+  const [preview, setPreview] = useState<Stroke | null>(null);
+  /** While the eraser is down, what the page would look like if it lifted now. */
+  const [erasing, setErasing] = useState<Stroke[] | null>(null);
   const [ratio, setRatio] = useState(1.3);
   const [visible, setVisible] = useState(false);
   const [width, setWidth] = useState(0);
@@ -111,14 +168,33 @@ function Page({
     return () => element.removeEventListener('touchmove', onTouchMove);
   }, [marking]);
 
-  function point(event: React.PointerEvent<SVGSVGElement>): [number, number] {
+  const space = inkSpaceFor(ratio);
+
+  /** A pointer position in this page's ink space. Read per axis from the live
+   * rect, which is what makes the ratio cancel on the way back out to storage —
+   * see toWireStroke. */
+  function point(event: React.PointerEvent<SVGSVGElement>) {
     const rect = event.currentTarget.getBoundingClientRect();
-    return [
-      Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-      Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
-    ];
+    const fx = rect.width ? (event.clientX - rect.left) / rect.width : 0;
+    const fy = rect.height ? (event.clientY - rect.top) / rect.height : 0;
+    return {
+      x: Math.max(0, Math.min(1, fx)) * space.width,
+      y: Math.max(0, Math.min(1, fy)) * space.height,
+      pressure: event.pressure > 0 ? event.pressure : 0.5,
+    };
   }
-  const all = preview ? [...strokes, preview] : strokes;
+
+  const inkStrokes = (erasing ?? strokes).map(s => toInkStroke(s, ratio));
+  const shown = preview ? [...inkStrokes, preview] : inkStrokes;
+
+  const endStroke = () => {
+    const stroke = drawing.current;
+    drawing.current = null;
+    setPreview(null);
+    setErasing(null);
+    return stroke;
+  };
+
   return (
     <div
       ref={container}
@@ -133,8 +209,9 @@ function Page({
         </p>
       )}
       <svg
+        ref={svgRef}
         className="absolute inset-0 w-full h-full"
-        viewBox={`0 0 1000 ${1000 * ratio}`}
+        viewBox={`0 0 ${space.width} ${space.height}`}
         // Never 'none': a finger has to keep scrolling the reader in every
         // tool, and the Pencil is held off by the touchmove listener above.
         style={{ touchAction: 'pan-y pinch-zoom' }}
@@ -149,46 +226,76 @@ function Page({
             return;
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
-          drawing.current = { page: number, tool, points: [point(event)] };
-          setPreview({ ...drawing.current });
+          drawing.current = {
+            tool: tool as Stroke['tool'],
+            size,
+            points: [point(event)],
+            ...(tool === 'eraser' ? {} : { color }),
+          };
+          setPreview(tool === 'eraser' ? null : { ...drawing.current });
         }}
         onPointerMove={event => {
+          const stroke = drawing.current;
           if (
-            !drawing.current ||
+            !stroke ||
             !event.currentTarget.hasPointerCapture(event.pointerId)
           )
             return;
-          if (drawing.current.points.length < 10000)
-            drawing.current.points.push(point(event));
-          setPreview({ ...drawing.current });
+          if (stroke.points.length < MAX_POINTS_PER_STROKE) {
+            stroke.points.push(point(event));
+          }
+          if (stroke.tool === 'eraser') {
+            // The eraser changes many strokes at once, so show the result of
+            // lifting now rather than the eraser's own path.
+            const survivors = eraseStroke(
+              {
+                strokes: strokes.map(s => toInkStroke(s, ratio)),
+                history: [],
+                redo: [],
+              },
+              stroke
+            ).strokes;
+            setErasing(survivors.map(s => toWireStroke(s, ratio)));
+          } else {
+            setPreview({ ...stroke });
+          }
         }}
         onPointerUp={event => {
-          if (
-            !drawing.current ||
-            !event.currentTarget.hasPointerCapture(event.pointerId)
-          )
-            return;
-          const stroke = drawing.current;
-          drawing.current = null;
-          setPreview(null);
-          onStroke(stroke);
+          if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
+          const survivors = erasing;
+          const stroke = endStroke();
           event.currentTarget.releasePointerCapture(event.pointerId);
+          if (!stroke) return;
+          if (stroke.tool === 'eraser') {
+            // A scrub that touched nothing is not an edit, and should not cost
+            // an undo step.
+            if (survivors && survivors.length !== strokes.length) {
+              onErase(number, survivors);
+            }
+            return;
+          }
+          onCommit(
+            number,
+            toWireStroke(simplifyStroke(stroke, MIN_POINT_DISTANCE), ratio)
+          );
         }}
-        onPointerCancel={() => {
-          drawing.current = null;
-          setPreview(null);
-        }}
+        // Discarded rather than committed, unlike the Paper editor: a cancel
+        // here means iPadOS took the pointer to scroll with, and half a stray
+        // line dragged across a photograph is worse than no line at all.
+        onPointerCancel={endStroke}
       >
-        {all.map((stroke, i) => (
+        {shown.map((stroke, i) => (
           <polyline
             key={i}
-            points={stroke.points
-              .map(([x, y]) => `${x * 1000},${y * 1000 * ratio}`)
-              .join(' ')}
+            points={stroke.points.map(p => `${p.x},${p.y}`).join(' ')}
             fill="none"
-            stroke={stroke.tool === 'pen' ? '#1756ad' : '#ffdb00'}
-            strokeWidth={stroke.tool === 'pen' ? 2 : 16}
-            opacity={stroke.tool === 'pen' ? 1 : 0.35}
+            stroke={strokeColor(stroke, NEWSPAPER_PALETTE)}
+            strokeWidth={stroke.size}
+            opacity={
+              stroke.tool === 'highlighter'
+                ? NEWSPAPER_PALETTE.highlightAlpha
+                : 1
+            }
             strokeLinecap="round"
             strokeLinejoin="round"
           />
@@ -201,6 +308,12 @@ function Page({
   );
 }
 
+/** #rrggbb into the 0..1 triple pdf-lib wants. */
+function toRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+}
+
 export function NewspaperReader({
   issue,
   onClose,
@@ -209,8 +322,19 @@ export function NewspaperReader({
   onClose: () => void;
 }) {
   const [pdf, setPdf] = useState<pdfjs.PDFDocumentProxy | null>(null);
-  const [strokes, setStrokes] = useState<NewspaperStroke[]>([]);
-  const [tool, setTool] = useState<Tool>('read');
+  const [markup, setMarkup] = useState<IssueMarkup>(emptyMarkup);
+  const [tool, setTool] = useState<PanelTool>('read');
+  const [sizeIndex, setSizeIndex] = useState<Record<string, number>>({
+    pen: 1,
+    highlighter: 1,
+    eraser: 1,
+  });
+  const [color, setColor] = useState<Record<string, string>>({
+    // The colour this reader has always drawn in: black would vanish into
+    // newsprint.
+    pen: PEN_COLORS[1],
+    highlighter: HIGHLIGHTER_COLORS[0],
+  });
   const [status, setStatus] = useState('Loading…');
   const [ready, setReady] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -218,27 +342,56 @@ export function NewspaperReader({
   // conflicting draft. Not "a save is in flight", which is every other moment
   // while drawing.
   const [unsaved, setUnsaved] = useState(false);
-  const state = useRef<NewspaperMarkup>({ revision: 0, strokes: [] });
+  const [area, setArea] = useState({ width: 0, height: 0 });
+  const areaRef = useRef<HTMLDivElement>(null);
+  const revision = useRef(0);
+  const markupRef = useRef(markup);
+  markupRef.current = markup;
   const saving = useRef(false);
   const dirty = useRef(false);
   const conflict = useRef(false);
   const key = `newspaper-markup:${issue.date}`;
 
+  const currentSize =
+    tool === 'read'
+      ? 0
+      : (NEWSPAPER_TOOL_SIZES[tool][sizeIndex[tool] ?? 1] ?? 2);
+
+  // The panel floats over the reading area, so it needs that area's size to
+  // stay on screen when the window changes.
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    const measure = () =>
+      setArea({ width: el.clientWidth, height: el.clientHeight });
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const draft = (next: IssueMarkup) => ({
+    revision: revision.current,
+    strokes: toWire(next),
+  });
+
   useEffect(() => {
     const loading = pdfjs.getDocument({ url: issue.pdfUrl });
     let active = true;
     void Promise.all([loading.promise, api.newspapers.markup(issue.date)])
-      .then(([document, markup]) => {
+      .then(([document, saved]) => {
         if (!active) return;
-        let draft: NewspaperMarkup | null = null;
+        let recovered: NewspaperMarkup | null = null;
         try {
-          draft = JSON.parse(localStorage.getItem(key) || 'null');
+          recovered = JSON.parse(localStorage.getItem(key) || 'null');
         } catch {
           /* No readable draft. */
         }
-        if (draft && Array.isArray(draft.strokes)) {
-          conflict.current = draft.revision !== markup.revision;
-          state.current = draft;
+        if (recovered && Array.isArray(recovered.strokes)) {
+          conflict.current = recovered.revision !== saved.revision;
+          revision.current = recovered.revision;
+          setMarkup(fromWire(recovered.strokes));
           dirty.current = true;
           setUnsaved(conflict.current);
           setStatus(
@@ -247,10 +400,10 @@ export function NewspaperReader({
               : 'Recovered local markup; saving…'
           );
         } else {
-          state.current = markup;
+          revision.current = saved.revision;
+          setMarkup(fromWire(saved.strokes));
           setStatus('Saved');
         }
-        setStrokes(state.current.strokes);
         setPdf(document);
         setReady(true);
       })
@@ -266,18 +419,21 @@ export function NewspaperReader({
   async function save() {
     if (!dirty.current || saving.current || conflict.current) return;
     saving.current = true;
-    const snapshot = state.current;
+    const snapshot = markupRef.current;
     setStatus('Saving…');
     try {
-      const result = await api.newspapers.saveMarkup(issue.date, snapshot);
-      const changed = state.current.strokes !== snapshot.strokes;
-      state.current = {
-        revision: result.revision,
-        strokes: state.current.strokes,
-      };
+      const result = await api.newspapers.saveMarkup(
+        issue.date,
+        draft(snapshot)
+      );
+      const changed = markupRef.current !== snapshot;
+      revision.current = result.revision;
       dirty.current = changed;
-      if (changed) localStorage.setItem(key, JSON.stringify(state.current));
-      else localStorage.removeItem(key);
+      if (changed) {
+        localStorage.setItem(key, JSON.stringify(draft(markupRef.current)));
+      } else {
+        localStorage.removeItem(key);
+      }
       setUnsaved(false);
       setStatus(changed ? 'Saving…' : 'Saved');
     } catch (e) {
@@ -305,23 +461,21 @@ export function NewspaperReader({
       clearInterval(timer);
       window.removeEventListener('beforeunload', beforeUnload);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
-  function change(next: NewspaperStroke[]) {
-    if (
-      next.length > 10000 ||
-      next.reduce((count, stroke) => count + stroke.points.length, 0) > 100000
-    ) {
+  function change(next: IssueMarkup) {
+    if (countStrokes(next) > MAX_STROKES || countPoints(next) > MAX_POINTS) {
       setStatus(
         'This issue has reached its markup limit. Export it before adding more marks.'
       );
       return;
     }
-    state.current = { ...state.current, strokes: next };
+    setMarkup(next);
+    markupRef.current = next;
     dirty.current = true;
-    setStrokes(next);
     try {
-      localStorage.setItem(key, JSON.stringify(state.current));
+      localStorage.setItem(key, JSON.stringify(draft(next)));
     } catch {
       setStatus(
         'Local storage is full. Keep this reader open until server save completes.'
@@ -335,23 +489,35 @@ export function NewspaperReader({
     try {
       const { PDFDocument, rgb, LineCapStyle } = await import('pdf-lib');
       const output = await PDFDocument.load(await pdf.getData());
-      for (const stroke of state.current.strokes) {
-        const source = await pdf.getPage(stroke.page);
+      for (const wire of toWire(markupRef.current)) {
+        const source = await pdf.getPage(wire.page);
         const view = source.getViewport({ scale: 1 });
-        const target = output.getPage(stroke.page - 1);
-        const points = stroke.points.map(([x, y]) =>
-          view.convertToPdfPoint(x * view.width, y * view.height)
-        );
+        const target = output.getPage(wire.page - 1);
+        const stroke = strokesOn(fromWire([wire]), wire.page)[0];
+        if (!stroke) continue;
+        const [r, g, b] = toRgb(strokeColor(stroke, NEWSPAPER_PALETTE));
+        const points = stroke.points.map(p => ({
+          at: view.convertToPdfPoint(p.x * view.width, p.y * view.height),
+          pressure: p.pressure,
+        }));
         for (let i = 0; i < points.length; i++) {
-          const start = points[Math.max(0, i - 1)],
-            end = points[i];
+          const start = points[Math.max(0, i - 1)];
+          const end = points[i];
+          // Ink units are thousandths of a page width, which is what makes a
+          // stroke the same weight here as it is on screen.
+          const weight =
+            stroke.tool === 'pen'
+              ? stroke.size * (0.35 + 0.65 * end.pressure)
+              : stroke.size;
           target.drawLine({
-            start: { x: start[0], y: start[1] },
-            end: { x: end[0], y: end[1] },
-            thickness: view.width * (stroke.tool === 'pen' ? 0.002 : 0.016),
-            color:
-              stroke.tool === 'pen' ? rgb(0.09, 0.34, 0.68) : rgb(1, 0.86, 0),
-            opacity: stroke.tool === 'pen' ? 1 : 0.35,
+            start: { x: start.at[0], y: start.at[1] },
+            end: { x: end.at[0], y: end.at[1] },
+            thickness: (view.width * weight) / 1000,
+            color: rgb(r, g, b),
+            opacity:
+              stroke.tool === 'highlighter'
+                ? NEWSPAPER_PALETTE.highlightAlpha
+                : 1,
             lineCap: LineCapStyle.Round,
           });
         }
@@ -385,24 +551,6 @@ export function NewspaperReader({
           ← Newspapers
         </button>
         <span>Toronto Star · {issue.date}</span>
-        {(['read', 'pen', 'highlight'] as const).map(value => (
-          <button
-            key={value}
-            aria-pressed={tool === value}
-            disabled={!ready}
-            className={`p-2 rounded ${tool === value ? 'bg-blue-700 text-white' : ''}`}
-            onClick={() => setTool(value)}
-          >
-            {value === 'read' ? 'Read' : value === 'pen' ? 'Pen' : 'Highlight'}
-          </button>
-        ))}
-        <button
-          className="p-2"
-          disabled={!strokes.length}
-          onClick={() => change(strokes.slice(0, -1))}
-        >
-          Undo
-        </button>
         <button
           className="p-2"
           disabled={!ready || exporting}
@@ -428,11 +576,11 @@ export function NewspaperReader({
               try {
                 const latest = await api.newspapers.markup(issue.date);
                 localStorage.removeItem(key);
-                state.current = latest;
+                revision.current = latest.revision;
+                setMarkup(fromWire(latest.strokes));
                 dirty.current = false;
                 conflict.current = false;
                 setUnsaved(false);
-                setStrokes(latest.strokes);
                 setStatus('Saved');
               } catch (e) {
                 setStatus((e as Error).message);
@@ -447,7 +595,10 @@ export function NewspaperReader({
             className="p-2"
             onClick={() => {
               try {
-                localStorage.setItem(key, JSON.stringify(state.current));
+                localStorage.setItem(
+                  key,
+                  JSON.stringify(draft(markupRef.current))
+                );
                 onClose();
               } catch {
                 setStatus(
@@ -468,18 +619,52 @@ export function NewspaperReader({
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto overscroll-contain">
-        {pdf &&
-          Array.from({ length: pdf.numPages }, (_, i) => (
-            <Page
-              key={i}
-              pdf={pdf}
-              number={i + 1}
-              tool={tool}
-              strokes={strokes.filter(s => s.page === i + 1)}
-              onStroke={stroke => change([...state.current.strokes, stroke])}
-            />
-          ))}
+      <div ref={areaRef} className="relative flex-1 min-h-0">
+        <div className="absolute inset-0 overflow-y-auto overscroll-contain">
+          {pdf &&
+            Array.from({ length: pdf.numPages }, (_, i) => (
+              <Page
+                key={i}
+                pdf={pdf}
+                number={i + 1}
+                tool={tool}
+                size={currentSize}
+                color={color[tool] ?? ''}
+                strokes={strokesOn(markup, i + 1)}
+                onCommit={(page, stroke) =>
+                  change(commitOn(markupRef.current, page, stroke))
+                }
+                onErase={(page, survivors) =>
+                  change(setStrokesOn(markupRef.current, page, survivors))
+                }
+              />
+            ))}
+        </div>
+        {ready && (
+          <InkToolPanel
+            tool={tool}
+            onToolChange={setTool}
+            tools={TOOLS}
+            sizes={
+              tool === 'read'
+                ? NEWSPAPER_TOOL_SIZES.pen
+                : NEWSPAPER_TOOL_SIZES[tool]
+            }
+            sizeIndex={sizeIndex[tool] ?? 1}
+            onSizeIndexChange={i => setSizeIndex(s => ({ ...s, [tool]: i }))}
+            color={color[tool]}
+            onColorChange={next => setColor(c => ({ ...c, [tool]: next }))}
+            sizeDotUnitsPerPx={DOT_UNITS_PER_PX}
+            sizeDotMinPx={DOT_MIN_PX}
+            canUndo={canUndo(markup)}
+            canRedo={canRedo(markup)}
+            onUndo={() => change(undoLast(markupRef.current))}
+            onRedo={() => change(redoLast(markupRef.current))}
+            bounds={area}
+            storageKey={PANEL_KEY}
+            label="Markup tools"
+          />
+        )}
       </div>
     </div>
   );
