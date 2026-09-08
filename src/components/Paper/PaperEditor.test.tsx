@@ -1374,3 +1374,56 @@ describe('the app chrome while a page is open', () => {
     expect(screen.getByText('chrome shown')).toBeTruthy();
   });
 });
+
+// QtWebEngine — what `main.py` opens the desktop window with — delivers a
+// keydown whose `key` is null for any key it cannot map to a character. The
+// editor's shortcut handler is the only one in the app that calls a method on
+// `e.key` rather than comparing it, and the modifier branch reached it before
+// any comparison could rule the event out, so one Ctrl-plus-odd-key press threw
+// out of a window listener.
+describe('a keydown with no mappable key', () => {
+  const dispatchNullKey = (init: KeyboardEventInit) => {
+    const event = new KeyboardEvent('keydown', { bubbles: true, ...init });
+    // `new KeyboardEvent('keydown', { key: null })` coerces the null to the
+    // *string* "null", so the real shape has to be forced on afterwards.
+    Object.defineProperty(event, 'key', { value: null });
+    return event;
+  };
+
+  it('is ignored instead of throwing out of the window listener', async () => {
+    const { container } = renderEditor();
+    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+
+    // jsdom swallows a listener's exception and reports it as an ErrorEvent on
+    // window rather than rethrowing out of dispatchEvent, so that is what has
+    // to be watched.
+    const errors: ErrorEvent[] = [];
+    const onError = (e: ErrorEvent) => errors.push(e);
+    window.addEventListener('error', onError);
+    try {
+      act(() => {
+        window.dispatchEvent(dispatchNullKey({ ctrlKey: true }));
+        window.dispatchEvent(dispatchNullKey({ metaKey: true }));
+        window.dispatchEvent(dispatchNullKey({}));
+      });
+    } finally {
+      window.removeEventListener('error', onError);
+    }
+
+    expect(errors).toEqual([]);
+  });
+
+  it('still saves on a real Ctrl+S', async () => {
+    const { container } = renderEditor();
+    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await drawOn(container);
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true })
+      );
+    });
+
+    await waitFor(() => expect(api.paper.savePage).toHaveBeenCalled());
+  });
+});

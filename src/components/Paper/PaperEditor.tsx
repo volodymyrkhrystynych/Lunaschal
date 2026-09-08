@@ -621,23 +621,32 @@ export function PaperEditor({
       ) {
         return;
       }
+      // Read defensively: QtWebEngine (the desktop shell's `gui='qt'`) hands
+      // us a keydown with a *null* `key` for anything it cannot map to a
+      // character — Fn-layer and media keys among them. Every other key
+      // handler in the app only ever compares `e.key`, which survives a null;
+      // this one calls a method on it, and the modifier branch below does so
+      // before any comparison has ruled the event out. Lowercasing is kept
+      // inside that branch rather than applied to `key` as a whole, so Shift+E
+      // still isn't the eraser.
+      const key = e.key ?? '';
       if (e.ctrlKey || e.metaKey) {
-        if (e.key.toLowerCase() === 'z') {
+        if (key.toLowerCase() === 'z') {
           e.preventDefault();
           if (e.shiftKey) canvasRef.current?.redo();
           else canvasRef.current?.undo();
-        } else if (e.key.toLowerCase() === 's') {
+        } else if (key.toLowerCase() === 's') {
           e.preventDefault();
           void saveAllRef.current();
         }
         return;
       }
-      if (e.key === 'e') {
+      if (key === 'e') {
         e.preventDefault();
         toggleEraser();
-      } else if (e.key === 'p') {
+      } else if (key === 'p') {
         setTool('pen');
-      } else if (e.key === 'h') {
+      } else if (key === 'h') {
         setTool('highlighter');
       }
     };
