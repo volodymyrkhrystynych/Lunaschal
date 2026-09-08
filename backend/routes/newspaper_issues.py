@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timezone
 
 from flask import jsonify, request, send_file
 
@@ -47,6 +48,24 @@ def download_issue(date):
 def list_issues():
     rows = get_db().execute('SELECT * FROM newspaper_issues ORDER BY date DESC').fetchall()
     return jsonify({'issues': [issues.public_issue(r) for r in rows], 'archivePath': str(issues.archive_root())})
+
+
+@bp.get('/issues/journal')
+def journal_issues():
+    """Archived issues for the Journal feed, newest first, each with how much of
+    it has been written on.
+
+    Sorted by when the issue was archived rather than by its own date, because
+    that is the moment it entered the record the feed is a record of — the same
+    choice the archived-papers feed makes. The two agree on any normally
+    downloaded issue and differ only when an old edition is uploaded by hand,
+    where the upload day is the honest one.
+    """
+    rows = get_db().execute('SELECT * FROM newspaper_issues ORDER BY created_at DESC, date DESC').fetchall()
+    return jsonify([{**issues.public_issue(row),
+                     'archivedAt': datetime.fromtimestamp(row['created_at'], tz=timezone.utc).isoformat(),
+                     'markedPages': len(issues.marked_pages(row['markup']))}
+                    for row in rows])
 
 
 @bp.post('/issues/<date>')

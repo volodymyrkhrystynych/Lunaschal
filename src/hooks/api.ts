@@ -1330,6 +1330,13 @@ export interface NewspaperIssue {
   pdfUrl: string;
 }
 
+/** An archived issue as the Journal feed sees it: the link, and how much of the
+ *  paper has been written on. */
+export interface JournalNewspaper extends NewspaperIssue {
+  archivedAt: string;
+  markedPages: number;
+}
+
 export interface NewspaperDownload {
   date: string;
   status: 'queued' | 'downloading' | 'complete' | 'failed' | 'sign-in-required';
@@ -4160,6 +4167,8 @@ export const api = {
       form.append('file', file);
       return upload<NewspaperIssue>(`/api/newspapers/issues/${date}`, form);
     },
+    journalIssues: () =>
+      get<JournalNewspaper[]>('/api/newspapers/issues/journal'),
     markup: (date: string) =>
       get<NewspaperMarkup>(`/api/newspapers/issues/${date}/markup`),
     saveMarkup: (date: string, body: NewspaperMarkup) =>

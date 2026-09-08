@@ -11,6 +11,9 @@ import {
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 type Tool = 'read' | NewspaperStroke['tool'];
+// Safari alone reports what made a touch, and it is the only browser an Apple
+// Pencil reaches us through; elsewhere the field is simply absent.
+type StylusTouch = Touch & { touchType?: 'direct' | 'stylus' };
 
 function Page({
   pdf,
@@ -28,7 +31,6 @@ function Page({
   const container = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const drawing = useRef<NewspaperStroke | null>(null);
-  const finger = useRef<{ id: number; y: number } | null>(null);
   const [preview, setPreview] = useState<NewspaperStroke | null>(null);
   const [ratio, setRatio] = useState(1.3);
   const [visible, setVisible] = useState(false);
@@ -86,6 +88,29 @@ function Page({
     };
   }, [pdf, number, visible, width]);
 
+  // The Pencil must never scroll while a marking tool is selected, and iPadOS
+  // gives only one way to enforce that: cancel the touch stream itself. Neither
+  // `touch-action` (WebKit ignores it on an <svg>) nor preventDefault on
+  // pointerdown stops a WebKit scroll, and once the scroll starts the pen
+  // pointer is cancelled mid-stroke — which is exactly what "it scrolls instead
+  // of writing" was. Fingers are left entirely alone so they keep native
+  // momentum scrolling and pinch-zoom, except while a stroke is in progress,
+  // where a resting palm would otherwise drag the page out from under the nib.
+  // Must be a native non-passive listener: React attaches touchmove passively,
+  // so an onTouchMove prop cannot preventDefault.
+  const marking = tool !== 'read';
+  useEffect(() => {
+    const element = container.current!;
+    const onTouchMove = (event: TouchEvent) => {
+      const touches = Array.from(event.touches) as StylusTouch[];
+      const stylus =
+        touches.length > 0 && touches.every(t => t.touchType === 'stylus');
+      if (drawing.current || (marking && stylus)) event.preventDefault();
+    };
+    element.addEventListener('touchmove', onTouchMove, { passive: false });
+    return () => element.removeEventListener('touchmove', onTouchMove);
+  }, [marking]);
+
   function point(event: React.PointerEvent<SVGSVGElement>): [number, number] {
     const rect = event.currentTarget.getBoundingClientRect();
     return [
@@ -110,31 +135,24 @@ function Page({
       <svg
         className="absolute inset-0 w-full h-full"
         viewBox={`0 0 1000 ${1000 * ratio}`}
-        style={{ touchAction: tool === 'read' ? 'pan-y pinch-zoom' : 'none' }}
+        // Never 'none': a finger has to keep scrolling the reader in every
+        // tool, and the Pencil is held off by the touchmove listener above.
+        style={{ touchAction: 'pan-y pinch-zoom' }}
         onPointerDown={event => {
-          // Fingers always scroll. Pencil (or a mouse for testing) writes.
-          if (tool === 'read' || !event.isPrimary) return;
-          if (event.pointerType === 'touch') {
-            if (!drawing.current) {
-              finger.current = { id: event.pointerId, y: event.clientY };
-              event.currentTarget.setPointerCapture(event.pointerId);
-            }
+          // Fingers only scroll; Pencil (or a mouse, for testing) only marks.
+          if (
+            !marking ||
+            !event.isPrimary ||
+            event.pointerType === 'touch' ||
+            drawing.current
+          )
             return;
-          }
           event.preventDefault();
           event.currentTarget.setPointerCapture(event.pointerId);
           drawing.current = { page: number, tool, points: [point(event)] };
           setPreview({ ...drawing.current });
         }}
         onPointerMove={event => {
-          if (finger.current?.id === event.pointerId) {
-            container.current?.parentElement?.scrollBy(
-              0,
-              finger.current.y - event.clientY
-            );
-            finger.current.y = event.clientY;
-            return;
-          }
           if (
             !drawing.current ||
             !event.currentTarget.hasPointerCapture(event.pointerId)
@@ -145,10 +163,6 @@ function Page({
           setPreview({ ...drawing.current });
         }}
         onPointerUp={event => {
-          if (finger.current?.id === event.pointerId) {
-            finger.current = null;
-            return;
-          }
           if (
             !drawing.current ||
             !event.currentTarget.hasPointerCapture(event.pointerId)
@@ -161,7 +175,6 @@ function Page({
           event.currentTarget.releasePointerCapture(event.pointerId);
         }}
         onPointerCancel={() => {
-          finger.current = null;
           drawing.current = null;
           setPreview(null);
         }}
