@@ -214,6 +214,10 @@ export function NewspaperReader({
   const [status, setStatus] = useState('Loading…');
   const [ready, setReady] = useState(false);
   const [exporting, setExporting] = useState(false);
+  // Whether the server has actually refused the markup — a failed save or a
+  // conflicting draft. Not "a save is in flight", which is every other moment
+  // while drawing.
+  const [unsaved, setUnsaved] = useState(false);
   const state = useRef<NewspaperMarkup>({ revision: 0, strokes: [] });
   const saving = useRef(false);
   const dirty = useRef(false);
@@ -236,6 +240,7 @@ export function NewspaperReader({
           conflict.current = draft.revision !== markup.revision;
           state.current = draft;
           dirty.current = true;
+          setUnsaved(conflict.current);
           setStatus(
             conflict.current
               ? 'A local draft conflicts with the server. Export it before reopening on another device.'
@@ -273,9 +278,11 @@ export function NewspaperReader({
       dirty.current = changed;
       if (changed) localStorage.setItem(key, JSON.stringify(state.current));
       else localStorage.removeItem(key);
+      setUnsaved(false);
       setStatus(changed ? 'Saving…' : 'Saved');
     } catch (e) {
       if (e instanceof ApiError && e.status === 409) conflict.current = true;
+      setUnsaved(true);
       setStatus(`Not saved to server: ${(e as Error).message}`);
     } finally {
       saving.current = false;
@@ -315,7 +322,6 @@ export function NewspaperReader({
     setStrokes(next);
     try {
       localStorage.setItem(key, JSON.stringify(state.current));
-      setStatus('Saved on this iPad; syncing…');
     } catch {
       setStatus(
         'Local storage is full. Keep this reader open until server save completes.'
@@ -425,6 +431,7 @@ export function NewspaperReader({
                 state.current = latest;
                 dirty.current = false;
                 conflict.current = false;
+                setUnsaved(false);
                 setStrokes(latest.strokes);
                 setStatus('Saved');
               } catch (e) {
@@ -435,7 +442,7 @@ export function NewspaperReader({
             Use server copy
           </button>
         )}
-        {ready && status !== 'Saved' && (
+        {ready && unsaved && (
           <button
             className="p-2"
             onClick={() => {
@@ -452,7 +459,7 @@ export function NewspaperReader({
             Close with local draft
           </button>
         )}
-        <span role="status" className="text-xs">
+        <span role="status" className="text-xs min-w-24">
           {status}
         </span>
         {!ready && (
@@ -461,10 +468,6 @@ export function NewspaperReader({
           </button>
         )}
       </div>
-      <p className="text-xs px-3 py-1">
-        Scroll with your finger. Write or highlight with Apple Pencil. Pages fit
-        the width.
-      </p>
       <div className="flex-1 overflow-y-auto overscroll-contain">
         {pdf &&
           Array.from({ length: pdf.numPages }, (_, i) => (

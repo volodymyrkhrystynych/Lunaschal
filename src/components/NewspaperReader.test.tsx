@@ -157,6 +157,25 @@ describe('newspaper pencil and finger input', () => {
     expect(touchMove('direct')).toBe(false);
   });
 
+  it('leaves the toolbar unchanged across an ordinary save', async () => {
+    // The bar wraps, so anything that grows or appears in it costs a line and
+    // gives it back. A stroke used to write a long status *and* reveal a close
+    // button, so the bar changed height twice per stroke — which is unusable
+    // to write against.
+    const { pointer } = await openPage();
+    fireEvent.click(screen.getByText('Pen'));
+    pointer('pointerdown', 'pen', 10, 20);
+    pointer('pointerup', 'pen', 10, 20);
+    expect(screen.queryByText('Close with local draft')).toBeNull();
+    expect(screen.getByRole('status').textContent).not.toMatch(/iPad/);
+    fireEvent.click(screen.getByText('Save now'));
+    expect(screen.queryByText('Close with local draft')).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe('Saved')
+    );
+    expect(screen.queryByText('Close with local draft')).toBeNull();
+  });
+
   it('never lets a finger scroll be blocked in Read mode', async () => {
     const { touchMove } = await openPage();
     expect(touchMove('direct')).toBe(false);
