@@ -1,7 +1,7 @@
 from io import BytesIO
 
 import pytest
-from pypdf import PdfWriter
+from pypdf import PdfReader, PdfWriter
 
 from backend.newspapers import issues
 
@@ -81,3 +81,23 @@ def test_missing_archive_keeps_markup(client):
     issues.issue_path('2026-09-01').unlink()
     assert client.get('/api/newspapers/issues/2026-09-01/pdf').status_code == 404
     assert client.get('/api/newspapers/issues/2026-09-01/markup').status_code == 200
+
+
+@pytest.mark.parametrize('password', ['', 'requires-password'])
+def test_passwordless_encryption_is_normalized_but_passwords_are_rejected(client, password):
+    writer = PdfWriter()
+    writer.add_blank_page(width=612, height=792)
+    writer.encrypt(user_password=password, owner_password='publisher')
+    stream = BytesIO()
+    writer.write(stream)
+    stream.seek(0)
+    response = client.post('/api/newspapers/issues/2026-09-01', data={'file': (stream, 'issue.pdf')})
+    if password:
+        assert response.status_code == 400
+        assert not issues.issue_path('2026-09-01').exists()
+    else:
+        assert response.status_code == 201
+        stored = PdfReader(issues.issue_path('2026-09-01'))
+        assert not stored.is_encrypted
+        assert len(stored.pages) == 1
+        assert float(stored.pages[0].mediabox.width) == 612

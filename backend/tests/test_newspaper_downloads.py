@@ -181,7 +181,11 @@ def test_child_signin_error_is_not_retried_as_a_network_failure(monkeypatch):
         pressreader.download_issue('2026-09-06')
 
 
-def test_browser_selects_issue_pdf_not_page_pdf():
+@pytest.mark.parametrize('confirmation', [
+    '<button onclick="location.href=\'/issue.pdf\'">Download issue as PDF</button>',
+    '<h2>Download Issue as PDF</h2><a href="/issue.pdf"><span>Download</span></a>',
+])
+def test_browser_selects_issue_pdf_not_page_pdf(confirmation):
     """Real DOM/click/download test; all PressReader requests are intercepted."""
     pw = pytest.importorskip('playwright.sync_api')
     with pw.sync_playwright() as playwright:
@@ -196,7 +200,7 @@ def test_browser_selects_issue_pdf_not_page_pdf():
               <nav hidden><button role="menuitem" onclick="document.querySelector('section').hidden=false">Download as PDF</button></nav>
               <section hidden><a href="/page.pdf">Download page as PDF</a>
               <a href="#" onclick="document.querySelector('dialog').showModal()">Download issue as PDF</a></section>
-              <dialog><button onclick="location.href='/issue.pdf'">Download issue as PDF</button></dialog>'''
+              <dialog>CONFIRMATION</dialog>'''.replace('CONFIRMATION', confirmation)
             def route_handler(route):
                 if route.request.url.endswith('.pdf'):
                     hits.append(route.request.url)

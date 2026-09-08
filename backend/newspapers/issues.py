@@ -37,7 +37,7 @@ def get_issue(value):
 
 def store_issue(value, stream):
     """Publish only complete PDFs, never replace an issue underneath its markup."""
-    from pypdf import PdfReader
+    from pypdf import PdfReader, PdfWriter
 
     path = issue_path(value)
     with issue_lock:
@@ -58,7 +58,25 @@ def store_issue(value, stream):
                 os.fsync(output.fileno())
             try:
                 reader = PdfReader(name)
-                if reader.is_encrypted or not 0 < len(reader.pages) <= 500:
+                if reader.is_encrypted:
+                    if not reader.decrypt(''):
+                        raise ValueError()
+                    # PressReader uses passwordless PDF encryption. Normalize
+                    # it so both the reader and pdf-lib markup export can open
+                    # the archived file, retaining the pages and their content.
+                    writer = PdfWriter(clone_from=reader)
+                    with tempfile.TemporaryFile() as normalized:
+                        writer.write(normalized)
+                        size = normalized.tell()
+                        if size > MAX_PDF_BYTES:
+                            raise ValueError()
+                        normalized.seek(0)
+                        with open(name, 'wb') as target:
+                            while chunk := normalized.read(1024 * 1024):
+                                target.write(chunk)
+                            target.flush()
+                            os.fsync(target.fileno())
+                if not 0 < len(reader.pages) <= 500:
                     raise ValueError()
                 page_count = len(reader.pages)
             except Exception:

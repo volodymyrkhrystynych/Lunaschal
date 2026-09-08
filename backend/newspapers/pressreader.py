@@ -75,11 +75,15 @@ def download_from_page(page, date):
     choice.wait_for(state='visible')
     with page.expect_download(timeout=120000) as pending:
         choice.click()
-        # Some PressReader versions show a confirmation dialog after the menu.
-        # Only confirm an issue-labelled action; never fall back to page PDF.
-        confirm = page.get_by_role('button', name=ISSUE_LABEL)
+        # The current dialog has an issue-labelled title and a plain Download
+        # action (a span inside a link). Scope that action to the issue dialog;
+        # never choose a generic Download elsewhere or the page-PDF option.
+        dialog = page.get_by_role('dialog').filter(has=page.get_by_text(ISSUE_LABEL))
+        confirm = dialog.get_by_text('Download', exact=True).or_(
+            dialog.get_by_role('button', name=ISSUE_LABEL)
+        )
         try:
-            confirm.wait_for(state='visible', timeout=2000)
+            confirm.wait_for(state='visible', timeout=5000)
         except Exception as exc:
             from playwright.sync_api import TimeoutError as BrowserTimeout
             if not isinstance(exc, BrowserTimeout):
