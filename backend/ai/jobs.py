@@ -28,6 +28,13 @@ cannot be written to SQLite, which is the whole reason for the registry.
   Deliberately no automatic retry: these handlers are idempotent enough to
   re-run by hand, and a failing job retried in a loop is how a broken model
   call becomes a busy loop against llama-server.
+
+The first two are detected two ways, and the second way is the one that fires:
+the exception reaching this module, and — because ten of the fourteen handlers
+catch `Exception` around their model call on purpose, so that a failed
+enrichment cannot break the row it was enriching — the mark
+`backend/ai/service.py` leaves on the thread, read back after a handler has
+returned normally. Without it, a paused evening's work is recorded as done.
 """
 import json
 import logging
@@ -174,6 +181,7 @@ def process_one(job_id: str) -> dict:
     # Past MAX_CANCELS this job stops yielding, so that a lane which is busy
     # all day defers it rather than cancelling it forever.
     preemptible = (row['cancels'] or 0) < MAX_CANCELS
+    service.clear_deferral()
     try:
         with service.background(preemptible=preemptible):
             fn(row['target_id'], payload)
@@ -195,6 +203,31 @@ def process_one(job_id: str) -> dict:
                        job_id, row['kind'], time.monotonic() - began, e)
         _finish(db, job_id, 'error', str(e) or 'Failed')
         return {'ok': False, 'error': str(e)}
+
+    # Returning without raising is not the same as having done the work. Most
+    # of these handlers wrap their model call in `except Exception` so that a
+    # failed enrichment cannot break the row it was enriching, and that catch
+    # takes `InferencePaused` with it — which is how an evening of paused jobs
+    # came to be marked `done`, leaving nothing pending to run when the switch
+    # went back on. The exception is swallowed; the mark the service leaves on
+    # the thread is not. See `deferred_reason` in backend/ai/service.py.
+    #
+    # Requeueing on it is safe even for a handler that made several calls and
+    # lost only the first: these are all re-runnable by construction, which is
+    # the same property `_reset_stale_llm_jobs` already depends on.
+    deferred = service.deferred_reason()
+    if deferred == 'paused':
+        logger.info('Deferred %s job %s: the handler swallowed a paused call;'
+                    ' requeued', row['kind'], job_id)
+        _requeue(db, job_id, bump_cancels=False)
+        return {'ok': False, 'error': 'paused'}
+    if deferred == 'preempted':
+        cancels = (row['cancels'] or 0) + 1
+        logger.info('Preempted %s job %s (cancel %d of %d): the handler'
+                    ' swallowed it; requeued',
+                    row['kind'], job_id, cancels, MAX_CANCELS)
+        _requeue(db, job_id, bump_cancels=True)
+        return {'ok': False, 'error': 'preempted'}
 
     logger.info('Finished %s job %s in %.1fs', row['kind'], job_id,
                 time.monotonic() - began)
