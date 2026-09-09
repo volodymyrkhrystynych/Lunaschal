@@ -68,6 +68,7 @@ function Page({
   size,
   color,
   strokes,
+  reseed,
   onEdit,
 }: {
   pdf: pdfjs.PDFDocumentProxy;
@@ -78,6 +79,9 @@ function Page({
   color: string;
   /** This page's strokes, in stored (normalised) space. */
   strokes: Stroke[];
+  /** Bumped when the reader has refused an edit the ink layer already drew, to
+   * pull the surface back to what is actually stored. */
+  reseed: number;
   onEdit: (page: number, strokes: Stroke[]) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
@@ -143,7 +147,11 @@ function Page({
   // it must change when the strokes do and not merely when the page re-renders.
   const inked = useMemo(
     () => strokes.map(s => toInkStroke(s, ratio)),
-    [strokes, ratio]
+    // `reseed` is deliberately part of this: a refused edit leaves the ink
+    // layer holding a stroke the markup does not have, and a fresh identity is
+    // what makes it adopt the stored strokes again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [strokes, ratio, reseed]
   );
 
   return (
@@ -240,6 +248,9 @@ export function NewspaperReader({
   // while drawing.
   const [unsaved, setUnsaved] = useState(false);
   const [area, setArea] = useState({ width: 0, height: 0 });
+  // Bumped when an edit is refused, to pull the ink layers back into line with
+  // the markup — they have already drawn the stroke by the time we say no.
+  const [reseed, setReseed] = useState(0);
   const areaRef = useRef<HTMLDivElement>(null);
   const revision = useRef(0);
   const markupRef = useRef(markup);
@@ -366,6 +377,9 @@ export function NewspaperReader({
       setStatus(
         'This issue has reached its markup limit. Export it before adding more marks.'
       );
+      // The mark is already on the surface that drew it; take it back off,
+      // rather than leaving one on screen that will never be saved.
+      setReseed(n => n + 1);
       return;
     }
     setMarkup(next);
@@ -528,6 +542,7 @@ export function NewspaperReader({
                 size={currentSize}
                 color={color[tool] ?? ''}
                 strokes={strokesOn(markup, i + 1)}
+                reseed={reseed}
                 onEdit={(page, next) =>
                   change(setStrokesOn(markupRef.current, page, next))
                 }

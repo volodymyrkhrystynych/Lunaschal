@@ -419,3 +419,47 @@ describe('the eraser the reader never had', () => {
     expect(sent.strokes.map(s => s.tool)).toEqual(['pen']);
   });
 });
+
+describe('an issue that has reached its markup limit', () => {
+  it('takes a refused mark back off the page instead of drawing a lie', async () => {
+    // The ink layer commits a stroke locally the moment the pen lifts, and only
+    // then does the reader get to refuse it. Without pulling the surface back
+    // into line, the refused mark stays on screen looking exactly like every
+    // saved one, and is silently gone on the next open.
+    // One short of the cap, so the first mark lands and the second cannot.
+    const nearlyFull = Array.from({ length: 9999 }, (_, i) => ({
+      page: 1,
+      tool: 'pen',
+      points: [[i / 10000, 0.5]],
+    }));
+    vi.mocked(api.newspapers.markup).mockResolvedValue({
+      revision: 0,
+      strokes: nearlyFull,
+    } as never);
+
+    const { pointer, pick } = await openPage();
+    pick('Pen');
+    const draw = (from: number) => {
+      pointer('pointerdown', 'pen', from, 20);
+      pointer('pointermove', 'pen', from + 30, 60);
+      pointer('pointerup', 'pen', from + 30, 60);
+    };
+    draw(10);
+    expect(screen.queryByText(/reached its markup limit/)).toBeNull();
+
+    // A single-point stroke is painted as a dot, so count both marks.
+    const paints = () =>
+      ctx.stroke.mock.calls.length + ctx.fill.mock.calls.length;
+    const before = paints();
+    draw(50);
+    await screen.findByText(/reached its markup limit/);
+    // The surface repainted from the stored strokes rather than keeping the one
+    // it had already drawn — a whole-page redraw, not the couple of segments a
+    // new stroke's own tail paint costs.
+    expect(paints() - before).toBeGreaterThan(9000);
+    fireEvent.click(screen.getByText('Save now'));
+    await waitFor(() => expect(api.newspapers.saveMarkup).toHaveBeenCalled());
+    const [, sent] = vi.mocked(api.newspapers.saveMarkup).mock.calls[0];
+    expect(sent.strokes).toHaveLength(10000);
+  });
+});
