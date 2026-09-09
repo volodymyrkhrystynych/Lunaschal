@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
@@ -16,7 +16,6 @@ import {
 import {
   canRedo,
   canUndo,
-  commitOn,
   countPoints,
   countStrokes,
   emptyMarkup,
@@ -42,6 +41,7 @@ import {
   DEFAULT_TOOLS,
   type PanelTool,
 } from '@/components/ink/InkToolPanel';
+import { InkCanvas } from '@/components/ink/InkCanvas';
 import { HIGHLIGHTER_COLORS, PEN_COLORS } from '@/lib/ink';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -68,27 +68,20 @@ function Page({
   size,
   color,
   strokes,
-  onCommit,
-  onErase,
+  onEdit,
 }: {
   pdf: pdfjs.PDFDocumentProxy;
   number: number;
-  /** null in Read mode: nothing marks, and every touch belongs to the browser. */
+  /** 'read' means nothing marks, and every touch belongs to the browser. */
   tool: PanelTool;
   size: number;
   color: string;
   /** This page's strokes, in stored (normalised) space. */
   strokes: Stroke[];
-  onCommit: (page: number, stroke: Stroke) => void;
-  onErase: (page: number, survivors: Stroke[]) => void;
+  onEdit: (page: number, strokes: Stroke[]) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const svgRef = useRef<SVGSVGElement>(null);
-  const drawing = useRef<Stroke | null>(null);
-  const [preview, setPreview] = useState<Stroke | null>(null);
-  /** While the eraser is down, what the page would look like if it lifted now. */
-  const [erasing, setErasing] = useState<Stroke[] | null>(null);
   const [ratio, setRatio] = useState(1.3);
   const [visible, setVisible] = useState(false);
   const [width, setWidth] = useState(0);
@@ -145,55 +138,13 @@ function Page({
     };
   }, [pdf, number, visible, width]);
 
-  // The Pencil must never scroll while a marking tool is selected, and iPadOS
-  // gives only one way to enforce that: cancel the touch stream itself. Neither
-  // `touch-action` (WebKit ignores it on an <svg>) nor preventDefault on
-  // pointerdown stops a WebKit scroll, and once the scroll starts the pen
-  // pointer is cancelled mid-stroke — which is exactly what "it scrolls instead
-  // of writing" was. Fingers are left entirely alone so they keep native
-  // momentum scrolling and pinch-zoom, except while a stroke is in progress,
-  // where a resting palm would otherwise drag the page out from under the nib.
-  // Must be a native non-passive listener: React attaches touchmove passively,
-  // so an onTouchMove prop cannot preventDefault.
-  const marking = tool !== 'read';
-  useEffect(() => {
-    const element = container.current!;
-    const onTouchMove = (event: TouchEvent) => {
-      const touches = Array.from(event.touches) as StylusTouch[];
-      const stylus =
-        touches.length > 0 && touches.every(t => t.touchType === 'stylus');
-      if (drawing.current || (marking && stylus)) event.preventDefault();
-    };
-    element.addEventListener('touchmove', onTouchMove, { passive: false });
-    return () => element.removeEventListener('touchmove', onTouchMove);
-  }, [marking]);
-
-  const space = inkSpaceFor(ratio);
-
-  /** A pointer position in this page's ink space. Read per axis from the live
-   * rect, which is what makes the ratio cancel on the way back out to storage —
-   * see toWireStroke. */
-  function point(event: React.PointerEvent<SVGSVGElement>) {
-    const rect = event.currentTarget.getBoundingClientRect();
-    const fx = rect.width ? (event.clientX - rect.left) / rect.width : 0;
-    const fy = rect.height ? (event.clientY - rect.top) / rect.height : 0;
-    return {
-      x: Math.max(0, Math.min(1, fx)) * space.width,
-      y: Math.max(0, Math.min(1, fy)) * space.height,
-      pressure: event.pressure > 0 ? event.pressure : 0.5,
-    };
-  }
-
-  const inkStrokes = (erasing ?? strokes).map(s => toInkStroke(s, ratio));
-  const shown = preview ? [...inkStrokes, preview] : inkStrokes;
-
-  const endStroke = () => {
-    const stroke = drawing.current;
-    drawing.current = null;
-    setPreview(null);
-    setErasing(null);
-    return stroke;
-  };
+  const space = useMemo(() => inkSpaceFor(ratio), [ratio]);
+  // Identity matters: the ink surface re-seeds whenever this array changes, so
+  // it must change when the strokes do and not merely when the page re-renders.
+  const inked = useMemo(
+    () => strokes.map(s => toInkStroke(s, ratio)),
+    [strokes, ratio]
+  );
 
   return (
     <div
@@ -208,99 +159,45 @@ function Page({
           {error}
         </p>
       )}
-      <svg
-        ref={svgRef}
-        className="absolute inset-0 w-full h-full"
-        viewBox={`0 0 ${space.width} ${space.height}`}
-        // Never 'none': a finger has to keep scrolling the reader in every
-        // tool, and the Pencil is held off by the touchmove listener above.
-        style={{ touchAction: 'pan-y pinch-zoom' }}
-        onPointerDown={event => {
-          // Fingers only scroll; Pencil (or a mouse, for testing) only marks.
-          if (
-            !marking ||
-            !event.isPrimary ||
-            event.pointerType === 'touch' ||
-            drawing.current
-          )
-            return;
-          event.preventDefault();
-          event.currentTarget.setPointerCapture(event.pointerId);
-          drawing.current = {
-            tool: tool as Stroke['tool'],
-            size,
-            points: [point(event)],
-            ...(tool === 'eraser' ? {} : { color }),
-          };
-          setPreview(tool === 'eraser' ? null : { ...drawing.current });
-        }}
-        onPointerMove={event => {
-          const stroke = drawing.current;
-          if (
-            !stroke ||
-            !event.currentTarget.hasPointerCapture(event.pointerId)
-          )
-            return;
-          if (stroke.points.length < MAX_POINTS_PER_STROKE) {
-            stroke.points.push(point(event));
-          }
-          if (stroke.tool === 'eraser') {
-            // The eraser changes many strokes at once, so show the result of
-            // lifting now rather than the eraser's own path.
-            const survivors = eraseStroke(
-              {
-                strokes: strokes.map(s => toInkStroke(s, ratio)),
-                history: [],
-                redo: [],
-              },
-              stroke
-            ).strokes;
-            setErasing(survivors.map(s => toWireStroke(s, ratio)));
-          } else {
-            setPreview({ ...stroke });
-          }
-        }}
-        onPointerUp={event => {
-          if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
-          const survivors = erasing;
-          const stroke = endStroke();
-          event.currentTarget.releasePointerCapture(event.pointerId);
-          if (!stroke) return;
-          if (stroke.tool === 'eraser') {
-            // A scrub that touched nothing is not an edit, and should not cost
-            // an undo step.
-            if (survivors && survivors.length !== strokes.length) {
-              onErase(number, survivors);
+      {/* Mounted only while the page is near the viewport, and torn down with
+       * it. An ink canvas for a broadsheet is tens of megabytes at full pixel
+       * ratio, and an issue runs to hundreds of pages; the strokes live in the
+       * reader's markup, so the surface is a view that can be rebuilt at will.
+       *
+       * The touchmove guard rides on the container above, which is always
+       * mounted — the Pencil must be held off the scroller whether or not this
+       * particular page currently has a canvas. */}
+      {visible && (
+        <div className="absolute inset-0">
+          <InkCanvas
+            space={space}
+            strokes={inked}
+            // The reader above holds every committed stroke, so it is never
+            // behind this surface and its Undo has to be able to reach in.
+            adoptWhileDirty
+            tool={tool === 'read' ? null : tool}
+            size={size}
+            color={color}
+            palette={NEWSPAPER_PALETTE}
+            // Drawn over a scrolling column of pages: a finger has to keep
+            // scrolling and pinch-zooming in every tool.
+            touchPolicy="scroll"
+            guardRef={container}
+            maxPixelRatio={Math.min(2, width ? 2048 / width : 2)}
+            minPointDistance={MIN_POINT_DISTANCE}
+            maxPointsPerStroke={MAX_POINTS_PER_STROKE}
+            // No backdrop: the page underneath has to show through, which is
+            // the whole reason this surface never paints over anything.
+            onEdit={next =>
+              onEdit(
+                number,
+                next.map(s => toWireStroke(s, ratio))
+              )
             }
-            return;
-          }
-          onCommit(
-            number,
-            toWireStroke(simplifyStroke(stroke, MIN_POINT_DISTANCE), ratio)
-          );
-        }}
-        // Discarded rather than committed, unlike the Paper editor: a cancel
-        // here means iPadOS took the pointer to scroll with, and half a stray
-        // line dragged across a photograph is worse than no line at all.
-        onPointerCancel={endStroke}
-      >
-        {shown.map((stroke, i) => (
-          <polyline
-            key={i}
-            points={stroke.points.map(p => `${p.x},${p.y}`).join(' ')}
-            fill="none"
-            stroke={strokeColor(stroke, NEWSPAPER_PALETTE)}
-            strokeWidth={stroke.size}
-            opacity={
-              stroke.tool === 'highlighter'
-                ? NEWSPAPER_PALETTE.highlightAlpha
-                : 1
-            }
-            strokeLinecap="round"
-            strokeLinejoin="round"
+            label={`Page ${number} markup`}
           />
-        ))}
-      </svg>
+        </div>
+      )}
       <span className="absolute bottom-0 right-1 text-xs text-gray-500 pointer-events-none">
         {number}
       </span>
@@ -631,11 +528,8 @@ export function NewspaperReader({
                 size={currentSize}
                 color={color[tool] ?? ''}
                 strokes={strokesOn(markup, i + 1)}
-                onCommit={(page, stroke) =>
-                  change(commitOn(markupRef.current, page, stroke))
-                }
-                onErase={(page, survivors) =>
-                  change(setStrokesOn(markupRef.current, page, survivors))
+                onEdit={(page, next) =>
+                  change(setStrokesOn(markupRef.current, page, next))
                 }
               />
             ))}

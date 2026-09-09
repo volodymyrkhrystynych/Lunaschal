@@ -47,6 +47,10 @@ beforeEach(() => {
   // jsdom implements neither, and the drawing path calls both.
   Element.prototype.setPointerCapture = vi.fn();
   Element.prototype.releasePointerCapture = vi.fn();
+  // jsdom lays nothing out, so without this every pointer maps to (0, 0) and
+  // the eraser can never reach the ink it is aimed at.
+  HTMLCanvasElement.prototype.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, width: 400, height: 566 }) as DOMRect;
 });
 
 const stroke = (x: number): Stroke => ({
@@ -264,7 +268,7 @@ describe('the colour a stroke is drawn in', () => {
     // restyle nothing already written, and a page holds strokes of several
     // colours at once.
     const { container, ref } = renderCanvas([], { color: '#c0392b' });
-    await waitFor(() => expect(ref.current).toBeTruthy());
+    await waitFor(() => expect(ctx.setTransform).toHaveBeenCalled());
     drawOn(container.querySelector('canvas')!);
     const [drawn] = await savedStrokes(ref);
     expect(drawn.color).toBe('#c0392b');
@@ -275,7 +279,7 @@ describe('the colour a stroke is drawn in', () => {
     // before there was a picker has no colour, and writing one in now would
     // make those two states indistinguishable.
     const { container, ref } = renderCanvas([]);
-    await waitFor(() => expect(ref.current).toBeTruthy());
+    await waitFor(() => expect(ctx.setTransform).toHaveBeenCalled());
     drawOn(container.querySelector('canvas')!);
     const [drawn] = await savedStrokes(ref);
     expect(drawn.color).toBeUndefined();
@@ -287,7 +291,9 @@ describe('the colour a stroke is drawn in', () => {
       size: 60,
       color: '#c0392b',
     });
-    await waitFor(() => expect(ref.current).toBeTruthy());
+    // The page's strokes are seeded asynchronously (the on-device buffer is
+    // looked for first), so wait until there is ink on the canvas to rub out.
+    await waitFor(() => expect(ctx.stroke).toHaveBeenCalled());
     drawOn(container.querySelector('canvas')!);
     // The eraser is consumed rather than stored, so nothing it touched can
     // have picked up a colour from it.

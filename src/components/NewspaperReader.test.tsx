@@ -40,12 +40,51 @@ const stroke = {
   ],
 };
 
+function stubContext() {
+  return {
+    setTransform: vi.fn(),
+    save: vi.fn(),
+    restore: vi.fn(),
+    beginPath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    arc: vi.fn(),
+    fill: vi.fn(),
+    fillRect: vi.fn(),
+    clearRect: vi.fn(),
+    stroke: vi.fn(),
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 0,
+    lineCap: '',
+    lineJoin: '',
+    globalAlpha: 1,
+  };
+}
+
+let ctx: ReturnType<typeof stubContext>;
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
+  ctx = stubContext();
+  HTMLCanvasElement.prototype.getContext = vi.fn(
+    () => ctx
+  ) as unknown as HTMLCanvasElement['getContext'];
+  // jsdom lays nothing out, so the ink layer needs a box for a pointer to land
+  // anywhere but (0, 0).
+  HTMLCanvasElement.prototype.getBoundingClientRect = () =>
+    ({ left: 0, top: 0, width: 100, height: 200 }) as DOMRect;
+  Element.prototype.setPointerCapture = vi.fn();
+  Element.prototype.releasePointerCapture = vi.fn();
   vi.stubGlobal(
     'IntersectionObserver',
     class {
+      // The ink layer is mounted only for pages near the viewport, so a page
+      // that never reports itself visible has nothing to draw on.
+      constructor(cb: (entries: { isIntersecting: boolean }[]) => void) {
+        cb([{ isIntersecting: true }]);
+      }
       observe() {}
       disconnect() {}
     }
@@ -70,18 +109,8 @@ async function openPage() {
     <NewspaperReader issue={issue} onClose={vi.fn()} />
   );
   await screen.findByText('Save now');
-  // The markup layer, not the tool panel's own icons.
-  const svg = container.querySelector('[aria-label="Page 1"] svg')!;
-  const captured = new Set<number>();
-  svg.setPointerCapture = id => {
-    captured.add(id);
-  };
-  svg.hasPointerCapture = id => captured.has(id);
-  svg.releasePointerCapture = id => {
-    captured.delete(id);
-  };
-  svg.getBoundingClientRect = () =>
-    ({ left: 0, top: 0, width: 100, height: 200 }) as DOMRect;
+  // The ink layer, told apart from the PDF canvas it is drawn over.
+  const ink = await screen.findByLabelText('Page 1 markup');
   function pointer(name: string, type: string, x: number, y: number) {
     const event = new Event(name, { bubbles: true });
     Object.assign(event, {
@@ -91,7 +120,7 @@ async function openPage() {
       clientX: x,
       clientY: y,
     });
-    fireEvent(svg, event);
+    fireEvent(ink, event);
   }
   // The page div is what carries the non-passive touchmove listener; jsdom has
   // no Touch constructor, so the touches are plain objects.
@@ -100,24 +129,28 @@ async function openPage() {
     Object.assign(event, {
       touches: types.map(touchType => ({ touchType, clientX: 0, clientY: 0 })),
     });
-    svg.parentElement!.dispatchEvent(event);
+    // The page box carries the guard, not the ink layer: it stays mounted when
+    // the canvas does not.
+    screen.getByLabelText('Page 1').dispatchEvent(event);
     return event.defaultPrevented;
   }
   /** The tools moved into the floating panel, where they are icons with
    * accessible names rather than text. */
   const pick = (name: string) =>
     fireEvent.click(screen.getByRole('button', { name }));
-  return { svg, pointer, touchMove, pick };
+  return { ink, pointer, touchMove, pick };
 }
 
 describe('newspaper pencil and finger input', () => {
   it('records Pencil coordinates and ignores finger pointers entirely', async () => {
-    const { svg, pointer, pick } = await openPage();
+    const { pointer, pick } = await openPage();
     pick('Pen');
+    ctx.stroke.mockClear();
     pointer('pointerdown', 'touch', 10, 20);
     pointer('pointermove', 'touch', 10, 40);
     pointer('pointerup', 'touch', 10, 40);
-    expect(svg.querySelectorAll('polyline')).toHaveLength(0);
+    // Nothing was painted: a finger scrolls, it never marks.
+    expect(ctx.stroke).not.toHaveBeenCalled();
     pointer('pointerdown', 'pen', 10, 20);
     pointer('pointermove', 'pen', 40, 60);
     pointer('pointerup', 'pen', 40, 60);
@@ -332,19 +365,17 @@ describe('a conflicting save', () => {
 
 describe('the eraser the reader never had', () => {
   it('rubs out a stroke and saves what survived', async () => {
-    const { svg, pointer, pick } = await openPage();
+    const { pointer, pick } = await openPage();
     pick('Pen');
     pointer('pointerdown', 'pen', 10, 20);
     pointer('pointermove', 'pen', 40, 60);
     pointer('pointerup', 'pen', 40, 60);
-    expect(svg.querySelectorAll('polyline')).toHaveLength(1);
 
     pick('Eraser');
     // Scrubbed straight over the stroke that was just drawn.
     pointer('pointerdown', 'pen', 10, 20);
     pointer('pointermove', 'pen', 40, 60);
     pointer('pointerup', 'pen', 40, 60);
-    expect(svg.querySelectorAll('polyline')).toHaveLength(0);
 
     fireEvent.click(screen.getByText('Save now'));
     await waitFor(() =>
@@ -368,13 +399,23 @@ describe('the eraser the reader never had', () => {
 
   it('never lays down ink of its own', async () => {
     // The eraser stroke is consumed, not stored: it removes what it crossed and
-    // leaves nothing behind, so it can work over a transparent page.
-    const { svg, pointer, pick } = await openPage();
-    pick('Eraser');
+    // leaves nothing behind. That is also what lets the markup layer be
+    // transparent — there is no "paint over it in the page colour" anywhere.
+    const { pointer, pick } = await openPage();
+    pick('Pen');
     pointer('pointerdown', 'pen', 10, 20);
     pointer('pointermove', 'pen', 40, 60);
-    expect(svg.querySelectorAll('polyline')).toHaveLength(0);
     pointer('pointerup', 'pen', 40, 60);
-    expect(svg.querySelectorAll('polyline')).toHaveLength(0);
+
+    pick('Eraser');
+    // Scrubbed well clear of the stroke, so nothing is removed either.
+    pointer('pointerdown', 'pen', 80, 180);
+    pointer('pointermove', 'pen', 90, 190);
+    pointer('pointerup', 'pen', 90, 190);
+
+    fireEvent.click(screen.getByText('Save now'));
+    await waitFor(() => expect(api.newspapers.saveMarkup).toHaveBeenCalled());
+    const [, sent] = vi.mocked(api.newspapers.saveMarkup).mock.calls[0];
+    expect(sent.strokes.map(s => s.tool)).toEqual(['pen']);
   });
 });
