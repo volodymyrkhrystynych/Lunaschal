@@ -50,7 +50,7 @@ import {
   type ImageBox,
   type PageImage,
 } from '../../lib/paperImages';
-import { PaperCanvas, type PaperCanvasHandle } from './PaperCanvas';
+import { PaperSurface, type PaperSurfaceHandle } from './PaperSurface';
 import { PaperToolPanel } from './PaperToolPanel';
 import { PaperImageLayer } from './PaperImageLayer';
 import { PaperImageActions } from './PaperImageActions';
@@ -160,7 +160,7 @@ export function PaperEditor({
   useImmersiveView(!embedded && isTouchDevice());
   useHideBottomBar(embedded);
   const queryClient = useQueryClient();
-  const canvasRef = useRef<PaperCanvasHandle>(null);
+  const canvasRef = useRef<PaperSurfaceHandle>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [tool, setTool] = useState<StrokeTool>('pen');
@@ -764,9 +764,10 @@ export function PaperEditor({
   // pen is moving (see LOCAL_COMMIT_DELAY_MS below), and that write keeps the
   // same `images` array — only `strokes` changes. Depending on the whole
   // object made this recompute on every one of those commits, which gave the
-  // canvas a new `images` prop identity mid-sentence and made it redraw from
-  // scratch (see the `[images]` effect in PaperCanvas) — visible as strokes
-  // being written flickering out and back while drawing.
+  // page a new `images` prop identity mid-sentence. Back when the page was a
+  // canvas that meant a full redraw from the *committed* strokes, so the one
+  // being written flickered out and back; now it re-derives every picture's
+  // element for nothing. Cheaper either way to key on what actually changed.
   const images = useMemo<PageImage[]>(
     () =>
       (content?.images ?? []).map(i => ({
@@ -1402,7 +1403,7 @@ export function PaperEditor({
               height: box.height,
             }}
           >
-            <PaperCanvas
+            <PaperSurface
               key={currentPage.id}
               ref={canvasRef}
               pageId={currentPage.id}

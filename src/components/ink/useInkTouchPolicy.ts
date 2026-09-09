@@ -57,8 +57,8 @@ export function useInkTouchPolicy({
   /** Whether a tool that lays down ink is selected. */
   marking: boolean;
   /** The element to guard. For a scrolling surface this is the page box, not
-   * the canvas: it stays mounted when the canvas does not. */
-  guardRef: RefObject<HTMLElement | null>;
+   * the ink layer: it stays mounted when the ink layer does not. */
+  guardRef: RefObject<Element | null>;
   /** Read at event time — true while a stroke is being drawn. */
   drawingRef: RefObject<boolean>;
 }): void {
@@ -66,8 +66,13 @@ export function useInkTouchPolicy({
     if (policy !== 'scroll') return;
     const element = guardRef.current;
     if (!element) return;
-    const onTouchMove = (event: TouchEvent) => {
-      const touches = Array.from(event.touches) as StylusTouch[];
+    // Typed as a bare Event because the guard element is only known to be an
+    // Element (an <svg> on one surface, a <div> on the other), and TypeScript's
+    // touch event map is declared on HTMLElement.
+    const onTouchMove = (event: Event) => {
+      const touches = Array.from(
+        (event as TouchEvent).touches
+      ) as StylusTouch[];
       const stylus =
         touches.length > 0 && touches.every(t => t.touchType === 'stylus');
       if (drawingRef.current || (marking && stylus)) event.preventDefault();

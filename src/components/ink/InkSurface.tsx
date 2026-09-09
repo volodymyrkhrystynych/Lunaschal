@@ -1,4 +1,12 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react';
+import {
+  forwardRef,
+  memo,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import {
   commitStroke,
   emptyStrokeState,
@@ -9,7 +17,6 @@ import {
   redo as redoState,
   simplifyStroke,
   strokeColor,
-  strokeWidth,
   undo as undoState,
   type InkPalette,
   type Size,
@@ -18,6 +25,7 @@ import {
   type StrokeState,
   type StrokeTool,
 } from '@/lib/ink';
+import { strokePathData } from '@/lib/inkPath';
 import {
   touchActionFor,
   useInkTouchPolicy,
@@ -38,14 +46,14 @@ const PEN_BARREL_BUTTONS_BIT = 2;
 
 export type SwipeDirection = 'next' | 'prev';
 
-export interface InkCanvasState {
+export interface InkSurfaceState {
   canUndo: boolean;
   canRedo: boolean;
   dirty: boolean;
   revision: number;
 }
 
-export interface InkCanvasHandle {
+export interface InkSurfaceHandle {
   undo: () => void;
   redo: () => void;
   /** The committed strokes, plus the counters a caller needs to save them
@@ -57,13 +65,12 @@ export interface InkCanvasHandle {
   /** Clear the dirty flag, but only if nothing has been drawn since `revision`
    * was issued. */
   markSaved: (revision: number) => void;
-  toBlob: (type?: string) => Promise<Blob | null>;
-  redraw: () => void;
+  /** The live `<svg>`, for a surface that has to rasterize itself. */
+  element: () => SVGSVGElement | null;
 }
 
-export interface InkCanvasProps {
-  /** The coordinate space the strokes are in. Everything stored is in these
-   * units, and the transform to the screen is a single uniform scale. */
+export interface InkSurfaceProps {
+  /** The coordinate space the strokes are in, and the SVG's viewBox. */
   space: Size;
   /** Strokes to draw. Identity changes are what trigger a re-seed. */
   strokes: Stroke[];
@@ -84,22 +91,18 @@ export interface InkCanvasProps {
   palette: InkPalette;
   touchPolicy: TouchPolicy;
   /** The element carrying the non-passive touchmove guard under the `scroll`
-   * policy. Deliberately not this canvas: on a scrolling surface the canvas is
-   * mounted only while its page is near the viewport, and the guard has to
-   * outlive that. */
-  guardRef?: React.RefObject<HTMLElement | null>;
-  /** Cap on the backing store's pixel ratio. A broadsheet at full devicePixel-
-   * Ratio is tens of megabytes a page. */
-  maxPixelRatio?: number;
+   * policy. Deliberately not this surface: on a scrolling page it is mounted
+   * only while its page is near the viewport, and the guard has to outlive
+   * that. */
+  guardRef?: React.RefObject<Element | null>;
   minPointDistance?: number;
   maxPointsPerStroke?: number;
-  /** Painted under the ink on every full redraw. The default clears to
-   * transparent, which is what a surface drawn over something else needs;
-   * Paper fills its page white and draws its pictures. */
-  paintBackdrop?: (ctx: CanvasRenderingContext2D, box: Size) => void;
+  /** Drawn under the ink, inside the same SVG and the same coordinate space, so
+   * it scales with the page and lands in any rasterization of it. */
+  backdrop?: ReactNode;
   /** After any change to the committed strokes. */
   onEdit?: (strokes: Stroke[]) => void;
-  onStateChange?: (state: InkCanvasState) => void;
+  onStateChange?: (state: InkSurfaceState) => void;
   /** Finger gestures, honoured only under the `exclusive` policy — under
    * `scroll` every finger belongs to the browser. */
   onSwipe?: (direction: SwipeDirection) => void;
@@ -109,22 +112,47 @@ export interface InkCanvasProps {
   label?: string;
 }
 
+/** One committed stroke.
+ *
+ * Memoised on the stroke object, which is immutable: erasing rebuilds only the
+ * strokes it actually cut, so a scrub across one mark does not re-derive the
+ * outline of every other mark on the page. */
+const InkStroke = memo(function InkStroke({
+  stroke,
+  palette,
+}: {
+  stroke: Stroke;
+  palette: InkPalette;
+}) {
+  const d = strokePathData(stroke);
+  if (!d) return null;
+  return (
+    <path
+      d={d}
+      fill={strokeColor(stroke, palette)}
+      opacity={
+        stroke.tool === 'highlighter' ? palette.highlightAlpha : undefined
+      }
+    />
+  );
+});
+
 /**
  * The drawing surface every ink surface in the app is made of: pointer capture,
- * the live stroke buffer, and the canvas painting.
+ * the live stroke, and the SVG the ink is drawn as.
  *
- * Generalized out of the Paper editor's canvas, which is where all of this was
- * worked out — the coalesced-event batching, the tail-only paint that keeps a
- * pen feeling attached to the nib, the single-pass highlighter that stops
- * overlapping segments stacking alpha into dark blobs, and the two guards that
- * stop an unrelated repaint wiping a stroke that has not committed yet.
+ * SVG rather than a canvas because ink is read at whatever magnification the
+ * reader chooses — a newspaper is pinch-zoomed to read small print, and a
+ * bitmap would soften exactly when it is being looked at hardest. It also means
+ * a stroke costs one DOM node rather than a page-sized bitmap, which is what
+ * makes a several-hundred-page issue affordable at all.
  *
  * What varies between surfaces is deliberately small: the coordinate space, the
  * palette, what sits behind the ink, and how touches are shared with the page
  * around it.
  */
-export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
-  function InkCanvas(
+export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
+  function InkSurface(
     {
       space,
       strokes,
@@ -135,10 +163,9 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       palette,
       touchPolicy,
       guardRef,
-      maxPixelRatio,
       minPointDistance = MIN_POINT_DISTANCE,
       maxPointsPerStroke,
-      paintBackdrop,
+      backdrop,
       onEdit,
       onStateChange,
       onSwipe,
@@ -148,14 +175,26 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
     },
     ref
   ) {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const stateRef = useRef<StrokeState>(emptyStrokeState());
+    const svgRef = useRef<SVGSVGElement>(null);
+    const stateRef = useRef<StrokeState>({
+      strokes,
+      history: [],
+      redo: [],
+    });
+    /** What is painted. Mirrors `stateRef.current.strokes`, which stays the
+     * authoritative copy because the imperative handle has to read it
+     * synchronously, before React has re-rendered. */
+    const [painted, setPainted] = useState<Stroke[]>(strokes);
+    /** While the eraser is down: what the page would look like if it lifted,
+     * and how much ink that leaves — the number a change is detected by. */
+    const [erasing, setErasing] = useState<Stroke[] | null>(null);
+    const erasedTo = useRef(-1);
     const dirtyRef = useRef(false);
     // Bumped on every edit so an in-flight save can tell whether the surface
     // moved on underneath it.
     const revisionRef = useRef(0);
 
-    // Read through refs so the paint helpers never close over a stale value.
+    // Read through refs so the handlers never close over a stale value.
     const toolRef = useRef(tool);
     toolRef.current = tool;
     const sizeRef = useRef(size);
@@ -164,10 +203,6 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
     colorRef.current = color;
     const spaceRef = useRef(space);
     spaceRef.current = space;
-    const paletteRef = useRef(palette);
-    paletteRef.current = palette;
-    const backdropRef = useRef(paintBackdrop);
-    backdropRef.current = paintBackdrop;
 
     // Live drawing scratch state.
     const drawingRef = useRef<{ pointerId: number; stroke: Stroke } | null>(
@@ -175,6 +210,11 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
     );
     /** Read by the touch guard at event time. */
     const isDrawingRef = useRef(false);
+    /** The in-flight stroke's own element, written straight to the DOM. A
+     * React render per pointer move would re-derive every other stroke's
+     * outline on the page; this touches one attribute on one node. */
+    const liveRef = useRef<SVGPathElement>(null);
+    const liveFrame = useRef(0);
     // Active finger contacts. Tracked as a map (not a single pointer) so a
     // two-finger tap can be told apart from a one-finger page swipe.
     const touchRef = useRef<{
@@ -185,16 +225,16 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       maxFingers: number;
       allTaps: boolean;
     }>({ points: new Map(), maxFingers: 0, allTaps: true });
-    // Overlay ring showing the eraser footprint while erasing (a colourless
-    // eraser is otherwise invisible). Driven imperatively to avoid a React
-    // re-render on every pointer move.
+    // Ring showing the eraser footprint while erasing (a colourless eraser is
+    // otherwise invisible). Driven imperatively to avoid a React re-render on
+    // every pointer move.
     const eraserCursorRef = useRef<HTMLDivElement>(null);
 
     const exclusive = touchPolicy === 'exclusive';
     useInkTouchPolicy({
       policy: touchPolicy,
       marking: tool !== null,
-      guardRef: guardRef ?? canvasRef,
+      guardRef: guardRef ?? svgRef,
       drawingRef: isDrawingRef,
     });
 
@@ -220,114 +260,20 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       return eraser ? 'eraser' : null;
     };
 
-    const ctxOf = () => canvasRef.current?.getContext('2d') ?? null;
-
-    // Space units -> on-screen CSS pixels. A single factor for both axes: the
-    // canvas box is fitted to the space's own aspect by the surface above, so
-    // there is no separate sx/sy to drift apart and squash the ink.
-    const scale = () => {
-      const c = canvasRef.current;
-      if (!c || !c.clientWidth || !spaceRef.current.width) return 1;
-      return c.clientWidth / spaceRef.current.width;
+    /** Space units per CSS pixel on screen, for the things drawn outside the
+     * SVG's own coordinate system (the eraser ring). */
+    const pxPerUnit = () => {
+      const el = svgRef.current;
+      if (!el || !spaceRef.current.width) return 1;
+      return el.getBoundingClientRect().width / spaceRef.current.width;
     };
 
-    // Draw a full stroke. Pen tapers with pen pressure per segment; the
-    // highlighter is one translucent flat pass (a single path so overlapping
-    // segments don't stack alpha into dark blobs).
-    //
-    // The eraser is never drawn. It removes ink geometrically and is not stored
-    // — which is also what lets this canvas be transparent, since there is no
-    // "paint over it in the background colour" anywhere in the paint path.
-    const drawStroke = (ctx: CanvasRenderingContext2D, stroke: Stroke) => {
-      const s = scale();
-      const pts = stroke.points;
-      if (!pts.length) return;
-      const paint = strokeColor(stroke, paletteRef.current);
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
-      ctx.strokeStyle = paint;
-      ctx.fillStyle = paint;
-
-      if (stroke.tool === 'highlighter') {
-        ctx.save();
-        ctx.globalAlpha = paletteRef.current.highlightAlpha;
-        ctx.lineWidth = stroke.size * s;
-        ctx.beginPath();
-        ctx.moveTo(pts[0].x * s, pts[0].y * s);
-        if (pts.length === 1) {
-          ctx.lineTo(pts[0].x * s + 0.01, pts[0].y * s);
-        } else {
-          for (let i = 1; i < pts.length; i++) {
-            ctx.lineTo(pts[i].x * s, pts[i].y * s);
-          }
-        }
-        ctx.stroke();
-        ctx.restore();
-        return;
-      }
-
-      const usePressure = stroke.tool === 'pen';
-      if (pts.length === 1) {
-        const p = pts[0];
-        const w = usePressure
-          ? strokeWidth(stroke.size, p.pressure)
-          : stroke.size;
-        ctx.beginPath();
-        ctx.arc(p.x * s, p.y * s, (w * s) / 2, 0, Math.PI * 2);
-        ctx.fill();
-        return;
-      }
-      for (let i = 1; i < pts.length; i++) {
-        const a = pts[i - 1];
-        const b = pts[i];
-        const w = usePressure
-          ? strokeWidth(stroke.size, b.pressure)
-          : stroke.size;
-        ctx.lineWidth = w * s;
-        ctx.beginPath();
-        ctx.moveTo(a.x * s, a.y * s);
-        ctx.lineTo(b.x * s, b.y * s);
-        ctx.stroke();
-      }
-    };
-
-    /** Whatever sits behind the ink. Everything that repaints from scratch goes
-     * through this, so ink always lands on top. */
-    const paintBehind = (ctx: CanvasRenderingContext2D) => {
-      const c = canvasRef.current;
-      if (!c) return;
-      const box = { width: c.clientWidth, height: c.clientHeight };
-      if (backdropRef.current) backdropRef.current(ctx, box);
-      else ctx.clearRect(0, 0, box.width, box.height);
-    };
-
-    const redrawAll = () => {
-      const ctx = ctxOf();
-      if (!ctx) return;
-      paintBehind(ctx);
-      for (const s of stateRef.current.strokes) drawStroke(ctx, s);
-    };
-
-    // Size the backing store to the CSS box × devicePixelRatio for crisp lines.
-    const setupCanvas = () => {
-      const c = canvasRef.current;
-      if (!c) return;
-      let dpr = window.devicePixelRatio || 1;
-      if (maxPixelRatio) dpr = Math.min(dpr, maxPixelRatio);
-      const w = c.clientWidth;
-      const h = c.clientHeight;
-      c.width = Math.round(w * dpr);
-      c.height = Math.round(h * dpr);
-      const ctx = c.getContext('2d');
-      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    };
-
-    // Convert a pointer event to a point in the stroke space. Goes through the
-    // live bounding rect, so the ink lands under the stylus whatever the fit
-    // scale is (and keeps working while the box animates or a sidebar opens).
+    // Convert a pointer event into the stroke space. Read per axis from the
+    // live bounding rect, which is exactly how the viewBox maps back out, so
+    // the ink lands under the nib whatever size the box currently is.
     const toLogical = (e: PointerEvent): StrokePoint => {
-      const c = canvasRef.current!;
-      const rect = c.getBoundingClientRect();
+      const el = svgRef.current!;
+      const rect = el.getBoundingClientRect();
       const { width, height } = spaceRef.current;
       const fx = rect.width ? (e.clientX - rect.left) / rect.width : 0;
       const fy = rect.height ? (e.clientY - rect.top) / rect.height : 0;
@@ -338,6 +284,11 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       };
     };
 
+    const commitState = (next: StrokeState) => {
+      stateRef.current = next;
+      setPainted(next.strokes);
+    };
+
     const afterEdit = () => {
       dirtyRef.current = true;
       revisionRef.current += 1;
@@ -345,12 +296,39 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       notify();
     };
 
+    /** Paint the stroke in flight, coalesced to one rebuild per frame. */
+    const drawLive = () => {
+      if (liveFrame.current) return;
+      liveFrame.current = requestAnimationFrame(() => {
+        liveFrame.current = 0;
+        const el = liveRef.current;
+        const d = drawingRef.current;
+        if (!el) return;
+        if (!d || d.stroke.tool === 'eraser') {
+          el.removeAttribute('d');
+          return;
+        }
+        el.setAttribute('d', strokePathData(d.stroke));
+        el.setAttribute('fill', strokeColor(d.stroke, palette));
+        el.setAttribute(
+          'opacity',
+          d.stroke.tool === 'highlighter' ? String(palette.highlightAlpha) : '1'
+        );
+      });
+    };
+
+    const clearLive = () => {
+      cancelAnimationFrame(liveFrame.current);
+      liveFrame.current = 0;
+      liveRef.current?.removeAttribute('d');
+    };
+
     const moveEraserCursor = (e: PointerEvent) => {
       const el = eraserCursorRef.current;
-      const c = canvasRef.current;
-      if (!el || !c) return;
-      const rect = c.getBoundingClientRect();
-      const d = sizeRef.current * scale();
+      const svg = svgRef.current;
+      if (!el || !svg) return;
+      const rect = svg.getBoundingClientRect();
+      const d = sizeRef.current * pxPerUnit();
       el.style.width = `${d}px`;
       el.style.height = `${d}px`;
       el.style.transform = `translate(${e.clientX - rect.left - d / 2}px, ${
@@ -364,77 +342,30 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       if (el) el.style.opacity = '0';
     };
 
-    // --- mount / seed ---
-    const seededRef = useRef<Stroke[] | null>(null);
-    useEffect(() => {
-      const c = canvasRef.current;
-      if (!c) return;
-      setupCanvas();
-      stateRef.current = { strokes, history: [], redo: [] };
-      seededRef.current = strokes;
-      redrawAll();
-      notify();
+    useEffect(() => () => cancelAnimationFrame(liveFrame.current), []);
 
-      // Re-fit the backing store whenever the canvas box changes size. A
-      // ResizeObserver (not window 'resize') is essential: toggling a sidebar
-      // reflows this element without any viewport resize, and without re-fitting
-      // the browser would stretch the old bitmap and offset every stroke. rAF
-      // coalesces the burst of callbacks during an open/close.
-      let raf = 0;
-      const onResize = () => {
-        cancelAnimationFrame(raf);
-        raf = requestAnimationFrame(() => {
-          setupCanvas();
-          redrawAll();
-        });
-      };
-      const ro =
-        typeof ResizeObserver !== 'undefined'
-          ? new ResizeObserver(onResize)
-          : null;
-      ro?.observe(c);
-      window.addEventListener('resize', onResize);
-      return () => {
-        cancelAnimationFrame(raf);
-        ro?.disconnect();
-        window.removeEventListener('resize', onResize);
-      };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
-
-    // Adopt content that arrives *after* mount. The effect above reads `strokes`
-    // once, so a refetch landing while this canvas is already up used to be
-    // dropped on the floor — which is what kept a page blank after its stale
-    // (pre-save) cache entry had seeded it.
+    // Adopt content that arrives after mount. The initial state is seeded at
+    // construction, so this fires only on a real change — a refetch landing
+    // while this surface is already up, which used to be dropped on the floor.
+    const seededRef = useRef(strokes);
     useEffect(() => {
       if (strokes === seededRef.current) return;
       seededRef.current = strokes;
       // Unsaved ink outranks anything the server has to say — unless the owner
       // above is the one holding the strokes, in which case it is never behind.
       if (dirtyRef.current && !adoptWhileDirty) return;
-      // A stroke in progress is painted straight onto the canvas before it is
-      // committed (see onPointerMove) and isn't part of stateRef yet, so a
-      // reseed here would repaint over it and erase everything drawn so far.
-      // Bail and let the commit's own paint stand.
+      // A stroke in progress lives in its own element and its own ref, so
+      // adopting here cannot disturb it; but the strokes arriving do not
+      // include it, and replacing the state mid-stroke would make the commit
+      // land on top of content the user has not seen resolve.
       if (drawingRef.current) return;
-      stateRef.current = { strokes, history: [], redo: [] };
-      redrawAll();
+      commitState({ strokes, history: [], redo: [] });
       notify();
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [strokes]);
 
-    // Repaint when what sits behind the ink changes. Guarded the same way: a
-    // stroke in progress is on the canvas but not yet in stateRef, so a redraw
-    // triggered by something as unrelated as a picture finishing its upload
-    // would wipe it until the stroke completes.
-    useEffect(() => {
-      if (drawingRef.current) return;
-      redrawAll();
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [paintBackdrop, space.width, space.height, palette]);
-
     // --- pointer handlers ---
-    const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const onPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
       const native = e.nativeEvent;
       if (toolRef.current === null) return; // read mode: nothing marks
       if (native.pointerType === 'touch') {
@@ -456,10 +387,10 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       // Only an explicitly secondary pointer is refused. `isPrimary` is always
       // populated on a real PointerEvent, but absent on a synthetic one, and
       // "undefined" must not read as "not primary".
-      if (e.isPrimary === false || drawingRef.current) return;
+      if (native.isPrimary === false || drawingRef.current) return;
       // Pen / mouse: draw (or erase).
       e.preventDefault();
-      canvasRef.current?.setPointerCapture(native.pointerId);
+      svgRef.current?.setPointerCapture(native.pointerId);
       const drawn = penButtonTool(native) ?? toolRef.current;
       const stroke: Stroke = {
         tool: drawn,
@@ -474,15 +405,11 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       };
       drawingRef.current = { pointerId: native.pointerId, stroke };
       isDrawingRef.current = true;
-      if (stroke.tool === 'eraser') {
-        moveEraserCursor(native);
-      } else {
-        const ctx = ctxOf();
-        if (ctx) drawStroke(ctx, stroke); // dot for a tap
-      }
+      if (stroke.tool === 'eraser') moveEraserCursor(native);
+      else drawLive();
     };
 
-    const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const onPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
       if (e.nativeEvent.pointerType === 'touch') {
         const t = touchRef.current.points.get(e.nativeEvent.pointerId);
         if (t) {
@@ -493,8 +420,6 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       }
       const d = drawingRef.current;
       if (!d || e.nativeEvent.pointerId !== d.pointerId) return;
-      const ctx = ctxOf();
-      if (!ctx) return;
       const events =
         typeof e.nativeEvent.getCoalescedEvents === 'function'
           ? e.nativeEvent.getCoalescedEvents()
@@ -510,42 +435,27 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       }
       if (d.stroke.tool === 'eraser') {
         moveEraserCursor(e.nativeEvent);
-        // The real eraser changes many strokes at once; redraw the whole
-        // surface so the user sees the result live as they scrub.
-        const eraser = simplifyStroke(d.stroke, minPointDistance);
-        const erased = eraseStroke(
+        // The eraser changes many strokes at once, so show the result of
+        // lifting now rather than the eraser's own path. Most moves cross
+        // nothing, so only a set that actually changed is pushed into state.
+        const survivors = eraseStroke(
           { ...stateRef.current, history: [], redo: [] },
-          eraser
-        );
-        paintBehind(ctx);
-        for (const s of erased.strokes) drawStroke(ctx, s);
-        // Small circle where the eraser tip is so the active area is visible.
-        const last = eraser.points[eraser.points.length - 1];
-        const s = scale();
-        const r = (eraser.size * s) / 2;
-        ctx.strokeStyle = '#888';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(last.x * s, last.y * s, r, 0, Math.PI * 2);
-        ctx.stroke();
+          simplifyStroke(d.stroke, minPointDistance)
+        ).strokes;
+        const left = pointCount(survivors);
+        if (left === pointCount(stateRef.current.strokes)) {
+          // Crossed nothing yet.
+          if (erasedTo.current !== -1) {
+            erasedTo.current = -1;
+            setErasing(null);
+          }
+        } else if (left !== erasedTo.current) {
+          erasedTo.current = left;
+          setErasing(survivors);
+        }
         return;
       }
-      if (d.stroke.tool === 'highlighter') {
-        // The translucent stroke must be redrawn as one uniform pass, so repaint
-        // the committed strokes plus the in-progress highlighter each frame.
-        redrawAll();
-        drawStroke(ctx, d.stroke);
-      } else {
-        // Opaque tools: draw only the new tail segment for low latency.
-        const pts = d.stroke.points;
-        const from = Math.max(1, pts.length - events.length);
-        for (let i = from; i < pts.length; i++) {
-          drawStroke(ctx, {
-            ...d.stroke,
-            points: [pts[i - 1], pts[i]],
-          });
-        }
-      }
+      drawLive();
     };
 
     const finishDrawing = (pointerId: number, commit: boolean) => {
@@ -554,36 +464,31 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       drawingRef.current = null;
       isDrawingRef.current = false;
       hideEraserCursor();
-      if (!commit) {
-        redrawAll();
-        return;
-      }
+      clearLive();
+      erasedTo.current = -1;
+      setErasing(null);
+      if (!commit) return;
       const simplified = simplifyStroke(d.stroke, minPointDistance);
       if (d.stroke.tool === 'eraser') {
         // The eraser stroke is consumed: it removes intersected ink and is not
         // stored. It may alter many strokes, so the undo/redo model uses full
         // snapshots.
-        const before = stateRef.current.strokes;
         const after = eraseStroke(stateRef.current, simplified);
-        // Either way the surface is repainted, to clear the tip ring the
-        // preview left on it.
-        if (after.strokes.length === before.length) {
-          // A scrub that crossed nothing is not an edit, and should not cost an
-          // undo step or leave the page reading as unsaved.
-          redrawAll();
+        // A scrub that crossed nothing is not an edit, and should not cost an
+        // undo step or leave the page reading as unsaved.
+        //
+        // Counted in points, not strokes. Erasing the tail of a stroke leaves
+        // it one stroke — as does erasing nothing — so comparing stroke counts
+        // silently threw those rubs away. Points are exact: the eraser drops
+        // precisely the ones it covered, and splits the rest into runs.
+        if (pointCount(after.strokes) === pointCount(stateRef.current.strokes))
           return;
-        }
-        stateRef.current = after;
-        redrawAll();
+        commitState(after);
       } else {
         // Store the simplified stroke, not the raw pointer firehose: rounded and
         // with sub-unit moves dropped. Skipping this is what let a densely
         // written page grow to megabytes of JSON and get rejected with a 413.
-        //
-        // No repaint: the stroke is already on the canvas, drawn tail-first as
-        // it was made, and a full redraw of a dense page costs a visible hitch
-        // at the end of every stroke.
-        stateRef.current = commitStroke(stateRef.current, simplified);
+        commitState(commitStroke(stateRef.current, simplified));
       }
       afterEdit();
     };
@@ -616,7 +521,7 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       }
     };
 
-    const onPointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const onPointerUp = (e: React.PointerEvent<SVGSVGElement>) => {
       const native = e.nativeEvent;
       if (native.pointerType === 'touch') {
         if (!exclusive) return;
@@ -632,7 +537,7 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
       finishDrawing(native.pointerId, true);
     };
 
-    const onPointerCancel = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const onPointerCancel = (e: React.PointerEvent<SVGSVGElement>) => {
       if (e.nativeEvent.pointerType === 'touch') {
         const t = touchRef.current;
         t.points.delete(e.nativeEvent.pointerId);
@@ -651,8 +556,7 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
 
     // --- imperative handle ---
     const rewind = (next: StrokeState) => {
-      stateRef.current = next;
-      redrawAll();
+      commitState(next);
       afterEdit();
     };
 
@@ -678,22 +582,23 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
         dirtyRef.current = false;
         notify();
       },
-      toBlob: (type = 'image/png') =>
-        new Promise<Blob | null>(resolve => {
-          const c = canvasRef.current;
-          if (!c) return resolve(null);
-          c.toBlob(blob => resolve(blob), type);
-        }),
-      redraw: redrawAll,
+      element: () => svgRef.current,
     }));
+
+    const shown = erasing ?? painted;
 
     return (
       <div className="relative w-full h-full">
-        <canvas
-          ref={canvasRef}
+        <svg
+          ref={svgRef}
           className={`w-full h-full block select-none ${className}`}
-          aria-label={label}
+          viewBox={`0 0 ${space.width} ${space.height}`}
+          // The box is always the space's own aspect, and mapping both axes
+          // straight onto it is what makes a pointer land exactly where the
+          // viewBox puts the ink back.
+          preserveAspectRatio="none"
           style={{ touchAction: touchActionFor(touchPolicy) }}
+          aria-label={label}
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
@@ -703,7 +608,15 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
           // time the nib crossed a page gutter would be a bug you could only
           // reproduce on the hardware.
           onPointerLeave={exclusive ? onPointerUp : undefined}
-        />
+        >
+          {backdrop != null && <g data-ink-backdrop="">{backdrop}</g>}
+          <g data-ink-strokes="">
+            {shown.map((stroke, i) => (
+              <InkStroke key={i} stroke={stroke} palette={palette} />
+            ))}
+            <path ref={liveRef} />
+          </g>
+        </svg>
         {/* Eraser footprint indicator (positioned imperatively). */}
         <div
           ref={eraserCursorRef}
@@ -718,3 +631,13 @@ export const InkCanvas = forwardRef<InkCanvasHandle, InkCanvasProps>(
     );
   }
 );
+
+/** How much ink a set of strokes holds. The eraser removes points, so this is
+ * what tells "it rubbed something out" from "it passed over blank page" — and
+ * it stays right when a rub shortens a stroke rather than removing or splitting
+ * one. */
+function pointCount(strokes: Stroke[]): number {
+  let n = 0;
+  for (const s of strokes) n += s.points.length;
+  return n;
+}

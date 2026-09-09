@@ -112,31 +112,31 @@ beforeEach(async () => {
   }
 });
 
-/** Draw one stroke on the mounted canvas, and hand it back. */
+/** Draw one stroke on the mounted page, and hand the surface back. */
 async function drawOn(container: HTMLElement) {
-  const canvas = await waitFor(() => {
-    const c = container.querySelector('canvas');
+  const surface = await waitFor(() => {
+    const c = container.querySelector('svg[aria-label="Page"]');
     expect(c).toBeTruthy();
     return c!;
   });
-  canvas.getBoundingClientRect = () =>
+  surface.getBoundingClientRect = () =>
     ({ left: 0, top: 0, width: 400, height: 566 }) as DOMRect;
   await act(async () => {
-    canvas.dispatchEvent(
+    surface.dispatchEvent(
       new MouseEvent('pointerdown', { bubbles: true, clientX: 20, clientY: 20 })
     );
-    canvas.dispatchEvent(
+    surface.dispatchEvent(
       new MouseEvent('pointermove', {
         bubbles: true,
         clientX: 80,
         clientY: 120,
       })
     );
-    canvas.dispatchEvent(
+    surface.dispatchEvent(
       new MouseEvent('pointerup', { bubbles: true, clientX: 80, clientY: 120 })
     );
   });
-  return canvas;
+  return surface;
 }
 
 function renderEditor() {
@@ -163,12 +163,12 @@ describe('page content cache after a save', () => {
     // blank one would overwrite the real strokes, because a save replaces the
     // column outright.
     const { container, queryClient } = renderEditor();
-    const canvas = await waitFor(() => {
-      const c = container.querySelector('canvas');
+    const surface = await waitFor(() => {
+      const c = container.querySelector('svg[aria-label="Page"]');
       expect(c).toBeTruthy();
       return c!;
     });
-    canvas.getBoundingClientRect = () =>
+    surface.getBoundingClientRect = () =>
       ({ left: 0, top: 0, width: 400, height: 566 }) as DOMRect;
 
     expect(queryClient.getQueryData(['paper', 'page', PAGE_1])).toMatchObject({
@@ -177,21 +177,21 @@ describe('page content cache after a save', () => {
 
     // Draw, then explicitly save — nothing uploads on its own any more.
     await act(async () => {
-      canvas.dispatchEvent(
+      surface.dispatchEvent(
         new MouseEvent('pointerdown', {
           bubbles: true,
           clientX: 20,
           clientY: 20,
         })
       );
-      canvas.dispatchEvent(
+      surface.dispatchEvent(
         new MouseEvent('pointermove', {
           bubbles: true,
           clientX: 80,
           clientY: 120,
         })
       );
-      canvas.dispatchEvent(
+      surface.dispatchEvent(
         new MouseEvent('pointerup', {
           bubbles: true,
           clientX: 80,
@@ -249,7 +249,9 @@ describe('manual save', () => {
     } as never);
 
     const { container } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     fireEvent.click(
       screen.getByTitle('Select and move pictures instead of drawing')
@@ -575,7 +577,9 @@ describe('a picture pasted, moved, then saved before it ever uploaded', () => {
     vi.mocked(api.paper.addImage).mockResolvedValue({ id: 'ignored' } as never);
 
     const { container, queryClient } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     await act(async () => {
       const event = new Event('paste') as Event & { clipboardData: unknown };
@@ -728,7 +732,9 @@ describe('a picture whose upload never landed', () => {
     );
 
     const { container, queryClient } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     const pasted = await pasteOne(queryClient);
     await dragRight(pasted, 150);
@@ -773,7 +779,9 @@ describe('a picture whose upload never landed', () => {
     });
 
     const { container, queryClient } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     const pasted = await pasteOne(queryClient);
     await dragRight(pasted, 150);
@@ -925,7 +933,9 @@ describe('rotating a picture before it ever uploaded', () => {
     vi.mocked(api.paper.addImage).mockResolvedValue({ id: 'ignored' } as never);
 
     const { container } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     await act(async () => {
       const event = new Event('paste') as Event & { clipboardData: unknown };
@@ -996,7 +1006,7 @@ describe('the images prop stays stable while drawing', () => {
     } as never);
 
     const { container, queryClient } = renderEditor();
-    const canvas = await drawOn(container);
+    const surface = await drawOn(container);
     const before = queryClient.getQueryData<{ images: unknown }>([
       'paper',
       'page',
@@ -1006,14 +1016,14 @@ describe('the images prop stays stable while drawing', () => {
     // A second stroke stands in for the idle-timer's local commit — both take
     // the same commitLocal path, and this way the test needs no fake timers.
     await act(async () => {
-      canvas.dispatchEvent(
+      surface.dispatchEvent(
         new MouseEvent('pointerdown', {
           bubbles: true,
           clientX: 30,
           clientY: 30,
         })
       );
-      canvas.dispatchEvent(
+      surface.dispatchEvent(
         new MouseEvent('pointerup', { bubbles: true, clientX: 30, clientY: 30 })
       );
     });
@@ -1025,8 +1035,10 @@ describe('the images prop stays stable while drawing', () => {
       'page',
       PAGE_1,
     ])!.images;
-    // Same array, not merely equal content — that identity is what keeps
-    // PaperCanvas's images-effect from firing on a strokes-only commit.
+    // Same array, not merely equal content. It mattered acutely when the page
+    // was a canvas — a new identity repainted it from the committed strokes and
+    // wiped whatever was mid-stroke — and it still matters: the pictures are
+    // memoised on it, so a fresh array re-derives every one of them for nothing.
     expect(after).toBe(before);
   });
 });
@@ -1108,7 +1120,9 @@ describe('the page is never refetched while it is already cached', () => {
       nowSpy.mockRestore();
     }
 
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
     expect(fetchesOfPage1()).toBe(before);
     // And the picture the server has never heard of is still on the page.
     expect(
@@ -1144,7 +1158,9 @@ describe('deleting a picture', () => {
     } as never);
 
     const { container } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     fireEvent.click(
       screen.getByTitle('Select and move pictures instead of drawing')
@@ -1187,7 +1203,9 @@ describe('deleting a picture', () => {
     });
 
     const { container } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     await act(async () => {
       const event = new Event('paste') as Event & { clipboardData: unknown };
@@ -1263,7 +1281,9 @@ describe('the Paste button', () => {
     ]);
 
     const { container, queryClient } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /paste/i }));
@@ -1290,7 +1310,9 @@ describe('the Paste button', () => {
     ]);
 
     const { container } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /paste/i }));
@@ -1312,7 +1334,9 @@ describe('the Paste button', () => {
     });
 
     const { container } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /paste/i }));
@@ -1370,7 +1394,9 @@ describe('the app chrome while a page is open', () => {
   it('leaves a desktop alone', async () => {
     pointer('fine');
     const { container } = renderWithChrome();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
     expect(screen.getByText('chrome shown')).toBeTruthy();
   });
 });
@@ -1392,7 +1418,9 @@ describe('a keydown with no mappable key', () => {
 
   it('is ignored instead of throwing out of the window listener', async () => {
     const { container } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
 
     // jsdom swallows a listener's exception and reports it as an ErrorEvent on
     // window rather than rethrowing out of dispatchEvent, so that is what has
@@ -1415,7 +1443,9 @@ describe('a keydown with no mappable key', () => {
 
   it('still saves on a real Ctrl+S', async () => {
     const { container } = renderEditor();
-    await waitFor(() => expect(container.querySelector('canvas')).toBeTruthy());
+    await waitFor(() =>
+      expect(container.querySelector('svg[aria-label="Page"]')).toBeTruthy()
+    );
     await drawOn(container);
 
     await act(async () => {

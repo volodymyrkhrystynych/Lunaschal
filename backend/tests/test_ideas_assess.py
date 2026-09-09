@@ -45,7 +45,7 @@ FACTS = {
         {'method': 'GET', 'path': '/api/tasks/todos', 'function': 'list_todos',
          'file': 'backend/routes/tasks.py', 'line': 20, 'doc': None},
     ],
-    'components': [{'file': 'src/components/Paper/PaperCanvas.tsx', 'lines': 700, 'exports': []}],
+    'components': [{'file': 'src/components/Paper/PaperSurface.tsx', 'lines': 700, 'exports': []}],
     'api': [{'namespace': 'paper', 'methods': ['list', 'getPage']}],
     'ai': [{'module': 'workouts', 'purpose': 'Freeform gym log parsing.'}],
     'settings': ['llama_url', 'briefing_hour'],

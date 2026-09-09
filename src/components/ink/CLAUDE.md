@@ -1,4 +1,4 @@
-# The ink layer (`src/components/ink/`, `src/lib/ink.ts`, `src/lib/inkPanel.ts`)
+# The ink layer (`src/components/ink/`, `src/lib/ink.ts`, `src/lib/inkPath.ts`, `src/lib/inkPanel.ts`)
 
 Every drawing surface in the app is built from this. There are three of them and
 they share one implementation, so a fix to how ink behaves is written once:
@@ -19,29 +19,45 @@ not supply a stroke model or a pointer loop.**
 - **`src/lib/ink.ts` knows nothing about how big anything is.** Strokes,
   snapshot undo/redo, the geometric eraser, simplification, pressure, the
   tap/swipe predicates. Every coordinate is in whatever space the surface above
-  declares, and the transform to the screen is always a single uniform scale —
-  the separate x/y scales that preceded it are what used to distort saved ink
-  when a window changed shape. Page-specific geometry lives beside the surface
-  that owns it: `src/lib/paper.ts` for the A4 sheet, `src/lib/newspaperMarkup.ts`
-  for a PDF page.
+  declares, and the transform to the screen is the SVG's own viewBox. Page-
+  specific geometry lives beside the surface that owns it: `src/lib/paper.ts`
+  for the A4 sheet, `src/lib/newspaperMarkup.ts` for a PDF page.
 
-- **`InkCanvas` owns the pointer loop and the painting**, and the parts of it
-  that look incidental are not. Coalesced events are drained on every move (a
-  pen reports faster than the browser fires, and dropping the batch is what
-  makes a fast stroke a polygon); opaque tools paint only the new tail segment,
-  which is what keeps ink feeling attached to the nib; the highlighter is one
-  translucent pass so overlapping segments don't stack alpha into dark blobs;
-  and two effects bail while a stroke is in flight, because in-progress ink is
-  painted straight to the canvas and is not in `stateRef` yet — a repaint
-  landing mid-stroke erases everything drawn so far.
+- **Ink is SVG, and that is a decision about magnification.** A stroke is
+  geometry in the page's own units, so it stays sharp at whatever zoom the page
+  is read at — a newspaper is pinch-zoomed to read small print, and a bitmap
+  would soften exactly when it is being looked at hardest. It also means a
+  stroke costs one DOM node instead of a page-sized bitmap, which is what makes
+  a several-hundred-page issue affordable.
+
+- **A `<polyline>` carries one width, so pressure needs an outline**
+  (`src/lib/inkPath.ts`). A tapering stroke is drawn as the outline of a
+  variable-width ribbon and filled: one `<path>` per stroke. Two details in
+  there are easy to get wrong and are pinned by tests — averaging the two
+  segment normals at a join shortens the offset by cos(θ/2) and pinches a sharp
+  corner to a waist, so the offset is stretched back and then capped the way a
+  miter limit is; and a repeated point makes a zero-length segment, which
+  without a guard puts `NaN` through the whole path. The highlighter does not
+  taper: it is a flat band, because a tapering edge reads as a smudge rather
+  than a marker.
+
+- **The stroke in flight is its own element, written straight to the DOM.** A
+  React render per pointer move would re-derive every other stroke's outline on
+  the page; instead one attribute on one node changes, coalesced to one rebuild
+  per animation frame. This is also why a whole class of bug is simply gone: on
+  the canvas, in-progress ink was painted onto the bitmap and was not in the
+  committed state yet, so _any_ repaint — a picture finishing its upload, say —
+  erased what had just been written until the stroke ended. Committed strokes
+  are memoised on the stroke object, which is immutable, so erasing re-derives
+  only the strokes it actually cut.
 
 - **The eraser is geometric and lays down nothing.** It splits the strokes it
   crosses and is itself discarded, so there is no "paint over it in the page
-  colour" anywhere in the paint path. That is not a detail: it is exactly what
-  lets the newspaper's ink layer be transparent over a PDF page. Anyone
-  optimising the eraser preview into a fill will break the newspaper silently,
-  and `InkCanvas.test.tsx` pins it. A scrub that crosses nothing is not an edit
-  and costs no undo step.
+  colour" anywhere. That is not a detail: it is exactly what lets the
+  newspaper's ink layer be transparent over a PDF page. A scrub that crosses
+  nothing is not an edit and costs no undo step — measured in **points, not
+  strokes**: rubbing the tail off a stroke leaves it one stroke exactly as
+  rubbing nothing does, so comparing stroke counts silently discarded those.
 
 - **`useInkTouchPolicy` names the one thing the surfaces genuinely disagree
   about, rather than splitting the difference.** It follows from whether there
@@ -58,14 +74,14 @@ not supply a stroke model or a pointer loop.**
 
   Under `scroll` the Pencil is held off the scroller by a **native, non-passive
   `touchmove` listener**, and every part of that sentence was paid for:
-  `touch-action` cannot tell a pen from a finger (and WebKit ignored it outright
-  on the `<svg>` this used to be), `preventDefault` on `pointerdown` does not
-  stop an iPadOS scroll, once that scroll starts the pen pointer is _cancelled_
+  `touch-action` cannot tell a pen from a finger (and WebKit ignores it outright
+  on an `<svg>`, which this is), `preventDefault` on `pointerdown` does not stop
+  an iPadOS scroll, once that scroll starts the pen pointer is _cancelled_
   mid-stroke — which is what "the Pencil scrolls instead of writing" was — and
   React attaches `touchmove` passively, so a prop cannot do it. The listener
-  goes on the **page box, not the canvas**: on a scrolling surface the canvas is
-  mounted only while its page is near the viewport, and the guard has to outlive
-  that.
+  goes on the **page box, not the ink layer**: on a scrolling surface the ink
+  layer is mounted only while its page is near the viewport, and the guard has
+  to outlive that.
 
 - **A cancelled stroke splits the same way**, and deliberately is not unified.
   Under `exclusive` it is committed: the ink was drawn, is on screen, and a
@@ -92,17 +108,14 @@ not supply a stroke model or a pointer loop.**
   Placement is remembered per surface: where the panel belongs over an A4 sheet
   is not where it belongs over a broadsheet.
 
-- **On a scrolling surface the ink canvas is mounted only near the viewport.**
-  A broadsheet canvas is tens of megabytes at full pixel ratio and an issue can
-  run to hundreds of pages. This is safe there and only there: the newspaper's
-  strokes live in the reader's markup, so the canvas is a view that can be
-  rebuilt at will, whereas Paper's bitmap _is_ the artifact — it is what
-  `getSaveData` turns into the page snapshot. The laziness belongs to the
-  newspaper's `Page`, not to `InkCanvas`, and must not leak into Paper.
-
-- **One loss, taken knowingly.** The newspaper's ink was SVG, which stays crisp
-  under pinch-zoom; a canvas bitmap does not. It is a bitmap over a bitmap now —
-  the pdf.js canvas beneath is already capped at 2048px and blurs on zoom by the
-  same factor, so the ink blurs _with_ the page rather than floating sharp over
-  soft text. Raising the ink canvas's backing store on zoom would undo the
-  memory budget above, so it deliberately does not.
+- **Paper still rasterizes, and only Paper.** A page's PNG snapshot is
+  load-bearing — `backend/routes/paper.py` serves it as the explorer grid's
+  cover, the Journal filmstrip's thumbnails and the Ideas sketch picker — so
+  `PaperSurface` renders one at save time. It fills the _same_ path data the
+  page is drawn with onto an offscreen canvas via `Path2D`, so the thumbnail
+  cannot drift from what is on screen. Serializing the `<svg>` and loading it
+  through an `<img>` would have been shorter and would have silently dropped
+  every picture: an SVG rasterized that way is not allowed to fetch its own
+  `href`s. The snapshot is a fixed 1240px wide, where it used to be whatever the
+  canvas happened to be on screen — the same page produced a different
+  thumbnail on a laptop and on a phone.

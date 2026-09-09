@@ -41,7 +41,7 @@ import {
   DEFAULT_TOOLS,
   type PanelTool,
 } from '@/components/ink/InkToolPanel';
-import { InkCanvas } from '@/components/ink/InkCanvas';
+import { InkSurface } from '@/components/ink/InkSurface';
 import { HIGHLIGHTER_COLORS, PEN_COLORS } from '@/lib/ink';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -168,16 +168,17 @@ function Page({
         </p>
       )}
       {/* Mounted only while the page is near the viewport, and torn down with
-       * it. An ink canvas for a broadsheet is tens of megabytes at full pixel
-       * ratio, and an issue runs to hundreds of pages; the strokes live in the
+       * it. An issue runs to hundreds of pages, and while SVG ink costs a DOM
+       * node per stroke rather than a page-sized bitmap, there is no reason to
+       * hold markup for pages nobody is looking at; the strokes live in the
        * reader's markup, so the surface is a view that can be rebuilt at will.
        *
        * The touchmove guard rides on the container above, which is always
        * mounted — the Pencil must be held off the scroller whether or not this
-       * particular page currently has a canvas. */}
+       * particular page currently has an ink layer. */}
       {visible && (
         <div className="absolute inset-0">
-          <InkCanvas
+          <InkSurface
             space={space}
             strokes={inked}
             // The reader above holds every committed stroke, so it is never
@@ -191,11 +192,10 @@ function Page({
             // scrolling and pinch-zooming in every tool.
             touchPolicy="scroll"
             guardRef={container}
-            maxPixelRatio={Math.min(2, width ? 2048 / width : 2)}
             minPointDistance={MIN_POINT_DISTANCE}
             maxPointsPerStroke={MAX_POINTS_PER_STROKE}
-            // No backdrop: the page underneath has to show through, which is
-            // the whole reason this surface never paints over anything.
+            // No backdrop: the PDF page underneath has to show through, which
+            // is the whole reason this surface never paints over anything.
             onEdit={next =>
               onEdit(
                 number,

@@ -23,8 +23,8 @@ older ink, use the eraser, which removes only what it is scrubbed over and only
 on the page it is on. Export PDF downloads a copy with the current markup drawn
 into it. It does not modify newspaper text or replace the original PDF.
 
-The markup layer is a canvas rather than SVG, so ink softens under pinch-zoom
-the way the page image beneath it already does.
+The markup layer is SVG, so ink stays sharp at any magnification — it does not
+soften under pinch-zoom the way the page image beneath it does.
 
 Markup saves to SQLite every 1.5 seconds, with a local browser draft written after
 each stroke. The status distinguishes local storage from a completed server save.

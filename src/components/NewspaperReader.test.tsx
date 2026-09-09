@@ -72,8 +72,9 @@ beforeEach(() => {
     () => ctx
   ) as unknown as HTMLCanvasElement['getContext'];
   // jsdom lays nothing out, so the ink layer needs a box for a pointer to land
-  // anywhere but (0, 0).
-  HTMLCanvasElement.prototype.getBoundingClientRect = () =>
+  // anywhere but (0, 0). On Element, not HTMLCanvasElement: the markup layer is
+  // an <svg> drawn over the PDF's canvas.
+  Element.prototype.getBoundingClientRect = () =>
     ({ left: 0, top: 0, width: 100, height: 200 }) as DOMRect;
   Element.prototype.setPointerCapture = vi.fn();
   Element.prototype.releasePointerCapture = vi.fn();
@@ -111,6 +112,12 @@ async function openPage() {
   await screen.findByText('Save now');
   // The ink layer, told apart from the PDF canvas it is drawn over.
   const ink = await screen.findByLabelText('Page 1 markup');
+  /** Marks actually on the page. The stroke in flight is a bare element with no
+   * path data until a frame has run, so it is not counted. */
+  const marks = () =>
+    Array.from(ink.querySelectorAll('[data-ink-strokes] path')).filter(p =>
+      p.getAttribute('d')
+    );
   function pointer(name: string, type: string, x: number, y: number) {
     const event = new Event(name, { bubbles: true });
     Object.assign(event, {
@@ -138,19 +145,18 @@ async function openPage() {
    * accessible names rather than text. */
   const pick = (name: string) =>
     fireEvent.click(screen.getByRole('button', { name }));
-  return { ink, pointer, touchMove, pick };
+  return { ink, marks, pointer, touchMove, pick };
 }
 
 describe('newspaper pencil and finger input', () => {
   it('records Pencil coordinates and ignores finger pointers entirely', async () => {
-    const { pointer, pick } = await openPage();
+    const { marks, pointer, pick } = await openPage();
     pick('Pen');
-    ctx.stroke.mockClear();
     pointer('pointerdown', 'touch', 10, 20);
     pointer('pointermove', 'touch', 10, 40);
     pointer('pointerup', 'touch', 10, 40);
-    // Nothing was painted: a finger scrolls, it never marks.
-    expect(ctx.stroke).not.toHaveBeenCalled();
+    // Nothing was marked: a finger scrolls, it never writes.
+    expect(marks()).toHaveLength(0);
     pointer('pointerdown', 'pen', 10, 20);
     pointer('pointermove', 'pen', 40, 60);
     pointer('pointerup', 'pen', 40, 60);
@@ -437,7 +443,7 @@ describe('an issue that has reached its markup limit', () => {
       strokes: nearlyFull,
     } as never);
 
-    const { pointer, pick } = await openPage();
+    const { marks, pointer, pick } = await openPage();
     pick('Pen');
     const draw = (from: number) => {
       pointer('pointerdown', 'pen', from, 20);
@@ -447,16 +453,12 @@ describe('an issue that has reached its markup limit', () => {
     draw(10);
     expect(screen.queryByText(/reached its markup limit/)).toBeNull();
 
-    // A single-point stroke is painted as a dot, so count both marks.
-    const paints = () =>
-      ctx.stroke.mock.calls.length + ctx.fill.mock.calls.length;
-    const before = paints();
+    const before = marks().length;
     draw(50);
     await screen.findByText(/reached its markup limit/);
-    // The surface repainted from the stored strokes rather than keeping the one
-    // it had already drawn — a whole-page redraw, not the couple of segments a
-    // new stroke's own tail paint costs.
-    expect(paints() - before).toBeGreaterThan(9000);
+    // The page shows exactly what is stored, not the extra mark it had already
+    // drawn and the reader then refused.
+    expect(marks()).toHaveLength(before);
     fireEvent.click(screen.getByText('Save now'));
     await waitFor(() => expect(api.newspapers.saveMarkup).toHaveBeenCalled());
     const [, sent] = vi.mocked(api.newspapers.saveMarkup).mock.calls[0];

@@ -1319,7 +1319,7 @@ export function insertPendingPaperImage(
         existing.y === vars.box.y &&
         existing.width === vars.box.width &&
         existing.height === vars.box.height;
-      // Same reference back when nothing moved: the canvas redraws from
+      // Same reference back when nothing moved: the page re-derives from
       // scratch whenever its `images` prop changes identity, and a redraw
       // landing mid-stroke wipes what is being written.
       if (same) return prev;
