@@ -38,7 +38,11 @@ export function scorePerformance(
   const origin = ons[0].timestampMs;
   let beat = 0;
   const expected = steps.map(step => {
-    const value = { time: origin + beat * beatMs, step };
+    const onset =
+      step.onsetBeats == null
+        ? beat
+        : step.onsetBeats - (steps[0].onsetBeats ?? 0);
+    const value = { time: origin + onset * beatMs, step };
     beat += step.durationBeats;
     return value;
   });
@@ -75,9 +79,9 @@ export function scorePerformance(
         ? [event.timestampMs - matched[index]!.timestampMs]
         : []
     );
-  const expectedIntervals = steps
-    .slice(0, -1)
-    .map(step => step.durationBeats * beatMs);
+  const expectedIntervals = expected
+    .slice(1)
+    .map((value, index) => value.time - expected[index].time);
   const stabilityErrors = intervals.map(
     (value, index) => Math.abs(value - expectedIntervals[index]) / beatMs
   );
@@ -92,6 +96,14 @@ export function scorePerformance(
   const releases: number[] = [];
   matched.forEach((on, index) => {
     if (!on) return;
+    const step = steps[index];
+    const selectedHand =
+      hand === 'left' || (hand === 'both' && !step.right.includes(on.note))
+        ? 'left'
+        : 'right';
+    const duration =
+      step.noteDurations?.[selectedHand][step[selectedHand].indexOf(on.note)] ??
+      step.durationBeats;
     const off = events.find(
       event =>
         event.kind === 'noteOff' &&
@@ -100,9 +112,7 @@ export function scorePerformance(
     );
     if (off)
       releases.push(
-        Math.abs(
-          off.timestampMs - on.timestampMs - steps[index].durationBeats * beatMs
-        ) / beatMs
+        Math.abs(off.timestampMs - on.timestampMs - duration * beatMs) / beatMs
       );
   });
   const velocities = ons
@@ -118,9 +128,7 @@ export function scorePerformance(
     matched.at(-1)?.timestampMs != null && matched[0]?.timestampMs != null
       ? matched.at(-1)!.timestampMs - matched[0]!.timestampMs
       : 0;
-  const beatsElapsed = steps
-    .slice(0, -1)
-    .reduce((sum, step) => sum + step.durationBeats, 0);
+  const beatsElapsed = (expected.at(-1)!.time - expected[0].time) / beatMs;
   return {
     onsetAccuracy,
     durationAccuracy: releases.length
