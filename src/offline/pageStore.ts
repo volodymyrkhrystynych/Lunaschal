@@ -14,8 +14,9 @@ import { createStore, get, set, del, keys } from 'idb-keyval';
  * That is also why the mutation's variables are a page id and nothing else.
  *
  * Paper matters more than the rest of the offline story: it is the one feature
- * whose contents exist *only* on the tablet they were written on. The canvas
- * already buffers ink to IndexedDB as it is drawn (see PaperCanvas), so the
+ * whose contents exist *only* on the tablet they were written on. The ink
+ * surface already buffers strokes to IndexedDB as they are drawn (see
+ * PaperSurface), so the
  * strokes themselves were never at risk — what was missing is the part that
  * gets them to the server without the user remembering to press Save again
  * once the wifi is back.
@@ -30,7 +31,7 @@ export interface PendingPageSave {
   strokes: string;
   width: number;
   height: number;
-  /** The canvas revision this payload was taken at, so the editor can clear
+  /** The surface's revision this payload was taken at, so the editor can clear
    *  its dirty flag for exactly the ink that was uploaded and no more. */
   revision: number;
   updatedAt: number;
@@ -137,7 +138,7 @@ export async function listPageSaves(): Promise<PendingPageSave[]> {
  * drawn while the upload was in flight leaves a *newer* record behind, and
  * deleting that would throw away strokes the server has never seen.
  *
- * Keyed on the canvas revision rather than a timestamp on purpose: two saves
+ * Keyed on the surface's revision rather than a timestamp on purpose: two saves
  * can land in the same millisecond, and "same millisecond" would then read as
  * "same save".
  */

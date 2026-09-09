@@ -16,6 +16,8 @@ function renderPanel(over: Partial<Parameters<typeof PaperToolPanel>[0]> = {}) {
     onToolChange: vi.fn(),
     sizeIndex: 1,
     onSizeIndexChange: vi.fn(),
+    color: '#111111',
+    onColorChange: vi.fn(),
     canUndo: false,
     canRedo: false,
     onUndo: vi.fn(),
@@ -77,8 +79,39 @@ describe('PaperToolPanel', () => {
     renderPanel({ tool: 'highlighter' });
     expect(screen.getAllByRole('button').length).toBe(withPen);
     expect(withPen).toBe(
-      1 /* drag handle */ + 3 /* tools */ + 3 /* widths */ + 2 /* undo/redo */
+      1 /* drag handle */ +
+        3 /* tools */ +
+        3 /* widths */ +
+        4 /* colours */ +
+        2 /* undo/redo */
     );
+  });
+
+  it('keeps the colour row even for the eraser, which has no colour', () => {
+    // The eraser lays down no ink, so it has no swatches to offer — but
+    // dropping the row would resize the panel on a tool switch, which is the
+    // exact thing the fixed-size rule exists to prevent. The slots stay,
+    // disabled and aria-hidden: the invariant here is physical size, so count
+    // the elements rather than the accessible names.
+    const { unmount, container } = renderPanel({ tool: 'pen' });
+    const withPen = container.querySelectorAll('button').length;
+    unmount();
+    const erasing = renderPanel({ tool: 'eraser' });
+    expect(erasing.container.querySelectorAll('button').length).toBe(withPen);
+    // ...and none of them offers a colour the eraser cannot use.
+    expect(screen.queryByRole('button', { name: /colour/ })).toBeNull();
+  });
+
+  it('offers the active tool its own palette and reports a pick', () => {
+    const { props } = renderPanel({ tool: 'pen', color: '#111111' });
+    const blue = screen.getByRole('button', { name: 'pen colour #1756ad' });
+    expect(
+      screen
+        .getByRole('button', { name: 'pen colour #111111' })
+        .getAttribute('aria-pressed')
+    ).toBe('true');
+    fireEvent.click(blue);
+    expect(props.onColorChange).toHaveBeenCalledWith('#1756ad');
   });
 
   it('gives every control a touch-sized target', () => {

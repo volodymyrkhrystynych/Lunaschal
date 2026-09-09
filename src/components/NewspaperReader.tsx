@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
@@ -6,32 +6,86 @@ import {
   ApiError,
   type NewspaperIssue,
   type NewspaperMarkup,
-  type NewspaperStroke,
 } from '../hooks/api';
+import {
+  eraseStroke,
+  simplifyStroke,
+  strokeColor,
+  type Stroke,
+} from '@/lib/ink';
+import {
+  canRedo,
+  canUndo,
+  countPoints,
+  countStrokes,
+  emptyMarkup,
+  fromWire,
+  inkSpaceFor,
+  MAX_POINTS,
+  MAX_POINTS_PER_STROKE,
+  MAX_STROKES,
+  NEWSPAPER_PALETTE,
+  NEWSPAPER_TOOL_SIZES,
+  redoLast,
+  setStrokesOn,
+  strokesOn,
+  toInkStroke,
+  toWire,
+  toWireStroke,
+  undoLast,
+  type IssueMarkup,
+} from '@/lib/newspaperMarkup';
+import {
+  InkToolPanel,
+  READ_TOOL,
+  DEFAULT_TOOLS,
+  type PanelTool,
+} from '@/components/ink/InkToolPanel';
+import { InkSurface } from '@/components/ink/InkSurface';
+import { HIGHLIGHTER_COLORS, PEN_COLORS } from '@/lib/ink';
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
-type Tool = 'read' | NewspaperStroke['tool'];
+
 // Safari alone reports what made a touch, and it is the only browser an Apple
 // Pencil reaches us through; elsewhere the field is simply absent.
 type StylusTouch = Touch & { touchType?: 'direct' | 'stylus' };
+
+/** Reading is the fourth option here and the default: the Pencil scrolls like a
+ * finger until a marking tool is chosen. */
+const TOOLS = [READ_TOOL, ...DEFAULT_TOOLS];
+const PANEL_KEY = 'lunaschal:newspaperToolPanel';
+/** Ink units are thousandths of a page width; the panel's preview dots want
+ * CSS pixels. A floor keeps the smallest pen visible as a dot. */
+const DOT_UNITS_PER_PX = 0.3;
+const DOT_MIN_PX = 5;
+/** Points closer than this add nothing at any zoom a page is read at. */
+const MIN_POINT_DISTANCE = 1.5;
 
 function Page({
   pdf,
   number,
   tool,
+  size,
+  color,
   strokes,
-  onStroke,
+  reseed,
+  onEdit,
 }: {
   pdf: pdfjs.PDFDocumentProxy;
   number: number;
-  tool: Tool;
-  strokes: NewspaperStroke[];
-  onStroke: (stroke: NewspaperStroke) => void;
+  /** 'read' means nothing marks, and every touch belongs to the browser. */
+  tool: PanelTool;
+  size: number;
+  color: string;
+  /** This page's strokes, in stored (normalised) space. */
+  strokes: Stroke[];
+  /** Bumped when the reader has refused an edit the ink layer already drew, to
+   * pull the surface back to what is actually stored. */
+  reseed: number;
+  onEdit: (page: number, strokes: Stroke[]) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
-  const drawing = useRef<NewspaperStroke | null>(null);
-  const [preview, setPreview] = useState<NewspaperStroke | null>(null);
   const [ratio, setRatio] = useState(1.3);
   const [visible, setVisible] = useState(false);
   const [width, setWidth] = useState(0);
@@ -88,37 +142,18 @@ function Page({
     };
   }, [pdf, number, visible, width]);
 
-  // The Pencil must never scroll while a marking tool is selected, and iPadOS
-  // gives only one way to enforce that: cancel the touch stream itself. Neither
-  // `touch-action` (WebKit ignores it on an <svg>) nor preventDefault on
-  // pointerdown stops a WebKit scroll, and once the scroll starts the pen
-  // pointer is cancelled mid-stroke — which is exactly what "it scrolls instead
-  // of writing" was. Fingers are left entirely alone so they keep native
-  // momentum scrolling and pinch-zoom, except while a stroke is in progress,
-  // where a resting palm would otherwise drag the page out from under the nib.
-  // Must be a native non-passive listener: React attaches touchmove passively,
-  // so an onTouchMove prop cannot preventDefault.
-  const marking = tool !== 'read';
-  useEffect(() => {
-    const element = container.current!;
-    const onTouchMove = (event: TouchEvent) => {
-      const touches = Array.from(event.touches) as StylusTouch[];
-      const stylus =
-        touches.length > 0 && touches.every(t => t.touchType === 'stylus');
-      if (drawing.current || (marking && stylus)) event.preventDefault();
-    };
-    element.addEventListener('touchmove', onTouchMove, { passive: false });
-    return () => element.removeEventListener('touchmove', onTouchMove);
-  }, [marking]);
+  const space = useMemo(() => inkSpaceFor(ratio), [ratio]);
+  // Identity matters: the ink surface re-seeds whenever this array changes, so
+  // it must change when the strokes do and not merely when the page re-renders.
+  const inked = useMemo(
+    () => strokes.map(s => toInkStroke(s, ratio)),
+    // `reseed` is deliberately part of this: a refused edit leaves the ink
+    // layer holding a stroke the markup does not have, and a fresh identity is
+    // what makes it adopt the stored strokes again.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [strokes, ratio, reseed]
+  );
 
-  function point(event: React.PointerEvent<SVGSVGElement>): [number, number] {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return [
-      Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)),
-      Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height)),
-    ];
-  }
-  const all = preview ? [...strokes, preview] : strokes;
   return (
     <div
       ref={container}
@@ -132,73 +167,56 @@ function Page({
           {error}
         </p>
       )}
-      <svg
-        className="absolute inset-0 w-full h-full"
-        viewBox={`0 0 1000 ${1000 * ratio}`}
-        // Never 'none': a finger has to keep scrolling the reader in every
-        // tool, and the Pencil is held off by the touchmove listener above.
-        style={{ touchAction: 'pan-y pinch-zoom' }}
-        onPointerDown={event => {
-          // Fingers only scroll; Pencil (or a mouse, for testing) only marks.
-          if (
-            !marking ||
-            !event.isPrimary ||
-            event.pointerType === 'touch' ||
-            drawing.current
-          )
-            return;
-          event.preventDefault();
-          event.currentTarget.setPointerCapture(event.pointerId);
-          drawing.current = { page: number, tool, points: [point(event)] };
-          setPreview({ ...drawing.current });
-        }}
-        onPointerMove={event => {
-          if (
-            !drawing.current ||
-            !event.currentTarget.hasPointerCapture(event.pointerId)
-          )
-            return;
-          if (drawing.current.points.length < 10000)
-            drawing.current.points.push(point(event));
-          setPreview({ ...drawing.current });
-        }}
-        onPointerUp={event => {
-          if (
-            !drawing.current ||
-            !event.currentTarget.hasPointerCapture(event.pointerId)
-          )
-            return;
-          const stroke = drawing.current;
-          drawing.current = null;
-          setPreview(null);
-          onStroke(stroke);
-          event.currentTarget.releasePointerCapture(event.pointerId);
-        }}
-        onPointerCancel={() => {
-          drawing.current = null;
-          setPreview(null);
-        }}
-      >
-        {all.map((stroke, i) => (
-          <polyline
-            key={i}
-            points={stroke.points
-              .map(([x, y]) => `${x * 1000},${y * 1000 * ratio}`)
-              .join(' ')}
-            fill="none"
-            stroke={stroke.tool === 'pen' ? '#1756ad' : '#ffdb00'}
-            strokeWidth={stroke.tool === 'pen' ? 2 : 16}
-            opacity={stroke.tool === 'pen' ? 1 : 0.35}
-            strokeLinecap="round"
-            strokeLinejoin="round"
+      {/* Mounted only while the page is near the viewport, and torn down with
+       * it. An issue runs to hundreds of pages, and while SVG ink costs a DOM
+       * node per stroke rather than a page-sized bitmap, there is no reason to
+       * hold markup for pages nobody is looking at; the strokes live in the
+       * reader's markup, so the surface is a view that can be rebuilt at will.
+       *
+       * The touchmove guard rides on the container above, which is always
+       * mounted — the Pencil must be held off the scroller whether or not this
+       * particular page currently has an ink layer. */}
+      {visible && (
+        <div className="absolute inset-0">
+          <InkSurface
+            space={space}
+            strokes={inked}
+            // The reader above holds every committed stroke, so it is never
+            // behind this surface and its Undo has to be able to reach in.
+            adoptWhileDirty
+            tool={tool === 'read' ? null : tool}
+            size={size}
+            color={color}
+            palette={NEWSPAPER_PALETTE}
+            // Drawn over a scrolling column of pages: a finger has to keep
+            // scrolling and pinch-zooming in every tool.
+            touchPolicy="scroll"
+            guardRef={container}
+            minPointDistance={MIN_POINT_DISTANCE}
+            maxPointsPerStroke={MAX_POINTS_PER_STROKE}
+            // No backdrop: the PDF page underneath has to show through, which
+            // is the whole reason this surface never paints over anything.
+            onEdit={next =>
+              onEdit(
+                number,
+                next.map(s => toWireStroke(s, ratio))
+              )
+            }
+            label={`Page ${number} markup`}
           />
-        ))}
-      </svg>
+        </div>
+      )}
       <span className="absolute bottom-0 right-1 text-xs text-gray-500 pointer-events-none">
         {number}
       </span>
     </div>
   );
+}
+
+/** #rrggbb into the 0..1 triple pdf-lib wants. */
+function toRgb(hex: string): [number, number, number] {
+  const n = parseInt(hex.slice(1), 16);
+  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
 
 export function NewspaperReader({
@@ -209,8 +227,19 @@ export function NewspaperReader({
   onClose: () => void;
 }) {
   const [pdf, setPdf] = useState<pdfjs.PDFDocumentProxy | null>(null);
-  const [strokes, setStrokes] = useState<NewspaperStroke[]>([]);
-  const [tool, setTool] = useState<Tool>('read');
+  const [markup, setMarkup] = useState<IssueMarkup>(emptyMarkup);
+  const [tool, setTool] = useState<PanelTool>('read');
+  const [sizeIndex, setSizeIndex] = useState<Record<string, number>>({
+    pen: 1,
+    highlighter: 1,
+    eraser: 1,
+  });
+  const [color, setColor] = useState<Record<string, string>>({
+    // The colour this reader has always drawn in: black would vanish into
+    // newsprint.
+    pen: PEN_COLORS[1],
+    highlighter: HIGHLIGHTER_COLORS[0],
+  });
   const [status, setStatus] = useState('Loading…');
   const [ready, setReady] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -218,27 +247,59 @@ export function NewspaperReader({
   // conflicting draft. Not "a save is in flight", which is every other moment
   // while drawing.
   const [unsaved, setUnsaved] = useState(false);
-  const state = useRef<NewspaperMarkup>({ revision: 0, strokes: [] });
+  const [area, setArea] = useState({ width: 0, height: 0 });
+  // Bumped when an edit is refused, to pull the ink layers back into line with
+  // the markup — they have already drawn the stroke by the time we say no.
+  const [reseed, setReseed] = useState(0);
+  const areaRef = useRef<HTMLDivElement>(null);
+  const revision = useRef(0);
+  const markupRef = useRef(markup);
+  markupRef.current = markup;
   const saving = useRef(false);
   const dirty = useRef(false);
   const conflict = useRef(false);
   const key = `newspaper-markup:${issue.date}`;
 
+  const currentSize =
+    tool === 'read'
+      ? 0
+      : (NEWSPAPER_TOOL_SIZES[tool][sizeIndex[tool] ?? 1] ?? 2);
+
+  // The panel floats over the reading area, so it needs that area's size to
+  // stay on screen when the window changes.
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    const measure = () =>
+      setArea({ width: el.clientWidth, height: el.clientHeight });
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const draft = (next: IssueMarkup) => ({
+    revision: revision.current,
+    strokes: toWire(next),
+  });
+
   useEffect(() => {
     const loading = pdfjs.getDocument({ url: issue.pdfUrl });
     let active = true;
     void Promise.all([loading.promise, api.newspapers.markup(issue.date)])
-      .then(([document, markup]) => {
+      .then(([document, saved]) => {
         if (!active) return;
-        let draft: NewspaperMarkup | null = null;
+        let recovered: NewspaperMarkup | null = null;
         try {
-          draft = JSON.parse(localStorage.getItem(key) || 'null');
+          recovered = JSON.parse(localStorage.getItem(key) || 'null');
         } catch {
           /* No readable draft. */
         }
-        if (draft && Array.isArray(draft.strokes)) {
-          conflict.current = draft.revision !== markup.revision;
-          state.current = draft;
+        if (recovered && Array.isArray(recovered.strokes)) {
+          conflict.current = recovered.revision !== saved.revision;
+          revision.current = recovered.revision;
+          setMarkup(fromWire(recovered.strokes));
           dirty.current = true;
           setUnsaved(conflict.current);
           setStatus(
@@ -247,10 +308,10 @@ export function NewspaperReader({
               : 'Recovered local markup; saving…'
           );
         } else {
-          state.current = markup;
+          revision.current = saved.revision;
+          setMarkup(fromWire(saved.strokes));
           setStatus('Saved');
         }
-        setStrokes(state.current.strokes);
         setPdf(document);
         setReady(true);
       })
@@ -266,18 +327,21 @@ export function NewspaperReader({
   async function save() {
     if (!dirty.current || saving.current || conflict.current) return;
     saving.current = true;
-    const snapshot = state.current;
+    const snapshot = markupRef.current;
     setStatus('Saving…');
     try {
-      const result = await api.newspapers.saveMarkup(issue.date, snapshot);
-      const changed = state.current.strokes !== snapshot.strokes;
-      state.current = {
-        revision: result.revision,
-        strokes: state.current.strokes,
-      };
+      const result = await api.newspapers.saveMarkup(
+        issue.date,
+        draft(snapshot)
+      );
+      const changed = markupRef.current !== snapshot;
+      revision.current = result.revision;
       dirty.current = changed;
-      if (changed) localStorage.setItem(key, JSON.stringify(state.current));
-      else localStorage.removeItem(key);
+      if (changed) {
+        localStorage.setItem(key, JSON.stringify(draft(markupRef.current)));
+      } else {
+        localStorage.removeItem(key);
+      }
       setUnsaved(false);
       setStatus(changed ? 'Saving…' : 'Saved');
     } catch (e) {
@@ -305,23 +369,24 @@ export function NewspaperReader({
       clearInterval(timer);
       window.removeEventListener('beforeunload', beforeUnload);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready]);
 
-  function change(next: NewspaperStroke[]) {
-    if (
-      next.length > 10000 ||
-      next.reduce((count, stroke) => count + stroke.points.length, 0) > 100000
-    ) {
+  function change(next: IssueMarkup) {
+    if (countStrokes(next) > MAX_STROKES || countPoints(next) > MAX_POINTS) {
       setStatus(
         'This issue has reached its markup limit. Export it before adding more marks.'
       );
+      // The mark is already on the surface that drew it; take it back off,
+      // rather than leaving one on screen that will never be saved.
+      setReseed(n => n + 1);
       return;
     }
-    state.current = { ...state.current, strokes: next };
+    setMarkup(next);
+    markupRef.current = next;
     dirty.current = true;
-    setStrokes(next);
     try {
-      localStorage.setItem(key, JSON.stringify(state.current));
+      localStorage.setItem(key, JSON.stringify(draft(next)));
     } catch {
       setStatus(
         'Local storage is full. Keep this reader open until server save completes.'
@@ -335,23 +400,35 @@ export function NewspaperReader({
     try {
       const { PDFDocument, rgb, LineCapStyle } = await import('pdf-lib');
       const output = await PDFDocument.load(await pdf.getData());
-      for (const stroke of state.current.strokes) {
-        const source = await pdf.getPage(stroke.page);
+      for (const wire of toWire(markupRef.current)) {
+        const source = await pdf.getPage(wire.page);
         const view = source.getViewport({ scale: 1 });
-        const target = output.getPage(stroke.page - 1);
-        const points = stroke.points.map(([x, y]) =>
-          view.convertToPdfPoint(x * view.width, y * view.height)
-        );
+        const target = output.getPage(wire.page - 1);
+        const stroke = strokesOn(fromWire([wire]), wire.page)[0];
+        if (!stroke) continue;
+        const [r, g, b] = toRgb(strokeColor(stroke, NEWSPAPER_PALETTE));
+        const points = stroke.points.map(p => ({
+          at: view.convertToPdfPoint(p.x * view.width, p.y * view.height),
+          pressure: p.pressure,
+        }));
         for (let i = 0; i < points.length; i++) {
-          const start = points[Math.max(0, i - 1)],
-            end = points[i];
+          const start = points[Math.max(0, i - 1)];
+          const end = points[i];
+          // Ink units are thousandths of a page width, which is what makes a
+          // stroke the same weight here as it is on screen.
+          const weight =
+            stroke.tool === 'pen'
+              ? stroke.size * (0.35 + 0.65 * end.pressure)
+              : stroke.size;
           target.drawLine({
-            start: { x: start[0], y: start[1] },
-            end: { x: end[0], y: end[1] },
-            thickness: view.width * (stroke.tool === 'pen' ? 0.002 : 0.016),
-            color:
-              stroke.tool === 'pen' ? rgb(0.09, 0.34, 0.68) : rgb(1, 0.86, 0),
-            opacity: stroke.tool === 'pen' ? 1 : 0.35,
+            start: { x: start.at[0], y: start.at[1] },
+            end: { x: end.at[0], y: end.at[1] },
+            thickness: (view.width * weight) / 1000,
+            color: rgb(r, g, b),
+            opacity:
+              stroke.tool === 'highlighter'
+                ? NEWSPAPER_PALETTE.highlightAlpha
+                : 1,
             lineCap: LineCapStyle.Round,
           });
         }
@@ -385,24 +462,6 @@ export function NewspaperReader({
           ← Newspapers
         </button>
         <span>Toronto Star · {issue.date}</span>
-        {(['read', 'pen', 'highlight'] as const).map(value => (
-          <button
-            key={value}
-            aria-pressed={tool === value}
-            disabled={!ready}
-            className={`p-2 rounded ${tool === value ? 'bg-blue-700 text-white' : ''}`}
-            onClick={() => setTool(value)}
-          >
-            {value === 'read' ? 'Read' : value === 'pen' ? 'Pen' : 'Highlight'}
-          </button>
-        ))}
-        <button
-          className="p-2"
-          disabled={!strokes.length}
-          onClick={() => change(strokes.slice(0, -1))}
-        >
-          Undo
-        </button>
         <button
           className="p-2"
           disabled={!ready || exporting}
@@ -428,11 +487,11 @@ export function NewspaperReader({
               try {
                 const latest = await api.newspapers.markup(issue.date);
                 localStorage.removeItem(key);
-                state.current = latest;
+                revision.current = latest.revision;
+                setMarkup(fromWire(latest.strokes));
                 dirty.current = false;
                 conflict.current = false;
                 setUnsaved(false);
-                setStrokes(latest.strokes);
                 setStatus('Saved');
               } catch (e) {
                 setStatus((e as Error).message);
@@ -447,7 +506,10 @@ export function NewspaperReader({
             className="p-2"
             onClick={() => {
               try {
-                localStorage.setItem(key, JSON.stringify(state.current));
+                localStorage.setItem(
+                  key,
+                  JSON.stringify(draft(markupRef.current))
+                );
                 onClose();
               } catch {
                 setStatus(
@@ -468,18 +530,50 @@ export function NewspaperReader({
           </button>
         )}
       </div>
-      <div className="flex-1 overflow-y-auto overscroll-contain">
-        {pdf &&
-          Array.from({ length: pdf.numPages }, (_, i) => (
-            <Page
-              key={i}
-              pdf={pdf}
-              number={i + 1}
-              tool={tool}
-              strokes={strokes.filter(s => s.page === i + 1)}
-              onStroke={stroke => change([...state.current.strokes, stroke])}
-            />
-          ))}
+      <div ref={areaRef} className="relative flex-1 min-h-0">
+        <div className="absolute inset-0 overflow-y-auto overscroll-contain">
+          {pdf &&
+            Array.from({ length: pdf.numPages }, (_, i) => (
+              <Page
+                key={i}
+                pdf={pdf}
+                number={i + 1}
+                tool={tool}
+                size={currentSize}
+                color={color[tool] ?? ''}
+                strokes={strokesOn(markup, i + 1)}
+                reseed={reseed}
+                onEdit={(page, next) =>
+                  change(setStrokesOn(markupRef.current, page, next))
+                }
+              />
+            ))}
+        </div>
+        {ready && (
+          <InkToolPanel
+            tool={tool}
+            onToolChange={setTool}
+            tools={TOOLS}
+            sizes={
+              tool === 'read'
+                ? NEWSPAPER_TOOL_SIZES.pen
+                : NEWSPAPER_TOOL_SIZES[tool]
+            }
+            sizeIndex={sizeIndex[tool] ?? 1}
+            onSizeIndexChange={i => setSizeIndex(s => ({ ...s, [tool]: i }))}
+            color={color[tool]}
+            onColorChange={next => setColor(c => ({ ...c, [tool]: next }))}
+            sizeDotUnitsPerPx={DOT_UNITS_PER_PX}
+            sizeDotMinPx={DOT_MIN_PX}
+            canUndo={canUndo(markup)}
+            canRedo={canRedo(markup)}
+            onUndo={() => change(undoLast(markupRef.current))}
+            onRedo={() => change(redoLast(markupRef.current))}
+            bounds={area}
+            storageKey={PANEL_KEY}
+            label="Markup tools"
+          />
+        )}
       </div>
     </div>
   );

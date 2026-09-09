@@ -32,8 +32,10 @@ import { get as idbGet, set as idbSet, del as idbDel } from 'idb-keyval';
 import { api, type PaperPageContent } from '../../hooks/api';
 import {
   fitPageBox,
+  HIGHLIGHTER_COLORS,
   PAGE_WIDTH,
   parseStrokes,
+  PEN_COLORS,
   resolveSwipe,
   saveStatusLabel,
   TOOL_SIZES,
@@ -48,7 +50,7 @@ import {
   type ImageBox,
   type PageImage,
 } from '../../lib/paperImages';
-import { PaperCanvas, type PaperCanvasHandle } from './PaperCanvas';
+import { PaperSurface, type PaperSurfaceHandle } from './PaperSurface';
 import { PaperToolPanel } from './PaperToolPanel';
 import { PaperImageLayer } from './PaperImageLayer';
 import { PaperImageActions } from './PaperImageActions';
@@ -158,7 +160,7 @@ export function PaperEditor({
   useImmersiveView(!embedded && isTouchDevice());
   useHideBottomBar(embedded);
   const queryClient = useQueryClient();
-  const canvasRef = useRef<PaperCanvasHandle>(null);
+  const canvasRef = useRef<PaperSurfaceHandle>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [tool, setTool] = useState<StrokeTool>('pen');
@@ -169,6 +171,14 @@ export function PaperEditor({
     eraser: 1,
   });
   const currentSize = TOOL_SIZES[tool][sizeIndex[tool]];
+  // ...and its own colour, for the same reason: reaching for the highlighter
+  // should not silently change what the pen writes in.
+  const [color, setColor] = useState<Record<StrokeTool, string>>({
+    pen: PEN_COLORS[0],
+    highlighter: HIGHLIGHTER_COLORS[0],
+    eraser: '',
+  });
+  const currentColor = color[tool];
   const [canvasState, setCanvasState] = useState({
     canUndo: false,
     canRedo: false,
@@ -754,9 +764,10 @@ export function PaperEditor({
   // pen is moving (see LOCAL_COMMIT_DELAY_MS below), and that write keeps the
   // same `images` array — only `strokes` changes. Depending on the whole
   // object made this recompute on every one of those commits, which gave the
-  // canvas a new `images` prop identity mid-sentence and made it redraw from
-  // scratch (see the `[images]` effect in PaperCanvas) — visible as strokes
-  // being written flickering out and back while drawing.
+  // page a new `images` prop identity mid-sentence. Back when the page was a
+  // canvas that meant a full redraw from the *committed* strokes, so the one
+  // being written flickered out and back; now it re-derives every picture's
+  // element for nothing. Cheaper either way to key on what actually changed.
   const images = useMemo<PageImage[]>(
     () =>
       (content?.images ?? []).map(i => ({
@@ -1392,7 +1403,7 @@ export function PaperEditor({
               height: box.height,
             }}
           >
-            <PaperCanvas
+            <PaperSurface
               key={currentPage.id}
               ref={canvasRef}
               pageId={currentPage.id}
@@ -1401,6 +1412,7 @@ export function PaperEditor({
               initialSize={initialSize}
               tool={tool}
               size={currentSize}
+              color={currentColor}
               onSwipe={navigate}
               onToggleEraser={toggleEraser}
               onStateChange={setCanvasState}
@@ -1456,6 +1468,8 @@ export function PaperEditor({
           tool={tool}
           onToolChange={setTool}
           sizeIndex={sizeIndex[tool]}
+          color={currentColor}
+          onColorChange={next => setColor(c => ({ ...c, [tool]: next }))}
           onSizeIndexChange={i =>
             setSizeIndex(prev => ({ ...prev, [tool]: i }))
           }

@@ -1,3 +1,4 @@
+import json
 from io import BytesIO
 
 import pytest
@@ -71,10 +72,68 @@ def test_markup_revision_prevents_lost_updates(client):
     {'page': 1, 'tool': 'pen', 'points': [[-1, 0]]},
     {'page': 1, 'tool': 'pen', 'points': [[True, 0]]},
     {'page': 1, 'tool': 'pen', 'points': []},
+    # Pressure rides along as a third coordinate, and is a 0..1 value like the
+    # other two. A fourth number means the client and the server disagree about
+    # what a point is, which is not something to guess at.
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0, 2]]},
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0, True]]},
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0, 0, 0]]},
+    # A width has to be a positive, bounded, real number.
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0]], 'size': 0},
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0]], 'size': -1},
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0]], 'size': True},
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0]], 'size': 'big'},
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0]], 'size': 5000},
+    # A colour is echoed back to a reader and painted, so it is a hex triple or
+    # it is nothing.
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0]], 'color': 'red'},
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0]], 'color': '#ff'},
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0]], 'color': 1},
+    # Unknown keys stay refused: the blob is handed back to a client, so it
+    # must not become a place to park arbitrary data.
+    {'page': 1, 'tool': 'pen', 'points': [[0, 0]], 'colour': '#ff0000'},
 ])
 def test_markup_validation(client, stroke):
     upload(client)
     assert client.put('/api/newspapers/issues/2026-09-01/markup', json={'revision': 0, 'strokes': [stroke]}).status_code == 400
+
+
+def test_a_stroke_keeps_its_pressure_width_and_colour(client):
+    upload(client)
+    url = '/api/newspapers/issues/2026-09-01/markup'
+    stroke = {'page': 1, 'tool': 'pen', 'points': [[0.1, 0.2, 0.4], [0.8, 0.2, 1]],
+              'size': 3, 'color': '#c0392b'}
+    assert client.put(url, json={'revision': 0, 'strokes': [stroke]}).json == {'revision': 1}
+    assert client.get(url).json['strokes'] == [stroke]
+
+
+def test_the_two_names_for_the_highlighter_are_stored_as_one(client):
+    # The client shared ink model calls it 'highlighter'; the column has always
+    # held 'highlight'. Both are accepted so a version skew cannot fail a save,
+    # and one is stored so the column cannot go bimodal.
+    upload(client)
+    url = '/api/newspapers/issues/2026-09-01/markup'
+    client.put(url, json={'revision': 0, 'strokes': [
+        {'page': 1, 'tool': 'highlighter', 'points': [[0, 0]]},
+        {'page': 1, 'tool': 'highlight', 'points': [[1, 1]]},
+    ]})
+    assert [s['tool'] for s in client.get(url).json['strokes']] == ['highlight', 'highlight']
+
+
+def test_markup_written_before_any_of_this_still_saves(client):
+    # The shape every existing issue is stored in: no size, no colour, two
+    # numbers per point. It has to keep validating exactly as it did.
+    upload(client)
+    url = '/api/newspapers/issues/2026-09-01/markup'
+    old = [{'page': 1, 'tool': 'pen', 'points': [[0.1, 0.2], [0.8, 0.2]]}]
+    assert client.put(url, json={'revision': 0, 'strokes': old}).status_code == 200
+    assert client.get(url).json['strokes'] == old
+    assert issues.marked_pages(json.dumps(old)) == {1}
+
+
+def test_marked_pages_counts_the_new_shape_too():
+    strokes = [{'page': 4, 'tool': 'highlight', 'points': [[0, 0, 0.5]], 'size': 16, 'color': '#ffdb00'}]
+    assert issues.marked_pages(json.dumps(strokes)) == {4}
 
 
 def test_missing_archive_keeps_markup(client):

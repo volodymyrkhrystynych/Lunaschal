@@ -11,10 +11,20 @@ In Newspapers, tap the Toronto Star cover or Read Toronto Star PDF. The archive
 dropdown opens older issues.
 
 The reader fits each page to the available width and scrolls vertically. Read
-mode supports normal browser touch scrolling and pinch zoom. Pen and Highlight
-modes accept Apple Pencil; fingers scroll without adding marks. Undo removes the
-last stroke. Export PDF downloads a copy with the current markup drawn into it.
-It does not modify newspaper text or replace the original PDF.
+mode supports normal browser touch scrolling and pinch zoom. Pen, Highlighter
+and Eraser accept Apple Pencil; fingers scroll without adding marks, in every
+tool. The tools live in a floating panel that snaps to a screen edge, with three
+widths and a colour each, and the pen tapers with Pencil pressure — all of it
+shared with the Paper editor (`src/components/ink/CLAUDE.md`).
+
+Undo and Redo rewind edits made in this sitting, most recent first, wherever in
+the issue they were made. They do not reach markup loaded from the server: for
+older ink, use the eraser, which removes only what it is scrubbed over and only
+on the page it is on. Export PDF downloads a copy with the current markup drawn
+into it. It does not modify newspaper text or replace the original PDF.
+
+The markup layer is SVG, so ink stays sharp at any magnification — it does not
+soften under pinch-zoom the way the page image beneath it does.
 
 Markup saves to SQLite every 1.5 seconds, with a local browser draft written after
 each stroke. The status distinguishes local storage from a completed server save.

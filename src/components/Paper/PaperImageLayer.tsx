@@ -15,7 +15,7 @@ const HANDLE_PX = 44;
 
 interface PaperImageLayerProps {
   images: PageImage[];
-  /** CSS pixels per page unit — the same factor the canvas renders with. */
+  /** CSS pixels per page unit — the same factor the page renders with. */
   scale: number;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
@@ -26,12 +26,13 @@ interface PaperImageLayerProps {
 }
 
 /**
- * Pointer handling for pasted pictures, as a DOM layer above the ink canvas.
+ * Pointer handling for pasted pictures, as a DOM layer above the ink surface.
  *
- * The pictures themselves are drawn *by the canvas*, beneath the ink; this
- * layer is transparent and exists only to be grabbed. Keeping interaction out
- * of the canvas is what lets the handles be real 44px touch targets instead of
- * hit-tested pixels, and leaves the drawing pointer logic untouched.
+ * The pictures themselves are drawn *inside the page's SVG*, beneath the ink,
+ * so they land in its snapshot; this layer is transparent and exists only to be
+ * grabbed. Keeping interaction out of the ink surface is what lets the handles
+ * be real 44px touch targets instead of hit-tested pixels, and leaves the
+ * drawing pointer logic untouched.
  *
  * The layer is only mounted in select mode, so it can never intercept a stroke.
  */
