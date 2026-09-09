@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 
@@ -27,7 +27,7 @@ export function AddTorrent({ categories, onClose }: Props) {
   const [retention, setRetention] = useState('');
   const [retentionTouched, setRetentionTouched] = useState(false);
   const [errors, setErrors] = useState<{ input: string; error: string }[]>([]);
-  const fileRef = useRef<HTMLInputElement>(null);
+  const [files, setFiles] = useState<File[]>([]);
 
   useEffect(() => {
     if (retentionTouched || !settings) return;
@@ -41,7 +41,6 @@ export function AddTorrent({ categories, onClose }: Props) {
 
   const add = useMutation({
     mutationFn: async () => {
-      const files = Array.from(fileRef.current?.files ?? []);
       const shared = {
         category: category || undefined,
         note: note || undefined,
@@ -68,8 +67,7 @@ export function AddTorrent({ categories, onClose }: Props) {
     },
   });
 
-  const nothingToAdd =
-    !magnets.trim() && !(fileRef.current?.files?.length ?? 0);
+  const nothingToAdd = !magnets.trim() && !files.length;
 
   return (
     <div className="rounded border border-white/10 bg-[var(--color-surface)] p-3 space-y-3">
@@ -85,11 +83,13 @@ export function AddTorrent({ categories, onClose }: Props) {
       />
 
       <div className="flex flex-wrap gap-2 items-center text-sm">
+        {/* iPad can gray out .torrent files with an accept filter. The backend
+            validates the uploaded contents instead of trusting the file type. */}
         <input
-          ref={fileRef}
+          aria-label="Torrent files (.torrent)"
           type="file"
-          accept=".torrent,application/x-bittorrent"
           multiple
+          onChange={e => setFiles(Array.from(e.target.files ?? []))}
           className="text-xs text-[var(--color-text-muted)] max-w-[16rem]"
         />
         <input
