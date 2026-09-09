@@ -52,12 +52,27 @@ not supply a stroke model or a pointer loop.**
   only the strokes it actually cut.
 
 - **The eraser is geometric and lays down nothing.** It splits the strokes it
-  crosses and is itself discarded, so there is no "paint over it in the page
-  colour" anywhere. That is not a detail: it is exactly what lets the
-  newspaper's ink layer be transparent over a PDF page. A scrub that crosses
-  nothing is not an edit and costs no undo step — measured in **points, not
-  strokes**: rubbing the tail off a stroke leaves it one stroke exactly as
-  rubbing nothing does, so comparing stroke counts silently discarded those.
+  crosses into the runs that survive, and is itself discarded, so there is no
+  "paint over it in the page colour" anywhere. That is not a detail: it is
+  exactly what lets the newspaper's ink layer be transparent over a PDF page. A
+  scrub that crosses nothing is not an edit and costs no undo step — measured in
+  **points, not strokes**: rubbing the tail off a stroke leaves it one stroke
+  exactly as rubbing nothing does, so comparing stroke counts silently discarded
+  those.
+
+- **It is not an SVG `<mask>`, and that is on purpose.** Masking would render
+  correctly, transparency included, but strokes here are _persisted_ rather than
+  only painted: a mask is a rendering artifact, so surviving a reload would mean
+  storing the eraser strokes too — and erasing would then _grow_ the document
+  instead of shrinking it. The newspaper has a hard server-side budget (10,000
+  strokes / 100,000 points, `backend/newspapers/issues.py`), so rubbing
+  something out would cost the same budget as drawing it, and every erase would
+  add a mask to composite against the ink forever. Neither export path could use
+  one either: the reader's `exportPdf` draws segments through pdf-lib and
+  Paper's snapshot fills path data through `Path2D`, so both want geometry and
+  the splitting code would have to exist anyway, as a second representation that
+  has to agree with the first. The _result_ is SVG — survivors are just paths.
+  Only the operation is geometric.
 
 - **`useInkTouchPolicy` names the one thing the surfaces genuinely disagree
   about, rather than splitting the difference.** It follows from whether there

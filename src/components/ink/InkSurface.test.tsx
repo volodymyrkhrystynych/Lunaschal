@@ -365,6 +365,30 @@ describe('the eraser', () => {
     expect(ref.current!.getState().dirty).toBe(true);
   });
 
+  it('shows its footprint in page units, so it is the size of what it takes', () => {
+    // A colourless eraser is otherwise invisible. The ring used to be a <div>
+    // positioned in CSS pixels, which needed the page's scale converted back
+    // out by hand; inside the SVG it is simply a circle in the same units as
+    // the ink, and follows the page at any magnification.
+    const { svg } = renderInk({ tool: 'eraser', size: 80 });
+    const ring = svg.querySelector('circle')!;
+    expect(ring.style.opacity).toBe('0');
+
+    send(svg, 'pointerdown', {
+      pointerType: 'pen',
+      clientX: 250,
+      clientY: 100,
+    });
+    // Half the 500px-wide box maps to half the 1000-unit space.
+    expect(ring.getAttribute('cx')).toBe('500');
+    expect(ring.getAttribute('cy')).toBe('200');
+    expect(ring.getAttribute('r')).toBe('40');
+    expect(ring.style.opacity).toBe('1');
+
+    send(svg, 'pointerup', { pointerType: 'pen', clientX: 250, clientY: 100 });
+    expect(ring.style.opacity).toBe('0');
+  });
+
   it('costs no undo step when it crosses nothing', () => {
     const changed = vi.fn();
     const { svg } = renderInk({

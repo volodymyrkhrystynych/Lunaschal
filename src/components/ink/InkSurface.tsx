@@ -228,7 +228,7 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
     // Ring showing the eraser footprint while erasing (a colourless eraser is
     // otherwise invisible). Driven imperatively to avoid a React re-render on
     // every pointer move.
-    const eraserCursorRef = useRef<HTMLDivElement>(null);
+    const eraserCursorRef = useRef<SVGCircleElement>(null);
 
     const exclusive = touchPolicy === 'exclusive';
     useInkTouchPolicy({
@@ -258,14 +258,6 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
         e.button === PEN_BARREL_BUTTON ||
         (e.buttons & PEN_BARREL_BUTTONS_BIT) !== 0;
       return eraser ? 'eraser' : null;
-    };
-
-    /** Space units per CSS pixel on screen, for the things drawn outside the
-     * SVG's own coordinate system (the eraser ring). */
-    const pxPerUnit = () => {
-      const el = svgRef.current;
-      if (!el || !spaceRef.current.width) return 1;
-      return el.getBoundingClientRect().width / spaceRef.current.width;
     };
 
     // Convert a pointer event into the stroke space. Read per axis from the
@@ -323,17 +315,14 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
       liveRef.current?.removeAttribute('d');
     };
 
-    const moveEraserCursor = (e: PointerEvent) => {
+    /** The eraser tip, in the page's own units — so it is the size of the ink
+     * it will remove, at whatever magnification the page is being read at. */
+    const moveEraserCursor = (at: StrokePoint) => {
       const el = eraserCursorRef.current;
-      const svg = svgRef.current;
-      if (!el || !svg) return;
-      const rect = svg.getBoundingClientRect();
-      const d = sizeRef.current * pxPerUnit();
-      el.style.width = `${d}px`;
-      el.style.height = `${d}px`;
-      el.style.transform = `translate(${e.clientX - rect.left - d / 2}px, ${
-        e.clientY - rect.top - d / 2
-      }px)`;
+      if (!el) return;
+      el.setAttribute('cx', String(at.x));
+      el.setAttribute('cy', String(at.y));
+      el.setAttribute('r', String(sizeRef.current / 2));
       el.style.opacity = '1';
     };
 
@@ -405,7 +394,7 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
       };
       drawingRef.current = { pointerId: native.pointerId, stroke };
       isDrawingRef.current = true;
-      if (stroke.tool === 'eraser') moveEraserCursor(native);
+      if (stroke.tool === 'eraser') moveEraserCursor(stroke.points[0]);
       else drawLive();
     };
 
@@ -434,7 +423,7 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
         d.stroke.points.push(toLogical(ev));
       }
       if (d.stroke.tool === 'eraser') {
-        moveEraserCursor(e.nativeEvent);
+        moveEraserCursor(d.stroke.points[d.stroke.points.length - 1]);
         // The eraser changes many strokes at once, so show the result of
         // lifting now rather than the eraser's own path. Most moves cross
         // nothing, so only a set that actually changed is pushed into state.
@@ -616,17 +605,23 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
             ))}
             <path ref={liveRef} />
           </g>
+          {/* Eraser footprint, positioned imperatively and in page units —
+           * drawn last so it sits over the ink it is about to take. Its outline
+           * does not scale, because it is a cursor rather than part of the
+           * drawing. */}
+          <circle
+            ref={eraserCursorRef}
+            r={0}
+            fill="#a3a3a3"
+            fillOpacity={0.2}
+            stroke="#737373"
+            strokeOpacity={0.7}
+            strokeWidth={2}
+            vectorEffect="non-scaling-stroke"
+            pointerEvents="none"
+            style={{ opacity: 0, transition: 'opacity 80ms' }}
+          />
         </svg>
-        {/* Eraser footprint indicator (positioned imperatively). */}
-        <div
-          ref={eraserCursorRef}
-          className="absolute top-0 left-0 rounded-full border-2 border-neutral-500/70 bg-neutral-400/20 pointer-events-none"
-          style={{
-            opacity: 0,
-            transition: 'opacity 80ms',
-            willChange: 'transform',
-          }}
-        />
       </div>
     );
   }
