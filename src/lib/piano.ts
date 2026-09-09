@@ -129,6 +129,8 @@ export interface PracticeStep {
   right: number[];
   left: number[];
   durationBeats: number;
+  onsetBeats?: number;
+  noteDurations?: { right: number[]; left: number[] };
 }
 
 const SEMITONES: Record<string, number> = {
@@ -150,7 +152,9 @@ function child(parent: Element, name: string): Element | undefined {
 }
 
 function numberText(parent: Element, name: string, fallback = 0): number {
-  const value = Number(child(parent, name)?.textContent);
+  const text = child(parent, name)?.textContent;
+  if (text == null || !text.trim()) return fallback;
+  const value = Number(text);
   return Number.isFinite(value) ? value : fallback;
 }
 
@@ -174,46 +178,99 @@ export function parsePracticeSteps(xml: string): PracticeStep[] {
   if (!part) return [];
   const steps = new Map<string, PracticeStep>();
   let divisions = 1;
+  let measureStart = 0;
+  const ties = new Map<
+    string,
+    { step: PracticeStep; hand: 'right' | 'left'; index: number; end: number }
+  >();
 
   children(part, 'measure').forEach((measure, measureIndex) => {
     const number = Number(measure.getAttribute('number')) || measureIndex + 1;
     let cursor = 0;
     let previousOnset = 0;
+    let measureLength = 0;
     for (const event of Array.from(measure.children)) {
       if (event.localName === 'attributes') {
         divisions = numberText(event, 'divisions', divisions) || divisions;
       } else if (event.localName === 'backup') {
-        cursor -= numberText(event, 'duration');
+        cursor -= numberText(event, 'duration') / divisions;
       } else if (event.localName === 'forward') {
-        cursor += numberText(event, 'duration');
+        cursor += numberText(event, 'duration') / divisions;
+        measureLength = Math.max(measureLength, cursor);
       } else if (event.localName === 'note') {
-        const duration = numberText(event, 'duration');
+        const duration = numberText(event, 'duration') / divisions;
         const isChord = Boolean(child(event, 'chord'));
         const onset = isChord ? previousOnset : cursor;
         previousOnset = onset;
         const pitch = midiPitch(event);
         if (pitch !== null) {
-          const key = `${measureIndex}:${onset}`;
-          const step = steps.get(key) ?? {
-            measure: number,
-            beat: onset / divisions + 1,
-            right: [],
-            left: [],
-            durationBeats: duration / divisions,
-          };
-          step.durationBeats = Math.max(
-            step.durationBeats,
-            duration / divisions
-          );
           const staff = numberText(event, 'staff', pitch < 60 ? 2 : 1);
-          (staff === 2 ? step.left : step.right).push(pitch);
-          steps.set(key, step);
+          const hand = staff === 2 ? 'left' : 'right';
+          const voice = child(event, 'voice')?.textContent?.trim() ?? '1';
+          const tieKey = `${staff}:${voice}:${pitch}`;
+          const tieNodes = [
+            ...children(event, 'tie'),
+            ...children(event, 'notations').flatMap(node =>
+              children(node, 'tied')
+            ),
+          ];
+          const stops = tieNodes.some(
+            node => node.getAttribute('type') === 'stop'
+          );
+          const starts = tieNodes.some(
+            node => node.getAttribute('type') === 'start'
+          );
+          const previous = ties.get(tieKey);
+          const absoluteOnset = measureStart + onset;
+          if (
+            stops &&
+            previous &&
+            Math.abs(previous.end - absoluteOnset) < 1e-7
+          ) {
+            previous.step.noteDurations![previous.hand][previous.index] +=
+              duration;
+            previous.end = absoluteOnset + duration;
+            if (!starts) ties.delete(tieKey);
+          } else {
+            const key = `${measureIndex}:${onset}`;
+            const step = steps.get(key) ?? {
+              measure: number,
+              beat: onset + 1,
+              onsetBeats: absoluteOnset,
+              right: [],
+              left: [],
+              durationBeats: duration,
+              noteDurations: { right: [], left: [] },
+            };
+            step.durationBeats = Math.max(step.durationBeats, duration);
+            const index = step[hand].length;
+            step[hand].push(pitch);
+            step.noteDurations![hand].push(duration);
+            ties.delete(tieKey);
+            if (starts)
+              ties.set(tieKey, {
+                step,
+                hand,
+                index,
+                end: absoluteOnset + duration,
+              });
+            steps.set(key, step);
+          }
         }
         if (!isChord) cursor += duration;
+        measureLength = Math.max(measureLength, cursor, onset + duration);
       }
     }
+    measureStart += measureLength;
   });
-  return Array.from(steps.values());
+  const ordered = Array.from(steps.values()).sort(
+    (a, b) => a.onsetBeats! - b.onsetBeats!
+  );
+  ordered.forEach((step, index) => {
+    step.durationBeats =
+      (ordered[index + 1]?.onsetBeats ?? measureStart) - step.onsetBeats!;
+  });
+  return ordered;
 }
 
 export function notesForHand(step: PracticeStep, hand: PianoHand): number[] {

@@ -71,9 +71,18 @@ export function buildFallingNotes(
   let beatOffset = 0;
   for (let index = 0; index < steps.length; index += 1) {
     const step = steps[index];
-    const relativeBeat = beatOffset - timelineBeat;
+    const onset =
+      step.onsetBeats == null
+        ? beatOffset
+        : step.onsetBeats - (steps[0].onsetBeats ?? 0);
+    const currentBeat =
+      elapsedBeats ??
+      (steps[currentIndex]?.onsetBeats == null
+        ? timelineBeat
+        : steps[currentIndex].onsetBeats! - (steps[0].onsetBeats ?? 0));
+    const relativeBeat = onset - currentBeat;
     if (relativeBeat > visibleBeats) break;
-    if (index < currentIndex) {
+    if (index < currentIndex && !step.noteDurations) {
       beatOffset += step.durationBeats;
       continue;
     }
@@ -83,12 +92,15 @@ export function buildFallingNotes(
         : ([hand] as Array<'right' | 'left'>);
     hands.forEach(selectedHand => {
       step[selectedHand].forEach((note, noteIndex) => {
+        const duration =
+          step.noteDurations?.[selectedHand][noteIndex] ?? step.durationBeats;
+        if (relativeBeat + duration <= 0) return;
         notes.push({
           id: `${index}:${selectedHand}:${note}:${noteIndex}`,
           note,
           hand: selectedHand,
           beatOffset: relativeBeat,
-          durationBeats: step.durationBeats,
+          durationBeats: duration,
           current: index === currentIndex,
         });
       });
