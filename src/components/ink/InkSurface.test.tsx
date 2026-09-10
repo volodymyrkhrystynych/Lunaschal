@@ -3,7 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRef, useRef } from 'react';
 import { fireEvent, render, waitFor } from '@testing-library/react';
 import { InkSurface, type InkSurfaceHandle } from './InkSurface';
-import type { InkPalette, Stroke } from '@/lib/ink';
+import {
+  parseStrokes,
+  serializeStrokes,
+  type InkPalette,
+  type Stroke,
+} from '@/lib/ink';
+import { strokePathData } from '@/lib/inkPath';
 
 const PALETTE: InkPalette = {
   ink: '#111111',
@@ -188,6 +194,43 @@ describe('how a stroke is painted', () => {
 });
 
 describe('a stroke in flight', () => {
+  it.each(['exclusive', 'scroll'] as const)(
+    'keeps identical geometry on lift and reload under %s',
+    async touchPolicy => {
+      const { svg, ref } = renderInk({ touchPolicy, size: 2 });
+      send(svg, 'pointerdown', {
+        pointerType: 'pen',
+        clientX: 50,
+        clientY: 50,
+      });
+      for (const [clientX, clientY, pressure] of [
+        [50.35, 50.5, 0.8],
+        [50.7, 50, 0.2],
+        [51.05, 50, 0.5],
+        [80, 80, 1],
+        [50, 50, 0.5],
+      ]) {
+        send(svg, 'pointermove', {
+          pointerType: 'pen',
+          clientX,
+          clientY,
+          pressure,
+        });
+      }
+      await frame();
+      const live = drawn(svg)[0].getAttribute('d');
+      expect(live).toBeTruthy();
+      send(svg, 'pointerup', { pointerType: 'pen', clientX: 50, clientY: 50 });
+      expect(drawn(svg)).toHaveLength(1);
+      expect(drawn(svg)[0].getAttribute('d')).toBe(live);
+      const saved = parseStrokes(serializeStrokes(strokesOf(ref)))[0];
+      expect(strokePathData(saved)).toBe(live);
+      ref.current!.undo();
+      ref.current!.redo();
+      expect(strokePathData(strokesOf(ref)[0])).toBe(live);
+    }
+  );
+
   it('is drawn on its own element, so a re-render cannot wipe it', async () => {
     // On the old canvas this was a real bug: in-progress ink was painted
     // straight onto the bitmap and was not in the committed state yet, so any

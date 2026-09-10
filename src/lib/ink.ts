@@ -227,10 +227,9 @@ export function eraseStroke(
   };
 }
 
-/** Minimum distance, in page units, between two consecutive stored points.
- * Pointer events fire far denser than the ink needs, and every dropped point is
- * ~40 bytes off the save payload. Two page units is a fifth of a millimetre —
- * the same effective density the old CSS-pixel space got from 1. */
+/** Maximum span of a dense run considered for point reduction, in page units.
+ * Corners and pressure changes can retain closer points. Two A4 page units
+ * are a fifth of a millimetre. */
 export const MIN_POINT_DISTANCE = 2;
 
 /** Decimal places kept for coordinates (a tenth of a page unit is a hundredth
@@ -248,36 +247,60 @@ const cleanPressure = (pressure: number): number =>
     ? roundTo(Math.min(Math.max(pressure, 0), 1), PRESSURE_DECIMALS)
     : 0.5;
 
-/** Reduce a freshly drawn stroke to what's worth storing: coordinates rounded
- * to a tenth of a pixel and points closer together than `minDistance` dropped.
- * The first and last points are always kept so the stroke's extent is exact.
- *
- * Applied when a stroke is committed, so the in-memory state, the IndexedDB
- * buffer, and the upload all share the same compact representation. Without
- * this a densely written page serializes to megabytes of JSON. */
+/** Compact short runs only when every removed point stays within 0.1 units
+ * of the replacement segment and its pressure within 0.01 of interpolation.
+ * A bounded window keeps this linear even for very dense input. The same
+ * processing is used in the live preview and on commit. */
 export function simplifyStroke(
   stroke: Stroke,
   minDistance = MIN_POINT_DISTANCE
 ): Stroke {
-  const pts = stroke.points;
-  const out: StrokePoint[] = [];
-  for (let i = 0; i < pts.length; i++) {
-    const p: StrokePoint = {
-      x: roundTo(pts[i].x, COORD_DECIMALS),
-      y: roundTo(pts[i].y, COORD_DECIMALS),
-      pressure: cleanPressure(pts[i].pressure),
+  const pts: StrokePoint[] = [];
+  for (const point of stroke.points) {
+    const p = {
+      x: roundTo(point.x, COORD_DECIMALS),
+      y: roundTo(point.y, COORD_DECIMALS),
+      pressure: cleanPressure(point.pressure),
     };
-    const last = out[out.length - 1];
-    if (last) {
-      const far = Math.hypot(p.x - last.x, p.y - last.y) >= minDistance;
-      // Keep the final point regardless of distance (it defines where the
-      // stroke ends) unless rounding made it an exact duplicate.
-      const isLast = i === pts.length - 1;
-      if (!far && !isLast) continue;
-      if (!far && p.x === last.x && p.y === last.y) continue;
-    }
-    out.push(p);
+    const prev = pts[pts.length - 1];
+    if (
+      prev &&
+      p.x === prev.x &&
+      p.y === prev.y &&
+      p.pressure === prev.pressure
+    )
+      continue;
+    pts.push(p);
   }
+  if (pts.length < 3) return { ...stroke, points: pts };
+  const out = [pts[0]];
+  let anchor = 0;
+  for (let end = 2; end < pts.length; end++) {
+    const a = pts[anchor],
+      b = pts[end];
+    const dx = b.x - a.x,
+      dy = b.y - a.y;
+    const length2 = dx * dx + dy * dy;
+    let fits = end - anchor <= 32 && length2 > 0 && length2 <= minDistance ** 2;
+    let previousT = 0;
+    for (let i = anchor + 1; fits && i < end; i++) {
+      const p = pts[i];
+      const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / length2;
+      // Monotonic projection preserves turnarounds, even along a straight line.
+      fits =
+        t >= previousT &&
+        t <= 1 &&
+        Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy) <= 0.1 &&
+        Math.abs(p.pressure - (a.pressure + t * (b.pressure - a.pressure))) <=
+          0.01;
+      previousT = t;
+    }
+    if (!fits) {
+      out.push(pts[end - 1]);
+      anchor = end - 1;
+    }
+  }
+  out.push(pts[pts.length - 1]);
   return { ...stroke, points: out };
 }
 

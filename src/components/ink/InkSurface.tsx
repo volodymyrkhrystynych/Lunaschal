@@ -300,7 +300,10 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
           el.removeAttribute('d');
           return;
         }
-        el.setAttribute('d', strokePathData(d.stroke));
+        el.setAttribute(
+          'd',
+          strokePathData(simplifyStroke(d.stroke, minPointDistance))
+        );
         el.setAttribute('fill', strokeColor(d.stroke, palette));
         el.setAttribute(
           'opacity',
