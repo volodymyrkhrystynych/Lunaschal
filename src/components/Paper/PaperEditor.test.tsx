@@ -84,6 +84,7 @@ beforeEach(() => {
     id: 'doc-1',
     title: 'Notes',
     archiveRequested: false,
+    studySourceId: null,
     pages: [
       { id: PAGE_1, position: 0 },
       { id: PAGE_2, position: 1 },

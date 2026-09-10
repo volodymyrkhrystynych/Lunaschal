@@ -77,6 +77,18 @@ export function StudyLibrary({ onOpen, canOpen = true }: Props) {
     },
   });
 
+  // The desk is large-screen-only, so this row is the only way to file a
+  // source from the phone — which is the half of Study most worth doing from
+  // wherever you found the link.
+  const setArchive = useMutation({
+    mutationFn: (vars: { id: string; archiveRequested: boolean }) =>
+      api.study.update(vars.id, { archiveRequested: vars.archiveRequested }),
+    onSuccess: () => {
+      invalidate();
+      queryClient.invalidateQueries({ queryKey: ['study', 'journal'] });
+    },
+  });
+
   const remove = useMutation({
     mutationFn: (id: string) => api.study.remove(id),
     onSuccess: invalidate,
@@ -165,58 +177,92 @@ export function StudyLibrary({ onOpen, canOpen = true }: Props) {
           </div>
         ) : (
           <ul className="flex flex-col gap-1">
-            {sources.map(source => (
-              <li key={source.id}>
-                <div className="w-full flex items-center gap-3 px-3 py-2 rounded hover:bg-white/5 group">
-                  {/* A plain div rather than a disabled button where there is
-                   * nowhere to go: a button that cannot be pressed still
-                   * reads as one, and on a phone every row would be it. */}
-                  <RowBody
-                    onOpen={canOpen ? () => onOpen(source) : undefined}
-                    ready={source.importStatus === 'ready'}
-                  >
-                    <span className="text-lg shrink-0">
-                      {KIND_ICON[source.kind]}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-[var(--color-text)]">
-                        {source.title || 'Untitled'}
+            {sources.map(source => {
+              // `?? false`: a row persisted before the field existed.
+              const filed = source.pendingArchive ?? false;
+              return (
+                <li key={source.id}>
+                  <div className="w-full flex items-center gap-3 px-3 py-2 rounded hover:bg-white/5 group">
+                    {/* A plain div rather than a disabled button where there is
+                     * nowhere to go: a button that cannot be pressed still
+                     * reads as one, and on a phone every row would be it. */}
+                    <RowBody
+                      onOpen={canOpen ? () => onOpen(source) : undefined}
+                      ready={source.importStatus === 'ready'}
+                    >
+                      <span className="text-lg shrink-0">
+                        {KIND_ICON[source.kind]}
                       </span>
-                      <span className="block truncate text-xs text-[var(--color-text-muted)]">
-                        {source.importStatus === 'importing'
-                          ? `Importing… ${source.importProgress?.phase ?? ''}`.trim()
-                          : source.importStatus === 'error'
-                            ? (source.importError ?? 'Import failed')
-                            : source.fileAvailable === false
-                              ? offlineReason(source)
-                              : sourceSubtitle(source)}
+                      <span className="min-w-0">
+                        <span className="block truncate text-[var(--color-text)]">
+                          {source.title || 'Untitled'}
+                        </span>
+                        <span className="block truncate text-xs text-[var(--color-text-muted)]">
+                          {source.importStatus === 'importing'
+                            ? `Importing… ${source.importProgress?.phase ?? ''}`.trim()
+                            : source.importStatus === 'error'
+                              ? (source.importError ?? 'Import failed')
+                              : source.fileAvailable === false
+                                ? offlineReason(source)
+                                : sourceSubtitle(source)}
+                        </span>
                       </span>
-                    </span>
-                  </RowBody>
-                  {source.importStatus === 'error' && source.sourceUrl && (
-                    <ToolbarButton
+                    </RowBody>
+                    {source.importStatus === 'error' && source.sourceUrl && (
+                      <ToolbarButton
+                        onClick={() =>
+                          importUrl.mutate({
+                            kind: source.kind === 'youtube' ? 'youtube' : 'web',
+                            value: source.sourceUrl as string,
+                            replaces: source.id,
+                          })
+                        }
+                      >
+                        Retry
+                      </ToolbarButton>
+                    )}
+                    {/* Deliberately not hover-revealed the way ✕ is: this is
+                     * the only way to file a source from a phone, and a hover
+                     * a touch screen cannot give would hide it there. */}
+                    <button
+                      type="button"
                       onClick={() =>
-                        importUrl.mutate({
-                          kind: source.kind === 'youtube' ? 'youtube' : 'web',
-                          value: source.sourceUrl as string,
-                          replaces: source.id,
+                        setArchive.mutate({
+                          id: source.id,
+                          archiveRequested: !filed,
                         })
                       }
+                      aria-pressed={filed}
+                      aria-label={
+                        filed
+                          ? `Keep ${source.title || 'source'} in the library`
+                          : `Send ${source.title || 'source'} to the journal`
+                      }
+                      title={
+                        filed
+                          ? 'Filed for the Journal — moves at 4am. Tap to keep it here.'
+                          : 'File this into the Journal (moves at 4am), with its notes and pages'
+                      }
+                      className={`px-2 py-1 min-h-[44px] lg:min-h-0 lg:py-0.5 rounded hover:bg-white/10 ${
+                        filed
+                          ? 'text-[var(--color-primary)]'
+                          : 'text-[var(--color-text-muted)]'
+                      }`}
                     >
-                      Retry
-                    </ToolbarButton>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => remove.mutate(source.id)}
-                    aria-label={`Delete ${source.title || 'source'}`}
-                    className="px-2 py-1 min-h-[44px] lg:min-h-0 lg:py-0.5 rounded text-[var(--color-text-muted)] lg:opacity-0 lg:group-hover:opacity-100 hover:bg-white/10 hover:text-red-400"
-                  >
-                    ✕
-                  </button>
-                </div>
-              </li>
-            ))}
+                      📓{filed ? ' ✓' : ''}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => remove.mutate(source.id)}
+                      aria-label={`Delete ${source.title || 'source'}`}
+                      className="px-2 py-1 min-h-[44px] lg:min-h-0 lg:py-0.5 rounded text-[var(--color-text-muted)] lg:opacity-0 lg:group-hover:opacity-100 hover:bg-white/10 hover:text-red-400"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>

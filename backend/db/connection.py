@@ -177,6 +177,7 @@ def init_db() -> None:
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
+    _ensure_paper_content_updated_at(db)
     _ensure_food_location(db)
     _ensure_food_recipe_match_status(db)
     _ensure_food_media_transcript(db)
@@ -196,6 +197,7 @@ def init_db() -> None:
     _ensure_learning_attempts_speech_requested(db)
     _ensure_study_position(db)
     _ensure_study_paper(db)
+    _ensure_study_archive_requested(db)
     _ensure_torrent_settings(db)
     _ensure_inference_pause_settings(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
@@ -585,6 +587,28 @@ def _ensure_paper_archive_requested(db: sqlite3.Connection) -> None:
         db.commit()
 
 
+def _ensure_paper_content_updated_at(db: sqlite3.Connection) -> None:
+    """When the paper was last drawn on, as opposed to last touched.
+
+    `papers.updated_at` moves for a rename and for the archive flag itself, so
+    it cannot answer "when did the drawing stop" -- which is what the Journal
+    card is timestamped with. Backfilled from the pages, which have carried an
+    honest content timestamp all along; papers with no pages fall back to
+    updated_at, the best guess available for them.
+    """
+    if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='papers'").fetchone():
+        return
+    cols = {r[1] for r in db.execute('PRAGMA table_info(papers)')}
+    if 'content_updated_at' not in cols:
+        db.execute('ALTER TABLE papers ADD COLUMN content_updated_at INTEGER')
+        db.execute(
+            'UPDATE papers SET content_updated_at = COALESCE('
+            ' (SELECT MAX(updated_at) FROM paper_pages WHERE paper_id = papers.id),'
+            ' updated_at)'
+        )
+        db.commit()
+
+
 def _ensure_food_location(db: sqlite3.Connection) -> None:
     if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='food_entries'").fetchone():
         return
@@ -777,6 +801,20 @@ def _ensure_study_paper(db: sqlite3.Connection) -> None:
         )
         changed = True
     if changed:
+        db.commit()
+
+
+def _ensure_study_archive_requested(db: sqlite3.Connection) -> None:
+    """The Journal flag, the same one papers carry.
+
+    Left NULL on every existing source, so a library built before this column
+    stays a library -- filing is a gesture the user makes, never a default.
+    """
+    if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='study_sources'").fetchone():
+        return
+    cols = {r[1] for r in db.execute('PRAGMA table_info(study_sources)')}
+    if 'archive_requested_at' not in cols:
+        db.execute('ALTER TABLE study_sources ADD COLUMN archive_requested_at INTEGER')
         db.commit()
 
 

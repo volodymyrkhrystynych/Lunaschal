@@ -57,7 +57,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ulid import ULID  # noqa: E402  (after the env-var guard, on purpose)
 from PIL import Image, ImageDraw  # noqa: E402
 
-from backend.day_boundary import day_key_for  # noqa: E402
+from backend.day_boundary import day_bounds, day_key_for  # noqa: E402
 from backend.db import connection  # noqa: E402
 from backend.storage import IdScopedStorage  # noqa: E402
 from backend.tags import tags_json  # noqa: E402
@@ -84,6 +84,24 @@ def today_key(days_ago: int = 0) -> str:
 
 def ts(days_ago: int = 0, hours_ago: int = 0) -> int:
     return int(time.time()) - days_ago * DAY - hours_ago * 3600
+
+
+def filed_day(days_ago: int = 2, worked_hour: int = 16) -> tuple[int, int]:
+    """A (flagged_at, worked_on_at) pair inside one finished 4am day.
+
+    For the two things that move into the Journal on the next 4am boundary: a
+    paper and a study source. Both timestamps have to sit inside the same
+    logical day and be older than the last 4am, or the item stays in its
+    explorer and the demo Journal shows nothing. day_bounds, not a wall-clock
+    date, for the reason today_key() gives above.
+    """
+    start, _ = day_bounds(today_key(days_ago))
+    # Flagged on opening, mid-morning; worked on until `worked_hour` hours into
+    # the day -- the gap the Journal timestamp exists to show
+    # (backend/journal_moment.py). Callers stagger that hour so the demo feed
+    # shows the two cards interleaved with the day's entries rather than
+    # stacked at one instant.
+    return start + 5 * 3600, start + worked_hour * 3600
 
 
 def placeholder_image(path: Path, label: str, size=(640, 400), color=(90, 110, 140)) -> None:
@@ -1097,8 +1115,9 @@ def seed_paper(db):
 
     paper_id = new_id()
     db.execute(
-        'INSERT INTO papers (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)',
-        (paper_id, 'Meeting notes', ts(3), ts(3)),
+        'INSERT INTO papers (id, title, created_at, updated_at, content_updated_at) '
+        'VALUES (?, ?, ?, ?, ?)',
+        (paper_id, 'Meeting notes', ts(3), ts(3), ts(3)),
     )
     page_id = new_id()
     snapshot_path = page_image_path(paper_id, page_id)
@@ -1107,6 +1126,27 @@ def seed_paper(db):
         'INSERT INTO paper_pages (id, paper_id, position, strokes, width, height, image_path, '
         'created_at, updated_at) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)',
         (page_id, paper_id, '[]', 1000, 1400, str(snapshot_path), ts(3), ts(3)),
+    )
+
+    # A second paper, already filed into the Journal: flagged mid-morning and
+    # drawn on until the evening, so the demo feed shows a card sitting at the
+    # time the drawing stopped rather than at the time it was filed. Nothing
+    # seeded archive_requested_at before, so the Journal's paper card had never
+    # appeared in ./test-env.sh at all.
+    filed_at, drawn_until = filed_day(2)
+    filed_id = new_id()
+    db.execute(
+        'INSERT INTO papers (id, title, archive_requested_at, created_at, updated_at, '
+        'content_updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        (filed_id, 'Reading notes', filed_at, filed_at, drawn_until, drawn_until),
+    )
+    filed_page_id = new_id()
+    filed_snapshot = page_image_path(filed_id, filed_page_id)
+    placeholder_image(filed_snapshot, 'filed page', size=(1000, 1400), color=(245, 245, 240))
+    db.execute(
+        'INSERT INTO paper_pages (id, paper_id, position, strokes, width, height, image_path, '
+        'created_at, updated_at) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)',
+        (filed_page_id, filed_id, '[]', 1000, 1400, str(filed_snapshot), filed_at, drawn_until),
     )
 
     # A picture pasted onto the page — it keeps its own box, which is what the
@@ -1411,8 +1451,9 @@ def seed_study(db):
     # it is the whole of what the Paper explorer grid shows.
     study_paper_id = new_id()
     db.execute(
-        'INSERT INTO papers (id, title, created_at, updated_at) VALUES (?, ?, ?, ?)',
-        (study_paper_id, 'Write-Ahead Logging — worked through', ts(3), ts(3)),
+        'INSERT INTO papers (id, title, created_at, updated_at, content_updated_at) '
+        'VALUES (?, ?, ?, ?, ?)',
+        (study_paper_id, 'Write-Ahead Logging — worked through', ts(3), ts(3), ts(3)),
     )
     study_page_id = new_id()
     study_snapshot = page_image_path(study_paper_id, study_page_id)
@@ -1423,6 +1464,52 @@ def seed_study(db):
         'created_at, updated_at) VALUES (?, ?, 0, ?, ?, ?, ?, ?, ?)',
         (study_page_id, study_paper_id, '[]', 1000, 1400, str(study_snapshot),
          ts(3), ts(3)),
+    )
+
+    # A fourth source, already filed into the Journal. It carries both halves
+    # the card is meant to show together — a paper with pages and a Notebook
+    # note — so ./test-env.sh demonstrates the whole card rather than a header.
+    # A separate row from the three above on purpose: filing one takes it out
+    # of the library, and the article row is what makes the desk open on the
+    # handwriting half.
+    filed_at, worked_until = filed_day(2, worked_hour=10)
+    filed_source_id = str(ULID())
+    filed_note = 'study/transformers-lecture.md'
+    placeholder_text(
+        notebook_root / filed_note,
+        '# Transformers, lecture 3\n\n'
+        '- Q, K, V are three projections of the same input.\n'
+        '- Multi-head attention is the same operation run in parallel subspaces.\n'
+        '- Residual stream is the thing every block reads from and writes back to.\n',
+    )
+    os.utime(notebook_root / filed_note, (worked_until, worked_until))
+    filed_paper_id = new_id()
+    db.execute(
+        'INSERT INTO papers (id, title, created_at, updated_at, content_updated_at) '
+        'VALUES (?, ?, ?, ?, ?)',
+        (filed_paper_id, 'Transformers — worked through', filed_at, worked_until,
+         worked_until),
+    )
+    for position, label in enumerate(('attention, by hand', 'the residual stream')):
+        filed_page_id = new_id()
+        filed_snapshot = page_image_path(filed_paper_id, filed_page_id)
+        placeholder_image(filed_snapshot, label, size=(1000, 1400),
+                          color=(245, 245, 240))
+        db.execute(
+            'INSERT INTO paper_pages (id, paper_id, position, strokes, width, height, '
+            'image_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (filed_page_id, filed_paper_id, position, '[]', 1000, 1400,
+             str(filed_snapshot), filed_at, worked_until),
+        )
+    db.execute(
+        'INSERT INTO study_sources (id, title, kind, source_url, file_path, content_type, '
+        'size_bytes, duration_seconds, note_path, paper_id, note_mode, import_status, '
+        'import_error, last_opened_at, position, archive_requested_at, created_at, '
+        'updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        (filed_source_id, 'Transformers, lecture 3', 'youtube',
+         'https://www.youtube.com/watch?v=zxQyTK8quyY', None, None, 0, 1680,
+         filed_note, filed_paper_id, 'paper', 'ready', None, filed_at, 1680,
+         filed_at, filed_at, worked_until),
     )
 
     rows = [
@@ -1444,9 +1531,9 @@ def seed_study(db):
         db.execute(
             'INSERT INTO study_sources (id, title, kind, source_url, file_path, content_type, '
             'size_bytes, duration_seconds, note_path, paper_id, note_mode, import_status, '
-            'import_error, last_opened_at, position, created_at, updated_at) '
-            'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (*row, ts(20), ts(1)),
+            'import_error, last_opened_at, position, archive_requested_at, created_at, '
+            'updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (*row, None, ts(20), ts(1)),
         )
 
 

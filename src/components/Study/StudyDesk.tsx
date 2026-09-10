@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import {
   isSourceRowFor,
@@ -106,6 +106,21 @@ export function StudyDesk({ sourceId, initial, onBack }: Props) {
     [sourceId, queryClient]
   );
 
+  // Filing the source into the Journal. Unlike the position and mode writes
+  // below, this is a real edit the rest of the app reads, so it invalidates:
+  // the library must drop a source that has moved, and the feed must gain it.
+  const setArchive = useMutation({
+    mutationFn: (archiveRequested: boolean) =>
+      api.study.update(sourceId, { archiveRequested }),
+    onSuccess: updated => {
+      if (isSourceRowFor(updated, sourceId)) {
+        queryClient.setQueryData(['study', 'source', sourceId], updated);
+      }
+      queryClient.invalidateQueries({ queryKey: ['study', 'sources'] });
+      queryClient.invalidateQueries({ queryKey: ['study', 'journal'] });
+    },
+  });
+
   const leave = useCallback(() => {
     // Fired, not awaited: the commit is local-only (two IndexedDB writes and a
     // canvas snapshot), and Back must not sit waiting on it.
@@ -144,6 +159,10 @@ export function StudyDesk({ sourceId, initial, onBack }: Props) {
     );
   }
 
+  // `?? false`, for the same reason `isSourceRowFor` exists: what this query
+  // hands back can be a row persisted before the field existed.
+  const filed = source.pendingArchive ?? false;
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
       <div className="shrink-0 flex items-center gap-2 px-3 py-1.5 border-b border-white/10 bg-[var(--color-surface)]">
@@ -168,6 +187,18 @@ export function StudyDesk({ sourceId, initial, onBack }: Props) {
           </a>
         )}
         <div className="ml-auto flex items-center gap-1 shrink-0">
+          <ModeButton
+            active={filed}
+            onClick={() => setArchive.mutate(!filed)}
+            title={
+              filed
+                ? 'Filed for the Journal — moves at 4am. Tap to keep it here.'
+                : 'File this into the Journal (moves at 4am), with its notes and pages'
+            }
+          >
+            📓 {filed ? 'To journal ✓' : 'To journal'}
+          </ModeButton>
+          <span className="w-px h-4 bg-white/10 mx-1" />
           <ModeButton
             active={noteMode === 'note'}
             onClick={() => switchMode('note')}
@@ -203,15 +234,18 @@ function ModeButton({
   active,
   onClick,
   children,
+  title,
 }: {
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
+  title?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
+      title={title}
       aria-pressed={active}
       className={
         active

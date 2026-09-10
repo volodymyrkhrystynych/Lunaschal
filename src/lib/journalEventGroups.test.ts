@@ -17,6 +17,40 @@ function entryItem(id: string, createdAt: string, entryIndex = 0): FeedItem {
   return { kind: 'entry', entry, entryIndex };
 }
 
+function studyItem(id: string, archivedAt: string): FeedItem {
+  return {
+    kind: 'study',
+    study: {
+      id,
+      title: `study ${id}`,
+      kind: 'web',
+      sourceUrl: 'https://example.com',
+      durationSeconds: null,
+      journalDate: archivedAt.slice(0, 10),
+      archivedAt,
+      fileUrl: `/api/study/sources/${id}/file`,
+      pages: [],
+      notePath: null,
+      note: null,
+      noteTruncated: false,
+    },
+  };
+}
+
+function newspaperItem(date: string, archivedAt: string): FeedItem {
+  return {
+    kind: 'newspaper',
+    newspaper: {
+      date,
+      byteSize: 1024,
+      pageCount: 12,
+      pdfUrl: `/api/newspapers/issues/${date}/pdf`,
+      archivedAt,
+      markedPages: 2,
+    },
+  };
+}
+
 function calendarEvent(
   id: string,
   overrides: Partial<CalendarEvent> = {}
@@ -162,5 +196,39 @@ describe('computeEventGroupSpans', () => {
     ];
     const spans = computeEventGroupSpans(feed, events);
     expect(spans.map(s => s.event.id)).toEqual(['earlier', 'later']);
+  });
+
+  // Both of these read a timestamp off the item, and the newspaper arm was
+  // missing from feedItemTimeMs outright — an archived issue fell off the
+  // switch and could never be covered by an event's window.
+  it('groups a filed study source under an event whose window covers it', () => {
+    const feed = [
+      entryItem('e1', '2026-07-08T09:10:00'),
+      studyItem('s1', '2026-07-08T09:30:00'),
+    ];
+    const spans = computeEventGroupSpans(feed, [calendarEvent('ev1')]);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].startIndex).toBe(0);
+    expect(spans[0].endIndex).toBe(1);
+  });
+
+  it('groups an archived newspaper issue the same way', () => {
+    const feed = [
+      entryItem('e1', '2026-07-08T09:10:00'),
+      newspaperItem('2026-07-08', '2026-07-08T09:30:00'),
+    ];
+    const spans = computeEventGroupSpans(feed, [calendarEvent('ev1')]);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].endIndex).toBe(1);
+  });
+
+  it('leaves a study source outside the window ungrouped', () => {
+    const feed = [
+      entryItem('e1', '2026-07-08T09:10:00'),
+      studyItem('s1', '2026-07-08T18:00:00'),
+    ];
+    const spans = computeEventGroupSpans(feed, [calendarEvent('ev1')]);
+    expect(spans).toHaveLength(1);
+    expect(spans[0].endIndex).toBe(0);
   });
 });

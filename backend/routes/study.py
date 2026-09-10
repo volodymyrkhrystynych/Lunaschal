@@ -8,11 +8,16 @@ in-memory progress registry (backend/study/importer.py) and a persisted
 import math
 import threading
 import time
+from datetime import datetime, timezone
 
 from flask import Blueprint, jsonify, request, send_file
 from ulid import ULID
 
+from backend.day_boundary import day_bounds, day_key_for
 from backend.db.connection import build_update, get_db, row_to_dict
+from backend.journal_moment import journal_moment
+from backend.routes.notebook import notebook_file
+from backend.routes.paper import page_image_url
 from backend.study import importer, storage
 
 bp = Blueprint('study', __name__, url_prefix='/api/study')
@@ -20,7 +25,7 @@ bp = Blueprint('study', __name__, url_prefix='/api/study')
 _LIST_COLS = (
     'id, title, kind, source_url, content_type, size_bytes, duration_seconds,'
     ' note_path, paper_id, note_mode, import_status, import_error,'
-    ' last_opened_at, position, created_at, updated_at'
+    ' last_opened_at, position, archive_requested_at, created_at, updated_at'
 )
 
 # `file_path` is deliberately absent from _LIST_COLS: a server path is not the
@@ -64,6 +69,68 @@ def _archive_state():
     return storage.archive_location_state(get_db())
 
 
+# A source filed for the Journal stays in the library until the next 4am
+# boundary passes, then moves -- the same lazy rule papers follow, computed off
+# backend.day_boundary so no scheduler is needed and it survives restarts.
+
+def _cutoff_4am(now_ts: int) -> int:
+    return day_bounds(day_key_for(now_ts))[0]
+
+
+def _iso(ts: int) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+# A note bigger than this is not a study note any more, and the Journal feed
+# renders every card it is handed. Truncated rather than dropped: the first
+# quarter-megabyte is still the note.
+NOTE_BYTE_CAP = 256 * 1024
+
+
+def _read_note(note_path: str | None) -> tuple[str | None, bool]:
+    """The Notebook file's text, and whether the cap cut it short."""
+    if not note_path:
+        return None, False
+    path = notebook_file(note_path)
+    if path is None or not path.is_file():
+        return None, False
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None, False
+    truncated = len(raw) > NOTE_BYTE_CAP
+    return raw[:NOTE_BYTE_CAP].decode('utf-8', 'replace'), truncated
+
+
+def _note_mtime(note_path: str | None) -> int | None:
+    if not note_path:
+        return None
+    path = notebook_file(note_path)
+    if path is None or not path.is_file():
+        return None
+    try:
+        return int(path.stat().st_mtime)
+    except OSError:
+        return None
+
+
+def _last_worked_on(row, note_path: str | None) -> int | None:
+    """When this source was last *worked on*, for the Journal's timestamp.
+
+    Reading is not working: `study_sources.updated_at` is bumped by `touch` on
+    every desk open, so it would put the card at the moment you sat down rather
+    than the moment you stopped. What counts is ink in the bound paper and
+    keystrokes in the Notebook file -- the two places studying leaves a mark.
+    `last_opened_at` is the fallback for a source that has neither, such as a
+    video simply watched through; it is the start of that sitting, which is the
+    best the record holds.
+    """
+    marks = [t for t in (row['paper_content_updated_at'], _note_mtime(note_path)) if t]
+    if marks:
+        return max(marks)
+    return row['last_opened_at']
+
+
 # Module-level so tests can monkeypatch them to the synchronous functions —
 # the indirection backend/tests/test_fanfic_import.py's fixture relies on.
 def _start_web_import_bg(source_id: str, url: str) -> None:
@@ -78,17 +145,100 @@ def _start_youtube_import_bg(source_id: str, url: str) -> None:
     ).start()
 
 
+def _public_source(row, archive) -> dict:
+    source = _attach_availability(_attach_progress(row_to_dict(row)), archive)
+    # The flag reaches the client as a boolean and nothing else. The raw column
+    # is not in TIMESTAMP_COLS, so leaving it in would put a bare unix int on
+    # every row beside an ISO string that means the same thing -- and the
+    # client has no use for the moment, only for the state.
+    source.pop('archiveRequestedAt', None)
+    source['pendingArchive'] = row['archive_requested_at'] is not None
+    return source
+
+
 @bp.get('/sources')
 def list_sources():
+    # Sources that have moved into the Journal are gone from here, exactly as a
+    # moved paper is gone from the Paper explorer; one flagged since the last
+    # 4am stays, marked pending. The two predicates are complements, so a
+    # source is in exactly one of the library and the feed at any instant.
     rows = get_db().execute(
-        f'SELECT {_LIST_COLS} FROM study_sources ORDER BY created_at DESC'
+        f'SELECT {_LIST_COLS} FROM study_sources'
+        ' WHERE archive_requested_at IS NULL OR archive_requested_at >= ?'
+        ' ORDER BY created_at DESC',
+        (_cutoff_4am(int(time.time())),),
     ).fetchall()
     # Resolved once for the whole listing rather than per row: it reads the
     # settings table and stats the drive.
     archive = _archive_state()
-    return jsonify(
-        [_attach_availability(_attach_progress(row_to_dict(row)), archive) for row in rows]
-    )
+    return jsonify([_public_source(row, archive) for row in rows])
+
+
+@bp.get('/journal')
+def journal_study_sources():
+    """Sources that have moved into the Journal, newest first.
+
+    One card carries the whole sitting: the source itself, the pages of the
+    paper it was written on, and the text of its Notebook note. They are one
+    thing in the day's record -- an article read and the page of notes taken
+    beside it are not two events -- which is also why a bound paper gets no
+    card of its own (see journal_papers in backend/routes/paper.py).
+
+    Timestamped at the last time it was worked on rather than at the flag; the
+    day is still the day it was filed under. See backend/journal_moment.py.
+    """
+    db = get_db()
+    cutoff = _cutoff_4am(int(time.time()))
+    rows = db.execute(
+        'SELECT s.id, s.title, s.kind, s.source_url, s.duration_seconds,'
+        ' s.note_path, s.paper_id, s.last_opened_at, s.archive_requested_at,'
+        ' p.content_updated_at AS paper_content_updated_at'
+        ' FROM study_sources s LEFT JOIN papers p ON p.id = s.paper_id'
+        ' WHERE s.archive_requested_at IS NOT NULL AND s.archive_requested_at < ?',
+        (cutoff,),
+    ).fetchall()
+    archive = _archive_state()
+    result = []
+    for row in rows:
+        pages = []
+        if row['paper_id']:
+            pages = db.execute(
+                'SELECT id, image_path, updated_at FROM paper_pages'
+                ' WHERE paper_id=? ORDER BY position ASC',
+                (row['paper_id'],),
+            ).fetchall()
+        note, note_truncated = _read_note(row['note_path'])
+        at = journal_moment(
+            _last_worked_on(row, row['note_path']), row['archive_requested_at']
+        )
+        card = {
+            'id': row['id'],
+            'title': row['title'],
+            'kind': row['kind'],
+            'sourceUrl': row['source_url'],
+            'durationSeconds': row['duration_seconds'],
+            'journalDate': day_key_for(row['archive_requested_at']),
+            'archivedAt': _iso(at),
+            'fileUrl': f"/api/study/sources/{row['id']}/file",
+            'notePath': row['note_path'],
+            'note': note,
+            'noteTruncated': note_truncated,
+            # page_image_url, not a second copy of the rule: the `?v=updated_at`
+            # cache-bust is what keeps a redrawn page from showing stale ink.
+            'pages': [
+                {'id': pg['id'], 'imageUrl': page_image_url(pg)} for pg in pages
+            ],
+            '_at': at,
+        }
+        # A video on an unplugged drive still gets its card -- listed and
+        # unreachable, the way viewerKindFor already treats it.
+        _attach_availability(card, archive)
+        result.append(card)
+    # Sorted here rather than in SQL, for the reason journal_papers gives.
+    result.sort(key=lambda r: r['_at'], reverse=True)
+    for r in result:
+        del r['_at']
+    return jsonify(result)
 
 
 @bp.get('/sources/<source_id>')
@@ -98,7 +248,7 @@ def get_source(source_id):
     ).fetchone()
     if row is None:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(_attach_availability(_attach_progress(row_to_dict(row)), _archive_state()))
+    return jsonify(_public_source(row, _archive_state()))
 
 
 @bp.get('/sources/<source_id>/status')
@@ -236,6 +386,12 @@ def update_source(source_id):
         if mode not in ('note', 'paper'):
             return jsonify({'error': 'Unknown note mode'}), 400
         updates['note_mode'] = mode
+    if 'archiveRequested' in body:
+        # Reversible until the next 4am carries it out of the library, the
+        # same as a paper's flag.
+        updates['archive_requested_at'] = (
+            int(time.time()) if body['archiveRequested'] else None
+        )
     if not updates:
         return jsonify({'error': 'Nothing to update'}), 400
 
@@ -256,7 +412,7 @@ def update_source(source_id):
     ).fetchone()
     if row is None:
         return jsonify({'error': 'Not found'}), 404
-    return jsonify(row_to_dict(row))
+    return jsonify(_public_source(row, _archive_state()))
 
 
 @bp.delete('/sources/<source_id>')

@@ -630,3 +630,280 @@ def test_stale_imports_are_reset_at_startup(client):
     source = client.get(f'/api/study/sources/{source_id}').get_json()
     assert source['importStatus'] == 'error'
     assert 'restart' in source['importError']
+
+
+# --- Filing a source into the Journal ---
+#
+# The same lazy 4am move papers use: flagging is reversible until a boundary
+# passes, and then the source leaves the library for the feed. What the card
+# carries is the whole sitting -- the source, the pages of the paper it was
+# written on, and the text of its Notebook note.
+
+@pytest.fixture
+def notebook_root(monkeypatch, tmp_path):
+    root = tmp_path / 'notebook'
+    root.mkdir()
+    monkeypatch.setenv('NOTEBOOK_ROOT', str(root))
+    return root
+
+
+def _file_source(source_id, days_ago=2, hour=5):
+    """Put the flag inside a finished 4am day, so the source has moved."""
+    from backend.day_boundary import day_bounds, day_key_for
+
+    start, _ = day_bounds(day_key_for(int(time.time()) - days_ago * 86400))
+    at = start + hour * 3600
+    db = get_db()
+    db.execute(
+        'UPDATE study_sources SET archive_requested_at=? WHERE id=?', (at, source_id)
+    )
+    db.commit()
+    return start, at
+
+
+def _journal_cards(client):
+    return client.get('/api/study/journal').get_json()
+
+
+def _new_source(client, name='Deep Learning.pdf'):
+    res = _upload_pdf(client, name=name)
+    assert res.status_code == 201
+    return res.get_json()['id']
+
+
+def _save_page_snapshot(client, page_id):
+    """A page with a stored PNG, so it has a thumbnail to appear in the card."""
+    return client.put(
+        f'/api/paper/pages/{page_id}',
+        data={
+            'strokes': json.dumps([]),
+            'width': '800',
+            'height': '1000',
+            'snapshot': (io.BytesIO(b'\x89PNG-fake'), 'snapshot.png'),
+        },
+        content_type='multipart/form-data',
+    )
+
+
+def test_flagging_keeps_the_source_in_the_library_until_4am(client):
+    source_id = _new_source(client)
+
+    r = client.patch(f'/api/study/sources/{source_id}', json={'archiveRequested': True})
+    assert r.status_code == 200
+    assert r.get_json()['pendingArchive'] is True
+
+    listed = client.get('/api/study/sources').get_json()
+    assert any(s['id'] == source_id and s['pendingArchive'] for s in listed)
+    assert _journal_cards(client) == []
+
+
+def test_once_the_boundary_passes_it_leaves_the_library_for_the_feed(client):
+    source_id = _new_source(client)
+    client.patch(f'/api/study/sources/{source_id}', json={'archiveRequested': True})
+    _, flagged_at = _file_source(source_id)
+
+    from backend.day_boundary import day_key_for
+
+    assert all(s['id'] != source_id for s in client.get('/api/study/sources').get_json())
+    cards = _journal_cards(client)
+    assert len(cards) == 1
+    assert cards[0]['id'] == source_id
+    assert cards[0]['journalDate'] == day_key_for(flagged_at)
+    assert cards[0]['kind'] == 'pdf'
+
+
+def test_unflagging_returns_the_source_to_the_library(client):
+    source_id = _new_source(client)
+    client.patch(f'/api/study/sources/{source_id}', json={'archiveRequested': True})
+    _file_source(source_id)
+    assert len(_journal_cards(client)) == 1
+
+    client.patch(f'/api/study/sources/{source_id}', json={'archiveRequested': False})
+    listed = client.get('/api/study/sources').get_json()
+    match = [s for s in listed if s['id'] == source_id]
+    assert match and match[0]['pendingArchive'] is False
+    assert _journal_cards(client) == []
+
+
+def test_the_card_carries_the_media_the_pages_and_the_note_together(
+    client, notebook_root
+):
+    """One sitting, one card: an article read and the page of notes taken
+    beside it are not two events in the day's record."""
+    source_id = _new_source(client)
+
+    note_rel = 'study/wal.md'
+    note_file = notebook_root / note_rel
+    note_file.parent.mkdir(parents=True, exist_ok=True)
+    note_file.write_text('# WAL\n\nReaders do not block the writer.\n')
+
+    paper_id = client.post('/api/paper').get_json()['id']
+    page_id = client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
+    _save_page_snapshot(client, page_id)
+    client.patch(
+        f'/api/study/sources/{source_id}',
+        json={'notePath': note_rel, 'paperId': paper_id, 'archiveRequested': True},
+    )
+    _file_source(source_id)
+
+    card = _journal_cards(client)[0]
+    assert card['notePath'] == note_rel
+    assert 'Readers do not block the writer.' in card['note']
+    assert card['noteTruncated'] is False
+    assert len(card['pages']) == 1
+    assert card['pages'][0]['imageUrl'].startswith(f'/api/paper/pages/{page_id}/image')
+    assert card['fileUrl'] == f'/api/study/sources/{source_id}/file'
+
+
+def test_the_bound_paper_gets_no_card_of_its_own(client):
+    """Otherwise the same drawings print twice in one day."""
+    source_id = _new_source(client)
+    paper_id = client.post('/api/paper').get_json()['id']
+    client.patch(f'/api/study/sources/{source_id}', json={'paperId': paper_id})
+    client.patch(f'/api/paper/{paper_id}', json={'archiveRequested': True})
+
+    from backend.day_boundary import day_bounds, day_key_for
+
+    start, _ = day_bounds(day_key_for(int(time.time()) - 2 * 86400))
+    db = get_db()
+    db.execute(
+        'UPDATE papers SET archive_requested_at=? WHERE id=?',
+        (start + 5 * 3600, paper_id),
+    )
+    db.commit()
+
+    assert client.get('/api/paper/journal').get_json() == []
+
+
+def test_the_timestamp_follows_the_ink_not_the_flag(client):
+    """study_sources.updated_at is bumped by `touch` on every desk open, so it
+    would place the card at the moment you sat down."""
+    from datetime import datetime, timezone
+
+    source_id = _new_source(client)
+    paper_id = client.post('/api/paper').get_json()['id']
+    client.patch(f'/api/study/sources/{source_id}', json={'paperId': paper_id})
+    day_start, flagged_at = _file_source(source_id)
+
+    drawn_at = day_start + 16 * 3600
+    db = get_db()
+    db.execute('UPDATE papers SET content_updated_at=? WHERE id=?', (drawn_at, paper_id))
+    db.commit()
+
+    card = _journal_cards(client)[0]
+    assert card['archivedAt'] == datetime.fromtimestamp(
+        drawn_at, tz=timezone.utc
+    ).isoformat()
+    assert card['archivedAt'] > datetime.fromtimestamp(
+        flagged_at, tz=timezone.utc
+    ).isoformat()
+
+
+def test_the_note_s_own_mtime_counts_as_working_on_it(client, notebook_root):
+    """A source studied with the Notebook half rather than the paper one."""
+    import os
+    from datetime import datetime, timezone
+
+    source_id = _new_source(client)
+    note_rel = 'study/typed.md'
+    note_file = notebook_root / note_rel
+    note_file.parent.mkdir(parents=True, exist_ok=True)
+    note_file.write_text('typed while watching\n')
+
+    client.patch(f'/api/study/sources/{source_id}', json={'notePath': note_rel})
+    day_start, _ = _file_source(source_id)
+    typed_at = day_start + 14 * 3600
+    os.utime(note_file, (typed_at, typed_at))
+
+    card = _journal_cards(client)[0]
+    assert card['archivedAt'] == datetime.fromtimestamp(
+        typed_at, tz=timezone.utc
+    ).isoformat()
+
+
+def test_a_source_with_no_notes_falls_back_to_when_it_was_opened(client):
+    """A video simply watched through leaves no mark but the sitting itself."""
+    from datetime import datetime, timezone
+
+    source_id = _new_source(client)
+    day_start, _ = _file_source(source_id)
+    opened_at = day_start + 11 * 3600
+    db = get_db()
+    db.execute(
+        'UPDATE study_sources SET last_opened_at=? WHERE id=?', (opened_at, source_id)
+    )
+    db.commit()
+
+    card = _journal_cards(client)[0]
+    assert card['archivedAt'] == datetime.fromtimestamp(
+        opened_at, tz=timezone.utc
+    ).isoformat()
+
+
+def test_a_video_on_an_unplugged_drive_still_gets_a_card(
+    client, archive_unplugged, monkeypatch, sync_imports
+):
+    """Listed and unreachable, the way viewerKindFor already treats it."""
+    db = get_db()
+    now = int(time.time())
+    source_id = str(ULID())
+    db.execute(
+        'INSERT INTO study_sources (id, title, kind, source_url, import_status,'
+        ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+        (source_id, 'A lecture', 'youtube', 'https://example.com/v', 'ready', now, now),
+    )
+    db.commit()
+    _file_source(source_id)
+
+    card = _journal_cards(client)[0]
+    assert card['id'] == source_id
+    assert card['fileAvailable'] is False
+    assert card['fileUnavailableReason']
+
+
+def test_the_feed_is_ordered_newest_first_by_the_last_edit(client):
+    """buildFeed takes every source it is handed as already newest-first."""
+    from backend.day_boundary import day_bounds, day_key_for
+
+    ids = [_new_source(client, name=f'{i}.pdf') for i in range(3)]
+    day_start, _ = day_bounds(day_key_for(int(time.time()) - 2 * 86400))
+    db = get_db()
+    for i, (source_id, opened_hour) in enumerate(zip(ids, (18, 6, 12))):
+        db.execute(
+            'UPDATE study_sources SET archive_requested_at=?, last_opened_at=?'
+            ' WHERE id=?',
+            (day_start + 5 * 3600 + i, day_start + opened_hour * 3600, source_id),
+        )
+    db.commit()
+
+    assert [c['id'] for c in _journal_cards(client)] == [ids[0], ids[2], ids[1]]
+
+
+def test_an_oversized_note_is_truncated_rather_than_dropped(client, notebook_root):
+    from backend.routes.study import NOTE_BYTE_CAP
+
+    source_id = _new_source(client)
+    note_rel = 'study/huge.md'
+    note_file = notebook_root / note_rel
+    note_file.parent.mkdir(parents=True, exist_ok=True)
+    note_file.write_text('x' * (NOTE_BYTE_CAP + 5000))
+
+    client.patch(f'/api/study/sources/{source_id}', json={'notePath': note_rel})
+    _file_source(source_id)
+
+    card = _journal_cards(client)[0]
+    assert card['noteTruncated'] is True
+    assert len(card['note']) == NOTE_BYTE_CAP
+
+
+def test_the_flag_reaches_the_client_as_a_state_not_a_timestamp(client):
+    """`_LIST_COLS` is curated on purpose; the raw column stays server-side."""
+    source_id = _new_source(client)
+    client.patch(f'/api/study/sources/{source_id}', json={'archiveRequested': True})
+
+    for row in (
+        client.get(f'/api/study/sources/{source_id}').get_json(),
+        client.get('/api/study/sources').get_json()[0],
+    ):
+        assert row['pendingArchive'] is True
+        assert 'archiveRequestedAt' not in row

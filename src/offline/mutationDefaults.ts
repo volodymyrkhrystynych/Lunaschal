@@ -1189,6 +1189,7 @@ const paperCreateCfg = (
       id: vars.id,
       title: '',
       archiveRequested: false,
+      studySourceId: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       pages: [{ id: vars.pageId, position: 0, imageUrl: null }],

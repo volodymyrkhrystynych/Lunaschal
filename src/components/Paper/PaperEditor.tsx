@@ -285,6 +285,7 @@ export function PaperEditor({
   const addPage = usePaperPageAdd();
 
   const archiveRequested = paper?.archiveRequested ?? false;
+  const studySourceId = paper?.studySourceId ?? null;
   const setArchive = useMutation({
     mutationFn: (requested: boolean) =>
       api.paper.setArchiveRequested(paperId, requested),
@@ -1244,17 +1245,27 @@ export function PaperEditor({
             <button onClick={handleBack} className={btn}>
               ‹ Back
             </button>
-            <button
-              onClick={() => setArchive.mutate(!archiveRequested)}
-              className={toolBtn(archiveRequested)}
-              title={
-                archiveRequested
-                  ? 'Flagged to move to the Journal at 4am — tap to keep here'
-                  : 'Move this paper to the Journal (happens at 4am)'
-              }
-            >
-              📓 {archiveRequested ? 'To journal ✓' : 'To journal'}
-            </button>
+            {/* A paper a Study source borrowed reaches the Journal inside that
+             * source's card and nowhere else, so filing it here would take it
+             * out of the explorer and produce no card at all. Said rather
+             * than silently omitted: the button was here a moment ago. */}
+            {studySourceId ? (
+              <span className="px-2 text-xs text-[var(--color-text-muted)]">
+                📓 In a Study source — send that to the journal
+              </span>
+            ) : (
+              <button
+                onClick={() => setArchive.mutate(!archiveRequested)}
+                className={toolBtn(archiveRequested)}
+                title={
+                  archiveRequested
+                    ? 'Flagged to move to the Journal at 4am — tap to keep here'
+                    : 'Move this paper to the Journal (happens at 4am)'
+                }
+              >
+                📓 {archiveRequested ? 'To journal ✓' : 'To journal'}
+              </button>
+            )}
           </>
         )}
         <button

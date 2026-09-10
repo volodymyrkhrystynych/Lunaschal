@@ -56,6 +56,7 @@ function source(overrides: Partial<StudySource> = {}): StudySource {
     position: null,
     paperId: null,
     noteMode: 'note' as const,
+    pendingArchive: false,
     createdAt: '2026-09-04T10:00:00+00:00',
     updatedAt: '2026-09-04T10:00:00+00:00',
     ...overrides,
@@ -300,6 +301,23 @@ describe('the Study desk', () => {
     });
   });
 
+  it('files a source into the journal from the desk header', async () => {
+    const unfiled = source();
+    vi.spyOn(api.study, 'sources').mockResolvedValue([unfiled]);
+    vi.spyOn(api.study, 'source').mockResolvedValue(unfiled);
+    renderStudy();
+
+    fireEvent.click(await screen.findByText('Attention Is All You Need'));
+    const file = await screen.findByText('📓 To journal');
+    fireEvent.click(file);
+
+    await waitFor(() =>
+      expect(api.study.update).toHaveBeenCalledWith('s1', {
+        archiveRequested: true,
+      })
+    );
+  });
+
   it('opens a PDF on the page it was left on', async () => {
     pdfPages = 6;
     const saved = source({ position: 4 });
@@ -446,6 +464,49 @@ describe('Study on a screen too small for the desk', () => {
 
     await waitFor(() =>
       expect(importYoutube).toHaveBeenCalledWith('https://youtu.be/abc')
+    );
+  });
+
+  it('files a source into the journal from the row itself', async () => {
+    // The desk is large-screen-only, so this row is the only way to file a
+    // source from the phone — and importing from wherever you found the link
+    // is the half of Study that most wants doing there.
+    const update = vi
+      .spyOn(api.study, 'update')
+      .mockResolvedValue(source({ pendingArchive: true }));
+    vi.spyOn(api.study, 'sources').mockResolvedValue([source()]);
+    renderStudy();
+
+    const file = await screen.findByLabelText(
+      'Send Attention Is All You Need to the journal'
+    );
+    // Not hover-revealed, unlike ✕: a hover a touch screen cannot give would
+    // hide the control on the only device that needs it here.
+    expect(file.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(file);
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith('s1', { archiveRequested: true })
+    );
+  });
+
+  it('offers to take a filed source back out again', async () => {
+    const update = vi
+      .spyOn(api.study, 'update')
+      .mockResolvedValue(source({ pendingArchive: false }));
+    vi.spyOn(api.study, 'sources').mockResolvedValue([
+      source({ pendingArchive: true }),
+    ]);
+    renderStudy();
+
+    const keep = await screen.findByLabelText(
+      'Keep Attention Is All You Need in the library'
+    );
+    expect(keep.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(keep);
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith('s1', { archiveRequested: false })
     );
   });
 

@@ -6,13 +6,14 @@ import type {
   FoodJournalItem,
   TaskEvent,
   JournalNewspaper,
+  JournalStudySource,
 } from '../hooks/api';
 
 // A journal feed item: a real entry, an interleaved STT transcription, a saved
-// chat day, an archived paper (drawings), a food-log entry, a task event, or an
-// archived newspaper issue. `entryIndex` preserves the entry's position in the
-// original entries array so keyboard navigation (selIndex) keeps indexing
-// entries only — the other kinds are not selectable.
+// chat day, an archived paper (drawings), a food-log entry, a task event, an
+// archived newspaper issue, or a filed study source. `entryIndex` preserves the
+// entry's position in the original entries array so keyboard navigation
+// (selIndex) keeps indexing entries only — the other kinds are not selectable.
 export type FeedItem =
   | { kind: 'entry'; entry: JournalEntry; entryIndex: number }
   | { kind: 'transcription'; transcription: Transcription }
@@ -20,7 +21,8 @@ export type FeedItem =
   | { kind: 'paper'; paper: JournalPaper }
   | { kind: 'food'; food: FoodJournalItem }
   | { kind: 'taskEvent'; taskEvent: TaskEvent }
-  | { kind: 'newspaper'; newspaper: JournalNewspaper };
+  | { kind: 'newspaper'; newspaper: JournalNewspaper }
+  | { kind: 'study'; study: JournalStudySource };
 
 // `undefined` because JournalEntry.createdAt is optional — an optimistically
 // inserted row exists before the server has stamped one. Such a row sorts to
@@ -44,14 +46,17 @@ function source<T>(
 }
 
 // Merge entries, transcriptions, saved chats, archived papers, food-log
-// entries, task events and archived newspaper issues into one feed sorted by
-// time descending (conversations sort by updatedAt, papers by the moment they
-// were archived, newspapers by the moment the issue was archived, the rest by
-// createdAt). All inputs are already newest-first.
+// entries, task events, archived newspaper issues and filed study sources into
+// one feed sorted by time descending (conversations sort by updatedAt,
+// newspapers by the moment the issue was archived, papers and study sources by
+// the moment they were last worked on inside the day they were filed under —
+// see backend/journal_moment.py — the rest by createdAt). All inputs are
+// already newest-first.
 //
 // An n-way merge over a list of sources rather than a cascade of comparisons:
 // with seven sources the cascade needed every arm rewritten to add one, and an
-// arm that forgot a comparand would silently mis-order the feed. Ties go to the
+// arm that forgot a comparand would silently mis-order the feed. The eighth
+// below cost one entry, which is what this shape is for. Ties go to the
 // earliest source in this list, which is why entries are first — an entry still
 // wins an exact timestamp tie against every other kind.
 export function buildFeed(
@@ -61,7 +66,8 @@ export function buildFeed(
   papers: JournalPaper[] = [],
   food: FoodJournalItem[] = [],
   taskEvents: TaskEvent[] = [],
-  newspapers: JournalNewspaper[] = []
+  newspapers: JournalNewspaper[] = [],
+  studySources: JournalStudySource[] = []
 ): FeedItem[] {
   const sources = [
     source(
@@ -98,6 +104,11 @@ export function buildFeed(
       newspapers,
       n => ms(n.archivedAt),
       newspaper => ({ kind: 'newspaper', newspaper })
+    ),
+    source(
+      studySources,
+      s => ms(s.archivedAt),
+      study => ({ kind: 'study', study })
     ),
   ];
   const cursors = sources.map(() => 0);

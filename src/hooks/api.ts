@@ -35,9 +35,14 @@ import type {
 } from '../lib/piano';
 // Same reasoning again: the Study desk's shapes live beside the pure helpers
 // that read them.
-import type { NoteMode, StudyImportProgress, StudySource } from '../lib/study';
+import type {
+  JournalStudySource,
+  NoteMode,
+  StudyImportProgress,
+  StudySource,
+} from '../lib/study';
 
-export type { NoteMode, StudyImportProgress, StudySource };
+export type { JournalStudySource, NoteMode, StudyImportProgress, StudySource };
 export type { SleepDay };
 export type { ServerLogEntry, ServerLogResponse, ServerLogUnit };
 export type { Torrent, VpnStatus };
@@ -2095,6 +2100,13 @@ export interface PaperDetail {
   id: string;
   title: string;
   archiveRequested: boolean;
+  /**
+   * The Study source that borrowed this paper, or null. A bound paper reaches
+   * the Journal inside its source's card and nowhere else, so the editor hides
+   * its own To-journal button rather than filing it into a card that will
+   * never be drawn.
+   */
+  studySourceId: string | null;
   createdAt: string;
   updatedAt: string;
   pages: PaperPageMeta[];
@@ -3843,6 +3855,8 @@ export const api = {
   study: {
     sources: () => get<StudySource[]>('/api/study/sources'),
     source: (id: string) => get<StudySource>(`/api/study/sources/${id}`),
+    /** Sources that have moved into the Journal, newest first. */
+    journal: () => get<JournalStudySource[]>('/api/study/journal'),
     /** The in-flight import's phase, or `{done: true}` once it has landed. */
     status: (id: string) =>
       get<StudyImportProgress>(`/api/study/sources/${id}/status`),
@@ -3873,6 +3887,8 @@ export const api = {
         /** An existing papers(id); '' or null unbinds it. */
         paperId?: string | null;
         noteMode?: NoteMode;
+        /** File this source into the Journal at the next 4am, or take it back. */
+        archiveRequested?: boolean;
       }
     ) => patch<StudySource>(`/api/study/sources/${id}`, updates),
     remove: (id: string) =>
