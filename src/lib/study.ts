@@ -35,6 +35,12 @@ export interface StudySource {
   /** Which half of the desk the right pane last showed for this source. */
   noteMode: NoteMode;
   /**
+   * Flagged to move into the Journal, but still here: the move happens at the
+   * next 4am, exactly as a paper's does, and the flag can be toggled back off
+   * until then. A source that has already moved is not in this list at all.
+   */
+  pendingArchive: boolean;
+  /**
    * Whether this source's bytes are reachable right now. Only ever false for a
    * video: those live on the external archive drive and nowhere else, so an
    * unplugged drive leaves the row listed and the file gone.
@@ -44,6 +50,37 @@ export interface StudySource {
   createdAt: string;
   updatedAt: string;
   importProgress?: StudyImportProgress;
+}
+
+/**
+ * A filed study source as the Journal feed sees it: one sitting, one card.
+ *
+ * The media, the pages of the paper it was written on and the text of its
+ * Notebook note together -- an article read and the page of notes taken beside
+ * it are not two events in the day's record, which is also why the bound paper
+ * gets no card of its own.
+ */
+export interface JournalStudySource {
+  id: string;
+  title: string;
+  kind: StudyKind;
+  sourceUrl: string | null;
+  durationSeconds: number | null;
+  /** The 4am day it was filed under -- the flag's day, not the last edit's. */
+  journalDate: string;
+  /**
+   * Where it sits inside that day: the last time it was worked on, clamped
+   * into the filed day. The feed sorts on this.
+   */
+  archivedAt: string;
+  fileUrl: string;
+  fileAvailable?: boolean;
+  fileUnavailableReason?: string;
+  /** The bound paper's page snapshots, empty when no paper was ever made. */
+  pages: { id: string; imageUrl: string | null }[];
+  notePath: string | null;
+  note: string | null;
+  noteTruncated: boolean;
 }
 
 export interface StudyImportProgress {

@@ -179,6 +179,32 @@ Both halves of the tension the plan flagged were resolved, and neither the way t
 
 ---
 
+## Stage 3.5 — into the Journal ✅ built _(sourced, 2026-09-09)_
+
+**A source is filed into the Journal the way a paper is, and its card carries the sitting whole.**
+
+- `study_sources.archive_requested_at`, the same flag and the same lazy 4am move papers use
+  (`_cutoff_4am` over `backend/day_boundary.py`; no scheduler, correct after a restart). The library
+  and `GET /api/study/journal` are exact complements, so a filed source is in one or the other and
+  never both — filing it takes it out of the library, which is what "goes to the Journal" means here.
+- The toggle is in **both** the desk header and the library row. The desk is ≥1024px only, so the row
+  is the only way to file from the phone, and it is deliberately not hover-revealed the way `✕` is.
+- **One card, three parts: the source, the bound paper's pages, the Notebook note.** Reading the
+  article and writing the page beside it are not two events in the day's record. The consequence is
+  that a bound paper gets no card of its own (`journal_papers()` excludes it), and `PaperEditor`
+  hides its To-journal button when `paper.studySourceId` is set — otherwise filing it there would
+  take it out of the explorer and produce no card anywhere.
+- The media is a heading and a link, not a thumbnail: `yt-dlp` saves no poster and an archived page
+  renders in a `sandbox=""` iframe nothing outside it can read. A video on an unplugged drive still
+  gets a card, listed and unreachable, as `viewerKindFor` already treats it.
+- **The card lands at the last time the source was worked on**, not at the flag
+  (`backend/journal_moment.py`): the newest of the bound paper's ink and the note file's mtime,
+  falling back to `last_opened_at`. `study_sources.updated_at` is deliberately not consulted — `touch`
+  bumps it on every open, which would place the card at the moment you sat down. Clamped into the
+  filed day, because the card is view-only.
+
+---
+
 ## Stage 4 — the divider _(deferred by a decision, 2026-09-04)_
 
 **A draggable, remembered split.** Offered during planning; 50/50 was chosen instead, with dragging

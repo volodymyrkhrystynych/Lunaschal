@@ -68,6 +68,7 @@ vi.mock('../hooks/api', () => ({
     },
     curatedTags: { list: vi.fn().mockResolvedValue([]) },
     newspapers: { journalIssues: vi.fn().mockResolvedValue([]) },
+    study: { journal: vi.fn().mockResolvedValue([]) },
     transcriptions: { list: vi.fn().mockResolvedValue([]), delete: vi.fn() },
     shortcuts: { get: vi.fn().mockResolvedValue({ bindings: {} }) },
     settings: { get: vi.fn().mockResolvedValue({}) },
@@ -1147,5 +1148,85 @@ describe('archived newspapers in the feed', () => {
       target: { value: 'first' },
     });
     await waitFor(() => expect(screen.queryByText(/not marked up/)).toBeNull());
+  });
+});
+
+describe('filed study sources in the feed', () => {
+  const card = {
+    id: 'src-1',
+    title: 'Transformers, lecture 3',
+    kind: 'youtube' as const,
+    sourceUrl: 'https://www.youtube.com/watch?v=abc',
+    durationSeconds: 1680,
+    journalDate: '2026-07-02',
+    archivedAt: '2026-07-02T20:00:00Z',
+    fileUrl: '/api/study/sources/src-1/file',
+    pages: [
+      { id: 'pg-1', imageUrl: '/api/paper/pages/pg-1/image?v=1' },
+      { id: 'pg-2', imageUrl: '/api/paper/pages/pg-2/image?v=1' },
+    ],
+    notePath: 'study/transformers.md',
+    note: 'Q, K and V are three projections of the same input.',
+    noteTruncated: false,
+  };
+
+  it('shows the media, the pages and the note in one card', async () => {
+    // One sitting, one card: reading the source and writing the page beside it
+    // are not two events in the day's record.
+    vi.mocked(api.study.journal).mockResolvedValue([card]);
+    renderJournal();
+
+    expect(await screen.findByText(/Transformers, lecture 3/)).toBeTruthy();
+    expect(
+      screen.getByText('https://www.youtube.com/watch?v=abc')
+    ).toBeTruthy();
+    expect(screen.getByText(/Q, K and V are three projections/)).toBeTruthy();
+    expect(
+      document.querySelectorAll('img[src^="/api/paper/pages/"]')
+    ).toHaveLength(2);
+  });
+
+  it('renders a source studied with no paper, without claiming pages are missing', async () => {
+    vi.mocked(api.study.journal).mockResolvedValue([{ ...card, pages: [] }]);
+    renderJournal();
+
+    expect(await screen.findByText(/Transformers, lecture 3/)).toBeTruthy();
+    // "No pages" is the paper card's wording, and it would read here as
+    // something lost rather than something never made.
+    expect(screen.queryByText('No pages')).toBeNull();
+  });
+
+  it('says when a long note was cut short', async () => {
+    vi.mocked(api.study.journal).mockResolvedValue([
+      { ...card, noteTruncated: true },
+    ]);
+    renderJournal();
+    expect(await screen.findByText(/note truncated/)).toBeTruthy();
+  });
+
+  it('says when the archive drive is out', async () => {
+    vi.mocked(api.study.journal).mockResolvedValue([
+      {
+        ...card,
+        fileAvailable: false,
+        fileUnavailableReason: 'The archive drive is not connected.',
+      },
+    ]);
+    renderJournal();
+    expect(
+      await screen.findByText('The archive drive is not connected.')
+    ).toBeTruthy();
+  });
+
+  it('keeps the card out of a search, where the feed is entries only', async () => {
+    vi.mocked(api.study.journal).mockResolvedValue([card]);
+    renderJournal();
+    await screen.findByText(/Transformers, lecture 3/);
+    fireEvent.change(screen.getByPlaceholderText(/Search/i), {
+      target: { value: 'first' },
+    });
+    await waitFor(() =>
+      expect(screen.queryByText(/Transformers, lecture 3/)).toBeNull()
+    );
   });
 });

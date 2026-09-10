@@ -97,3 +97,45 @@ def test_merge_chores_into_todos_folds_the_retired_list(client):
 
     _merge_chores_into_todos(db)  # idempotent: nothing left to match
     assert db.execute("SELECT COUNT(*) c FROM todos WHERE list='chores'").fetchone()['c'] == 0
+
+
+def test_paper_content_time_backfills_from_the_pages(client):
+    """A DB carried over from before the column has to answer "when did the
+    drawing stop" for papers already in it, and the pages have always known."""
+    from backend.db.connection import _ensure_paper_content_updated_at
+
+    db = get_db()
+    # Simulate the pre-migration shape: the column exists (schema.sql created
+    # it), so drop back to NULL and re-run the migration's backfill.
+    db.execute(
+        "INSERT INTO papers(id, title, created_at, updated_at, content_updated_at)"
+        " VALUES ('drawn', 'has pages', 100, 900, NULL),"
+        "        ('blank', 'no pages', 100, 700, NULL)"
+    )
+    db.execute(
+        "INSERT INTO paper_pages(id, paper_id, position, created_at, updated_at)"
+        " VALUES ('p1', 'drawn', 0, 100, 300),"
+        "        ('p2', 'drawn', 1, 100, 500)"
+    )
+    db.commit()
+    db.execute(
+        'UPDATE papers SET content_updated_at = COALESCE('
+        ' (SELECT MAX(updated_at) FROM paper_pages WHERE paper_id = papers.id),'
+        ' updated_at) WHERE content_updated_at IS NULL'
+    )
+    db.commit()
+
+    times = {
+        r['id']: r['content_updated_at']
+        for r in db.execute('SELECT id, content_updated_at FROM papers')
+    }
+    # The newest page, not the paper's own updated_at (900 — polluted by the
+    # rename and archive-flag writes this column exists to escape).
+    assert times['drawn'] == 500
+    # Nothing to read: updated_at is the best guess a pageless paper offers.
+    assert times['blank'] == 700
+
+    # Idempotent: the guard is the column's presence, so a second run is a
+    # no-op rather than a re-backfill over live values.
+    _ensure_paper_content_updated_at(db)
+    assert times['drawn'] == 500

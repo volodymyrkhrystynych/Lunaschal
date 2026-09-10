@@ -46,6 +46,13 @@ function feedItemTimeMs(item: FeedItem): number {
       return new Date(item.food.createdAt).getTime();
     case 'taskEvent':
       return new Date(item.taskEvent.createdAt).getTime();
+    // Both of these are "when it entered the record", not when the content
+    // itself is dated. The newspaper arm was missing outright, so an archived
+    // issue fell off this switch and grouped under nothing.
+    case 'newspaper':
+      return new Date(item.newspaper.archivedAt).getTime();
+    case 'study':
+      return new Date(item.study.archivedAt).getTime();
   }
 }
 

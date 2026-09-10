@@ -1,5 +1,7 @@
+import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
@@ -8,6 +10,29 @@ from backend.routes.files import make_files_blueprint
 
 NOTEBOOK_ROOT_ENV = 'NOTEBOOK_ROOT'
 NOTEBOOK_DEFAULT_ROOT = './data/notebook'
+
+
+def notebook_root() -> Path:
+    """Where the Notebook's file tree lives."""
+    return Path(
+        os.environ.get(NOTEBOOK_ROOT_ENV, NOTEBOOK_DEFAULT_ROOT)
+    ).expanduser().resolve()
+
+
+def notebook_file(rel: str) -> Path | None:
+    """Absolute path of a notebook-relative file, or None if it escapes the root.
+
+    The same containment check make_files_blueprint does internally, lifted out
+    so callers outside the blueprint (the Study desk's journal card, the diary
+    scheduler) share it rather than each rebuilding the path by hand.
+    """
+    root = notebook_root()
+    path = (root / (rel or '').lstrip('/')).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return None
+    return path
 
 
 def _like_prefix(rel: str) -> str:

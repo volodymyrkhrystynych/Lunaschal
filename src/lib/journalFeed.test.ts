@@ -8,6 +8,7 @@ import type {
   FoodJournalItem,
   TaskEvent,
   JournalNewspaper,
+  JournalStudySource,
 } from '../hooks/api';
 
 function entry(id: string, createdAt: string): JournalEntry {
@@ -100,8 +101,26 @@ function newspaper(date: string, archivedAt: string): JournalNewspaper {
   };
 }
 
+function study(id: string, archivedAt: string): JournalStudySource {
+  return {
+    id,
+    title: `study ${id}`,
+    kind: 'youtube',
+    sourceUrl: `https://example.com/${id}`,
+    durationSeconds: 600,
+    journalDate: archivedAt.slice(0, 10),
+    archivedAt,
+    fileUrl: `/api/study/sources/${id}/file`,
+    pages: [{ id: `${id}-p0`, imageUrl: `/img/${id}` }],
+    notePath: `study/${id}.md`,
+    note: `notes for ${id}`,
+    noteTruncated: false,
+  };
+}
+
 function idOf(i: FeedItem): string {
   if (i.kind === 'entry') return i.entry.id;
+  if (i.kind === 'study') return i.study.id;
   if (i.kind === 'transcription') return i.transcription.id;
   if (i.kind === 'paper') return i.paper.id;
   if (i.kind === 'food') return i.food.id;
@@ -317,7 +336,8 @@ describe('buildFeed', () => {
       [paper('p1', '2026-07-08T06:00:00')],
       [food('f1', '2026-07-08T05:00:00')],
       [taskEvent('k1', '2026-07-08T04:00:00')],
-      [newspaper('2026-07-08', '2026-07-08T03:00:00')]
+      [newspaper('2026-07-08', '2026-07-08T03:00:00')],
+      [study('s1', '2026-07-08T02:00:00')]
     );
     expect(feed.map(idOf)).toEqual([
       'e1',
@@ -327,6 +347,50 @@ describe('buildFeed', () => {
       'f1',
       'k1',
       '2026-07-08',
+      's1',
     ]);
+  });
+
+  it('interleaves filed study sources by archivedAt like every other kind', () => {
+    const feed = buildFeed(
+      [entry('e1', '2026-07-08T20:00:00')],
+      [],
+      [],
+      [paper('p1', '2026-07-08T10:00:00')],
+      [],
+      [],
+      [],
+      [study('s1', '2026-07-08T16:00:00'), study('s2', '2026-07-08T06:00:00')]
+    );
+    expect(feed.map(idOf)).toEqual(['e1', 's1', 'p1', 's2']);
+  });
+
+  it('keeps study items non-selectable (no entryIndex)', () => {
+    const feed = buildFeed(
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [study('s1', '2026-07-08T16:00:00')]
+    );
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).not.toHaveProperty('entryIndex');
+  });
+
+  it('lets an entry win an exact timestamp tie against a study source', () => {
+    const feed = buildFeed(
+      [entry('e1', '2026-07-08T12:00:00')],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [],
+      [study('s1', '2026-07-08T12:00:00')]
+    );
+    expect(feed.map(idOf)).toEqual(['e1', 's1']);
   });
 });

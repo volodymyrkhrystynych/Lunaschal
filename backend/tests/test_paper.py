@@ -1,9 +1,11 @@
 import io
 import json
 import time
+from datetime import datetime, timezone
 
 import pytest
 
+from backend.day_boundary import day_key_for
 from backend.db.connection import get_db
 
 
@@ -217,6 +219,195 @@ def test_flag_stays_in_explorer_until_4am_then_moves_to_journal(client):
     assert jp['journalDate']  # a YYYY-MM-DD string
     assert len(jp['pages']) == 1
     assert jp['pages'][0]['imageUrl'].startswith(f'/api/paper/pages/{page_id}/image')
+
+
+def _file_paper(paper_id, days_ago=2, hour=5):
+    """Put the paper inside a finished 4am day, so it has moved to the journal.
+
+    Both timestamps, not just the flag: a paper created now and filed into a
+    past day is edited-in-the-future, which journal_moment correctly clamps to
+    that day's last second -- masking whatever the test meant to observe.
+    """
+    from backend.day_boundary import day_bounds, day_key_for
+
+    start, _ = day_bounds(day_key_for(int(time.time()) - days_ago * 86400))
+    at = start + hour * 3600
+    db = get_db()
+    db.execute(
+        'UPDATE papers SET archive_requested_at=?, content_updated_at=? WHERE id=?',
+        (at, at, paper_id),
+    )
+    db.commit()
+    return start, at
+
+
+def _content_time(paper_id):
+    return get_db().execute(
+        'SELECT content_updated_at FROM papers WHERE id=?', (paper_id,)
+    ).fetchone()['content_updated_at']
+
+
+def _backdate_content(paper_id, seconds=600):
+    was = _content_time(paper_id) - seconds
+    db = get_db()
+    db.execute('UPDATE papers SET content_updated_at=? WHERE id=?', (was, paper_id))
+    db.commit()
+    return was
+
+
+def _journal_card(client, paper_id):
+    return next(
+        (c for c in client.get('/api/paper/journal').get_json() if c['id'] == paper_id),
+        None,
+    )
+
+
+def test_the_journal_timestamp_is_the_last_edit_not_the_flag(client):
+    """The whole point of content_updated_at: the toggle sits in the editor's
+    toolbar, so it is hit on opening -- which used to sort a day of drawing to
+    the bottom of that day's feed."""
+    paper_id = _create(client)
+    page_id = client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
+    _save_page(client, page_id, [])
+    day_start, flagged_at = _file_paper(paper_id)
+
+    # Drawn on well after it was filed.
+    drawn_at = day_start + 16 * 3600
+    db = get_db()
+    db.execute('UPDATE papers SET content_updated_at=? WHERE id=?', (drawn_at, paper_id))
+    db.commit()
+
+    card = _journal_card(client, paper_id)
+    assert card is not None
+    assert card['archivedAt'] == datetime.fromtimestamp(
+        drawn_at, tz=timezone.utc
+    ).isoformat()
+    assert card['archivedAt'] > datetime.fromtimestamp(
+        flagged_at, tz=timezone.utc
+    ).isoformat()
+    # The day it was filed under is unchanged -- only the moment inside it moved.
+    assert card['journalDate'] == day_key_for(flagged_at)
+    assert page_id in card['pages'][0]['imageUrl']
+
+
+def test_saving_strokes_records_when_the_drawing_happened(client):
+    paper_id = _create(client)
+    page_id = client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
+    was = _backdate_content(paper_id)
+
+    _save_page(client, page_id, [{'points': [[0.1, 0.1], [0.2, 0.2]]}])
+    assert _content_time(paper_id) > was
+
+
+def test_adding_and_deleting_a_page_counts_as_editing_the_paper(client):
+    paper_id = _create(client)
+    was = _backdate_content(paper_id)
+    page_id = client.post(f'/api/paper/{paper_id}/pages').get_json()['id']
+    added = _content_time(paper_id)
+    assert added > was
+
+    _backdate_content(paper_id)
+    client.delete(f'/api/paper/pages/{page_id}')
+    assert _content_time(paper_id) > added - 600
+
+
+def test_a_later_edit_cannot_leave_the_day_it_was_filed_under(client):
+    from backend.day_boundary import day_bounds
+
+    paper_id = _create(client)
+    _, flagged_at = _file_paper(paper_id, days_ago=3)
+    day_start, day_end = day_bounds(day_key_for(flagged_at))
+    # Edited two days after it was filed -- the paper is only reachable at all
+    # through a bound Study source or a direct link by then.
+    db = get_db()
+    db.execute(
+        'UPDATE papers SET content_updated_at=? WHERE id=?',
+        (flagged_at + 2 * 86400, paper_id),
+    )
+    db.commit()
+
+    card = _journal_card(client, paper_id)
+    assert card['journalDate'] == day_key_for(flagged_at)
+    assert card['archivedAt'] == datetime.fromtimestamp(
+        day_end - 1, tz=timezone.utc
+    ).isoformat()
+
+
+def test_renaming_and_reflagging_do_not_move_the_card(client):
+    """updated_at moves for both; content_updated_at is why that no longer
+    drags the Journal card around with it."""
+    paper_id = _create(client)
+    page_id = client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
+    _save_page(client, page_id, [])
+    _file_paper(paper_id)
+    before = _journal_card(client, paper_id)['archivedAt']
+
+    client.patch(f'/api/paper/{paper_id}', json={'title': 'Renamed'})
+    assert _journal_card(client, paper_id)['archivedAt'] == before
+
+    client.patch(f'/api/paper/{paper_id}', json={'archiveRequested': False})
+    client.patch(f'/api/paper/{paper_id}', json={'archiveRequested': True})
+    _file_paper(paper_id)
+    assert _journal_card(client, paper_id)['archivedAt'] == before
+
+
+def test_pasting_and_moving_a_picture_counts_as_editing_the_paper(client):
+    """The three image routes used to bump the page and never the paper, so a
+    page built entirely out of pasted photos looked untouched."""
+    paper_id = _create(client)
+    page_id = client.get(f'/api/paper/{paper_id}').get_json()['pages'][0]['id']
+
+    was = _backdate_content(paper_id)
+    image_id = _add_image(client, page_id).get_json()['id']
+    assert _content_time(paper_id) > was
+
+    was = _backdate_content(paper_id)
+    client.patch(f'/api/paper/images/{image_id}', json={'x': 5.0})
+    assert _content_time(paper_id) > was
+
+    was = _backdate_content(paper_id)
+    client.delete(f'/api/paper/images/{image_id}')
+    assert _content_time(paper_id) > was
+
+
+def test_the_journal_is_ordered_newest_first_by_the_last_edit(client):
+    """buildFeed's n-way merge takes every source as already newest-first, and
+    the key is now computed rather than a column, so the route sorts it."""
+    from backend.day_boundary import day_bounds
+
+    ids = [_create(client) for _ in range(3)]
+    day_start, _ = day_bounds(day_key_for(int(time.time()) - 2 * 86400))
+    db = get_db()
+    # Filed in one order, worked on in another.
+    for i, (paper_id, worked_hour) in enumerate(zip(ids, (18, 6, 12))):
+        db.execute(
+            'UPDATE papers SET archive_requested_at=?, content_updated_at=? WHERE id=?',
+            (day_start + 5 * 3600 + i, day_start + worked_hour * 3600, paper_id),
+        )
+    db.commit()
+
+    order = [c['id'] for c in client.get('/api/paper/journal').get_json()]
+    assert order == [ids[0], ids[2], ids[1]]
+
+
+def test_a_paper_bound_to_a_study_source_gets_no_card_of_its_own(client):
+    """Its pages ride inside the study card instead, so the same drawings are
+    not printed twice in one day."""
+    paper_id = _create(client)
+    _file_paper(paper_id)
+    assert _journal_card(client, paper_id) is not None
+
+    db = get_db()
+    now = int(time.time())
+    db.execute(
+        'INSERT INTO study_sources (id, title, kind, paper_id, note_mode,'
+        ' import_status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
+        ('src-1', 'A lecture', 'youtube', paper_id, 'paper', 'ready', now, now),
+    )
+    db.commit()
+
+    assert _journal_card(client, paper_id) is None
+    assert client.get(f'/api/paper/{paper_id}').get_json()['studySourceId'] == 'src-1'
 
 
 def test_unflagging_returns_paper_to_explorer(client):

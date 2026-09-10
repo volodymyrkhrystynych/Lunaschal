@@ -49,6 +49,7 @@ import type {
   JournalEntry,
   JournalNewspaper,
   JournalPaper,
+  JournalStudySource,
   JournalVoiceDraft,
   FoodJournalItem,
   TaskEvent,
@@ -287,6 +288,15 @@ export function Journal({
     // a background worker, with nothing on this side to invalidate from.
     refetchInterval: q =>
       hasRunningMealTranscript(q.state.data) ? 4000 : false,
+  });
+
+  // Study sources filed into the Journal: one card per sitting, carrying the
+  // source, its paper's pages and its Notebook note together.
+  const studyVisible = !searchQuery && !selectedCuratedTagId;
+  const { data: journalStudy } = useQuery({
+    queryKey: ['study', 'journal'],
+    queryFn: () => api.study.journal(),
+    enabled: studyVisible,
   });
 
   // Archived newspaper issues interleave too, each a link into the reader.
@@ -599,7 +609,8 @@ export function Journal({
         papersVisible ? (journalPapers ?? []) : [],
         foodVisible ? (journalFood ?? []) : [],
         taskEventsVisible ? (taskEvents ?? []) : [],
-        newspapersVisible ? (journalNewspapers ?? []) : []
+        newspapersVisible ? (journalNewspapers ?? []) : [],
+        studyVisible ? (journalStudy ?? []) : []
       ),
     [
       entries,
@@ -615,6 +626,8 @@ export function Journal({
       taskEvents,
       newspapersVisible,
       journalNewspapers,
+      studyVisible,
+      journalStudy,
     ]
   );
   // Calendar events whose window covers a run of feedItems, rendered as a
@@ -649,6 +662,9 @@ export function Journal({
     }
     if (item.kind === 'paper') {
       return <JournalPaperItem key={item.paper.id} paper={item.paper} />;
+    }
+    if (item.kind === 'study') {
+      return <JournalStudyItem key={item.study.id} study={item.study} />;
     }
     if (item.kind === 'food') {
       return <JournalFoodItem key={item.food.id} food={item.food} />;
@@ -1606,29 +1622,128 @@ const JournalPaperItem = memo(function JournalPaperItem({
           {paper.pages.length === 1 ? '' : 's'}
         </span>
       </div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {pages.map(pg => (
-          <button
-            key={pg.id}
-            onClick={() => lightbox.open(pg.imageUrl)}
-            className="shrink-0 h-32 rounded-md overflow-hidden border border-white/10 bg-white hover:border-[var(--color-primary)] transition-colors"
-            title="View"
-          >
-            {/* Fixed height, width follows the page — a landscape page used to
-                be cropped to its top-left corner. */}
-            <img
-              src={pg.imageUrl!}
-              alt=""
-              className="h-full w-auto object-contain"
-            />
-          </button>
-        ))}
-        {pages.length === 0 && (
-          <span className="text-sm text-[var(--color-text-muted)] italic">
-            No pages
-          </span>
-        )}
+      <PageFilmstrip pages={pages} lightbox={lightbox} emptyLabel="No pages" />
+      <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
+    </div>
+  );
+});
+
+/** The row of page thumbnails a paper shows in the feed.
+ *
+ * Shared by the paper card and the study card rather than copied into the
+ * second one: they show the same thing, and a copy is how two views of one
+ * object drift apart. */
+function PageFilmstrip({
+  pages,
+  lightbox,
+  emptyLabel,
+}: {
+  pages: { id: string; imageUrl: string | null }[];
+  lightbox: ReturnType<typeof useLightbox>;
+  emptyLabel: string | null;
+}) {
+  if (pages.length === 0) {
+    return emptyLabel ? (
+      <div className="flex gap-2 pb-1">
+        <span className="text-sm text-[var(--color-text-muted)] italic">
+          {emptyLabel}
+        </span>
       </div>
+    ) : null;
+  }
+  return (
+    <div className="flex gap-2 overflow-x-auto pb-1">
+      {pages.map(pg => (
+        <button
+          key={pg.id}
+          onClick={() => lightbox.open(pg.imageUrl)}
+          className="shrink-0 h-32 rounded-md overflow-hidden border border-white/10 bg-white hover:border-[var(--color-primary)] transition-colors"
+          title="View"
+        >
+          {/* Fixed height, width follows the page — a landscape page used to
+              be cropped to its top-left corner. */}
+          <img
+            src={pg.imageUrl!}
+            alt=""
+            className="h-full w-auto object-contain"
+          />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+const STUDY_KIND_ICON: Record<JournalStudySource['kind'], string> = {
+  pdf: '📕',
+  web: '🌐',
+  youtube: '🎬',
+};
+
+/** A study source filed into the Journal: the media, the pages and the note.
+ *
+ * All three together because they are one sitting — reading the article and
+ * writing the page beside it are not two events in the day's record. The media
+ * is a heading and a link rather than a thumbnail: yt-dlp saves no poster, and
+ * an archived page renders in a sandboxed iframe whose contents cannot be
+ * screenshotted from outside it. */
+const JournalStudyItem = memo(function JournalStudyItem({
+  study,
+}: {
+  study: JournalStudySource;
+}) {
+  const lightbox = useLightbox();
+
+  const dayLabel = formatDay(study.journalDate + 'T00:00:00');
+  const pages = study.pages.filter(pg => pg.imageUrl);
+  const unavailable = study.fileAvailable === false;
+
+  return (
+    <div className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5">
+      <div className="flex items-baseline justify-between gap-2 mb-1">
+        <span className="text-[var(--color-text)] truncate">
+          {STUDY_KIND_ICON[study.kind]} {study.title || 'Untitled'}
+        </span>
+        <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+          {dayLabel}
+        </span>
+      </div>
+      {study.sourceUrl && (
+        <a
+          href={study.sourceUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block truncate text-xs text-[var(--color-text-muted)] hover:underline mb-2"
+        >
+          {study.sourceUrl}
+        </a>
+      )}
+      {unavailable && (
+        <div className="text-xs text-amber-400 mb-2">
+          {study.fileUnavailableReason}
+        </div>
+      )}
+
+      {/* No empty label: a source studied entirely in the Notebook half never
+          had a paper, and "No pages" would read as something missing. */}
+      <PageFilmstrip pages={pages} lightbox={lightbox} emptyLabel={null} />
+
+      {study.note && (
+        <div
+          className={
+            pages.length > 0 ? 'mt-2 pt-2 border-t border-white/10' : 'mt-1'
+          }
+        >
+          <p className="text-sm text-[var(--color-text)] whitespace-pre-wrap break-words">
+            {study.note}
+            {study.noteTruncated && (
+              <span className="text-[var(--color-text-muted)] italic">
+                {' '}
+                … (note truncated)
+              </span>
+            )}
+          </p>
+        </div>
+      )}
 
       <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
     </div>

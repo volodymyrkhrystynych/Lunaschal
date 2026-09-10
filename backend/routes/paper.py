@@ -6,6 +6,7 @@ from ulid import ULID
 
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.day_boundary import day_bounds, day_key_for
+from backend.journal_moment import journal_moment
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.paper import storage
 
@@ -33,6 +34,30 @@ def _cutoff_4am(now_ts: int) -> int:
 
 def _iso(ts: int) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+def _touch_paper_content(db, paper_id: str, now: int) -> None:
+    """Record that a paper's content changed, not merely that it was touched.
+
+    `updated_at` orders the explorer and cache-busts thumbnails, so it still
+    moves; `content_updated_at` is the one the Journal reads, and is written
+    only from here -- never by a rename or by the archive flag.
+    """
+    db.execute(
+        'UPDATE papers SET updated_at=?, content_updated_at=? WHERE id=?',
+        (now, now, paper_id),
+    )
+
+
+def _touch_page_content(db, page_id: str, now: int) -> None:
+    """The same, reached through a page: pasting or moving a picture is a
+    change to the paper it sits in, which the image routes used not to say."""
+    db.execute('UPDATE paper_pages SET updated_at=? WHERE id=?', (now, page_id))
+    db.execute(
+        'UPDATE papers SET updated_at=?, content_updated_at=? WHERE id ='
+        ' (SELECT paper_id FROM paper_pages WHERE id=?)',
+        (now, now, page_id),
+    )
 
 
 # --- Papers ---
@@ -72,13 +97,23 @@ def list_papers():
 @bp.get('/journal')
 def journal_papers():
     """Papers that have moved into the journal, newest first, each with all its
-    page thumbnails for the Journal feed's filmstrip."""
+    page thumbnails for the Journal feed's filmstrip.
+
+    Two things this does not report. A paper bound to a Study source gets no
+    card of its own -- the study card carries its pages, beside the source and
+    the notes, and showing both would print the same drawings twice in one day
+    (see journal_study_sources in backend/routes/study.py). And the day is
+    still the day it was *filed* under, while the moment inside that day is the
+    last time it was drawn on: `archivedAt` is journal_moment's answer, not the
+    flag timestamp, which is a filing gesture and typically the moment the
+    paper was opened.
+    """
     db = get_db()
     cutoff = _cutoff_4am(int(time.time()))
     papers = db.execute(
         'SELECT * FROM papers '
         'WHERE archive_requested_at IS NOT NULL AND archive_requested_at < ? '
-        'ORDER BY archive_requested_at DESC',
+        'AND NOT EXISTS (SELECT 1 FROM study_sources s WHERE s.paper_id = papers.id)',
         (cutoff,),
     ).fetchall()
     result = []
@@ -87,15 +122,23 @@ def journal_papers():
             'SELECT id, image_path, updated_at FROM paper_pages WHERE paper_id=? ORDER BY position ASC',
             (p['id'],),
         ).fetchall()
+        at = journal_moment(p['content_updated_at'], p['archive_requested_at'])
         result.append({
             'id': p['id'],
             'title': p['title'],
             'journalDate': day_key_for(p['archive_requested_at']),
-            'archivedAt': _iso(p['archive_requested_at']),
+            'archivedAt': _iso(at),
+            '_at': at,
             'pages': [
                 {'id': pg['id'], 'imageUrl': page_image_url(pg)} for pg in pages
             ],
         })
+    # Sorted here rather than in SQL: the key is computed, and buildFeed's
+    # n-way merge (src/lib/journalFeed.ts) documents that every source it is
+    # handed is already newest-first.
+    result.sort(key=lambda r: r['_at'], reverse=True)
+    for r in result:
+        del r['_at']
     return jsonify(result)
 
 
@@ -112,8 +155,9 @@ def create_paper():
     page_id = (body.get('pageId') or '').strip() or str(ULID())
     db = get_db()
     db.execute(
-        'INSERT OR IGNORE INTO papers(id, title, created_at, updated_at) VALUES (?,?,?,?)',
-        (paper_id, body.get('title', '').strip(), now, now),
+        'INSERT OR IGNORE INTO papers(id, title, created_at, updated_at, content_updated_at)'
+        ' VALUES (?,?,?,?,?)',
+        (paper_id, body.get('title', '').strip(), now, now, now),
     )
     # Every paper starts with one blank page.
     db.execute(
@@ -141,6 +185,15 @@ def get_paper(paper_id):
         for pg in pages
     ]
     d['archiveRequested'] = paper['archive_requested_at'] is not None
+    # The one query nothing used to make: papers has no back-reference, so
+    # "does a Study source own this?" is only answerable by looking. The editor
+    # needs it to hide its own To-journal button -- a bound paper reaches the
+    # feed inside its source's card and nowhere else, so flagging it here would
+    # take it out of the explorer and produce no card at all.
+    owner = db.execute(
+        'SELECT id FROM study_sources WHERE paper_id=?', (paper_id,)
+    ).fetchone()
+    d['studySourceId'] = owner['id'] if owner else None
     return jsonify(d)
 
 
@@ -189,7 +242,7 @@ def add_page(paper_id):
         ' VALUES (?,?,?,?,?)',
         (page_id, paper_id, row['next_pos'], now, now),
     )
-    db.execute('UPDATE papers SET updated_at=? WHERE id=?', (now, paper_id))
+    _touch_paper_content(db, paper_id, now)
     db.commit()
     return jsonify({'id': page_id, 'position': row['next_pos']}), 201
 
@@ -250,7 +303,7 @@ def save_page(page_id):
     if image_path is not None:
         updates['image_path'] = image_path
     build_update(db, 'paper_pages', updates, 'id=?', (page_id,))
-    db.execute('UPDATE papers SET updated_at=? WHERE id=?', (now, paper_id))
+    _touch_paper_content(db, paper_id, now)
     db.commit()
     return jsonify({'success': True})
 
@@ -262,7 +315,7 @@ def delete_page(page_id):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     db.execute('DELETE FROM paper_pages WHERE id=?', (page_id,))
-    db.execute('UPDATE papers SET updated_at=? WHERE id=?', (int(time.time()), row['paper_id']))
+    _touch_paper_content(db, row['paper_id'], int(time.time()))
     db.commit()
     if row['image_path']:
         path = storage.resolve_stored_path(row['image_path'])
@@ -370,7 +423,7 @@ def add_page_image(page_id):
         (image_id, page_id, str(path), request.form.get('x', type=float),
          request.form.get('y', type=float), width, height, next_pos, now, now),
     )
-    db.execute('UPDATE paper_pages SET updated_at=? WHERE id=?', (now, page_id))
+    _touch_page_content(db, page_id, now)
     db.commit()
     row = db.execute(
         f'SELECT {_IMAGE_COLUMNS} FROM paper_page_images WHERE id=?', (image_id,)
@@ -421,7 +474,7 @@ def update_page_image(image_id):
     now = int(time.time())
     updates['updated_at'] = now
     build_update(db, 'paper_page_images', updates, 'id=?', (image_id,))
-    db.execute('UPDATE paper_pages SET updated_at=? WHERE id=?', (now, row['page_id']))
+    _touch_page_content(db, row['page_id'], now)
     db.commit()
     fresh = db.execute(
         f'SELECT {_IMAGE_COLUMNS} FROM paper_page_images WHERE id=?', (image_id,)
@@ -438,7 +491,7 @@ def delete_page_image(image_id):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     db.execute('DELETE FROM paper_page_images WHERE id=?', (image_id,))
-    db.execute('UPDATE paper_pages SET updated_at=? WHERE id=?', (int(time.time()), row['page_id']))
+    _touch_page_content(db, row['page_id'], int(time.time()))
     db.commit()
     path = storage.resolve_stored_path(row['file_path'])
     if path is not None and path.is_file():

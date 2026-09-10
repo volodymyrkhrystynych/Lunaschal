@@ -19,11 +19,10 @@ import re
 import threading
 import time
 from datetime import datetime
-from pathlib import Path
 
 from backend.db.connection import get_db
 from backend.day_boundary import day_key_for, day_bounds
-from backend.routes.notebook import NOTEBOOK_ROOT_ENV, NOTEBOOK_DEFAULT_ROOT
+from backend.routes.notebook import notebook_root
 from backend.routes.journal import create_journal_entry
 
 WINDOW_START_HOUR = 4
@@ -33,14 +32,10 @@ _POLL_SECONDS = 300
 _DIARY_FILE_RE = re.compile(r'^(\d{4}-\d{2}-\d{2})\.md$')
 
 
-def _notebook_root() -> Path:
-    return Path(os.environ.get(NOTEBOOK_ROOT_ENV, NOTEBOOK_DEFAULT_ROOT)).expanduser().resolve()
-
-
 def promote_diary_notes() -> int:
     """Promotes every not-yet-promoted diary note whose day has ended into a
     journal entry. Returns how many were promoted."""
-    diary_dir = _notebook_root() / 'diary'
+    diary_dir = notebook_root() / 'diary'
     if not diary_dir.is_dir():
         return 0
 

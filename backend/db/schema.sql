@@ -842,6 +842,13 @@ CREATE TABLE IF NOT EXISTS papers (
     -- boundary passes (see backend/routes/paper.py); until then it stays in the
     -- explorer, marked pending, and the flag can be toggled back off.
     archive_requested_at INTEGER,
+    -- The last time the paper's *content* changed: a stroke saved, a page
+    -- added or removed, a picture pasted or moved. Deliberately not
+    -- `updated_at`, which update_paper bumps for a rename and for the archive
+    -- flag itself -- so right after flagging it equals archive_requested_at
+    -- and says nothing about when the drawing stopped. This is what the
+    -- Journal card is timestamped with (backend/journal_moment.py).
+    content_updated_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -1960,6 +1967,13 @@ CREATE TABLE IF NOT EXISTS study_sources (
     -- with it, only the binding.
     paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL,
     note_mode TEXT NOT NULL DEFAULT 'note' CHECK(note_mode IN ('note','paper')),
+    -- The same flag papers carry, with the same lazy 4am move: when set, the
+    -- user has filed this source into the Journal, and once a 4am boundary
+    -- passes it leaves the library for the feed (backend/routes/study.py).
+    -- The card it becomes carries the source, its bound paper's pages and its
+    -- Notebook note together -- which is why a bound paper gets no card of its
+    -- own; see journal_papers() in backend/routes/paper.py.
+    archive_requested_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
