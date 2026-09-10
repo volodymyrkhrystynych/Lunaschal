@@ -6,6 +6,7 @@ import {
   PEN_COLORS,
   serializeStrokes,
   sizeDotPx,
+  simplifyStroke,
   strokeColor,
   type InkPalette,
   type Stroke,
@@ -27,6 +28,38 @@ const stroke = (over: Partial<Stroke> = {}): Stroke => ({
   size: 8,
   points: [{ x: 1, y: 2, pressure: 0.5 }],
   ...over,
+});
+
+describe('shape-preserving point reduction', () => {
+  it.each([
+    [
+      [0, 0, 0.5],
+      [0.7, 1, 0.5],
+      [1.4, 0, 0.5],
+      [2.1, 0, 0.5],
+    ],
+    [
+      [0, 0, 0.5],
+      [1, 0, 0.5],
+      [0.2, 0, 0.5],
+      [1.5, 0, 0.5],
+    ],
+    [
+      [0, 0, 0.2],
+      [0.7, 0, 1],
+      [1.4, 0, 0.2],
+    ],
+    [
+      [0, 0, 0.2],
+      [0, 0, 1],
+      [1, 0, 0.2],
+    ],
+  ])('retains small corners, reversals and pressure peaks: %j', (...points) => {
+    const s = stroke({
+      points: points.map(([x, y, pressure]) => ({ x, y, pressure })),
+    });
+    expect(simplifyStroke(s).points).toEqual(s.points);
+  });
 });
 
 describe('stroke colour', () => {

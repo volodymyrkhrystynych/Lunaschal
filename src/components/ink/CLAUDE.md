@@ -32,14 +32,20 @@ not supply a stroke model or a pointer loop.**
 
 - **A `<polyline>` carries one width, so pressure needs an outline**
   (`src/lib/inkPath.ts`). A tapering stroke is drawn as the outline of a
-  variable-width ribbon and filled: one `<path>` per stroke. Two details in
-  there are easy to get wrong and are pinned by tests — averaging the two
-  segment normals at a join shortens the offset by cos(θ/2) and pinches a sharp
-  corner to a waist, so the offset is stretched back and then capped the way a
-  miter limit is; and a repeated point makes a zero-length segment, which
-  without a guard puts `NaN` through the whole path. The highlighter does not
+  variable-width ribbon and filled: one `<path>` per stroke. Perfect Freehand
+  generates the outline, joined with a closed quadratic spline. Sparse segments
+  get interpolated support points to keep corner rounding local
+  and preserve pressure on two-point lines. Pressure is mapped to the existing
+  0.35..1 width range; velocity-based simulation is disabled. The highlighter does not
   taper: it is a flat band, because a tapering edge reads as a smudge rather
   than a marker.
+
+- **Preview and release use identical geometry.** Both simplify the captured
+  points with the same bounded, shape- and pressure-aware reducer before calling
+  the renderer, which explicitly uses `last: true` in both states. Never put a
+  more aggressive reduction only on pointer-up: it changes what was drawn as
+  soon as the pen lifts. Raster tests check filled joins and pressure widths;
+  component tests compare the live path with the committed and reloaded path.
 
 - **The stroke in flight is its own element, written straight to the DOM.** A
   React render per pointer move would re-derive every other stroke's outline on

@@ -136,7 +136,7 @@ describe('simplifyStroke', () => {
     expect(s.points).toEqual([{ x: 1.2, y: 9.9, pressure: 0.12 }]);
   });
 
-  it('drops points closer together than the minimum distance', () => {
+  it('compacts a straight dense run while retaining the sample before a long gap', () => {
     const dense = pen([
       { x: 0, y: 0, pressure: 0.5 },
       { x: 0.2, y: 0, pressure: 0.5 },
@@ -145,6 +145,7 @@ describe('simplifyStroke', () => {
     ]);
     expect(simplifyStroke(dense).points).toEqual([
       { x: 0, y: 0, pressure: 0.5 },
+      { x: 0.4, y: 0, pressure: 0.5 },
       { x: 5, y: 0, pressure: 0.5 },
     ]);
   });
