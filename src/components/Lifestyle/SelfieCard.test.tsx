@@ -54,6 +54,26 @@ const cameraInput = () =>
 const fileInput = () =>
   screen.getByTestId('selfie-file-input') as HTMLInputElement;
 
+it('loads a bounded thumbnail and requests the original only for a preview', async () => {
+  const photo = selfie(TODAY);
+  list.mockResolvedValue([photo]);
+  renderCard();
+  const thumbnail = await screen.findByRole('img');
+  expect(thumbnail.getAttribute('src')).toBe(`${photo.url}?thumbnail=1`);
+  fireEvent.error(thumbnail);
+  await waitFor(() =>
+    expect(screen.getByRole('img').getAttribute('src')).toBe(
+      `${photo.url}?thumbnail=1&retry=1`
+    )
+  );
+  fireEvent.click(screen.getByTitle(`${TODAY} — show larger`));
+  expect(
+    screen
+      .getAllByRole('img')
+      .some(img => img.getAttribute('src') === photo.url)
+  ).toBe(true);
+});
+
 describe('capture', () => {
   it('opens the device camera instead of an in-page preview', async () => {
     // The old button called getUserMedia and rendered a <video>; on an iPad the

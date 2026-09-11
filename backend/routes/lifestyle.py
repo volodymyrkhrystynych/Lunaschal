@@ -699,6 +699,25 @@ def get_selfie_image(selfie_id):
     path = storage.resolve_stored_path(row['path'])
     if path is None or not path.is_file():
         return jsonify({'error': 'Not found'}), 404
+    if request.args.get('thumbnail') == '1':
+        # Fourteen full camera images can exhaust a mobile browser's decoded
+        # image memory even though CSS displays them at only 48px each.
+        from PIL import Image, ImageOps
+
+        try:
+            with Image.open(path) as source:
+                source.draft('RGB', (160, 160))
+                image = ImageOps.exif_transpose(source)
+                image.thumbnail((160, 160))
+                output = BytesIO()
+                image.convert('RGB').save(output, format='JPEG', quality=80)
+            output.seek(0)
+        except (OSError, ValueError):
+            return jsonify({'error': 'Could not read image'}), 422
+        return send_file(
+            output, mimetype='image/jpeg', max_age=86400,
+            etag=f'{selfie_id}-thumbnail-v1',
+        )
     return send_file(path, mimetype=row['mime'] or None)
 
 

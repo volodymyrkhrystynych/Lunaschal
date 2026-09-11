@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import { todayISO } from '@/lib/lifestyle';
@@ -31,6 +32,11 @@ import { CARD, CARD_DIVIDER } from './card';
  * next to empty space. Everything else stacks vertically in the other column.
  */
 export function Lifestyle() {
+  const [priorities, setPriorities] = useState<{
+    needsSelfie: boolean;
+    needsWeight: boolean;
+    needsCalories: boolean;
+  } | null>(null);
   const today = todayISO();
   const { data: selfies } = useQuery({
     queryKey: ['lifestyle', 'selfies'],
@@ -45,19 +51,42 @@ export function Lifestyle() {
     queryFn: () => api.lifestyle.calories.day(),
   });
 
-  // Do not rearrange the page around loading placeholders. Once today's data
-  // is known, unfinished daily inputs move above everything else. The cards'
-  // own mutations update/invalidate these same query keys, so each one returns
-  // to its usual position as soon as it is completed.
-  const needsSelfie =
-    selfies !== undefined && !selfies.some(selfie => selfie.date === today);
-  const needsWeight =
-    weights !== undefined && !weights.some(log => log.date === today);
-  const needsCalories = calories !== undefined && calories.total < 2000;
+  // Choose priorities once per visit. Moving a card to another parent unmounts
+  // its input, losing focus and pending UI state even if its draft is stored.
+  // If someone starts interacting before the queries resolve, keep the layout
+  // they are already using. Otherwise wait for all three before arranging it.
+  const resolvedPriorities = {
+    needsSelfie:
+      selfies !== undefined && !selfies.some(selfie => selfie.date === today),
+    needsWeight:
+      weights !== undefined && !weights.some(log => log.date === today),
+    needsCalories: calories !== undefined && calories.total < 2000,
+  };
+  const ready =
+    selfies !== undefined && weights !== undefined && calories !== undefined;
+  if (priorities === null && ready) setPriorities(resolvedPriorities);
+  const layout =
+    priorities ??
+    (ready
+      ? resolvedPriorities
+      : {
+          needsSelfie: false,
+          needsWeight: false,
+          needsCalories: false,
+        });
+  const { needsSelfie, needsWeight, needsCalories } = layout;
   const hasDailyPriorities = needsSelfie || needsWeight || needsCalories;
 
   return (
-    <div className="flex-1 overflow-y-auto p-4">
+    <div
+      className="flex-1 overflow-y-auto p-4"
+      onFocusCapture={() => {
+        if (priorities === null) setPriorities(layout);
+      }}
+      onPointerDownCapture={() => {
+        if (priorities === null) setPriorities(layout);
+      }}
+    >
       <div className="flex flex-col gap-4 max-w-6xl">
         {hasDailyPriorities && (
           <div

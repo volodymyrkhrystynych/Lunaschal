@@ -1,6 +1,17 @@
 // @vitest-environment jsdom
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import {
+  QueryClient,
+  QueryClientProvider,
+  useQuery,
+} from '@tanstack/react-query';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import {
@@ -20,7 +31,23 @@ vi.mock('./TrendsChart', () => ({ TrendsChart: () => <div>Trends</div> }));
 vi.mock('./WorkoutLog', () => ({ WorkoutLog: () => <div>Workout</div> }));
 vi.mock('./WeatherCard', () => ({ WeatherCard: () => <div>Weather</div> }));
 vi.mock('./SelfieCard', () => ({ SelfieCard: () => <div>Selfie</div> }));
-vi.mock('./CaloriesCard', () => ({ CaloriesCard: () => <div>Calories</div> }));
+vi.mock('./CaloriesCard', () => ({
+  CaloriesCard: () => {
+    const { data } = useQuery({
+      queryKey: ['lifestyle', 'calories'],
+      queryFn: () => api.lifestyle.calories.day(),
+    });
+    return (
+      <>
+        <label>
+          Calories
+          <input aria-label="Calorie entry" />
+        </label>
+        <span>Total: {data?.total}</span>
+      </>
+    );
+  },
+}));
 vi.mock('./Progression', () => ({
   BodyWeightCard: () => <div>Body weight</div>,
   Progression: ({ hideBodyWeight }: { hideBodyWeight?: boolean }) => (
@@ -99,23 +126,59 @@ describe('Lifestyle daily priorities', () => {
     expect(screen.getByText('Selfie')).toBeTruthy();
   });
 
-  it('returns a priority to normal ordering when its shared cache completes', async () => {
+  it('keeps the focused calorie input mounted when its shared cache completes', async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
     render(<Lifestyle />, { wrapper: wrapper(client) });
     await screen.findByLabelText("Today's priorities");
+    const input = screen.getByRole('textbox');
+    input.focus();
+    fireEvent.change(input, { target: { value: 'next meal 500' } });
 
-    client.setQueryData<Selfie[]>(['lifestyle', 'selfies'], [selfie()]);
-    client.setQueryData<BodyWeightLog[]>(['lifestyle', 'weight'], [weight()]);
-    client.setQueryData<CalorieDay>(
-      ['lifestyle', 'calories'],
-      calorieDay(2000)
+    await act(async () => {
+      client.setQueryData<Selfie[]>(['lifestyle', 'selfies'], [selfie()]);
+      client.setQueryData<BodyWeightLog[]>(['lifestyle', 'weight'], [weight()]);
+      client.setQueryData<CalorieDay>(
+        ['lifestyle', 'calories'],
+        calorieDay(2000)
+      );
+    });
+
+    await screen.findByText('Total: 2000');
+    expect(screen.getByRole('textbox')).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(screen.getByDisplayValue('next meal 500')).toBe(input);
+    expect(
+      within(screen.getByLabelText("Today's priorities")).getByRole('textbox')
+    ).toBe(input);
+  });
+
+  it('keeps the current layout if queries arrive after typing starts', async () => {
+    let resolve!: (day: CalorieDay) => void;
+    vi.mocked(api.lifestyle.calories.day).mockReturnValue(
+      new Promise(r => {
+        resolve = r;
+      })
     );
-
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(<Lifestyle />, { wrapper: wrapper(client) });
+    const input = screen.getByRole('textbox');
+    act(() => input.focus());
+    fireEvent.change(input, { target: { value: 'rice 600' } });
+    await act(async () => {
+      resolve(calorieDay(0));
+    });
     await waitFor(() =>
-      expect(screen.queryByLabelText("Today's priorities")).toBeNull()
+      expect(client.getQueryData(['lifestyle', 'calories'])).toEqual(
+        calorieDay(0)
+      )
     );
-    expect(screen.getByText('Progression')).toBeTruthy();
+    expect(screen.getByRole('textbox')).toBe(input);
+    expect(document.activeElement).toBe(input);
+    expect(screen.getByDisplayValue('rice 600')).toBe(input);
+    expect(screen.queryByLabelText("Today's priorities")).toBeNull();
   });
 });

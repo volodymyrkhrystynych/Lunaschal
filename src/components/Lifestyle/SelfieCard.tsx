@@ -45,7 +45,11 @@ function RetryingImage({
   return (
     <img
       key={attempt}
-      src={attempt === 0 ? src : `${src}?retry=${attempt}`}
+      src={
+        attempt === 0
+          ? src
+          : `${src}${src.includes('?') ? '&' : '?'}retry=${attempt}`
+      }
       alt={alt}
       className={className}
       onError={() => {
@@ -235,7 +239,11 @@ export function SelfieCard() {
                 }`}
               >
                 <RetryingImage
-                  src={selfie.url}
+                  src={
+                    selfie.url.startsWith('/api/')
+                      ? `${selfie.url}?thumbnail=1`
+                      : selfie.url
+                  }
                   alt={`Selfie from ${date}`}
                   className="w-full h-full object-cover"
                 />
