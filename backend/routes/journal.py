@@ -14,7 +14,8 @@ from backend.ai.journal import (
 )
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
-from backend.journal import storage, voice_drafts
+from backend.journal import archive, storage, voice_drafts, youtube_import
+from backend.study import youtube
 from backend.tags import tags_json
 
 bp = Blueprint('journal', __name__, url_prefix='/api/journal')
@@ -327,7 +328,7 @@ def _attachment_polish_context(entry_id: str) -> str | None:
     handling in backend/ai/journal.py's system prompt)."""
     rows = get_db().execute(
         "SELECT name, description FROM journal_attachments"
-        " WHERE entry_id=? AND kind IN ('audio','video')"
+        " WHERE entry_id=? AND kind IN ('audio','video','youtube')"
         " AND description_status='done' AND description IS NOT NULL",
         (entry_id,),
     ).fetchall()
@@ -582,15 +583,24 @@ _ATTACHMENT_COLS = (
     'id, entry_id, kind, name, path, mime, size, position,'
     ' transcript, transcript_status, transcript_error,'
     ' description, description_status, description_error,'
-    ' latitude, longitude, created_at'
+    ' latitude, longitude, source_url, duration_seconds, thumb_path,'
+    ' import_status, import_error, created_at'
 )
 
 
 def _attachment_dict(row) -> dict:
     d = row_to_dict(row)
-    # `path` is a server-side filesystem location; the client gets a URL instead.
+    # `path` and `thumb_path` are server-side filesystem locations; the client
+    # gets URLs instead.
     d.pop('path', None)
-    d['url'] = f'/api/journal/attachments/{row["id"]}/file'
+    thumb = d.pop('thumbPath', None)
+    # Only when there is something to serve. A youtube attachment exists from
+    # the moment the link is pasted and has no file until the download lands —
+    # handing the client a URL to it then is a broken <video> on every card.
+    if row['path']:
+        d['url'] = f'/api/journal/attachments/{row["id"]}/file'
+    if thumb:
+        d['thumbnailUrl'] = f'/api/journal/attachments/{row["id"]}/thumbnail'
     return d
 
 
@@ -1033,9 +1043,14 @@ def delete_attachment(attachment_id):
     if not row:
         return jsonify({'error': 'Not found'}), 404
     entry_id = row['entry_id']
+    # Cancel first, so a download thread still running reads its absence from
+    # the progress registry as cancellation and stops writing to a dead row.
+    youtube_import.cancel_progress(attachment_id)
     db.execute('DELETE FROM journal_attachments WHERE id=?', (attachment_id,))
     db.commit()
     storage.delete_attachment_dir(attachment_id)
+    if row['kind'] == 'youtube':
+        archive.delete_archived_dir(attachment_id)
     _notify_subscribers(entry_id)
     return jsonify({'success': True})
 
@@ -1048,12 +1063,113 @@ def get_attachment_file(attachment_id):
     ).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    path = storage.resolve_stored_path(row['path'])
+    path = _resolve_attachment_path(row['path'])
     if path is None or not path.is_file():
         return jsonify({'error': 'Not found'}), 404
     # conditional=True so <audio> range requests work — seeking in a long voice
     # memo otherwise re-downloads the whole file on every scrub.
     return send_file(path, mimetype=row['mime'] or None, conditional=True)
+
+
+@bp.post('/<entry_id>/attachments/link')
+def attach_link(entry_id):
+    """Attach a YouTube video to an entry by its URL.
+
+    The row is created synchronously and the bytes arrive minutes later, so this
+    returns 201 with an attachment already in `import_status='importing'` — the
+    card can show itself downloading instead of the composer blocking on a
+    thirty-minute fetch.
+
+    Replay is a no-op, same contract as the upload route above: an optional
+    client-supplied `attachmentId` is what lets a re-POST be recognised, and the
+    early return happens before the download thread is spawned so a retry does
+    not start a second one.
+    """
+    body = request.get_json(silent=True) or {}
+    url = (body.get('url') or '').strip()
+    if not url:
+        return jsonify({'error': 'Missing url'}), 400
+    try:
+        attachment_id = _client_id(body.get('attachmentId'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+    if attachment_id:
+        existing = _load_attachment(attachment_id)
+        if existing is not None:
+            return jsonify(_attachment_dict(existing)), 201
+    else:
+        attachment_id = str(ULID())
+
+    db = get_db()
+    entry = db.execute(
+        'SELECT id FROM journal_entries WHERE id=?', (entry_id,)
+    ).fetchone()
+    if entry is None:
+        # The create is still in flight. The client retries rather than
+        # surfacing this, exactly as it does for a staged photo.
+        return jsonify({'error': 'Entry not found'}), 404
+
+    # Rejected here as well as in the worker: this is the one caller that can
+    # answer the user directly, and a 400 beats a card that appears only to
+    # fail. The worker still checks, because it is also reached by a retry.
+    if youtube.parse_video_id(url) is None:
+        return jsonify({'error': 'That does not look like a YouTube video URL.'}), 400
+
+    position = db.execute(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS next FROM journal_attachments'
+        ' WHERE entry_id=?',
+        (entry_id,),
+    ).fetchone()['next']
+
+    # `transcript_status` stays 'idle', not 'running': it is what
+    # `_attachments_settled` reads, and a download that can take half an hour
+    # would otherwise hold the entry's title generation for its full wait cap
+    # and then time out anyway. The download has its own `import_status`.
+    cur = db.execute(
+        'INSERT OR IGNORE INTO journal_attachments'
+        '(id, entry_id, kind, name, path, position, source_url,'
+        " import_status, created_at)"
+        " VALUES (?,?,'youtube',?,'',?,?,'importing',?)",
+        (attachment_id, entry_id, url, position, url, int(time.time())),
+    )
+    db.commit()
+
+    # OR IGNORE, and the rowcount matters: two replays of the same link can both
+    # pass the existence check above before either has inserted. Losing that
+    # race must be a no-op — spawning the thread anyway is a second yt-dlp
+    # process writing into the same directory as the first.
+    if cur.rowcount:
+        _notify_subscribers(entry_id)
+        youtube_import.start_progress(attachment_id, 'queued')
+        youtube_import.start_import_bg(attachment_id, entry_id, url)
+    return jsonify(_attachment_dict(_load_attachment(attachment_id))), 201
+
+
+@bp.get('/attachments/<attachment_id>/import-status')
+def attachment_import_status(attachment_id):
+    """What the download is doing right now, for the card's progress line.
+
+    `{'done': True}` when the registry has nothing: either it finished, or this
+    process never started it (a restart), and the row's own `import_status` is
+    the durable answer in both cases.
+    """
+    return jsonify(youtube_import.get_progress(attachment_id) or {'done': True})
+
+
+@bp.get('/attachments/<attachment_id>/thumbnail')
+def get_attachment_thumbnail(attachment_id):
+    """The video's poster. On the SSD even when the video is on the archive
+    drive, so this still answers with the drive unplugged."""
+    row = get_db().execute(
+        'SELECT thumb_path FROM journal_attachments WHERE id=?', (attachment_id,)
+    ).fetchone()
+    if not row or not row['thumb_path']:
+        return jsonify({'error': 'Not found'}), 404
+    path = storage.resolve_stored_path(row['thumb_path'])
+    if path is None or not path.is_file():
+        return jsonify({'error': 'Not found'}), 404
+    return send_file(path, mimetype='image/jpeg', conditional=True)
 
 
 @bp.post('/attachments/<attachment_id>/transcribe')
@@ -1071,6 +1187,8 @@ def transcribe_attachment(attachment_id):
     # park the row in 'running' until it errored.
     if row['kind'] == 'file':
         return jsonify({'error': 'This attachment type cannot be transcribed'}), 400
+    if row['kind'] == 'youtube' and row['import_status'] != 'ready':
+        return jsonify({'error': 'The video is still downloading'}), 409
     if row['transcript_status'] == 'running':
         return jsonify({'error': 'Already running'}), 409
     _queue_attachment_transcription(row)
@@ -1176,22 +1294,96 @@ def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str,
                      {'entry_id': entry_id, 'path': path, 'name': name})
 
 
+def _resolve_attachment_path(path: str):
+    """The file behind an attachment row, or None.
+
+    Two roots, because a downloaded video is the one attachment whose bytes are
+    not under JOURNAL_ROOT — it lives on the archive drive
+    (backend/journal/archive.py). Tried in turn rather than selected by `kind`,
+    so every caller that has a path but no row stays a one-argument call.
+
+    That is safe because neither resolver is a prefix test it can be talked out
+    of: each one independently requires the path to still be a direct grandchild
+    of *its own* root, so a `path` column that has since been tampered with
+    resolves to None under both.
+    """
+    if not path:
+        return None
+    return storage.resolve_stored_path(path) or archive.resolve_archived_path(path)
+
+
 def _do_attachment_audio(path: str) -> str:
-    """Transcribe an audio *or video* attachment.
+    """Transcribe an audio, video *or downloaded YouTube* attachment.
 
     The work itself lives in `stt.transcribe_file`, shared with the food log's
-    meal clips — this resolves the stored path first, which is journal-specific
-    (`storage.resolve_stored_path` refuses a path outside JOURNAL_ROOT).
+    meal clips — this resolves the stored path first, which is journal-specific.
+    A video container needs no special handling: every STT backend goes through
+    ffmpeg, which reads the audio track out without caring about the frames.
     """
     # Imported here rather than at module scope: the STT module pulls in numpy
     # and (for the local backend) torch, and the journal blueprint is imported
     # by tests that have no business paying for that.
     from backend.routes import stt as stt_routes
 
-    p = storage.resolve_stored_path(path)
+    p = _resolve_attachment_path(path)
     if p is None or not p.is_file():
         raise RuntimeError('The recording is missing')
     return stt_routes.transcribe_file(p)
+
+
+def _summarize_youtube_bg(
+    attachment_id: str, entry_id: str, title: str = '', *, now: bool = False
+) -> None:
+    """Write the few sentences saying what a watched video was about.
+
+    Lands on `description`, beside the transcript in `transcript` — the same
+    split the audio attachments use, where the transcript is the record and the
+    description is the summary of it.
+
+    Never touches the entry's own text. The entry is the user's commentary; a
+    summary folded into it would be an AI paragraph inside the one field the
+    journal promises is verbatim.
+    """
+    def _run():
+        from backend.ai.youtube import summarize_video
+
+        try:
+            row = get_db().execute(
+                'SELECT transcript, name FROM journal_attachments WHERE id=?',
+                (attachment_id,),
+            ).fetchone()
+            if row is None:
+                return
+            transcript = row['transcript'] or ''
+            if not transcript.strip():
+                return
+            text = summarize_video(title or row['name'] or '', transcript)
+            status, error = ('done', None) if text else ('idle', None)
+        except (InferencePaused, Preempted):
+            # Same contract as _transcribe_attachment_bg's: the llm_jobs row is
+            # what remembers, and recording 'error' here would turn a paused
+            # evening into a permanent failure behind a job marked done.
+            raise
+        except Exception as e:
+            text, status, error = None, 'error', str(e) or 'Failed'
+            print(f'Video summarization failed for {attachment_id}: {e}')
+
+        try:
+            db = get_db()
+            updates = {'description_status': status, 'description_error': error}
+            if text:
+                updates['description'] = text
+            build_update(db, 'journal_attachments', updates, 'id=?', (attachment_id,))
+            db.commit()
+            _notify_subscribers(entry_id)
+        except Exception as e:
+            print(f'Failed to record video summary for {attachment_id}: {e}')
+
+    if now:
+        _run()
+    else:
+        jobs.enqueue('journal.summarize_youtube', attachment_id,
+                     {'entry_id': entry_id, 'title': title})
 
 
 def _do_attachment_caption(path: str, name: str) -> str:
@@ -1262,7 +1454,7 @@ def _transcribe_attachment_bg(
         try:
             # Video takes the speech path, not the vision one: what is worth
             # keeping from a clip filmed to talk into is what was said.
-            if kind in ('audio', 'video'):
+            if kind in ('audio', 'video', 'youtube'):
                 text = _do_attachment_audio(path)
             else:
                 text = _do_attachment_caption(path, name)
@@ -1332,6 +1524,16 @@ def _transcribe_attachment_bg(
                 _deliver_idea_transcript(entry_id, body)
                 _polish_bg(entry_id, body)
                 _generate_metadata_bg(entry_id, body)
+
+            # A watched video's words are not the entry's words (so `merge` is
+            # false for one), but they are the only thing the summary can be
+            # written from — and this is the point at which they exist. Queued
+            # here rather than beside the transcription job because the two
+            # share one FIFO worker: enqueued together, the summarizer would run
+            # first and read an empty transcript.
+            if kind == 'youtube' and text:
+                jobs.enqueue('journal.summarize_youtube', attachment_id,
+                             {'entry_id': entry_id, 'title': name})
         except Exception as e:
             print(f'Failed to record transcription result for {attachment_id}: {e}')
 

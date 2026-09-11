@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS journal_entries (
 CREATE TABLE IF NOT EXISTS journal_attachments (
     id TEXT PRIMARY KEY,
     entry_id TEXT NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
-    kind TEXT NOT NULL,          -- 'audio' | 'image'
+    kind TEXT NOT NULL,          -- 'audio' | 'video' | 'image' | 'file' | 'youtube'
     -- What the attachment is about, named by the user. Defaults to the uploaded
     -- filename so a list of attachments is never a list of blank rows.
     name TEXT NOT NULL,
@@ -42,6 +42,20 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
     -- carries no GPS EXIF, or for non-image attachments.
     latitude REAL,
     longitude REAL,
+    -- The five below are for kind='youtube' only: a video watched and commented
+    -- on, downloaded at 720p and kept on the archive drive rather than under
+    -- ./data/journal/ (backend/journal/archive.py). Its poster stays on the SSD
+    -- at thumb_path, so the card still draws with the drive unplugged.
+    source_url TEXT,
+    duration_seconds INTEGER,
+    thumb_path TEXT,
+    -- 'importing' | 'ready' | 'error'. A download arrives minutes after the row
+    -- does, which is why this is separate from transcript_status — that one
+    -- means "is a model reading this", and the metadata waiter reads it.
+    -- Defaults to 'ready' so every attachment that is not a download, and every
+    -- row predating this, reads as finished rather than as stuck importing.
+    import_status TEXT NOT NULL DEFAULT 'ready',
+    import_error TEXT,
     created_at INTEGER NOT NULL
 );
 

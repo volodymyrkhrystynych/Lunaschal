@@ -59,6 +59,7 @@ vi.mock('../hooks/api', () => ({
         rename: vi.fn(),
         delete: vi.fn(),
         transcribe: vi.fn(),
+        link: vi.fn().mockResolvedValue({ id: 'v1' }),
       },
       voiceDrafts: {
         list: vi.fn().mockResolvedValue([]),
@@ -708,6 +709,59 @@ describe('Journal new-entry attachments', () => {
     // Staged the same way a paste would be — nothing uploads until save.
     expect(screen.getByText('fence.png')).toBeTruthy();
     expect(uploadMock).not.toHaveBeenCalled();
+  });
+
+  it('stages a YouTube link and attaches it only once the entry exists', async () => {
+    // The same rule staged files follow: the entry it hangs off is not there
+    // yet, and the create has to land first.
+    const linkMock = api.journal.attachments.link as ReturnType<typeof vi.fn>;
+    linkMock.mockClear();
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+
+    fireEvent.click(screen.getByTestId('journal-new-entry-link-button'));
+    fireEvent.change(screen.getByTestId('journal-new-entry-link-input'), {
+      target: { value: 'https://youtu.be/aircAruvnKk' },
+    });
+    fireEvent.click(screen.getByTestId('journal-new-entry-link-add'));
+
+    expect(screen.getByTestId('journal-new-entry-staged-link')).toBeTruthy();
+    expect(linkMock).not.toHaveBeenCalled();
+
+    fireEvent.change(
+      screen.getByPlaceholderText('Write your journal entry...'),
+      {
+        target: { value: 'Worth rewatching.' },
+      }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(createMock).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(linkMock).toHaveBeenCalledWith(
+        expect.any(String),
+        'https://youtu.be/aircAruvnKk',
+        expect.any(String)
+      )
+    );
+  });
+
+  it('saves an entry that is only a video link', async () => {
+    // A video watched and not yet written about is a real entry, the same way
+    // a photo with no words is.
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+
+    fireEvent.click(screen.getByTestId('journal-new-entry-link-button'));
+    fireEvent.change(screen.getByTestId('journal-new-entry-link-input'), {
+      target: { value: 'https://youtu.be/aircAruvnKk' },
+    });
+    fireEvent.click(screen.getByTestId('journal-new-entry-link-add'));
+
+    const save = screen.getByRole('button', {
+      name: 'Save',
+    }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
   });
 
   it('takes several photos at once, unlike the single-file buttons it replaced', async () => {

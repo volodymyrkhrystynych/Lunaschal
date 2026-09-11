@@ -119,6 +119,7 @@ def init_db() -> None:
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
     _ensure_journal_idea_id(db)
+    _ensure_journal_attachment_youtube(db)
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
     _ensure_nudge_settings(db)
@@ -211,6 +212,7 @@ def init_db() -> None:
     _reset_stale_study_imports(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
+    _reset_stale_journal_youtube_imports(db)
     _reset_stale_chat_attachment_descriptions(db)
     _reset_stale_message_runs(db)
     _reset_stale_voice_drafts(db)
@@ -895,6 +897,19 @@ def _reset_stale_attachment_transcripts(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE food_media SET transcript_status='idle'"
         " WHERE transcript_status='running'"
+    )
+    db.commit()
+
+
+def _reset_stale_journal_youtube_imports(db: sqlite3.Connection) -> None:
+    """Same reasoning as _reset_stale_study_imports, for a journal entry's video
+    attachment: the download is a daemon thread driving a yt-dlp subprocess, and
+    neither survives the process. 'error' rather than 'idle' — nothing re-arms a
+    download on its own, the card's Retry is what starts it again."""
+    db.execute(
+        "UPDATE journal_attachments SET import_status='error',"
+        " import_error='Interrupted by an app restart — retry the import.'"
+        " WHERE import_status='importing'"
     )
     db.commit()
 
@@ -1906,6 +1921,40 @@ def _ensure_journal_idea_id(db: sqlite3.Connection) -> None:
         'CREATE INDEX IF NOT EXISTS idx_journal_entries_idea'
         ' ON journal_entries(idea_id)'
     )
+    db.commit()
+
+
+def _ensure_journal_attachment_youtube(db: sqlite3.Connection) -> None:
+    """What a `kind='youtube'` attachment needs beyond the media columns.
+
+    The bytes live on the archive drive (backend/journal/archive.py) and arrive
+    minutes after the row does, so unlike every other attachment this one has a
+    lifecycle of its own — hence `import_status` rather than reusing
+    `transcript_status`, which means something else here and is what the
+    metadata waiter reads.
+
+    `path` stays NOT NULL and starts as '' — the row exists from the moment the
+    link is pasted so the card can show itself downloading.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_attachments)')}
+    if 'source_url' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN source_url TEXT')
+    if 'duration_seconds' not in cols:
+        db.execute(
+            'ALTER TABLE journal_attachments ADD COLUMN duration_seconds INTEGER'
+        )
+    if 'thumb_path' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN thumb_path TEXT')
+    if 'import_status' not in cols:
+        # 'ready' as the default, so every attachment that predates this — and
+        # every one that is not a download — reads as finished rather than as
+        # permanently importing.
+        db.execute(
+            "ALTER TABLE journal_attachments ADD COLUMN import_status TEXT"
+            " NOT NULL DEFAULT 'ready'"
+        )
+    if 'import_error' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN import_error TEXT')
     db.commit()
 
 

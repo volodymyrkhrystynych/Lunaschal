@@ -193,6 +193,47 @@ def seed_journal(db):
          img_path.stat().st_size, 0, ts(1)),
     )
 
+    # A YouTube video watched and commented on: the entry is the commentary,
+    # the attachment is what was watched. `import_status='ready'`, never
+    # 'importing' — the startup orphan sweep rewrites that one
+    # (connection.py's _reset_stale_journal_youtube_imports).
+    from backend.journal import archive as journal_archive
+
+    video_id = new_id()
+    video_entry = entries[0][0]
+    try:
+        video_dir = journal_archive.video_dir(video_id, create=True)
+    except Exception:
+        # No archive root configured (./test-env.sh exports one). The rest of
+        # the journal still seeds; only the video card is missing.
+        video_dir = None
+    if video_dir is not None:
+        video_dir.mkdir(parents=True, exist_ok=True)
+        video_path = video_dir / 'video.mp4'
+        # Not a playable file — nothing in the demo decodes it, and shipping a
+        # real video in a public repo is a different kind of problem.
+        video_path.write_bytes(b'\x00\x00\x00 ftypmp42')
+        thumb = attachment_path(video_id, 'jpg')
+        thumb.parent.mkdir(parents=True, exist_ok=True)
+        placeholder_image(thumb, 'neural networks', size=(640, 360))
+        db.execute(
+            'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime,'
+            ' size, position, transcript, transcript_status, description,'
+            ' description_status, source_url, duration_seconds, thumb_path,'
+            ' import_status, created_at)'
+            " VALUES (?,?,'youtube',?,?,'video/mp4',?,?,?,'done',?,'done',?,?,?,'ready',?)",
+            (
+                video_id, video_entry, 'But what is a neural network?',
+                str(video_path), video_path.stat().st_size, 1,
+                'a neural network is a function\nthat you train with gradient descent',
+                'A walk through what a neural network is as a mathematical object, '
+                'building up from single neurons to layers and ending on how '
+                'gradient descent adjusts the weights.',
+                'https://www.youtube.com/watch?v=aircAruvnKk', 1140,
+                str(thumb), ts(6),
+            ),
+        )
+
     # Curated tags: user-defined in Settings → Tags, applied to entries by a
     # background classifier. Seed the tag plus one match so the Journal filter
     # pills have something to filter by without the scan ever running.

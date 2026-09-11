@@ -1,9 +1,12 @@
 import { memo, useEffect, useState } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { type JournalAttachment, api } from '../hooks/api';
 import { useAttachmentUpload } from '../hooks/useAttachmentUpload';
 import { ImageLightbox, useLightbox } from './ImageLightbox';
 import { mapLink } from '../lib/food';
+// The same formatter the Study desk labels its videos with — one shape for
+// a runtime across the app.
+import { formatDuration } from '../lib/study';
 import { AttachmentButtons } from './AttachmentButtons';
 import { CollapsibleText } from './CollapsibleText';
 import {
@@ -93,6 +96,15 @@ export const JournalAttachments = memo(function JournalAttachments({
         ...current,
         [id]: (current[id] ?? 0) + 1,
       }));
+      invalidate();
+    },
+    onError: (e: Error) => setError(e.message),
+  });
+
+  const linkAttachment = useMutation({
+    mutationFn: (url: string) => api.journal.attachments.link(entryId, url),
+    onSuccess: () => {
+      setError(null);
       invalidate();
     },
     onError: (e: Error) => setError(e.message),
@@ -253,6 +265,7 @@ export const JournalAttachments = memo(function JournalAttachments({
               idPrefix="journal"
               disabled={isUploading}
               onFiles={uploadFiles}
+              onLink={url => linkAttachment.mutate(url)}
               extra={
                 <>
                   <button
@@ -304,11 +317,120 @@ export const JournalAttachments = memo(function JournalAttachments({
   );
 });
 
+/**
+ * A YouTube video watched and commented on.
+ *
+ * The poster rather than an autoplaying player: an entry can carry one of these
+ * alongside photos and clips, and three videos all preloading is not a page the
+ * Pocket 2 can open. Clicking swaps in the real `<video>`, pointed at the
+ * archived 720p copy rather than at YouTube — the local file is the point of
+ * downloading it, and it plays with the network off.
+ *
+ * The thumbnail is served from the SSD even though the video is on the archive
+ * drive, so this still draws when the drive is unplugged; the player below it
+ * is then the part that 404s.
+ */
+function YouTubeCard({ a }: { a: JournalAttachment }) {
+  const [playing, setPlaying] = useState(false);
+  const importing = a.importStatus === 'importing';
+
+  // Only while the download is actually running, and only in this tab. The
+  // registry is in-memory, so after a restart it answers `done` and the row's
+  // own importStatus is the durable answer.
+  const { data: progress } = useQuery({
+    queryKey: ['journal', 'import', a.id],
+    queryFn: () => api.journal.attachments.importStatus(a.id),
+    enabled: importing,
+    refetchInterval: 2000,
+  });
+
+  const duration = formatDuration(a.durationSeconds ?? null);
+
+  if (a.importStatus === 'error') {
+    return (
+      <div className="rounded bg-black/30 px-3 py-2 text-xs text-[var(--color-error,#f87171)]">
+        Could not download this video. {a.importError}
+      </div>
+    );
+  }
+
+  if (importing) {
+    return (
+      <div className="rounded bg-black/30 px-3 py-3 text-xs text-[var(--color-text-muted)] flex items-center gap-2">
+        <span className="animate-pulse" aria-hidden="true">
+          ⏳
+        </span>
+        <span>
+          {progress?.phase === 'downloading'
+            ? 'Downloading the video…'
+            : 'Looking the video up…'}
+        </span>
+      </div>
+    );
+  }
+
+  if (playing && a.url) {
+    return (
+      <video
+        src={a.url}
+        controls
+        autoPlay
+        playsInline
+        className="w-full max-h-96 rounded bg-black"
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <button
+        type="button"
+        onClick={() => setPlaying(true)}
+        disabled={!a.url}
+        className="relative block w-full rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors disabled:cursor-not-allowed"
+        title={a.url ? 'Play the archived copy' : 'The video file is missing'}
+      >
+        {a.thumbnailUrl ? (
+          <img
+            src={a.thumbnailUrl}
+            alt={a.name}
+            loading="lazy"
+            className="w-full max-h-72 object-contain bg-black"
+          />
+        ) : (
+          <div className="w-full py-10 bg-black/40 text-2xl" aria-hidden="true">
+            ▶️
+          </div>
+        )}
+        <span className="absolute inset-0 flex items-center justify-center">
+          <span className="rounded-full bg-black/60 px-4 py-2 text-xl">▶</span>
+        </span>
+        {duration && (
+          <span className="absolute bottom-1 right-1 rounded bg-black/75 px-1.5 py-0.5 text-[11px] text-white">
+            {duration}
+          </span>
+        )}
+      </button>
+      {a.sourceUrl && (
+        <a
+          href={a.sourceUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-block text-xs text-[var(--color-text-muted)] underline hover:text-[var(--color-text)]"
+        >
+          Watch on YouTube
+        </a>
+      )}
+    </div>
+  );
+}
+
 const KIND_ICONS: Record<JournalAttachment['kind'], string> = {
   audio: '🎙️',
   video: '🎬',
   image: '📷',
   file: '📎',
+  youtube: '▶️',
 };
 
 const DESCRIPTION_SEEN_KEY_PREFIX = 'journal-attachment-description-seen:';
@@ -382,10 +504,14 @@ function AttachmentRow({
   };
 
   const lightbox = useLightbox();
+  // `url` is absent until there are bytes to serve (a video still
+  // downloading). Only an image reaches the rotation branch, and an image
+  // always has one.
+  const fileUrl = a.url ?? '';
   const imageUrl =
     a.kind === 'image' && imageRevision
-      ? `${a.url}${a.url.includes('?') ? '&' : '?'}rotation=${imageRevision}`
-      : a.url;
+      ? `${fileUrl}${fileUrl.includes('?') ? '&' : '?'}rotation=${imageRevision}`
+      : fileUrl;
   const geoLink = a.kind === 'image' ? mapLink(a.latitude, a.longitude) : null;
 
   const shareImage = async () => {
@@ -459,10 +585,10 @@ function AttachmentRow({
 
       {/* preload="none" throughout: an entry can carry several clips and the
           Pocket 2 should not fetch any of them until one is actually played. */}
-      {a.kind === 'audio' && (
+      {a.kind === 'audio' && a.url && (
         <audio src={a.url} controls preload="none" className="w-full" />
       )}
-      {a.kind === 'video' && (
+      {a.kind === 'video' && a.url && (
         <video
           src={a.url}
           controls
@@ -471,6 +597,7 @@ function AttachmentRow({
           className="w-full max-h-96 rounded bg-black"
         />
       )}
+      {a.kind === 'youtube' && <YouTubeCard a={a} />}
       {a.kind === 'image' && (
         <div className="flex items-center gap-2">
           {/* Fixed height, width follows the photo: a landscape shot in a
@@ -623,7 +750,21 @@ function AttachmentRow({
         </div>
       )}
 
-      {a.description && a.kind !== 'image' && (
+      {/* A watched video's summary is not folded away. Every other AI block
+          here describes something the reader can see for themselves; this one
+          is the only account of twenty minutes they may not have time to
+          rewatch, and it is two sentences long. The transcript above it stays
+          collapsible, because that one is the full text. */}
+      {a.description && a.kind === 'youtube' && (
+        <div className="bg-white/5 rounded px-3 py-2 text-sm text-[var(--color-text-muted)]">
+          <div className="text-xs uppercase tracking-wide opacity-60 mb-1">
+            What the video says
+          </div>
+          <div className="whitespace-pre-wrap italic">{a.description}</div>
+        </div>
+      )}
+
+      {a.description && a.kind !== 'image' && a.kind !== 'youtube' && (
         <AttachmentDescription
           attachmentId={a.id}
           descriptionKind="recording"

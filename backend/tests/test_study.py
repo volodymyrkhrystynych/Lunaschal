@@ -1,7 +1,7 @@
 """Study sources: uploads, the two URL imports, and the file route.
 
 No real network and no real yt-dlp — `importer.fetch_public_page` and
-`importer._run_ytdlp` are monkeypatched, and the route's `_start_*_bg` thread
+`importer.run_ytdlp` are monkeypatched, and the route's `_start_*_bg` thread
 launchers are swapped for the synchronous functions so a POST can be asserted
 on directly (the backend/tests/test_fanfic_import.py pattern).
 """
@@ -17,6 +17,7 @@ from backend.db.connection import get_db
 from backend.research.web import UnsafeUrl
 from backend.routes import study as study_routes
 from backend.study import importer, storage, youtube
+from backend import ytdlp
 
 
 @pytest.fixture(autouse=True)
@@ -182,7 +183,7 @@ def _fake_ytdlp(monkeypatch, tmp_dir_written='video.mp4', *, meta_rc=0, dl_rc=0,
             Path(path).write_bytes(b'\x00\x00\x00 ftypmp42')
         return subprocess.CompletedProcess(args, dl_rc, '', stderr)
 
-    monkeypatch.setattr(importer, '_run_ytdlp', run)
+    monkeypatch.setattr(importer, 'run_ytdlp', run)
     return calls
 
 
@@ -246,12 +247,12 @@ def test_youtube_download_asks_for_h264_within_the_height_cap(
     fmt = calls[1][calls[1].index('-f') + 1]
     # The *first* branch is what wins on any normal YouTube video.
     assert fmt.split('/')[0] == (
-        f'bv*[height<={importer.YTDLP_MAX_HEIGHT}][vcodec^=avc1]'
+        f'bv*[height<={ytdlp.YTDLP_MAX_HEIGHT}][vcodec^=avc1]'
         f'+ba[acodec^=mp4a]'
     )
     # Every branch stays inside the height cap except the bare last-resort one.
     branches = fmt.split('/')
-    assert all(f'height<={importer.YTDLP_MAX_HEIGHT}' in b for b in branches[:-1])
+    assert all(f'height<={ytdlp.YTDLP_MAX_HEIGHT}' in b for b in branches[:-1])
     assert branches[-1] == 'b'
     assert '--merge-output-format' in calls[1]
 
@@ -273,7 +274,7 @@ def test_youtube_import_ignores_a_leftover_format_fragment(
         out.with_name('video.mp4').write_bytes(b'merged')
         return subprocess.CompletedProcess(args, 0, '', '')
 
-    monkeypatch.setattr(importer, '_run_ytdlp', run)
+    monkeypatch.setattr(importer, 'run_ytdlp', run)
     res = client.post(
         '/api/study/sources/youtube', json={'url': 'https://youtu.be/aircAruvnKk'}
     )

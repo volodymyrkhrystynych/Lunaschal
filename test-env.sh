@@ -42,6 +42,11 @@ export TORRENT_ROOT="$SCRATCH/torrents"
 # only, so it is one of the views a demo instance can most easily be judged on.
 export STUDY_ROOT="$SCRATCH/study"
 export STUDY_ARCHIVE_ROOT="$SCRATCH/study-archive"
+# A journal entry's YouTube attachment keeps its video here — the same archive
+# drive Study and Piano use in production, a scratch directory here. Without it
+# the seeded video would resolve through settings.backup_path
+# (backend/journal/archive.py).
+export JOURNAL_ARCHIVE_ROOT="$SCRATCH/journal-archive"
 export SHORTCUTS_PATH="$SCRATCH/shortcuts.json"
 
 # Same idiom backend/tests/conftest.py uses: keep every daemon scheduler off
