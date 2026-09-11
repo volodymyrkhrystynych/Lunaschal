@@ -362,6 +362,28 @@ def test_selfie_upload_stores_the_file_and_serves_it_back(client, lifestyle_root
     assert (lifestyle_root / body['id'] / 'selfie.png').is_file()
 
 
+def test_selfie_thumbnail_bounds_decoded_size_and_preserves_original(client, lifestyle_root):
+    from PIL import Image
+
+    original = io.BytesIO()
+    photo = Image.new('RGB', (2400, 1200), 'red')
+    exif = photo.getexif()
+    exif[274] = 6  # Portrait when displayed, despite landscape stored pixels.
+    photo.save(original, format='JPEG', exif=exif)
+    data = original.getvalue()
+    selfie = _upload_selfie(client, data=data, filename='selfie.jpg',
+                            content_type='image/jpeg').get_json()
+    response = client.get(selfie['url'] + '?thumbnail=1')
+    assert response.status_code == 200
+    assert response.mimetype == 'image/jpeg'
+    with Image.open(io.BytesIO(response.data)) as thumbnail:
+        assert thumbnail.size == (80, 160)
+    assert client.get(selfie['url']).data == data
+    assert client.get(selfie['url'] + '?thumbnail=1', headers={
+        'If-None-Match': response.headers['ETag'],
+    }).status_code == 304
+
+
 def test_reuploading_a_day_replaces_the_selfie_and_its_file(client, lifestyle_root):
     first = _upload_selfie(client, date='2026-07-20').get_json()
     second = _upload_selfie(
