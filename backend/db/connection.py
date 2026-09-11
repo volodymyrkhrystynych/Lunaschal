@@ -110,6 +110,7 @@ def init_db() -> None:
     _drop_vector_tables(db)
     _ensure_network_code(db)
     _ensure_newspaper_downloads(db)
+    _ensure_newspaper_last_read_at(db)
     _ensure_writing_project_id(db)
     _ensure_conversation_day_key(db)
     _ensure_conversation_mode(db)
@@ -1981,6 +1982,25 @@ def _ensure_newspaper_downloads(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN newspapers_auto_download INTEGER NOT NULL DEFAULT 0')
     db.execute("UPDATE newspaper_downloads SET status='queued', error='Interrupted; retrying after restart' WHERE status='downloading'")
     db.commit()
+
+
+def _ensure_newspaper_last_read_at(db: sqlite3.Connection) -> None:
+    """When the reader was last in an issue, as opposed to when it arrived.
+
+    Deliberately not backfilled. An issue archived before this column has a
+    `created_at` (the downloader's hour) and a markup blob, and the blob is one
+    JSON document with no per-stroke time in it -- so there is genuinely no
+    record of when it was written on, and inventing one from created_at would
+    be the wrong answer stated confidently. NULL is the honest answer, and the
+    Journal sorts those to the end of their day (backend/journal_moment.py),
+    where the unread ones go too.
+    """
+    if not db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='newspaper_issues'").fetchone():
+        return
+    cols = {r[1] for r in db.execute('PRAGMA table_info(newspaper_issues)')}
+    if 'last_read_at' not in cols:
+        db.execute('ALTER TABLE newspaper_issues ADD COLUMN last_read_at INTEGER')
+        db.commit()
 
 
 def _ensure_torrent_settings(db: sqlite3.Connection) -> None:

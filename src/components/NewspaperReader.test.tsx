@@ -21,7 +21,9 @@ vi.mock('../hooks/api', () => ({
       this.status = status;
     }
   },
-  api: { newspapers: { markup: vi.fn(), saveMarkup: vi.fn() } },
+  api: {
+    newspapers: { markup: vi.fn(), saveMarkup: vi.fn(), markOpened: vi.fn() },
+  },
 }));
 
 const issue = {
@@ -102,6 +104,7 @@ beforeEach(() => {
     strokes: [],
   });
   vi.mocked(api.newspapers.saveMarkup).mockResolvedValue({ revision: 1 });
+  vi.mocked(api.newspapers.markOpened).mockResolvedValue({ ok: true });
 });
 
 /** The reader's page surface, wired up the way a browser would wire it. */
@@ -147,6 +150,24 @@ async function openPage() {
     fireEvent.click(screen.getByRole('button', { name }));
   return { ink, marks, pointer, touchMove, pick };
 }
+
+describe('opening an issue', () => {
+  it('tells the server, which is what dates the issue in the Journal', async () => {
+    render(<NewspaperReader issue={issue} onClose={vi.fn()} />);
+    await waitFor(() =>
+      expect(api.newspapers.markOpened).toHaveBeenCalledWith('2026-09-01')
+    );
+  });
+
+  it('still opens when the server cannot be told', async () => {
+    // The stamp is a nicety; a reader offline on a train still has a paper.
+    vi.mocked(api.newspapers.markOpened).mockRejectedValue(
+      new Error('offline')
+    );
+    render(<NewspaperReader issue={issue} onClose={vi.fn()} />);
+    expect(await screen.findByText('Save now')).toBeTruthy();
+  });
+});
 
 describe('newspaper pencil and finger input', () => {
   it('records Pencil coordinates and ignores finger pointers entirely', async () => {

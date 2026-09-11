@@ -284,6 +284,15 @@ export function NewspaperReader({
     strokes: toWire(next),
   });
 
+  // Opening the issue is half of what dates its Journal card — the other half
+  // is saving markup — so it is recorded on its own rather than inferred from
+  // the markup fetch below. Fire-and-forget: a reader that cannot reach the
+  // server still has a paper to read, and the stamp is not worth an error
+  // banner over.
+  useEffect(() => {
+    void api.newspapers.markOpened(issue.date).catch(() => {});
+  }, [issue.date]);
+
   useEffect(() => {
     const loading = pdfjs.getDocument({ url: issue.pdfUrl });
     let active = true;

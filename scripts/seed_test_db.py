@@ -498,10 +498,21 @@ def seed_newspapers(db):
         {'page': 1, 'tool': 'highlight', 'points': [[0.12, 0.30], [0.78, 0.30]]},
         {'page': 3, 'tool': 'pen', 'points': [[0.20, 0.55], [0.35, 0.62], [0.48, 0.51]]},
     ], separators=(',', ':'))
+    # Downloaded a few hours ago, read since: the gap the Journal card's
+    # timestamp exists to show (backend/journal_moment.py). Without a
+    # last_read_at the demo card would sit at the end of the day with the
+    # never-opened ones, which is the half of the rule that needs no seeding.
+    # Both are pulled forward to the 4am day start rather than fixed at an hour
+    # of the morning, so a seed run at 5am does not stamp the demo's newspaper
+    # into the future.
+    day_start, _ = day_bounds(today)
+    arrived = max(day_start, ts(hours_ago=6))
     db.execute(
-        'INSERT INTO newspaper_issues (id, date, pdf_path, byte_size, page_count, markup, revision, created_at)'
-        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        (new_id(), today, str(path), path.stat().st_size, 4, markup, 1, ts(0)),
+        'INSERT INTO newspaper_issues (id, date, pdf_path, byte_size, page_count, markup, revision,'
+        ' last_read_at, created_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        (new_id(), today, str(path), path.stat().st_size, 4, markup, 1,
+         max(arrived, ts(hours_ago=2)), arrived),
     )
 
 
