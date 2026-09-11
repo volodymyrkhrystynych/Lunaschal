@@ -181,6 +181,7 @@ def init_db() -> None:
     _ensure_food_location(db)
     _ensure_food_recipe_match_status(db)
     _ensure_food_media_transcript(db)
+    _ensure_food_descriptions(db)
     _ensure_hf_token(db)
     _ensure_weather_settings(db)
     _ensure_meeting_speaker_names(db)
@@ -617,6 +618,21 @@ def _ensure_food_location(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE food_entries ADD COLUMN latitude REAL')
     if 'longitude' not in cols:
         db.execute('ALTER TABLE food_entries ADD COLUMN longitude REAL')
+    db.commit()
+
+
+def _ensure_food_descriptions(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(food_media)')}
+    for name, definition in (
+        ('description', 'TEXT'),
+        ('description_status', "TEXT NOT NULL DEFAULT 'idle'"),
+        ('description_error', 'TEXT'),
+    ):
+        if name not in cols:
+            db.execute(f'ALTER TABLE food_media ADD COLUMN {name} {definition}')
+    cols = {r[1] for r in db.execute('PRAGMA table_info(food_entries)')}
+    if 'generated_notes' not in cols:
+        db.execute('ALTER TABLE food_entries ADD COLUMN generated_notes TEXT')
     db.commit()
 
 

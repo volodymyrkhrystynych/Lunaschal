@@ -549,6 +549,7 @@ CREATE TABLE IF NOT EXISTS food_entries (
     dish TEXT,                            -- AI-extracted or manual
     place TEXT,
     notes TEXT,                           -- cleaned commentary
+    generated_notes TEXT,                 -- last AI version; manual edits win
     rating INTEGER,                       -- 1..5, nullable
     tags TEXT,                            -- JSON array (see backend/tags.py)
     recipe_id TEXT REFERENCES recipes(id) ON DELETE SET NULL,
@@ -574,6 +575,9 @@ CREATE TABLE IF NOT EXISTS food_media (
     transcript TEXT,
     transcript_status TEXT NOT NULL DEFAULT 'idle',   -- idle|running|done|error
     transcript_error TEXT,
+    description TEXT,
+    description_status TEXT NOT NULL DEFAULT 'idle',
+    description_error TEXT,
     created_at INTEGER NOT NULL
 );
 

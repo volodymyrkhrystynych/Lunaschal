@@ -13,6 +13,7 @@ import {
 } from '../../lib/food';
 import { groupByFoodDay } from '../../lib/foodDay';
 import { FoodCapture } from './FoodCapture';
+import { FoodDescriptions } from './FoodDescriptions';
 
 const splitTagInput = (input: string): string[] =>
   input
@@ -96,6 +97,10 @@ function FoodEntryCard({
     mutationFn: () => api.food.delete(entry.id),
     onSuccess: invalidate,
   });
+  const polish = useMutation({
+    mutationFn: () => api.food.polish(entry.id),
+    onSuccess: invalidate,
+  });
 
   const startEdit = () => {
     setDish(entry.dish ?? '');
@@ -169,6 +174,24 @@ function FoodEntryCard({
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
+          {entry.rawContent && !editing && (
+            <button
+              onClick={() => polish.mutate()}
+              disabled={
+                polish.isPending ||
+                entry.polishing ||
+                entry.media.some(
+                  m =>
+                    m.descriptionStatus === 'running' ||
+                    m.transcriptStatus === 'running'
+                )
+              }
+              className="text-sm text-[var(--color-text-muted)] disabled:opacity-50"
+              title="Polish the original transcript using meal photo descriptions"
+            >
+              {polish.isPending || entry.polishing ? 'Polishing…' : 'Polish'}
+            </button>
+          )}
           <button
             onClick={startEdit}
             className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
@@ -184,6 +207,12 @@ function FoodEntryCard({
         </div>
       </div>
 
+      <FoodDescriptions media={entry.media} />
+      {polish.error && (
+        <p role="alert" className="text-sm text-red-400">
+          {polish.error.message}
+        </p>
+      )}
       {editing ? (
         <div className="mt-3 space-y-2">
           <input
@@ -293,7 +322,7 @@ export function FoodLog() {
   const { data: entries, isLoading } = useQuery({
     queryKey: ['food', 'list', { tag: selectedTag }],
     queryFn: () => api.food.list({ tag: selectedTag ?? undefined }),
-    // Only while a clip is being transcribed: the result arrives on a
+    // While transcription, descriptions, or polishing run: results arrive on a
     // background worker with nothing on this side to invalidate from.
     refetchInterval: q =>
       hasRunningMealTranscript(q.state.data) ? 4000 : false,

@@ -29,7 +29,8 @@ def _media_url(media_id: str) -> str:
 
 def _entry_media(db, entry_id: str) -> list[dict]:
     rows = db.execute(
-        'SELECT id, kind, position, transcript, transcript_status, transcript_error'
+        'SELECT id, kind, position, transcript, transcript_status, transcript_error,'
+        ' description, description_status, description_error'
         ' FROM food_media WHERE entry_id=? ORDER BY position ASC, created_at ASC',
         (entry_id,),
     ).fetchall()
@@ -49,6 +50,10 @@ def _media_dict(r) -> dict:
         d['transcript'] = r['transcript']
         d['transcriptStatus'] = r['transcript_status']
         d['transcriptError'] = r['transcript_error']
+    if r['kind'] == 'image':
+        d['description'] = r['description']
+        d['descriptionStatus'] = r['description_status']
+        d['descriptionError'] = r['description_error']
     return d
 
 
@@ -61,6 +66,11 @@ def _linked_recipe(db, recipe_id: str | None) -> dict | None:
 
 def _entry_dict(db, row) -> dict:
     d = row_to_dict(row)
+    d.pop('generatedNotes', None)
+    d['polishing'] = db.execute(
+        "SELECT 1 FROM llm_jobs WHERE target_id=? AND kind='food.structure'"
+        " AND status IN ('pending', 'running')", (row['id'],),
+    ).fetchone() is not None
     d['media'] = _entry_media(db, row['id'])
     d['recipe'] = _linked_recipe(db, row['recipe_id'])
     return d
@@ -142,6 +152,9 @@ def _save_media_file(
         ' VALUES (?,?,?,?,?,?,?)',
         (media_id, entry_id, kind, str(path), mime, position, now),
     )
+    from backend.ai.images import is_vision_configured
+    if kind == 'image' and is_vision_configured():
+        _queue_description(media_id)
     public = {'id': media_id, 'kind': kind, 'position': position, 'url': _media_url(media_id)}
     return public, path, kind
 
@@ -186,27 +199,51 @@ def _next_media_position(db, entry_id: str) -> int:
 
 # --- Background structuring ---
 
-def structure_food_entry(entry_id: str, text: str) -> None:
-    """Fill empty fields on a food entry from its raw text via the LLM, and
-    create+link a recipe if one was described. Only overwrites columns that are
-    still empty, so manual input always wins. Safe to run in a worker thread.
+def structure_food_entry(entry_id: str, text: str, *, force_notes: bool = False) -> bool:
+    """Structure the latest raw text with meal photos and standing memory.
+
+    Metadata fills empty fields. Notes can refresh the previous generated
+    version, so later clips/photos improve it; manual notes require explicit
+    Polish. Never overwrite an edit made while inference was running.
 
     Always finishes by checking for a homemade/existing-recipe match — even
     when parsing found nothing new to fill in, since that's independent of
     whether this text described a *new* recipe."""
     from backend.memory import get_memory
 
-    parsed = parse_food_entry(text, memory=get_memory())
     db = get_db()
+    before = db.execute('SELECT * FROM food_entries WHERE id=?', (entry_id,)).fetchone()
+    if not before:
+        return False
+    # A queued payload may predate another clip. Always polish the whole meal.
+    text = before['raw_content'] or ''
+    descriptions = db.execute(
+        "SELECT description FROM food_media WHERE entry_id=? AND kind='image'"
+        " AND description_status='done' AND description IS NOT NULL"
+        ' ORDER BY position, created_at, id', (entry_id,),
+    ).fetchall()
+    context = '\n'.join(r['description'] for r in descriptions)[:15000]
+    parsed = parse_food_entry(text, memory=get_memory(), descriptions=context)
     row = db.execute('SELECT * FROM food_entries WHERE id=?', (entry_id,)).fetchone()
     if not row:
-        return
+        return False
+    if row['raw_content'] != before['raw_content']:
+        jobs.enqueue('food.structure', entry_id, {'text': row['raw_content'] or ''})
+        return False
 
+    notes_updated = False
     if parsed:
         updates: dict = {}
-        for col in ('dish', 'place', 'notes'):
+        for col in ('dish', 'place'):
             if not row[col] and parsed.get(col):
                 updates[col] = parsed[col]
+        if (parsed.get('notes') and row['notes'] == before['notes']
+                and row['generated_notes'] == before['generated_notes']
+                and (force_notes or not row['notes'] or
+                     row['notes'] == row['generated_notes'])):
+            updates['notes'] = parsed['notes']
+            updates['generated_notes'] = parsed['notes']
+            notes_updated = True
         if row['rating'] is None and parsed.get('rating') is not None:
             updates['rating'] = parsed['rating']
         if not row['tags'] and parsed.get('tags'):
@@ -224,6 +261,81 @@ def structure_food_entry(entry_id: str, text: str) -> None:
             db.commit()
 
     check_homemade_recipe_match(entry_id)
+    return notes_updated
+
+
+def _queue_description(media_id: str) -> None:
+    db = get_db()
+    db.execute("UPDATE food_media SET description_status='running',"
+               ' description_error=NULL WHERE id=?', (media_id,))
+    jobs.enqueue('food.describe_media', media_id, commit=False)
+
+
+def describe_food_media(media_id: str) -> None:
+    from backend.ai.images import describe_image
+    from backend.ai.service import InferencePaused, Preempted
+
+    db = get_db()
+    row = db.execute('SELECT * FROM food_media WHERE id=?', (media_id,)).fetchone()
+    if not row or row['kind'] != 'image':
+        return
+    described = False
+    try:
+        path = storage.resolve_stored_path(row['path'])
+        if path is None:
+            raise ValueError('The image file is missing')
+        description = describe_image(
+            path,
+            system=(
+                'Describe this meal photo as reference for correcting a food voice transcript. '
+                'Name visible dishes and ingredients only as specifically as the image supports. '
+                'Quote legible menu, packaging, brand, and restaurant text exactly, preserving '
+                'spelling. State uncertainty and unreadable text instead of guessing. '
+                'Do not infer hidden ingredients, recipes, taste, or what the person said. '
+                'Return only a concise factual description.'
+            ),
+            prompt='Describe the food and quote any legible food-related names.',
+            max_tokens=500,
+        )
+        db.execute("UPDATE food_media SET description=?, description_status='done',"
+                   ' description_error=NULL WHERE id=?', (description, media_id))
+        described = True
+    except (InferencePaused, Preempted):
+        raise
+    except Exception as e:
+        db.execute("UPDATE food_media SET description_status='error', description_error=?"
+                   ' WHERE id=?', (str(e) or 'Description failed', media_id))
+    entry = db.execute('SELECT raw_content FROM food_entries WHERE id=?',
+                       (row['entry_id'],)).fetchone()
+    if described and entry and entry['raw_content']:
+        jobs.enqueue('food.structure', row['entry_id'],
+                     {'text': entry['raw_content']}, commit=False)
+    db.commit()
+
+
+@bp.post('/media/<media_id>/describe')
+def describe_media(media_id):
+    db = get_db()
+    row = db.execute('SELECT kind FROM food_media WHERE id=?', (media_id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if row['kind'] != 'image':
+        return jsonify({'error': 'Only photos can be described'}), 400
+    _queue_description(media_id)
+    db.commit()
+    return jsonify({'success': True}), 202
+
+
+@bp.post('/<id>/polish')
+def polish_entry(id):
+    row = get_db().execute('SELECT raw_content FROM food_entries WHERE id=?', (id,)).fetchone()
+    if not row:
+        return jsonify({'error': 'Not found'}), 404
+    if not row['raw_content']:
+        return jsonify({'error': 'No original transcript to polish'}), 400
+    if not structure_food_entry(id, row['raw_content'], force_notes=True):
+        return jsonify({'error': 'Food polishing unavailable; notes were kept'}), 503
+    return jsonify({'success': True})
 
 
 # --- Meal recordings -----------------------------------------------------------
@@ -550,6 +662,7 @@ def update_entry(id):
         updates['place'] = (body['place'] or '').strip() or None
     if 'notes' in body:
         updates['notes'] = (body['notes'] or '').strip() or None
+        updates['generated_notes'] = None
     if 'rating' in body:
         updates['rating'] = _parse_rating(body['rating'])
     if 'tags' in body:
