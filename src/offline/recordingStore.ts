@@ -76,6 +76,22 @@ export interface RecordingFood {
   id: string;
 }
 
+/**
+ * The chat message this clip *is* — the Chat tab's microphone.
+ *
+ * Stored beside the audio for the reason the three above are, and with one more
+ * of its own: this clip is not attached to a message, it is the message. The
+ * recording's own id becomes the attachment id (as a meal clip's does), and
+ * `messageId` is minted alongside it so the server can create the message and
+ * the attachment in one replayable request. A resumed upload that had forgotten
+ * either would file a spoken question as a journal entry — in a different tab
+ * from the conversation it was asked in, and with nothing to answer it.
+ */
+export interface RecordingChat {
+  conversationId: string;
+  messageId: string;
+}
+
 export interface StoredRecording {
   id: string;
   mode: RecordingMode;
@@ -114,6 +130,8 @@ export interface StoredRecording {
   fic?: RecordingFic;
   /** Set when the clip is a food log capture; absent for journal recordings. */
   food?: RecordingFood;
+  /** Set when the clip is a spoken chat message; absent for journal recordings. */
+  chat?: RecordingChat;
 }
 
 const META_PREFIX = 'rec:';
@@ -182,6 +200,7 @@ export function beginRecording(
     idea?: RecordingIdea;
     fic?: RecordingFic;
     food?: RecordingFood;
+    chat?: RecordingChat;
   } = {}
 ): Promise<StoredRecording> {
   const meta: StoredRecording = {
@@ -192,6 +211,7 @@ export function beginRecording(
     ...(opts.idea ? { idea: opts.idea } : {}),
     ...(opts.fic ? { fic: opts.fic } : {}),
     ...(opts.food ? { food: opts.food } : {}),
+    ...(opts.chat ? { chat: opts.chat } : {}),
     startedAt: Date.now(),
     endedAt: null,
     chunkCount: 0,

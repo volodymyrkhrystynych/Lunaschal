@@ -542,9 +542,15 @@ export interface ChatAttachment {
   messageId: string | null;
   mime: string | null;
   url: string;
+  /** A photo, or a clip the message was spoken into. */
+  kind: 'image' | 'audio';
   description: string | null;
   descriptionStatus: 'running' | 'done' | 'error' | null;
   descriptionError: string | null;
+  /** Audio only: what was said, once the server has been through STT. */
+  transcript: string | null;
+  transcriptStatus: 'running' | 'done' | 'error' | null;
+  transcriptError: string | null;
   /** Where the device was when the photo was attached — the fallback behind the
    * photo's own EXIF GPS, which a pasted image no longer has. */
   latitude: number | null;
@@ -3665,6 +3671,38 @@ export const api = {
       }
       return upload<ChatAttachment[]>(
         `/api/chat/conversations/${conversationId}/attachments`,
+        form
+      );
+    },
+    /**
+     * A spoken message: the audio now, its words shortly after.
+     *
+     * Both ids are minted on the device and the message is created by this
+     * request, which is what lets it be replayed — the phone keeps the audio
+     * until the server confirms it and re-POSTs on every reconnect. Unlike
+     * `addMessage` there is no follow-up call to `/api/chat/stream`: the server
+     * transcribes the clip and starts the reply itself, so stopping the
+     * recording is the last thing that needs anybody present.
+     */
+    createRecording: (
+      audio: Blob,
+      opts: {
+        conversationId: string;
+        messageId: string;
+        attachmentId: string;
+        text?: string;
+        attachmentIds?: string[];
+      }
+    ) => {
+      const form = new FormData();
+      form.append('audio', audio, recordingFilename(audio.type));
+      form.append('messageId', opts.messageId);
+      form.append('attachmentId', opts.attachmentId);
+      if (opts.text) form.append('text', opts.text);
+      if (opts.attachmentIds?.length)
+        form.append('attachmentIds', JSON.stringify(opts.attachmentIds));
+      return upload<{ id: string; attachment: ChatAttachment }>(
+        `/api/chat/conversations/${opts.conversationId}/recordings`,
         form
       );
     },

@@ -80,6 +80,7 @@ export const MUTATION_KEYS = {
   calorieLog: ['lifestyle', 'calories', 'create'] as const,
   foodCreate: ['food', 'create'] as const,
   foodRecording: ['food', 'recording'] as const,
+  chatRecording: ['chat', 'recording'] as const,
   selfieUpload: ['lifestyle', 'selfie', 'upload'] as const,
   paperCreate: ['paper', 'create'] as const,
   paperPageAdd: ['paper', 'page', 'add'] as const,
@@ -166,6 +167,26 @@ export interface FoodRecordingVars {
   foodId: string;
   /** Record order, so the transcripts read in the order they were spoken. */
   position?: number;
+}
+
+/**
+ * A spoken chat message.
+ *
+ * Flat ids rather than the stored recording's `chat` object, for the reason
+ * every other set of vars here is flat: these are structured-cloned into the
+ * persisted cache and a paused upload has to be replayable from them alone
+ * after a reload.
+ *
+ * `text` and `attachmentIds` are what the composer held when the recording
+ * stopped — typed words and staged photos ride along so that half a message
+ * typed and the rest spoken stays one message.
+ */
+export interface ChatRecordingVars {
+  id: string;
+  conversationId: string;
+  messageId: string;
+  text?: string;
+  attachmentIds?: string[];
 }
 
 export interface JournalRecordingVars {
@@ -908,10 +929,58 @@ const foodRecordingCfg = (
   onSettled: () => qc.invalidateQueries({ queryKey: ['food'] }),
 });
 
+/**
+ * The Chat tab's spoken message, which does not go through the journal either.
+ *
+ * Same durability contract as the two recording configs above — never let go of
+ * the audio until the server confirms it — and the same retry shape. What is
+ * different is what a success means: the server now owns the rest of the turn,
+ * so this upload is the last thing the browser has to be around for.
+ */
+const chatRecordingCfg = (
+  qc: QueryClient
+): Cfg<unknown, ChatRecordingVars> => ({
+  ...ONLINE,
+  retry: (failureCount, error) => !isTerminal(error) && failureCount < 5,
+  retryDelay: attempt => Math.min(30_000, 1000 * 2 ** attempt),
+  mutationFn: async vars => {
+    const rec = await getRecording(vars.id);
+    if (!rec) throw new Error('That recording is no longer on this device.');
+    const blob = await assembleBlob(vars.id);
+    if (!blob || blob.size === 0) {
+      // Nothing was ever captured (permission revoked before the first chunk).
+      await deleteRecording(vars.id);
+      throw new Error('That recording was empty.');
+    }
+    try {
+      const res = await api.chat.createRecording(blob, {
+        conversationId: vars.conversationId,
+        messageId: vars.messageId,
+        attachmentId: vars.id,
+        text: vars.text,
+        attachmentIds: vars.attachmentIds,
+      });
+      // Confirmed stored. The only place this audio may be let go of.
+      await deleteRecording(vars.id);
+      return res;
+    } catch (e) {
+      await markAttempt(
+        vars.id,
+        e instanceof Error ? e.message : 'Upload failed',
+        isTerminal(e)
+      );
+      throw e;
+    }
+  },
+  onSettled: () =>
+    qc.invalidateQueries({ queryKey: ['chat', 'today', 'chat'] }),
+});
+
 export function registerOfflineMutationDefaults(qc: QueryClient): void {
   const pairs: Array<[readonly unknown[], Cfg<unknown, never>]> = [
     [MUTATION_KEYS.foodCreate, foodCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.foodRecording, foodRecordingCfg(qc) as Cfg<unknown, never>],
+    [MUTATION_KEYS.chatRecording, chatRecordingCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.paperCreate, paperCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.paperPageAdd, paperPageAddCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.paperPageSave, paperPageSaveCfg(qc) as Cfg<unknown, never>],
