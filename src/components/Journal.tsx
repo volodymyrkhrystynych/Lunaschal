@@ -441,7 +441,8 @@ export function Journal({
     id: string,
     content: string,
     staged: StagedFile[],
-    clipCount: number
+    clipCount: number,
+    links: string[] = []
   ) => {
     // Fired first, so it is first into JOURNAL_LANE and the entry exists before
     // anything is hung off it — online *and* on a queue replayed after a
@@ -453,11 +454,36 @@ export function Journal({
       // captions instead of being generated from the text alone milliseconds
       // from now. Clips count too: a title generated before the recordings
       // have been transcribed is a title for an entry that was still empty.
+      // A link is not counted: the row is created the moment the request
+      // lands, so there is nothing for the title to wait on — and waiting on
+      // the *download* would hold the title for half an hour and then time out.
       pendingAttachments: staged.length + clipCount || undefined,
     });
     setStagedUploadError(null);
     setShowNewEntry(false);
     if (staged.length) void queueStagedFiles(id, staged);
+    if (links.length) void queueStagedLinks(id, links);
+  };
+
+  /**
+   * Attach the composer's YouTube links once the entry exists.
+   *
+   * Sequential and behind the create, like the staged files above. The id is
+   * minted here so a retry of the same link is a no-op server-side rather than
+   * a second copy of the same video.
+   */
+  const queueStagedLinks = async (entryId: string, links: string[]) => {
+    for (const url of links) {
+      try {
+        await api.journal.attachments.link(entryId, url, ulid());
+      } catch (e) {
+        setStagedUploadError(
+          `The entry was saved, but the video link could not be attached: ` +
+            `${(e as Error).message || 'request failed'}`
+        );
+      }
+    }
+    queryClient.invalidateQueries({ queryKey: ['journal'] });
   };
 
   /**
@@ -1147,7 +1173,8 @@ function NewEntryComposer({
     id: string,
     content: string,
     files: StagedFile[],
-    clipCount: number
+    clipCount: number,
+    links: string[]
   ) => void;
   onCancel: () => void;
 }) {
@@ -1155,6 +1182,10 @@ function NewEntryComposer({
   // Files picked, pasted, dropped or recorded here, held until the entry they
   // belong to exists server-side.
   const [files, setFiles] = useState<StagedFile[]>([]);
+  // YouTube links pasted into the composer, attached once the entry exists.
+  // Staged rather than posted immediately for the same reason files are: the
+  // entry they hang off is not there yet.
+  const [links, setLinks] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [recorderNotice, setRecorderNotice] = useState('');
 
@@ -1184,14 +1215,21 @@ function NewEntryComposer({
   const submit = () => {
     // A photo with no words is a real entry — and the one that most needs its
     // title generated from a caption. So is a recording with no words typed.
-    if (!content.trim() && files.length === 0 && clips.clips.length === 0)
+    // So is a video someone watched and has not written about yet.
+    if (
+      !content.trim() &&
+      files.length === 0 &&
+      links.length === 0 &&
+      clips.clips.length === 0
+    )
       return;
-    onSubmit(clips.claimId(), content, files, clips.clips.length);
+    onSubmit(clips.claimId(), content, files, clips.clips.length, links);
     // Not awaited: the clips are on the device, and the queue lands them behind
     // the create in JOURNAL_LANE whenever the backend is next reachable.
     void clips.commit();
     setContent('');
     setFiles([]);
+    setLinks([]);
     clips.reset();
   };
 
@@ -1231,6 +1269,10 @@ function NewEntryComposer({
         onFiles={picked => {
           setError(null);
           setFiles(current => [...current, ...picked.map(file => ({ file }))]);
+        }}
+        onLink={url => {
+          setError(null);
+          setLinks(current => [...current, url]);
         }}
         extra={
           <button
@@ -1285,6 +1327,31 @@ function NewEntryComposer({
           </span>
         </div>
       )}
+      {links.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {links.map((url, i) => (
+            <span
+              key={`${url}:${i}`}
+              className="flex items-center gap-1 px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] bg-white/5"
+              data-testid="journal-new-entry-staged-link"
+            >
+              <span className="truncate max-w-[16rem]">▶️ {url}</span>
+              <button
+                onClick={() =>
+                  setLinks(current => current.filter((_, index) => index !== i))
+                }
+                aria-label={`Remove ${url}`}
+                className="text-red-400 hover:text-red-300"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          <span className="text-xs text-[var(--color-text-muted)] self-center">
+            downloaded after save
+          </span>
+        </div>
+      )}
       <div className="flex justify-end gap-2 mt-2">
         <button
           onClick={() => {
@@ -1294,6 +1361,7 @@ function NewEntryComposer({
             for (const clip of clips.clips) clips.remove(clip.id);
             clips.reset();
             setFiles([]);
+            setLinks([]);
             setContent('');
             onCancel();
           }}
@@ -1304,7 +1372,10 @@ function NewEntryComposer({
         <button
           onClick={submit}
           disabled={
-            !content.trim() && files.length === 0 && clips.clips.length === 0
+            !content.trim() &&
+            files.length === 0 &&
+            links.length === 0 &&
+            clips.clips.length === 0
           }
           className="px-3 py-1 bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
         >

@@ -391,3 +391,42 @@ describe('defaultNameFor', () => {
     expect(defaultNameFor('IMG_0042')).toBe('IMG_0042');
   });
 });
+
+describe('a watched YouTube video', () => {
+  const video = (over: Partial<JournalAttachment> = {}) =>
+    attachment({ kind: 'youtube', importStatus: 'ready', ...over });
+
+  it('is transcribed, not described — it has speech in it', () => {
+    expect(transcribeLabel(video())).toBe('Transcribe');
+    expect(describeAudioLabel(video())).toBe('Describe audio');
+    expect(canDescribeAudio(video())).toBe(true);
+  });
+
+  it('cannot be transcribed until the download has landed', () => {
+    // The server 409s this, so offering the button is offering an error.
+    expect(canTranscribe(video({ importStatus: 'importing' }))).toBe(false);
+    expect(canTranscribe(video({ importStatus: 'error' }))).toBe(false);
+    expect(canTranscribe(video())).toBe(true);
+  });
+
+  it('is counted apart from a video the user filmed', () => {
+    // Both are "video"; "1 video, 1 video" is not a summary.
+    expect(
+      summarizeAttachments([
+        video({ id: 'v1' }),
+        attachment({ id: 'a1', kind: 'video' }),
+      ])
+    ).toBe('1 video, 1 YouTube video');
+    expect(summarizeAttachments([video(), video({ id: 'v2' })])).toBe(
+      '2 YouTube videos'
+    );
+  });
+
+  it('does not make an entry voice-only', () => {
+    // A video with no words typed is still an entry about the video, not a
+    // stray recording to be merged into a neighbouring one.
+    expect(isVoiceOnlyEntry({ content: '', attachments: [video()] })).toBe(
+      false
+    );
+  });
+});

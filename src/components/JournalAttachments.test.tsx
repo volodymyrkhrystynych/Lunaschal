@@ -25,6 +25,8 @@ vi.mock('../hooks/api', () => ({
         rotate: vi.fn(),
         transcribe: vi.fn(),
         describeAudio: vi.fn(),
+        link: vi.fn(),
+        importStatus: vi.fn().mockResolvedValue({ done: true }),
       },
     },
   },
@@ -746,5 +748,113 @@ describe('JournalAttachments', () => {
     });
 
     expect(await screen.findByText('That photo came back empty')).toBeTruthy();
+  });
+});
+
+/** A YouTube video attached to an entry, at whatever stage. */
+function video(over: Partial<JournalAttachment> = {}): JournalAttachment {
+  return attachment({
+    id: 'v1',
+    kind: 'youtube',
+    name: 'But what is a neural network?',
+    mime: 'video/mp4',
+    url: '/api/journal/attachments/v1/file',
+    thumbnailUrl: '/api/journal/attachments/v1/thumbnail',
+    sourceUrl: 'https://www.youtube.com/watch?v=aircAruvnKk',
+    durationSeconds: 1140,
+    importStatus: 'ready',
+    ...over,
+  });
+}
+
+describe('JournalAttachments — a watched YouTube video', () => {
+  it('shows the poster and its runtime rather than autoloading the video', () => {
+    // An entry can carry several of these; three preloading players is not a
+    // page the Pocket 2 can open.
+    const { container } = renderIt([video()], false);
+    const img = container.querySelector('img');
+    expect(img?.getAttribute('src')).toBe(
+      '/api/journal/attachments/v1/thumbnail'
+    );
+    expect(container.querySelector('video')).toBeNull();
+    expect(screen.getByText('19:00')).toBeTruthy();
+  });
+
+  it('swaps in the local file — not YouTube — when the poster is clicked', () => {
+    // Playing the archived copy is the whole point of downloading it.
+    const { container } = renderIt([video()], false);
+    fireEvent.click(screen.getByTitle('Play the archived copy'));
+    const el = container.querySelector('video');
+    expect(el?.getAttribute('src')).toBe('/api/journal/attachments/v1/file');
+  });
+
+  it('still links out to the original', () => {
+    renderIt([video()], false);
+    const link = screen.getByText('Watch on YouTube') as HTMLAnchorElement;
+    expect(link.getAttribute('href')).toBe(
+      'https://www.youtube.com/watch?v=aircAruvnKk'
+    );
+  });
+
+  it('says it is downloading, and offers no player yet', () => {
+    const { container } = renderIt(
+      [
+        video({
+          importStatus: 'importing',
+          url: undefined,
+          thumbnailUrl: undefined,
+        }),
+      ],
+      false
+    );
+    expect(screen.getByText(/Looking the video up|Downloading/)).toBeTruthy();
+    expect(container.querySelector('video')).toBeNull();
+  });
+
+  it('surfaces a failed download with its reason', () => {
+    renderIt(
+      [
+        video({
+          importStatus: 'error',
+          importError: 'The backup drive is not connected.',
+          url: undefined,
+        }),
+      ],
+      false
+    );
+    expect(screen.getByText(/The backup drive is not connected/)).toBeTruthy();
+  });
+
+  it('shows the summary without making the reader open it', () => {
+    // Every other AI block here describes something visible on the page. This
+    // one is the only account of twenty minutes nobody has time to rewatch.
+    renderIt([video({ description: 'It explains gradient descent.' })], false);
+    expect(screen.getByText('It explains gradient descent.')).toBeTruthy();
+    expect(screen.getByText('What the video says')).toBeTruthy();
+  });
+
+  it('attaches a link typed into the editor', async () => {
+    vi.mocked(api.journal.attachments.link).mockResolvedValue(video());
+    renderIt([], true);
+
+    fireEvent.click(screen.getByTestId('journal-link-button'));
+    fireEvent.change(screen.getByTestId('journal-link-input'), {
+      target: { value: 'https://youtu.be/aircAruvnKk' },
+    });
+    fireEvent.click(screen.getByTestId('journal-link-add'));
+
+    await waitFor(() =>
+      expect(api.journal.attachments.link).toHaveBeenCalledWith(
+        'e1',
+        'https://youtu.be/aircAruvnKk'
+      )
+    );
+  });
+
+  it('counts a watched video apart from a filmed one', () => {
+    // Both are "video"; an entry holding one of each must not read
+    // "1 video, 1 video".
+    renderIt([video(), attachment({ id: 'a9', kind: 'video' })], false);
+    expect(screen.getByText(/1 video, 1 YouTube video/)).toBeTruthy();
   });
 });

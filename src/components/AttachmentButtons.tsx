@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { ACCEPT_IMAGE } from '../lib/journalAttachments';
 import { isTouchDevice } from '../lib/deviceInput';
 
@@ -23,17 +23,25 @@ import { isTouchDevice } from '../lib/deviceInput';
  *
  * All three take `multiple`, which none of the old ones did.
  *
+ * A fourth button, **Video**, appears only where `onLink` is supplied: it takes
+ * a YouTube URL rather than a file, and the video is downloaded server-side.
+ * Deliberately a button and a field rather than sniffing the composer's text
+ * for a URL — a link pasted into a sentence is usually part of the sentence.
+ *
  * One component, used by both the new-entry composer and the editor on an
  * existing entry, so the two cannot drift — which is how the pair above ended up
  * identical in the first place.
  */
 export function AttachmentButtons({
   onFiles,
+  onLink,
   disabled = false,
   idPrefix,
   extra,
 }: {
   onFiles: (files: File[]) => void;
+  /** Supplied where a YouTube link can be attached; omit to hide the button. */
+  onLink?: (url: string) => void;
   disabled?: boolean;
   /** Distinguishes the composer's inputs from an entry's in the DOM. */
   idPrefix: string;
@@ -43,7 +51,20 @@ export function AttachmentButtons({
   const cameraRef = useRef<HTMLInputElement>(null);
   const photoRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [link, setLink] = useState('');
   const touch = isTouchDevice();
+
+  const commitLink = () => {
+    const url = link.trim();
+    if (!url) {
+      setLinkOpen(false);
+      return;
+    }
+    onLink?.(url);
+    setLink('');
+    setLinkOpen(false);
+  };
 
   const pick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -113,7 +134,49 @@ export function AttachmentButtons({
       >
         📎 File
       </button>
+      {onLink && (
+        <button
+          type="button"
+          onClick={() => setLinkOpen(o => !o)}
+          disabled={disabled}
+          className={cls}
+          data-testid={`${idPrefix}-link-button`}
+        >
+          🔗 Video
+        </button>
+      )}
       {extra}
+      {onLink && linkOpen && (
+        <div className="flex items-center gap-2 w-full">
+          <input
+            autoFocus
+            value={link}
+            onChange={e => setLink(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                commitLink();
+              }
+              if (e.key === 'Escape') {
+                setLink('');
+                setLinkOpen(false);
+              }
+            }}
+            placeholder="Paste a YouTube link"
+            className="flex-1 min-w-0 px-2 py-1 text-xs rounded border border-white/10 bg-transparent text-[var(--color-text)]"
+            data-testid={`${idPrefix}-link-input`}
+          />
+          <button
+            type="button"
+            onClick={commitLink}
+            disabled={disabled || !link.trim()}
+            className={cls}
+            data-testid={`${idPrefix}-link-add`}
+          >
+            Add
+          </button>
+        </div>
+      )}
     </div>
   );
 }

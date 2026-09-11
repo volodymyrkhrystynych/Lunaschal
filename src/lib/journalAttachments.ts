@@ -146,9 +146,10 @@ export function formatBytes(bytes: number | null | undefined): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
 }
 
-/** Audio and video both yield speech; only an image is described. */
+/** Audio, video and a watched YouTube video all yield speech; only an image
+ * is described. */
 function isSpoken(kind: JournalAttachment['kind']): boolean {
-  return kind === 'audio' || kind === 'video';
+  return kind === 'audio' || kind === 'video' || kind === 'youtube';
 }
 
 /**
@@ -164,8 +165,13 @@ export function transcribeLabel(a: JournalAttachment): string {
   return a.transcript ? `Re-${verb.toLowerCase()}` : verb;
 }
 
-/** A queued job is not re-queueable; everything else is. */
+/**
+ * A queued job is not re-queueable; everything else is. A video still
+ * downloading has nothing to read yet — the server 409s that, and offering the
+ * button anyway is offering a guaranteed error.
+ */
 export function canTranscribe(a: JournalAttachment): boolean {
+  if (a.kind === 'youtube' && a.importStatus !== 'ready') return false;
   return a.transcriptStatus !== 'running';
 }
 
@@ -198,6 +204,9 @@ const KIND_NOUNS: Record<JournalAttachment['kind'], [string, string]> = {
   video: ['video', 'videos'],
   image: ['photo', 'photos'],
   file: ['file', 'files'],
+  // Distinct from `video`, which is a clip the user filmed. An entry can hold
+  // both, and "1 video, 1 video" is not a summary.
+  youtube: ['YouTube video', 'YouTube videos'],
 };
 
 /**
@@ -211,7 +220,7 @@ export function summarizeAttachments(
   const list = attachments ?? [];
   if (list.length === 0) return 'No attachments';
   const parts: string[] = [];
-  for (const kind of ['audio', 'video', 'image', 'file'] as const) {
+  for (const kind of ['audio', 'video', 'youtube', 'image', 'file'] as const) {
     const n = list.filter(a => a.kind === kind).length;
     if (n) parts.push(`${n} ${KIND_NOUNS[kind][n === 1 ? 0 : 1]}`);
   }

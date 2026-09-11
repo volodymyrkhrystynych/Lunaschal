@@ -10,7 +10,6 @@ because there is nothing to wait for.
 """
 import json
 import logging
-import shutil
 import subprocess
 import threading
 import time
@@ -22,6 +21,13 @@ from backend.db.connection import get_db
 from backend.htmltext import strip_html_with_title
 from backend.research.web import UnsafeUrl, assert_public_url, fetch_public_page
 from backend.study import storage, youtube
+from backend.ytdlp import (
+    YTDLP_DOWNLOAD_TIMEOUT,
+    YTDLP_FORMAT,
+    YTDLP_METADATA_TIMEOUT,
+    run_ytdlp,
+    ytdlp_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,37 +36,6 @@ logger = logging.getLogger(__name__)
 MAX_PAGE_BYTES = 5_000_000
 _HTML_TYPES = ('text/html', 'application/xhtml+xml')
 
-# yt-dlp is a system binary (as pdftotext is for backend/jobs/resume_review.py)
-# rather than a Python dependency, so a box without it degrades to a clear
-# error instead of failing to import the module.
-YTDLP_METADATA_TIMEOUT = 60
-YTDLP_DOWNLOAD_TIMEOUT = 30 * 60
-# 720p ceiling. The Study pane is half the window, and on the 12.9" iPad Pro
-# this tab is built for that is ~683 CSS pt — 1366 physical px at 2x — so a
-# 1280x720 stream is already pixel-matched and 1080p is oversampled for it.
-# Measured on a 25-minute lecture: 720p H.264 is 279 MB against 572 MB for
-# 1080p. Bump this to 1080 if fullscreen playback matters more than disk.
-YTDLP_MAX_HEIGHT = 720
-
-# H.264 + AAC, explicitly, in preference to whatever "best" happens to be.
-#
-# Left to itself yt-dlp picks AV1 + Opus for anything modern on YouTube, and
-# **Safari cannot decode AV1 without a hardware decoder** — Apple's first is the
-# A17 Pro / M3, so every 12.9" iPad Pro (A12Z, M1, M2) fails to play it, with no
-# software fallback and no error worth the name: the player just sits there.
-# That is the one device this large-screen-only tab exists for, so codec
-# compatibility outranks compression efficiency here.
-#
-# The fallbacks descend deliberately: merged avc1+mp4a, then a progressive avc1
-# stream, then anything at all within the height cap, then anything. YouTube
-# publishes avc1 at every tier up to 1080p, so the first branch nearly always
-# wins; the tail exists so an unusual upload still imports rather than failing.
-YTDLP_FORMAT = (
-    f'bv*[height<={YTDLP_MAX_HEIGHT}][vcodec^=avc1]+ba[acodec^=mp4a]/'
-    f'b[height<={YTDLP_MAX_HEIGHT}][vcodec^=avc1]/'
-    f'bv*[height<={YTDLP_MAX_HEIGHT}]+ba/'
-    f'b[height<={YTDLP_MAX_HEIGHT}]/b'
-)
 
 _progress: dict[str, dict] = {}
 _lock = threading.Lock()
@@ -206,21 +181,6 @@ def sanitize_page_html(html: str) -> str:
 
 # --- youtube ---
 
-def _run_ytdlp(args: list[str], timeout: int) -> subprocess.CompletedProcess:
-    """Wrapped so tests can stub one function instead of subprocess itself."""
-    exe = shutil.which('yt-dlp')
-    if exe is None:
-        raise RuntimeError('yt-dlp is not installed on this machine.')
-    return subprocess.run(
-        [exe, *args], capture_output=True, text=True, timeout=timeout, check=False
-    )
-
-
-def _ytdlp_error(proc: subprocess.CompletedProcess) -> str:
-    tail = (proc.stderr or proc.stdout or '').strip().splitlines()
-    return tail[-1][:500] if tail else f'yt-dlp exited {proc.returncode}'
-
-
 def import_youtube(source_id: str, url: str) -> None:
     """Download one YouTube video into the source's dir via yt-dlp."""
     try:
@@ -245,11 +205,11 @@ def import_youtube(source_id: str, url: str) -> None:
         directory.mkdir(parents=True, exist_ok=True)
 
         _update_progress(source_id, phase='metadata')
-        meta_proc = _run_ytdlp(
+        meta_proc = run_ytdlp(
             ['-J', '--no-playlist', '--no-warnings', target], YTDLP_METADATA_TIMEOUT
         )
         if meta_proc.returncode != 0:
-            _fail(source_id, _ytdlp_error(meta_proc))
+            _fail(source_id, ytdlp_error(meta_proc))
             return
         try:
             meta = json.loads(meta_proc.stdout)
@@ -273,7 +233,7 @@ def import_youtube(source_id: str, url: str) -> None:
             return
 
         _update_progress(source_id, phase='downloading')
-        dl_proc = _run_ytdlp(
+        dl_proc = run_ytdlp(
             [
                 '--no-playlist', '--no-warnings', '--no-part',
                 '-f', YTDLP_FORMAT,
@@ -284,7 +244,7 @@ def import_youtube(source_id: str, url: str) -> None:
             YTDLP_DOWNLOAD_TIMEOUT,
         )
         if dl_proc.returncode != 0:
-            _fail(source_id, _ytdlp_error(dl_proc))
+            _fail(source_id, ytdlp_error(dl_proc))
             return
 
         # yt-dlp picks the container, so find what it actually wrote rather

@@ -41,6 +41,15 @@ def _journal_transcribe(target_id, payload):
     )
 
 
+@jobs.handler('journal.summarize_youtube')
+def _journal_summarize_youtube(target_id, payload):
+    from backend.routes.journal import _summarize_youtube_bg
+
+    _summarize_youtube_bg(
+        target_id, payload['entry_id'], payload.get('title', ''), now=True
+    )
+
+
 @jobs.handler('journal.describe_audio')
 def _journal_describe_audio(target_id, payload):
     from backend.routes.journal import _describe_attachment_bg

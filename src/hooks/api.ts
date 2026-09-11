@@ -76,10 +76,14 @@ export interface JournalAttachment {
    * download and nothing else — no player, no thumbnail, and no model ever
    * reads it.
    */
-  kind: 'audio' | 'video' | 'image' | 'file';
+  kind: 'audio' | 'video' | 'image' | 'file' | 'youtube';
   /** The user's label — what this recording, video, photo or file is about. */
   name: string;
-  url: string;
+  /**
+   * Absent until there is a file to serve. A `youtube` attachment exists from
+   * the moment the link is pasted and has no bytes until the download lands.
+   */
+  url?: string;
   mime: string | null;
   size: number | null;
   position: number;
@@ -94,7 +98,29 @@ export interface JournalAttachment {
   /** EXIF-derived capture location, images only. Null when the photo carries no GPS EXIF. */
   latitude: number | null;
   longitude: number | null;
+  /** The canonical watch URL, `youtube` only. */
+  sourceUrl?: string | null;
+  /** Runtime in seconds, `youtube` only. Known before the download finishes. */
+  durationSeconds?: number | null;
+  /**
+   * The poster. Served from the SSD even though the video is on the archive
+   * drive, so the card still draws when the drive is unplugged.
+   */
+  thumbnailUrl?: string;
+  /**
+   * The download's own lifecycle, `youtube` only — separate from
+   * `transcriptStatus`, which means "is a model reading this".
+   */
+  importStatus?: 'importing' | 'ready' | 'error';
+  importError?: string | null;
   createdAt: string;
+}
+
+/** What the download is doing right now (GET .../import-status). */
+export interface JournalImportProgress {
+  phase?: 'queued' | 'metadata' | 'downloading' | 'done' | 'error';
+  error?: string | null;
+  done?: boolean;
 }
 
 export interface FicRef {
@@ -2936,6 +2962,23 @@ export const api = {
           form
         );
       },
+      /**
+       * Attach a YouTube video by URL. Returns at once with the row already in
+       * `importStatus: 'importing'` — the download takes minutes and the card
+       * shows itself working rather than the composer blocking on it.
+       *
+       * `attachmentId` is the client's own ULID, replayed until the server
+       * confirms, which is what makes a retry a no-op server-side.
+       */
+      link: (entryId: string, url: string, attachmentId?: string) =>
+        post<JournalAttachment>(`/api/journal/${entryId}/attachments/link`, {
+          url,
+          ...(attachmentId ? { attachmentId } : {}),
+        }),
+      importStatus: (attachmentId: string) =>
+        get<JournalImportProgress>(
+          `/api/journal/attachments/${attachmentId}/import-status`
+        ),
       rename: (attachmentId: string, name: string) =>
         patch<JournalAttachment>(`/api/journal/attachments/${attachmentId}`, {
           name,

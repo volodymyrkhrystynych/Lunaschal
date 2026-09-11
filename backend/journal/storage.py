@@ -160,3 +160,17 @@ def attachment_path(attachment_id: str, ext: str) -> Path | None:
     if d is None or not is_safe_name(attachment_id) or not _SAFE_EXT.match(ext):
         return None
     return d / f'attachment.{ext}'
+
+
+def thumb_path(attachment_id: str) -> Path | None:
+    """`<root>/<attachment_id>/thumb.jpg` — the poster for a video attachment.
+
+    On the SSD even when the video itself is on the archive drive
+    (backend/journal/archive.py): it is tiny, it is backed up, and a journal
+    card that still draws with the drive unplugged is worth far more than the
+    50 KB it costs.
+    """
+    d = attachment_dir(attachment_id)
+    if d is None or not is_safe_name(attachment_id):
+        return None
+    return d / 'thumb.jpg'
