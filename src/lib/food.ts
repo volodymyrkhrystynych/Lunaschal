@@ -64,9 +64,19 @@ export function parseTags(tags: string | null | undefined): string[] {
  * the list.
  */
 export function hasRunningMealTranscript(
-  entries: Array<{ media: Array<{ transcriptStatus?: string }> }> | undefined
+  entries:
+    | Array<{
+        polishing?: boolean;
+        media: Array<{ transcriptStatus?: string; descriptionStatus?: string }>;
+      }>
+    | undefined
 ): boolean {
-  return (entries ?? []).some(e =>
-    e.media.some(m => m.transcriptStatus === 'running')
+  return (entries ?? []).some(
+    e =>
+      e.polishing ||
+      e.media.some(
+        m =>
+          m.transcriptStatus === 'running' || m.descriptionStatus === 'running'
+      )
   );
 }

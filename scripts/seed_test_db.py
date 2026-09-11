@@ -375,6 +375,15 @@ def seed_food(db, recipe_id):
         'VALUES (?, ?, ?, ?, ?, 0, ?)',
         (media_id, entry_ids[-1], 'image', str(img_path), 'image/jpeg', ts(3)),
     )
+    db.execute(
+        "UPDATE food_media SET description=?, description_status='done' WHERE id=?",
+        ('A plate of noodles with bean sprouts and lime, labelled Pad Thai.', media_id),
+    )
+    db.execute(
+        'UPDATE food_entries SET raw_content=?, notes=?, generated_notes=? WHERE id=?',
+        ('Ordered the pad tie again.', 'Ordered the pad thai again.',
+         'Ordered the pad thai again.', entry_ids[-1]),
+    )
 
     # A meal that was talked over as well as photographed. 'done', never
     # 'running': an in-flight state is rewritten by init_db()'s orphan reset on

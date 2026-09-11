@@ -2152,10 +2152,14 @@ export interface FoodMedia {
   transcript?: string | null;
   transcriptStatus?: 'idle' | 'running' | 'done' | 'error';
   transcriptError?: string | null;
+  description?: string | null;
+  descriptionStatus?: 'idle' | 'running' | 'done' | 'error';
+  descriptionError?: string | null;
 }
 
 export interface FoodEntry {
   id: string;
+  polishing?: boolean;
   rawContent: string | null;
   dish: string | null;
   place: string | null;
@@ -3197,6 +3201,10 @@ export const api = {
     },
     deleteMedia: (mediaId: string) =>
       del<{ success: boolean }>(`/api/food/media/${mediaId}`),
+    describeMedia: (mediaId: string) =>
+      post<{ success: boolean }>(`/api/food/media/${mediaId}/describe`, {}),
+    polish: (id: string) =>
+      post<{ success: boolean }>(`/api/food/${id}/polish`, {}),
   },
 
   fanfic: {
