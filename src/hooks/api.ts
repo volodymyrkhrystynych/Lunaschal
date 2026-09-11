@@ -4232,6 +4232,10 @@ export const api = {
       get<JournalNewspaper[]>('/api/newspapers/issues/journal'),
     markup: (date: string) =>
       get<NewspaperMarkup>(`/api/newspapers/issues/${date}/markup`),
+    // Opening an issue is what dates its Journal card, so the reader says so
+    // explicitly instead of letting the markup GET double as the signal.
+    markOpened: (date: string) =>
+      post<{ ok: boolean }>(`/api/newspapers/issues/${date}/opened`),
     // Status-carrying on purpose: a 409 here means another reader has moved the
     // markup on, and the reader has to stop re-sending its stale revision and
     // offer the server copy. Anything less than the status cannot tell that

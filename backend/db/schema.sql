@@ -734,6 +734,14 @@ CREATE TABLE IF NOT EXISTS newspaper_issues (
     page_count INTEGER NOT NULL,
     markup TEXT NOT NULL DEFAULT '[]',
     revision INTEGER NOT NULL DEFAULT 0,
+    -- When the reader was last in this issue: bumped both by opening it and by
+    -- saving markup, because the Journal card is timestamped with the last time
+    -- the issue was read rather than with created_at, which is whenever the
+    -- overnight downloader happened to run (backend/journal_moment.py). One
+    -- column rather than an opened/marked-up pair: both only ever move forward
+    -- to now, so the newer of the two *is* this column, and the feed wants
+    -- nothing finer. NULL means nobody has opened it since the column existed.
+    last_read_at INTEGER,
     created_at INTEGER NOT NULL
 );
 

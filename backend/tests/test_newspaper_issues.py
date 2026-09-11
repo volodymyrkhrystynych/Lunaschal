@@ -1,4 +1,6 @@
 import json
+import time
+from datetime import datetime
 from io import BytesIO
 
 import pytest
@@ -186,6 +188,110 @@ def test_journal_feed_counts_marked_pages_for_every_archived_issue(client):
 
 def test_journal_feed_is_empty_before_anything_is_archived(client):
     assert client.get('/api/newspapers/issues/journal').json == []
+
+
+def _archived_at(client, date='2026-09-01'):
+    feed = client.get('/api/newspapers/issues/journal').json
+    return int(datetime.fromisoformat(
+        next(item['archivedAt'] for item in feed if item['date'] == date)).timestamp())
+
+
+def _backdate(date, *, created=None, read=None):
+    """Reach past the routes for the two timestamps nothing can set directly.
+
+    `created_at` is stamped by the archiver and `last_read_at` only ever moves
+    to now, so a test that needs an issue which arrived days ago, or one read an
+    hour ago, has to write the columns.
+    """
+    from backend.db.connection import get_db
+    db = get_db()
+    if created is not None:
+        db.execute('UPDATE newspaper_issues SET created_at=? WHERE date=?', (created, date))
+    if read is not None:
+        db.execute('UPDATE newspaper_issues SET last_read_at=? WHERE date=?', (read, date))
+    db.commit()
+
+
+def _day_end(ts):
+    from backend.day_boundary import day_bounds, day_key_for
+    return day_bounds(day_key_for(ts))[1] - 1
+
+
+def test_an_unopened_issue_is_dated_to_the_end_of_the_day_it_arrived(client):
+    """Not to created_at, which is whenever the overnight downloader ran — an
+    unread paper is the day's paper still waiting, not a 6am event."""
+    from backend.day_boundary import day_key_for
+
+    upload(client, '2026-09-01')
+    downloaded = int(time.time()) - 3 * 86400
+    _backdate('2026-09-01', created=downloaded)
+    at = _archived_at(client)
+    assert at == _day_end(downloaded)
+    assert day_key_for(at) == day_key_for(downloaded)
+
+
+def test_opening_an_issue_moves_its_card_to_when_it_was_opened(client):
+    upload(client, '2026-09-01')
+    assert _archived_at(client) == _day_end(int(time.time()))
+    assert client.post('/api/newspapers/issues/2026-09-01/opened').status_code == 200
+    assert _archived_at(client) == pytest.approx(int(time.time()), abs=5)
+
+
+def test_saving_markup_dates_the_card_too(client):
+    """Marking up is reading. The reader need not have been freshly opened for
+    the card to be about the evening it was written on."""
+    upload(client, '2026-09-01')
+    _backdate('2026-09-01', read=int(time.time()) - 3600)
+    before = _archived_at(client)
+    assert client.put('/api/newspapers/issues/2026-09-01/markup',
+                      json={'revision': 0,
+                            'strokes': [{'page': 1, 'tool': 'pen', 'points': [[0.1, 0.2]]}]}
+                      ).status_code == 200
+    assert _archived_at(client) > before
+    assert _archived_at(client) == pytest.approx(int(time.time()), abs=5)
+
+
+def test_a_refused_markup_save_does_not_move_the_card(client):
+    """The bump rides inside the compare-and-set, so a stale revision that
+    changes no strokes must not change the timestamp either."""
+    upload(client, '2026-09-01')
+    _backdate('2026-09-01', read=int(time.time()) - 7200)
+    before = _archived_at(client)
+    assert client.put('/api/newspapers/issues/2026-09-01/markup',
+                      json={'revision': 7, 'strokes': []}).status_code == 409
+    assert _archived_at(client) == before
+
+
+def test_reading_an_old_issue_today_keeps_its_card_in_the_day_it_arrived(client):
+    """Clamped like a paper and a study source: the card is view-only, and the
+    day it arrived would otherwise lose its paper to a day nobody filed it in."""
+    from backend.day_boundary import day_key_for
+
+    upload(client, '2026-09-01')
+    downloaded = int(time.time()) - 2 * 86400
+    _backdate('2026-09-01', created=downloaded)
+    assert client.post('/api/newspapers/issues/2026-09-01/opened').status_code == 200
+    at = _archived_at(client)
+    assert at == _day_end(downloaded)
+    assert day_key_for(at) == day_key_for(downloaded)
+
+
+def test_opening_an_issue_that_is_not_archived_is_a_404(client):
+    assert client.post('/api/newspapers/issues/2026-09-01/opened').status_code == 404
+    assert client.post('/api/newspapers/issues/not-a-date/opened').status_code == 404
+
+
+def test_the_feed_orders_by_reading_rather_than_by_archive_order(client):
+    """Two issues archived in the same day: the unread one holds the day's last
+    second, and reading it drops it to now, under the one read more recently."""
+    upload(client, '2026-09-01')
+    upload(client, '2026-09-02')
+    _backdate('2026-09-01', read=int(time.time()))
+    feed = client.get('/api/newspapers/issues/journal').json
+    assert [item['date'] for item in feed] == ['2026-09-02', '2026-09-01']
+    _backdate('2026-09-02', read=int(time.time()) - 3600)
+    feed = client.get('/api/newspapers/issues/journal').json
+    assert [item['date'] for item in feed] == ['2026-09-01', '2026-09-02']
 
 
 @pytest.mark.parametrize('markup', ['', 'not json', '{"page": 1}', '[{"tool": "pen"}]', '[3]'])

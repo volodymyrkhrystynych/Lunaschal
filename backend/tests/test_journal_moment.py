@@ -1,4 +1,4 @@
-"""Where a flagged paper or study source sits in the day it was filed under."""
+"""Where a filed paper, study source or newspaper sits in its day."""
 import time
 
 from backend.day_boundary import day_bounds, day_key_for
@@ -57,3 +57,44 @@ def test_a_paper_flagged_after_midnight_stays_on_the_day_it_was_lived():
     at = journal_moment(just_before_rollover, flagged)
     assert at == just_before_rollover
     assert day_key_for(at) == day_key_for(flagged)
+
+
+def test_an_unopened_newspaper_sorts_to_the_end_of_its_day():
+    """The card is the paper still waiting, not a 6am event.
+
+    A newspaper is stamped by the downloader, so unlike a flag its filing
+    moment is nobody's gesture and burying the day's paper underneath the whole
+    day is the one thing it must not do.
+    """
+    downloaded = int(time.time())
+    start, end = _day(downloaded)
+    at = journal_moment(None, downloaded, unworked_at_day_end=True)
+    assert at == end - 1
+    assert day_key_for(at) == day_key_for(downloaded)
+
+
+def test_a_newspaper_that_was_read_sits_at_the_reading_not_the_day_end():
+    """The day end is only the fallback — a real reading moment beats it."""
+    start, end = _day(int(time.time()))
+    downloaded = start + 2 * 3600      # 6am, when the downloader ran
+    read = start + 15 * 3600           # 7pm, when it was actually read
+    assert journal_moment(read, downloaded, unworked_at_day_end=True) == read
+    assert read < end - 1
+
+
+def test_reading_monday_s_paper_on_wednesday_keeps_it_in_monday():
+    """Clamped like everything else: the card is view-only, and Monday's record
+    would otherwise lose its paper to a day it cannot be read in context of."""
+    downloaded = int(time.time()) - 2 * 86400
+    _, end = _day(downloaded)
+    at = journal_moment(int(time.time()), downloaded, unworked_at_day_end=True)
+    assert at == end - 1
+    assert day_key_for(at) == day_key_for(downloaded)
+
+
+def test_the_day_end_fallback_is_off_unless_asked_for():
+    """Papers and study sources keep the flag moment: somebody chose it."""
+    flagged = int(time.time())
+    assert journal_moment(None, flagged) == flagged
+    assert journal_moment(None, flagged) != journal_moment(
+        None, flagged, unworked_at_day_end=True)
