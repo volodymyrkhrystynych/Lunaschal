@@ -27,8 +27,14 @@ LOCAL_SHA=$(git rev-parse HEAD)
 REMOTE_SHA=$(git rev-parse origin/main)
 BRANCH=$(git branch --show-current)
 
+# Only *tracked* edits count as dirt. Untracked files are not work-in-progress
+# this watcher could destroy -- a --ff-only pull that would clobber one aborts on
+# its own, and `set -e` turns that into a loud failure rather than a bad deploy.
+# Counting them stalled production for hours behind a handful of stray 0-byte
+# files in the repo root: every tick logged `skip-dirty` and exited 0, so the
+# timer stayed green while nothing shipped.
 DIRTY_FLAG=()
-if [ -n "$(git status --porcelain)" ]; then
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   DIRTY_FLAG=(--dirty)
 fi
 
