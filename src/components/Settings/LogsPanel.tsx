@@ -4,6 +4,7 @@ import { InferenceActivity } from './InferenceActivity';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { ServerLogResponse } from '../../hooks/api';
+import { copyText } from '../../lib/clipboard';
 import {
   LINE_OPTIONS,
   PRIORITY_OPTIONS,
@@ -74,13 +75,15 @@ export function LogsPanel() {
   };
 
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(entriesToText(entries));
+      await copyText(entriesToText(entries));
+      setCopyError(false);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      /* clipboard blocked — nothing useful to do */
+      setCopyError(true);
     }
   };
 
@@ -199,6 +202,12 @@ export function LogsPanel() {
           lines
         </span>
       </div>
+      {copyError && (
+        <p className="text-sm text-red-400" role="alert">
+          Could not copy to the clipboard. Select the log text and copy it
+          manually.
+        </p>
+      )}
 
       {logs.isError ? (
         <p className="text-sm text-red-400">Could not read the logs.</p>

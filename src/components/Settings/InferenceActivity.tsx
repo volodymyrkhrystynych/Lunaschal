@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
+import { copyText } from '../../lib/clipboard';
 import {
   ACTIVITY_TONE,
   JOB_TONE,
@@ -30,6 +31,7 @@ export function InferenceActivity() {
   const [open, setOpen] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState(false);
 
   const { data, isLoading, isFetching, refetch } = useQuery({
     queryKey: ['settings', 'inference', 'activity'],
@@ -40,11 +42,12 @@ export function InferenceActivity() {
 
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(activityToText(data));
+      await copyText(activityToText(data));
+      setCopyError(false);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      /* clipboard blocked — nothing useful to do */
+      setCopyError(true);
     }
   };
 
@@ -101,6 +104,12 @@ export function InferenceActivity() {
               {copied ? 'Copied' : 'Copy'}
             </button>
           </div>
+          {copyError && (
+            <p className="text-sm text-red-400" role="alert">
+              Could not copy to the clipboard. Select the activity text and copy
+              it manually.
+            </p>
+          )}
 
           {orphans.length > 0 && (
             <p className="text-sm text-red-400">
