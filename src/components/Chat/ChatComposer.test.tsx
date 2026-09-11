@@ -2,12 +2,15 @@
 /**
  * The chat composer: photos and dictation.
  *
- * The behaviour worth pinning down is that dictation sends on its own. It used
- * to, then stopped: a transcript could mishear a proper noun, and a message is
- * a permanent record, so the box-and-a-second-click gave you somewhere to fix
- * it. Every dictation now goes through two STT models reconciled by an LLM
- * (`merge_transcripts`), and the read-then-click step costs more than it buys —
- * speaking to the chat should be a conversation, not a form.
+ * The behaviour worth pinning down is that stopping the recording is the last
+ * thing the user has to be present for. The clip is stored on the device and
+ * handed to the offline upload queue; the server makes it a message, transcribes
+ * it, and answers it. Nothing here waits on `/api/transcribe`, and nothing here
+ * calls `addMessage` — a spoken message is created by the upload itself.
+ *
+ * That replaced a path where the transcript came back to *this browser* first,
+ * which meant a screen lock during transcription lost both the recording and the
+ * question. The tests below are mostly about what must no longer happen.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, fireEvent, screen, waitFor } from '@testing-library/react';
@@ -38,20 +41,50 @@ vi.mock('../../hooks/api', () => ({
   },
 }));
 
-// Only the transcript matters here — the microphone plumbing has its own test.
-let dictate: (text: string) => void = () => {};
+// The microphone plumbing has its own test; what matters here is the hand-off.
+// `speak()` stands in for a whole recording: `start` records the target the
+// composer asked for, and stopping delivers a stored recording carrying it —
+// which is exactly what `useRecorder` does in durable audio mode.
+let startArgs: { mode?: string; opts?: Record<string, unknown> } = {};
+let deliverRecording: () => Promise<void> = async () => {};
+const recorderStart = vi.fn(
+  async (mode: string, opts: Record<string, unknown>) => {
+    startArgs = { mode, opts };
+  }
+);
 vi.mock('../../hooks/useRecorder', () => ({
-  useRecorder: (onTranscript: (text: string) => void) => {
-    dictate = onTranscript;
+  useRecorder: (
+    _onTranscript: (text: string) => void,
+    _onAudio: unknown,
+    options: { onRecording?: (rec: unknown) => Promise<void> | void } = {}
+  ) => {
+    deliverRecording = async () => {
+      await options.onRecording?.({
+        id: 'clip-1',
+        chat: startArgs.opts?.chat,
+      });
+    };
     return {
       status: 'idle',
       canTranscribe: true,
       error: '',
-      start: vi.fn(),
+      start: recorderStart,
       stop: vi.fn(),
     };
   },
 }));
+
+const enqueueChatRecording = vi.fn().mockResolvedValue(undefined);
+vi.mock('../../offline/recordingQueue', () => ({
+  enqueueChatRecording: (...args: unknown[]) => enqueueChatRecording(...args),
+}));
+
+/** Press the mic, speak, press it again. */
+async function speak() {
+  fireEvent.click(screen.getByTitle('Speak to send'));
+  await waitFor(() => expect(recorderStart).toHaveBeenCalled());
+  await deliverRecording();
+}
 
 const attachment = (over: object = {}) => ({
   id: 'a1',
@@ -59,9 +92,13 @@ const attachment = (over: object = {}) => ({
   messageId: null,
   mime: 'image/jpeg',
   url: '/api/chat/attachments/a1/file',
+  kind: 'image',
   description: 'A plate of vareniki. The menu reads "VARENIKI".',
   descriptionStatus: 'done',
   descriptionError: null,
+  transcript: null,
+  transcriptStatus: null,
+  transcriptError: null,
   position: 0,
   createdAt: '2026-01-01T08:00:00.000Z',
   ...over,
@@ -93,6 +130,8 @@ beforeEach(() => {
   // The api mock is module-level, so call history survives `restoreAllMocks`.
   // Several assertions below are "was this never called", which needs it clear.
   vi.clearAllMocks();
+  enqueueChatRecording.mockResolvedValue(undefined);
+  startArgs = {};
   Element.prototype.scrollIntoView = vi.fn();
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(emptyStream()));
   vi.mocked(api.chat.today).mockResolvedValue(null);
@@ -130,62 +169,114 @@ const attachViaPaste = async () => {
 };
 
 describe('dictation', () => {
-  it('sends the transcript as a message the moment it arrives', async () => {
+  it('hands the clip to the upload queue instead of transcribing it here', async () => {
+    renderChat();
+    await ready();
+    await speak();
+
+    await waitFor(() => expect(enqueueChatRecording).toHaveBeenCalled());
+    const [, id, chat] = enqueueChatRecording.mock.calls[0];
+    expect(id).toBe('clip-1');
+    expect(chat).toMatchObject({ conversationId: 'c1' });
+    // The message is created by the upload, not by the browser — and nothing
+    // was sent to speech-to-text from here.
+    expect(api.chat.addMessage).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalledWith(
+      '/api/transcribe',
+      expect.anything()
+    );
+  });
+
+  it('records audio durably, and against a conversation that already exists', async () => {
+    // `audio` mode is what tells the server to do the transcribing; `durable`
+    // is what keeps the clip when the page dies. The conversation id has to be
+    // known before the first chunk, because a clip recovered by the boot sweep
+    // knows only what was stored beside it.
+    renderChat();
+    await ready();
+    await speak();
+
+    expect(startArgs.mode).toBe('audio');
+    expect(startArgs.opts).toMatchObject({ durable: true });
+    expect(startArgs.opts?.chat).toMatchObject({ conversationId: 'c1' });
+    expect(
+      (startArgs.opts?.chat as { messageId?: string })?.messageId
+    ).toBeTruthy();
+  });
+
+  it('sends what was typed along with what was spoken, as one message', async () => {
     renderChat();
     const input = await ready();
-    dictate('had vareniki at Movati');
+    fireEvent.change(input, { target: { value: 'note:' } });
+    await speak();
 
-    await waitFor(() =>
-      expect(api.chat.addMessage).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({
-          role: 'user',
-          content: 'had vareniki at Movati',
-        })
-      )
-    );
+    await waitFor(() => expect(enqueueChatRecording).toHaveBeenCalled());
+    expect(enqueueChatRecording.mock.calls[0][3]).toMatchObject({
+      text: 'note:',
+    });
     // …and the box is left empty, not holding a copy of what was just sent.
     expect((input as HTMLTextAreaElement).value).toBe('');
   });
 
-  it('sends what was typed and what was spoken as one message', async () => {
+  it('carries staged photos onto the spoken message', async () => {
     renderChat();
-    const input = await ready();
-    fireEvent.change(input, { target: { value: 'note:' } });
-    dictate('had vareniki at Movati');
+    await attachViaPaste();
+    await speak();
 
-    await waitFor(() =>
-      expect(api.chat.addMessage).toHaveBeenCalledWith(
-        'c1',
-        expect.objectContaining({ content: 'note: had vareniki at Movati' })
-      )
-    );
-    expect(api.chat.addMessage).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(enqueueChatRecording).toHaveBeenCalled());
+    expect(enqueueChatRecording.mock.calls[0][3]).toMatchObject({
+      attachmentIds: ['a1'],
+    });
   });
 
-  it('sends no rawContent — the message already is the transcript', async () => {
+  it('keeps the mic usable offline', async () => {
+    // Dictation used to need the server before it could become a message at
+    // all. The clip is stored on the device now and uploaded when the backend
+    // is back, so a flat mic would refuse a recording it can perfectly well
+    // keep. The title is the tell: there is no offline wording left.
     renderChat();
     await ready();
-    dictate('had vareniki at Movati');
-
-    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalled());
-    const [, body] = vi.mocked(api.chat.addMessage).mock.calls[0];
-    expect(body.rawContent).toBeUndefined();
+    const mic = screen.getByTitle('Speak to send') as HTMLButtonElement;
+    expect(mic.disabled).toBe(false);
   });
 
-  it('puts the words back in the box when the send fails', async () => {
-    // Nothing was typed, so a dropped transcript is not something the user can
-    // retype — it is the only copy of what they said.
-    vi.mocked(api.chat.addMessage).mockRejectedValueOnce(new Error('offline'));
+  it('says the recording is on its way, and never asks for it back', async () => {
+    // A paused upload is not an error: the audio is on the device and the queue
+    // resumes it. An error banner would suggest something needs doing.
+    enqueueChatRecording.mockRejectedValueOnce(new Error('offline'));
     renderChat();
-    const input = await ready();
-    dictate('had vareniki at Movati');
+    await ready();
+    await speak();
 
-    await waitFor(() =>
-      expect((input as HTMLTextAreaElement).value).toBe(
-        'had vareniki at Movati'
-      )
+    await waitFor(() => expect(enqueueChatRecording).toHaveBeenCalled());
+    expect(screen.queryByText(/offline/i)).toBeNull();
+  });
+
+  it('lets go of the mic while an offline upload is still paused', async () => {
+    // An offline upload *pauses* rather than failing, so a handler that awaited
+    // it would hold the recorder in 'saving' — mic disabled, spinner turning —
+    // until the backend came back. The clip is on the device by then, which is
+    // the only thing that had to happen before letting go. Being able to record
+    // a second message while the first waits is the visible half of that.
+    let release!: () => void;
+    enqueueChatRecording.mockReturnValueOnce(
+      new Promise<void>(resolve => {
+        release = resolve;
+      })
     );
+    renderChat();
+    await ready();
+    await speak();
+
+    await waitFor(() => expect(enqueueChatRecording).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(/sending your recording/i)).toBeTruthy();
+    const mic = screen.getByTitle('Speak to send') as HTMLButtonElement;
+    expect(mic.disabled).toBe(false);
+
+    // A second message can be spoken while the first is still queued.
+    await speak();
+    await waitFor(() => expect(enqueueChatRecording).toHaveBeenCalledTimes(2));
+    release();
   });
 
   it('leaves rawContent unset when the message was typed', async () => {

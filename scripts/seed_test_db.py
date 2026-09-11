@@ -810,6 +810,32 @@ def seed_chat(db):
          'done', 43.6532, -79.3832, ts(2)),
     )
 
+    # A message that was spoken rather than typed, with its clip kept beside it.
+    # The audio is the durable half of a dictated message — the server makes the
+    # message out of it, transcribes it and answers it — so a demo without one
+    # shows a Chat tab where the microphone appears to do nothing.
+    #
+    # 'running' is avoided here for the usual reason (never seed an in-flight
+    # state), and for a second one specific to this column: nothing resets it at
+    # startup, because a real 'running' clip has an llm_jobs row coming back for
+    # it and a seeded one would not.
+    spoken_id = new_id()
+    clip_id = new_id()
+    spoken = 'Actually, can you check whether the ferry runs in November?'
+    db.execute(
+        'INSERT INTO messages (id, conversation_id, role, content, status, created_at, finished_at) '
+        "VALUES (?, ?, 'user', ?, 'done', ?, NULL)",
+        (spoken_id, conv_id, spoken, ts(2)),
+    )
+    clip_path = attachment_path(conv_id, clip_id, 'wav')
+    placeholder_audio(clip_path)
+    db.execute(
+        'INSERT INTO chat_attachments (id, conversation_id, message_id, path, mime, kind, '
+        'transcript, transcript_status, position, created_at) '
+        "VALUES (?, ?, ?, ?, 'audio/wav', 'audio', ?, 'done', 0, ?)",
+        (clip_id, conv_id, spoken_id, str(clip_path), spoken, ts(2)),
+    )
+
     # The day-scoped todo list the chat delegate writes to, separate from the
     # Lifestyle todos.
     day_key = today_key()

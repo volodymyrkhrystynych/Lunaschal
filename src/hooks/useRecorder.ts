@@ -5,6 +5,7 @@ import {
   assembleBlob,
   beginRecording,
   finalizeRecording,
+  type RecordingChat,
   type RecordingFic,
   type RecordingFood,
   type RecordingIdea,
@@ -304,6 +305,7 @@ export function useRecorder(
       idea?: RecordingIdea;
       fic?: RecordingFic;
       food?: RecordingFood;
+      chat?: RecordingChat;
     } = {}
   ) => {
     // A second tap while the first start is still waiting on the permission
@@ -430,6 +432,7 @@ export function useRecorder(
           idea: opts.idea,
           fic: opts.fic,
           food: opts.food,
+          chat: opts.chat,
         });
       }
 

@@ -58,17 +58,25 @@ _ATTACHMENT_COLS = 'id, path, description, description_status'
 
 
 def _rows_for(attachment_ids: list[str]):
-    """The attachment rows for these ids, in the order given.
+    """The *photo* rows for these ids, in the order given.
 
     Unknown ids are skipped silently — a client replaying a stale message must
     not be able to make a turn fail.
+
+    So are voice clips, and that is the load-bearing half: a dictated message
+    carries its clip in the same `attachmentIds` list its photos are in, but the
+    clip's words were appended to the message's own `content` when it was
+    transcribed. Everything below this line is about putting a picture in front
+    of a model — described on the text path, encoded as an `image_url` part on
+    the vision one — and a `.weba` has no business on either.
     """
     ids = [a for a in attachment_ids if isinstance(a, str) and a]
     if not ids:
         return []
     placeholders = ','.join('?' * len(ids))
     rows = get_db().execute(
-        f'SELECT {_ATTACHMENT_COLS} FROM chat_attachments WHERE id IN ({placeholders})',
+        f'SELECT {_ATTACHMENT_COLS} FROM chat_attachments'
+        f" WHERE id IN ({placeholders}) AND kind='image'",
         ids,
     ).fetchall()
     by_id = {r['id']: r for r in rows}

@@ -6,9 +6,11 @@ import { MessageMarkdown } from '../MessageMarkdown';
 import { AgentSteps } from './AgentSteps';
 import { DelegateProposals } from './DelegateProposals';
 import { ChatTodoBar } from './ChatTodoBar';
+import { ChatClips, clipAttachments, photoAttachments } from './ChatClips';
 import { ThinkingLabel } from './ThinkingLabel';
 import { NoteReviewButton } from '../NoteReview';
 import { contextMessages, isBreak } from '@/lib/chatSegments';
+import { POLL_INTERVAL_MS, shouldPollConversation } from '@/lib/chatPolling';
 import { readSSE } from '@/lib/sse';
 import { isAtBottom } from '@/lib/chatScroll';
 import { formatMessageTime } from '@/lib/chatTime';
@@ -25,6 +27,9 @@ import {
   rejectedPhotosMessage,
 } from '@/lib/chatAttachments';
 import { currentPosition } from '@/lib/geo';
+import { ulid } from '@/lib/ulid';
+import { enqueueChatRecording } from '../../offline/recordingQueue';
+import { type StoredRecording } from '../../offline/recordingStore';
 
 /** One staged action from the delegate's `done` event. Only `flashcard_draft`
  * is still read from this live shape — the other kinds (calendar/calorie/task/
@@ -61,6 +66,10 @@ export function ChatPanel() {
   // model), so this holds real rows, not File objects.
   const [staged, setStaged] = useState<ChatAttachment[]>([]);
   const [attachError, setAttachError] = useState('');
+  // Something the recorder needs to say that isn't an error — a screen lock or
+  // an incoming call ending the clip early. The audio up to that point is saved,
+  // which is the whole message of it.
+  const [recorderNotice, setRecorderNotice] = useState('');
   const [isUploading, setIsUploading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const photoInputRef = useRef<HTMLInputElement>(null);
@@ -76,19 +85,17 @@ export function ChatPanel() {
 
   // The single conversation for the current chat day (4am -> 4am).
   //
-  // refetchInterval keeps polling while the last message is still
-  // 'streaming' — the reply now generates on a background thread
-  // (backend/delegate/runs.py) independent of any one connection, so this is
-  // what picks it up whether we dropped mid-stream (sendMessage's catch below
-  // just invalidates and lets this take over) or the page was reloaded while
-  // a reply was still running.
+  // refetchInterval keeps polling while anything is still being written on the
+  // server — a reply generating on a background thread, or a voice message
+  // still being transcribed. Neither is returned to a request, so this poll is
+  // how both reach the screen; `shouldPollConversation` holds the rule and why.
   const { data: conversation } = useQuery({
     queryKey: ['chat', 'today', 'chat'],
     queryFn: () => api.chat.today(),
-    refetchInterval: query => {
-      const msgs = query.state.data?.messages ?? [];
-      return msgs[msgs.length - 1]?.status === 'streaming' ? 1500 : false;
-    },
+    refetchInterval: query =>
+      shouldPollConversation(query.state.data?.messages)
+        ? POLL_INTERVAL_MS
+        : false,
   });
 
   const { data: settings } = useQuery({
@@ -515,34 +522,93 @@ export function ChatPanel() {
   };
 
   /**
-   * Dictation sends. Speak, stop, and the message goes.
+   * Dictation sends, and the phone is free the moment you stop.
    *
-   * It landed in the box and waited for a second click for as long as a
-   * transcript could not be trusted with a proper noun — the mangled-name
-   * problem. Every dictation now goes through two STT models and an LLM
-   * cross-check (`backend/ai/transcribe_polish.merge_transcripts`), which is
-   * what makes talking to the chat a conversation again rather than a
-   * speak-read-click loop.
+   * This used to be the only recording surface in the app that kept the audio
+   * nowhere: the clip lived in memory, went to `/api/transcribe`, and the
+   * message was not created until two STT models and an LLM cross-check had
+   * returned *to this browser*. So the turn was hostage to the tab — lock the
+   * screen mid-transcription and both the recording and the question were gone.
    *
-   * Whatever was already typed goes with it: half a message in the box and the
-   * rest spoken is one message, not two.
+   * Now it takes the durable path every other microphone takes. Stopping writes
+   * the audio to IndexedDB and hands it to the offline upload queue; the server
+   * stores it as the message, transcribes it on the job worker, and — the part
+   * only chat needs — starts the reply itself (backend/chat/autoreply.py). The
+   * transcript and the answer arrive through the `today` poll below, whether or
+   * not this tab is still open to see them.
+   *
+   * Two consequences worth naming:
+   * - The mic no longer needs the server. `audio` mode records offline and the
+   *   queue uploads when the backend is back, so a question asked on the subway
+   *   is answered once the phone has signal.
+   * - There is no in-box transcript to correct any more, because there is no
+   *   window in which one exists. That window is what dictation-sends already
+   *   gave up; this only removes the wait that was left behind it.
    */
-  const handleTranscript = (text: string) => {
-    const raw = text.trim();
-    if (!raw) return;
-    const combined = input.trim() ? `${input.trim()} ${raw}` : raw;
+  const [pendingClips, setPendingClips] = useState<string[]>([]);
+
+  const handleRecording = (rec: StoredRecording) => {
+    const chat = rec.chat;
+    // Only if `start` actually stored one — a recorder that failed before its
+    // first chunk has nothing to send and no ids to send it under.
+    if (!chat) return;
+    const text = input.trim();
+    const attachmentIds = staged.map(a => a.id);
+    // Cleared here rather than on success: the words and photos are in the
+    // queue's variables now, and leaving them in the composer would send them
+    // twice if the user typed on.
     setInput('');
-    // Nothing here was typed, so a failed send has nothing to retype from —
-    // put the words back in the box instead of dropping them on the floor.
-    void sendMessage(combined).catch(() => setInput(combined));
+    setStaged([]);
+    setPendingClips(prev => [...prev, rec.id]);
+    // Deliberately not awaited, and this is the same rule `useClipStage.commit`
+    // follows: an offline upload *pauses* here rather than failing, so awaiting
+    // it would hold the recorder in 'saving' — mic disabled, spinner turning —
+    // until the backend came back. The clip is already on the device by now,
+    // which is the only thing that had to happen before letting go.
+    void enqueueChatRecording(queryClient, rec.id, chat, {
+      text: text || undefined,
+      attachmentIds: attachmentIds.length ? attachmentIds : undefined,
+    })
+      .catch(() => {
+        // The audio is still on the device and the mutation is paused, not
+        // lost — `resumeStoredRecordings` picks it up. The pending line below
+        // is what says so; an error banner would imply something needs doing.
+      })
+      .finally(() => {
+        setPendingClips(prev => prev.filter(id => id !== rec.id));
+        void invalidateToday();
+      });
   };
 
-  const recorder = useRecorder(handleTranscript);
+  const recorder = useRecorder(() => {}, undefined, {
+    durable: true,
+    onRecording: handleRecording,
+    onNotice: setRecorderNotice,
+  });
   const isRecording = recorder.status === 'recording';
-  const isTranscribing = recorder.status === 'transcribing';
+  const isSavingClip = recorder.status === 'saving';
 
-  const toggleRecording = () =>
-    isRecording ? recorder.stop() : recorder.start();
+  const startRecording = async () => {
+    // The conversation has to exist before the first chunk, because its id is
+    // written into the stored recording — a clip recovered by the boot sweep
+    // knows only what is in that store, and one that has forgotten its
+    // conversation has nowhere to be a message.
+    setRecorderNotice('');
+    let convId = conversationId;
+    if (!convId) convId = (await createConversation.mutateAsync()).id;
+    // `start('audio')`, not `start('transcribe')`: the stored mode is what tells
+    // the server side to do the transcribing, and having both ends transcribe
+    // the same clip would cost a second CPU pass for a transcript nobody reads.
+    await recorder.start('audio', {
+      durable: true,
+      chat: { conversationId: convId, messageId: ulid() },
+    });
+  };
+
+  const toggleRecording = () => {
+    if (isRecording) recorder.stop();
+    else void startRecording();
+  };
 
   const attachPhotos = async (files: File[]) => {
     if (files.length === 0) return;
@@ -713,6 +779,9 @@ export function ChatPanel() {
           // render regardless, leaving an empty padded rectangle that read as
           // a broken message; the trace below it is the actual account of what
           // happened, so that is all this shows.
+          const photos = photoAttachments(message.attachments);
+          // A message whose clip is still being transcribed has no text yet, and
+          // the clip is the whole of it — so an empty body is a body here.
           const hasBody =
             message.content.trim().length > 0 ||
             (message.attachments ?? []).length > 0;
@@ -742,9 +811,9 @@ export function ChatPanel() {
                   <div
                     className={`content-text rounded-lg px-4 py-2 ${message.role === 'user' ? 'bg-[var(--color-primary)] text-white' : 'bg-[var(--color-surface)] text-[var(--color-text)]'}`}
                   >
-                    {(message.attachments ?? []).length > 0 && (
+                    {photos.length > 0 && (
                       <div className="mb-2 flex flex-wrap gap-2">
-                        {(message.attachments ?? []).map(attachment => (
+                        {photos.map(attachment => (
                           <a
                             key={attachment.id}
                             href={attachment.url}
@@ -763,6 +832,10 @@ export function ChatPanel() {
                         ))}
                       </div>
                     )}
+                    {/* Below the photos, above the words: the picture was
+                        attached first and the clip is what was said about it,
+                        which is also the order `position` puts them in. */}
+                    <ChatClips clips={clipAttachments(message.attachments)} />
                     {message.role === 'user' ? (
                       <div className="whitespace-pre-wrap">
                         {message.content}
@@ -1061,9 +1134,29 @@ export function ChatPanel() {
             ))}
           </div>
         )}
-        {(photoStatus || attachError) && (
+        {(photoStatus ||
+          attachError ||
+          recorderNotice ||
+          recorder.error ||
+          pendingClips.length > 0) && (
           <div className="mb-2 space-y-1 text-xs text-[var(--color-text-muted)]">
             {attachError && <div className="text-red-400">{attachError}</div>}
+            {recorder.error && (
+              <div className="text-red-400">{recorder.error}</div>
+            )}
+            {recorderNotice && <div>{recorderNotice}</div>}
+            {/* The gap between stopping and the message appearing in the
+                transcript above. Short when the backend is there, indefinite
+                when it isn't — the clip is on the device either way, which is
+                what this says rather than showing an error for a state that
+                resolves itself. */}
+            {pendingClips.length > 0 && (
+              <div>
+                {pendingClips.length === 1
+                  ? 'Sending your recording…'
+                  : `Sending ${pendingClips.length} recordings…`}
+              </div>
+            )}
             {photoStatus && <div>{photoStatus}</div>}
           </div>
         )}
@@ -1120,27 +1213,23 @@ export function ChatPanel() {
             // Gated only when idle: every condition here is about whether a
             // new dictation may start, and while one is running this button
             // is the only way to stop it.
+            //
+            // `canTranscribe` is deliberately gone from this list. It was here
+            // because dictation used to need the server before it could become
+            // a message at all; the clip is now stored on the device and
+            // uploaded whenever the backend is back, so a flat mic offline
+            // would refuse a recording it is perfectly able to keep.
             disabled={
-              !isRecording &&
-              (!isConfigured ||
-                isStreaming ||
-                isTranscribing ||
-                !recorder.canTranscribe)
+              !isRecording && (!isConfigured || isStreaming || isSavingClip)
             }
-            title={
-              !recorder.canTranscribe
-                ? 'Offline — dictation needs the server'
-                : isRecording
-                  ? 'Stop recording'
-                  : 'Speak to send'
-            }
+            title={isRecording ? 'Stop recording' : 'Speak to send'}
             className={`px-3 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               isRecording
                 ? 'bg-red-500 text-white animate-pulse hover:bg-red-500'
                 : 'bg-[var(--color-surface)] border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20'
             }`}
           >
-            {isTranscribing ? (
+            {isSavingClip ? (
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 width="16"

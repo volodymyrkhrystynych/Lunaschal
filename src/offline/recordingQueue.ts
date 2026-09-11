@@ -1,12 +1,14 @@
 import type { QueryClient } from '@tanstack/react-query';
 import {
   MUTATION_KEYS,
+  type ChatRecordingVars,
   type FoodRecordingVars,
   type JournalRecordingVars,
 } from './mutationDefaults';
 import {
   finalizeRecording,
   listRecordings,
+  type RecordingChat,
   type RecordingFic,
   type RecordingIdea,
   type StoredRecording,
@@ -79,6 +81,35 @@ export function enqueueFoodRecording(
   return mutation.execute({ id, foodId, position });
 }
 
+/**
+ * The Chat tab's spoken message, which goes through neither the journal nor the
+ * food log.
+ *
+ * A chat message is not a journal entry — it is a `messages` row the Journal's
+ * past-chat feed borrows — so its audio is a `chat_attachments` row. Same
+ * durability contract, different route, and one thing neither of the others
+ * does: the server answers it afterwards.
+ */
+export function enqueueChatRecording(
+  qc: QueryClient,
+  id: string,
+  chat: RecordingChat,
+  opts: { text?: string; attachmentIds?: string[] } = {}
+): Promise<unknown> {
+  const mutation = qc
+    .getMutationCache()
+    .build<unknown, Error, ChatRecordingVars, unknown>(qc, {
+      mutationKey: MUTATION_KEYS.chatRecording,
+    });
+  return mutation.execute({
+    id,
+    conversationId: chat.conversationId,
+    messageId: chat.messageId,
+    text: opts.text,
+    attachmentIds: opts.attachmentIds,
+  });
+}
+
 /** True if this recording already has a live or paused upload in flight. */
 function alreadyQueued(qc: QueryClient, id: string): boolean {
   return qc
@@ -86,12 +117,17 @@ function alreadyQueued(qc: QueryClient, id: string): boolean {
     .getAll()
     .some(m => {
       const [group, kind] = m.options.mutationKey ?? [];
-      // Both recording mutations, because the boot sweep is what would
-      // otherwise queue a food clip a second time under the journal route.
-      if (group !== 'journal' && group !== 'food') return false;
+      // Every recording mutation, because the boot sweep is what would
+      // otherwise queue a food clip or a spoken chat message a second time
+      // under the journal route.
+      if (group !== 'journal' && group !== 'food' && group !== 'chat')
+        return false;
       if (kind !== 'recording') return false;
       const vars = m.state.variables as
-        JournalRecordingVars | FoodRecordingVars | undefined;
+        | JournalRecordingVars
+        | FoodRecordingVars
+        | ChatRecordingVars
+        | undefined;
       return vars?.id === id && m.state.status === 'pending';
     });
 }
@@ -139,6 +175,17 @@ export async function resumeStoredRecordings(qc: QueryClient): Promise<void> {
     // plate they were spoken over.
     if (rec.food) {
       void enqueueFoodRecording(qc, rec.id, rec.food.id).catch(() => undefined);
+      continue;
+    }
+    // A spoken chat message goes to the chat route or nowhere, for the same
+    // reason: filed as a journal entry it would sit in a different tab from the
+    // conversation it was asked in, and nothing would ever answer it.
+    //
+    // `text` and `attachmentIds` are deliberately not carried here. They lived
+    // in a composer that is long gone by the time a boot sweep runs, and the
+    // words that matter are in the recording itself.
+    if (rec.chat) {
+      void enqueueChatRecording(qc, rec.id, rec.chat).catch(() => undefined);
       continue;
     }
     void enqueueRecordingUpload(

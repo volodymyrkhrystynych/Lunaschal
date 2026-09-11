@@ -194,6 +194,7 @@ def init_db() -> None:
     _ensure_message_status(db)
     _ensure_message_raw_content(db)
     _ensure_chat_attachment_location(db)
+    _ensure_chat_attachment_recording(db)
     _ensure_practice_recall_columns(db)
     _ensure_piano_attempt_metrics(db)
     _ensure_learning_attempts_speech_requested(db)
@@ -753,6 +754,34 @@ def _ensure_chat_attachment_location(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE chat_attachments ADD COLUMN latitude REAL')
     if 'longitude' not in cols:
         db.execute('ALTER TABLE chat_attachments ADD COLUMN longitude REAL')
+    db.commit()
+
+
+def _ensure_chat_attachment_recording(db: sqlite3.Connection) -> None:
+    """Voice clips in the chat, beside the photos.
+
+    `kind` defaults to 'image' so every row written before this reads as what it
+    already was. The transcript columns are the three `journal_attachments` and
+    `food_media` both carry, for the same reason they do: a transcription that
+    failed has to be distinguishable from one that was never asked for.
+
+    Deliberately *not* paired with a stale reset in `init_db`. The transcription
+    is an `llm_jobs` row, and `_reset_stale_llm_jobs` requeues a job that died
+    mid-flight -- so a clip still 'running' at startup really does have work
+    coming, and rewriting it to 'idle' would say otherwise.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(chat_attachments)')}
+    if 'kind' not in cols:
+        db.execute(
+            "ALTER TABLE chat_attachments ADD COLUMN kind TEXT NOT NULL"
+            " DEFAULT 'image'"
+        )
+    if 'transcript' not in cols:
+        db.execute('ALTER TABLE chat_attachments ADD COLUMN transcript TEXT')
+    if 'transcript_status' not in cols:
+        db.execute('ALTER TABLE chat_attachments ADD COLUMN transcript_status TEXT')
+    if 'transcript_error' not in cols:
+        db.execute('ALTER TABLE chat_attachments ADD COLUMN transcript_error TEXT')
     db.commit()
 
 

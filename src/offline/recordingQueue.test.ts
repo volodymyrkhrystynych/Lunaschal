@@ -16,6 +16,7 @@ vi.mock('idb-keyval', () => ({
 
 const createRecording = vi.fn();
 const createFoodRecording = vi.fn();
+const createChatRecording = vi.fn();
 vi.mock('../hooks/api', async () => {
   const actual =
     await vi.importActual<typeof import('../hooks/api')>('../hooks/api');
@@ -24,6 +25,7 @@ vi.mock('../hooks/api', async () => {
     api: {
       journal: { createRecording: (...a: unknown[]) => createRecording(...a) },
       food: { createRecording: (...a: unknown[]) => createFoodRecording(...a) },
+      chat: { createRecording: (...a: unknown[]) => createChatRecording(...a) },
     },
   };
 });
@@ -39,6 +41,7 @@ const {
 const { MUTATION_KEYS, registerOfflineMutationDefaults } =
   await import('./mutationDefaults');
 const {
+  enqueueChatRecording,
   enqueueFoodRecording,
   enqueueRecordingUpload,
   handleFinishedRecording,
@@ -68,6 +71,7 @@ function client() {
   for (const key of [
     MUTATION_KEYS.journalRecording,
     MUTATION_KEYS.foodRecording,
+    MUTATION_KEYS.chatRecording,
   ]) {
     qc.setMutationDefaults(key, {
       ...qc.getMutationDefaults(key),
@@ -84,6 +88,7 @@ async function storedRecording(
     idea?: { id: string; repoId?: string };
     fic?: { ficId: string; chapterId?: string };
     food?: { id: string };
+    chat?: { conversationId: string; messageId: string };
   } = {}
 ) {
   const rec = await beginRecording(mode, 'audio/mp4', opts);
@@ -95,6 +100,7 @@ beforeEach(() => {
   idb.clear();
   createRecording.mockReset();
   createFoodRecording.mockReset();
+  createChatRecording.mockReset();
 });
 
 describe('uploading a stored recording', () => {
@@ -265,6 +271,43 @@ describe('sending a staged clip', () => {
     expect(await listRecordings()).toHaveLength(0);
   });
 
+  it('sends a spoken chat message to the chat route, with both its ids', async () => {
+    // A chat message is not a journal entry either — it is a `messages` row the
+    // Journal's past-chat feed borrows. The message id travels with the audio
+    // because the upload is what creates the message.
+    const chat = { conversationId: 'conv-1', messageId: 'msg-1' };
+    const rec = await storedRecording('audio', { chat });
+    createChatRecording.mockResolvedValue({ id: 'msg-1', attachment: {} });
+
+    await enqueueChatRecording(client(), rec.id, chat, {
+      text: 'note:',
+      attachmentIds: ['photo-1'],
+    });
+
+    expect(createRecording).not.toHaveBeenCalled();
+    expect(createChatRecording.mock.calls[0][1]).toMatchObject({
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      attachmentId: rec.id,
+      text: 'note:',
+      attachmentIds: ['photo-1'],
+    });
+    // Confirmed stored, so the audio may go.
+    expect(await listRecordings()).toHaveLength(0);
+  });
+
+  it('keeps a spoken chat message when the upload fails', async () => {
+    const chat = { conversationId: 'conv-1', messageId: 'msg-1' };
+    const rec = await storedRecording('audio', { chat });
+    createChatRecording.mockRejectedValue(new Error('offline'));
+
+    await expect(
+      enqueueChatRecording(client(), rec.id, chat)
+    ).rejects.toThrow();
+
+    expect(await listRecordings()).toHaveLength(1);
+  });
+
   it('keeps a meal clip when the upload fails', async () => {
     const rec = await storedRecording('transcribe', { food: { id: 'meal-1' } });
     createFoodRecording.mockRejectedValue(new Error('offline'));
@@ -319,6 +362,26 @@ describe('picking up recordings from a previous session', () => {
     const opts = createRecording.mock.calls[0][1];
     expect(opts.id).toBe('entry-7');
     expect(opts.attachmentId).toBe(rec.id);
+  });
+
+  it('sends a rescued chat clip to the chat route, not the journal', async () => {
+    // Filed as a journal entry it would sit in a different tab from the
+    // conversation it was asked in, and nothing would ever answer it.
+    const chat = { conversationId: 'conv-1', messageId: 'msg-1' };
+    const rec = await storedRecording('audio', { chat });
+    createChatRecording.mockResolvedValue({ id: 'msg-1', attachment: {} });
+
+    await resumeStoredRecordings(client());
+    await vi.waitFor(() =>
+      expect(createChatRecording).toHaveBeenCalledTimes(1)
+    );
+
+    expect(createRecording).not.toHaveBeenCalled();
+    expect(createChatRecording.mock.calls[0][1]).toMatchObject({
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+      attachmentId: rec.id,
+    });
   });
 
   it('sends a rescued meal clip to the food route, not the journal', async () => {

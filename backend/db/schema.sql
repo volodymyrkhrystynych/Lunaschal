@@ -295,10 +295,17 @@ CREATE TABLE IF NOT EXISTS chat_compactions (
 CREATE INDEX IF NOT EXISTS idx_chat_compactions_conversation
     ON chat_compactions(conversation_id, created_at DESC);
 
--- Photos attached to a chat message. The chat model is text-only
--- (llama/presets.ini sets mmproj-auto = false on [qwen36]), so `description` --
--- written by the CPU-only omni model in backend/ai/images.py -- is how the
--- picture actually reaches the conversation.
+-- Photos and voice clips attached to a chat message. The chat model is
+-- text-only by default (llama/presets.ini sets mmproj-auto = false on
+-- [qwen36]), so `description` -- written by the CPU-only omni model in
+-- backend/ai/images.py -- is how a picture actually reaches the conversation.
+--
+-- A voice clip (`kind='audio'`) reaches it a different way: it is transcribed
+-- and the text is appended to the message's own `content`, because the clip
+-- *is* the message rather than something attached to one. That is why the
+-- transcript gets its own columns instead of reusing `description` -- a
+-- transcript pushed through `descriptions_for()` would be handed to the model
+-- as though something had looked at a picture.
 CREATE TABLE IF NOT EXISTS chat_attachments (
     id TEXT PRIMARY KEY,
     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
@@ -307,9 +314,21 @@ CREATE TABLE IF NOT EXISTS chat_attachments (
     message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
     path TEXT NOT NULL,
     mime TEXT,
+    -- 'image' or 'audio'. Defaulted rather than nullable so every row written
+    -- before voice clips existed reads as what it is: a photo.
+    kind TEXT NOT NULL DEFAULT 'image',
     description TEXT,
     description_status TEXT,
     description_error TEXT,
+    -- Audio only. No stale-reset runs over `transcript_status` at startup, and
+    -- that is deliberate: this work is an `llm_jobs` row, and
+    -- _reset_stale_llm_jobs puts a job that died mid-flight back in the queue --
+    -- so 'running' across a restart is the truth. Resetting it to 'idle' (what
+    -- food_media does, whose clips share the queue but whose UI has a re-run
+    -- button) would claim nothing was coming when something is.
+    transcript TEXT,
+    transcript_status TEXT,
+    transcript_error TEXT,
     -- Where the device was when the photo was attached. A *fallback* for the
     -- photo's own EXIF GPS, which iOS strips whenever an image goes through the
     -- clipboard or a share sheet rather than being handed over as the original

@@ -6,6 +6,7 @@ from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.chat import storage as chat_storage
 from backend.chat import compaction as chat_compaction
+from backend.chat import autoreply
 from backend.day_boundary import day_key_for
 from backend.geo import coord_pair
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
@@ -207,8 +208,9 @@ MAX_IMAGE_BYTES = 25 * 1024 * 1024
 _UNSUPPORTED_IMAGE = 'Unsupported file type — images only'
 
 _ATTACHMENT_COLS = (
-    'id, conversation_id, message_id, path, mime,'
+    'id, conversation_id, message_id, path, mime, kind,'
     ' description, description_status, description_error,'
+    ' transcript, transcript_status, transcript_error,'
     ' latitude, longitude, position, created_at'
 )
 
@@ -274,7 +276,10 @@ def _store_attachment(conversation_id: str, file, position: int, coords=None):
     where the picture was taken, this says where its owner was a moment ago.
     """
     ext = chat_storage.resolve_ext(file.mimetype, file.filename)
-    if ext is None:
+    # `resolve_ext` answers for audio too now, and this is the photo door: a
+    # voice clip arriving here would be stored with no transcription queued and
+    # then handed to the vision model as a picture.
+    if ext is None or chat_storage.kind_for_ext(ext) != 'image':
         return None, (_UNSUPPORTED_IMAGE, 400)
 
     # HEIC has to become JPEG here or nothing downstream can read it: browsers
@@ -321,8 +326,8 @@ def _store_attachment(conversation_id: str, file, position: int, coords=None):
     try:
         db.execute(
             'INSERT INTO chat_attachments(id, conversation_id, message_id, path, mime,'
-            ' description_status, latitude, longitude, position, created_at)'
-            ' VALUES (?,?,NULL,?,?,?,?,?,?,?)',
+            " kind, description_status, latitude, longitude, position, created_at)"
+            " VALUES (?,?,NULL,?,?,'image',?,?,?,?,?)",
             (attachment_id, conversation_id, str(path), mime,
              'running' if pre_read else None,
              coords[0] if coords else None, coords[1] if coords else None,
@@ -464,6 +469,228 @@ def delete_attachment(attachment_id):
     db.execute('DELETE FROM chat_attachments WHERE id=?', (attachment_id,))
     db.commit()
     return jsonify({'success': True})
+
+
+# --- Voice messages ---------------------------------------------------------
+#
+# A dictated chat message. It mirrors POST /api/food/recordings, which mirrors
+# POST /api/journal/recordings, because all three answer the same question: the
+# phone holds the audio until the server confirms it and re-POSTs on every
+# reconnect, so both ids come from the client and a replay must be a no-op —
+# checked before the file is read, so a retry does not stream the recording to
+# disk again to discover it was already there.
+#
+# What this one adds on the end is the reply. Everything else in the app stops at
+# "the transcript is filed"; here the transcript *is* a question, and the whole
+# point of the feature is that nobody has to be holding the phone when it gets
+# answered. See backend/chat/autoreply.py.
+
+MAX_AUDIO_BYTES = 100 * 1024 * 1024
+
+_UNSUPPORTED_AUDIO = 'Unsupported file type — audio only'
+
+
+def _append_message_text(db, message_id: str, text: str) -> None:
+    """Add a clip's transcript to the end of a message.
+
+    A blank line between clips, not a space — the same rule the food log's
+    `_append_entry_text` follows, and for the same reason: the gap is the pause
+    that was taken, and it is the only thing distinguishing "one thought, said
+    twice" from a run-on sentence. A message that was typed *and* dictated keeps
+    the typed half first, because that is the order it happened in.
+    """
+    row = db.execute('SELECT content FROM messages WHERE id=?', (message_id,)).fetchone()
+    if row is None:
+        return
+    existing = (row['content'] or '').strip()
+    merged = f'{existing}\n\n{text}' if existing else text
+    db.execute('UPDATE messages SET content=? WHERE id=?', (merged, message_id))
+
+
+def _transcribe_recording_bg(attachment_id: str, message_id: str, path: str,
+                             *, now: bool = False) -> None:
+    """Transcribe one voice message, fold it into the message, then answer it.
+
+    `InferencePaused` and `Preempted` are re-raised rather than recorded: both
+    mean this clip has not been transcribed *yet*, and the `llm_jobs` row is what
+    remembers to come back to it. Writing 'error' would tell the chat the model
+    refused to listen to a recording it was never played.
+    """
+    def _run():
+        from backend.routes import stt as stt_routes
+
+        try:
+            p = chat_storage.resolve_stored_path(path)
+            if p is None or not p.is_file():
+                raise RuntimeError('The recording is missing')
+            text = stt_routes.transcribe_file(p)
+            status, error = 'done', None
+        except (InferencePaused, Preempted):
+            raise
+        except Exception as e:
+            text, status, error = None, 'error', str(e) or 'Failed'
+            logger.warning('Transcribing chat recording %s failed: %s', attachment_id, e)
+
+        db = get_db()
+        prior = db.execute(
+            'SELECT transcript FROM chat_attachments WHERE id=?', (attachment_id,)
+        ).fetchone()
+        # Only the first time this clip produces a transcript. A re-run has to
+        # refresh the clip's own text without pasting it into the message a
+        # second time — the rule journal attachments and meal clips both follow.
+        first_time = not (prior and prior['transcript'])
+        updates = {'transcript_status': status, 'transcript_error': error}
+        if text is not None:
+            updates['transcript'] = text
+        build_update(db, 'chat_attachments', updates, 'id=?', (attachment_id,))
+        if text is not None and first_time:
+            _append_message_text(db, message_id, text)
+        db.commit()
+
+        # Committed above, before the run starts: the reply is allowed to fail,
+        # and when it does the question and its audio still have to be sitting in
+        # the conversation afterwards.
+        if text is None:
+            return
+        row = db.execute(
+            'SELECT conversation_id FROM messages WHERE id=?', (message_id,)
+        ).fetchone()
+        if row is None:
+            return
+        try:
+            autoreply.start_reply(row['conversation_id'], message_id)
+        except (InferencePaused, Preempted):
+            # The transcript is saved, so re-running this job is cheap and lands
+            # on `first_time = False`. Let the job row bring it back.
+            raise
+        except Exception as e:
+            logger.warning('Auto-reply for chat recording %s failed: %s', attachment_id, e)
+
+    if now:
+        _run()
+    else:
+        jobs.enqueue('chat.transcribe_recording', attachment_id,
+                     {'message_id': message_id, 'path': path})
+
+
+@bp.post('/conversations/<id>/recordings')
+def create_recording(id):
+    """Store a dictated message: its audio now, its words shortly after.
+
+    Both ids are the client's, and the conversation is created if it is not
+    there yet. A clip can outrun the conversation it belongs to — the composer
+    creates it first, but a boot sweep after a crash sends only the clip — and
+    the alternative to `INSERT OR IGNORE` is a 404 that strands the audio.
+
+    A replay that lands the next day therefore files the clip under today's
+    conversation rather than the one it was spoken into. That is the better of
+    the two wrong answers: the words end up somewhere the user can see them,
+    which is not true of a 404.
+    """
+    audio = request.files.get('audio')
+    if audio is None or not audio.filename:
+        return jsonify({'error': 'Missing audio file'}), 400
+    attachment_id = (request.form.get('attachmentId') or '').strip()
+    message_id = (request.form.get('messageId') or '').strip()
+    if not attachment_id or not message_id:
+        return jsonify({'error': 'attachmentId and messageId are required'}), 400
+
+    db = get_db()
+    # Before the file is read: a replay must not stream the recording to disk
+    # again only to discover the row is already there.
+    existing = _load_attachment(attachment_id)
+    if existing:
+        return jsonify({
+            'id': message_id,
+            'attachment': _attachment_dict(existing),
+        }), 201
+
+    ext = chat_storage.resolve_ext(audio.mimetype, audio.filename)
+    # An explicit kind beats the extension, the way the food route's does: this
+    # request is holding a voice memo, and `recording.webm` on its own does not
+    # say so.
+    if ext is None or chat_storage.kind_for_ext(ext) != 'audio':
+        return jsonify({'error': _UNSUPPORTED_AUDIO}), 400
+    path = chat_storage.attachment_path(id, attachment_id, ext)
+    if path is None:
+        return jsonify({'error': _UNSUPPORTED_AUDIO}), 400
+
+    now = int(time.time())
+    db.execute(
+        'INSERT OR IGNORE INTO conversations(id, title, day_key, mode, created_at, updated_at)'
+        " VALUES (?,NULL,?,'chat',?,?)",
+        (id, day_key_for(), now, now),
+    )
+    db.execute(
+        'INSERT OR IGNORE INTO messages(id, conversation_id, role, content, metadata,'
+        " status, created_at) VALUES (?,?,'user',?,NULL,'done',?)",
+        (message_id, id, (request.form.get('text') or '').strip(), now),
+    )
+    # The photos staged while this was being spoken. Bound here rather than by
+    # add_message, because a dictated message never goes through add_message.
+    _bind_attachments(db, id, message_id, _parse_attachment_ids(request.form.get('attachmentIds')))
+    db.commit()
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # Streamed to disk rather than read() into memory — this also runs on a
+    # handheld with 8 GB of RAM, and a recording has no size limit until it is
+    # on disk to measure.
+    audio.save(path)
+    size = path.stat().st_size
+    if size == 0 or size > MAX_AUDIO_BYTES:
+        path.unlink(missing_ok=True)
+        _discard_empty_message(db, message_id)
+        db.commit()
+        return jsonify({
+            'error': 'That recording was empty' if size == 0 else 'That recording is too large'
+        }), 400 if size == 0 else 413
+
+    # `position` puts the clip after whatever photos this message carries: the
+    # picture was attached first, and the clip is what was said about it.
+    row = db.execute(
+        'SELECT COALESCE(MAX(position), -1) + 1 AS n FROM chat_attachments WHERE message_id=?',
+        (message_id,),
+    ).fetchone()
+    db.execute(
+        'INSERT INTO chat_attachments(id, conversation_id, message_id, path, mime,'
+        " kind, transcript_status, position, created_at)"
+        " VALUES (?,?,?,?,?,'audio','running',?,?)",
+        (attachment_id, id, message_id, str(path), audio.mimetype, row['n'], now),
+    )
+    db.execute('UPDATE conversations SET updated_at=? WHERE id=?', (now, id))
+    db.commit()
+    _transcribe_recording_bg(attachment_id, message_id, str(path))
+
+    return jsonify({
+        'id': message_id,
+        'attachment': _attachment_dict(_load_attachment(attachment_id)),
+    }), 201
+
+
+def _parse_attachment_ids(raw) -> list:
+    """The photos this message is claiming. Anything unparseable means "none"
+    rather than an error: the ids are a binding hint, and refusing the whole
+    recording over a malformed one would lose the audio."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return [str(x) for x in parsed] if isinstance(parsed, list) else []
+
+
+def _discard_empty_message(db, message_id: str) -> None:
+    """Roll back a message this request may have just created.
+
+    Only while it is still empty and carries nothing — a replay arriving beside
+    a real message must not delete it. The food route's rollback rule.
+    """
+    db.execute(
+        "DELETE FROM messages WHERE id=? AND content='' AND role='user'"
+        ' AND NOT EXISTS (SELECT 1 FROM chat_attachments WHERE message_id=?)',
+        (message_id, message_id),
+    )
 
 
 @bp.post('/briefing/run')
@@ -646,10 +873,18 @@ def _device_position(db, message_id: str | None):
 
 
 def _copy_attachments_to_food(db, message_id: str | None, entry_id: str) -> list:
-    """Copy the message's photos into the food entry's own storage.
+    """Copy the message's photos and voice clips into the food entry's storage.
 
-    Copied, not moved: the photo is part of what was said in the chat and stays
-    on that message. Returns the new food-side paths, for the EXIF pass.
+    Copied, not moved: they are part of what was said in the chat and stay on
+    that message. Returns the new food-side paths **of the photos only** — the
+    caller reads EXIF off them, and an audio file has none.
+
+    A clip's kind is carried across rather than assumed. The meal already gets
+    its words (they are in the message's own text by the time a proposal can be
+    accepted), so this is about the recording itself: filed as `audio` it plays
+    in the food log beside the plate, filed as `image` it is a picture nothing
+    can render. Its transcript comes with it so the meal does not re-transcribe
+    a clip that has already been through STT once.
     """
     import shutil
 
@@ -658,13 +893,13 @@ def _copy_attachments_to_food(db, message_id: str | None, entry_id: str) -> list
     if not message_id:
         return []
     rows = db.execute(
-        'SELECT id, path, mime FROM chat_attachments WHERE message_id=?'
+        'SELECT id, path, mime, kind, transcript FROM chat_attachments WHERE message_id=?'
         ' ORDER BY position, created_at',
         (message_id,),
     ).fetchall()
 
     now = int(time.time())
-    copied = []
+    photos = []
     for position, row in enumerate(rows):
         source = chat_storage.resolve_stored_path(row['path'])
         if source is None or not source.is_file():
@@ -678,17 +913,23 @@ def _copy_attachments_to_food(db, message_id: str | None, entry_id: str) -> list
         try:
             shutil.copyfile(source, dest)
         except OSError as e:
-            # A photo that can't be copied costs the entry its picture, never
-            # the entry — the meal and what was said about it still matter.
-            logger.warning('Copying chat photo %s into food entry failed: %s', row['id'], e)
+            # One that can't be copied costs the entry its picture, never the
+            # entry — the meal and what was said about it still matter.
+            logger.warning('Copying chat attachment %s into food entry failed: %s',
+                           row['id'], e)
             continue
+        kind = row['kind'] or 'image'
+        transcript = row['transcript'] if kind == 'audio' else None
         db.execute(
-            'INSERT INTO food_media(id, entry_id, kind, path, mime, position, created_at)'
-            ' VALUES (?,?,?,?,?,?,?)',
-            (media_id, entry_id, 'image', str(dest), row['mime'], position, now),
+            'INSERT INTO food_media(id, entry_id, kind, path, mime, position,'
+            ' transcript, transcript_status, created_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?)',
+            (media_id, entry_id, kind, str(dest), row['mime'], position,
+             transcript, 'done' if transcript else 'idle', now),
         )
-        copied.append(dest)
-    return copied
+        if kind == 'image':
+            photos.append(dest)
+    return photos
 
 
 def _accept_food(db, data: dict, ctx: dict) -> dict:
