@@ -30,6 +30,7 @@ import {
   topGaps,
 } from '@/lib/jobs';
 import { SourcesPanel } from './SourcesPanel';
+import { StatusBadge } from '../StatusBadge';
 
 /**
  * The triage screen, designed for a phone.
@@ -427,23 +428,22 @@ function FeedCard({
               here rather than judged by the model. A posting the gazetteer
               could not place shows nothing at all rather than a hedge. */}
           {commute && (
-            <span
+            <StatusBadge
+              status={commuteBand(job)}
+              label={commute}
+              colorMap={DISTANCE_CLASS}
+              className="px-1.5 py-0.5 rounded text-[11px] border"
               title={`Straight-line distance, ${job.distancePrecision || 'unknown'} precision`}
-              className={`px-1.5 py-0.5 rounded text-[11px] border ${
-                DISTANCE_CLASS[commuteBand(job)]
-              }`}
-            >
-              {commute}
-            </span>
+            />
           )}
           {job.triageFlags.map(flag => (
-            <span
+            <StatusBadge
               key={flag.kind}
-              title={flag.detail}
+              status={flag.kind}
+              label={FLAG_LABELS[flag.kind] ?? flag.kind}
               className="px-1.5 py-0.5 rounded text-[11px] bg-amber-500/15 text-amber-300 border border-amber-500/30"
-            >
-              {FLAG_LABELS[flag.kind] ?? flag.kind}
-            </span>
+              title={flag.detail}
+            />
           ))}
         </div>
       )}
