@@ -10,6 +10,7 @@ import { Queue } from './Queue';
 import { Browse } from './Browse';
 import { BrainDump } from './BrainDump';
 import { Folders } from './Folders';
+import { TagPill } from '../TagPill';
 
 export type LearningMode = 'review' | 'queue' | 'browse' | 'create' | 'folders';
 
@@ -21,8 +22,10 @@ const MODES: LearningMode[] = [
   'folders',
 ];
 
-export const pillClass = (active: boolean) =>
-  `px-3 py-1 text-sm rounded-full border transition-colors ${active ? 'bg-[var(--color-primary)] border-[var(--color-primary)] text-white' : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}`;
+const PILL_ACTIVE =
+  'bg-[var(--color-primary)] border-[var(--color-primary)] text-white';
+const PILL_INACTIVE =
+  'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]';
 
 const modeClass = (active: boolean, focusRing = false) =>
   `px-3 py-1 rounded ${active ? 'bg-[var(--color-primary)] text-white' : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'}${focusRing && active ? ' ring-1 ring-white/70' : ''}`;
@@ -124,43 +127,63 @@ export function Learning() {
 
       {folders && folders.length > 0 && mode !== 'folders' && (
         <div className="mb-3 flex flex-nowrap gap-2 overflow-x-auto">
-          <button
+          <TagPill
+            active={!folderId}
             onClick={() => setFolderId(null)}
-            className={`${pillClass(!folderId)} shrink-0 whitespace-nowrap`}
-          >
-            All folders
-          </button>
+            className="shrink-0 whitespace-nowrap"
+            size="sm"
+            activeClassName={PILL_ACTIVE}
+            inactiveClassName={PILL_INACTIVE}
+            label="All folders"
+          />
           {folders.map(f => (
-            <button
+            <TagPill
               key={f.id}
+              active={folderId === f.id}
               onClick={() => setFolderId(folderId === f.id ? null : f.id)}
-              className={`${pillClass(folderId === f.id)} shrink-0 whitespace-nowrap`}
-            >
-              {f.name}
-              {f.dueCount > 0 && (
-                <span className="opacity-60 ml-1">{f.dueCount} due</span>
-              )}
-            </button>
+              className="shrink-0 whitespace-nowrap"
+              size="sm"
+              activeClassName={PILL_ACTIVE}
+              inactiveClassName={PILL_INACTIVE}
+              label={
+                <>
+                  {f.name}
+                  {f.dueCount > 0 && (
+                    <span className="opacity-60 ml-1">{f.dueCount} due</span>
+                  )}
+                </>
+              }
+            />
           ))}
         </div>
       )}
 
       {tags && tags.length > 0 && mode !== 'folders' && (
         <div className="mb-4 flex flex-nowrap gap-2 overflow-x-auto">
-          <button
+          <TagPill
+            active={!tag}
             onClick={() => setTag(null)}
-            className={`${pillClass(!tag)} shrink-0 whitespace-nowrap`}
-          >
-            All
-          </button>
+            className="shrink-0 whitespace-nowrap"
+            size="sm"
+            activeClassName={PILL_ACTIVE}
+            inactiveClassName={PILL_INACTIVE}
+            label="All"
+          />
           {tags.map(t => (
-            <button
+            <TagPill
               key={t.name}
+              active={tag === t.name}
               onClick={() => setTag(tag === t.name ? null : t.name)}
-              className={`${pillClass(tag === t.name)} shrink-0 whitespace-nowrap`}
-            >
-              #{t.name} <span className="opacity-60">{t.count}</span>
-            </button>
+              className="shrink-0 whitespace-nowrap"
+              size="sm"
+              activeClassName={PILL_ACTIVE}
+              inactiveClassName={PILL_INACTIVE}
+              label={
+                <>
+                  #{t.name} <span className="opacity-60">{t.count}</span>
+                </>
+              }
+            />
           ))}
         </div>
       )}

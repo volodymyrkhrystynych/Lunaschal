@@ -13,6 +13,7 @@ import {
 } from '../../lib/food';
 import { groupByFoodDay } from '../../lib/foodDay';
 import { FoodCapture } from './FoodCapture';
+import { TagPill } from '../TagPill';
 import { FoodDescriptions } from './FoodDescriptions';
 
 const splitTagInput = (input: string): string[] =>
@@ -355,20 +356,16 @@ export function FoodLog() {
       {(tags?.length ?? 0) > 0 && (
         <div className="tag-row flex flex-wrap gap-1.5 mb-3">
           {tags?.map(tag => (
-            <button
+            <TagPill
               key={tag.name}
+              active={selectedTag === tag.name}
               onClick={() =>
                 setSelectedTag(selectedTag === tag.name ? null : tag.name)
               }
-              className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                selectedTag === tag.name
-                  ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
-                  : 'border-white/20 text-[var(--color-text-muted)] hover:border-white/40 hover:text-[var(--color-text)]'
-              }`}
-            >
-              #{tag.name}
-              <span className="ml-1 opacity-60">({tag.count})</span>
-            </button>
+              prefix="#"
+              label={tag.name}
+              count={tag.count}
+            />
           ))}
         </div>
       )}

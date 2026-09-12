@@ -10,6 +10,7 @@ import { useListSelection } from '../../shortcuts/useListSelection';
 import { useRecorder } from '../../hooks/useRecorder';
 import { parseTags, mediaKind } from '../../lib/food';
 import { MessageMarkdown } from '../MessageMarkdown';
+import { TagPill } from '../TagPill';
 
 const splitTagInput = (input: string): string[] =>
   input
@@ -427,21 +428,17 @@ export function RecipeList() {
         {(recipeTags?.length ?? 0) > 0 && (
           <div className="tag-row flex flex-wrap gap-1.5 mt-2">
             {recipeTags?.map(tag => (
-              <button
+              <TagPill
                 key={tag.name}
+                active={selectedTag === tag.name}
                 onClick={() => {
                   setSelectedTag(selectedTag === tag.name ? null : tag.name);
                   setSearchQuery('');
                 }}
-                className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                  selectedTag === tag.name
-                    ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
-                    : 'border-white/20 text-[var(--color-text-muted)] hover:border-white/40 hover:text-[var(--color-text)]'
-                }`}
-              >
-                #{tag.name}
-                <span className="ml-1 opacity-60">({tag.count})</span>
-              </button>
+                prefix="#"
+                label={tag.name}
+                count={tag.count}
+              />
             ))}
           </div>
         )}
