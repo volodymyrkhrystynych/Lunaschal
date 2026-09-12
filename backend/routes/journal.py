@@ -416,10 +416,10 @@ def delete_entry(id):
         (id,),
     ).fetchone()
     if session:
-        # The generated event directly references the journal entry, so remove
-        # it first. Deleting the event also cascades the session row.
-        db.execute('DELETE FROM calendar_events WHERE id=?',
-                   (session['calendar_event_id'],))
+        # A run gets an event only after its second screenshot.
+        if session['calendar_event_id']:
+            db.execute('DELETE FROM calendar_events WHERE id=?',
+                       (session['calendar_event_id'],))
     db.execute('DELETE FROM journal_entries WHERE id=?', (id,))
     db.commit()
     return jsonify({'success': True})
@@ -845,49 +845,76 @@ def _parse_capture_time(value: str | None) -> datetime:
     return captured
 
 
-def _sync_screenshot_event(db, session, captured: datetime) -> None:
-    """Extend the generated calendar event to the run's capture bounds."""
-    captured_at = int(captured.timestamp())
-    local_date = captured.date().isoformat()
-    local_time = captured.strftime('%H:%M:%S')
+def _capture_local_parts(attachment) -> tuple[str, str]:
+    """Local date/time preserved in a screenshot's timestamp name."""
+    try:
+        captured = datetime.strptime(attachment['name'], '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        # A closed screenshot entry may have had an attachment renamed before
+        # one was deleted. Its absolute capture instant remains a sound fallback.
+        captured = datetime.fromtimestamp(attachment['created_at'])
+    return captured.date().isoformat(), captured.strftime('%H:%M:%S')
 
-    first_at = session['first_captured_at']
-    last_at = session['last_captured_at']
-    first_date = session['first_local_date']
-    first_time = session['first_local_time']
-    last_date = session['last_local_date']
-    last_time = session['last_local_time']
-    if captured_at < first_at:
-        first_at, first_date, first_time = captured_at, local_date, local_time
-    if captured_at > last_at:
-        last_at, last_date, last_time = captured_at, local_date, local_time
 
-    db.execute(
-        'UPDATE journal_screenshot_sessions SET first_captured_at=?,'
-        ' last_captured_at=?, first_local_date=?, first_local_time=?,'
-        ' last_local_date=?, last_local_time=?, updated_at=? WHERE entry_id=?',
-        (first_at, last_at, first_date, first_time, last_date, last_time,
-         int(time.time()), session['entry_id']),
-    )
-    db.execute(
-        'UPDATE journal_entries SET created_at=?, updated_at=? WHERE id=?',
-        (first_at, last_at, session['entry_id']),
-    )
+def _sync_screenshot_event(db, session) -> None:
+    """Recompute capture bounds and keep an event only for two or more shots."""
     attachments = db.execute(
-        'SELECT id FROM journal_attachments WHERE entry_id=?'
+        'SELECT id, name, created_at FROM journal_attachments WHERE entry_id=?'
         ' ORDER BY created_at, id',
         (session['entry_id'],),
     ).fetchall()
+    if not attachments:
+        if session['calendar_event_id']:
+            db.execute('DELETE FROM calendar_events WHERE id=?',
+                       (session['calendar_event_id'],))
+        return
+
     for position, attachment in enumerate(attachments):
         db.execute(
             'UPDATE journal_attachments SET position=? WHERE id=?',
             (position, attachment['id']),
         )
+
+    first = attachments[0]
+    last = attachments[-1]
+    first_date, first_time = _capture_local_parts(first)
+    last_date, last_time = _capture_local_parts(last)
+    db.execute(
+        'UPDATE journal_screenshot_sessions SET first_captured_at=?,'
+        ' last_captured_at=?, first_local_date=?, first_local_time=?,'
+        ' last_local_date=?, last_local_time=?, updated_at=? WHERE entry_id=?',
+        (first['created_at'], last['created_at'], first_date, first_time,
+         last_date, last_time, int(time.time()), session['entry_id']),
+    )
+    db.execute(
+        'UPDATE journal_entries SET created_at=?, updated_at=? WHERE id=?',
+        (first['created_at'], last['created_at'], session['entry_id']),
+    )
+
+    event_id = session['calendar_event_id']
+    if len(attachments) < 2:
+        if event_id:
+            db.execute('DELETE FROM calendar_events WHERE id=?', (event_id,))
+        return
+
+    if not event_id:
+        event_id = str(ULID())
+        db.execute(
+            'INSERT INTO calendar_events(id, title, date, time, end_time,'
+            ' journal_id, created_at) VALUES (?,?,?,?,?,?,?)',
+            (event_id, 'Screenshots', first_date, first_time[:5],
+             last_time[:5], session['entry_id'], int(time.time())),
+        )
+        db.execute(
+            'UPDATE journal_screenshot_sessions SET calendar_event_id=?'
+            ' WHERE entry_id=?',
+            (event_id, session['entry_id']),
+        )
     # Calendar stores minute precision. A lower end time is already understood
     # as crossing midnight by the day view, so a run can span the date line.
     db.execute(
         'UPDATE calendar_events SET date=?, time=?, end_time=? WHERE id=?',
-        (first_date, first_time[:5], last_time[:5], session['calendar_event_id']),
+        (first_date, first_time[:5], last_time[:5], event_id),
     )
 
 
@@ -920,7 +947,7 @@ def upload_screenshot():
                 # The first attempt may have committed the attachment and lost
                 # its connection before extending the event. Replay converges
                 # that last step too, even when the session has since closed.
-                _sync_screenshot_event(db, session, captured)
+                _sync_screenshot_event(db, session)
                 db.commit()
             return jsonify({
                 'id': existing['entry_id'],
@@ -944,18 +971,11 @@ def upload_screenshot():
         local_time = captured.strftime('%H:%M:%S')
         if session is None:
             entry_id = str(ULID())
-            event_id = str(ULID())
             db.execute(
                 'INSERT INTO journal_entries(id, content, raw_content, title, tags,'
                 ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
                 (entry_id, '', None, 'Screenshots', None,
                  captured_at, captured_at),
-            )
-            db.execute(
-                'INSERT INTO calendar_events(id, title, date, time, end_time,'
-                ' journal_id, created_at) VALUES (?,?,?,?,?,?,?)',
-                (event_id, 'Screenshots', local_date, local_time[:5],
-                 local_time[:5], entry_id, int(time.time())),
             )
             now = int(time.time())
             db.execute(
@@ -963,8 +983,8 @@ def upload_screenshot():
                 ' entry_id, calendar_event_id, is_open, first_captured_at,'
                 ' last_captured_at, first_local_date, first_local_time,'
                 ' last_local_date, last_local_time, created_at, updated_at)'
-                ' VALUES (?,?,1,?,?,?,?,?,?,?,?)',
-                (entry_id, event_id, captured_at, captured_at, local_date,
+                ' VALUES (?,NULL,1,?,?,?,?,?,?,?,?)',
+                (entry_id, captured_at, captured_at, local_date,
                  local_time, local_date, local_time, now, now),
             )
             db.commit()
@@ -982,23 +1002,25 @@ def upload_screenshot():
             )
         except Exception:
             if created_entry:
-                db.execute('DELETE FROM calendar_events WHERE id=?',
-                           (session['calendar_event_id'],))
+                if session['calendar_event_id']:
+                    db.execute('DELETE FROM calendar_events WHERE id=?',
+                               (session['calendar_event_id'],))
                 db.execute('DELETE FROM journal_entries WHERE id=?',
                            (session['entry_id'],))
                 db.commit()
             raise
         if failure is not None:
             if created_entry:
-                db.execute('DELETE FROM calendar_events WHERE id=?',
-                           (session['calendar_event_id'],))
+                if session['calendar_event_id']:
+                    db.execute('DELETE FROM calendar_events WHERE id=?',
+                               (session['calendar_event_id'],))
                 db.execute('DELETE FROM journal_entries WHERE id=?',
                            (session['entry_id'],))
                 db.commit()
             message, status = failure
             return jsonify({'error': message}), status
 
-        _sync_screenshot_event(db, session, captured)
+        _sync_screenshot_event(db, session)
         db.commit()
         _notify_subscribers(session['entry_id'])
         return jsonify({'id': session['entry_id'], 'attachment': attachment}), 201
@@ -1260,6 +1282,12 @@ def delete_attachment(attachment_id):
     # the progress registry as cancellation and stops writing to a dead row.
     youtube_import.cancel_progress(attachment_id)
     db.execute('DELETE FROM journal_attachments WHERE id=?', (attachment_id,))
+    session = db.execute(
+        'SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
+        (entry_id,),
+    ).fetchone()
+    if session is not None:
+        _sync_screenshot_event(db, session)
     db.commit()
     storage.delete_attachment_dir(attachment_id)
     if row['kind'] == 'youtube':

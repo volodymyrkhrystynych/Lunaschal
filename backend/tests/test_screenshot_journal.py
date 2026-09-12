@@ -10,7 +10,11 @@ from PIL import Image
 from requests import ConnectionError
 
 from stt import screenshots
-from backend.db.connection import _ensure_stt_shortcuts, get_db
+from backend.db.connection import (
+    _ensure_journal_screenshot_event_threshold,
+    _ensure_stt_shortcuts,
+    get_db,
+)
 
 
 @pytest.fixture
@@ -124,7 +128,7 @@ def test_lost_upload_response_replays_without_duplicate_entry_or_photo(
     assert not list(capture.root.glob('*.png'))
     assert get_db().execute('SELECT COUNT(*) FROM journal_entries').fetchone()[0] == 1
     assert get_db().execute('SELECT COUNT(*) FROM journal_attachments').fetchone()[0] == 1
-    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 1
+    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 0
 
 
 def _png():
@@ -149,6 +153,7 @@ def test_consecutive_screenshots_share_entry_and_extend_calendar_event(
 
     first = _upload(client, '01J00000000000000000000001',
                     '2026-09-12T18:04:17-04:00')
+    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 0
     last = _upload(client, '01J00000000000000000000002',
                    '2026-09-12T21:11:42-04:00')
     delayed = _upload(client, '01J0000000000000000000000A',
@@ -230,7 +235,7 @@ def test_screenshot_replay_is_idempotent(client, monkeypatch, tmp_path):
     assert replay.get_json()['id'] == first.get_json()['id']
     assert get_db().execute('SELECT COUNT(*) FROM journal_entries').fetchone()[0] == 1
     assert get_db().execute('SELECT COUNT(*) FROM journal_attachments').fetchone()[0] == 1
-    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 1
+    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 0
 
 
 def test_deleting_screenshot_entry_also_deletes_generated_event(
@@ -238,6 +243,9 @@ def test_deleting_screenshot_entry_also_deletes_generated_event(
     monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path / 'media'))
     entry_id = _upload(client, '01J00000000000000000000008',
                        '2026-09-12T18:04:17-04:00').get_json()['id']
+    _upload(client, '01J0000000000000000000000F',
+            '2026-09-12T18:30:00-04:00')
+    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 1
     assert client.delete(f'/api/journal/{entry_id}').status_code == 200
     assert get_db().execute('SELECT COUNT(*) FROM journal_entries').fetchone()[0] == 0
     assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 0
@@ -247,6 +255,28 @@ def test_deleting_screenshot_entry_also_deletes_generated_event(
 def test_screenshot_requires_offset_local_capture_time(client, captured_at):
     response = _upload(client, '01J00000000000000000000009', captured_at)
     assert response.status_code == 400
+
+
+def test_deleting_back_to_one_screenshot_removes_event(client, monkeypatch, tmp_path):
+    monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path / 'media'))
+    first_attachment = '01J0000000000000000000000G'
+    entry_id = _upload(client, first_attachment,
+                       '2026-09-12T18:04:17-04:00').get_json()['id']
+    second_attachment = '01J0000000000000000000000H'
+    _upload(client, second_attachment, '2026-09-12T18:30:00-04:00')
+    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 1
+
+    assert client.delete(
+        f'/api/journal/attachments/{second_attachment}'
+    ).status_code == 200
+    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 0
+    session = get_db().execute(
+        'SELECT calendar_event_id, first_captured_at, last_captured_at'
+        ' FROM journal_screenshot_sessions WHERE entry_id=?',
+        (entry_id,),
+    ).fetchone()
+    assert session['calendar_event_id'] is None
+    assert session['first_captured_at'] == session['last_captured_at']
 
 
 def test_screenshot_shortcut_can_be_saved_and_disabled(client):
@@ -262,4 +292,50 @@ def test_shortcut_migration_is_idempotent():
     _ensure_stt_shortcuts(db)
     _ensure_stt_shortcuts(db)
     assert 'stt_screenshot_key' in {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    db.close()
+
+
+def test_screenshot_session_migration_allows_an_entry_without_an_event():
+    db = sqlite3.connect(':memory:')
+    db.execute('PRAGMA foreign_keys=ON')
+    db.execute('CREATE TABLE journal_entries(id TEXT PRIMARY KEY)')
+    db.execute('CREATE TABLE calendar_events(id TEXT PRIMARY KEY)')
+    db.execute(
+        '''CREATE TABLE journal_screenshot_sessions (
+               entry_id TEXT PRIMARY KEY REFERENCES journal_entries(id) ON DELETE CASCADE,
+               calendar_event_id TEXT NOT NULL UNIQUE
+                   REFERENCES calendar_events(id) ON DELETE CASCADE,
+               is_open INTEGER NOT NULL DEFAULT 1,
+               first_captured_at INTEGER NOT NULL,
+               last_captured_at INTEGER NOT NULL,
+               first_local_date TEXT NOT NULL,
+               first_local_time TEXT NOT NULL,
+               last_local_date TEXT NOT NULL,
+               last_local_time TEXT NOT NULL,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+           )'''
+    )
+    db.execute("INSERT INTO journal_entries VALUES ('entry')")
+    db.execute("INSERT INTO calendar_events VALUES ('event')")
+    db.execute(
+        "INSERT INTO journal_screenshot_sessions VALUES "
+        "('entry','event',1,1,2,'2026-09-12','10:00:00',"
+        "'2026-09-12','11:00:00',1,2)"
+    )
+
+    _ensure_journal_screenshot_event_threshold(db)
+    assert db.execute(
+        'SELECT entry_id, calendar_event_id FROM journal_screenshot_sessions'
+    ).fetchone() == ('entry', 'event')
+    event_column = next(
+        row for row in db.execute('PRAGMA table_info(journal_screenshot_sessions)')
+        if row[1] == 'calendar_event_id'
+    )
+    assert event_column[3] == 0
+    event_fk = next(
+        row for row in db.execute('PRAGMA foreign_key_list(journal_screenshot_sessions)')
+        if row[3] == 'calendar_event_id'
+    )
+    assert event_fk[6] == 'SET NULL'
     db.close()

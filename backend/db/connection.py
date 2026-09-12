@@ -119,6 +119,7 @@ def init_db() -> None:
     _ensure_stt_model_settings(db)
     _ensure_journal_raw_content(db)
     _ensure_journal_idea_id(db)
+    _ensure_journal_screenshot_event_threshold(db)
     _ensure_journal_attachment_youtube(db)
     _migrate_flashcards_to_learning(db)
     _ensure_prevent_sleep(db)
@@ -2025,6 +2026,77 @@ def _ensure_writing_project_id(db: sqlite3.Connection) -> None:
     if 'writing_project_id' not in cols:
         db.execute('ALTER TABLE conversations ADD COLUMN writing_project_id TEXT REFERENCES writing_projects(id)')
         db.commit()
+
+
+def _ensure_journal_screenshot_event_threshold(db: sqlite3.Connection) -> None:
+    """Allow a screenshot session to exist before it has a calendar event.
+
+    The first version of screenshot grouping created the event immediately and
+    made `calendar_event_id` NOT NULL with a cascading delete. It existed on a
+    feature branch long enough for development databases to initialize that
+    shape, so changing schema.sql alone would leave those databases unable to
+    save their first screenshot. Rebuild the small relationship table while
+    preserving any runs already captured.
+    """
+    info = {
+        row[1]: row for row in db.execute(
+            'PRAGMA table_info(journal_screenshot_sessions)'
+        )
+    }
+    if not info:
+        return
+    foreign_keys = db.execute(
+        'PRAGMA foreign_key_list(journal_screenshot_sessions)'
+    ).fetchall()
+    event_fk = next((row for row in foreign_keys if row[3] == 'calendar_event_id'), None)
+    if info['calendar_event_id'][3] == 0 and event_fk and event_fk[6] == 'SET NULL':
+        return
+
+    db.execute('DROP TRIGGER IF EXISTS close_screenshot_session_on_journal_insert')
+    db.execute('DROP TABLE IF EXISTS journal_screenshot_sessions_new')
+    db.execute(
+        '''CREATE TABLE journal_screenshot_sessions_new (
+               entry_id TEXT PRIMARY KEY REFERENCES journal_entries(id) ON DELETE CASCADE,
+               calendar_event_id TEXT UNIQUE REFERENCES calendar_events(id) ON DELETE SET NULL,
+               is_open INTEGER NOT NULL DEFAULT 1 CHECK(is_open IN (0, 1)),
+               first_captured_at INTEGER NOT NULL,
+               last_captured_at INTEGER NOT NULL,
+               first_local_date TEXT NOT NULL,
+               first_local_time TEXT NOT NULL,
+               last_local_date TEXT NOT NULL,
+               last_local_time TEXT NOT NULL,
+               created_at INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+           )'''
+    )
+    db.execute(
+        '''INSERT INTO journal_screenshot_sessions_new(
+               entry_id, calendar_event_id, is_open, first_captured_at,
+               last_captured_at, first_local_date, first_local_time,
+               last_local_date, last_local_time, created_at, updated_at)
+           SELECT entry_id, calendar_event_id, is_open, first_captured_at,
+               last_captured_at, first_local_date, first_local_time,
+               last_local_date, last_local_time, created_at, updated_at
+           FROM journal_screenshot_sessions'''
+    )
+    db.execute('DROP TABLE journal_screenshot_sessions')
+    db.execute(
+        'ALTER TABLE journal_screenshot_sessions_new RENAME TO journal_screenshot_sessions'
+    )
+    db.execute(
+        'CREATE UNIQUE INDEX idx_one_open_journal_screenshot_session'
+        ' ON journal_screenshot_sessions(is_open) WHERE is_open = 1'
+    )
+    db.execute(
+        '''CREATE TRIGGER close_screenshot_session_on_journal_insert
+           AFTER INSERT ON journal_entries
+           BEGIN
+               UPDATE journal_screenshot_sessions
+               SET is_open = 0, updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+               WHERE is_open = 1 AND entry_id != NEW.id;
+           END'''
+    )
+    db.commit()
 
 
 def _ensure_conversation_day_key(db: sqlite3.Connection) -> None:

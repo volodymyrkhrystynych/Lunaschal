@@ -153,7 +153,9 @@ CREATE TABLE IF NOT EXISTS calendar_journal_links (
 -- reuse its entry instead of inserting another one.
 CREATE TABLE IF NOT EXISTS journal_screenshot_sessions (
     entry_id TEXT PRIMARY KEY REFERENCES journal_entries(id) ON DELETE CASCADE,
-    calendar_event_id TEXT NOT NULL UNIQUE REFERENCES calendar_events(id) ON DELETE CASCADE,
+    -- NULL for a one-screenshot run. The event is created only when a second
+    -- capture gives it an actual span.
+    calendar_event_id TEXT UNIQUE REFERENCES calendar_events(id) ON DELETE SET NULL,
     is_open INTEGER NOT NULL DEFAULT 1 CHECK(is_open IN (0, 1)),
     first_captured_at INTEGER NOT NULL,
     last_captured_at INTEGER NOT NULL,
