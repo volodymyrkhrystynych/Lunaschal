@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
 import { shiftDateISO, isFutureDate, todayISO } from '../lib/newspapers';
+import { ImageLightbox } from './ImageLightbox';
 const NewspaperReader = lazy(() =>
   import('./NewspaperReader').then(module => ({
     default: module.NewspaperReader,
@@ -16,36 +17,6 @@ function formatDisplayDate(date: string) {
     day: 'numeric',
     timeZone: 'UTC',
   });
-}
-
-function Lightbox({
-  src,
-  alt,
-  onClose,
-}: {
-  src: string;
-  alt: string;
-  onClose: () => void;
-}) {
-  return (
-    <div
-      className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
-      <img
-        src={src}
-        alt={alt}
-        className="max-w-full max-h-full rounded-lg shadow-2xl"
-        onClick={e => e.stopPropagation()}
-      />
-      <button
-        onClick={onClose}
-        className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl"
-      >
-        ✕
-      </button>
-    </div>
-  );
 }
 
 export function Newspapers() {
@@ -253,13 +224,11 @@ export function Newspapers() {
         </div>
       )}
 
-      {lightbox && (
-        <Lightbox
-          src={lightbox.src}
-          alt={lightbox.alt}
-          onClose={() => setLightbox(null)}
-        />
-      )}
+      <ImageLightbox
+        src={lightbox?.src ?? null}
+        alt={lightbox?.alt}
+        onClose={() => setLightbox(null)}
+      />
       {reading && issue && (
         <Suspense fallback={<p>Loading PDF reader…</p>}>
           <NewspaperReader issue={issue} onClose={() => setReading(false)} />

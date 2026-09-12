@@ -8,15 +8,18 @@ export function useLightbox() {
 }
 
 /** Full-screen click-to-close preview of one image, opened by a thumbnail
- * button elsewhere (the paper/food/journal-attachment filmstrips). */
+ * button elsewhere. Used by the journal entry/attachment filmstrips, the
+ * food log, the Ideas sketch strip, and the newspaper front-page preview. */
 export function ImageLightbox({
   src,
   onClose,
   whiteBg = false,
+  alt = '',
 }: {
   src: string | null;
   onClose: () => void;
   whiteBg?: boolean;
+  alt?: string;
 }) {
   if (!src) return null;
   return (
@@ -26,7 +29,7 @@ export function ImageLightbox({
     >
       <img
         src={src}
-        alt=""
+        alt={alt}
         className={`max-w-full max-h-full rounded-lg shadow-2xl${whiteBg ? ' bg-white' : ''}`}
         onClick={e => e.stopPropagation()}
       />
