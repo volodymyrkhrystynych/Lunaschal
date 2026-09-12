@@ -420,6 +420,10 @@ def delete_entry(id):
         if session['calendar_event_id']:
             db.execute('DELETE FROM calendar_events WHERE id=?',
                        (session['calendar_event_id'],))
+    # A completed voice draft remains as replay/history after promotion. Its
+    # entry link has no cascading delete because deleting the draft itself
+    # would let a late upload replay recreate work the user just removed.
+    db.execute('UPDATE journal_voice_drafts SET entry_id=NULL WHERE entry_id=?', (id,))
     db.execute('DELETE FROM journal_entries WHERE id=?', (id,))
     db.commit()
     return jsonify({'success': True})

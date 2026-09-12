@@ -261,6 +261,31 @@ def test_delete_refuses_a_promoted_draft(client, monkeypatch):
     assert get_db().execute('SELECT * FROM journal_voice_drafts').fetchone() is not None
 
 
+def test_deleting_a_promoted_entry_keeps_draft_history_without_a_link(
+        client, monkeypatch):
+    monkeypatch.setattr(
+        stt_routes, 'run_multi_backend_transcribe',
+        lambda *a, **k: _candidates_ok('parakeet'),
+    )
+    monkeypatch.setattr(
+        'backend.journal.voice_drafts.merge_voice_draft',
+        lambda c, context=None: 'Merged.',
+    )
+    created = _post_draft(client).get_json()
+
+    response = client.delete(f"/api/journal/{created['entryId']}")
+
+    assert response.status_code == 200
+    assert get_db().execute(
+        'SELECT * FROM journal_entries WHERE id=?', (created['entryId'],)
+    ).fetchone() is None
+    draft = get_db().execute(
+        'SELECT status, entry_id FROM journal_voice_drafts WHERE id=?',
+        (created['id'],),
+    ).fetchone()
+    assert (draft['status'], draft['entry_id']) == ('done', None)
+
+
 def test_draft_audio_is_playable_while_pending(client, monkeypatch):
     monkeypatch.setattr(
         stt_routes, 'run_multi_backend_transcribe',
