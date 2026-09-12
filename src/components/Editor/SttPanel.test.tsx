@@ -87,7 +87,7 @@ describe('SttPanel', () => {
       <SttPanel onTranscribed={onTranscribed} onMeetingUploaded={() => {}} />
     );
 
-    fireEvent.click(await screen.findByText('Journal'));
+    fireEvent.click(await screen.findByText('Transcribe'));
 
     await waitFor(() =>
       expect(handleFinishedRecording).toHaveBeenCalledTimes(1)
@@ -106,7 +106,7 @@ describe('SttPanel', () => {
       <SttPanel onTranscribed={onTranscribed} onMeetingUploaded={() => {}} />
     );
 
-    fireEvent.click(await screen.findByText('Transcribe'));
+    fireEvent.click(await screen.findByText('Dictate'));
 
     await waitFor(() =>
       expect(onTranscribed).toHaveBeenCalledWith(
@@ -141,8 +141,8 @@ describe('SttPanel', () => {
     );
 
     fireEvent.click(await screen.findByText('Record'));
-    fireEvent.click(await screen.findByText('Journal'));
     fireEvent.click(await screen.findByText('Transcribe'));
+    fireEvent.click(await screen.findByText('Dictate'));
 
     // The two journal buttons persist their audio; the third dictates into
     // whatever text field is open, where a lost take is retyped, not lost.

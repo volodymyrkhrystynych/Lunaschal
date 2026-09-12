@@ -1,8 +1,8 @@
+import { RecordingButton } from '../RecordingButton';
 import { useRef, useState } from 'react';
 import { useIdeaCreate } from '../../offline/mutationDefaults';
 import { useClipStage } from '../../hooks/useClipStage';
 import { ClipStrip } from '../ClipRecorder';
-import { clipButtonLabel } from '../../lib/clipStage';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 
 interface IdeaCaptureProps {
@@ -77,27 +77,17 @@ export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
           }
         }}
         rows={3}
-        placeholder="Capture an idea — type it, or hit record and talk."
+        placeholder="Capture an idea — type it, or hit Transcribe and talk."
         className="w-full resize-none rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1.5 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
       />
       <div className="flex items-center gap-2 mt-2">
-        <button
-          type="button"
+        <RecordingButton
+          status={clips.status}
+          starting={clips.starting}
           onClick={clips.toggle}
-          // Gated only while the recorder is finishing one off: recording works
-          // offline (the clip is stored and uploaded later), and while
-          // recording this button is the only way to stop.
-          disabled={clips.busy}
-          data-testid="idea-capture-record"
-          aria-label={clips.recording ? 'Stop recording' : 'Record an idea'}
-          className={`px-2 py-1 rounded text-sm ${
-            clips.recording
-              ? 'bg-red-500/25 text-red-300'
-              : 'bg-white/10 text-[var(--color-text)] hover:bg-white/15'
-          } disabled:opacity-50`}
-        >
-          {clipButtonLabel(clips.status, clips.starting)}
-        </button>
+
+          testId="idea-capture-record"
+        />
         <button
           type="button"
           onClick={submit}

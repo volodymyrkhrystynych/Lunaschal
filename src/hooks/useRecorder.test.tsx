@@ -112,6 +112,57 @@ describe('useRecorder', () => {
     expect(result.current.status).toBe('idle');
   });
 
+  it('shows startup while permission is pending and releases a mic granted after unmount', async () => {
+    const fake = installFakeMediaRecorder();
+    const getUserMedia = navigator.mediaDevices.getUserMedia.bind(
+      navigator.mediaDevices
+    );
+    let allow!: () => void;
+    const permission = new Promise<void>(resolve => {
+      allow = resolve;
+    });
+    vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(
+      async constraints => {
+        await permission;
+        return getUserMedia(constraints);
+      }
+    );
+    const { result, unmount } = renderHook(() => useRecorder(vi.fn()));
+    let start!: Promise<void>;
+    act(() => {
+      start = result.current.start('audio');
+    });
+    expect(result.current.starting).toBe(true);
+    unmount();
+    await act(async () => {
+      allow();
+      await start;
+    });
+    expect(fake.recorderCount()).toBe(0);
+    expect(fake.trackStopCalls()).toBe(1);
+  });
+
+  it('leaves recording immediately on Stop and blocks another take until finalization', async () => {
+    const fake = installFakeMediaRecorder();
+    const { result } = renderHook(() => useRecorder(vi.fn(), vi.fn()));
+    await act(async () => {
+      await result.current.start('audio');
+    });
+    act(() => {
+      result.current.stop();
+    });
+    expect(result.current.status).toBe('saving');
+    expect(fake.state()).toBe('inactive');
+    await act(async () => {
+      await result.current.start('audio');
+    });
+    expect(fake.recorderCount()).toBe(1);
+    await act(async () => {
+      await fake.stop();
+    });
+    expect(result.current.status).toBe('idle');
+  });
+
   // --- durable mode ---------------------------------------------------------
   //
   // The bug being fixed: a journal recording existed only inside MediaRecorder

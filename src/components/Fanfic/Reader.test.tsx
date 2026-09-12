@@ -507,7 +507,7 @@ describe('Reader commentary microphone', () => {
     await screen.findByRole('heading', { name: startChapter });
     fireEvent.click(screen.getByText(/Commentary/));
     fireEvent.click(screen.getByTestId('fanfic-commentary-record'));
-    const stop = await screen.findByRole('button', { name: '■ Stop' });
+    const stop = await screen.findByRole('button', { name: 'Stop recording' });
     fake.emit();
     return { fake, stop };
   };
@@ -541,10 +541,44 @@ describe('Reader commentary microphone', () => {
 
     const starting = screen.getByRole('button', { name: 'Starting…' });
     expect((starting as HTMLButtonElement).disabled).toBe(true);
-    expect(starting.getAttribute('title')).toBe('Starting microphone');
+    expect(starting.getAttribute('title')).toBe('Starting…');
 
     allowMicrophone();
-    await screen.findByRole('button', { name: '■ Stop' });
+    await screen.findByRole('button', { name: 'Stop recording' });
+  });
+
+  it('updates the same commentary button on start and stop, including after reopening', async () => {
+    const { fake, stop } = await record();
+    expect(stop.getAttribute('aria-pressed')).toBe('true');
+    expect(stop.className).toContain('bg-red-600');
+
+    fireEvent.click(stop);
+    expect(screen.getByTestId('fanfic-commentary-record')).toBe(stop);
+    expect(stop.getAttribute('data-recording-state')).toBe('saving');
+    expect(stop.getAttribute('aria-pressed')).toBe('false');
+    expect((stop as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      await fake.stop();
+    });
+    expect(stop.getAttribute('data-recording-state')).toBe('idle');
+
+    // A second take must work without closing the panel to refresh its handler.
+    const next = installFakeMediaRecorder();
+    fireEvent.click(stop);
+    await screen.findByRole('button', { name: 'Stop recording' });
+    expect(screen.getByTestId('fanfic-commentary-record')).toBe(stop);
+    next.emit();
+    fireEvent.click(screen.getByText(/Commentary/));
+    expect(next.state()).toBe('recording');
+    fireEvent.click(screen.getByText(/Commentary/));
+    const reopened = screen.getByRole('button', { name: 'Stop recording' });
+    expect(reopened.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(reopened);
+    await act(async () => {
+      await next.stop();
+    });
+    expect(reopened.getAttribute('data-recording-state')).toBe('idle');
+    expect(screen.getAllByTestId('fanfic-commentary-clip')).toHaveLength(2);
   });
 
   // Stopping stages the clip and nothing else. Nothing is transcribed here,

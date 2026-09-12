@@ -271,7 +271,7 @@ describe('IdeaCapture', () => {
     renderIt();
     await screen.findByText('Habit tracking');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe' }));
 
     // 'transcribe' + durable: the clip is stored on the device and the server
     // transcribes it, rather than the browser transcribing a clip it holds in
@@ -287,7 +287,7 @@ describe('IdeaCapture', () => {
     renderIt();
     await screen.findByText('Habit tracking');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe' }));
     finishRecording!();
 
     // A chip, and nothing else. Stopping used to *be* the save, which meant one
@@ -301,7 +301,7 @@ describe('IdeaCapture', () => {
     renderIt();
     await screen.findByText('Habit tracking');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe' }));
     const ideaId = startCalls[0]!.opts!.idea!.id;
     finishRecording!();
     await screen.findByTestId('idea-capture-clip');
@@ -335,7 +335,7 @@ describe('IdeaCapture', () => {
     const save = screen.getByRole('button', { name: /Save idea/ });
     expect(save.hasAttribute('disabled')).toBe(true);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe' }));
     finishRecording!();
     await screen.findByTestId('idea-capture-clip');
 
@@ -353,7 +353,7 @@ describe('IdeaCapture', () => {
     fireEvent.change(await screen.findByLabelText('Repository'), {
       target: { value: 'r2' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Record an idea' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Transcribe' }));
 
     expect(startCalls.at(-1)!.opts?.idea?.repoId).toBe('r2');
   });

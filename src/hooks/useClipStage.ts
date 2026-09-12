@@ -53,8 +53,7 @@ export interface ClipStage {
   recording: boolean;
   /**
    * The gap between the tap and the microphone actually being live —
-   * `getUserMedia`'s prompt plus the first store write. Its own flag because
-   * the recorder cannot report it: it is not recording yet.
+   * `getUserMedia`'s prompt plus the first store write, reported by useRecorder.
    */
   starting: boolean;
   /** True while the recorder is closing a clip out — briefly, on stop. */
@@ -106,7 +105,6 @@ export function useClipStage(target: ClipTarget): ClipStage {
   const qc = useQueryClient();
   const [clips, setClips] = useState<StoredRecording[]>([]);
   const [notice, setNotice] = useState('');
-  const [starting, setStarting] = useState(false);
   const idsRef = useRef<ClipIds | null>(null);
   // Read inside `toggle` and `commit`, which are recreated on every render;
   // holding it in a ref keeps a target change (the reader walking to the next
@@ -141,6 +139,7 @@ export function useClipStage(target: ClipTarget): ClipStage {
       },
     }
   );
+  const starting = recorder.starting ?? false;
 
   const toggle = useCallback(() => {
     if (recorder.status === 'recording') {
@@ -149,30 +148,24 @@ export function useClipStage(target: ClipTarget): ClipStage {
     }
     if (recorder.status !== 'idle' || starting) return;
     setNotice('');
-    setStarting(true);
     const t = targetRef.current;
     const claimed = ids();
-    // Wrapped rather than chained off `start` directly: a test that stubs the
-    // recorder hands back undefined, and a `.finally` on that throws inside the
-    // click handler.
-    void Promise.resolve(
-      recorder.start('transcribe', {
-        durable: true,
-        entryId: t.kind === 'food' ? undefined : claimed.entryId,
-        idea:
-          t.kind === 'idea'
-            ? { id: claimed.ideaId!, ...(t.repoId ? { repoId: t.repoId } : {}) }
-            : undefined,
-        fic:
-          t.kind === 'fic'
-            ? {
-                ficId: t.ficId,
-                ...(t.chapterId ? { chapterId: t.chapterId } : {}),
-              }
-            : undefined,
-        food: t.kind === 'food' ? { id: claimed.foodId! } : undefined,
-      })
-    ).finally(() => setStarting(false));
+    void recorder.start('transcribe', {
+      durable: true,
+      entryId: t.kind === 'food' ? undefined : claimed.entryId,
+      idea:
+        t.kind === 'idea'
+          ? { id: claimed.ideaId!, ...(t.repoId ? { repoId: t.repoId } : {}) }
+          : undefined,
+      fic:
+        t.kind === 'fic'
+          ? {
+              ficId: t.ficId,
+              ...(t.chapterId ? { chapterId: t.chapterId } : {}),
+            }
+          : undefined,
+      food: t.kind === 'food' ? { id: claimed.foodId! } : undefined,
+    });
   }, [ids, recorder, starting]);
 
   const remove = useCallback((id: string) => {

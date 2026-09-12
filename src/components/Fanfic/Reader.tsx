@@ -1,3 +1,4 @@
+import { RecordingButton } from '../RecordingButton';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -35,7 +36,6 @@ import { useMasterDetail } from '@/hooks/useMasterDetail';
 import { MasterDetailBack } from '@/components/MasterDetailBack';
 import { useClipStage } from '../../hooks/useClipStage';
 import { ClipStrip } from '../ClipRecorder';
-import { clipButtonLabel } from '../../lib/clipStage';
 import { useDraftState } from '@/hooks/useDraftState';
 
 interface ReaderProps {
@@ -805,30 +805,13 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                         Stop when you pause — you can add another clip.
                       </span>
                     )}
-                    <button
+                    <RecordingButton
+                      status={clips.status}
+                      starting={clips.starting}
                       onClick={clips.toggle}
-                      // Not gated on being online: the clip is stored on the
-                      // device and uploaded when the server is back, so
-                      // commentary on a chapter read offline is still kept.
-                      // Only the moment it is being handed over is blocked, and
-                      // while recording this button is the only way to stop.
-                      disabled={clips.busy}
-                      data-testid="fanfic-commentary-record"
-                      title={
-                        clips.starting
-                          ? 'Starting microphone'
-                          : clips.recording
-                            ? 'Stop recording'
-                            : 'Record commentary — it is sent with the rest'
-                      }
-                      className={`px-3 py-1 rounded disabled:opacity-50 ${
-                        clips.recording
-                          ? 'bg-red-600 hover:bg-red-700 text-white'
-                          : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
-                      }`}
-                    >
-                      {clipButtonLabel(clips.status, clips.starting)}
-                    </button>
+
+                      testId="fanfic-commentary-record"
+                    />
                     <button
                       onClick={sendCommentary}
                       // Never gated on the recorder: a stopped clip is staged,
