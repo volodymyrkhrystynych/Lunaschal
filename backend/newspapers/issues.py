@@ -32,6 +32,138 @@ def issue_path(value):
     return archive_root() / 'toronto-star' / f'{validate_date(value)}.pdf'
 
 
+# Rendered page pictures for the Journal card. There is no PDF rasterizer on
+# this server — pypdf cannot draw — so these are made by the reader itself,
+# client-side, and uploaded; see src/components/NewspaperReader.tsx.
+#
+# They live under newspapers_root() and NOT under archive_root(), for the
+# reason backend/journal/archive.py keeps its YouTube thumbnail on the SSD: the
+# bytes that draw the card stay on the data disk, in the backup, and available
+# with the archive drive unplugged. Only the thing that needs the drive — the
+# PDF — lives on the drive.
+#
+# 'issue-pages' must not collide with a key of storage.PAPERS: with
+# NEWSPAPERS_ARCHIVE_ROOT unset the two roots are the same directory, and
+# 'toronto-star/' is already in it.
+MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024
+
+
+def snapshots_root():
+    return newspapers_root() / 'issue-pages'
+
+
+def snapshot_dir(value):
+    return snapshots_root() / validate_date(value)
+
+
+def snapshot_path(value, page):
+    if type(page) is not int or page < 1:
+        raise ValueError('Page must be a positive integer')
+    return snapshot_dir(value) / f'{page}.jpg'
+
+
+def looks_like_jpeg(data):
+    """Both ends, not just the magic number: an upload cut off mid-flight still
+    starts with the right three bytes, and a half-written thumbnail is exactly
+    the broken image on the card this check exists to prevent."""
+    return len(data) > 4 and data[:3] == b'\xff\xd8\xff' and data[-2:] == b'\xff\xd9'
+
+
+def store_snapshot(value, page, data):
+    """Publish only whole pictures, the way store_issue publishes only whole
+    PDFs — a half-written file served to the Journal feed is a broken image."""
+    path = snapshot_path(value, page)
+    if not data:
+        raise ValueError('Page image is empty')
+    if len(data) > MAX_SNAPSHOT_BYTES:
+        raise ValueError('Page image exceeds the 2 MB limit')
+    if not looks_like_jpeg(data):
+        raise ValueError('Page image must be a complete JPEG')
+    path.parent.mkdir(parents=True, exist_ok=True)
+    name = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, suffix='.part', delete=False) as output:
+            name = output.name
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(name, path)
+        name = None
+    finally:
+        if name:
+            Path(name).unlink(missing_ok=True)
+    return path
+
+
+def prune_snapshots(value, keep):
+    """Drop the pictures of pages that no longer have any ink.
+
+    Never removes the directory itself: an empty one is harmless, and removing
+    it races a store_snapshot that has already made it.
+    """
+    directory = snapshot_dir(value)
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return
+    for entry in entries:
+        page = _page_number(entry.name)
+        if page is not None and page not in keep:
+            Path(entry.path).unlink(missing_ok=True)
+
+
+def _page_number(name):
+    stem, _, ext = name.partition('.')
+    if ext != 'jpg' or not stem.isdigit():
+        return None
+    return int(stem)
+
+
+def snapshot_pages(value):
+    """(page, mtime) for every rendered page of one issue, in page order."""
+    try:
+        entries = list(os.scandir(snapshot_dir(value)))
+    except OSError:
+        return []
+    found = []
+    for entry in entries:
+        page = _page_number(entry.name)
+        if page is None:
+            continue
+        try:
+            found.append((page, int(entry.stat().st_mtime)))
+        except OSError:
+            continue
+    found.sort()
+    return found
+
+
+def snapshot_index():
+    """Every issue's rendered pages, in one pass, for the Journal feed.
+
+    One scandir names the issues that have ever been opened in the reader, and
+    one more per issue reads its pages. Issues nobody has opened — which is
+    most of an archive — have no directory and cost nothing at all.
+
+    Read off the disk rather than mirrored into a column for the reason
+    marked_pages gives below: the files are the truth, and a column would be
+    one more thing every write path had to remember to keep true.
+    """
+    try:
+        dates = [e.name for e in os.scandir(snapshots_root()) if e.is_dir()]
+    except OSError:
+        return {}
+    index = {}
+    for value in dates:
+        try:
+            pages = snapshot_pages(value)
+        except ValueError:
+            continue
+        if pages:
+            index[value] = pages
+    return index
+
+
 def get_issue(value):
     return get_db().execute('SELECT * FROM newspaper_issues WHERE date = ?', (validate_date(value),)).fetchone()
 

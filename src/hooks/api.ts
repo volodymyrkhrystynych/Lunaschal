@@ -1367,11 +1367,32 @@ export interface NewspaperIssue {
   pdfUrl: string;
 }
 
-/** An archived issue as the Journal feed sees it: the link, and how much of the
- *  paper has been written on. */
+/** One rendered page of an issue — the picture the reader made of it. */
+export interface NewspaperPageImage {
+  page: number;
+  imageUrl: string;
+}
+
+/** The same picture as the reader's own inventory sees it. `url` rather than
+ * `imageUrl` because this one carries the mtime the feed's cache-buster is
+ * built from, and the reader compares it rather than displaying it. */
+export interface NewspaperRenderedPage {
+  page: number;
+  url: string;
+  updatedAt: number;
+}
+
+/** An archived issue as the Journal feed sees it: the link, how much of the
+ *  paper has been written on, and pictures of the pages that were.
+ *
+ *  `pages` holds the marked-up pages plus page 1 as the cover, in page order.
+ *  It is empty for an issue that has not been opened in the reader since the
+ *  reader learned to render them — the pictures are made client-side, so an
+ *  older issue can report marked pages and carry none. */
 export interface JournalNewspaper extends NewspaperIssue {
   archivedAt: string;
   markedPages: number;
+  pages: NewspaperPageImage[];
 }
 
 export interface NewspaperDownload {
@@ -2653,6 +2674,27 @@ const del = <T>(url: string) => send<T>('DELETE', url);
 
 const upload = <T>(url: string, form: FormData) =>
   uploadWith<T>('POST', url, form);
+
+/** PUT a file as the whole body rather than as a form part. One caller (the
+ * newspaper reader's page pictures, where the image *is* the payload), so this
+ * stays narrow rather than bending `put` into taking a Blob. */
+async function putBlob<T>(url: string, body: Blob): Promise<T> {
+  const r = await fetchWithTimeout(
+    url,
+    {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': body.type || 'application/octet-stream' },
+      body,
+    },
+    UPLOAD_TIMEOUT_MS
+  );
+  if (!r.ok) {
+    const b = await r.json().catch(() => ({}));
+    throw new ApiError(b.error || `HTTP ${r.status}`, r.status);
+  }
+  return r.json();
+}
 
 async function uploadWith<T>(
   method: string,
@@ -4321,6 +4363,20 @@ export const api = {
       get<JournalNewspaper[]>('/api/newspapers/issues/journal'),
     markup: (date: string) =>
       get<NewspaperMarkup>(`/api/newspapers/issues/${date}/markup`),
+    // Which pages already have a picture, so the reader renders only what is
+    // missing. Its own request rather than a field on the markup response:
+    // that response is also the PUT body and the shape of the recovered local
+    // draft, and a field travelling one of those three directions would not
+    // stay out of the other two.
+    pageImages: (date: string) =>
+      get<{ pages: NewspaperRenderedPage[] }>(
+        `/api/newspapers/issues/${date}/pages`
+      ),
+    savePageImage: (date: string, page: number, image: Blob) =>
+      putBlob<NewspaperRenderedPage>(
+        `/api/newspapers/issues/${date}/pages/${page}`,
+        image
+      ),
     // Opening an issue is what dates its Journal card, so the reader says so
     // explicitly instead of letting the markup GET double as the signal.
     markOpened: (date: string) =>

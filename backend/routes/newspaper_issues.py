@@ -69,6 +69,11 @@ def journal_issues():
     An issue nobody has opened has no such moment and goes to the end of its
     day, above that day's last entry: it is the paper still waiting, not an
     event that happened at 6am. See backend/journal_moment.py.
+
+    'pages' are the pictures the reader has rendered of this issue — the pages
+    written on, plus page 1 as the cover. They exist only for issues that have
+    been opened since the reader learned to make them, so an older issue can
+    report marked pages and carry no pictures at all.
     """
     rows = get_db().execute('SELECT * FROM newspaper_issues ORDER BY created_at DESC, date DESC').fetchall()
     dated = [(journal_moment(row['last_read_at'], row['created_at'], unworked_at_day_end=True), row)
@@ -79,9 +84,15 @@ def journal_issues():
     # meaningful, so issues that tie — every unread pair from one day lands on
     # that day's last second — hold the archive order the query gave them.
     dated.sort(key=lambda pair: pair[0], reverse=True)
+    # One scandir names every issue that has ever been opened in the reader,
+    # and the rest — most of an archive — cost nothing, because an unopened
+    # issue has no directory to look in.
+    rendered = issues.snapshot_index()
     return jsonify([{**issues.public_issue(row),
                      'archivedAt': datetime.fromtimestamp(at, tz=timezone.utc).isoformat(),
-                     'markedPages': len(issues.marked_pages(row['markup']))}
+                     'markedPages': len(issues.marked_pages(row['markup'])),
+                     'pages': [{'page': page, 'imageUrl': page_image_url(row['date'], page, mtime)}
+                               for page, mtime in rendered.get(row['date'], [])]}
                     for at, row in dated])
 
 
@@ -102,6 +113,15 @@ def upload_issue(date):
     return jsonify(issues.public_issue(row)), 201
 
 
+def page_image_url(date, page, mtime):
+    """Cache-busted on the file's own mtime rather than on the issue revision:
+    revision bumps for the whole issue on every markup save, so using it would
+    re-fetch forty thumbnails because one page was drawn on. Same idea as
+    backend/routes/paper.py's page_image_url, keyed differently for that
+    reason."""
+    return f'/api/newspapers/issues/{date}/pages/{page}?v={mtime}'
+
+
 def lookup(date):
     try:
         return issues.get_issue(date)
@@ -117,6 +137,66 @@ def issue_pdf(date):
         return jsonify(error='Issue PDF is unavailable; check the archive drive'), 404
     return send_file(path, mimetype='application/pdf', conditional=True,
                      download_name=f'toronto-star-{date}.pdf')
+
+
+@bp.get('/issues/<date>/pages')
+def list_issue_pages(date):
+    """Which pages of this issue already have a rendered picture.
+
+    A route of its own rather than a field on GET /markup, which the reader
+    asks for in the same breath. {revision, strokes} is not only a response: it
+    is also the PUT body, and the shape of the localStorage draft the reader
+    recovers from (src/components/NewspaperReader.tsx). A field that only ever
+    travels one of those three directions is how a `delete body.pages` gets
+    written later. The extra round trip is free — the reader opens with a
+    Promise.all in which the PDF is the long pole.
+    """
+    row = lookup(date)
+    if row is None:
+        return jsonify(error='Issue not found'), 404
+    return jsonify(pages=[{'page': page, 'url': page_image_url(date, page, mtime), 'updatedAt': mtime}
+                          for page, mtime in issues.snapshot_pages(date)])
+
+
+@bp.get('/issues/<date>/pages/<int:page>')
+def issue_page_image(date, page):
+    row = lookup(date)
+    if row is None:
+        return jsonify(error='Issue not found'), 404
+    if not 1 <= page <= row['page_count']:
+        return jsonify(error='No such page in this issue'), 404
+    path = issues.snapshot_path(date, page)
+    if not path.is_file():
+        return jsonify(error='Page image has not been rendered yet'), 404
+    return send_file(path, mimetype='image/jpeg', conditional=True)
+
+
+@bp.put('/issues/<date>/pages/<int:page>')
+def store_issue_page_image(date, page):
+    """A page picture from the reader, as a raw JPEG body.
+
+    Not multipart: Paper posts its snapshot as a form part because it rides
+    alongside the strokes, and here the picture is the whole payload.
+
+    Deliberately does not touch last_read_at. The worker that sends these is
+    machinery, not a person reading; POST /issues/<date>/opened is the event.
+    """
+    request.max_content_length = issues.MAX_SNAPSHOT_BYTES + 1024
+    if request.content_length and request.content_length > issues.MAX_SNAPSHOT_BYTES:
+        return jsonify(error='Page image is too large'), 413
+    row = lookup(date)
+    if row is None:
+        return jsonify(error='Issue not found'), 404
+    if not 1 <= page <= row['page_count']:
+        return jsonify(error='No such page in this issue'), 400
+    try:
+        path = issues.store_snapshot(date, page, request.get_data())
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except OSError:
+        return jsonify(error='Page image storage is unavailable'), 503
+    mtime = int(path.stat().st_mtime)
+    return jsonify(page=page, url=page_image_url(date, page, mtime), updatedAt=mtime)
 
 
 @bp.post('/issues/<date>/opened')
@@ -172,4 +252,15 @@ def write_markup(date):
         db.commit()
     if not cursor.rowcount:
         return jsonify(error='Markup changed in another reader. Reopen the issue before editing.'), 409
+    # Only after the compare-and-set has actually landed: before it, a refused
+    # save would delete the thumbnails of the markup it was refused in favour
+    # of — the same reason last_read_at rides inside the CAS above.
+    #
+    # Page 1 survives whatever happens to the ink. It is the issue's cover, and
+    # the cover is what gives an unmarked paper a picture in the Journal feed;
+    # without this line, erasing everything would also erase the card.
+    try:
+        issues.prune_snapshots(date, issues.marked_pages(markup) | {1})
+    except OSError:
+        pass  # The markup is saved. A stale thumbnail is not worth a 500.
     return jsonify(revision=body['revision'] + 1)

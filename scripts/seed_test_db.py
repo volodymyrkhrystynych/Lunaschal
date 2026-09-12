@@ -521,7 +521,7 @@ def seed_fanfic(db, journal_ids):
 
 def seed_newspapers(db):
     from backend.newspapers.storage import build_path
-    from backend.newspapers.issues import issue_path
+    from backend.newspapers.issues import issue_path, snapshot_path
     from pypdf import PdfWriter
 
     today = today_key()
@@ -564,6 +564,13 @@ def seed_newspapers(db):
         (new_id(), today, str(path), path.stat().st_size, 4, markup, 1,
          max(arrived, ts(hours_ago=2)), arrived),
     )
+    # The pictures the Journal card shows. Pages 1 and 3 exactly: that is the
+    # set a markup save would keep (the marked pages, plus page 1 as the cover),
+    # so the demo shows a state the app can actually reach. No new table forces
+    # this — a card with an empty strip is just one more thing that renders
+    # blank in ./test-env.sh and errors nowhere.
+    for page in (1, 3):
+        placeholder_image(snapshot_path(today, page), f'Star p{page}', size=(1000, 1294))
 
 
 def seed_torrents(db):

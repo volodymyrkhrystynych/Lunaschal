@@ -14,7 +14,6 @@ import {
   parseBuffer,
   serializeBuffer,
   serializeStrokes,
-  strokeColor,
   toPageSpaceStrokes,
   type InkPalette,
   type Size,
@@ -22,7 +21,7 @@ import {
   type StrokeTool,
   type SwipeDirection,
 } from '@/lib/paper';
-import { strokePathData } from '@/lib/inkPath';
+import { paintStrokes } from '@/lib/inkRaster';
 import { InkSurface, type InkSurfaceHandle } from '@/components/ink/InkSurface';
 import type { PageImage } from '@/lib/paperImages';
 
@@ -273,20 +272,7 @@ export const PaperSurface = forwardRef<PaperSurfaceHandle, PaperSurfaceProps>(
             ctx.restore();
           }
 
-          // Path2D is in every browser this runs in; jsdom has none, and a
-          // snapshot without ink is a better test artefact than a crash.
-          if (typeof Path2D !== 'undefined') {
-            for (const stroke of strokes) {
-              const d = strokePathData(stroke);
-              if (!d) continue;
-              ctx.fillStyle = strokeColor(stroke, PAPER_PALETTE);
-              ctx.globalAlpha =
-                stroke.tool === 'highlighter'
-                  ? PAPER_PALETTE.highlightAlpha
-                  : 1;
-              ctx.fill(new Path2D(d));
-            }
-          }
+          paintStrokes(ctx, strokes, PAPER_PALETTE);
           canvas.toBlob(resolve, 'image/png');
         }),
       [images]

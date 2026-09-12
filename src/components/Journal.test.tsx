@@ -130,6 +130,14 @@ vi.mock('../offline/photoStore', () => ({
   storePhoto: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The reader is lazy-loaded and drags pdf.js in with it; the feed only needs
+// to know whether it was asked for.
+vi.mock('./NewspaperReader', () => ({
+  NewspaperReader: ({ issue }: { issue: { date: string } }) => (
+    <div data-testid="newspaper-reader">reader {issue.date}</div>
+  ),
+}));
+
 vi.mock('../offline/photoQueue', () => ({
   enqueueJournalAttachment: vi.fn().mockResolvedValue(undefined),
 }));
@@ -1218,7 +1226,17 @@ describe('archived newspapers in the feed', () => {
     byteSize: 1000,
     pageCount: 40,
     markedPages: 0,
+    pages: [] as { page: number; imageUrl: string }[],
     pdfUrl: '/api/newspapers/issues/2026-07-02/pdf',
+  };
+
+  const withPages = {
+    ...issue,
+    markedPages: 2,
+    pages: [
+      { page: 1, imageUrl: '/api/newspapers/issues/2026-07-02/pages/1?v=1' },
+      { page: 9, imageUrl: '/api/newspapers/issues/2026-07-02/pages/9?v=2' },
+    ],
   };
 
   it('shows how much of the paper has been marked up', async () => {
@@ -1233,6 +1251,50 @@ describe('archived newspapers in the feed', () => {
     vi.mocked(api.newspapers.journalIssues).mockResolvedValue([issue]);
     renderJournal();
     expect(await screen.findByText(/40 pages · not marked up/)).toBeTruthy();
+  });
+
+  it('shows the marked-up pages as thumbnails', async () => {
+    vi.mocked(api.newspapers.journalIssues).mockResolvedValue([withPages]);
+    renderJournal();
+    await screen.findByText(/2 of 40 pages marked up/);
+    const thumbs = screen.getAllByTitle('View');
+    expect(
+      thumbs.map(b => b.querySelector('img')?.getAttribute('src'))
+    ).toEqual(withPages.pages.map(pg => pg.imageUrl));
+  });
+
+  it('blows a thumbnail up rather than opening the reader', async () => {
+    vi.mocked(api.newspapers.journalIssues).mockResolvedValue([withPages]);
+    renderJournal();
+    await screen.findByText(/2 of 40 pages marked up/);
+    fireEvent.click(screen.getAllByTitle('View')[1]);
+    // The lightbox adds a second copy of that page. Queried by src rather than
+    // by role: both images are decorative (alt=""), so neither has one.
+    await waitFor(() =>
+      expect(
+        document.querySelectorAll(`img[src="${withPages.pages[1].imageUrl}"]`)
+          .length
+      ).toBe(2)
+    );
+    expect(screen.queryByTestId('newspaper-reader')).toBeNull();
+  });
+
+  it('opens the reader from the header, not from a page', async () => {
+    vi.mocked(api.newspapers.journalIssues).mockResolvedValue([withPages]);
+    renderJournal();
+    const header = await screen.findByText(/2 of 40 pages marked up/);
+    fireEvent.click(header);
+    await waitFor(() =>
+      expect(screen.getByTestId('newspaper-reader')).toBeTruthy()
+    );
+  });
+
+  it('shows no strip and no empty label for an issue with no pictures', async () => {
+    vi.mocked(api.newspapers.journalIssues).mockResolvedValue([issue]);
+    renderJournal();
+    await screen.findByText(/not marked up/);
+    expect(screen.queryAllByTitle('View')).toHaveLength(0);
+    expect(screen.queryByText('No pages')).toBeNull();
   });
 
   it('keeps the card out of a search, where the feed is entries only', async () => {

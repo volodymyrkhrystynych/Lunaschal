@@ -1,4 +1,4 @@
-# The ink layer (`src/components/ink/`, `src/lib/ink.ts`, `src/lib/inkPath.ts`, `src/lib/inkPanel.ts`)
+# The ink layer (`src/components/ink/`, `src/lib/ink.ts`, `src/lib/inkPath.ts`, `src/lib/inkRaster.ts`, `src/lib/inkPanel.ts`)
 
 Every drawing surface in the app is built from this. There are three of them and
 they share one implementation, so a fix to how ink behaves is written once:
@@ -39,6 +39,16 @@ not supply a stroke model or a pointer loop.**
   0.35..1 width range; velocity-based simulation is disabled. The highlighter does not
   taper: it is a flat band, because a tapering edge reads as a smudge rather
   than a marker.
+
+- **Painting ink onto a canvas is written once** (`src/lib/inkRaster.ts`'s
+  `paintStrokes`), and has two callers: Paper's page snapshot
+  (`PaperSurface.tsx`) and the newspaper reader's Journal thumbnails
+  (`NewspaperReader.tsx`). It fills the _same_ path data the screen is drawn
+  with, so a picture cannot drift from what was on the page, and it owns the
+  three decisions that turn a path into paint — the colour a stroke resolves
+  to, the highlighter's alpha, and doing nothing rather than crashing where
+  `Path2D` does not exist (jsdom has none). The caller owns the transform: only
+  it knows what units its strokes are in.
 
 - **Preview and release use identical geometry.** Both simplify the captured
   points with the same bounded, shape- and pressure-aware reducer before calling
