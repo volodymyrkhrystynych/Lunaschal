@@ -4,14 +4,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { RecordingButton } from './RecordingButton';
 
 describe('RecordingButton', () => {
-  it.each(['Record', 'Journal', 'Transcribe'])(
+  it.each([
+    ['audio', 'Record'],
+    ['transcribe', 'Transcribe'],
+    ['dictate', 'Dictate'],
+  ] as const)(
     'keeps %s stoppable when starting becomes unavailable',
-    label => {
+    (action, label) => {
       const onClick = vi.fn();
       const { rerender } = render(
         <RecordingButton
           status="idle"
-          label={label}
+          action={action}
           onClick={onClick}
           disabled
         />
@@ -23,7 +27,7 @@ describe('RecordingButton', () => {
       rerender(
         <RecordingButton
           status="recording"
-          label={label}
+          action={action}
           onClick={onClick}
           disabled
         />

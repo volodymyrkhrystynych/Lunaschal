@@ -74,7 +74,7 @@ export function ClipRecorder({
         status={stage.status}
         starting={stage.starting}
         onClick={stage.toggle}
-        idleLabel="Record a clip"
+
         testId={testId}
       />
       <ClipStrip stage={stage} testId={testId} />

@@ -252,7 +252,7 @@ describe('Journal edit-mode recording', () => {
   });
 
   const pressRecord = () =>
-    fireEvent.click(screen.getByLabelText('Record into this entry'));
+    fireEvent.click(screen.getByLabelText('Transcribe'));
 
   it('stages the clip instead of writing into the draft', async () => {
     // The whole point of the change. Recording used to fetch a transcript in
@@ -311,12 +311,12 @@ describe('Journal edit-mode recording', () => {
     expect(api.journal.update).not.toHaveBeenCalled();
   });
 
-  it('reads Record, not Transcribe', async () => {
+  it('labels saved audio with transcription as Transcribe', async () => {
     renderJournal();
     await screen.findByText('First entry');
     openEditWithKeyboard();
 
-    expect(screen.getByText('Record')).toBeTruthy();
+    expect(screen.getByText('Transcribe')).toBeTruthy();
     expect(screen.queryByText('● Transcribe')).toBeNull();
   });
 });
@@ -517,7 +517,7 @@ describe('Journal new-entry attachments', () => {
     fireEvent.click(await screen.findByText('+ New Entry'));
 
     expect(screen.getByTestId('journal-new-entry-transcribe')).toBeTruthy();
-    expect(screen.getByText('Record')).toBeTruthy();
+    expect(screen.getByText('Transcribe')).toBeTruthy();
   });
 
   it('stages the clip and leaves the draft alone', async () => {

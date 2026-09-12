@@ -27,7 +27,7 @@ afterEach(() => {
 
 describe('bottom bar with the real recorder', () => {
   it.each([
-    ['Journal', 'transcribe'],
+    ['Transcribe', 'transcribe'],
     ['Record', 'audio'],
   ])(
     '%s reports startup, capture and stop on the same button',
@@ -59,7 +59,7 @@ describe('bottom bar with the real recorder', () => {
       expect(screen.getByRole('button', { name: 'Starting…' })).toBe(button);
       expect(button.disabled).toBe(true);
       const other = screen.getByRole('button', {
-        name: label === 'Journal' ? 'Record' : 'Journal',
+        name: label === 'Transcribe' ? 'Record' : 'Transcribe',
       }) as HTMLButtonElement;
       expect(other.disabled).toBe(true);
       allow();

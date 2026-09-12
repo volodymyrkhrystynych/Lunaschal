@@ -314,7 +314,8 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
               : startRecording
           }
           disabled={buttonDisabled}
-          label={buttonLabel}
+          action="dictate"
+          statusLabel={isListenerControlling ? buttonLabel : undefined}
           title={
             recorder.canTranscribe
               ? 'Record → transcribe into the active editor or the clipboard'
@@ -330,7 +331,6 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
               : startJournalRecording
           }
           disabled={unavailable('journal')}
-          label="Journal"
           title="Record → save the audio to the journal → transcribe it into the entry"
         />
         <RecordingButton
@@ -342,7 +342,7 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
               : startAudioRecording
           }
           disabled={unavailable('audio')}
-          label="Record"
+          action="audio"
           title="Record → save as a journal entry with the audio attached, without transcribing it"
         />
 

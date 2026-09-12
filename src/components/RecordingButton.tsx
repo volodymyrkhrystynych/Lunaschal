@@ -6,8 +6,8 @@ export function RecordingButton({
   starting = false,
   onClick,
   disabled = false,
-  label = 'Record',
-  idleLabel = label,
+  action = 'transcribe',
+  statusLabel,
   title = 'Record a clip — saved audio is transcribed after sending',
   testId,
   className = '',
@@ -17,13 +17,20 @@ export function RecordingButton({
   onClick: () => void;
   /** Prevent starting; an active recording must always remain stoppable. */
   disabled?: boolean;
-  label?: string;
-  idleLabel?: string;
+  /** Transcribe keeps audio and produces text; dictate only inserts text. */
+  action?: 'transcribe' | 'audio' | 'dictate';
+  /** Feedback for an external recorder, such as the desktop voice listener. */
+  statusLabel?: string;
   title?: string;
   testId?: string;
   /** Layout only: recording colors and feedback belong to this component. */
   className?: string;
 }) {
+  const label = {
+    transcribe: 'Transcribe',
+    audio: 'Record',
+    dictate: 'Dictate',
+  }[action];
   const recording = status === 'recording';
   const busy = !recording && (starting || status !== 'idle');
   const text = recording
@@ -34,13 +41,13 @@ export function RecordingButton({
         ? 'Saving…'
         : status === 'transcribing'
           ? 'Transcribing…'
-          : label;
+          : (statusLabel ?? label);
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={!recording && (disabled || busy)}
-      aria-label={recording ? 'Stop recording' : busy ? text : idleLabel}
+      aria-label={recording ? 'Stop recording' : text}
       aria-pressed={recording}
       aria-busy={busy}
       data-recording-state={

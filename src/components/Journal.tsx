@@ -867,7 +867,7 @@ export function Journal({
                 status={editClips.status}
                 starting={editClips.starting}
                 onClick={editClips.toggle}
-                idleLabel="Record into this entry"
+
                 title="Record — the clip is attached to this entry and transcribed into it once you close the editor"
                 testId="journal-edit-record"
               />
@@ -1274,7 +1274,7 @@ function NewEntryComposer({
             status={clips.status}
             starting={clips.starting}
             onClick={clips.toggle}
-            idleLabel="Record a clip"
+
             title="Record — the clip is attached to the entry and transcribed into it after you save"
             testId="journal-new-entry-transcribe"
           />

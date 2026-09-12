@@ -1214,7 +1214,7 @@ export function ChatPanel() {
             starting={recorder.starting || createConversation.isPending}
             onClick={toggleRecording}
             disabled={!isConfigured || isStreaming || isSavingClip}
-            idleLabel="Speak to send"
+
             title="Speak to send"
           />
           <button

@@ -147,7 +147,7 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
           status={clips.status}
           starting={clips.starting}
           onClick={clips.toggle}
-          idleLabel="Record a clip"
+
           testId="food-capture-record"
           className="absolute top-2 right-2"
         />

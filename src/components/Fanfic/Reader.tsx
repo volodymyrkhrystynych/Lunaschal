@@ -809,7 +809,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
                       status={clips.status}
                       starting={clips.starting}
                       onClick={clips.toggle}
-                      idleLabel="Record commentary"
+
                       testId="fanfic-commentary-record"
                     />
                     <button

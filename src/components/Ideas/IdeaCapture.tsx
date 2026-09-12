@@ -77,7 +77,7 @@ export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
           }
         }}
         rows={3}
-        placeholder="Capture an idea — type it, or hit record and talk."
+        placeholder="Capture an idea — type it, or hit Transcribe and talk."
         className="w-full resize-none rounded bg-[var(--color-bg)] border border-white/10 px-2 py-1.5 text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
       />
       <div className="flex items-center gap-2 mt-2">
@@ -85,7 +85,7 @@ export function IdeaCapture({ onCreated, repoId }: IdeaCaptureProps) {
           status={clips.status}
           starting={clips.starting}
           onClick={clips.toggle}
-          idleLabel="Record an idea"
+
           testId="idea-capture-record"
         />
         <button
