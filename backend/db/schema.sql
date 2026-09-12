@@ -147,6 +147,35 @@ CREATE TABLE IF NOT EXISTS calendar_journal_links (
     created_at INTEGER NOT NULL
 );
 
+-- One run of consecutive global screenshot captures. The row remains after a
+-- run closes so an upload retry can converge on the entry and event it already
+-- created. A normal journal insert closes the current run; screenshot uploads
+-- reuse its entry instead of inserting another one.
+CREATE TABLE IF NOT EXISTS journal_screenshot_sessions (
+    entry_id TEXT PRIMARY KEY REFERENCES journal_entries(id) ON DELETE CASCADE,
+    calendar_event_id TEXT NOT NULL UNIQUE REFERENCES calendar_events(id) ON DELETE CASCADE,
+    is_open INTEGER NOT NULL DEFAULT 1 CHECK(is_open IN (0, 1)),
+    first_captured_at INTEGER NOT NULL,
+    last_captured_at INTEGER NOT NULL,
+    first_local_date TEXT NOT NULL,
+    first_local_time TEXT NOT NULL,
+    last_local_date TEXT NOT NULL,
+    last_local_time TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_one_open_journal_screenshot_session
+    ON journal_screenshot_sessions(is_open) WHERE is_open = 1;
+
+CREATE TRIGGER IF NOT EXISTS close_screenshot_session_on_journal_insert
+AFTER INSERT ON journal_entries
+BEGIN
+    UPDATE journal_screenshot_sessions
+    SET is_open = 0, updated_at = CAST(strftime('%s', 'now') AS INTEGER)
+    WHERE is_open = 1 AND entry_id != NEW.id;
+END;
+
 -- Manually-set wake/sleep times for a day. A row exists ONLY for a day the user
 -- corrected by hand: the times are otherwise derived on read from when they were
 -- active (backend/sleep.py), so there is nothing to keep in sync. The two

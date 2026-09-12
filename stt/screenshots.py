@@ -85,16 +85,10 @@ class ScreenshotJournal:
                     ident = path.stem
                     captured = datetime.datetime.fromtimestamp(
                         path.stat().st_mtime).astimezone().isoformat(timespec='seconds')
-                    response = self.session.post(
-                        f'{self.url}/api/journal',
-                        json={'id': ident, 'title': 'Screenshot',
-                              'content': f'Screenshot captured {captured}',
-                              'pendingAttachments': 1}, timeout=15)
-                    response.raise_for_status()
                     with path.open('rb') as file:
                         response = self.session.post(
-                            f'{self.url}/api/journal/{ident}/attachments',
-                            data={'attachmentId': ident, 'name': 'Screenshot'},
+                            f'{self.url}/api/journal/screenshots',
+                            data={'attachmentId': ident, 'capturedAt': captured},
                             files={'file': ('screenshot.png', file, 'image/png')},
                             timeout=30)
                     response.raise_for_status()
