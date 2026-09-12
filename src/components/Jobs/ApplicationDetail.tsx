@@ -17,6 +17,7 @@ import {
 import { MasterDetailBack } from '../MasterDetailBack';
 import { AnswerKit } from './AnswerKit';
 import { SteerBar } from './SteerBar';
+import { LoadingState, ErrorBanner } from '../LoadStates';
 
 function KeywordBlock({ content }: { content: TailoredContent }) {
   const coverage = coveragePercent(content);
@@ -244,11 +245,7 @@ function ResumeEditor({
             from the resume.
           </p>
         )}
-        {save.isError && (
-          <p className="text-sm text-red-400">
-            {(save.error as Error).message}
-          </p>
-        )}
+        {save.isError && <ErrorBanner error={save.error} />}
 
         <button
           type="button"
@@ -375,11 +372,7 @@ function NoteDraft({
           </button>
         )}
       </div>
-      {generate.isError && (
-        <p className="text-xs text-red-400">
-          {(generate.error as Error).message}
-        </p>
-      )}
+      {generate.isError && <ErrorBanner error={generate.error} />}
       {draft && (
         <div className="space-y-1">
           <input
@@ -476,11 +469,7 @@ function InterviewPrep({ applicationId }: { applicationId: string }) {
               ? 'Refresh research'
               : 'Research with verified sources'}
         </button>
-        {research.isError && (
-          <p className="text-xs text-red-400">
-            {(research.error as Error).message}
-          </p>
-        )}
+        {research.isError && <ErrorBanner error={research.error} />}
         {findings?.facts.map((fact, index) => (
           <div key={`${fact.claim}-${index}`} className="text-sm">
             <p>{fact.claim}</p>
@@ -502,11 +491,7 @@ function InterviewPrep({ applicationId }: { applicationId: string }) {
           </div>
         ))}
       </div>
-      {generate.isError && (
-        <p className="text-sm text-red-400">
-          {(generate.error as Error).message}
-        </p>
-      )}
+      {generate.isError && <ErrorBanner error={generate.error} />}
       {pack && (
         <>
           <div className="rounded border border-white/10 p-3">
@@ -611,11 +596,7 @@ export function ApplicationDetail({
   });
 
   if (isLoading || !data) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
-        Loading…
-      </div>
-    );
+    return <LoadingState variant="panel" />;
   }
 
   const effectiveSteer = steer ?? data.steer;
@@ -716,9 +697,7 @@ export function ApplicationDetail({
                     : 'Draft cover letter'}
               </button>
               {generateLetter.isError && (
-                <p className="text-xs text-red-400">
-                  {(generateLetter.error as Error).message}
-                </p>
+                <ErrorBanner error={generateLetter.error} />
               )}
               {data.coverLetter && (
                 <textarea
@@ -789,11 +768,7 @@ export function ApplicationDetail({
               runLabel={latest ? 'Re-tailor resume' : 'Tailor resume'}
             />
 
-            {tailor.isError && (
-              <p className="text-sm text-red-400">
-                {(tailor.error as Error).message}
-              </p>
-            )}
+            {tailor.isError && <ErrorBanner error={tailor.error} />}
 
             {content && <KeywordBlock content={content} />}
             {(tailor.data?.review || latest?.review) && (

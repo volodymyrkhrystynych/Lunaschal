@@ -18,6 +18,7 @@ import {
   type EventCategory,
 } from '@/lib/calendarCategories';
 import { CategoryTagPicker, RepeatFields } from './EventFormFields';
+import { LoadingState } from '../LoadStates';
 
 export function EventDetails({
   eventId,
@@ -164,7 +165,7 @@ export function EventDetails({
     return (
       <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div className="bg-[var(--color-surface)] rounded-lg p-6 max-w-lg w-full mx-4">
-          <div className="text-[var(--color-text-muted)]">Loading...</div>
+          <LoadingState />
           <button
             type="button"
             onClick={onClose}

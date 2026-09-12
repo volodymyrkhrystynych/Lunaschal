@@ -1,6 +1,7 @@
 import { FormEvent, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type KnowledgeSearchResult } from '../../hooks/api';
+import { LoadingState, ErrorBanner } from '../LoadStates';
 
 function sizeLabel(bytes: number): string {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -42,11 +43,7 @@ export function Knowledge() {
   };
 
   if (config.isLoading) {
-    return (
-      <div className="flex-1 grid place-items-center text-[var(--color-text-muted)]">
-        Loading…
-      </div>
-    );
+    return <LoadingState variant="panel" />;
   }
   if (!config.data?.exists) {
     return (
@@ -88,11 +85,7 @@ export function Knowledge() {
           {!query && (
             <>
               <h2 className="text-sm font-semibold mb-2">Archives</h2>
-              {archives.isError && (
-                <p className="text-sm text-red-400">
-                  {(archives.error as Error).message}
-                </p>
-              )}
+              {archives.isError && <ErrorBanner error={archives.error} />}
               {archives.data?.length === 0 && (
                 <p className="text-sm text-[var(--color-text-muted)]">
                   No .zim files found in this folder.
@@ -130,11 +123,7 @@ export function Knowledge() {
                   Searching…
                 </p>
               )}
-              {results.isError && (
-                <p className="text-sm text-red-400">
-                  {(results.error as Error).message}
-                </p>
-              )}
+              {results.isError && <ErrorBanner error={results.error} />}
               {results.data?.length === 0 && (
                 <p className="text-sm text-[var(--color-text-muted)]">
                   Nothing found.

@@ -31,6 +31,7 @@ import {
 } from '@/lib/jobs';
 import { CollapsibleSection } from '../CollapsibleSection';
 import { SourcesPanel } from './SourcesPanel';
+import { ErrorBanner } from '../LoadStates';
 
 /**
  * The triage screen, designed for a phone.
@@ -333,11 +334,7 @@ function AddJob() {
         rows={4}
         className="w-full p-2 rounded bg-[var(--color-bg)] border border-white/10 text-sm text-[var(--color-text)] resize-y"
       />
-      {create.isError && (
-        <p className="text-sm text-red-400">
-          {(create.error as Error).message}
-        </p>
-      )}
+      {create.isError && <ErrorBanner error={create.error} />}
       <div className="flex gap-2">
         <button
           type="button"
@@ -534,7 +531,7 @@ function FeedCard({
       </div>
 
       {/* The card came back. Say why, on the card, where the retry is. */}
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <ErrorBanner error={error} />}
 
       <div className="flex flex-wrap items-center gap-3 text-xs">
         <button
@@ -569,11 +566,7 @@ function FeedCard({
         </span>
       </div>
 
-      {rationale.isError && (
-        <p className="text-xs text-red-400">
-          {(rationale.error as Error).message}
-        </p>
-      )}
+      {rationale.isError && <ErrorBanner error={rationale.error} />}
     </div>
   );
 }

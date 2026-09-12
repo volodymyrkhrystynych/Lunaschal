@@ -4,6 +4,7 @@ import { api } from '../hooks/api';
 import type { Meeting, MeetingPhase } from '../hooks/api';
 import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
+import { LoadingState, ErrorBanner } from './LoadStates';
 
 const PHASE_LABELS: Partial<Record<MeetingPhase, string>> = {
   recording: 'Recording…',
@@ -192,9 +193,7 @@ export function Meetings() {
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-3">
-        {isLoading && (
-          <div className="text-[var(--color-text-muted)]">Loading...</div>
-        )}
+        {isLoading && <LoadingState />}
 
         {meetings?.map((m, idx) => (
           <button
@@ -368,9 +367,7 @@ function TranscriptionPicker({
         {start.isPending ? busyLabel : buttonLabel}
       </button>
       {start.isError && (
-        <div className="text-xs text-red-400">
-          {(start.error as Error).message}
-        </div>
+        <ErrorBanner error={start.error} onRetry={handleStart} />
       )}
       <div className="text-xs text-[var(--color-text-muted)]">{hint}</div>
     </div>
@@ -443,9 +440,7 @@ function MeetingDetailView({ id, onBack }: { id: string; onBack: () => void }) {
   if (isLoading || !meeting) {
     return (
       <div className="flex-1 flex flex-col p-4">
-        <div className="text-[var(--color-text-muted)]">
-          {isLoading ? 'Loading...' : 'Meeting not found'}
-        </div>
+        <LoadingState label={isLoading ? undefined : 'Meeting not found'} />
       </div>
     );
   }
@@ -547,8 +542,10 @@ function MeetingDetailView({ id, onBack }: { id: string; onBack: () => void }) {
               </div>
             )}
             {(pauseMeeting.isError || resumeMeeting.isError) && (
-              <div className="text-xs text-red-400 mt-2">
-                {((pauseMeeting.error ?? resumeMeeting.error) as Error).message}
+              <div className="mt-2">
+                <ErrorBanner
+                  error={pauseMeeting.error ?? resumeMeeting.error}
+                />
               </div>
             )}
           </div>
@@ -696,8 +693,8 @@ function MeetingDetailView({ id, onBack }: { id: string; onBack: () => void }) {
               </button>
             </div>
             {summarize.isError && (
-              <div className="text-sm text-red-400 mb-2">
-                {(summarize.error as Error).message}
+              <div className="mb-2">
+                <ErrorBanner error={summarize.error} />
               </div>
             )}
             {meeting.summary ? (

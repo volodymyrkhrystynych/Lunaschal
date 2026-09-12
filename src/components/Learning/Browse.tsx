@@ -6,6 +6,7 @@ import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { useListSelection } from '../../shortcuts/useListSelection';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { VerificationPanel } from './VerificationPanel';
+import { EmptyState } from '../LoadStates';
 
 interface Props {
   folderId: string | null;
@@ -148,13 +149,11 @@ export function Browse({ folderId, tag, onSelectTag }: Props) {
           );
         })}
         {(!cards || cards.length === 0) && (
-          <div className="col-span-full text-center text-[var(--color-text-muted)] py-12">
-            <div className="text-4xl mb-4">📚</div>
-            <div className="text-lg">No cards here yet</div>
-            <div className="mt-2">
-              Brain-dump something in + Create, or generate cards from a journal
-              entry.
-            </div>
+          <div className="col-span-full">
+            <EmptyState
+              title="No cards here yet"
+              message="Brain-dump something in + Create, or generate cards from a journal entry."
+            />
           </div>
         )}
       </div>

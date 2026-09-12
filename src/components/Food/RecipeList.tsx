@@ -12,6 +12,7 @@ import { parseTags, mediaKind } from '../../lib/food';
 import { CollapsibleSection } from '../CollapsibleSection';
 import { MessageMarkdown } from '../MessageMarkdown';
 import { TagPill } from '../TagPill';
+import { LoadingState } from '../LoadStates';
 
 const splitTagInput = (input: string): string[] =>
   input
@@ -635,9 +636,7 @@ export function RecipeList() {
       )}
 
       <div className="flex-1 overflow-y-auto space-y-4">
-        {isLoading && (
-          <div className="text-[var(--color-text-muted)]">Loading...</div>
-        )}
+        {isLoading && <LoadingState />}
 
         {recipes?.map((recipe, idx) => {
           const tags = parseTags(recipe.tags);

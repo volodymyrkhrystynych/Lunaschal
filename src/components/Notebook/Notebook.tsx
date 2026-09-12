@@ -10,6 +10,7 @@ import type { NotebookPaneHandle } from './NotebookEditorPane';
 import { NotebookReviewSession } from './NotebookReviewSession';
 import { INDEX_PATH } from '../../lib/notebookVim';
 import { buildIndexContent, treeEntriesFor } from '../../lib/notebookIndex';
+import { LoadingState } from '../LoadStates';
 
 // Same step the Fanfic reader scrolls its chapter by, so W/S feels the same
 // in both places.
@@ -174,9 +175,12 @@ export function Notebook() {
           handle={paneRef}
         />
       ) : (
-        <div className="flex-1 flex items-center justify-center text-[var(--color-text-muted)]">
-          {ensureIndex.isError ? "Couldn't load the notebook." : 'Loading…'}
-        </div>
+        <LoadingState
+          variant="panel"
+          label={
+            ensureIndex.isError ? "Couldn't load the notebook." : undefined
+          }
+        />
       )}
     </div>
   );

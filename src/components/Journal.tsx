@@ -70,6 +70,7 @@ import { useListSelection } from '../shortcuts/useListSelection';
 import { useClipStage } from '../hooks/useClipStage';
 import { ClipStrip } from './ClipRecorder';
 import { MealClips, visualMedia } from './Food/MealClips';
+import { LoadingState, ErrorBanner } from './LoadStates';
 
 // Opened straight from the feed rather than by sending the user to the
 // Newspapers tab to find the day again — the reader is a full-screen overlay
@@ -1064,9 +1065,7 @@ export function Journal({
         ref={feedScrollRef}
         className="flex-1 overflow-y-auto overflow-x-hidden px-2 space-y-4"
       >
-        {isLoading && (
-          <div className="text-[var(--color-text-muted)]">Loading...</div>
-        )}
+        {isLoading && <LoadingState />}
 
         {feedItems.map((item, i) => {
           // Already rendered inside its event group's wrapper below.
@@ -1405,10 +1404,9 @@ function MergeIntoPicker({
   // instead of broken.
   if (isError) {
     return (
-      <div className="mt-3 px-3 py-2 rounded border border-red-500/20 bg-red-500/10 text-xs text-red-400">
-        Couldn't check for other entries to merge into:{' '}
-        {(candidatesError as Error).message}
-      </div>
+      <ErrorBanner
+        error={`Couldn't check for other entries to merge into: ${(candidatesError as Error).message}`}
+      />
     );
   }
 

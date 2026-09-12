@@ -6,6 +6,7 @@ import {
   sourceSubtitle,
   type StudySource,
 } from '../../lib/study';
+import { LoadingState, EmptyState } from '../LoadStates';
 
 const KIND_ICON: Record<StudySource['kind'], string> = {
   pdf: '📕',
@@ -166,15 +167,16 @@ export function StudyLibrary({ onOpen, canOpen = true }: Props) {
 
       <div className="flex-1 overflow-y-auto p-4">
         {isLoading ? (
-          <div className="text-[var(--color-text-muted)]">Loading…</div>
+          <LoadingState />
         ) : sources.length === 0 ? (
-          <div className="text-[var(--color-text-muted)] max-w-prose">
-            {`Nothing here yet. Upload a book, archive a web page, or pull down a YouTube video — ${
+          <EmptyState
+            title="Nothing here yet."
+            message={`Upload a book, archive a web page, or pull down a YouTube video — ${
               canOpen
                 ? 'then it opens beside a notebook page you write in.'
                 : 'then read it at the desk, on a screen wide enough for two panes.'
             }`}
-          </div>
+          />
         ) : (
           <ul className="flex flex-col gap-1">
             {sources.map(source => {
