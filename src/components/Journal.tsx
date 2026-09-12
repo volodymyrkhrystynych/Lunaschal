@@ -1852,7 +1852,14 @@ const JournalNewspaperItem = memo(function JournalNewspaperItem({
   const lightbox = useLightbox();
   const dayLabel = formatDay(newspaper.date + 'T00:00:00');
   const marked = newspaper.markedPages;
-  const pages = newspaper.pages.map(pg => ({
+  // Defaulted, not read straight through: the persisted cache is restored
+  // before any refetch and can be 30 days old, so this renders against rows
+  // written by an earlier version of the app. `pages` arrived after those rows
+  // did, and mapping over the missing key threw during render — which, with no
+  // error boundary, took the whole app down rather than one card's thumbnails.
+  // Bumping PERSIST_BUSTER discards those rows; this makes the next such
+  // addition cost a strip instead of a white screen.
+  const pages = (newspaper.pages ?? []).map(pg => ({
     id: String(pg.page),
     imageUrl: pg.imageUrl,
   }));

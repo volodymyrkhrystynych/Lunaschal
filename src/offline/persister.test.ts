@@ -61,7 +61,7 @@ describe('useInfiniteQuery users vs PERSIST_BUSTER', () => {
     'src/components/Journal.tsx',
     'src/components/Paper/Paper.tsx',
   ];
-  const BUSTER_AT_TIME_OF_LIST = 'v5';
+  const BUSTER_AT_TIME_OF_LIST = 'v6';
 
   it('has not gained an infinite query without a buster bump', async () => {
     const { readdirSync, readFileSync } = await import('node:fs');

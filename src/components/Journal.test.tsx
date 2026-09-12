@@ -8,7 +8,7 @@ import {
 } from '@tanstack/react-query';
 import { Journal } from './Journal';
 import { ShortcutProvider } from '../shortcuts/ShortcutProvider';
-import { api, type JournalEntry } from '../hooks/api';
+import { api, type JournalEntry, type JournalNewspaper } from '../hooks/api';
 import { enqueueRecordingUpload } from '../offline/recordingQueue';
 import { deleteRecording } from '../offline/recordingStore';
 import { storePhoto } from '../offline/photoStore';
@@ -1295,6 +1295,22 @@ describe('archived newspapers in the feed', () => {
     await screen.findByText(/not marked up/);
     expect(screen.queryAllByTitle('View')).toHaveLength(0);
     expect(screen.queryByText('No pages')).toBeNull();
+  });
+
+  it('renders a row cached before thumbnails existed, instead of crashing', async () => {
+    // What the persisted cache holds for an issue stored by a build that
+    // predates `pages`: the key is simply absent. The cache is restored before
+    // any refetch can correct the shape, so the card renders against this — and
+    // mapping straight over the missing key threw during render, which with no
+    // error boundary took down the whole app, not just the strip.
+    const { pages: _pages, ...prePages } = withPages;
+    vi.mocked(api.newspapers.journalIssues).mockResolvedValue([
+      prePages as unknown as JournalNewspaper,
+    ]);
+    renderJournal();
+
+    expect(await screen.findByText(/2 of 40 pages marked up/)).toBeTruthy();
+    expect(screen.queryAllByTitle('View')).toHaveLength(0);
   });
 
   it('keeps the card out of a search, where the feed is entries only', async () => {

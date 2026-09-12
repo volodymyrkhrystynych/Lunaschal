@@ -29,7 +29,12 @@ export const QUERY_GC_TIME = 1000 * 60 * 60 * 24 * 20; // 20 days, < 2^31-1 ms
 // restored flat array and throws "Cannot read properties of undefined
 // (reading 'length')" before anything renders. Any query moving to
 // useInfiniteQuery needs a bump here in the same commit.
-export const PERSIST_BUSTER = 'v5';
+// v6: the Journal feed's newspaper cards grew a `pages` array (the rendered
+// page thumbnails) — a restored pre-thumbnails row has no such key, and
+// mapping straight over it took down the whole app, not just the card. Same
+// shape of mistake as v3: a persisted object gained a required field and the
+// commit that added it did not bump this.
+export const PERSIST_BUSTER = 'v6';
 
 const IDB_KEY = 'lunaschal-react-query';
 
