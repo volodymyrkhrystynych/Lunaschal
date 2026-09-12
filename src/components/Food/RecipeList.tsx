@@ -10,12 +10,13 @@ import { useListSelection } from '../../shortcuts/useListSelection';
 import { useRecorder } from '../../hooks/useRecorder';
 import { parseTags, mediaKind } from '../../lib/food';
 import { MessageMarkdown } from '../MessageMarkdown';
+import { TagsInput } from '../TagsInput';
 
-const splitTagInput = (input: string): string[] =>
-  input
-    .split(',')
-    .map(t => t.trim().toLowerCase())
-    .filter(Boolean);
+// Recipe tags are lowercased on top of TagsInput's generic comma-split, to
+// match this feature's existing tag-matching/filtering, which is
+// case-insensitive.
+const splitTagInput = (input: string[]): string[] =>
+  input.map(t => t.toLowerCase());
 
 interface PickedMedia {
   file: File;
@@ -182,11 +183,11 @@ export function RecipeList() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
-  const [editTags, setEditTags] = useState('');
+  const [editTags, setEditTags] = useState<string[]>([]);
   const [showNewRecipe, setShowNewRecipe] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const [newContent, setNewContent] = useState('');
-  const [newTags, setNewTags] = useState('');
+  const [newTags, setNewTags] = useState<string[]>([]);
   const [newMedia, setNewMedia] = useState<PickedMedia[]>([]);
   // A picked file that cannot be read (see storePhoto) is the one failure that
   // must not be swallowed: the recipe would be queued without its photograph.
@@ -282,7 +283,7 @@ export function RecipeList() {
     newMedia.forEach(m => URL.revokeObjectURL(m.url));
     setNewTitle('');
     setNewContent('');
-    setNewTags('');
+    setNewTags([]);
     setNewMedia([]);
     setShowNewRecipe(false);
   };
@@ -368,7 +369,7 @@ export function RecipeList() {
     setEditingId(recipe.id);
     setEditTitle(recipe.title);
     setEditContent(recipe.content);
-    setEditTags(parseTags(recipe.tags).join(', '));
+    setEditTags(parseTags(recipe.tags));
   };
 
   const formatDate = (date: string) =>
@@ -496,9 +497,9 @@ export function RecipeList() {
               {dictateError}
             </div>
           )}
-          <input
+          <TagsInput
             value={newTags}
-            onChange={e => setNewTags(e.target.value)}
+            onChange={setNewTags}
             placeholder="Tags, comma separated (e.g. soup, quick, chicken)"
             className="w-full bg-transparent text-sm text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none border border-white/10 rounded p-2 mb-2"
           />
@@ -705,9 +706,9 @@ export function RecipeList() {
                     rows={10}
                     className="w-full bg-transparent text-[var(--color-text)] resize-none focus:outline-none border border-white/10 rounded p-2 mb-2"
                   />
-                  <input
+                  <TagsInput
                     value={editTags}
-                    onChange={e => setEditTags(e.target.value)}
+                    onChange={setEditTags}
                     placeholder="Tags, comma separated"
                     className="w-full bg-transparent text-sm text-[var(--color-text)] focus:outline-none border border-white/10 rounded p-2 mb-2"
                   />
