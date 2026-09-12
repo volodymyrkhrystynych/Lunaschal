@@ -7,6 +7,7 @@ import {
   JOB_STATUS_LABELS,
   formatEmailDate,
 } from '../../lib/email';
+import { ListRowButton } from '../ListRow';
 
 const PAGE_SIZE = 50;
 
@@ -106,46 +107,51 @@ export function EmailList({
           </div>
         ) : (
           emails?.map(email => (
-            <button
+            <ListRowButton
               key={email.id}
               onClick={() => onSelect(email)}
-              className={`w-full text-left p-3 rounded-lg border transition-colors ${
+              className={`p-3 rounded-lg border transition-colors ${
                 selectedId === email.id
                   ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10'
                   : 'border-white/10 bg-[var(--color-surface)] hover:border-white/20'
               }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium text-sm text-[var(--color-text)] truncate">
-                  {email.sender || email.senderEmail || 'Unknown sender'}
-                </span>
-                <span className="text-xs text-[var(--color-text-muted)] shrink-0">
-                  {formatEmailDate(email.receivedAt)}
-                </span>
-              </div>
-              <p className="text-sm text-[var(--color-text)] truncate">
-                {email.subject || '(no subject)'}
-              </p>
-              {email.snippet && (
-                <p className="text-xs text-[var(--color-text-muted)] truncate">
-                  {email.snippet}
-                </p>
-              )}
-              {(email.category || email.jobStatus) && (
-                <div className="flex gap-1 mt-1">
-                  {email.category && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-[var(--color-text-muted)]">
-                      {EMAIL_CATEGORY_LABELS[email.category]}
-                    </span>
-                  )}
-                  {email.jobStatus && (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)]">
-                      {JOB_STATUS_LABELS[email.jobStatus]}
-                    </span>
-                  )}
+              title={
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-sm text-[var(--color-text)] truncate">
+                    {email.sender || email.senderEmail || 'Unknown sender'}
+                  </span>
+                  <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+                    {formatEmailDate(email.receivedAt)}
+                  </span>
                 </div>
-              )}
-            </button>
+              }
+              subtitle={
+                <>
+                  <p className="text-sm text-[var(--color-text)] truncate">
+                    {email.subject || '(no subject)'}
+                  </p>
+                  {email.snippet && (
+                    <p className="text-xs text-[var(--color-text-muted)] truncate">
+                      {email.snippet}
+                    </p>
+                  )}
+                  {(email.category || email.jobStatus) && (
+                    <div className="flex gap-1 mt-1">
+                      {email.category && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-[var(--color-text-muted)]">
+                          {EMAIL_CATEGORY_LABELS[email.category]}
+                        </span>
+                      )}
+                      {email.jobStatus && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-[var(--color-primary)]/20 text-[var(--color-primary)]">
+                          {JOB_STATUS_LABELS[email.jobStatus]}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </>
+              }
+            />
           ))
         )}
         {/* Sits inside the scroll container so the observer fires against it,
