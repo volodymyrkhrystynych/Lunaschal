@@ -1,4 +1,5 @@
 import { RecordingButton } from './RecordingButton';
+import { TagPill } from './TagPill';
 import {
   useState,
   useEffect,
@@ -1009,35 +1010,24 @@ export function Journal({
         />
         <div className="tag-row flex flex-wrap gap-1.5 mt-2">
           {curatedTags?.map(tag => (
-            <button
+            <TagPill
               key={tag.id}
+              active={selectedCuratedTagId === tag.id}
               onClick={() =>
                 setSelectedCuratedTagId(
                   selectedCuratedTagId === tag.id ? null : tag.id
                 )
               }
-              className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                selectedCuratedTagId === tag.id
-                  ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
-                  : 'border-white/20 text-[var(--color-text-muted)] hover:border-white/40 hover:text-[var(--color-text)]'
-              }`}
-            >
-              #{tag.name}
-              {tag.entryCount > 0 && (
-                <span className="ml-1 opacity-60">({tag.entryCount})</span>
-              )}
-            </button>
+              prefix="#"
+              label={tag.name}
+              count={tag.entryCount > 0 ? tag.entryCount : undefined}
+            />
           ))}
-          <button
+          <TagPill
+            active={showTranscriptions}
             onClick={() => setShowTranscriptions(!showTranscriptions)}
-            className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-              showTranscriptions
-                ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
-                : 'border-white/20 text-[var(--color-text-muted)] hover:border-white/40 hover:text-[var(--color-text)]'
-            }`}
-          >
-            Show transcriptions
-          </button>
+            label="Show transcriptions"
+          />
         </div>
       </div>
 

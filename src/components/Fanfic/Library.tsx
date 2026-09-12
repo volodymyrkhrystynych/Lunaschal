@@ -13,6 +13,7 @@ import {
   siteLabel,
   SITE_LABELS,
 } from '../../lib/fanfic';
+import { TagPill } from '../TagPill';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { useListSelection } from '../../shortcuts/useListSelection';
 import { FolderBar, FolderPicker } from './Folders';
@@ -277,18 +278,16 @@ export function Library({ onOpen }: LibraryProps) {
                   ['recent', 'Recent', 'Books ordered by most recently opened'],
                   ['unsorted', 'Unsorted', 'Books not assigned to a folder'],
                 ].map(([id, label, title]) => (
-                  <button
+                  <TagPill
                     key={label}
                     title={title ?? undefined}
+                    active={folderId === id}
                     onClick={() => setFolderId(id)}
-                    className={`px-3 py-1 text-sm rounded-full border transition-colors ${
-                      folderId === id
-                        ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-                        : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-                    }`}
-                  >
-                    {label}
-                  </button>
+                    label={label}
+                    size="sm"
+                    activeClassName="border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]"
+                    inactiveClassName="border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  />
                 ))}
               </div>
             ) : (
@@ -299,13 +298,15 @@ export function Library({ onOpen }: LibraryProps) {
               />
             )}
             {tag && (
-              <button
+              <TagPill
+                active
                 onClick={() => setTag(null)}
-                className="mb-4 px-3 py-1 text-sm rounded-full border border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]"
                 title="Clear tag filter"
-              >
-                tag: {tag} ✕
-              </button>
+                size="sm"
+                activeClassName="border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]"
+                className="mb-4"
+                label={`tag: ${tag} ✕`}
+              />
             )}
           </div>
         </div>

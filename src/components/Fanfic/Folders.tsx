@@ -3,8 +3,12 @@ import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { Fic } from '../../hooks/api';
+import { TagPill } from '../TagPill';
 
-const pillBase = 'px-3 py-1 text-sm rounded-full border transition-colors';
+const PILL_ACTIVE =
+  'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]';
+const PILL_INACTIVE =
+  'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]';
 
 /** Folder filter pills shown above the library list. */
 export function FolderBar({
@@ -101,42 +105,36 @@ export function FolderBar({
   return (
     <div className="tag-row flex flex-wrap items-center gap-2 mb-4">
       {showDefaults && (
-        <button
+        <TagPill
+          active={folderId === null}
           onClick={() => onSelect(null)}
-          className={`${pillBase} ${
-            folderId === null
-              ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-              : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-          }`}
-        >
-          All
-        </button>
+          label="All"
+          size="sm"
+          activeClassName={PILL_ACTIVE}
+          inactiveClassName={PILL_INACTIVE}
+        />
       )}
       {showDefaults && (
-        <button
+        <TagPill
+          active={folderId === 'recent'}
           onClick={() => onSelect(folderId === 'recent' ? null : 'recent')}
           title="All fics, sorted only by the latest threadmark's forum post date"
-          className={`${pillBase} ${
-            folderId === 'recent'
-              ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-              : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-          }`}
-        >
-          Recent
-        </button>
+          label="Recent"
+          size="sm"
+          activeClassName={PILL_ACTIVE}
+          inactiveClassName={PILL_INACTIVE}
+        />
       )}
       {showDefaults && (
-        <button
+        <TagPill
+          active={folderId === 'unsorted'}
           onClick={() => onSelect(folderId === 'unsorted' ? null : 'unsorted')}
           title="Show fics not in any folder"
-          className={`${pillBase} ${
-            folderId === 'unsorted'
-              ? 'border-amber-400/60 bg-amber-400/10 text-amber-300'
-              : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-          }`}
-        >
-          Unsorted
-        </button>
+          label="Unsorted"
+          size="sm"
+          activeClassName="border-amber-400/60 bg-amber-400/10 text-amber-300"
+          inactiveClassName={PILL_INACTIVE}
+        />
       )}
       {folders?.map(f =>
         renaming && f.id === folderId ? (
@@ -148,17 +146,19 @@ export function FolderBar({
             )}
           </span>
         ) : (
-          <button
+          <TagPill
             key={f.id}
+            active={f.id === folderId}
             onClick={() => onSelect(f.id)}
-            className={`${pillBase} ${
-              f.id === folderId
-                ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]'
-                : 'border-white/15 text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-            }`}
-          >
-            {f.name} <span className="opacity-60">{f.ficCount}</span>
-          </button>
+            size="sm"
+            activeClassName={PILL_ACTIVE}
+            inactiveClassName={PILL_INACTIVE}
+            label={
+              <>
+                {f.name} <span className="opacity-60">{f.ficCount}</span>
+              </>
+            }
+          />
         )
       )}
       {creating ? (
@@ -168,16 +168,17 @@ export function FolderBar({
           'Folder name…'
         )
       ) : (
-        <button
+        <TagPill
+          active={false}
           onClick={() => {
             setCreating(true);
             setName('');
           }}
-          className={`${pillBase} border-dashed border-white/20 text-[var(--color-text-muted)] hover:text-[var(--color-text)]`}
           title="New folder"
-        >
-          + folder
-        </button>
+          size="sm"
+          inactiveClassName="border-dashed border-white/20 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          label="+ folder"
+        />
       )}
       {active && !renaming && (
         <span className="flex gap-1 text-xs text-[var(--color-text-muted)]">
