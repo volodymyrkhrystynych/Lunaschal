@@ -9,6 +9,7 @@ import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { useListSelection } from '../../shortcuts/useListSelection';
 import { useRecorder } from '../../hooks/useRecorder';
 import { parseTags, mediaKind } from '../../lib/food';
+import { CollapsibleSection } from '../CollapsibleSection';
 import { MessageMarkdown } from '../MessageMarkdown';
 
 const splitTagInput = (input: string): string[] =>
@@ -780,10 +781,26 @@ export function RecipeList() {
                 </div>
               ) : (
                 <>
-                  {expanded && <MediaGallery media={recipe.media} />}
-                  {expanded ? (
-                    <MessageMarkdown content={recipe.content} />
-                  ) : (
+                  {/* Trigger is the title button above, doubling as the
+                      expand toggle for this one row of a list that keeps at
+                      most one row open — CollapsibleSection's own chevron+h2
+                      header doesn't fit a per-row title, so this stays
+                      headless and controlled, borrowing only the collapse
+                      transition. The collapsed preview below is a distinct
+                      truncated view, not something CollapsibleSection hides. */}
+                  <CollapsibleSection
+                    open={expanded}
+                    onToggle={open => setExpandedId(open ? recipe.id : null)}
+                    hideHeader
+                    sectionClassName=""
+                    bodyClassName=""
+                  >
+                    <>
+                      <MediaGallery media={recipe.media} />
+                      <MessageMarkdown content={recipe.content} />
+                    </>
+                  </CollapsibleSection>
+                  {!expanded && (
                     <div className="content-text text-[var(--color-text)] whitespace-pre-wrap line-clamp-3">
                       {recipe.content}
                     </div>

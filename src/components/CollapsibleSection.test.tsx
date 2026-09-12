@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { useState } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { CollapsibleSection } from './CollapsibleSection';
 
@@ -92,5 +93,59 @@ describe('CollapsibleSection', () => {
       </CollapsibleSection>
     );
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('in controlled mode, reflects the open prop rather than owning its own state', () => {
+    const onToggle = vi.fn();
+    const { rerender } = render(
+      <CollapsibleSection title="Recipe" open={false} onToggle={onToggle}>
+        <p>inner</p>
+      </CollapsibleSection>
+    );
+    const toggle = screen.getByRole('button', { name: /Recipe/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(toggle);
+    // A click asks the parent to toggle; it does not flip state on its own —
+    // that would fight a caller like RecipeList tracking one open row at a time.
+    expect(onToggle).toHaveBeenCalledWith(true);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    rerender(
+      <CollapsibleSection title="Recipe" open onToggle={onToggle}>
+        <p>inner</p>
+      </CollapsibleSection>
+    );
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('drives a real controlled parent through open/close', () => {
+    function Wrapper() {
+      const [open, setOpen] = useState(false);
+      return (
+        <CollapsibleSection title="Recipe" open={open} onToggle={setOpen}>
+          <p>inner</p>
+        </CollapsibleSection>
+      );
+    }
+    render(<Wrapper />);
+    const toggle = screen.getByRole('button', { name: /Recipe/ });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('hideHeader suppresses the built-in trigger, leaving only the collapse body', () => {
+    render(
+      <CollapsibleSection title="Details" open onToggle={() => {}} hideHeader>
+        <p>inner content</p>
+      </CollapsibleSection>
+    );
+    expect(screen.queryByRole('button')).toBeNull();
+    expect(screen.getByText('inner content')).not.toBeNull();
   });
 });

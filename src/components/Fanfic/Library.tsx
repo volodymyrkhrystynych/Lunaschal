@@ -15,6 +15,7 @@ import {
 } from '../../lib/fanfic';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { useListSelection } from '../../shortcuts/useListSelection';
+import { CollapsibleSection } from '../CollapsibleSection';
 import { FolderBar, FolderPicker } from './Folders';
 
 interface LibraryProps {
@@ -675,8 +676,18 @@ function FicCard({
             </div>
           )}
 
-          {expanded && (
-            <div className="mt-3 space-y-3 border-t border-white/10 pt-3 text-sm">
+          {/* Trigger is the "▾/▸ Details" button above, sitting in the row of
+              other card actions — CollapsibleSection's own chevron+title
+              header does not fit there, so this is controlled/headless and
+              only supplies the collapse transition + styling. */}
+          <CollapsibleSection
+            open={expanded}
+            onToggle={setExpanded}
+            hideHeader
+            sectionClassName=""
+            bodyClassName="mt-3 space-y-3 border-t border-white/10 pt-3 text-sm"
+          >
+            <>
               <section>
                 <h3 className="mb-1 text-xs font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
                   My rating
@@ -709,8 +720,8 @@ function FicCard({
                   </p>
                 </section>
               )}
-            </div>
-          )}
+            </>
+          </CollapsibleSection>
 
           {showReview && (
             <ReviewEditor fic={fic} onClose={() => setShowReview(false)} />

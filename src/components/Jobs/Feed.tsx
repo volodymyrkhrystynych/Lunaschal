@@ -29,6 +29,7 @@ import {
   splitFeed,
   topGaps,
 } from '@/lib/jobs';
+import { CollapsibleSection } from '../CollapsibleSection';
 import { SourcesPanel } from './SourcesPanel';
 
 /**
@@ -487,11 +488,20 @@ function FeedCard({
         </p>
       )}
 
-      {expanded && (
+      {/* Trigger is the "Read posting"/"Less" button below, in the row of
+          card actions — the content it discloses sits above that button, so
+          this stays headless and only borrows the collapse transition. */}
+      <CollapsibleSection
+        open={expanded}
+        onToggle={setExpanded}
+        hideHeader
+        sectionClassName=""
+        bodyClassName=""
+      >
         <p className="text-xs text-[var(--color-text-muted)] whitespace-pre-wrap">
           {job.description}
         </p>
-      )}
+      </CollapsibleSection>
 
       {assessment && (
         <p className="text-xs text-[var(--color-text)] border-l-2 border-white/20 pl-2">
