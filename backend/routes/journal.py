@@ -1282,12 +1282,6 @@ def delete_attachment(attachment_id):
     # the progress registry as cancellation and stops writing to a dead row.
     youtube_import.cancel_progress(attachment_id)
     db.execute('DELETE FROM journal_attachments WHERE id=?', (attachment_id,))
-    session = db.execute(
-        'SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
-        (entry_id,),
-    ).fetchone()
-    if session is not None:
-        _sync_screenshot_event(db, session)
     db.commit()
     storage.delete_attachment_dir(attachment_id)
     if row['kind'] == 'youtube':

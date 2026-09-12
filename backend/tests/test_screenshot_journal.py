@@ -251,32 +251,35 @@ def test_deleting_screenshot_entry_also_deletes_generated_event(
     assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 0
 
 
-@pytest.mark.parametrize('captured_at', ['', '2026-09-12T18:04:17'])
-def test_screenshot_requires_offset_local_capture_time(client, captured_at):
-    response = _upload(client, '01J00000000000000000000009', captured_at)
-    assert response.status_code == 400
-
-
-def test_deleting_back_to_one_screenshot_removes_event(client, monkeypatch, tmp_path):
+def test_deleting_one_screenshot_leaves_generated_event(
+        client, monkeypatch, tmp_path):
     monkeypatch.setenv('JOURNAL_ROOT', str(tmp_path / 'media'))
-    first_attachment = '01J0000000000000000000000G'
-    entry_id = _upload(client, first_attachment,
+    entry_id = _upload(client, '01J0000000000000000000000G',
                        '2026-09-12T18:04:17-04:00').get_json()['id']
     second_attachment = '01J0000000000000000000000H'
     _upload(client, second_attachment, '2026-09-12T18:30:00-04:00')
-    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 1
+    event = get_db().execute(
+        'SELECT id, date, time, end_time FROM calendar_events WHERE journal_id=?',
+        (entry_id,),
+    ).fetchone()
 
     assert client.delete(
         f'/api/journal/attachments/{second_attachment}'
     ).status_code == 200
-    assert get_db().execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 0
-    session = get_db().execute(
-        'SELECT calendar_event_id, first_captured_at, last_captured_at'
-        ' FROM journal_screenshot_sessions WHERE entry_id=?',
+    remaining_event = get_db().execute(
+        'SELECT id, date, time, end_time FROM calendar_events WHERE journal_id=?',
         (entry_id,),
     ).fetchone()
-    assert session['calendar_event_id'] is None
-    assert session['first_captured_at'] == session['last_captured_at']
+    assert tuple(remaining_event) == tuple(event)
+    assert get_db().execute(
+        'SELECT COUNT(*) FROM journal_attachments WHERE entry_id=?', (entry_id,)
+    ).fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('captured_at', ['', '2026-09-12T18:04:17'])
+def test_screenshot_requires_offset_local_capture_time(client, captured_at):
+    response = _upload(client, '01J00000000000000000000009', captured_at)
+    assert response.status_code == 400
 
 
 def test_screenshot_shortcut_can_be_saved_and_disabled(client):
