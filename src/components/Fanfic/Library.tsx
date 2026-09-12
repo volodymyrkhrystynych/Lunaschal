@@ -16,6 +16,7 @@ import {
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { useListSelection } from '../../shortcuts/useListSelection';
 import { FolderBar, FolderPicker } from './Folders';
+import { ItemCard } from '../ItemCard';
 
 interface LibraryProps {
   onOpen: (ficId: string) => void;
@@ -544,93 +545,101 @@ function FicCard({
   };
 
   return (
-    <div
-      ref={el => {
+    <ItemCard
+      className="cursor-pointer"
+      padding="md"
+      surface="solid"
+      borderClassName={
+        selected ? 'border-[var(--color-primary)]' : 'border-white/10'
+      }
+      onClick={toggleDetailsFromCard}
+      cardRef={el => {
         if (el && selected) el.scrollIntoView({ block: 'nearest' });
       }}
-      onClick={toggleDetailsFromCard}
-      className={`p-4 bg-[var(--color-surface)] rounded-lg border cursor-pointer ${selected ? 'border-[var(--color-primary)]' : 'border-white/10'}`}
-    >
-      <div className="flex items-start gap-3">
-        {fic.coverPath && (
+      thumbnail={
+        fic.coverPath ? (
           <img
             src={`/api/fanfic/${fic.id}/images/${fic.coverPath}`}
             alt=""
             className="w-12 h-16 object-cover rounded border border-white/10 shrink-0"
           />
-        )}
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-start justify-between gap-2">
+        ) : undefined
+      }
+      title={
+        <button
+          onClick={onOpen}
+          className="min-w-0 break-words text-left text-base font-bold text-[var(--color-text)] hover:text-[var(--color-primary)] transition-colors"
+        >
+          {fic.title}
+        </button>
+      }
+      titleActions={
+        <>
+          <button
+            onClick={() => setExpanded(value => !value)}
+            aria-expanded={expanded}
+            className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+            title="Show summary and review"
+          >
+            {expanded ? '▾ Details' : '▸ Details'}
+          </button>
+          <FolderPicker fic={fic} />
+          <button
+            onClick={() => setShowReview(!showReview)}
+            className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+            title="Rate and review"
+          >
+            Review
+          </button>
+          {fic.sourceType === 'xenforo' && !downloading && (
+            <>
+              <button
+                onClick={() => onCheckUpdates(false)}
+                className={`text-sm ${
+                  fic.updatePending
+                    ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                }`}
+                title={
+                  fic.updatePending
+                    ? 'Waiting for the update worker — click to un-queue'
+                    : 'Queue an update check for new chapters'
+                }
+              >
+                {fic.updatePending && !fic.deepPending
+                  ? '⏳ Queued'
+                  : '↻ Update'}
+              </button>
+              <button
+                onClick={() => onCheckUpdates(true)}
+                className={`text-sm ${
+                  fic.deepPending
+                    ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                }`}
+                title={
+                  fic.deepPending
+                    ? 'Deep check queued — click to un-queue'
+                    : 'Re-read every saved chapter and pull in any the author has edited. Slower: it refetches the whole fic.'
+                }
+              >
+                {fic.deepPending ? '⏳ Deep' : '↻↻ Deep'}
+              </button>
+            </>
+          )}
+          {showDelete && (
             <button
-              onClick={onOpen}
-              className="min-w-0 break-words text-left text-base font-bold text-[var(--color-text)] hover:text-[var(--color-primary)] transition-colors"
+              onClick={onDelete}
+              className="text-sm text-red-400 hover:text-red-300"
             >
-              {fic.title}
+              Delete
             </button>
-            <div className="flex flex-wrap gap-2 shrink-0">
-              <button
-                onClick={() => setExpanded(value => !value)}
-                aria-expanded={expanded}
-                className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                title="Show summary and review"
-              >
-                {expanded ? '▾ Details' : '▸ Details'}
-              </button>
-              <FolderPicker fic={fic} />
-              <button
-                onClick={() => setShowReview(!showReview)}
-                className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-                title="Rate and review"
-              >
-                Review
-              </button>
-              {fic.sourceType === 'xenforo' && !downloading && (
-                <>
-                  <button
-                    onClick={() => onCheckUpdates(false)}
-                    className={`text-sm ${
-                      fic.updatePending
-                        ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
-                        : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-                    }`}
-                    title={
-                      fic.updatePending
-                        ? 'Waiting for the update worker — click to un-queue'
-                        : 'Queue an update check for new chapters'
-                    }
-                  >
-                    {fic.updatePending && !fic.deepPending
-                      ? '⏳ Queued'
-                      : '↻ Update'}
-                  </button>
-                  <button
-                    onClick={() => onCheckUpdates(true)}
-                    className={`text-sm ${
-                      fic.deepPending
-                        ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
-                        : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-                    }`}
-                    title={
-                      fic.deepPending
-                        ? 'Deep check queued — click to un-queue'
-                        : 'Re-read every saved chapter and pull in any the author has edited. Slower: it refetches the whole fic.'
-                    }
-                  >
-                    {fic.deepPending ? '⏳ Deep' : '↻↻ Deep'}
-                  </button>
-                </>
-              )}
-              {showDelete && (
-                <button
-                  onClick={onDelete}
-                  className="text-sm text-red-400 hover:text-red-300"
-                >
-                  Delete
-                </button>
-              )}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-text-muted)] mt-0.5">
+          )}
+        </>
+      }
+      body={
+        <>
+          <div className="flex flex-wrap items-center gap-2 text-sm text-[var(--color-text-muted)]">
             {fic.author && <span>{fic.author}</span>}
             {formatRating(fic.rating) && (
               <span className="text-amber-400" title={`Rated ${fic.rating}/5`}>
@@ -745,9 +754,9 @@ function FicCard({
               {fic.downloadError}
             </div>
           )}
-        </div>
-      </div>
-    </div>
+        </>
+      }
+    />
   );
 }
 

@@ -16,6 +16,7 @@ import {
   SORTS,
   type TorrentSort,
 } from '@/lib/torrents';
+import { ItemCard } from '../ItemCard';
 import { AddTorrent } from './AddTorrent';
 import { TorrentDetail } from './TorrentDetail';
 import { VpnBanner } from './VpnBanner';
@@ -177,84 +178,96 @@ export function Torrent() {
       <div className="flex-1 flex gap-4 overflow-hidden">
         <ul className="flex-1 overflow-y-auto space-y-1">
           {visible.map((t, i) => (
-            <li
+            <ItemCard
               key={t.infoHash}
-              ref={scrollSelectedIntoView(i)}
+              as="li"
+              cardRef={scrollSelectedIntoView(i)}
               onClick={() => setSelIndex(i)}
-              className={`rounded border px-3 py-2 cursor-pointer ${
+              padding="compact"
+              radius="md"
+              surface="none"
+              className="cursor-pointer"
+              borderClassName={
                 isSelected(i)
                   ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10'
                   : 'border-white/10 hover:bg-white/5'
-              }`}
-            >
-              <div className="flex items-baseline justify-between gap-2">
+              }
+              title={
                 <span className="truncate text-sm" title={t.name}>
                   {t.name}
                 </span>
+              }
+              meta={
                 <span
                   className={`shrink-0 text-xs ${stateColor(t.stateGroup)}`}
                 >
                   {stateLabel(t.stateGroup)}
                 </span>
-              </div>
-              <div className="mt-1 h-1 rounded bg-white/10 overflow-hidden">
-                <div
-                  className="h-full bg-[var(--color-primary)]"
-                  style={{ width: formatPercent(t.progress) }}
-                />
-              </div>
-              <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-[var(--color-text-muted)]">
-                <span>{formatPercent(t.progress)}</span>
-                <span>{formatBytes(t.size)}</span>
-                <span>↓ {formatSpeed(t.dlSpeed)}</span>
-                <span>↑ {formatSpeed(t.upSpeed)}</span>
-                <span>ETA {formatEta(t.eta)}</span>
-                <span>
-                  {t.numSeeds}/{t.numLeechs} peers
-                </span>
-                {t.category && <span>#{t.category}</span>}
-              </div>
-              <div className="mt-1 flex gap-2 text-xs">
-                <button
-                  onClick={e => {
-                    e.stopPropagation();
-                    act.mutate({
-                      hash: t.infoHash,
-                      action: t.stateGroup === 'paused' ? 'resume' : 'pause',
-                    });
-                  }}
-                  className="px-2 py-0.5 rounded border border-white/10"
-                >
-                  {t.stateGroup === 'paused' ? 'Resume' : 'Pause'}
-                </button>
-                <button
-                  onClick={e => {
-                    e.stopPropagation();
-                    remove.mutate({ hash: t.infoHash, deleteFiles: false });
-                  }}
-                  className="px-2 py-0.5 rounded border border-white/10"
-                >
-                  Remove
-                </button>
-                <button
-                  onClick={e => {
-                    e.stopPropagation();
-                    // Irreversible and off by default everywhere else in this
-                    // feature, so it asks.
-                    if (
-                      window.confirm(
-                        `Delete "${t.name}" and its downloaded files?`
-                      )
-                    ) {
-                      remove.mutate({ hash: t.infoHash, deleteFiles: true });
-                    }
-                  }}
-                  className="px-2 py-0.5 rounded border border-red-500/40 text-red-400"
-                >
-                  Delete + files
-                </button>
-              </div>
-            </li>
+              }
+              progress={
+                <div className="mt-1 h-1 rounded bg-white/10 overflow-hidden">
+                  <div
+                    className="h-full bg-[var(--color-primary)]"
+                    style={{ width: formatPercent(t.progress) }}
+                  />
+                </div>
+              }
+              body={
+                <div className="mt-1 flex flex-wrap gap-x-3 text-xs text-[var(--color-text-muted)]">
+                  <span>{formatPercent(t.progress)}</span>
+                  <span>{formatBytes(t.size)}</span>
+                  <span>↓ {formatSpeed(t.dlSpeed)}</span>
+                  <span>↑ {formatSpeed(t.upSpeed)}</span>
+                  <span>ETA {formatEta(t.eta)}</span>
+                  <span>
+                    {t.numSeeds}/{t.numLeechs} peers
+                  </span>
+                  {t.category && <span>#{t.category}</span>}
+                </div>
+              }
+              actions={
+                <div className="mt-1 flex gap-2 text-xs">
+                  <button
+                    onClick={e => {
+                      e.stopPropagation();
+                      act.mutate({
+                        hash: t.infoHash,
+                        action: t.stateGroup === 'paused' ? 'resume' : 'pause',
+                      });
+                    }}
+                    className="px-2 py-0.5 rounded border border-white/10"
+                  >
+                    {t.stateGroup === 'paused' ? 'Resume' : 'Pause'}
+                  </button>
+                  <button
+                    onClick={e => {
+                      e.stopPropagation();
+                      remove.mutate({ hash: t.infoHash, deleteFiles: false });
+                    }}
+                    className="px-2 py-0.5 rounded border border-white/10"
+                  >
+                    Remove
+                  </button>
+                  <button
+                    onClick={e => {
+                      e.stopPropagation();
+                      // Irreversible and off by default everywhere else in
+                      // this feature, so it asks.
+                      if (
+                        window.confirm(
+                          `Delete "${t.name}" and its downloaded files?`
+                        )
+                      ) {
+                        remove.mutate({ hash: t.infoHash, deleteFiles: true });
+                      }
+                    }}
+                    className="px-2 py-0.5 rounded border border-red-500/40 text-red-400"
+                  >
+                    Delete + files
+                  </button>
+                </div>
+              }
+            />
           ))}
         </ul>
 

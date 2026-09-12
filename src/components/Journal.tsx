@@ -44,6 +44,7 @@ import {
 } from '../lib/journalAttachments';
 import { AttachmentButtons } from './AttachmentButtons';
 import { ImageLightbox, useLightbox } from './ImageLightbox';
+import { ItemCard } from './ItemCard';
 import { JournalAttachments } from './JournalAttachments';
 import { MessageMarkdown } from './MessageMarkdown';
 import type {
@@ -725,11 +726,10 @@ export function Journal({
     if (item.kind === 'transcription') {
       const t = item.transcription;
       return (
-        <div
+        <ItemCard
           key={t.id}
-          className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5 opacity-70"
-        >
-          <div className="flex items-start justify-between gap-2 mb-1">
+          className="opacity-70"
+          title={
             <div className="flex items-baseline gap-2 min-w-0">
               <span className="text-sm text-[var(--color-text-muted)] shrink-0">
                 {formatDate(t.createdAt)}
@@ -741,7 +741,9 @@ export function Journal({
                 </span>
               )}
             </div>
-            <div className="flex gap-2 shrink-0">
+          }
+          titleActions={
+            <>
               <button
                 onClick={() => copyTranscription(t.id, t.text)}
                 className="text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
@@ -756,12 +758,14 @@ export function Journal({
                   Delete
                 </button>
               )}
+            </>
+          }
+          body={
+            <div className="text-sm text-[var(--color-text-muted)] italic whitespace-pre-wrap">
+              {t.text}
             </div>
-          </div>
-          <div className="text-sm text-[var(--color-text-muted)] italic whitespace-pre-wrap">
-            {t.text}
-          </div>
-        </div>
+          }
+        />
       );
     }
     const { entry, entryIndex: idx } = item;
@@ -1668,17 +1672,27 @@ const JournalPaperItem = memo(function JournalPaperItem({
   const pages = paper.pages.filter(pg => pg.imageUrl);
 
   return (
-    <div className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5">
-      <div className="flex items-baseline justify-between gap-2 mb-2">
+    <ItemCard
+      title={
         <span className="text-[var(--color-text)] truncate">🖊 {title}</span>
+      }
+      meta={
         <span className="text-xs text-[var(--color-text-muted)] shrink-0">
           {dayLabel} · {paper.pages.length} page
           {paper.pages.length === 1 ? '' : 's'}
         </span>
-      </div>
-      <PageFilmstrip pages={pages} lightbox={lightbox} emptyLabel="No pages" />
-      <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
-    </div>
+      }
+      body={
+        <>
+          <PageFilmstrip
+            pages={pages}
+            lightbox={lightbox}
+            emptyLabel="No pages"
+          />
+          <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
+        </>
+      }
+    />
   );
 });
 
@@ -1754,55 +1768,62 @@ const JournalStudyItem = memo(function JournalStudyItem({
   const unavailable = study.fileAvailable === false;
 
   return (
-    <div className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5">
-      <div className="flex items-baseline justify-between gap-2 mb-1">
+    <ItemCard
+      title={
         <span className="text-[var(--color-text)] truncate">
           {STUDY_KIND_ICON[study.kind]} {study.title || 'Untitled'}
         </span>
+      }
+      meta={
         <span className="text-xs text-[var(--color-text-muted)] shrink-0">
           {dayLabel}
         </span>
-      </div>
-      {study.sourceUrl && (
-        <a
-          href={study.sourceUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="block truncate text-xs text-[var(--color-text-muted)] hover:underline mb-2"
-        >
-          {study.sourceUrl}
-        </a>
-      )}
-      {unavailable && (
-        <div className="text-xs text-amber-400 mb-2">
-          {study.fileUnavailableReason}
-        </div>
-      )}
+      }
+      body={
+        <>
+          {study.sourceUrl && (
+            <a
+              href={study.sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block truncate text-xs text-[var(--color-text-muted)] hover:underline mb-2"
+            >
+              {study.sourceUrl}
+            </a>
+          )}
+          {unavailable && (
+            <div className="text-xs text-amber-400 mb-2">
+              {study.fileUnavailableReason}
+            </div>
+          )}
 
-      {/* No empty label: a source studied entirely in the Notebook half never
-          had a paper, and "No pages" would read as something missing. */}
-      <PageFilmstrip pages={pages} lightbox={lightbox} emptyLabel={null} />
+          {/* No empty label: a source studied entirely in the Notebook half
+              never had a paper, and "No pages" would read as something
+              missing. */}
+          <PageFilmstrip pages={pages} lightbox={lightbox} emptyLabel={null} />
 
-      {study.note && (
-        <div
-          className={
-            pages.length > 0 ? 'mt-2 pt-2 border-t border-white/10' : 'mt-1'
-          }
-        >
-          <p className="text-sm text-[var(--color-text)] whitespace-pre-wrap break-words">
-            {study.note}
-            {study.noteTruncated && (
-              <span className="text-[var(--color-text-muted)] italic">
-                {' '}
-                … (note truncated)
-              </span>
-            )}
-          </p>
-        </div>
-      )}
+          {study.note && (
+            <div
+              className={
+                pages.length > 0 ? 'mt-2 pt-2 border-t border-white/10' : 'mt-1'
+              }
+            >
+              <p className="text-sm text-[var(--color-text)] whitespace-pre-wrap break-words">
+                {study.note}
+                {study.noteTruncated && (
+                  <span className="text-[var(--color-text-muted)] italic">
+                    {' '}
+                    … (note truncated)
+                  </span>
+                )}
+              </p>
+            </div>
+          )}
 
-      <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
-    </div>
+          <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
+        </>
+      }
+    />
   );
 });
 
@@ -1838,34 +1859,40 @@ const JournalNewspaperItem = memo(function JournalNewspaperItem({
     imageUrl: pg.imageUrl,
   }));
   return (
-    <div className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5">
-      <button
-        onClick={onOpen}
-        className={`w-full text-left hover:text-[var(--color-primary)] transition-colors${
-          pages.length > 0 ? ' mb-2' : ''
-        }`}
-      >
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-[var(--color-text)] truncate">
-            📰 Toronto Star — {dayLabel}
-          </span>
-          <span className="text-xs text-[var(--color-text-muted)] shrink-0">
-            {marked
-              ? `${marked} of ${newspaper.pageCount} page${
-                  newspaper.pageCount === 1 ? '' : 's'
-                } marked up`
-              : `${newspaper.pageCount} page${
-                  newspaper.pageCount === 1 ? '' : 's'
-                } · not marked up`}
-          </span>
-        </div>
-      </button>
-      {/* No empty label: an issue nobody has opened has no pictures yet, and
-          "No pages" would read as something missing when the paper is right
-          there behind the header. */}
-      <PageFilmstrip pages={pages} lightbox={lightbox} emptyLabel={null} />
-      <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
-    </div>
+    <ItemCard
+      title={
+        <button
+          onClick={onOpen}
+          className={`w-full text-left hover:text-[var(--color-primary)] transition-colors${
+            pages.length > 0 ? ' mb-2' : ''
+          }`}
+        >
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[var(--color-text)] truncate">
+              📰 Toronto Star — {dayLabel}
+            </span>
+            <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+              {marked
+                ? `${marked} of ${newspaper.pageCount} page${
+                    newspaper.pageCount === 1 ? '' : 's'
+                  } marked up`
+                : `${newspaper.pageCount} page${
+                    newspaper.pageCount === 1 ? '' : 's'
+                  } · not marked up`}
+            </span>
+          </div>
+        </button>
+      }
+      body={
+        <>
+          {/* No empty label: an issue nobody has opened has no pictures yet,
+              and "No pages" would read as something missing when the paper is
+              right there behind the header. */}
+          <PageFilmstrip pages={pages} lightbox={lightbox} emptyLabel={null} />
+          <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
+        </>
+      }
+    />
   );
 });
 
@@ -1944,8 +1971,8 @@ const JournalFoodItem = memo(function JournalFoodItem({
   const dayLabel = formatDayTime(food.createdAt);
 
   return (
-    <div className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5">
-      <div className="flex items-baseline justify-between gap-2 mb-2">
+    <ItemCard
+      title={
         <span className="text-[var(--color-text)] truncate">
           🍽 {foodTitle(food)}
           {food.place && (
@@ -1967,61 +1994,66 @@ const JournalFoodItem = memo(function JournalFoodItem({
             </a>
           )}
         </span>
+      }
+      meta={
         <span className="text-xs text-[var(--color-text-muted)] shrink-0">
           {stars && (
             <span className="text-[var(--color-primary)] mr-2">{stars}</span>
           )}
           {dayLabel}
         </span>
-      </div>
-
-      {food.notes && (
-        <div className="text-sm text-[var(--color-text)] whitespace-pre-wrap mb-2">
-          {food.notes}
-        </div>
-      )}
-
-      <MealClips media={food.media} />
-
-      {visualMedia(food.media).length > 0 && (
-        <div className="flex gap-2 overflow-x-auto pb-1">
-          {visualMedia(food.media).map(m =>
-            m.kind === 'video' ? (
-              <video
-                key={m.id}
-                src={m.url}
-                controls
-                className="shrink-0 h-28 rounded-md border border-white/10"
-              />
-            ) : (
-              <button
-                key={m.id}
-                onClick={() => lightbox.open(m.url)}
-                className="shrink-0 h-28 rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
-                title="View"
-              >
-                {/* Fixed height, width follows the photo — a wide meal shot in
-                    a square box lost its edges. */}
-                <img
-                  src={m.url}
-                  alt=""
-                  className="h-full w-auto object-contain"
-                />
-              </button>
-            )
+      }
+      body={
+        <>
+          {food.notes && (
+            <div className="text-sm text-[var(--color-text)] whitespace-pre-wrap mb-2">
+              {food.notes}
+            </div>
           )}
-        </div>
-      )}
 
-      {food.recipe && (
-        <div className="mt-2">
-          <span className="px-2 py-0.5 text-xs rounded border border-[var(--color-primary)]/40 text-[var(--color-primary)] bg-[var(--color-primary)]/10">
-            🍳 {food.recipe.title}
-          </span>
-        </div>
-      )}
+          <MealClips media={food.media} />
 
-      <ImageLightbox src={lightbox.src} onClose={lightbox.close} />
-    </div>
+          {visualMedia(food.media).length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {visualMedia(food.media).map(m =>
+                m.kind === 'video' ? (
+                  <video
+                    key={m.id}
+                    src={m.url}
+                    controls
+                    className="shrink-0 h-28 rounded-md border border-white/10"
+                  />
+                ) : (
+                  <button
+                    key={m.id}
+                    onClick={() => lightbox.open(m.url)}
+                    className="shrink-0 h-28 rounded-md overflow-hidden border border-white/10 hover:border-[var(--color-primary)] transition-colors"
+                    title="View"
+                  >
+                    {/* Fixed height, width follows the photo — a wide meal
+                        shot in a square box lost its edges. */}
+                    <img
+                      src={m.url}
+                      alt=""
+                      className="h-full w-auto object-contain"
+                    />
+                  </button>
+                )
+              )}
+            </div>
+          )}
+
+          {food.recipe && (
+            <div className="mt-2">
+              <span className="px-2 py-0.5 text-xs rounded border border-[var(--color-primary)]/40 text-[var(--color-primary)] bg-[var(--color-primary)]/10">
+                🍳 {food.recipe.title}
+              </span>
+            </div>
+          )}
+
+          <ImageLightbox src={lightbox.src} onClose={lightbox.close} />
+        </>
+      }
+    />
   );
 });
