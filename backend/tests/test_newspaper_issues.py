@@ -1,4 +1,5 @@
 import json
+import shutil
 import time
 from datetime import datetime
 from io import BytesIO
@@ -11,7 +12,12 @@ from backend.newspapers import issues
 
 @pytest.fixture(autouse=True)
 def archive(monkeypatch, tmp_path):
+    # Two roots, deliberately different directories: the PDF goes on the
+    # archive drive, the rendered page pictures stay on the data disk. Nothing
+    # else in this suite makes that distinction visible, and it is the whole
+    # reason the Journal card still draws with the drive unplugged.
     monkeypatch.setenv('NEWSPAPERS_ARCHIVE_ROOT', str(tmp_path / 'archive'))
+    monkeypatch.setenv('NEWSPAPERS_ROOT', str(tmp_path / 'data'))
 
 
 def pdf(pages=1):
@@ -299,3 +305,139 @@ def test_marked_pages_survives_unreadable_markup(markup):
     """The count is derived on read, so it must never be the thing that 500s the
     journal feed — every row predating the column defaults to '[]'."""
     assert issues.marked_pages(markup) == set()
+
+
+# --- Rendered page pictures ------------------------------------------------
+
+# A complete one-pixel JPEG, and the shortest thing store_snapshot will accept.
+JPEG = (b'\xff\xd8\xff\xdb\x00C\x00' + b'\x08' * 64 +
+        b'\xff\xc9\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00'
+        b'\xff\xcc\x00\x06\x00\x10\x10\x05\xff\xda\x00\x08\x01\x01\x00\x00?\x00\xd2\xcf \xff\xd9')
+
+
+def put_page(client, date='2026-09-01', page=1, body=JPEG):
+    return client.put(f'/api/newspapers/issues/{date}/pages/{page}',
+                      data=body, content_type='image/jpeg')
+
+
+def test_a_page_picture_round_trips(client):
+    upload(client, pages=4)
+    stored = put_page(client, page=3)
+    assert stored.status_code == 200
+    assert stored.json['page'] == 3
+    assert stored.json['url'].startswith('/api/newspapers/issues/2026-09-01/pages/3?v=')
+    served = client.get('/api/newspapers/issues/2026-09-01/pages/3')
+    assert served.status_code == 200
+    assert served.mimetype == 'image/jpeg'
+    assert served.data == JPEG
+
+
+def test_the_inventory_lists_what_has_been_rendered(client):
+    upload(client, pages=5)
+    for page in (5, 1, 3):
+        assert put_page(client, page=page).status_code == 200
+    listed = client.get('/api/newspapers/issues/2026-09-01/pages').json['pages']
+    assert [item['page'] for item in listed] == [1, 3, 5]
+    assert all(item['url'].endswith(f"?v={item['updatedAt']}") for item in listed)
+    assert client.get('/api/newspapers/issues/2026-09-09/pages').status_code == 404
+
+
+def test_an_unrendered_page_is_a_404_not_a_broken_image(client):
+    upload(client, pages=4)
+    assert client.get('/api/newspapers/issues/2026-09-01/pages/2').status_code == 404
+
+
+@pytest.mark.parametrize('body', [
+    b'\x89PNG\r\n\x1a\n' + b'0' * 40,          # a PNG
+    b'<html>error</html>',                         # an error page
+    JPEG[:-2],                                     # a JPEG cut off mid-flight
+    b'',                                           # nothing at all
+])
+def test_only_a_whole_jpeg_is_stored(client, body):
+    """A truncated upload still starts with the right three bytes, and half a
+    picture on the card is the failure this check exists for."""
+    upload(client)
+    assert put_page(client, body=body).status_code == 400
+    assert not issues.snapshot_path('2026-09-01', 1).exists()
+
+
+def test_an_oversize_page_picture_leaves_nothing_behind(client, monkeypatch):
+    """Refused on the declared length, before a byte of it is read — and
+    refused again inside store_snapshot for a body that never declared one."""
+    upload(client)
+    monkeypatch.setattr(issues, 'MAX_SNAPSHOT_BYTES', 16)
+    assert put_page(client).status_code == 413
+    with pytest.raises(ValueError):
+        issues.store_snapshot('2026-09-01', 1, JPEG)
+    assert not issues.snapshot_path('2026-09-01', 1).exists()
+    assert not list(issues.snapshot_dir('2026-09-01').glob('*.part'))
+
+
+def test_a_page_must_exist_in_the_issue(client):
+    upload(client, pages=4)
+    assert put_page(client, page=0).status_code == 400
+    assert put_page(client, page=99).status_code == 400
+    assert put_page(client, date='2026-09-09').status_code == 404
+    assert client.get('/api/newspapers/issues/2026-09-01/pages/0').status_code == 404
+
+
+def test_page_pictures_live_off_the_archive_drive(client):
+    """The card has to keep drawing when the drive is unplugged, so only the
+    PDF lives on it. Same rule as backend/journal/archive.py's thumbnail."""
+    upload(client, pages=4)
+    assert put_page(client, page=1).status_code == 200
+    stored = issues.snapshot_path('2026-09-01', 1)
+    assert stored.is_file()
+    assert issues.archive_root() not in stored.parents
+    issues.issue_path('2026-09-01').unlink()
+    assert client.get('/api/newspapers/issues/2026-09-01/pdf').status_code == 404
+    feed = client.get('/api/newspapers/issues/journal').json
+    assert [p['page'] for p in feed[0]['pages']] == [1]
+    assert client.get(feed[0]['pages'][0]['imageUrl']).status_code == 200
+
+
+def test_the_journal_feed_lists_rendered_pages_in_page_order(client):
+    upload(client, pages=5)
+    for page in (3, 1):
+        assert put_page(client, page=page).status_code == 200
+    feed = client.get('/api/newspapers/issues/journal').json
+    assert [p['page'] for p in feed[0]['pages']] == [1, 3]
+    assert feed[0]['pages'][1]['imageUrl'].startswith(
+        '/api/newspapers/issues/2026-09-01/pages/3?v=')
+
+
+def test_an_issue_nobody_has_opened_has_no_pictures(client):
+    upload(client, pages=4)
+    assert client.get('/api/newspapers/issues/journal').json[0]['pages'] == []
+    assert not issues.snapshots_root().exists()
+
+
+def test_the_feed_survives_a_missing_picture_root(client):
+    upload(client, pages=4)
+    assert put_page(client, page=1).status_code == 200
+    shutil.rmtree(issues.snapshots_root())
+    feed = client.get('/api/newspapers/issues/journal').json
+    assert feed[0]['pages'] == []
+    assert feed[0]['markedPages'] == 0
+
+
+def test_saving_markup_prunes_pages_that_lost_their_ink(client):
+    """Erasing a page takes its picture with it — but never the cover, which is
+    what gives an unmarked issue a card with a picture on it."""
+    upload(client, pages=5)
+    for page in (1, 3, 5):
+        assert put_page(client, page=page).status_code == 200
+    assert client.put('/api/newspapers/issues/2026-09-01/markup',
+                      json={'revision': 0,
+                            'strokes': [{'page': 3, 'tool': 'pen', 'points': [[0.1, 0.2]]}]}
+                      ).status_code == 200
+    assert [page for page, _ in issues.snapshot_pages('2026-09-01')] == [1, 3]
+
+
+def test_a_refused_markup_save_prunes_nothing(client):
+    upload(client, pages=5)
+    for page in (1, 3, 5):
+        assert put_page(client, page=page).status_code == 200
+    assert client.put('/api/newspapers/issues/2026-09-01/markup',
+                      json={'revision': 7, 'strokes': []}).status_code == 409
+    assert [page for page, _ in issues.snapshot_pages('2026-09-01')] == [1, 3, 5]

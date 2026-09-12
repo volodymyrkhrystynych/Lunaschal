@@ -1139,8 +1139,8 @@ export function Journal({
             issue={readingIssue}
             onClose={() => {
               setReadingIssue(null);
-              // The marked-page count on the card is now stale by exactly the
-              // marks just made.
+              // The card's marked-page count — and its strip of page
+              // pictures — are now stale by exactly the marks just made.
               void queryClient.invalidateQueries({
                 queryKey: ['newspapers', 'journal'],
               });
@@ -1732,10 +1732,12 @@ function PageFilmstrip({
           title="View"
         >
           {/* Fixed height, width follows the page — a landscape page used to
-              be cropped to its top-left corner. */}
+              be cropped to its top-left corner. Lazy because a newspaper issue
+              can put forty of these in one horizontally scrolling strip. */}
           <img
             src={pg.imageUrl!}
             alt=""
+            loading="lazy"
             className="h-full w-auto object-contain"
           />
         </button>
@@ -1821,10 +1823,16 @@ const JournalStudyItem = memo(function JournalStudyItem({
   );
 });
 
-// An archived newspaper issue in the journal feed: the day's paper, how much of
-// it has been written on, and a way back into the reader. Every archived issue
-// gets one, marked or not — the feed is the record of the day, and "the paper
-// arrived and I never opened it" is part of that record.
+// An archived newspaper issue in the journal feed: the day's paper, the pages
+// written on, and a way back into the reader. Every archived issue gets one,
+// marked or not — the feed is the record of the day, and "the paper arrived and
+// I never opened it" is part of that record.
+//
+// The pages are shown the way a journal photo is: a small strip, blown up by
+// the same ImageLightbox the paper and study cards use. Only the header opens
+// the reader — the card cannot be one big button any more, because the strip is
+// made of buttons and nesting those is invalid HTML React will not stop you
+// writing.
 const JournalNewspaperItem = memo(function JournalNewspaperItem({
   newspaper,
   onOpen,
@@ -1832,28 +1840,42 @@ const JournalNewspaperItem = memo(function JournalNewspaperItem({
   newspaper: JournalNewspaper;
   onOpen: () => void;
 }) {
+  const lightbox = useLightbox();
   const dayLabel = formatDay(newspaper.date + 'T00:00:00');
   const marked = newspaper.markedPages;
+  const pages = newspaper.pages.map(pg => ({
+    id: String(pg.page),
+    imageUrl: pg.imageUrl,
+  }));
   return (
-    <button
-      onClick={onOpen}
-      className="w-full text-left p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5 hover:border-[var(--color-primary)] transition-colors"
-    >
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[var(--color-text)] truncate">
-          📰 Toronto Star — {dayLabel}
-        </span>
-        <span className="text-xs text-[var(--color-text-muted)] shrink-0">
-          {marked
-            ? `${marked} of ${newspaper.pageCount} page${
-                newspaper.pageCount === 1 ? '' : 's'
-              } marked up`
-            : `${newspaper.pageCount} page${
-                newspaper.pageCount === 1 ? '' : 's'
-              } · not marked up`}
-        </span>
-      </div>
-    </button>
+    <div className="p-3 bg-[var(--color-surface)]/50 rounded-lg border border-white/5">
+      <button
+        onClick={onOpen}
+        className={`w-full text-left hover:text-[var(--color-primary)] transition-colors${
+          pages.length > 0 ? ' mb-2' : ''
+        }`}
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <span className="text-[var(--color-text)] truncate">
+            📰 Toronto Star — {dayLabel}
+          </span>
+          <span className="text-xs text-[var(--color-text-muted)] shrink-0">
+            {marked
+              ? `${marked} of ${newspaper.pageCount} page${
+                  newspaper.pageCount === 1 ? '' : 's'
+                } marked up`
+              : `${newspaper.pageCount} page${
+                  newspaper.pageCount === 1 ? '' : 's'
+                } · not marked up`}
+          </span>
+        </div>
+      </button>
+      {/* No empty label: an issue nobody has opened has no pictures yet, and
+          "No pages" would read as something missing when the paper is right
+          there behind the header. */}
+      <PageFilmstrip pages={pages} lightbox={lightbox} emptyLabel={null} />
+      <ImageLightbox src={lightbox.src} onClose={lightbox.close} whiteBg />
+    </div>
   );
 });
 

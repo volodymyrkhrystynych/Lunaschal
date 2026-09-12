@@ -1,13 +1,26 @@
 // @vitest-environment jsdom
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api } from '../hooks/api';
 import { NewspaperReader } from './NewspaperReader';
 
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {},
   getDocument: () => ({
-    promise: Promise.resolve({ numPages: 1 }),
+    promise: Promise.resolve({
+      numPages: 1,
+      // Enough of a page for the thumbnail worker: an aspect ratio and a
+      // render that resolves. What the JPEG would look like is untestable
+      // here — jsdom rasterizes nothing — so what these tests pin is which
+      // pages are rendered and when.
+      getPage: vi.fn(async () => ({
+        getViewport: ({ scale }: { scale: number }) => ({
+          width: 612 * scale,
+          height: 792 * scale,
+        }),
+        render: () => ({ promise: Promise.resolve() }),
+      })),
+    }),
     destroy: vi.fn(),
   }),
 }));
@@ -22,7 +35,13 @@ vi.mock('../hooks/api', () => ({
     }
   },
   api: {
-    newspapers: { markup: vi.fn(), saveMarkup: vi.fn(), markOpened: vi.fn() },
+    newspapers: {
+      markup: vi.fn(),
+      saveMarkup: vi.fn(),
+      markOpened: vi.fn(),
+      pageImages: vi.fn(),
+      savePageImage: vi.fn(),
+    },
   },
 }));
 
@@ -105,6 +124,15 @@ beforeEach(() => {
   });
   vi.mocked(api.newspapers.saveMarkup).mockResolvedValue({ revision: 1 });
   vi.mocked(api.newspapers.markOpened).mockResolvedValue({ ok: true });
+  vi.mocked(api.newspapers.pageImages).mockResolvedValue({ pages: [] });
+  vi.mocked(api.newspapers.savePageImage).mockResolvedValue({
+    page: 1,
+    url: '/api/newspapers/issues/2026-09-01/pages/1?v=1',
+    updatedAt: 1,
+  });
+  HTMLCanvasElement.prototype.toBlob = vi.fn(cb =>
+    cb(new Blob(['x'], { type: 'image/jpeg' }))
+  );
 });
 
 /** The reader's page surface, wired up the way a browser would wire it. */
@@ -484,5 +512,95 @@ describe('an issue that has reached its markup limit', () => {
     await waitFor(() => expect(api.newspapers.saveMarkup).toHaveBeenCalled());
     const [, sent] = vi.mocked(api.newspapers.saveMarkup).mock.calls[0];
     expect(sent.strokes).toHaveLength(10000);
+  });
+});
+
+describe('the pictures the Journal card shows', () => {
+  // Made here because nothing on the server can draw a PDF page. What the JPEG
+  // actually looks like is deliberately not asserted anywhere: jsdom has no
+  // raster and no Path2D, so what is pinned is which pages get rendered, when,
+  // and that a rendered one is uploaded.
+  //
+  // Fake timers throughout: the worker looks for work every three seconds, and
+  // four tests waiting that out in real time is most of this suite's runtime.
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const serverHasCover = () =>
+    vi.mocked(api.newspapers.pageImages).mockResolvedValue({
+      pages: [
+        {
+          page: 1,
+          url: '/api/newspapers/issues/2026-09-01/pages/1?v=9',
+          updatedAt: 9,
+        },
+      ],
+    });
+
+  it('renders the cover of an issue the server has no picture of', async () => {
+    await openPage();
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(api.newspapers.savePageImage).toHaveBeenCalledWith(
+      issue.date,
+      1,
+      expect.any(Blob)
+    );
+    // The cover, and nothing else: page 1 is the only page of this issue, and
+    // once uploaded it is not wanted again.
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(api.newspapers.savePageImage).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves alone a page the server already has a picture of', async () => {
+    serverHasCover();
+    await openPage();
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(api.newspapers.savePageImage).not.toHaveBeenCalled();
+  });
+
+  it('renders a page again once it has been drawn on', async () => {
+    serverHasCover();
+    const { pointer, pick } = await openPage();
+    pick('Pen');
+    pointer('pointerdown', 'pen', 10, 20);
+    pointer('pointermove', 'pen', 40, 60);
+    pointer('pointerup', 'pen', 40, 60);
+    await vi.advanceTimersByTimeAsync(3500);
+    expect(api.newspapers.savePageImage).toHaveBeenCalledWith(
+      issue.date,
+      1,
+      expect.any(Blob)
+    );
+  });
+
+  it('sends no picture of strokes the server has refused', async () => {
+    // A reader in conflict holds markup the server would not take; a picture of
+    // it would land anyway, since a file has no revision to be refused on.
+    serverHasCover();
+    vi.mocked(api.newspapers.saveMarkup).mockRejectedValue(
+      new ApiError('Markup changed in another reader.', 409)
+    );
+    const { pointer, pick } = await openPage();
+    pick('Pen');
+    pointer('pointerdown', 'pen', 10, 20);
+    pointer('pointermove', 'pen', 40, 60);
+    pointer('pointerup', 'pen', 40, 60);
+    await vi.advanceTimersByTimeAsync(2000);
+    await screen.findByText(/Use server copy/);
+    vi.mocked(api.newspapers.savePageImage).mockClear();
+    await vi.advanceTimersByTimeAsync(9000);
+    expect(api.newspapers.savePageImage).not.toHaveBeenCalled();
+  });
+
+  it('still opens when the inventory cannot be fetched', async () => {
+    vi.mocked(api.newspapers.pageImages).mockRejectedValue(
+      new Error('offline')
+    );
+    await openPage();
+    expect(await screen.findByText('Save now')).toBeTruthy();
   });
 });

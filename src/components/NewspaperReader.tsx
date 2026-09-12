@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
@@ -35,6 +35,14 @@ import {
   undoLast,
   type IssueMarkup,
 } from '@/lib/newspaperMarkup';
+import {
+  pagesNeedingSnapshot,
+  SNAPSHOT_MIME,
+  SNAPSHOT_QUALITY,
+  SNAPSHOT_WIDTH,
+  type RenderedPage,
+} from '@/lib/newspaperSnapshots';
+import { paintStrokes } from '@/lib/inkRaster';
 import {
   InkToolPanel,
   READ_TOOL,
@@ -213,6 +221,160 @@ function Page({
   );
 }
 
+/** How often the worker considers rendering one page. Slower than the 1500 ms
+ * markup save, and never in step with it: the two want the same reader and the
+ * strokes are the half that matters. */
+const SNAPSHOT_INTERVAL_MS = 3000;
+
+/**
+ * Keeps the Journal card's pictures of this issue up to date.
+ *
+ * The feed shows marked-up pages the way it shows photos, and nothing on the
+ * server can draw a PDF page — so the reader, which is already drawing them,
+ * renders each one to an offscreen canvas, paints that page's ink over it with
+ * the same path data the screen uses, and uploads a JPEG.
+ *
+ * Offscreen and page-by-page on purpose. It does not borrow the canvas a Page
+ * happens to have mounted, so it neither depends on what is scrolled into view
+ * nor produces a different picture on a phone than on a laptop — and an issue
+ * marked up before any of this existed backfills itself simply by being
+ * opened.
+ *
+ * There is no compare-and-set on a picture, and there cannot be one: it is a
+ * file, not a document with a revision. Two devices marking one issue get
+ * last-writer-wins on the thumbnail while the strokes themselves stay
+ * protected by the markup CAS.
+ */
+function useSnapshotWorker({
+  pdf,
+  date,
+  ready,
+  pageCount,
+  markupRef,
+  conflictRef,
+  savingRef,
+}: {
+  pdf: pdfjs.PDFDocumentProxy | null;
+  date: string;
+  ready: boolean;
+  pageCount: number;
+  markupRef: { current: IssueMarkup };
+  conflictRef: { current: boolean };
+  savingRef: { current: boolean };
+}) {
+  /** What the server has, by page. A picture fetched from the inventory has a
+   * null stroke count: we cannot know what was on it, and re-rendering every
+   * marked page on open would re-upload a whole issue for nothing. */
+  const rendered = useRef(new Map<number, RenderedPage>());
+
+  // Seeded once per issue. A failure is not worth surfacing — the worst case
+  // is re-rendering pictures the server already had.
+  useEffect(() => {
+    rendered.current = new Map();
+    let active = true;
+    void api.newspapers
+      .pageImages(date)
+      .then(result => {
+        if (!active) return;
+        for (const page of result.pages) {
+          if (!rendered.current.has(page.page)) {
+            rendered.current.set(page.page, { strokes: null });
+          }
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [date]);
+
+  useEffect(() => {
+    if (!pdf || !ready) return;
+    let cancelled = false;
+    let running = false;
+
+    const renderPage = async (page: number): Promise<Blob | null> => {
+      const source = await pdf.getPage(page);
+      if (cancelled) return null;
+      const base = source.getViewport({ scale: 1 });
+      const viewport = source.getViewport({
+        scale: SNAPSHOT_WIDTH / base.width,
+      });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return null;
+      try {
+        await source.render({ canvasContext: ctx, viewport }).promise;
+        if (cancelled) return null;
+        const ratio = base.height / base.width;
+        // Ink space is { 1000, 1000 * ratio } (inkSpaceFor), so one uniform
+        // scale puts it on a canvas SNAPSHOT_WIDTH wide — exactly what the
+        // live surface's viewBox expresses. The width the page happens to be
+        // displayed at never enters this.
+        const scale = canvas.width / 1000;
+        ctx.setTransform(scale, 0, 0, scale, 0, 0);
+        paintStrokes(
+          ctx,
+          strokesOn(markupRef.current, page).map(k => toInkStroke(k, ratio)),
+          NEWSPAPER_PALETTE
+        );
+        return await new Promise<Blob | null>(resolve =>
+          canvas.toBlob(resolve, SNAPSHOT_MIME, SNAPSHOT_QUALITY)
+        );
+      } finally {
+        // Release the bitmap, as Page does when it unmounts.
+        canvas.width = 0;
+        canvas.height = 0;
+      }
+    };
+
+    const tick = async () => {
+      if (cancelled || running || conflictRef.current || savingRef.current) {
+        return;
+      }
+      // Re-derived from the live markup every tick rather than queued when a
+      // page changed: a page rubbed clean before its turn comes round simply
+      // stops being wanted, so a picture of ink that no longer exists is never
+      // uploaded.
+      const page = pagesNeedingSnapshot(
+        markupRef.current,
+        rendered.current,
+        pageCount
+      )[0];
+      if (page === undefined) return;
+      running = true;
+      const strokes = strokesOn(markupRef.current, page).length;
+      try {
+        const blob = await renderPage(page);
+        if (cancelled || !blob) return;
+        await api.newspapers.savePageImage(date, page, blob);
+        if (cancelled) return;
+        rendered.current.set(page, { strokes });
+      } catch {
+        // Dropped rather than retried on a counter: the target set is derived
+        // afresh each tick, so a failed page comes round again on its own and
+        // a reader that is closed stops trying.
+      } finally {
+        running = false;
+      }
+    };
+
+    const timer = window.setInterval(() => void tick(), SNAPSHOT_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [pdf, ready, date, pageCount, markupRef, conflictRef, savingRef]);
+
+  /** A page has been drawn on: whatever picture the server holds of it is now
+   * of the wrong ink. */
+  return useCallback((page: number) => {
+    rendered.current.delete(page);
+  }, []);
+}
+
 /** #rrggbb into the 0..1 triple pdf-lib wants. */
 function toRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
@@ -278,6 +440,16 @@ export function NewspaperReader({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  const invalidateSnapshot = useSnapshotWorker({
+    pdf,
+    date: issue.date,
+    ready,
+    pageCount: issue.pageCount,
+    markupRef,
+    conflictRef: conflict,
+    savingRef: saving,
+  });
 
   const draft = (next: IssueMarkup) => ({
     revision: revision.current,
@@ -552,9 +724,15 @@ export function NewspaperReader({
                 color={color[tool] ?? ''}
                 strokes={strokesOn(markup, i + 1)}
                 reseed={reseed}
-                onEdit={(page, next) =>
-                  change(setStrokesOn(markupRef.current, page, next))
-                }
+                onEdit={(page, next) => {
+                  // The one funnel with a page number in it, which is what the
+                  // worker needs to know its picture of that page is stale.
+                  // Undo and redo go through change() without one, and are
+                  // caught instead by the stroke-count comparison on the next
+                  // tick.
+                  invalidateSnapshot(page);
+                  change(setStrokesOn(markupRef.current, page, next));
+                }}
               />
             ))}
         </div>
