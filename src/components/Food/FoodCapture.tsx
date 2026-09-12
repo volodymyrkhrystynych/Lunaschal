@@ -1,3 +1,4 @@
+import { RecordingButton } from '../RecordingButton';
 import { useRef, useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useClipStage } from '../../hooks/useClipStage';
@@ -140,25 +141,16 @@ export function FoodCapture({ onDone }: { onDone?: () => void }) {
           onChange={e => setText(e.target.value)}
           placeholder="What did you eat? Where? Was it good? (Describe how you made it and it'll be saved as a recipe.)"
           rows={4}
-          className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none border border-white/10 rounded p-2 pr-12"
+          className="w-full bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none border border-white/10 rounded p-2 pr-28"
         />
-        <button
-          type="button"
+        <RecordingButton
+          status={clips.status}
+          starting={clips.starting}
           onClick={clips.toggle}
-          // Only while a clip is being closed out. Recording needs no backend —
-          // the audio is stored and uploaded later — so being offline does not
-          // gate it, and while recording this is the only way to stop.
-          disabled={clips.busy}
-          data-testid="food-capture-record"
-          title={clips.recording ? 'Stop recording' : 'Record a clip'}
-          className={`absolute top-2 right-2 w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
-            clips.recording
-              ? 'bg-red-500 text-white animate-pulse'
-              : 'bg-white/10 text-[var(--color-text)] hover:bg-white/20'
-          } disabled:opacity-50`}
-        >
-          {clips.busy ? '…' : '🎤'}
-        </button>
+          idleLabel="Record a clip"
+          testId="food-capture-record"
+          className="absolute top-2 right-2"
+        />
       </div>
 
       <ClipStrip stage={clips} testId="food-capture" />

@@ -1,3 +1,4 @@
+import { RecordingButton } from '../RecordingButton';
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
@@ -137,20 +138,22 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
           ? 'transcribing'
           : 'idle';
 
-  const isListenerControlling = isListenerActive && status === 'idle';
+  const isListenerControlling =
+    isListenerActive && status === 'idle' && !recorder.starting;
   const isJournalMode = isListenerControlling && listenerMode === 'journal';
 
   // The in-app Journal and Record buttons share the same recorder/mic as the
   // Transcribe button (only one recording can run at a time) — recordModeRef
   // tracks which one is "holding" it so each button reflects its own state.
   const holding = (mode: RecordMode) =>
-    status !== 'idle' && recordModeRef.current === mode;
+    (status !== 'idle' || recorder.starting) && recordModeRef.current === mode;
   const inAppJournalActive = holding('journal');
   const inAppNormalActive = holding('normal');
   const inAppAudioActive = holding('audio');
   // Another button owns the mic, so this one can only get in the way.
   const busyElsewhere = (mode: RecordMode) =>
-    (status !== 'idle' && recordModeRef.current !== mode) ||
+    ((status !== 'idle' || recorder.starting) &&
+      recordModeRef.current !== mode) ||
     isListenerControlling;
   // This button's own work is finishing (transcribing, or saving the entry) —
   // its label is a status, not something to click.
@@ -180,22 +183,6 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
     : status === 'recording'
       ? 'Stop'
       : 'Transcribing…';
-
-  const journalButtonDisabled = unavailable('journal');
-
-  const journalButtonLabel = inAppJournalActive
-    ? status === 'recording'
-      ? 'Stop'
-      : 'Saving…'
-    : 'Journal';
-
-  const audioButtonDisabled = unavailable('audio');
-
-  const audioButtonLabel = inAppAudioActive
-    ? status === 'recording'
-      ? 'Stop'
-      : 'Saving…'
-    : 'Record';
 
   return (
     <div className="shrink-0 border-t border-white/10 bg-[var(--color-surface)]">
@@ -318,95 +305,46 @@ export function SttPanel({ onTranscribed, onMeetingUploaded }: Props) {
       )}
 
       <div className="h-10 flex items-center gap-2 md:gap-3 px-2 md:px-4 overflow-x-auto">
-        <button
+        <RecordingButton
+          status={inAppNormalActive ? status : 'idle'}
+          starting={inAppNormalActive && recorder.starting}
           onClick={
-            effectiveStatus === 'recording' && !isListenerControlling
+            inAppNormalActive && status === 'recording'
               ? stopRecording
               : startRecording
           }
           disabled={buttonDisabled}
+          label={buttonLabel}
           title={
             recorder.canTranscribe
               ? 'Record → transcribe into the active editor or the clipboard'
               : 'Offline — dictation needs the server'
           }
-          className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
-            effectiveStatus === 'recording' && isJournalMode
-              ? 'bg-amber-600 hover:bg-amber-700 text-white'
-              : effectiveStatus === 'recording' &&
-                  (inAppNormalActive || isListenerControlling)
-                ? 'bg-red-600 hover:bg-red-700 text-white'
-                : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
-          }`}
-        >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              effectiveStatus === 'recording' &&
-              (inAppNormalActive || isListenerControlling)
-                ? 'bg-white animate-pulse'
-                : inAppNormalActive && status === 'transcribing'
-                  ? 'bg-yellow-400'
-                  : 'bg-[var(--color-text-muted)]'
-            }`}
-          />
-          {buttonLabel}
-        </button>
-
-        <button
+        />
+        <RecordingButton
+          status={inAppJournalActive ? status : 'idle'}
+          starting={inAppJournalActive && recorder.starting}
           onClick={
             inAppJournalActive && status === 'recording'
               ? stopRecording
               : startJournalRecording
           }
-          disabled={journalButtonDisabled}
-          title={
-            'Record → save the audio to the journal → transcribe it into the entry'
-          }
-          className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
-            inAppJournalActive && status === 'recording'
-              ? 'bg-amber-600 hover:bg-amber-700 text-white'
-              : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
-          }`}
-        >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              inAppJournalActive && status === 'recording'
-                ? 'bg-white animate-pulse'
-                : inAppJournalActive && status === 'saving'
-                  ? 'bg-yellow-400'
-                  : 'bg-[var(--color-text-muted)]'
-            }`}
-          />
-          {journalButtonLabel}
-        </button>
-
-        {/* Keeps the audio itself: a journal entry whose body is the recording,
-            with nothing sent to speech-to-text. */}
-        <button
+          disabled={unavailable('journal')}
+          label="Journal"
+          title="Record → save the audio to the journal → transcribe it into the entry"
+        />
+        <RecordingButton
+          status={inAppAudioActive ? status : 'idle'}
+          starting={inAppAudioActive && recorder.starting}
           onClick={
             inAppAudioActive && status === 'recording'
               ? stopRecording
               : startAudioRecording
           }
-          disabled={audioButtonDisabled}
+          disabled={unavailable('audio')}
+          label="Record"
           title="Record → save as a journal entry with the audio attached, without transcribing it"
-          className={`shrink-0 flex items-center gap-1.5 px-3 py-1 rounded text-sm font-medium transition-colors disabled:opacity-50 ${
-            inAppAudioActive && status === 'recording'
-              ? 'bg-red-600 hover:bg-red-700 text-white'
-              : 'bg-white/10 hover:bg-white/20 text-[var(--color-text)]'
-          }`}
-        >
-          <span
-            className={`w-2 h-2 rounded-full ${
-              inAppAudioActive && status === 'recording'
-                ? 'bg-white animate-pulse'
-                : inAppAudioActive && status === 'saving'
-                  ? 'bg-yellow-400'
-                  : 'bg-[var(--color-text-muted)]'
-            }`}
-          />
-          {audioButtonLabel}
-        </button>
+        />
 
         {(error || recorder.error) && (
           <span className="text-xs text-red-400 truncate">

@@ -1,15 +1,13 @@
-import { clipButtonLabel, clipLabel } from '../lib/clipStage';
+import { RecordingButton } from './RecordingButton';
+import { clipLabel } from '../lib/clipStage';
 import type { ClipStage } from '../hooks/useClipStage';
 
 /**
  * The strip of clips a composer has staged, plus whatever the recorder had to
  * say.
  *
- * Split from the button below because Food's microphone is a round one sitting
- * inside its textarea, while the other three composers want a labelled button
- * in a row of controls. What must not vary between them is *this* — how a
- * staged clip is shown, that it can be thrown away, and that the recorder's
- * notices reach the user.
+ * Separate from RecordingButton so composers can position their recording
+ * control beside their other actions while keeping clips and notices below.
  */
 export function ClipStrip({
   stage,
@@ -59,13 +57,7 @@ export function ClipStrip({
 /**
  * A composer's record button with its staged clips underneath.
  *
- * One component for the three composers that want a labelled button (the
- * Journal composer, the fanfic reader's commentary box, Ideas capture) because
- * they used to be three hand-rolled buttons that disagreed about the glyph,
- * the labels, which states disabled them and whether being offline blocked
- * recording at all — and the last of those was a real bug: recording works
- * offline, the clip is stored and uploaded later, so a mic greyed out on a bad
- * connection was refusing to do something it could do.
+ * Convenience layout; RecordingButton owns all recording feedback and styling.
  */
 export function ClipRecorder({
   stage,
@@ -78,23 +70,13 @@ export function ClipRecorder({
 }) {
   return (
     <div className={className}>
-      <button
-        type="button"
+      <RecordingButton
+        status={stage.status}
+        starting={stage.starting}
         onClick={stage.toggle}
-        // Only while a clip is being closed out. Recording itself needs no
-        // backend, and while recording this button is the only way to stop.
-        disabled={stage.busy}
-        data-testid={testId}
-        aria-label={stage.recording ? 'Stop recording' : 'Record a clip'}
-        title="Record — the clip is kept and transcribed after you send"
-        className={`px-2 py-1 text-xs rounded border ${
-          stage.recording
-            ? 'border-red-500/40 bg-red-500/25 text-red-300'
-            : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20'
-        } disabled:opacity-50`}
-      >
-        {clipButtonLabel(stage.status, stage.starting)}
-      </button>
+        idleLabel="Record a clip"
+        testId={testId}
+      />
       <ClipStrip stage={stage} testId={testId} />
     </div>
   );

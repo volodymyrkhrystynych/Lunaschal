@@ -1,3 +1,4 @@
+import { RecordingButton } from './RecordingButton';
 import {
   useState,
   useEffect,
@@ -67,7 +68,6 @@ import { useListSelection } from '../shortcuts/useListSelection';
 import { useClipStage } from '../hooks/useClipStage';
 import { ClipStrip } from './ClipRecorder';
 import { MealClips, visualMedia } from './Food/MealClips';
-import { clipButtonLabel } from '../lib/clipStage';
 
 // Opened straight from the feed rather than by sending the user to the
 // Newspapers tab to find the day again — the reader is a full-screen overlay
@@ -863,28 +863,14 @@ export function Journal({
             )}
             <ClipStrip stage={editClips} testId="journal-edit" />
             <div className="flex items-center gap-2 mt-2">
-              <button
-                type="button"
+              <RecordingButton
+                status={editClips.status}
+                starting={editClips.starting}
                 onClick={editClips.toggle}
-                // Only while a clip is being closed out. Recording works
-                // offline — the audio is stored and uploaded later — so being
-                // offline no longer greys this out.
-                disabled={editClips.busy}
-                data-testid="journal-edit-record"
+                idleLabel="Record into this entry"
                 title="Record — the clip is attached to this entry and transcribed into it once you close the editor"
-                aria-label={
-                  editClips.recording
-                    ? 'Stop recording'
-                    : 'Record into this entry'
-                }
-                className={`px-2 py-1 rounded text-sm ${
-                  editClips.recording
-                    ? 'bg-red-500/25 text-red-300'
-                    : 'bg-white/10 text-[var(--color-text)] hover:bg-white/15'
-                } disabled:opacity-50`}
-              >
-                {clipButtonLabel(editClips.status, editClips.starting)}
-              </button>
+                testId="journal-edit-record"
+              />
               <button
                 onClick={closeEditor}
                 className="ml-auto px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
@@ -1284,26 +1270,14 @@ function NewEntryComposer({
           setLinks(current => [...current, url]);
         }}
         extra={
-          <button
-            type="button"
+          <RecordingButton
+            status={clips.status}
+            starting={clips.starting}
             onClick={clips.toggle}
-            // Only while a clip is being closed out into IndexedDB. Recording
-            // needs no backend and staging does not either, so nothing here is
-            // gated on being online any more.
-            disabled={clips.busy}
-            data-testid="journal-new-entry-transcribe"
+            idleLabel="Record a clip"
             title="Record — the clip is attached to the entry and transcribed into it after you save"
-            aria-label={
-              clips.recording ? 'Stop recording' : 'Record into this entry'
-            }
-            className={`px-2 py-1 text-xs rounded border ${
-              clips.recording
-                ? 'border-red-500/40 bg-red-500/25 text-red-300'
-                : 'border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20'
-            } disabled:opacity-50`}
-          >
-            {clipButtonLabel(clips.status, clips.starting)}
-          </button>
+            testId="journal-new-entry-transcribe"
+          />
         }
       />
       <ClipStrip stage={clips} testId="journal-new-entry" />

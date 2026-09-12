@@ -1,3 +1,4 @@
+import { RecordingButton } from '../RecordingButton';
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type ChatAttachment, type DraftCard } from '../../hooks/api';
@@ -1208,60 +1209,14 @@ export function ChatPanel() {
               <path d="m21 15-4.5-4.5L7 20" />
             </svg>
           </button>
-          <button
+          <RecordingButton
+            status={recorder.status}
+            starting={recorder.starting || createConversation.isPending}
             onClick={toggleRecording}
-            // Gated only when idle: every condition here is about whether a
-            // new dictation may start, and while one is running this button
-            // is the only way to stop it.
-            //
-            // `canTranscribe` is deliberately gone from this list. It was here
-            // because dictation used to need the server before it could become
-            // a message at all; the clip is now stored on the device and
-            // uploaded whenever the backend is back, so a flat mic offline
-            // would refuse a recording it is perfectly able to keep.
-            disabled={
-              !isRecording && (!isConfigured || isStreaming || isSavingClip)
-            }
-            title={isRecording ? 'Stop recording' : 'Speak to send'}
-            className={`px-3 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-              isRecording
-                ? 'bg-red-500 text-white animate-pulse hover:bg-red-500'
-                : 'bg-[var(--color-surface)] border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-white/20'
-            }`}
-          >
-            {isSavingClip ? (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="animate-spin"
-              >
-                <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-              </svg>
-            ) : (
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z" />
-                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                <line x1="12" y1="19" x2="12" y2="22" />
-              </svg>
-            )}
-          </button>
+            disabled={!isConfigured || isStreaming || isSavingClip}
+            idleLabel="Speak to send"
+            title="Speak to send"
+          />
           <button
             onClick={() => sendMessage()}
             disabled={

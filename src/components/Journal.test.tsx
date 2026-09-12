@@ -316,7 +316,7 @@ describe('Journal edit-mode recording', () => {
     await screen.findByText('First entry');
     openEditWithKeyboard();
 
-    expect(screen.getByText('● Record')).toBeTruthy();
+    expect(screen.getByText('Record')).toBeTruthy();
     expect(screen.queryByText('● Transcribe')).toBeNull();
   });
 });
@@ -517,7 +517,7 @@ describe('Journal new-entry attachments', () => {
     fireEvent.click(await screen.findByText('+ New Entry'));
 
     expect(screen.getByTestId('journal-new-entry-transcribe')).toBeTruthy();
-    expect(screen.getByText('● Record')).toBeTruthy();
+    expect(screen.getByText('Record')).toBeTruthy();
   });
 
   it('stages the clip and leaves the draft alone', async () => {

@@ -115,6 +115,7 @@ export function useRecorder(
   options: RecorderOptions = {}
 ) {
   const [status, setStatus] = useState<RecorderStatus>('idle');
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const mediaRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -127,6 +128,7 @@ export function useRecorder(
   // Held for the whole of `start()`, including the await on the permission
   // prompt — which is the window a second tap used to slip through.
   const startingRef = useRef(false);
+  const statusRef = useRef<RecorderStatus>('idle');
 
   // Callbacks are read through a ref so the lifecycle listeners below can be
   // installed once and still see the current ones.
@@ -154,6 +156,7 @@ export function useRecorder(
   canTranscribeRef.current = canTranscribe;
 
   const setStatusIfMounted = (s: RecorderStatus) => {
+    statusRef.current = s;
     if (mountedRef.current) setStatus(s);
   };
   const setErrorIfMounted = (e: string) => {
@@ -314,7 +317,8 @@ export function useRecorder(
     // newer one and the older kept the microphone live with nothing able to
     // release it. On iOS it is worse than a leak — a second capture ends the
     // first outright, which is what killed the track that wedged the button.
-    if (startingRef.current || mediaRef.current) return;
+    if (startingRef.current || mediaRef.current || statusRef.current !== 'idle')
+      return;
     setError('');
     const durable = opts.durable ?? optionsRef.current.durable ?? false;
     if (mode === 'transcribe' && !durable && !canTranscribeRef.current) {
@@ -333,8 +337,13 @@ export function useRecorder(
       return;
     }
     startingRef.current = true;
+    setStarting(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!mountedRef.current) {
+        stream.getTracks().forEach(t => t.stop());
+        return;
+      }
       streamRef.current = stream;
       chunksRef.current = [];
       const preferred = pickMimeType();
@@ -450,7 +459,7 @@ export function useRecorder(
       // ondataavailable fires exactly once, at stop, and everything before that
       // is unreachable inside the browser.
       mr.start(CHUNK_MS);
-      setStatus('recording');
+      setStatusIfMounted('recording');
       if (durable) void acquireWakeLock();
     } catch (err) {
       // The ref is claimed early now, so a failure after that point has to give
@@ -458,15 +467,19 @@ export function useRecorder(
       mediaRef.current = null;
       releaseStream();
       setError(err instanceof Error ? err.message : 'Microphone access denied');
-      setStatus('idle');
+      setStatusIfMounted('idle');
     } finally {
       startingRef.current = false;
+      if (mountedRef.current) setStarting(false);
     }
   };
 
   const stop = () => {
     const mr = mediaRef.current;
     if (!mr) return;
+    // Reflect the click before the browser delivers its asynchronous stop
+    // event or IndexedDB finishes. The microphone is no longer accepting input.
+    setStatusIfMounted('saving');
     if (captureEnded(mr)) {
       // Already dead — the OS got there first. onstop won't fire, so finish by
       // hand rather than leaving the recording open forever.
@@ -549,5 +562,5 @@ export function useRecorder(
     };
   }, []);
 
-  return { status, error, start, stop, canTranscribe };
+  return { status, starting, error, start, stop, canTranscribe };
 }
