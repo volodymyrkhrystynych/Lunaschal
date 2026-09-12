@@ -20,6 +20,7 @@ import { CollapsibleSection } from '../CollapsibleSection';
 import { FolderBar, FolderPicker } from './Folders';
 import { ItemCard } from '../ItemCard';
 import { LoadingState, EmptyState } from '../LoadStates';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface LibraryProps {
   onOpen: (ficId: string) => void;
@@ -48,6 +49,7 @@ export function Library({ onOpen }: LibraryProps) {
   const [tag, setTag] = useState<string | null>(null);
   const [showDelete, setShowDelete] = useState(false);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
+  const [ficToDelete, setFicToDelete] = useState<Fic | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
@@ -474,10 +476,7 @@ export function Library({ onOpen }: LibraryProps) {
               setSearchQuery('');
               setTag(name);
             }}
-            onDelete={() => {
-              if (window.confirm(`Delete "${fic.title}" and all its chapters?`))
-                deleteFic.mutate(fic.id);
-            }}
+            onDelete={() => setFicToDelete(fic)}
           />
         ))}
 
@@ -503,6 +502,18 @@ export function Library({ onOpen }: LibraryProps) {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={ficToDelete !== null}
+        title={`Delete "${ficToDelete?.title}" and all its chapters?`}
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => {
+          const fic = ficToDelete;
+          setFicToDelete(null);
+          if (fic) deleteFic.mutate(fic.id);
+        }}
+        onCancel={() => setFicToDelete(null)}
+      />
     </div>
   );
 }
