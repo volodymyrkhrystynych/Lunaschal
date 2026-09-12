@@ -4,6 +4,7 @@ import { api } from '../../hooks/api';
 import { useRecorder } from '../../hooks/useRecorder';
 import { useShortcutScope } from '../../shortcuts/ShortcutProvider';
 import { parseTagsInput } from '../../lib/tags';
+import { ErrorBanner } from '../LoadStates';
 
 interface Props {
   folderId: string | null;
@@ -117,11 +118,9 @@ export function BrainDump({ folderId, onGenerated }: Props) {
           {generate.isPending ? 'Generating cards…' : 'Generate Cards'}
         </button>
         {generate.isError && (
-          <p className="text-xs text-red-400 mt-2">
-            {generate.error instanceof Error
-              ? generate.error.message
-              : 'Generation failed'}
-          </p>
+          <div className="mt-2">
+            <ErrorBanner error={generate.error} />
+          </div>
         )}
       </div>
 

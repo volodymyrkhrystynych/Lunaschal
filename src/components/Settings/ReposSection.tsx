@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type Repo } from '../../hooks/api';
+import { ErrorBanner } from '../LoadStates';
 
 /**
  * Repositories the Ideas agent reads.
@@ -93,7 +94,7 @@ export function ReposSection() {
         </button>
       </div>
 
-      {error && <p className="text-xs text-red-400">{error}</p>}
+      {error && <ErrorBanner error={error} />}
 
       <p className="text-xs text-[var(--color-text-muted)]">
         https:// and git@host:owner/repo URLs only. SSH uses the keys you
@@ -171,7 +172,9 @@ function RepoRow({
       </div>
 
       {repo.cloneError && (
-        <p className="mt-1 text-xs text-red-400">{repo.cloneError}</p>
+        <div className="mt-1">
+          <ErrorBanner error={repo.cloneError} />
+        </div>
       )}
 
       <div className="mt-2 flex items-center gap-2">

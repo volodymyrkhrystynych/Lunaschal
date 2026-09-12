@@ -25,6 +25,7 @@ import { TorrentSection } from './TorrentSection';
 import { KnowledgeSection } from './KnowledgeSection';
 import { LogsPanel } from './LogsPanel';
 import { CollapsibleSection } from '../CollapsibleSection';
+import { LoadingState } from '../LoadStates';
 import { InferenceSection } from './InferenceSection';
 import { NewspapersSection } from './NewspapersSection';
 import { shouldAutoExpand } from '../../lib/backup';
@@ -49,11 +50,7 @@ export function Settings() {
   const backupBroken = shouldAutoExpand(backup);
 
   if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-[var(--color-text-muted)]">Loading...</div>
-      </div>
-    );
+    return <LoadingState variant="panel" />;
   }
 
   return (

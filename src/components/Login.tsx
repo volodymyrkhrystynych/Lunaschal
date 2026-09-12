@@ -6,6 +6,7 @@ import {
   saveCachedCode,
   cacheExpiresInDays,
 } from '../lib/networkCode';
+import { ErrorBanner } from './LoadStates';
 
 interface Props {
   onSuccess: () => void;
@@ -96,7 +97,7 @@ export function Login({ onSuccess }: Props) {
               />
             </div>
           )}
-          {error && <p className="text-sm text-red-400">{error}</p>}
+          {error && <ErrorBanner error={error} />}
           <button
             type="submit"
             disabled={!password || !code || login.isPending}

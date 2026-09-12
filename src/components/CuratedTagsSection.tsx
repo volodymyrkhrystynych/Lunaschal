@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../hooks/api';
+import { ErrorBanner } from './LoadStates';
 
 export function CuratedTagsSection() {
   const queryClient = useQueryClient();
@@ -90,7 +91,11 @@ export function CuratedTagsSection() {
             Add
           </button>
         </div>
-        {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+        {error && (
+          <div className="mt-2">
+            <ErrorBanner error={error} />
+          </div>
+        )}
       </div>
 
       {tags && tags.length > 0 ? (

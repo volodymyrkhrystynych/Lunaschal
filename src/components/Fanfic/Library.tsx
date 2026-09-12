@@ -19,6 +19,7 @@ import { useListSelection } from '../../shortcuts/useListSelection';
 import { CollapsibleSection } from '../CollapsibleSection';
 import { FolderBar, FolderPicker } from './Folders';
 import { ItemCard } from '../ItemCard';
+import { LoadingState, EmptyState } from '../LoadStates';
 
 interface LibraryProps {
   onOpen: (ficId: string) => void;
@@ -457,9 +458,7 @@ export function Library({ onOpen }: LibraryProps) {
         ref={listRef}
         className="flex-1 overflow-y-auto overflow-x-hidden space-y-3"
       >
-        {isLoading && (
-          <div className="text-[var(--color-text-muted)]">Loading...</div>
-        )}
+        {isLoading && <LoadingState />}
 
         {fics?.map((fic, idx) => (
           <FicCard
@@ -483,13 +482,15 @@ export function Library({ onOpen }: LibraryProps) {
         ))}
 
         {fics?.length === 0 && !isLoading && (
-          <div className="text-center text-[var(--color-text-muted)] py-12">
-            {searchQuery
-              ? 'No fics match'
-              : view === 'folders' && !folderId
-                ? 'Choose a folder to browse and group its books.'
-                : 'Nothing here yet — import a fic from a forum or upload an EPUB/DOCX/PDF.'}
-          </div>
+          <EmptyState
+            title={
+              searchQuery
+                ? 'No fics match'
+                : view === 'folders' && !folderId
+                  ? 'Choose a folder to browse and group its books.'
+                  : 'Nothing here yet — import a fic from a forum or upload an EPUB/DOCX/PDF.'
+            }
+          />
         )}
 
         {!searchQuery && (

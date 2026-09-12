@@ -15,6 +15,7 @@ import { groupByFoodDay } from '../../lib/foodDay';
 import { FoodCapture } from './FoodCapture';
 import { TagPill } from '../TagPill';
 import { FoodDescriptions } from './FoodDescriptions';
+import { LoadingState } from '../LoadStates';
 
 const splitTagInput = (input: string): string[] =>
   input
@@ -371,9 +372,7 @@ export function FoodLog() {
       )}
 
       <div className="flex-1 overflow-y-auto space-y-4">
-        {isLoading && (
-          <div className="text-[var(--color-text-muted)]">Loading...</div>
-        )}
+        {isLoading && <LoadingState />}
         {entries &&
           (() => {
             let idx = 0;
