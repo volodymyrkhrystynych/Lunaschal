@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useRecorder } from '@/hooks/useRecorder';
+import { CollapsibleSection } from '../CollapsibleSection';
 
 interface Props {
   steer: string;
@@ -83,26 +84,33 @@ export function SteerBar({
         </p>
       )}
 
-      {expanded && (
-        <div className="px-2 pb-2">
-          <textarea
-            value={steer}
-            onChange={e => onSteerChange(e.target.value)}
-            rows={3}
-            placeholder="How should this be answered? e.g. “emphasise the payments work, keep it short”"
-            className="w-full p-2 rounded bg-[var(--color-bg)] border border-white/10 text-sm text-[var(--color-text)] resize-y"
-          />
-          {steer && (
-            <button
-              type="button"
-              onClick={() => onSteerChange('')}
-              className="mt-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
-            >
-              Clear
-            </button>
-          )}
-        </div>
-      )}
+      {/* Trigger is the ✎/▲ button above, sharing the top row with mic/run —
+          CollapsibleSection's own header does not fit there, so this stays
+          headless and only borrows the collapse transition. */}
+      <CollapsibleSection
+        open={expanded}
+        onToggle={setExpanded}
+        hideHeader
+        sectionClassName=""
+        bodyClassName="px-2 pb-2"
+      >
+        <textarea
+          value={steer}
+          onChange={e => onSteerChange(e.target.value)}
+          rows={3}
+          placeholder="How should this be answered? e.g. “emphasise the payments work, keep it short”"
+          className="w-full p-2 rounded bg-[var(--color-bg)] border border-white/10 text-sm text-[var(--color-text)] resize-y"
+        />
+        {steer && (
+          <button
+            type="button"
+            onClick={() => onSteerChange('')}
+            className="mt-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+          >
+            Clear
+          </button>
+        )}
+      </CollapsibleSection>
 
       {!expanded && steer && (
         <p className="px-3 pb-2 text-xs text-[var(--color-text-muted)] truncate">

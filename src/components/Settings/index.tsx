@@ -24,7 +24,7 @@ import { FilesSection } from './FilesSection';
 import { TorrentSection } from './TorrentSection';
 import { KnowledgeSection } from './KnowledgeSection';
 import { LogsPanel } from './LogsPanel';
-import { CollapsibleSection } from './CollapsibleSection';
+import { CollapsibleSection } from '../CollapsibleSection';
 import { InferenceSection } from './InferenceSection';
 import { NewspapersSection } from './NewspapersSection';
 import { shouldAutoExpand } from '../../lib/backup';
