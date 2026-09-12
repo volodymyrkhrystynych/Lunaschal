@@ -5,6 +5,7 @@ import type { Meeting, MeetingPhase } from '../hooks/api';
 import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
 import { LoadingState, ErrorBanner } from './LoadStates';
+import { StatusBadge } from './StatusBadge';
 
 const PHASE_LABELS: Partial<Record<MeetingPhase, string>> = {
   recording: 'Recording…',
@@ -280,11 +281,7 @@ function StatusPill({ meeting }: { meeting: Meeting }) {
     error: 'Error',
   };
   return (
-    <span
-      className={`shrink-0 px-2 py-0.5 text-xs rounded-full border ${styles[meeting.status]}`}
-    >
-      {labels[meeting.status]}
-    </span>
+    <StatusBadge status={meeting.status} labelMap={labels} colorMap={styles} />
   );
 }
 

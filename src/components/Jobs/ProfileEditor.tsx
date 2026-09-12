@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
 import type { ProfileSection } from '@/hooks/api';
 import { ProfileImport } from './ProfileImport';
+import { TagsInput } from '../TagsInput';
 
 function Field({
   label,
@@ -257,18 +258,16 @@ export function ProfileEditor() {
           </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-          <Field
-            label="Explicit company blacklist (comma-separated)"
-            value={companyBlacklist.join(', ')}
-            onCommit={v =>
-              patchContact.mutate({
-                companyBlacklist: v
-                  .split(',')
-                  .map(x => x.trim())
-                  .filter(Boolean),
-              })
-            }
-          />
+          <label className="block">
+            <span className="block text-xs text-[var(--color-text-muted)] mb-1">
+              Explicit company blacklist (comma-separated)
+            </span>
+            <TagsInput
+              value={companyBlacklist}
+              onChange={tags => patchContact.mutate({ companyBlacklist: tags })}
+              className="w-full min-h-[44px] p-2 rounded bg-[var(--color-bg)] border border-white/10 text-sm text-[var(--color-text)]"
+            />
+          </label>
           <Field
             label="Preferred salary floor"
             value={profile.softSalaryFloor?.toString() ?? ''}
