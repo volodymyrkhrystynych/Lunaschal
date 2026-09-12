@@ -1,6 +1,7 @@
 import { useDraftState } from '@/hooks/useDraftState';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, DailyTask } from '../../hooks/api';
+import { InlineEditableText } from '../InlineEditableText';
 
 interface DailyTasksProps {
   tasks: DailyTask[];
@@ -31,7 +32,6 @@ export function DailyTasks({
     'daily-task:editing',
     null
   );
-  const [editTitle, setEditTitle] = useDraftState('daily-task:edit-title', '');
   const queryClient = useQueryClient();
 
   const invalidate = () =>
@@ -91,14 +91,6 @@ export function DailyTasks({
 
   const startEdit = (task: DailyTask) => {
     setEditingId(task.id);
-    setEditTitle(task.title);
-  };
-
-  const saveEdit = () => {
-    if (!editingId) return;
-    const trimmed = editTitle.trim();
-    if (trimmed) updateTask.mutate({ id: editingId, title: trimmed });
-    else setEditingId(null);
   };
 
   return (
@@ -179,30 +171,19 @@ export function DailyTasks({
             </button>
 
             <div className="flex-1 min-w-0">
-              {editingId === task.id ? (
-                <input
-                  autoFocus
-                  value={editTitle}
-                  onChange={e => setEditTitle(e.target.value)}
-                  onBlur={saveEdit}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter') saveEdit();
-                    if (e.key === 'Escape') setEditingId(null);
-                  }}
-                  className="w-full bg-transparent text-[var(--color-text)] text-sm outline-none border-b border-[var(--color-primary)]"
-                />
-              ) : (
-                <span
-                  onClick={() => startEdit(task)}
-                  className={`text-sm cursor-text select-none ${
-                    task.done
-                      ? 'line-through text-[var(--color-text-muted)]'
-                      : 'text-[var(--color-text)]'
-                  }`}
-                >
-                  {task.title}
-                </span>
-              )}
+              <InlineEditableText
+                value={task.title}
+                editing={editingId === task.id}
+                onStartEdit={() => startEdit(task)}
+                onStopEdit={() => setEditingId(null)}
+                onSave={title => updateTask.mutate({ id: task.id, title })}
+                draftKey="daily-task:edit-title"
+                displayClassName={
+                  task.done
+                    ? 'line-through text-[var(--color-text-muted)]'
+                    : 'text-[var(--color-text)]'
+                }
+              />
             </div>
 
             <div className="flex items-center gap-1 shrink-0">

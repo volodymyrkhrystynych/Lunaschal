@@ -6,6 +6,7 @@ import {
   priorityFlag,
   repeatLabel,
 } from '../../lib/todos';
+import { InlineEditableText } from '../InlineEditableText';
 
 interface TodoRowProps {
   todo: TodoItem;
@@ -30,19 +31,9 @@ export function TodoRow({
   onDelete,
 }: TodoRowProps) {
   const [editing, setEditing] = useDraftState(`todo:${todo.id}:editing`, false);
-  const [editTitle, setEditTitle] = useDraftState(
-    `todo:${todo.id}:edit-title`,
-    ''
-  );
 
-  const startEdit = () => {
-    setEditing(true);
-    setEditTitle(todo.title);
-  };
-
-  const saveEdit = () => {
-    const trimmed = editTitle.trim();
-    if (trimmed && trimmed !== todo.title) onUpdate({ title: trimmed });
+  const saveEdit = (title: string) => {
+    if (title !== todo.title) onUpdate({ title });
     setEditing(false);
   };
 
@@ -75,34 +66,20 @@ export function TodoRow({
       </button>
 
       <div className="flex-1 min-w-0">
-        {editing ? (
-          <input
-            autoFocus
-            value={editTitle}
-            onChange={e => setEditTitle(e.target.value)}
-            onBlur={saveEdit}
-            onKeyDown={e => {
-              if (e.key === 'Enter') saveEdit();
-              if (e.key === 'Escape') setEditing(false);
-            }}
-            onClick={e => e.stopPropagation()}
-            className="w-full bg-transparent text-[var(--color-text)] text-sm outline-none border-b border-[var(--color-primary)]"
-          />
-        ) : (
-          <span
-            onClick={e => {
-              e.stopPropagation();
-              startEdit();
-            }}
-            className={`text-sm cursor-text select-none ${
-              todo.done
-                ? 'line-through text-[var(--color-text-muted)]'
-                : 'text-[var(--color-text)]'
-            }`}
-          >
-            {todo.title}
-          </span>
-        )}
+        <InlineEditableText
+          value={todo.title}
+          editing={editing}
+          onStartEdit={() => setEditing(true)}
+          onStopEdit={() => setEditing(false)}
+          onSave={saveEdit}
+          draftKey={`todo:${todo.id}:edit-title`}
+          stopClickPropagation
+          displayClassName={
+            todo.done
+              ? 'line-through text-[var(--color-text-muted)]'
+              : 'text-[var(--color-text)]'
+          }
+        />
         {todo.notes && (
           <div
             className={`text-xs text-[var(--color-text-muted)] mt-0.5 ${
