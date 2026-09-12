@@ -193,6 +193,39 @@ def seed_journal(db):
          img_path.stat().st_size, 0, ts(1)),
     )
 
+    # The screenshot shortcut's main shape: several captures collected into
+    # one text-free journal entry, ordered and named by their local capture
+    # time. Fixed offsets inside today's 4am-anchored day make this stable even
+    # when the seed is rebuilt between midnight and 4am.
+    screenshot_entry_id = new_id()
+    day_start, _ = day_bounds(today_key())
+    screenshot_captures = [
+        (day_start + 12 * 3600 + 2 * 60 + 11, 'Entering the ruins', (73, 91, 126)),
+        (day_start + 12 * 3600 + 47 * 60 + 28, 'Found the hidden chamber', (91, 73, 126)),
+        (day_start + 14 * 3600 + 5 * 60 + 44, 'Boss fight', (126, 73, 82)),
+        (day_start + 15 * 3600 + 12 * 60 + 9, 'Victory screen', (73, 126, 101)),
+    ]
+    db.execute(
+        'INSERT INTO journal_entries (id, content, raw_content, title, tags,'
+        ' created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (screenshot_entry_id, '', None, 'Screenshots', None,
+         screenshot_captures[0][0], screenshot_captures[-1][0]),
+    )
+    for position, (captured_at, label, color) in enumerate(screenshot_captures):
+        screenshot_id = new_id()
+        screenshot_path = attachment_path(screenshot_id, 'jpg')
+        captured_local = time.localtime(captured_at)
+        placeholder_image(screenshot_path, label, size=(720, 405), color=color)
+        db.execute(
+            'INSERT INTO journal_attachments ('
+            ' id, entry_id, kind, name, path, mime, size, position, created_at)'
+            " VALUES (?, ?, 'image', ?, ?, 'image/jpeg', ?, ?, ?)",
+            (screenshot_id, screenshot_entry_id,
+             time.strftime('%Y-%m-%d %H:%M:%S', captured_local),
+             str(screenshot_path), screenshot_path.stat().st_size, position,
+             captured_at),
+        )
+
     # A YouTube video watched and commented on: the entry is the commentary,
     # the attachment is what was watched. `import_status='ready'`, never
     # 'importing' — the startup orphan sweep rewrites that one
@@ -272,7 +305,7 @@ def seed_journal(db):
             (draft_id, str(draft_path), 'audio/wav', draft_path.stat().st_size, status, error,
              candidates, entry_id_ref, ts(3), ts(3)),
         )
-    return [e[0] for e in entries]
+    return [e[0] for e in entries] + [screenshot_entry_id]
 
 
 def seed_calendar(db, journal_ids):
@@ -284,11 +317,40 @@ def seed_calendar(db, journal_ids):
     db.execute(
         'INSERT INTO calendar_events (id, title, description, date, time, end_time, all_day, tags, journal_id, created_at) '
         'VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)',
-        (past_id, 'Dentist checkup', 'Routine cleaning', yesterday, '10:00', '10:30', tags_json(['health']), journal_ids[-1], ts(1)),
+        (past_id, 'Dentist checkup', 'Routine cleaning', yesterday, '10:00', '10:30', tags_json(['health']), journal_ids[-2], ts(1)),
     )
     db.execute(
         'INSERT INTO calendar_journal_links (id, calendar_event_id, journal_entry_id, created_at) VALUES (?, ?, ?, ?)',
-        (new_id(), past_id, journal_ids[-1], ts(1)),
+        (new_id(), past_id, journal_ids[-2], ts(1)),
+    )
+    # The completed run behind the multi-image screenshot card seeded above.
+    # It stays closed so a real shortcut press in the demo starts fresh rather
+    # than appending to fixture data.
+    capture_bounds = db.execute(
+        'SELECT MIN(created_at), MAX(created_at) FROM journal_attachments'
+        ' WHERE entry_id=?',
+        (journal_ids[-1],),
+    ).fetchone()
+    captured_start, captured_end = capture_bounds[0], capture_bounds[1]
+    start_local = time.localtime(captured_start)
+    end_local = time.localtime(captured_end)
+    screenshot_event_id = new_id()
+    db.execute(
+        'INSERT INTO calendar_events (id, title, date, time, end_time, journal_id, created_at)'
+        ' VALUES (?, ?, ?, ?, ?, ?, ?)',
+        (screenshot_event_id, 'Screenshots',
+         time.strftime('%Y-%m-%d', start_local), time.strftime('%H:%M', start_local),
+         time.strftime('%H:%M', end_local), journal_ids[-1], captured_end),
+    )
+    db.execute(
+        'INSERT INTO journal_screenshot_sessions('
+        ' entry_id, calendar_event_id, is_open, first_captured_at, last_captured_at,'
+        ' first_local_date, first_local_time, last_local_date, last_local_time,'
+        ' created_at, updated_at) VALUES (?,?,0,?,?,?,?,?,?,?,?)',
+        (journal_ids[-1], screenshot_event_id, captured_start, captured_end,
+         time.strftime('%Y-%m-%d', start_local), time.strftime('%H:%M:%S', start_local),
+         time.strftime('%Y-%m-%d', end_local), time.strftime('%H:%M:%S', end_local),
+         captured_start, captured_end),
     )
     db.execute(
         'INSERT INTO calendar_events (id, title, description, date, time, end_time, all_day, tags, created_at) '

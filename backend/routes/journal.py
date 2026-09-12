@@ -3,6 +3,7 @@ import queue
 import re
 import threading
 import time
+from datetime import datetime
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
@@ -22,6 +23,7 @@ bp = Blueprint('journal', __name__, url_prefix='/api/journal')
 
 _subscribers: list[queue.Queue] = []
 _subscribers_lock = threading.Lock()
+_screenshot_lock = threading.Lock()
 
 
 def _notify_subscribers(entry_id: str) -> None:
@@ -398,15 +400,28 @@ def update_entry(id):
         updates['title'] = body['title']
     if 'tags' in body:
         updates['tags'] = tags_json(body['tags'])
-    build_update(get_db(), 'journal_entries', updates, 'id=?', (id,))
-    get_db().commit()
+    db = get_db()
+    build_update(db, 'journal_entries', updates, 'id=?', (id,))
+    if any(field in body for field in ('content', 'title', 'tags')):
+        _close_screenshot_session(db, id)
+    db.commit()
     return jsonify({'success': True})
 
 
 @bp.delete('/<id>')
 def delete_entry(id):
-    get_db().execute('DELETE FROM journal_entries WHERE id=?', (id,))
-    get_db().commit()
+    db = get_db()
+    session = db.execute(
+        'SELECT calendar_event_id FROM journal_screenshot_sessions WHERE entry_id=?',
+        (id,),
+    ).fetchone()
+    if session:
+        # A run gets an event only after its second screenshot.
+        if session['calendar_event_id']:
+            db.execute('DELETE FROM calendar_events WHERE id=?',
+                       (session['calendar_event_id'],))
+    db.execute('DELETE FROM journal_entries WHERE id=?', (id,))
+    db.commit()
     return jsonify({'success': True})
 
 
@@ -421,6 +436,15 @@ def delete_entry(id):
 
 def _local_day(created_at: int) -> str:
     return day_key_for(created_at)
+
+
+def _close_screenshot_session(db, entry_id: str) -> None:
+    """Close one screenshot run when its entry gains user-authored context."""
+    db.execute(
+        'UPDATE journal_screenshot_sessions SET is_open=0, updated_at=?'
+        ' WHERE entry_id=? AND is_open=1',
+        (int(time.time()), entry_id),
+    )
 
 
 def _is_voice_only_entry(db, entry_id: str) -> bool:
@@ -494,6 +518,7 @@ def merge_entry(id):
         'UPDATE journal_attachments SET entry_id=?, position=? WHERE id=?',
         (target_id, next_position, attachment['id']),
     )
+    _close_screenshot_session(db, target_id)
     db.execute('DELETE FROM journal_entries WHERE id=?', (id,))
     db.commit()
     _notify_subscribers(target_id)
@@ -643,7 +668,7 @@ def list_attachments(id):
 
 def _store_attachment(
     entry_id: str, file, name: str | None, attachment_id: str | None = None,
-    *, media_only: bool = False,
+    *, media_only: bool = False, created_at: int | None = None,
 ):
     """Save one uploaded file as an attachment of `entry_id`.
 
@@ -735,7 +760,8 @@ def _store_attachment(
             ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (attachment_id, entry_id, kind, name, str(path), file.mimetype or None,
              size, position, transcript_status, description_status,
-             latitude, longitude, int(time.time())),
+             latitude, longitude,
+             created_at if created_at is not None else int(time.time())),
         )
         db.commit()
     except Exception:
@@ -781,6 +807,9 @@ def upload_attachment(id):
             # copy — the whole point of the retry loop. Deliberately not checked
             # against `id`: an attachment we already hold is stored, and moving
             # it would be a stranger outcome than ignoring the duplicate POST.
+            db = get_db()
+            _close_screenshot_session(db, existing['entry_id'])
+            db.commit()
             return jsonify(_attachment_dict(existing)), 201
 
     entry = get_db().execute(
@@ -799,7 +828,202 @@ def upload_attachment(id):
     if failure is not None:
         message, status = failure
         return jsonify({'error': message}), status
+    db = get_db()
+    _close_screenshot_session(db, id)
+    db.commit()
     return jsonify(attachment), 201
+
+
+def _parse_capture_time(value: str | None) -> datetime:
+    """Parse an ISO timestamp carrying the screenshot machine's local offset."""
+    try:
+        captured = datetime.fromisoformat((value or '').strip())
+    except ValueError as exc:
+        raise ValueError('capturedAt must be an ISO timestamp') from exc
+    if captured.tzinfo is None or captured.utcoffset() is None:
+        raise ValueError('capturedAt must include a UTC offset')
+    return captured
+
+
+def _capture_local_parts(attachment) -> tuple[str, str]:
+    """Local date/time preserved in a screenshot's timestamp name."""
+    try:
+        captured = datetime.strptime(attachment['name'], '%Y-%m-%d %H:%M:%S')
+    except ValueError:
+        # A closed screenshot entry may have had an attachment renamed before
+        # one was deleted. Its absolute capture instant remains a sound fallback.
+        captured = datetime.fromtimestamp(attachment['created_at'])
+    return captured.date().isoformat(), captured.strftime('%H:%M:%S')
+
+
+def _sync_screenshot_event(db, session) -> None:
+    """Recompute capture bounds and keep an event only for two or more shots."""
+    attachments = db.execute(
+        'SELECT id, name, created_at FROM journal_attachments WHERE entry_id=?'
+        ' ORDER BY created_at, id',
+        (session['entry_id'],),
+    ).fetchall()
+    if not attachments:
+        if session['calendar_event_id']:
+            db.execute('DELETE FROM calendar_events WHERE id=?',
+                       (session['calendar_event_id'],))
+        return
+
+    for position, attachment in enumerate(attachments):
+        db.execute(
+            'UPDATE journal_attachments SET position=? WHERE id=?',
+            (position, attachment['id']),
+        )
+
+    first = attachments[0]
+    last = attachments[-1]
+    first_date, first_time = _capture_local_parts(first)
+    last_date, last_time = _capture_local_parts(last)
+    db.execute(
+        'UPDATE journal_screenshot_sessions SET first_captured_at=?,'
+        ' last_captured_at=?, first_local_date=?, first_local_time=?,'
+        ' last_local_date=?, last_local_time=?, updated_at=? WHERE entry_id=?',
+        (first['created_at'], last['created_at'], first_date, first_time,
+         last_date, last_time, int(time.time()), session['entry_id']),
+    )
+    db.execute(
+        'UPDATE journal_entries SET created_at=?, updated_at=? WHERE id=?',
+        (first['created_at'], last['created_at'], session['entry_id']),
+    )
+
+    event_id = session['calendar_event_id']
+    if len(attachments) < 2:
+        if event_id:
+            db.execute('DELETE FROM calendar_events WHERE id=?', (event_id,))
+        return
+
+    if not event_id:
+        event_id = str(ULID())
+        db.execute(
+            'INSERT INTO calendar_events(id, title, date, time, end_time,'
+            ' journal_id, created_at) VALUES (?,?,?,?,?,?,?)',
+            (event_id, 'Screenshots', first_date, first_time[:5],
+             last_time[:5], session['entry_id'], int(time.time())),
+        )
+        db.execute(
+            'UPDATE journal_screenshot_sessions SET calendar_event_id=?'
+            ' WHERE entry_id=?',
+            (event_id, session['entry_id']),
+        )
+    # Calendar stores minute precision. A lower end time is already understood
+    # as crossing midnight by the day view, so a run can span the date line.
+    db.execute(
+        'UPDATE calendar_events SET date=?, time=?, end_time=? WHERE id=?',
+        (first_date, first_time[:5], last_time[:5], event_id),
+    )
+
+
+@bp.post('/screenshots')
+def upload_screenshot():
+    """Append one durable global capture to the current screenshot run.
+
+    The attachment id is client-minted and checked before reading the file, so
+    retrying after a lost response creates neither another picture nor another
+    entry. The backend owns grouping because manual journal edits and recording
+    entries happen here too; the listener cannot reliably observe those.
+    """
+    try:
+        attachment_id = _client_id(request.form.get('attachmentId'))
+        captured = _parse_capture_time(request.form.get('capturedAt'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    if attachment_id is None:
+        return jsonify({'error': 'attachmentId required'}), 400
+
+    with _screenshot_lock:
+        existing = _load_attachment(attachment_id)
+        if existing is not None:
+            db = get_db()
+            session = db.execute(
+                'SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
+                (existing['entry_id'],),
+            ).fetchone()
+            if session is not None:
+                # The first attempt may have committed the attachment and lost
+                # its connection before extending the event. Replay converges
+                # that last step too, even when the session has since closed.
+                _sync_screenshot_event(db, session)
+                db.commit()
+            return jsonify({
+                'id': existing['entry_id'],
+                'attachment': _attachment_dict(_load_attachment(attachment_id)),
+            }), 201
+
+        file = request.files.get('file')
+        if file is None:
+            return jsonify({'error': 'file is required'}), 400
+        if storage.resolve_upload(file.mimetype, file.filename)[1] != 'image':
+            return jsonify({'error': 'file must be an image'}), 400
+
+        db = get_db()
+        session = db.execute(
+            'SELECT * FROM journal_screenshot_sessions WHERE is_open=1'
+            ' ORDER BY last_captured_at DESC LIMIT 1'
+        ).fetchone()
+        created_entry = False
+        captured_at = int(captured.timestamp())
+        local_date = captured.date().isoformat()
+        local_time = captured.strftime('%H:%M:%S')
+        if session is None:
+            entry_id = str(ULID())
+            db.execute(
+                'INSERT INTO journal_entries(id, content, raw_content, title, tags,'
+                ' created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
+                (entry_id, '', None, 'Screenshots', None,
+                 captured_at, captured_at),
+            )
+            now = int(time.time())
+            db.execute(
+                'INSERT INTO journal_screenshot_sessions('
+                ' entry_id, calendar_event_id, is_open, first_captured_at,'
+                ' last_captured_at, first_local_date, first_local_time,'
+                ' last_local_date, last_local_time, created_at, updated_at)'
+                ' VALUES (?,NULL,1,?,?,?,?,?,?,?,?)',
+                (entry_id, captured_at, captured_at, local_date,
+                 local_time, local_date, local_time, now, now),
+            )
+            db.commit()
+            session = db.execute(
+                'SELECT * FROM journal_screenshot_sessions WHERE entry_id=?',
+                (entry_id,),
+            ).fetchone()
+            created_entry = True
+
+        name = captured.strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            attachment, failure = _store_attachment(
+                session['entry_id'], file, name, attachment_id,
+                media_only=True, created_at=captured_at,
+            )
+        except Exception:
+            if created_entry:
+                if session['calendar_event_id']:
+                    db.execute('DELETE FROM calendar_events WHERE id=?',
+                               (session['calendar_event_id'],))
+                db.execute('DELETE FROM journal_entries WHERE id=?',
+                           (session['entry_id'],))
+                db.commit()
+            raise
+        if failure is not None:
+            if created_entry:
+                if session['calendar_event_id']:
+                    db.execute('DELETE FROM calendar_events WHERE id=?',
+                               (session['calendar_event_id'],))
+                db.execute('DELETE FROM journal_entries WHERE id=?',
+                           (session['entry_id'],))
+                db.commit()
+            message, status = failure
+            return jsonify({'error': message}), status
+
+        _sync_screenshot_event(db, session)
+        db.commit()
+        _notify_subscribers(session['entry_id'])
+        return jsonify({'id': session['entry_id'], 'attachment': attachment}), 201
 
 
 _ULID_RE = re.compile(r'^[0-9A-HJKMNP-TV-Z]{26}$')
@@ -932,6 +1156,9 @@ def create_recording_entry():
                 _queue_attachment_transcription(
                     existing, into_entry=True, skip_completed=True
                 )
+            db = get_db()
+            _close_screenshot_session(db, existing['entry_id'])
+            db.commit()
             # Already stored. Answer as if we'd just saved it so the client
             # clears its local copy — the whole point of the retry loop.
             return jsonify(
@@ -974,6 +1201,12 @@ def create_recording_entry():
         message, status = failure
         return jsonify({'error': message}), status
 
+    # A recording attached from the editor adds a different kind of context to
+    # an existing screenshot entry. A newly-created recording entry already
+    # closes the prior session through the database insert trigger.
+    _close_screenshot_session(db, entry_id)
+    db.commit()
+
     if idea_id:
         # After the file, not before: a rejected upload rolls the entry back,
         # and an idea left pointing at nothing would be a permanently empty row
@@ -1006,6 +1239,8 @@ def update_attachment(attachment_id):
     if not cur.rowcount:
         return jsonify({'error': 'Not found'}), 404
     row = _load_attachment(attachment_id)
+    _close_screenshot_session(db, row['entry_id'])
+    db.commit()
     _notify_subscribers(row['entry_id'])
     return jsonify(_attachment_dict(row))
 
@@ -1097,6 +1332,9 @@ def attach_link(entry_id):
     if attachment_id:
         existing = _load_attachment(attachment_id)
         if existing is not None:
+            db = get_db()
+            _close_screenshot_session(db, existing['entry_id'])
+            db.commit()
             return jsonify(_attachment_dict(existing)), 201
     else:
         attachment_id = str(ULID())
@@ -1141,6 +1379,8 @@ def attach_link(entry_id):
     # race must be a no-op — spawning the thread anyway is a second yt-dlp
     # process writing into the same directory as the first.
     if cur.rowcount:
+        _close_screenshot_session(db, entry_id)
+        db.commit()
         _notify_subscribers(entry_id)
         youtube_import.start_progress(attachment_id, 'queued')
         youtube_import.start_import_bg(attachment_id, entry_id, url)
@@ -1436,6 +1676,7 @@ def _append_entry_text(db, entry_id: str, text: str) -> None:
         'UPDATE journal_entries SET content=?, raw_content=?, updated_at=? WHERE id=?',
         (merged, merged, int(time.time()), entry_id),
     )
+    _close_screenshot_session(db, entry_id)
 
 
 def _entry_raw_text(entry_id: str) -> str | None:
