@@ -17,6 +17,7 @@ import {
 import { api } from '../hooks/api';
 import { ulid } from '../lib/ulid';
 import {
+  enqueueJournalLink,
   useJournalCreate,
   useJournalUpdate,
 } from '../offline/mutationDefaults';
@@ -462,28 +463,36 @@ export function Journal({
     setStagedUploadError(null);
     setShowNewEntry(false);
     if (staged.length) void queueStagedFiles(id, staged);
-    if (links.length) void queueStagedLinks(id, links);
+    if (links.length) queueStagedLinks(id, links);
   };
 
   /**
-   * Attach the composer's YouTube links once the entry exists.
+   * Hand the composer's YouTube links to the durable queue.
    *
-   * Sequential and behind the create, like the staged files above. The id is
-   * minted here so a retry of the same link is a no-op server-side rather than
-   * a second copy of the same video.
+   * Queued rather than fetched, and that is the whole point: the link route
+   * answers 404 until its entry exists, and a bare request fired in the same
+   * tick as the create raced it — "the video link could not be attached: Entry
+   * not found", for an entry already visible in the feed. The mutation shares
+   * `JOURNAL_LANE` with the create started just above, so it goes second; and
+   * offline it pauses alongside it rather than failing. The id is minted here
+   * so a replay is a no-op server-side rather than a second copy of the video.
+   *
+   * Not awaited, like the staged files below: a paused link settles whenever
+   * this device next has signal, which is not something to hold the UI on.
    */
-  const queueStagedLinks = async (entryId: string, links: string[]) => {
+  const queueStagedLinks = (entryId: string, links: string[]) => {
     for (const url of links) {
-      try {
-        await api.journal.attachments.link(entryId, url, ulid());
-      } catch (e) {
+      void enqueueJournalLink(queryClient, {
+        attachmentId: ulid(),
+        entryId,
+        url,
+      }).catch(e => {
         setStagedUploadError(
           `The entry was saved, but the video link could not be attached: ` +
             `${(e as Error).message || 'request failed'}`
         );
-      }
+      });
     }
-    queryClient.invalidateQueries({ queryKey: ['journal'] });
   };
 
   /**

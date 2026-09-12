@@ -1106,8 +1106,9 @@ def attach_link(entry_id):
         'SELECT id FROM journal_entries WHERE id=?', (entry_id,)
     ).fetchone()
     if entry is None:
-        # The create is still in flight. The client retries rather than
-        # surfacing this, exactly as it does for a staged photo.
+        # The create is still in flight, or it never landed. The client does not
+        # race this: the link is queued in the same lane as the entry's own
+        # create and started behind it, exactly as a staged photo is.
         return jsonify({'error': 'Entry not found'}), 404
 
     # Rejected here as well as in the worker: this is the one caller that can

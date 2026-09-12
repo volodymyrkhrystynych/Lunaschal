@@ -13,6 +13,7 @@ import { enqueueRecordingUpload } from '../offline/recordingQueue';
 import { deleteRecording } from '../offline/recordingStore';
 import { storePhoto } from '../offline/photoStore';
 import { enqueueJournalAttachment } from '../offline/photoQueue';
+import { registerOfflineMutationDefaults } from '../offline/mutationDefaults';
 
 const { ENTRIES } = vi.hoisted(() => {
   const ENTRIES: JournalEntry[] = [
@@ -142,6 +143,11 @@ function renderJournal(props: Parameters<typeof Journal>[0] = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
+  // The real offline defaults, because the composer's queued writes are keyed
+  // rather than hooked: `enqueueJournalLink` builds its mutation from the key
+  // alone, so without this the link would have no mutationFn at all — and the
+  // lane that keeps it behind the entry's create lives on the same config.
+  registerOfflineMutationDefaults(queryClient);
   return render(
     <QueryClientProvider client={queryClient}>
       <ShortcutProvider currentView="journal" onViewChange={() => {}}>
@@ -744,6 +750,41 @@ describe('Journal new-entry attachments', () => {
         expect.any(String)
       )
     );
+  });
+
+  it('holds a staged link until the create it was saved with has landed', async () => {
+    // The bug this closes: the link was POSTed in the same tick as the create,
+    // and `POST /attachments/link` answers 404 for an entry that is not there
+    // yet — so a save that worked reported "Entry not found". Queued in
+    // JOURNAL_LANE it cannot be sent until the create ahead of it resolves.
+    const linkMock = api.journal.attachments.link as ReturnType<typeof vi.fn>;
+    linkMock.mockClear();
+    let landCreate: (value: { id: string }) => void = () => {};
+    createMock.mockImplementationOnce(
+      () => new Promise<{ id: string }>(resolve => (landCreate = resolve))
+    );
+
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+    fireEvent.click(screen.getByTestId('journal-new-entry-link-button'));
+    fireEvent.change(screen.getByTestId('journal-new-entry-link-input'), {
+      target: { value: 'https://youtu.be/aircAruvnKk' },
+    });
+    fireEvent.click(screen.getByTestId('journal-new-entry-link-add'));
+    fireEvent.change(
+      screen.getByPlaceholderText('Write your journal entry...'),
+      { target: { value: 'Worth rewatching.' } }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(createMock).toHaveBeenCalled());
+    // Still in flight: the entry does not exist yet, so neither may the link.
+    await Promise.resolve();
+    expect(linkMock).not.toHaveBeenCalled();
+
+    landCreate({ id: 'new' });
+    await waitFor(() => expect(linkMock).toHaveBeenCalled());
+    expect(screen.queryByText(/could not be attached/)).toBeNull();
   });
 
   it('saves an entry that is only a video link', async () => {

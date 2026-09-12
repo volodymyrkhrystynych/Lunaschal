@@ -65,6 +65,7 @@ export const MUTATION_KEYS = {
   journalUpdate: ['journal', 'update'] as const,
   journalRecording: ['journal', 'recording'] as const,
   journalAttachment: ['journal', 'attachment'] as const,
+  journalLink: ['journal', 'link'] as const,
   todoCreate: ['todos', 'create'] as const,
   todoUpdate: ['todos', 'update'] as const,
   dailyToggle: ['tasks', 'toggle'] as const,
@@ -127,6 +128,22 @@ export interface JournalAttachmentVars {
   attachmentId: string;
   entryId: string;
   name?: string;
+}
+
+/**
+ * One pasted YouTube link on its way to an entry that exists (or is queued
+ * ahead of it in `JOURNAL_LANE`).
+ *
+ * Nothing but strings, and deliberately so: there is no device store behind a
+ * link the way `photoStore` sits behind a staged file, so these vars *are* the
+ * whole thing to be replayed after a reload. `attachmentId` is minted by the
+ * composer and sent with the POST, which is what makes a replay a no-op rather
+ * than a second download of the same video.
+ */
+export interface JournalLinkVars {
+  attachmentId: string;
+  entryId: string;
+  url: string;
 }
 
 /**
@@ -680,6 +697,59 @@ const journalAttachmentCfg = (
   onSettled: () => qc.invalidateQueries({ queryKey: ['journal'] }),
 });
 
+/**
+ * A YouTube link, queued exactly like the staged file above.
+ *
+ * In `JOURNAL_LANE` for the reason the lane exists: the link route answers 404
+ * when its entry is not there yet, and this used to be a bare `await
+ * api.journal.attachments.link(...)` fired in the same tick as the entry's
+ * create — so the two raced, and losing that race showed up as "the video link
+ * could not be attached: Entry not found" against an entry sitting right there
+ * in the feed. Started after the create, in the same scope, it now waits for
+ * it; offline it pauses with it instead of being lost to an error toast.
+ *
+ * No attempt bound of the kind `MISSING_ENTRY_ATTEMPTS` puts on a photo, and
+ * none needed: a 404 here means the create has genuinely failed, since a
+ * pending one cannot still be ahead in the lane. It is reported and dropped —
+ * the link is a URL the user still has, not bytes only this device holds.
+ */
+const journalLinkCfg = (
+  qc: QueryClient
+): Cfg<JournalAttachment, JournalLinkVars> => ({
+  ...ONLINE,
+  ...JOURNAL_LANE,
+  mutationFn: vars =>
+    api.journal.attachments.link(vars.entryId, vars.url, vars.attachmentId),
+  // No optimistic insert, same as above: the card is the server's row, and the
+  // download it reports on has not started until the POST lands.
+  onSettled: () => qc.invalidateQueries({ queryKey: ['journal'] }),
+});
+
+/**
+ * Hand a composer's YouTube link to the offline write queue.
+ *
+ * The twin of `enqueueJournalAttachment` in photoQueue.ts — built on the
+ * mutation cache rather than a hook because the composer fires one per pasted
+ * link and then closes, and a single `useMutation` observer would run one of
+ * them and silently drop the rest. Needs `registerOfflineMutationDefaults` to
+ * have run: the config lives on the key, not on the call.
+ *
+ * The returned promise rejects on a real failure and simply never settles while
+ * the mutation is paused, which is what lets the caller report the first
+ * without inventing an error for the second.
+ */
+export function enqueueJournalLink(
+  qc: QueryClient,
+  vars: JournalLinkVars
+): Promise<JournalAttachment> {
+  return qc
+    .getMutationCache()
+    .build<JournalAttachment, Error, JournalLinkVars, unknown>(qc, {
+      mutationKey: MUTATION_KEYS.journalLink,
+    })
+    .execute(vars);
+}
+
 const todoCreateCfg = (
   qc: QueryClient
 ): Cfg<{ id: string }, TodoCreateVars> => ({
@@ -1007,6 +1077,7 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
       MUTATION_KEYS.journalAttachment,
       journalAttachmentCfg(qc) as Cfg<unknown, never>,
     ],
+    [MUTATION_KEYS.journalLink, journalLinkCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.todoCreate, todoCreateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.todoUpdate, todoUpdateCfg(qc) as Cfg<unknown, never>],
     [MUTATION_KEYS.dailyToggle, dailyToggleCfg(qc) as Cfg<unknown, never>],
