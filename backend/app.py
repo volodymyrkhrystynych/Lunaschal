@@ -138,6 +138,8 @@ def create_app():
     from backend.ai import job_handlers  # noqa: F401
 
     if not os.environ.get('LUNASCHAL_NO_SCHEDULERS'):
+        from backend.fanfic.collections import start_scans
+        start_scans()
         from backend.ai.jobs import start_job_worker
         start_job_worker()
         from backend.newspapers.scheduler import start_newspaper_scheduler

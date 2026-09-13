@@ -573,6 +573,12 @@ def seed_fanfic(db, journal_ids):
         ('forums.example.com', 3, 12, 1, 11, ts(2)),
     )
 
+    db.execute(
+        'INSERT INTO fanfic_collection_scans (id,site,collection,username,status,found,imported,pages,updated_at)'
+        " VALUES (?,?,?,?, 'complete',1,1,1,?)",
+        (new_id(), 'archiveofourown.org', 'bookmarks', 'demo-reader', ts(2)),
+    )
+
     # Reading commentary — this is what interleaves a fic into the Journal feed.
     db.execute(
         'INSERT INTO journal_entry_fic_refs (id, journal_entry_id, fic_id, chapter_id, created_at) '

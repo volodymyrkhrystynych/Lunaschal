@@ -856,7 +856,7 @@ def test_stale_downloading_status_reset_on_startup(client):
 def test_import_rejects_bad_urls(client, fake_net):
     assert client.post('/api/fanfic/import', json={}).status_code == 400
     assert client.post('/api/fanfic/import', json={'url': 'file:///etc/passwd'}).status_code == 400
-    resp = client.post('/api/fanfic/import', json={'url': 'https://archiveofourown.org/works/1'})
+    resp = client.post('/api/fanfic/import', json={'url': 'https://unsupported.example/works/1'})
     assert resp.status_code == 422
 
 

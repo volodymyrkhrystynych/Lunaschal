@@ -177,6 +177,8 @@ def init_db() -> None:
     _ensure_fic_update_pending(db)
     _ensure_fic_deep_scan_columns(db)
     _ensure_fic_library_dates(db)
+    from backend.db.fic_sources_migration import ensure_fic_sources
+    ensure_fic_sources(db)
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
@@ -810,6 +812,10 @@ def _reset_stale_fic_downloads(db: sqlite3.Connection) -> None:
     permanently stuck 'downloading' with no thread left to finish it. Since
     this runs once at startup, before any download thread exists in this
     process, any row still marked 'downloading' here is necessarily orphaned."""
+    db.execute(
+        "UPDATE fics SET update_pending=1 WHERE download_status='downloading'"
+        " AND source_type IN ('fanfiction','ao3','patreon')"
+    )
     db.execute(
         "UPDATE fics SET download_status='error',"
         " download_error='Interrupted by an app restart — click Update to retry.'"

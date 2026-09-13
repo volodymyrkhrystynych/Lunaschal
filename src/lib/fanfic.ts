@@ -3,15 +3,27 @@
 import type { FicChapterSummary } from '@/hooks/api';
 
 export type FicSite =
-  'spacebattles' | 'sufficientvelocity' | 'questionablequesting';
+  | 'spacebattles'
+  | 'sufficientvelocity'
+  | 'questionablequesting'
+  | 'fanfiction'
+  | 'ao3'
+  | 'patreon';
 
 const SITE_HOSTS: Record<string, FicSite> = {
+  'fanfiction.net': 'fanfiction',
+  'm.fanfiction.net': 'fanfiction',
+  'archiveofourown.org': 'ao3',
+  'patreon.com': 'patreon',
   'forums.spacebattles.com': 'spacebattles',
   'forums.sufficientvelocity.com': 'sufficientvelocity',
   'forum.questionablequesting.com': 'questionablequesting',
 };
 
 export const SITE_LABELS: Record<FicSite, string> = {
+  fanfiction: 'FanFiction.net',
+  ao3: 'AO3',
+  patreon: 'Patreon',
   spacebattles: 'SpaceBattles',
   sufficientvelocity: 'Sufficient Velocity',
   questionablequesting: 'Questionable Questing',

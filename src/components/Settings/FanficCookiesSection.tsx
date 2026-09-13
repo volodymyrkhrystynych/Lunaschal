@@ -124,20 +124,31 @@ function FanficCookieRow({
       {save.isError && (
         <p className="text-xs text-red-400 mt-2">{save.error.message}</p>
       )}
-      <div className="mt-3 flex items-center justify-between">
-        <button
-          onClick={() => scanWatched.mutate()}
-          disabled={!hasCookie || !!scanning || scanWatched.isPending}
-          title={
-            hasCookie
-              ? 'Walk this site’s watched-threads list and import anything missing from the library'
-              : 'Save a cookie above first — scanning needs a logged-in session'
-          }
-          className="px-3 py-1.5 text-sm rounded border border-white/10 text-[var(--color-text)] hover:bg-white/5 disabled:opacity-50"
-        >
-          {scanning ? 'Scanning…' : 'Scan watched threads'}
-        </button>
-      </div>
+      {!['fanfiction.net', 'archiveofourown.org', 'patreon.com'].includes(
+        domain
+      ) && (
+        <div className="mt-3 flex items-center justify-between">
+          <button
+            onClick={() => scanWatched.mutate()}
+            disabled={!hasCookie || !!scanning || scanWatched.isPending}
+            title={
+              hasCookie
+                ? 'Walk this site’s watched-threads list and import anything missing from the library'
+                : 'Save a cookie above first — scanning needs a logged-in session'
+            }
+            className="px-3 py-1.5 text-sm rounded border border-white/10 text-[var(--color-text)] hover:bg-white/5 disabled:opacity-50"
+          >
+            {scanning ? 'Scanning…' : 'Scan watched threads'}
+          </button>
+        </div>
+      )}
+      {['fanfiction.net', 'archiveofourown.org', 'patreon.com'].includes(
+        domain
+      ) && (
+        <p className="text-xs text-[var(--color-text-muted)] mt-3">
+          Bulk import: Library → Import → My collections.
+        </p>
+      )}
       {watchedScan && <WatchedScanStatus scan={watchedScan} />}
     </div>
   );

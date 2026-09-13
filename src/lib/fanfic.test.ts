@@ -10,6 +10,18 @@ import {
 import type { FicChapterSummary } from '@/hooks/api';
 
 describe('detectFicSite', () => {
+  it('recognizes the additional library sources', () => {
+    expect(detectFicSite('https://www.fanfiction.net/s/123/1/')).toBe(
+      'fanfiction'
+    );
+    expect(detectFicSite('https://m.fanfiction.net/s/123/2/')).toBe(
+      'fanfiction'
+    );
+    expect(detectFicSite('https://archiveofourown.org/works/12')).toBe('ao3');
+    expect(detectFicSite('https://www.patreon.com/posts/a-post-45')).toBe(
+      'patreon'
+    );
+  });
   it('detects all three forums', () => {
     expect(detectFicSite('https://forums.spacebattles.com/threads/x.1/')).toBe(
       'spacebattles'
@@ -29,7 +41,7 @@ describe('detectFicSite', () => {
   });
 
   it('returns null for other URLs and garbage', () => {
-    expect(detectFicSite('https://archiveofourown.org/works/1')).toBeNull();
+    expect(detectFicSite('https://unsupported.example/works/1')).toBeNull();
     expect(detectFicSite('not a url')).toBeNull();
     expect(detectFicSite('')).toBeNull();
   });

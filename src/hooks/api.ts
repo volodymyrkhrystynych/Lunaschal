@@ -47,6 +47,19 @@ export type { SleepDay };
 export type { ServerLogEntry, ServerLogResponse, ServerLogUnit };
 export type { Torrent, VpnStatus };
 
+export interface CollectionScan {
+  id: string;
+  site: string;
+  collection: string;
+  username: string;
+  status: 'pending' | 'complete' | 'error';
+  found: number;
+  imported: number;
+  skipped: number;
+  pages: number;
+  error: string | null;
+}
+
 export interface JournalEntry {
   id: string;
   content: string;
@@ -167,7 +180,8 @@ export interface Fic {
   id: string;
   title: string;
   author: string | null;
-  sourceType: 'xenforo' | 'epub' | 'docx' | 'pdf';
+  sourceType:
+    'xenforo' | 'epub' | 'docx' | 'pdf' | 'fanfiction' | 'ao3' | 'patreon';
   sourceUrl: string | null;
   site: string | null;
   description?: string | null;
@@ -3404,6 +3418,15 @@ export const api = {
       list: () => get<SiteCookieInfo[]>('/api/fanfic/cookies'),
       put: (domain: string, cookie: string) =>
         put<{ success: boolean }>('/api/fanfic/cookies', { domain, cookie }),
+    },
+    collections: {
+      list: () => get<CollectionScan[]>('/api/fanfic/collections'),
+      start: (site: string, collection: string, username: string) =>
+        post<{ id: string }>('/api/fanfic/collections', {
+          site,
+          collection,
+          username,
+        }),
     },
     scanWatched: (domain: string) =>
       post<{ started: boolean }>(`/api/fanfic/scan-watched/${domain}`),
