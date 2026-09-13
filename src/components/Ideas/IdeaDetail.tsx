@@ -24,6 +24,7 @@ import { IdeaDecisions } from './IdeaDecisions';
 import { IdeaDiscussion } from './IdeaDiscussion';
 import { IdeaPlan } from './IdeaPlan';
 import { IdeaRecording } from './IdeaRecording';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 const SAVE_DEBOUNCE_MS = 1500;
 
@@ -71,6 +72,7 @@ export function IdeaDetail({ ideaId, onOpenEntry }: IdeaDetailProps) {
   const [tab, setTab] = useState<TabId>('idea');
   const [draft, setDraft] = useState<IdeaDraft>(EMPTY);
   const [failed, setFailed] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   // The last text known to be on the server. Kept apart from the query cache
@@ -273,13 +275,7 @@ export function IdeaDetail({ ideaId, onOpenEntry }: IdeaDetailProps) {
         <span className="flex-1" />
         <button
           type="button"
-          onClick={() => {
-            if (
-              confirm('Delete this idea? Its sketches and notes go with it.')
-            ) {
-              remove.mutate();
-            }
-          }}
+          onClick={() => setConfirmRemove(true)}
           className="px-2 py-0.5 rounded text-xs text-[var(--color-text-muted)] hover:bg-white/10"
         >
           Delete
@@ -370,6 +366,17 @@ export function IdeaDetail({ ideaId, onOpenEntry }: IdeaDetailProps) {
           <IdeaPlan ideaId={ideaId} />
         </div>
       )}
+      <ConfirmDialog
+        open={confirmRemove}
+        title="Delete this idea? Its sketches and notes go with it."
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => {
+          setConfirmRemove(false);
+          remove.mutate();
+        }}
+        onCancel={() => setConfirmRemove(false)}
+      />
     </div>
   );
 }

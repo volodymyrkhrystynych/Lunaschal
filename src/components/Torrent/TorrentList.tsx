@@ -20,10 +20,15 @@ import { ItemCard } from '../ItemCard';
 import { AddTorrent } from './AddTorrent';
 import { TorrentDetail } from './TorrentDetail';
 import { VpnBanner } from './VpnBanner';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 export function Torrent() {
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
+  const [toDelete, setToDelete] = useState<{
+    hash: string;
+    name: string;
+  } | null>(null);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('');
   const [sort, setSort] = useState<TorrentSort>('added');
@@ -253,13 +258,7 @@ export function Torrent() {
                       e.stopPropagation();
                       // Irreversible and off by default everywhere else in
                       // this feature, so it asks.
-                      if (
-                        window.confirm(
-                          `Delete "${t.name}" and its downloaded files?`
-                        )
-                      ) {
-                        remove.mutate({ hash: t.infoHash, deleteFiles: true });
-                      }
+                      setToDelete({ hash: t.infoHash, name: t.name });
                     }}
                     className="px-2 py-0.5 rounded border border-red-500/40 text-red-400"
                   >
@@ -277,6 +276,18 @@ export function Torrent() {
           </aside>
         )}
       </div>
+      <ConfirmDialog
+        open={toDelete !== null}
+        title={`Delete "${toDelete?.name}" and its downloaded files?`}
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => {
+          const target = toDelete;
+          setToDelete(null);
+          if (target) remove.mutate({ hash: target.hash, deleteFiles: true });
+        }}
+        onCancel={() => setToDelete(null)}
+      />
     </div>
   );
 }

@@ -10,6 +10,7 @@ import {
 import { enqueueRecordingUpload } from '../../offline/recordingQueue';
 import { recordingFilename } from '../../lib/journalAttachments';
 import { pendingRecordingLabel, visibleRecordings } from '../../lib/recordings';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 /**
  * Journal audio still on the device.
@@ -23,6 +24,7 @@ import { pendingRecordingLabel, visibleRecordings } from '../../lib/recordings';
 export function PendingRecordings() {
   const qc = useQueryClient();
   const [all, setAll] = useState<StoredRecording[]>([]);
+  const [toDiscard, setToDiscard] = useState<StoredRecording | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,11 +68,10 @@ export function PendingRecordings() {
     URL.revokeObjectURL(url);
   };
 
-  const discard = (rec: StoredRecording) => {
-    // The one path that destroys audio on purpose, so it asks first.
-    if (!window.confirm('Delete this recording? It has not been saved yet.')) {
-      return;
-    }
+  // The one path that destroys audio on purpose, so it asks first.
+  const discard = (rec: StoredRecording) => setToDiscard(rec);
+
+  const confirmDiscard = (rec: StoredRecording) => {
     void deleteRecording(rec.id).then(() =>
       setAll(list => list.filter(r => r.id !== rec.id))
     );
@@ -105,6 +106,18 @@ export function PendingRecordings() {
           </button>
         </div>
       ))}
+      <ConfirmDialog
+        open={toDiscard !== null}
+        title="Delete this recording? It has not been saved yet."
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => {
+          const rec = toDiscard;
+          setToDiscard(null);
+          if (rec) confirmDiscard(rec);
+        }}
+        onCancel={() => setToDiscard(null)}
+      />
     </div>
   );
 }

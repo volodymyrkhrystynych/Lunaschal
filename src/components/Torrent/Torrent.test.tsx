@@ -201,15 +201,18 @@ describe('controls', () => {
 
   it('asks before deleting the files, since that cannot be undone', async () => {
     list.mockResolvedValue({ torrents: [torrent()], vpn: vpnUp });
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     renderView();
     fireEvent.click(await screen.findByText('Delete + files'));
-    expect(confirm).toHaveBeenCalled();
+    expect(
+      screen.getByText('Delete "Debian ISO" and its downloaded files?')
+    ).toBeTruthy();
     expect(remove).not.toHaveBeenCalled();
 
-    confirm.mockReturnValue(true);
+    fireEvent.click(screen.getByText('Cancel'));
+    expect(remove).not.toHaveBeenCalled();
+
     fireEvent.click(screen.getByText('Delete + files'));
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith('aabb', true));
-    confirm.mockRestore();
   });
 });
