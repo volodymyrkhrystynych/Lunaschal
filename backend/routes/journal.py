@@ -12,6 +12,7 @@ from backend.ai.journal import (
     PolishUnavailable,
     polish_journal_entry,
     generate_journal_metadata,
+    generate_fic_commentary_metadata,
 )
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
@@ -1920,6 +1921,29 @@ def _metadata_context(entry_id: str) -> str | None:
     return '\n'.join(f"{r['name']}: {r['transcript']}" for r in rows)
 
 
+def _fic_commentary_metadata_input(entry_id: str) -> dict | None:
+    """The fic/chapter this entry is commentary on, for the title/tags call.
+
+    Distinct from `_enrich_with_fic_refs` (the API response shape): this pulls
+    the fic's description and the chapter's own text, which
+    `generate_fic_commentary_metadata` needs to make sense of commentary as
+    short as "loved this twist!!" — the reply is the entry's subject, the
+    fic/chapter are what it's a reply to. An entry can in principle carry more
+    than one ref; the first is what the title speaks to.
+    """
+    row = get_db().execute(
+        'SELECT f.title AS fic_title, f.description AS fic_description,'
+        ' fc.title AS chapter_title, fc.content_text AS chapter_text'
+        ' FROM journal_entry_fic_refs jefr'
+        ' JOIN fics f ON f.id = jefr.fic_id'
+        ' LEFT JOIN fic_chapters fc ON fc.id = jefr.chapter_id'
+        ' WHERE jefr.journal_entry_id=?'
+        ' ORDER BY jefr.created_at LIMIT 1',
+        (entry_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def _attachments_settled(entry_id: str, expected: int) -> bool:
     """True once every attachment the client said it would upload has arrived
     and none is still being captioned.
@@ -1944,7 +1968,17 @@ def _generate_metadata_bg(
 ) -> None:
     def _run():
         try:
-            meta = generate_journal_metadata(content, _metadata_context(journal_id))
+            fic_ref = _fic_commentary_metadata_input(journal_id)
+            if fic_ref:
+                meta = generate_fic_commentary_metadata(
+                    content,
+                    fic_title=fic_ref['fic_title'],
+                    fic_description=fic_ref['fic_description'],
+                    chapter_title=fic_ref['chapter_title'],
+                    chapter_text=fic_ref['chapter_text'],
+                )
+            else:
+                meta = generate_journal_metadata(content, _metadata_context(journal_id))
             if not meta:
                 return
             updates: dict = {}

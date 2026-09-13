@@ -15,6 +15,7 @@ its failure modes — a replayed upload, a rejected file, and ids that name
 nothing.
 """
 import io
+import json
 import time
 
 import pytest
@@ -252,6 +253,50 @@ def test_a_chapter_from_another_fic_links_to_the_fic_alone(client, monkeypatch):
                        chapter_id=other_chapter).get_json()['id']
 
     assert [tuple(row) for row in _refs(entry_id)] == [(fic_id, None)]
+
+
+def test_metadata_generation_uses_fic_context_for_a_linked_entry(client, monkeypatch):
+    """The whole point of the change: a commentary entry's title/tags call gets
+    the fic description and chapter text, not just the reader's own words."""
+    jobs = _run_pending_bg(monkeypatch)
+    monkeypatch.setattr(journal_routes, '_do_attachment_audio',
+                        lambda _p: 'Did NOT see that coming.')
+    monkeypatch.setattr(journal_routes, '_polish_bg', lambda *a, **k: None)
+    fic_id, (chapter_id,) = _fic('Worm Redux')
+    connection.get_db().execute(
+        "UPDATE fics SET description='A girl gets superpowers.' WHERE id=?",
+        (fic_id,),
+    )
+    connection.get_db().commit()
+
+    captured = {}
+
+    def fake_commentary_metadata(commentary, *, fic_title, fic_description,
+                                  chapter_title, chapter_text):
+        captured.update(commentary=commentary, fic_title=fic_title,
+                        fic_description=fic_description,
+                        chapter_title=chapter_title, chapter_text=chapter_text)
+        return {'title': 'Blindsided by chapter 1', 'tags': ['reading']}
+
+    monkeypatch.setattr(journal_routes, 'generate_fic_commentary_metadata',
+                        fake_commentary_metadata)
+    monkeypatch.setattr(journal_routes, 'generate_journal_metadata',
+                        lambda *a, **k: pytest.fail('should not use the plain path'))
+
+    entry_id = _record(client, fic_id=fic_id, chapter_id=chapter_id).get_json()['id']
+    assert len(jobs) == 1  # the transcription
+    jobs[0]()
+    assert len(jobs) == 2  # transcription landing enqueues the metadata pass
+    jobs[1]()
+
+    assert captured['commentary'] == 'Did NOT see that coming.'
+    assert captured['fic_title'] == 'Worm Redux'
+    assert captured['fic_description'] == 'A girl gets superpowers.'
+    assert captured['chapter_title'] == 'Chapter 1'
+    assert captured['chapter_text'] == 'text'
+    entry = client.get(f'/api/journal/{entry_id}').get_json()
+    assert entry['title'] == 'Blindsided by chapter 1'
+    assert json.loads(entry['tags']) == ['reading']
 
 
 def test_a_plain_journal_recording_links_to_nothing(client, monkeypatch):
