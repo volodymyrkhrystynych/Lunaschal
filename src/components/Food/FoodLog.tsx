@@ -16,6 +16,7 @@ import { FoodCapture } from './FoodCapture';
 import { TagPill } from '../TagPill';
 import { FoodDescriptions } from './FoodDescriptions';
 import { LoadingState } from '../LoadStates';
+import { ImageLightbox } from '../ImageLightbox';
 
 const splitTagInput = (input: string): string[] =>
   input
@@ -405,18 +406,7 @@ export function FoodLog() {
         )}
       </div>
 
-      {zoom && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
-          onClick={() => setZoom(null)}
-        >
-          <img
-            src={zoom}
-            alt=""
-            className="max-w-full max-h-full rounded object-contain"
-          />
-        </div>
-      )}
+      <ImageLightbox src={zoom} onClose={() => setZoom(null)} />
     </div>
   );
 }

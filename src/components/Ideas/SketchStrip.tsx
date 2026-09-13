@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type IdeaSketch } from '../../hooks/api';
 import { SketchPicker } from './SketchPicker';
+import { ImageLightbox } from '../ImageLightbox';
 
 interface SketchStripProps {
   ideaId: string;
@@ -112,20 +113,12 @@ export function SketchStrip({ ideaId }: SketchStripProps) {
         />
       )}
 
-      {preview?.imageUrl && (
-        <div
-          role="dialog"
-          aria-label="Sketch preview"
-          onClick={() => setPreview(null)}
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
-        >
-          <img
-            src={preview.imageUrl}
-            alt={preview.caption || 'Paper sketch'}
-            className="max-h-full max-w-full object-contain bg-white rounded"
-          />
-        </div>
-      )}
+      <ImageLightbox
+        src={preview?.imageUrl ?? null}
+        onClose={() => setPreview(null)}
+        whiteBg
+        alt={preview?.caption || 'Paper sketch'}
+      />
     </div>
   );
 }
