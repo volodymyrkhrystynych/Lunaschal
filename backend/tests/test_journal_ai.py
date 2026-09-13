@@ -128,6 +128,92 @@ def test_an_entirely_empty_entry_asks_nothing(monkeypatch):
     assert 'prompt' not in captured
 
 
+class TestFicCommentaryMetadata:
+    """generate_fic_commentary_metadata is generate_journal_metadata's
+    counterpart for the fanfic reader's commentary entries: the fic's
+    description and the chapter's own text stand in for the photo captions a
+    regular entry gets."""
+
+    def _capture(self, monkeypatch):
+        captured = {}
+
+        def fake_chat_json(prompt, system=None, **kwargs):
+            captured['prompt'] = prompt
+            captured['system'] = system
+            return {'title': 'A title', 'tags': ['reading']}
+
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+        monkeypatch.setattr(journal, 'chat_json', fake_chat_json)
+        return captured
+
+    def test_uses_the_dedicated_system_prompt(self, monkeypatch):
+        captured = self._capture(monkeypatch)
+
+        journal.generate_fic_commentary_metadata(
+            'loved this twist!!', fic_title='Worm Redux',
+        )
+
+        assert captured['system'] == journal._FIC_COMMENTARY_METADATA_SYSTEM
+
+    def test_folds_fic_description_and_chapter_text_into_the_prompt(self, monkeypatch):
+        captured = self._capture(monkeypatch)
+
+        journal.generate_fic_commentary_metadata(
+            'loved this twist!!',
+            fic_title='Worm Redux',
+            fic_description='A girl gets superpowers.',
+            chapter_title='Chapter 12',
+            chapter_text='Taylor revealed her identity to the team.',
+        )
+
+        assert 'loved this twist!!' in captured['prompt']
+        assert 'Worm Redux' in captured['prompt']
+        assert 'A girl gets superpowers.' in captured['prompt']
+        assert 'Chapter 12' in captured['prompt']
+        assert 'Taylor revealed her identity to the team.' in captured['prompt']
+
+    def test_truncates_a_long_chapter(self, monkeypatch):
+        captured = self._capture(monkeypatch)
+
+        journal.generate_fic_commentary_metadata(
+            'so good', fic_title='Worm Redux', chapter_text='x' * 5000,
+        )
+
+        assert len(captured['prompt']) < 5000
+
+    def test_omits_optional_context_lines_when_absent(self, monkeypatch):
+        captured = self._capture(monkeypatch)
+
+        journal.generate_fic_commentary_metadata('so good', fic_title='Worm Redux')
+
+        assert captured['prompt'] == 'so good\n\n---\nFic: Worm Redux'
+
+    def test_caps_and_returns_tags(self, monkeypatch):
+        def fake_chat_json(prompt, system=None, **kwargs):
+            return {'title': 'A title', 'tags': ['reading', 'creative', 'memory', 'work']}
+
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: True)
+        monkeypatch.setattr(journal, 'chat_json', fake_chat_json)
+
+        result = journal.generate_fic_commentary_metadata('so good', fic_title='Worm Redux')
+
+        assert result == {'title': 'A title', 'tags': ['reading', 'creative', 'memory']}
+
+    def test_empty_when_ai_unconfigured(self, monkeypatch):
+        monkeypatch.setattr(journal, 'is_ai_configured', lambda: False)
+        assert journal.generate_fic_commentary_metadata(
+            'so good', fic_title='Worm Redux',
+        ) == {}
+
+    def test_empty_commentary_asks_nothing(self, monkeypatch):
+        captured = self._capture(monkeypatch)
+
+        assert journal.generate_fic_commentary_metadata(
+            '   ', fic_title='Worm Redux',
+        ) == {}
+        assert 'prompt' not in captured
+
+
 def test_classify_reads_yes_no_from_chat_text(monkeypatch):
     captured = {}
 
