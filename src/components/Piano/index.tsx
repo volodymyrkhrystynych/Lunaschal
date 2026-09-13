@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../../hooks/api';
+import { ConfirmDialog } from '../ConfirmDialog';
 import {
   desktopApi,
   subscribeMidiEvents,
@@ -35,6 +36,7 @@ export function Piano() {
   const activeRef = useRef(activeNotes);
   const [sustain, setSustain] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pieceToRemove, setPieceToRemove] = useState<PianoPiece | null>(null);
   const [pieces, setPieces] = useState<PianoPiece[]>([]);
   const [piece, setPiece] = useState<PianoPiece | null>(null);
   const [score, setScore] = useState('');
@@ -254,8 +256,6 @@ export function Piano() {
   };
 
   const removePiece = async (selected: PianoPiece) => {
-    if (!window.confirm(`Delete “${selected.title}” from the Piano library?`))
-      return;
     try {
       await api.piano.remove(selected.id);
       if (piece?.id === selected.id) {
@@ -453,7 +453,7 @@ export function Piano() {
                       type="button"
                       aria-label={`Delete ${item.title}`}
                       title="Delete score"
-                      onClick={() => void removePiece(item)}
+                      onClick={() => setPieceToRemove(item)}
                       className="self-start rounded px-2 py-1 text-[var(--color-text-muted)] hover:bg-red-500/10 hover:text-red-300"
                     >
                       ×
@@ -599,6 +599,18 @@ export function Piano() {
           </>
         )}
       </div>
+      <ConfirmDialog
+        open={pieceToRemove !== null}
+        title={`Delete “${pieceToRemove?.title}” from the Piano library?`}
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => {
+          const selected = pieceToRemove;
+          setPieceToRemove(null);
+          if (selected) void removePiece(selected);
+        }}
+        onCancel={() => setPieceToRemove(null)}
+      />
     </section>
   );
 }

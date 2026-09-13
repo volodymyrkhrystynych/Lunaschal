@@ -7,6 +7,7 @@ import {
   type NewspaperIssue,
   type NewspaperMarkup,
 } from '../hooks/api';
+import { ConfirmDialog } from './ConfirmDialog';
 import {
   eraseStroke,
   simplifyStroke,
@@ -413,6 +414,7 @@ export function NewspaperReader({
   // Bumped when an edit is refused, to pull the ink layers back into line with
   // the markup — they have already drawn the stroke by the time we say no.
   const [reseed, setReseed] = useState(0);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const areaRef = useRef<HTMLDivElement>(null);
   const revision = useRef(0);
   const markupRef = useRef(markup);
@@ -630,6 +632,22 @@ export function NewspaperReader({
     }
   }
 
+  const discardLocalDraft = async () => {
+    setConfirmDiscard(false);
+    try {
+      const latest = await api.newspapers.markup(issue.date);
+      localStorage.removeItem(key);
+      revision.current = latest.revision;
+      setMarkup(fromWire(latest.strokes));
+      dirty.current = false;
+      conflict.current = false;
+      setUnsaved(false);
+      setStatus('Saved');
+    } catch (e) {
+      setStatus((e as Error).message);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-[var(--color-bg)] text-[var(--color-text)]">
       <div className="flex flex-wrap items-center gap-2 p-2 border-b border-white/10">
@@ -656,29 +674,7 @@ export function NewspaperReader({
           </button>
         )}
         {ready && conflict.current && (
-          <button
-            className="p-2"
-            onClick={async () => {
-              if (
-                !window.confirm(
-                  'Discard this local draft and load the saved server copy? Export your local markup first if you want to keep it.'
-                )
-              )
-                return;
-              try {
-                const latest = await api.newspapers.markup(issue.date);
-                localStorage.removeItem(key);
-                revision.current = latest.revision;
-                setMarkup(fromWire(latest.strokes));
-                dirty.current = false;
-                conflict.current = false;
-                setUnsaved(false);
-                setStatus('Saved');
-              } catch (e) {
-                setStatus((e as Error).message);
-              }
-            }}
-          >
+          <button className="p-2" onClick={() => setConfirmDiscard(true)}>
             Use server copy
           </button>
         )}
@@ -762,6 +758,15 @@ export function NewspaperReader({
           />
         )}
       </div>
+      <ConfirmDialog
+        open={confirmDiscard}
+        title="Discard this local draft and load the saved server copy?"
+        message="Export your local markup first if you want to keep it."
+        confirmLabel="Use server copy"
+        onConfirm={() => void discardLocalDraft()}
+        onCancel={() => setConfirmDiscard(false)}
+        danger
+      />
     </div>
   );
 }

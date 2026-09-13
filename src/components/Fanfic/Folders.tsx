@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import type { Fic } from '../../hooks/api';
 import { TagPill } from '../TagPill';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 const PILL_ACTIVE =
   'border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]';
@@ -23,6 +24,7 @@ export function FolderBar({
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const queryClient = useQueryClient();
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ['fanfic'] });
@@ -214,14 +216,7 @@ export function FolderBar({
           </button>
           <span>·</span>
           <button
-            onClick={() => {
-              if (
-                window.confirm(
-                  `Delete folder "${active.name}"? Fics inside are kept.`
-                )
-              )
-                deleteFolder.mutate(active.id);
-            }}
+            onClick={() => setConfirmDelete(true)}
             className="hover:text-red-400"
             title="Delete folder"
           >
@@ -229,6 +224,17 @@ export function FolderBar({
           </button>
         </span>
       )}
+      <ConfirmDialog
+        open={confirmDelete}
+        title={`Delete folder "${active?.name}"? Fics inside are kept.`}
+        confirmLabel="Delete"
+        danger
+        onConfirm={() => {
+          setConfirmDelete(false);
+          if (active) deleteFolder.mutate(active.id);
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }
