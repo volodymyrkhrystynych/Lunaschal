@@ -662,7 +662,7 @@ CREATE TABLE IF NOT EXISTS fics (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     author TEXT,
-    source_type TEXT NOT NULL CHECK(source_type IN ('xenforo','epub','docx','pdf')),
+    source_type TEXT NOT NULL CHECK(source_type IN ('xenforo','epub','docx','pdf','fanfiction','ao3','patreon')),
     source_url TEXT,
     site TEXT,
     thread_id TEXT,
@@ -733,6 +733,22 @@ CREATE TABLE IF NOT EXISTS fanfic_watched_scans (
     already_in_library INTEGER NOT NULL DEFAULT 0,
     last_error TEXT,
     updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fanfic_collection_scans (
+    id TEXT PRIMARY KEY,
+    site TEXT NOT NULL,
+    collection TEXT NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    remaining_urls TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','complete','error')),
+    found INTEGER NOT NULL DEFAULT 0,
+    imported INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    pages INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(site, collection, username)
 );
 
 CREATE TABLE IF NOT EXISTS fic_folders (

@@ -171,9 +171,11 @@ _CF_CHALLENGE_MARKERS = (
 # was the missing Referer in _headers(), and a fingerprint-shaped fix for a
 # header-shaped problem is a compiled dependency bought for nothing. The one
 # indirection kept is this seam, so tests can stub the network in one place.
-def _http_get(url: str, *, headers: dict, cookies: dict | None, timeout: float, stream: bool = False):
+def _http_get(url: str, *, headers: dict, cookies: dict | None, timeout: float, stream: bool = False,
+              allow_redirects: bool = True):
     import requests
-    return requests.get(url, headers=headers, cookies=cookies, timeout=timeout, stream=stream)
+    return requests.get(url, headers=headers, cookies=cookies, timeout=timeout, stream=stream,
+                        allow_redirects=allow_redirects)
 
 
 def _blocked_marker(resp) -> str | None:
@@ -192,9 +194,17 @@ def _blocked_marker(resp) -> str | None:
 
 
 RETRY_BACKOFF = (5, 15, 30)
+_fetch_lock = threading.Lock()
 
 
-def _fetch(url: str):
+def _fetch(url: str, *, same_host: bool = False):
+    # Collection discovery and chapter downloads share the request delay even
+    # when a user starts a scan while an update worker is already running.
+    with _fetch_lock:
+        return _fetch_serial(url, same_host=same_host)
+
+
+def _fetch_serial(url: str, *, same_host: bool = False):
     # QQ rate-limits bursts with transient 403s that can outlast a short
     # pause, so back off progressively before giving up. Cloudflare
     # challenges are recognized and not retried — they need cookies, not
@@ -203,7 +213,21 @@ def _fetch(url: str):
     # never clears, resp.raise_for_status() below reports its real status
     # instead of the Cloudflare-specific hint.
     for attempt, backoff in enumerate((*RETRY_BACKOFF, None)):
-        resp = _http_get(url, headers=_headers(url), cookies=_cookies_for(url), timeout=20)
+        if same_host:
+            from backend.fanfic.sites import same_site_url
+            target = url
+            for redirect in range(6):
+                resp = _http_get(target, headers=_headers(target), cookies=_cookies_for(target),
+                                 timeout=20, allow_redirects=False)
+                if resp.status_code not in (301, 302, 303, 307, 308):
+                    break
+                location = resp.headers.get('Location', '')
+                resp.close()
+                if not location or redirect == 5:
+                    raise FetchBlockedError('Invalid or excessive site redirects')
+                target = same_site_url(location, target)
+        else:
+            resp = _http_get(url, headers=_headers(url), cookies=_cookies_for(url), timeout=20)
         marker = _blocked_marker(resp)
         if marker is not None:
             domain = urlparse(url).netloc
@@ -851,7 +875,11 @@ def run_check_updates(fic_id: str, deep: bool = False) -> None:
     chapters is rare enough that paying a full re-walk on a timer would cost
     far more requests than it recovers."""
     db = get_db()
-    row = db.execute('SELECT source_url FROM fics WHERE id=?', (fic_id,)).fetchone()
+    row = db.execute('SELECT source_url,source_type FROM fics WHERE id=?', (fic_id,)).fetchone()
+    from backend.fanfic import collections, sites
+    if row and row['source_type'] in sites.SOURCE_TYPES:
+        collections.run_work(fic_id, row['source_url'], deep)
+        return
     if not row or not row['source_url']:
         _update_progress(fic_id, phase='error', error='Not a forum fic', done=True)
         return

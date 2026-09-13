@@ -46,6 +46,7 @@ const { CHAPTERS, FIC } = vi.hoisted(() => {
 vi.mock('../../hooks/api', () => ({
   api: {
     fanfic: {
+      collections: { list: vi.fn().mockResolvedValue([]), start: vi.fn() },
       get: vi.fn().mockResolvedValue(FIC),
       markOpened: vi.fn().mockResolvedValue({ success: true }),
       list: vi.fn().mockResolvedValue([FIC]),

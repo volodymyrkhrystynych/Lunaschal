@@ -21,6 +21,8 @@ import { FolderBar, FolderPicker } from './Folders';
 import { ItemCard } from '../ItemCard';
 import { LoadingState, EmptyState } from '../LoadStates';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { CollectionImport } from './CollectionImport';
+import { useCollectionScans } from './useCollectionScans';
 
 interface LibraryProps {
   onOpen: (ficId: string) => void;
@@ -39,10 +41,13 @@ const formatDate = (date: string) =>
 const PAGE_SIZE = 50;
 
 export function Library({ onOpen }: LibraryProps) {
+  useCollectionScans();
   const [view, setView] = useState<'library' | 'folders'>('library');
   const [searchQuery, setSearchQuery] = useState('');
   const [showImport, setShowImport] = useState(false);
-  const [importMode, setImportMode] = useState<'forum' | 'file'>('forum');
+  const [importMode, setImportMode] = useState<'forum' | 'file' | 'collection'>(
+    'forum'
+  );
   const [importUrl, setImportUrl] = useState('');
   const [importError, setImportError] = useState<string | null>(null);
   const [folderId, setFolderId] = useState<string | null>(null);
@@ -326,7 +331,8 @@ export function Library({ onOpen }: LibraryProps) {
           >
             {(
               [
-                ['forum', 'From forum'],
+                ['forum', 'From website'],
+                ['collection', 'My collections'],
                 ['file', 'Upload file'],
               ] as const
             ).map(([mode, label]) => (
@@ -352,9 +358,9 @@ export function Library({ onOpen }: LibraryProps) {
           {importMode === 'forum' ? (
             <>
               <div className="text-sm text-[var(--color-text-muted)] mb-2">
-                Paste any link to the fic — a chapter, the thread, or the
-                reader. The whole fic (all threadmarks, sidestories and images)
-                is downloaded for offline reading.
+                Paste a forum thread, FanFiction.net story, AO3 work or Patreon
+                post URL. Story text is downloaded into the Library for offline
+                reading.
               </div>
               <input
                 value={importUrl}
@@ -373,10 +379,12 @@ export function Library({ onOpen }: LibraryProps) {
               />
               {importSite && (
                 <div className="mb-2 text-xs text-[var(--color-primary)]">
-                  {SITE_LABELS[importSite]} thread detected
+                  {SITE_LABELS[importSite]} link detected
                 </div>
               )}
             </>
+          ) : importMode === 'collection' ? (
+            <CollectionImport />
           ) : (
             <>
               <div className="text-sm text-[var(--color-text-muted)] mb-2">
@@ -545,10 +553,7 @@ function FicCard({
         Math.round((progress.chaptersDone / progress.chaptersTotal) * 100)
       )
     : null;
-  const badge =
-    fic.sourceType === 'xenforo'
-      ? siteLabel(fic.site)
-      : fic.sourceType.toUpperCase();
+  const badge = fic.site ? siteLabel(fic.site) : fic.sourceType.toUpperCase();
 
   const toggleDetailsFromCard = (event: React.MouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement;
@@ -605,42 +610,45 @@ function FicCard({
           >
             Review
           </button>
-          {fic.sourceType === 'xenforo' && !downloading && (
-            <>
-              <button
-                onClick={() => onCheckUpdates(false)}
-                className={`text-sm ${
-                  fic.updatePending
-                    ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-                }`}
-                title={
-                  fic.updatePending
-                    ? 'Waiting for the update worker — click to un-queue'
-                    : 'Queue an update check for new chapters'
-                }
-              >
-                {fic.updatePending && !fic.deepPending
-                  ? '⏳ Queued'
-                  : '↻ Update'}
-              </button>
-              <button
-                onClick={() => onCheckUpdates(true)}
-                className={`text-sm ${
-                  fic.deepPending
-                    ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
-                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-                }`}
-                title={
-                  fic.deepPending
-                    ? 'Deep check queued — click to un-queue'
-                    : 'Re-read every saved chapter and pull in any the author has edited. Slower: it refetches the whole fic.'
-                }
-              >
-                {fic.deepPending ? '⏳ Deep' : '↻↻ Deep'}
-              </button>
-            </>
-          )}
+          {['xenforo', 'fanfiction', 'ao3', 'patreon'].includes(
+            fic.sourceType
+          ) &&
+            !downloading && (
+              <>
+                <button
+                  onClick={() => onCheckUpdates(false)}
+                  className={`text-sm ${
+                    fic.updatePending
+                      ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                  }`}
+                  title={
+                    fic.updatePending
+                      ? 'Waiting for the update worker — click to un-queue'
+                      : 'Queue an update check for new chapters'
+                  }
+                >
+                  {fic.updatePending && !fic.deepPending
+                    ? '⏳ Queued'
+                    : '↻ Update'}
+                </button>
+                <button
+                  onClick={() => onCheckUpdates(true)}
+                  className={`text-sm ${
+                    fic.deepPending
+                      ? 'text-[var(--color-primary)] hover:text-[var(--color-text)]'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                  }`}
+                  title={
+                    fic.deepPending
+                      ? 'Deep check queued — click to un-queue'
+                      : 'Re-read every saved chapter and pull in any the author has edited. Slower: it refetches the whole fic.'
+                  }
+                >
+                  {fic.deepPending ? '⏳ Deep' : '↻↻ Deep'}
+                </button>
+              </>
+            )}
           {showDelete && (
             <button
               onClick={onDelete}

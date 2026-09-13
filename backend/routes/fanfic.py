@@ -7,6 +7,7 @@ from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
 from backend.fanfic import download, storage, xenforo
+from backend.fanfic import collections, sites
 from backend.fanfic.download import FetchBlockedError
 from backend.fanfic.xenforo import KNOWN_SITES, UnsupportedUrlError
 
@@ -153,7 +154,7 @@ def list_cookies():
             ' FROM fanfic_watched_scans').fetchall()
     }
     result = []
-    for domain in sorted(KNOWN_SITES):
+    for domain in sorted(KNOWN_SITES | sites.DOMAINS):
         entry = {
             'domain': domain,
             'hasCookie': domain in stored,
@@ -283,7 +284,7 @@ def put_cookie():
         cookie = _normalize_cookie_input(raw)
     except CookieInputError as e:
         return jsonify({'error': str(e)}), 400
-    if domain not in KNOWN_SITES:
+    if domain not in KNOWN_SITES | sites.DOMAINS:
         return jsonify({'error': f'unknown domain: {domain}'}), 400
     user_agent = _extract_user_agent(raw)
     db = get_db()
@@ -489,6 +490,11 @@ def import_from_url():
     if not url.startswith(('http://', 'https://')):
         return jsonify({'error': 'invalid url'}), 400
     try:
+        work = sites.parse_work_url(url)
+        if work:
+            fic_id, created = collections.queue_work(work)
+            _start_drain_bg()
+            return jsonify({'id': fic_id, 'alreadyExists': not created}), 202
         ref = xenforo.resolve_thread_ref(url, download._fetch)
     except UnsupportedUrlError as e:
         return jsonify({'error': str(e)}), 422
@@ -554,8 +560,8 @@ def check_updates(fic_id):
         ' FROM fics WHERE id=?', (fic_id,)).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
-    if row['source_type'] != 'xenforo':
-        return jsonify({'error': 'Only forum fics can be updated'}), 400
+    if row['source_type'] not in {'xenforo'} | sites.SOURCE_TYPES:
+        return jsonify({'error': 'Only online sources can be updated'}), 400
     if download.is_active(fic_id) or row['download_status'] == 'downloading':
         return jsonify({'error': 'A download is already running for this fic'}), 409
     if row['update_pending'] and not (deep and not row['deep_pending']):
@@ -567,6 +573,32 @@ def check_updates(fic_id):
     db.commit()
     _start_drain_bg()
     return jsonify({'id': fic_id, 'queued': True, 'deep': deep}), 202
+
+
+@bp.get('/collections')
+def list_collection_scans():
+    return jsonify([row_to_dict(r) for r in get_db().execute(
+        'SELECT id,site,collection,username,status,found,imported,skipped,pages,error,updated_at'
+        ' FROM fanfic_collection_scans ORDER BY updated_at DESC')])
+
+
+@bp.post('/collections')
+def start_collection_scan():
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict) or any(not isinstance(body.get(k, ''), str)
+                                          for k in ('site', 'collection', 'username')):
+        return jsonify({'error': 'Expected site, collection and username strings'}), 400
+    site = body.get('site', '')
+    if site not in sites.DOMAINS:
+        return jsonify({'error': 'Unsupported collection site'}), 400
+    if not download._cookie_for(site):
+        return jsonify({'error': 'Save your session in Settings → Fanfic site cookies first'}), 400
+    try:
+        scan_id = collections.create_scan(site, body.get('collection', 'all'), body.get('username', '').strip())
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    collections.start_scans()
+    return jsonify({'id': scan_id}), 202
 
 
 @bp.post('/refresh-alerts')

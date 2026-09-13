@@ -2,6 +2,29 @@
 
 Personal fanfiction library + reader ("Library" in the UI). Imports from XenForo forums (SpaceBattles / Sufficient Velocity / Questionable Questing) by scraping threadmark reader pages — `xenforo.py` is a **pure parser** (no network/DB; tests feed fixture HTML), `download.py` streams chapters into the DB one reader page at a time (resumable; in-memory progress registry; 2 s request delay; browser UA + per-domain cookies from `site_cookies` for Cloudflare). Also imports epub/docx uploads and stores PDFs. Chapters keep sanitized HTML + plain text (FTS). Per-fic: folders (ordered), site tags, per-chapter read tracking, last-read position, rating/review, update checking (`check-updates` / `refresh-alerts` set `update_pending`; a single drain worker walks the flags one fic at a time). Journal entries can reference fics/chapters (`journal_entry_fic_refs`) — reading commentary shows up in the Journal feed and deep-links back into the reader.
 
+**FanFiction.net, AO3 and Patreon** use pure parsers in `sites.py` and the jobs in
+`collections.py`. Library → Import → From website accepts a single story/work/post;
+My collections imports FFN favorite/followed stories, AO3 bookmarked works and work
+subscriptions (requires the account username), or accessible text posts from the
+Patreon feed. All collection scans require a saved browser session in Settings →
+Fanfic site cookies. No passwords or cookies are returned by the status APIs.
+AO3 author/series subscriptions and external bookmarks are not expanded; Patreon
+media and attachments are not downloaded. Locked posts are skipped and counted;
+unreadable stories/posts fail visibly instead of saving a login page or teaser.
+
+Collection pagination and counters live in `fanfic_collection_scans`. Every page
+queues canonical `(site, thread_id)` work identities through the existing persistent
+`fics.update_pending` queue, then checkpoints its next URL. Retry resumes a stopped
+scan; rerunning a completed scan starts at page one and skips existing works. A
+crash during a page can change its imported/already-present counts on replay, but
+cannot duplicate stories. Pending scans and interrupted downloads for these sites
+resume at startup, within the `LUNASCHAL_NO_SCHEDULERS` boundary. The shared fetch
+lock serializes requests and their delay. New sites only follow same-host HTTPS
+redirects so session cookies cannot be forwarded to unrelated hosts. Update adds
+missing chapters; Deep refreshes existing chapters in place, preserving their IDs,
+read markers and bookmarks. The source CHECK migration rebuilds `fics` with foreign
+keys temporarily disabled and verifies references before committing.
+
 **The reader's Commentary panel has two halves that finish differently.** Typed commentary posts its text (`journal.createFromVoice`) and links it in a second call. The **microphone is the Journal button's contract instead — stopping the recording is the save**: the clip goes to the durable store, uploads as a journal entry carrying `ficId`/`chapterId` (`captureFicCommentary` → `POST /api/journal/recordings`), and the transcript, the polish and the title arrive on that entry afterwards. It used to transcribe in the browser and post the text, so the audio existed only in memory and a failed transcription lost the commentary outright. The chapter is captured with the first chunk and stored beside the audio, because W/S walks the reader on while a thought is still being spoken — resolving it at upload time would file the entry under whatever chapter was open by then.
 
 **Update checks come in two tiers, because an edit is invisible from outside the post.** XenForo raises no alert when an author revises an existing chapter and leaves the threadmarks index untouched, so nothing about the fic looks different until you re-read the post itself.
