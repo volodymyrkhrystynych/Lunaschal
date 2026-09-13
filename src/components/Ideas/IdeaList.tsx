@@ -21,6 +21,7 @@ import {
   setStoredIdeaRepo,
 } from '../../lib/ideaRepoPersistence';
 import { IdeaCapture } from './IdeaCapture';
+import { ListRowButton } from '../ListRow';
 
 interface IdeaListProps {
   ideas: IdeaSummary[];
@@ -142,74 +143,76 @@ export function IdeaList({
               const impl = resolveImplementation(idea);
               return (
                 <li key={idea.id}>
-                  <button
-                    type="button"
+                  <ListRowButton
                     onClick={() => onSelect(idea.id)}
                     aria-current={selected ? 'true' : undefined}
-                    className={`w-full text-left px-3 py-2 border-b border-white/5 ${
+                    className={`px-3 py-2 border-b border-white/5 ${
                       selected
                         ? 'bg-[var(--color-primary)]/20 text-[var(--color-primary)]'
                         : 'text-[var(--color-text)] hover:bg-white/10'
                     } ${level === 1 && selected ? 'ring-1 ring-[var(--color-primary)]' : ''}`}
-                  >
-                    <span className="block text-sm truncate">
-                      {displayTitle(idea)}
-                    </span>
-                    <span className="flex items-center gap-1.5 mt-1 text-xs">
-                      <span
-                        className={`px-1.5 py-0.5 rounded ${statusClasses(idea.status)}`}
-                      >
-                        {statusLabel(idea.status)}
+                    title={
+                      <span className="block text-sm truncate">
+                        {displayTitle(idea)}
                       </span>
-                      {impl.verdict && (
+                    }
+                    subtitle={
+                      <span className="flex items-center gap-1.5 mt-1 text-xs">
                         <span
-                          className={`px-1.5 py-0.5 rounded ${implementationClasses(impl)}`}
+                          className={`px-1.5 py-0.5 rounded ${statusClasses(idea.status)}`}
                         >
-                          {implementationLabel(impl)}
+                          {statusLabel(idea.status)}
                         </span>
-                      )}
-                      {idea.openQuestionCount > 0 && (
-                        <span
-                          className="text-amber-300"
-                          title={`${idea.openQuestionCount} decision${idea.openQuestionCount === 1 ? '' : 's'} needed`}
-                        >
-                          ? {idea.openQuestionCount}
-                        </span>
-                      )}
-                      {idea.hasPlan && (
-                        <span
-                          className="text-[var(--color-text-muted)]"
-                          title="Has a plan"
-                        >
-                          📄
-                        </span>
-                      )}
-                      {idea.articleCount > 0 && (
-                        <span
-                          className="text-[var(--color-text-muted)]"
-                          title={`${idea.articleCount} research note${idea.articleCount === 1 ? '' : 's'}`}
-                        >
-                          📚 {idea.articleCount}
-                        </span>
-                      )}
-                      {idea.sketchCount > 0 && (
-                        <span
-                          className="text-[var(--color-text-muted)]"
-                          title={`${idea.sketchCount} sketch${idea.sketchCount === 1 ? '' : 'es'}`}
-                        >
-                          🖊 {idea.sketchCount}
-                        </span>
-                      )}
-                      {parseTags(idea.tags).map(tag => (
-                        <span
-                          key={tag}
-                          className="text-[var(--color-text-muted)]"
-                        >
-                          #{tag}
-                        </span>
-                      ))}
-                    </span>
-                  </button>
+                        {impl.verdict && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded ${implementationClasses(impl)}`}
+                          >
+                            {implementationLabel(impl)}
+                          </span>
+                        )}
+                        {idea.openQuestionCount > 0 && (
+                          <span
+                            className="text-amber-300"
+                            title={`${idea.openQuestionCount} decision${idea.openQuestionCount === 1 ? '' : 's'} needed`}
+                          >
+                            ? {idea.openQuestionCount}
+                          </span>
+                        )}
+                        {idea.hasPlan && (
+                          <span
+                            className="text-[var(--color-text-muted)]"
+                            title="Has a plan"
+                          >
+                            📄
+                          </span>
+                        )}
+                        {idea.articleCount > 0 && (
+                          <span
+                            className="text-[var(--color-text-muted)]"
+                            title={`${idea.articleCount} research note${idea.articleCount === 1 ? '' : 's'}`}
+                          >
+                            📚 {idea.articleCount}
+                          </span>
+                        )}
+                        {idea.sketchCount > 0 && (
+                          <span
+                            className="text-[var(--color-text-muted)]"
+                            title={`${idea.sketchCount} sketch${idea.sketchCount === 1 ? '' : 'es'}`}
+                          >
+                            🖊 {idea.sketchCount}
+                          </span>
+                        )}
+                        {parseTags(idea.tags).map(tag => (
+                          <span
+                            key={tag}
+                            className="text-[var(--color-text-muted)]"
+                          >
+                            #{tag}
+                          </span>
+                        ))}
+                      </span>
+                    }
+                  />
                 </li>
               );
             })}

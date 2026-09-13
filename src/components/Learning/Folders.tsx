@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type McpServer } from '../../hooks/api';
+import { ListRowShell } from '../ListRow';
 
 export function Folders() {
   const [newFolder, setNewFolder] = useState('');
@@ -53,39 +54,42 @@ export function Folders() {
 
         <div className="space-y-2 mb-4">
           {folders?.map(f => (
-            <div
+            <ListRowShell
               key={f.id}
-              className="flex items-center gap-3 border border-white/10 rounded-lg px-3 py-2"
-            >
-              <span className="text-[var(--color-text)] flex-1">{f.name}</span>
-              <span className="text-xs text-[var(--color-text-muted)]">
-                {f.activeCount} cards
-                {f.pendingCount > 0 && ` · ${f.pendingCount} queued`}
-              </span>
-              <select
-                value={f.evidenceProviderId ?? ''}
-                onChange={e =>
-                  bindProvider.mutate({
-                    id: f.id,
-                    providerId: e.target.value || null,
-                  })
-                }
-                className="bg-[var(--color-bg)] text-sm text-[var(--color-text)] border border-white/10 rounded px-2 py-1 focus:outline-none"
-              >
-                <option value="">No evidence provider</option>
-                {servers?.map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                onClick={() => deleteFolder.mutate(f.id)}
-                className="text-xs text-red-400 hover:text-red-300"
-              >
-                Delete
-              </button>
-            </div>
+              className="border border-white/10 rounded-lg px-3 py-2"
+              title={<span className="text-[var(--color-text)]">{f.name}</span>}
+              trailing={
+                <>
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    {f.activeCount} cards
+                    {f.pendingCount > 0 && ` · ${f.pendingCount} queued`}
+                  </span>
+                  <select
+                    value={f.evidenceProviderId ?? ''}
+                    onChange={e =>
+                      bindProvider.mutate({
+                        id: f.id,
+                        providerId: e.target.value || null,
+                      })
+                    }
+                    className="bg-[var(--color-bg)] text-sm text-[var(--color-text)] border border-white/10 rounded px-2 py-1 focus:outline-none"
+                  >
+                    <option value="">No evidence provider</option>
+                    {servers?.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => deleteFolder.mutate(f.id)}
+                    className="text-xs text-red-400 hover:text-red-300"
+                  >
+                    Delete
+                  </button>
+                </>
+              }
+            />
           ))}
           {(!folders || folders.length === 0) && (
             <p className="text-sm text-[var(--color-text-muted)]">
@@ -195,29 +199,33 @@ function McpServers({ servers }: { servers: McpServer[] }) {
             key={s.id}
             className="border border-white/10 rounded-lg px-3 py-2"
           >
-            <div className="flex items-center gap-3">
-              <span className="text-[var(--color-text)] flex-1">{s.name}</span>
-              <span className="text-xs text-[var(--color-text-muted)]">
-                {s.transport === 'stdio'
-                  ? `${s.command} ${s.args.join(' ')}`
-                  : s.url}
-              </span>
-              <button
-                onClick={() => test.mutate(s.id)}
-                disabled={test.isPending}
-                className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
-              >
-                {test.isPending && test.variables === s.id
-                  ? 'Testing…'
-                  : 'Test'}
-              </button>
-              <button
-                onClick={() => remove.mutate(s.id)}
-                className="text-xs text-red-400 hover:text-red-300"
-              >
-                Delete
-              </button>
-            </div>
+            <ListRowShell
+              title={<span className="text-[var(--color-text)]">{s.name}</span>}
+              trailing={
+                <>
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    {s.transport === 'stdio'
+                      ? `${s.command} ${s.args.join(' ')}`
+                      : s.url}
+                  </span>
+                  <button
+                    onClick={() => test.mutate(s.id)}
+                    disabled={test.isPending}
+                    className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] disabled:opacity-50"
+                  >
+                    {test.isPending && test.variables === s.id
+                      ? 'Testing…'
+                      : 'Test'}
+                  </button>
+                  <button
+                    onClick={() => remove.mutate(s.id)}
+                    className="text-xs text-red-400 hover:text-red-300"
+                  >
+                    Delete
+                  </button>
+                </>
+              }
+            />
             {testResult[s.id] && (
               <div
                 className={`text-xs mt-1 ${testResult[s.id].startsWith('✓') ? 'text-green-400' : 'text-red-400'}`}
