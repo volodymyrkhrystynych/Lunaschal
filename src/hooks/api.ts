@@ -88,6 +88,32 @@ export interface JournalEntry {
   updatedAt?: string;
 }
 
+/** One run of the recording backfill. Mirrors backend/journal/backfill.py. */
+export interface RecordingBackfillProgress {
+  running: boolean;
+  /** Which half it is on: descriptions first, then titles. */
+  phase?: 'describing' | 'titling' | 'done';
+  processed?: number;
+  total?: number;
+  described?: number;
+  titled?: number;
+  failed?: number;
+  /**
+   * Why it stood down early — a paused or preempted model. Not an error: the
+   * work that was not done is still there to be done, and pressing the button
+   * again after resuming picks up exactly where it left off.
+   */
+  stopped?: string | null;
+}
+
+export interface RecordingBackfillStatus {
+  /** Clips with no description yet. */
+  undescribed: number;
+  /** Entries carrying a recording that have never been titled. */
+  untitled: number;
+  progress: RecordingBackfillProgress;
+}
+
 export interface JournalAttachment {
   id: string;
   entryId: string;
@@ -2996,6 +3022,15 @@ export const api = {
     // the now-empty source entry.
     merge: (id: string, targetId: string) =>
       post<JournalEntry>(`/api/journal/${id}/merge`, { targetId }),
+
+    // The one-time catch-up for recordings that predate the titling rules —
+    // clips never described, entries never titled. See backend/journal/backfill.py.
+    recordingBackfill: {
+      status: () =>
+        get<RecordingBackfillStatus>('/api/journal/backfill/recordings'),
+      start: () =>
+        post<RecordingBackfillProgress>('/api/journal/backfill/recordings'),
+    },
 
     attachments: {
       list: (entryId: string) =>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../hooks/api';
 import { CuratedTagsSection } from '../CuratedTagsSection';
+import { RecordingBackfillSection } from './RecordingBackfillSection';
 import { ShortcutSettings } from '../ShortcutSettings';
 import { STTStatusSection } from './STTStatusSection';
 import { ShortcutsSection } from './ShortcutsSection';
@@ -130,6 +131,10 @@ export function Settings() {
 
           <CollapsibleSection title="What the assistant knows about you">
             <LifeWikiSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Recordings">
+            <RecordingBackfillSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Voice Status">
