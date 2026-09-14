@@ -172,6 +172,66 @@ def generate_journal_metadata(content: str, context: str | None = None) -> dict:
     return {}
 
 
+# Reader commentary is a reply, not a self-contained thought: "so good!!" or
+# "I did NOT see that coming" says nothing on its own, so the title/tag call
+# needs what it's replying to — the fic's own blurb and the chapter it was
+# written against — the way a regular entry's call needs its photo captions.
+_FIC_COMMENTARY_METADATA_SYSTEM = (
+    "You generate metadata for a reader's journal commentary on a fanfiction "
+    "chapter.\n"
+    "Return ONLY valid JSON with two fields:\n"
+    '- "title": a concise 4-8 word title\n'
+    '- "tags": an array of 1-3 tags chosen ONLY from this exact list:\n'
+    f"  {', '.join(JOURNAL_TAGS)}\n"
+    'Example: {"title": "Floored by the chapter 12 reveal", "tags": ["reading"]}\n'
+    "The commentary is what the entry is about — the fic description and "
+    "chapter text are context for understanding it, not the subject of the "
+    "title. Use them to make the title specific (what happened, who's involved) "
+    "rather than generic, but the reader's own reaction and words come first."
+)
+
+_CHAPTER_TEXT_MAX_CHARS = 2000
+
+
+def generate_fic_commentary_metadata(
+    commentary: str, *, fic_title: str, fic_description: str | None = None,
+    chapter_title: str | None = None, chapter_text: str | None = None,
+) -> dict:
+    """Title and tags for a fanfic reader's commentary entry.
+
+    The counterpart to `generate_journal_metadata` for the one kind of entry
+    that isn't self-contained: it's a reaction to a specific chapter, so the
+    fic's description and that chapter's own text are folded in as context
+    the way photo captions are for a regular entry — read to understand the
+    commentary, never as the thing the title is about.
+    """
+    if not commentary.strip():
+        return {}
+    try:
+        if not is_ai_configured():
+            return {}
+        context_lines = [f'Fic: {fic_title}']
+        if fic_description:
+            context_lines.append(f'Fic description: {fic_description}')
+        if chapter_title:
+            context_lines.append(f'Chapter: {chapter_title}')
+        if chapter_text:
+            text = chapter_text.strip()
+            if len(text) > _CHAPTER_TEXT_MAX_CHARS:
+                text = text[:_CHAPTER_TEXT_MAX_CHARS] + '…'
+            context_lines.append(f'Chapter text: {text}')
+        prompt = f"{commentary}\n\n---\n{chr(10).join(context_lines)}"
+        data = chat_json(prompt, system=_FIC_COMMENTARY_METADATA_SYSTEM,
+                          schema=_METADATA_SCHEMA)
+        valid_tags = normalize_tags(data.get('tags'))[:3]
+        title = (data.get('title') or '').strip() or None
+        return {'title': title, 'tags': valid_tags or None}
+    except Exception as e:
+        logger.error('Fic commentary metadata generation failed: %s', e)
+
+    return {}
+
+
 def _is_paused(e: Exception) -> bool:
     """Whether this failure was the GPU switch rather than a broken model."""
     from backend.ai.service import InferencePaused

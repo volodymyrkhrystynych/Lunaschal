@@ -167,16 +167,22 @@ def wipe_scratch() -> None:
 def seed_journal(db):
     from backend.journal.storage import attachment_dir, attachment_path
 
+    # The last two are located, the first is not: asking for a location is an
+    # explicit press of the composer's button, so a feed where every entry has
+    # a map pill would misrepresent what this looks like in use.
     entries = [
-        (new_id(), 'Morning pages', 'Woke up early and got a good hour of writing in before the day got noisy. Feeling optimistic about the week.', ['journal', 'writing'], 6),
-        (new_id(), 'Long walk', 'Took the long way home along the river. Cold enough to see my breath, which always makes a walk feel like an event rather than a chore.', ['journal', 'outside'], 3),
-        (new_id(), '', 'Quick note: need to call the dentist back about rescheduling. Also finally fixed the squeaky drawer in the kitchen.', ['journal'], 1),
+        (new_id(), 'Morning pages', 'Woke up early and got a good hour of writing in before the day got noisy. Feeling optimistic about the week.', ['journal', 'writing'], 6, None),
+        (new_id(), 'Long walk', 'Took the long way home along the river. Cold enough to see my breath, which always makes a walk feel like an event rather than a chore.', ['journal', 'outside'], 3, (43.6512, -79.3670)),
+        (new_id(), '', 'Quick note: need to call the dentist back about rescheduling. Also finally fixed the squeaky drawer in the kitchen.', ['journal'], 1, (43.6629, -79.3957)),
     ]
-    for entry_id, title, content, tags, days_ago in entries:
+    for entry_id, title, content, tags, days_ago, coords in entries:
+        latitude, longitude = coords if coords else (None, None)
         db.execute(
-            'INSERT INTO journal_entries (id, content, raw_content, title, tags, created_at, updated_at) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (entry_id, content, content, title, tags_json(tags), ts(days_ago), ts(days_ago)),
+            'INSERT INTO journal_entries (id, content, raw_content, title, tags,'
+            ' latitude, longitude, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (entry_id, content, content, title, tags_json(tags),
+             latitude, longitude, ts(days_ago), ts(days_ago)),
         )
 
     # One image attachment on the oldest entry.
@@ -186,11 +192,15 @@ def seed_journal(db):
     d.mkdir(parents=True, exist_ok=True)
     img_path = attachment_path(attachment_id, 'jpg')
     placeholder_image(img_path, 'kitchen drawer')
+    # Located from the entry rather than from EXIF, which is what a photo taken
+    # through the camera actually looks like — the placeholder has no GPS tags
+    # and neither does an iPhone camera capture handed to the browser.
     db.execute(
-        'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, size, position, created_at) '
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO journal_attachments (id, entry_id, kind, name, path, mime, size, position,'
+        ' latitude, longitude, created_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         (attachment_id, entry_id, 'image', 'fixed drawer', str(img_path), 'image/jpeg',
-         img_path.stat().st_size, 0, ts(1)),
+         img_path.stat().st_size, 0, entries[-1][5][0], entries[-1][5][1], ts(1)),
     )
 
     # The screenshot shortcut's main shape: several captures collected into

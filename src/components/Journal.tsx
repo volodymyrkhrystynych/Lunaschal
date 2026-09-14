@@ -69,6 +69,8 @@ import { useShortcutScope } from '../shortcuts/ShortcutProvider';
 import { useListSelection } from '../shortcuts/useListSelection';
 import { useClipStage } from '../hooks/useClipStage';
 import { ClipStrip } from './ClipRecorder';
+import { LocationButton, useLocationAsk } from './LocationButton';
+import type { Coords } from '../lib/geo';
 import { MealClips, visualMedia } from './Food/MealClips';
 import { LoadingState, ErrorBanner } from './LoadStates';
 
@@ -446,7 +448,8 @@ export function Journal({
     content: string,
     staged: StagedFile[],
     clipCount: number,
-    links: string[] = []
+    links: string[] = [],
+    coords: Coords | null = null
   ) => {
     // Fired first, so it is first into JOURNAL_LANE and the entry exists before
     // anything is hung off it — online *and* on a queue replayed after a
@@ -462,6 +465,12 @@ export function Journal({
       // lands, so there is nothing for the title to wait on — and waiting on
       // the *download* would hold the title for half an hour and then time out.
       pendingAttachments: staged.length + clipCount || undefined,
+      // Sent with the create rather than with each file, because it is the
+      // *entry's* location: the server hands it down to any attachment whose
+      // own EXIF has none (backend/routes/journal.py's `_entry_coords`), which
+      // covers every photo taken through the camera and every voice clip.
+      latitude: coords?.latitude,
+      longitude: coords?.longitude,
     });
     setStagedUploadError(null);
     setShowNewEntry(false);
@@ -775,6 +784,7 @@ export function Journal({
     // per render — once to decide whether to show the row at all, once to fill
     // it — and this whole function ran for every entry on every keystroke.
     const aiTags = parseTags(entry.tags);
+    const entryMap = mapLink(entry.latitude ?? null, entry.longitude ?? null);
     return (
       <div
         key={entry.id}
@@ -923,9 +933,25 @@ export function Journal({
 
         {((entry.ficRefs?.length ?? 0) > 0 ||
           !!entry.ideaId ||
+          entryMap !== null ||
           entry.curatedTags?.length > 0 ||
           aiTags.length > 0) && (
           <div className="tag-row flex flex-wrap gap-1.5 mt-2">
+            {/* Where the entry was written, when its composer was asked. Its
+                photos each carry the same coordinates (they inherited them),
+                so showing it once on the entry says it without repeating it
+                under every picture. */}
+            {entryMap && (
+              <a
+                href={entryMap}
+                target="_blank"
+                rel="noreferrer"
+                onClick={e => e.stopPropagation()}
+                className="px-2 py-0.5 text-xs rounded border border-white/20 text-[var(--color-text-muted)] bg-white/5 hover:text-[var(--color-text)] transition-colors"
+              >
+                🗺️ map
+              </a>
+            )}
             {/* Only ever set on an entry dictated from the Ideas tab, and only
                 while that idea still exists — the server drops the id with the
                 idea, so a deleted idea leaves the entry and its recording
@@ -1162,7 +1188,8 @@ function NewEntryComposer({
     content: string,
     files: StagedFile[],
     clipCount: number,
-    links: string[]
+    links: string[],
+    coords: Coords | null
   ) => void;
   onCancel: () => void;
 }) {
@@ -1186,6 +1213,11 @@ function NewEntryComposer({
   // did not exist yet and there was nowhere server-side for the text to go.
   // Minting the id up front is what removed that constraint.
   const clips = useClipStage({ kind: 'journal' });
+
+  // Nothing is asked of the device until the button is pressed — see
+  // LocationButton for why the Journal asks out loud where Food and Chat grab
+  // the fix silently.
+  const location = useLocationAsk();
 
   const stage = (transfer: DataTransfer | null, e: React.SyntheticEvent) => {
     const { accepted, rejected } = filesFromTransfer(transfer);
@@ -1211,7 +1243,14 @@ function NewEntryComposer({
       clips.clips.length === 0
     )
       return;
-    onSubmit(clips.claimId(), content, files, clips.clips.length, links);
+    onSubmit(
+      clips.claimId(),
+      content,
+      files,
+      clips.clips.length,
+      links,
+      location.coords
+    );
     // Not awaited: the clips are on the device, and the queue lands them behind
     // the create in JOURNAL_LANE whenever the backend is next reachable.
     void clips.commit();
@@ -1219,6 +1258,7 @@ function NewEntryComposer({
     setFiles([]);
     setLinks([]);
     clips.reset();
+    location.reset();
   };
 
   return (
@@ -1328,7 +1368,9 @@ function NewEntryComposer({
           </span>
         </div>
       )}
-      <div className="flex justify-end gap-2 mt-2">
+      <div className="flex items-center justify-end gap-2 mt-2">
+        <LocationButton ask={location} testId="journal-new-entry-location" />
+        <div className="flex-1" />
         <button
           onClick={() => {
             // Cancelling discards the staged clips too — the entry they were
@@ -1339,6 +1381,7 @@ function NewEntryComposer({
             setFiles([]);
             setLinks([]);
             setContent('');
+            location.reset();
             onCancel();
           }}
           className="px-3 py-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"

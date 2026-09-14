@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { currentPosition } from './geo';
+import { currentPosition, formatCoords } from './geo';
 
 const geo = (impl: Partial<Geolocation>) => impl as Geolocation;
 
@@ -45,5 +45,23 @@ describe('currentPosition', () => {
     expect(opts.enableHighAccuracy).toBe(false);
     expect(opts.timeout).toBeGreaterThan(0);
     expect(opts.maximumAge).toBeGreaterThan(0);
+  });
+});
+
+describe('formatCoords', () => {
+  it('renders a fix at four decimals — roughly 11 m', () => {
+    expect(formatCoords({ latitude: 43.65321, longitude: -79.38329 })).toBe(
+      '43.6532, -79.3833'
+    );
+  });
+
+  it('pads a whole number so the two halves line up', () => {
+    expect(formatCoords({ latitude: 1, longitude: -2 })).toBe(
+      '1.0000, -2.0000'
+    );
+  });
+
+  it('is empty for no fix, so a caller can render it unguarded', () => {
+    expect(formatCoords(null)).toBe('');
   });
 });

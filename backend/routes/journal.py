@@ -8,10 +8,12 @@ from flask import Blueprint, Response, jsonify, request, send_file, stream_with_
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
 from backend.day_boundary import day_bounds, day_key_for
+from backend.geo import coord_pair
 from backend.ai.journal import (
     PolishUnavailable,
     polish_journal_entry,
     generate_journal_metadata,
+    generate_fic_commentary_metadata,
 )
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE, Preempted
@@ -215,6 +217,7 @@ def create_journal_entry(
     entry_id: str | None = None,
     polish: bool = False,
     pending_attachments: int = 0,
+    coords: tuple[float, float] | None = None,
 ) -> str | None:
     """Inserts a journal entry and kicks off background metadata generation
     (and, if `polish` and `raw_content` is set, background polish — the STT
@@ -227,6 +230,11 @@ def create_journal_entry(
     need its id — so without this the title would always be generated from the
     text alone, before any photo had been captioned. Given it, metadata waits.
 
+    `coords` is the device fix the composer asked for, if the user pressed its
+    location button. It is the entry's own location and the fallback for any
+    photo on it that carries no GPS EXIF of its own — which is every picture
+    taken through the camera rather than picked from the library.
+
     A composer mints its entry id at the first recorded chunk, so a clip can
     reach `create_recording_entry` *before* this does — the boot sweep after a
     crash sends only the clip, and an offline queue can replay in either order.
@@ -237,18 +245,25 @@ def create_journal_entry(
     """
     id = entry_id or str(ULID())
     db = get_db()
+    latitude, longitude = coords if coords else (None, None)
     cur = db.execute(
-        'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
-        (id, content, raw_content, title, tags_json(tags), created_at, created_at),
+        'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title, tags,'
+        ' latitude, longitude, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        (id, content, raw_content, title, tags_json(tags),
+         latitude, longitude, created_at, created_at),
     )
     db.commit()
     if cur.rowcount == 0:
         if not content.strip():
             return None
+        # COALESCE on the coordinates rather than a plain assignment: the
+        # recording route may have located the row already, and a create with
+        # no fix (button not pressed, permission refused) must not erase it.
         adopted = db.execute(
-            "UPDATE journal_entries SET content=?, raw_content=?, updated_at=?"
+            "UPDATE journal_entries SET content=?, raw_content=?, updated_at=?,"
+            " latitude=COALESCE(?, latitude), longitude=COALESCE(?, longitude)"
             " WHERE id=? AND content='' AND COALESCE(raw_content, '')=''",
-            (content, raw_content, created_at, id),
+            (content, raw_content, created_at, latitude, longitude, id),
         )
         db.commit()
         if not adopted.rowcount:
@@ -318,8 +333,27 @@ def create_entry():
         content, raw_content, now,
         title=title, tags=tags, entry_id=id, polish=True,
         pending_attachments=pending,
+        # Absent unless the composer's location button was pressed and the
+        # device answered. `coord_pair` drops a half-sent pair rather than
+        # storing a row that looks located and isn't.
+        coords=coord_pair(body.get('latitude'), body.get('longitude')),
     )
     return jsonify({'id': id}), 201
+
+
+def _entry_coords(entry_id: str) -> tuple[float | None, float | None]:
+    """The entry's own location, or `(None, None)`.
+
+    Applies to every kind of attachment, not just images: a voice clip recorded
+    on the spot was recorded somewhere, and it has no EXIF to read.
+    """
+    row = get_db().execute(
+        'SELECT latitude, longitude FROM journal_entries WHERE id=?',
+        (entry_id,),
+    ).fetchone()
+    if row is None or row['latitude'] is None or row['longitude'] is None:
+        return None, None
+    return row['latitude'], row['longitude']
 
 
 def _attachment_polish_context(entry_id: str) -> str | None:
@@ -724,11 +758,19 @@ def _store_attachment(
 
     # A photo should be located by where it was taken, not where it was
     # uploaded from — same helper the food log uses (backend/food/exif.py).
+    # Falling back to the entry's own fix is the whole reason that fix is asked
+    # for: iOS hands a picture taken through the browser's camera input over
+    # with its GPS EXIF stripped, so for anything not picked out of the library
+    # the EXIF read above finds nothing and this is the only location there is.
+    # EXIF still wins when it exists — it says where the picture was taken,
+    # while the entry's fix only says where it was written.
     latitude = longitude = None
     if kind == 'image':
         from backend.food.exif import extract_photo_meta
         meta = extract_photo_meta(path)
         latitude, longitude = meta['latitude'], meta['longitude']
+    if latitude is None:
+        latitude, longitude = _entry_coords(entry_id)
 
     # Non-speech audio description auto-fires on upload (unlike the transcript,
     # which stays opt-in) as long as an audio model is actually configured —
@@ -1920,6 +1962,29 @@ def _metadata_context(entry_id: str) -> str | None:
     return '\n'.join(f"{r['name']}: {r['transcript']}" for r in rows)
 
 
+def _fic_commentary_metadata_input(entry_id: str) -> dict | None:
+    """The fic/chapter this entry is commentary on, for the title/tags call.
+
+    Distinct from `_enrich_with_fic_refs` (the API response shape): this pulls
+    the fic's description and the chapter's own text, which
+    `generate_fic_commentary_metadata` needs to make sense of commentary as
+    short as "loved this twist!!" — the reply is the entry's subject, the
+    fic/chapter are what it's a reply to. An entry can in principle carry more
+    than one ref; the first is what the title speaks to.
+    """
+    row = get_db().execute(
+        'SELECT f.title AS fic_title, f.description AS fic_description,'
+        ' fc.title AS chapter_title, fc.content_text AS chapter_text'
+        ' FROM journal_entry_fic_refs jefr'
+        ' JOIN fics f ON f.id = jefr.fic_id'
+        ' LEFT JOIN fic_chapters fc ON fc.id = jefr.chapter_id'
+        ' WHERE jefr.journal_entry_id=?'
+        ' ORDER BY jefr.created_at LIMIT 1',
+        (entry_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def _attachments_settled(entry_id: str, expected: int) -> bool:
     """True once every attachment the client said it would upload has arrived
     and none is still being captioned.
@@ -1944,7 +2009,17 @@ def _generate_metadata_bg(
 ) -> None:
     def _run():
         try:
-            meta = generate_journal_metadata(content, _metadata_context(journal_id))
+            fic_ref = _fic_commentary_metadata_input(journal_id)
+            if fic_ref:
+                meta = generate_fic_commentary_metadata(
+                    content,
+                    fic_title=fic_ref['fic_title'],
+                    fic_description=fic_ref['fic_description'],
+                    chapter_title=fic_ref['chapter_title'],
+                    chapter_text=fic_ref['chapter_text'],
+                )
+            else:
+                meta = generate_journal_metadata(content, _metadata_context(journal_id))
             if not meta:
                 return
             updates: dict = {}

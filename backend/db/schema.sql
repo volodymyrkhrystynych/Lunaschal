@@ -4,6 +4,15 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     raw_content TEXT,
     title TEXT,
     tags TEXT,
+    -- Where the entry was written, asked for explicitly by the composer's
+    -- location button rather than inferred. This is the *only* location a
+    -- camera-captured photo ever has: iOS hands a picture taken through the
+    -- browser's camera input over with its GPS EXIF stripped, so an entry
+    -- photographed on the spot is unlocated unless the device is asked here.
+    -- A photo picked from the library keeps its own EXIF and still wins over
+    -- this (backend/routes/journal.py's _entry_coords fallback).
+    latitude REAL,
+    longitude REAL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
