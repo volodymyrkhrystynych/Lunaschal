@@ -461,10 +461,11 @@ export function Journal({
       // captions instead of being generated from the text alone milliseconds
       // from now. Clips count too: a title generated before the recordings
       // have been transcribed is a title for an entry that was still empty.
-      // A link is not counted: the row is created the moment the request
-      // lands, so there is nothing for the title to wait on — and waiting on
-      // the *download* would hold the title for half an hour and then time out.
-      pendingAttachments: staged.length + clipCount || undefined,
+      // Links count for the same reason, and they are why the server's wait
+      // has a second, much longer cap: a video is titled from what it turns
+      // out to be about, so the title waits for the download and the summary
+      // that follows it (backend/routes/journal.py's `_attachments_settled`).
+      pendingAttachments: staged.length + clipCount + links.length || undefined,
       // Sent with the create rather than with each file, because it is the
       // *entry's* location: the server hands it down to any attachment whose
       // own EXIF has none (backend/routes/journal.py's `_entry_coords`), which

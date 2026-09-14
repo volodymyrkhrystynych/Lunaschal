@@ -100,6 +100,32 @@ def test_metadata_sees_the_photo_captions(monkeypatch):
     assert 'ADV METAL' in captured['prompt']
 
 
+def test_metadata_sees_what_a_watched_video_was_about(monkeypatch):
+    """The same failure one step over: "watched this" plus a link titled an
+    entry about nothing, while the import pipeline had already worked out
+    exactly what the video said."""
+    captured = _capture_metadata_prompt(monkeypatch)
+
+    journal.generate_journal_metadata(
+        'Watched this on the train.',
+        'Video "But what is a neural network?" — It builds up to backpropagation.',
+    )
+
+    assert 'Watched this on the train.' in captured['prompt']
+    assert 'backpropagation' in captured['prompt']
+
+
+def test_the_context_block_carries_no_heading_of_its_own(monkeypatch):
+    """It used to be introduced as "Attached photos:", which mislabels a video.
+    The lines label themselves and the system prompt says what they mean."""
+    captured = _capture_metadata_prompt(monkeypatch)
+
+    journal.generate_journal_metadata('Watched this.', 'Video "A talk" — Ants.')
+
+    assert 'Attached photos' not in captured['prompt']
+    assert captured['prompt'] == 'Watched this.\n\n---\nVideo "A talk" — Ants.'
+
+
 def test_metadata_without_context_sends_the_content_alone(monkeypatch):
     """No stray heading when there are no photos — every existing entry goes
     through this path."""

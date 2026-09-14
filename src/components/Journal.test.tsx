@@ -761,6 +761,33 @@ describe('Journal new-entry attachments', () => {
     );
   });
 
+  it('counts a staged link, so the title waits for the video', async () => {
+    // A link is the one attachment the entry is usually entirely about, and the
+    // one that takes longest to arrive — downloaded, transcribed, summarised.
+    // Left out of the count, the create takes the no-attachments path and the
+    // entry is titled from its text milliseconds later.
+    renderJournal();
+    fireEvent.click(await screen.findByText('+ New Entry'));
+
+    fireEvent.click(screen.getByTestId('journal-new-entry-link-button'));
+    fireEvent.change(screen.getByTestId('journal-new-entry-link-input'), {
+      target: { value: 'https://youtu.be/aircAruvnKk' },
+    });
+    fireEvent.click(screen.getByTestId('journal-new-entry-link-add'));
+
+    fireEvent.change(
+      screen.getByPlaceholderText('Write your journal entry...'),
+      { target: { value: 'Watched this.' } }
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(
+        expect.objectContaining({ pendingAttachments: 1 })
+      )
+    );
+  });
+
   it('holds a staged link until the create it was saved with has landed', async () => {
     // The bug this closes: the link was POSTed in the same tick as the create,
     // and `POST /attachments/link` answers 404 for an entry that is not there

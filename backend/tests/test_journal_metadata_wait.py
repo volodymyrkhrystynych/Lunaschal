@@ -240,6 +240,137 @@ def test_the_context_is_photos_only(client, monkeypatch):
     assert journal_routes._metadata_context(entry_id) is None
 
 
+# --- a video is the slow case, and gets its own cap --------------------------
+
+def _link_video(entry_id, **columns):
+    """A youtube attachment in whatever state the test needs, without the
+    import pipeline — this suite is about the wait, not the download."""
+    from backend.db.connection import get_db
+    from ulid import ULID
+
+    columns = {'import_status': 'importing', 'name': 'A talk', **columns}
+    aid = str(ULID())
+    db = get_db()
+    db.execute(
+        "INSERT INTO journal_attachments(id, entry_id, kind, name, path,"
+        " position, source_url, import_status, transcript, transcript_status,"
+        " description, description_status, created_at)"
+        " VALUES (?,?,'youtube',?,'',0,?,?,?,?,?,?,?)",
+        (aid, entry_id, columns['name'], 'https://youtu.be/x',
+         columns['import_status'], columns.get('transcript'),
+         columns.get('transcript_status', 'idle'), columns.get('description'),
+         columns.get('description_status', 'idle'), int(time.time())),
+    )
+    db.commit()
+    return aid
+
+
+def test_the_title_waits_for_a_video_to_finish_downloading(client, monkeypatch):
+    """`import_status`, not `transcript_status`: a video that is still being
+    fetched has nothing to say about the entry yet."""
+    monkeypatch.setattr(llm_jobs_mod, 'enqueue', lambda *a, **k: None)
+    entry_id = client.post(
+        '/api/journal', json={'content': 'Watched this.'}
+    ).get_json()['id']
+
+    aid = _link_video(entry_id)
+    assert not journal_routes._attachments_settled(entry_id, 1)
+
+    _set(aid, import_status='ready', transcript='All about neural nets.',
+         transcript_status='done', description_status='running')
+    assert not journal_routes._attachments_settled(entry_id, 1)
+
+    _set(aid, description='It explains neural nets.', description_status='done')
+    assert journal_routes._attachments_settled(entry_id, 1)
+
+
+def test_an_entry_with_a_video_gets_the_longer_cap(client, monkeypatch):
+    """A download plus a transcription plus a summary is work of a different
+    order from captioning a photo, so the two caps are different numbers."""
+    assert (journal_routes._METADATA_VIDEO_WAIT_SECONDS
+            > journal_routes._METADATA_WAIT_SECONDS)
+
+    monkeypatch.setattr(llm_jobs_mod, 'enqueue', lambda *a, **k: None)
+    entry_id = client.post('/api/journal', json={'content': 'A day.'}).get_json()['id']
+    assert journal_routes._entry_has_video(entry_id) is False
+    _link_video(entry_id)
+    assert journal_routes._entry_has_video(entry_id) is True
+
+
+def test_the_video_cap_is_claimed_after_the_link_lands(
+    client, inline_bg, captured_prompt, monkeypatch
+):
+    """The deadline is picked per poll, not when the waiter starts: `attach_link`
+    is a separate request that lands after the create, so at start there is no
+    video to see. With the short cap in force this entry would be titled before
+    its summary; with the long one it waits."""
+    monkeypatch.setattr(journal_routes, '_METADATA_WAIT_SECONDS', 0.5)
+    monkeypatch.setattr(journal_routes, '_METADATA_VIDEO_WAIT_SECONDS', 8.0)
+
+    entry_id = client.post(
+        '/api/journal', json={'content': 'Watched this.', 'pendingAttachments': 1}
+    ).get_json()['id']
+    aid = _link_video(entry_id)
+
+    # Well past the photo cap, and still no title.
+    time.sleep(1.5)
+    assert client.get(f'/api/journal/{entry_id}').get_json().get('title') is None
+
+    _set(aid, import_status='ready', transcript='x', transcript_status='done',
+         description='It explains neural nets.', description_status='done')
+
+    assert _await_title(client, entry_id) == 'A title'
+    assert 'neural nets' in captured_prompt['context']
+
+
+def test_a_video_that_never_resolves_still_gets_a_title(
+    client, inline_bg, captured_prompt, monkeypatch
+):
+    """The long cap is still a cap. An import that dies mid-download leaves the
+    entry titled from its own text, which is the behaviour it had before."""
+    monkeypatch.setattr(journal_routes, '_METADATA_VIDEO_WAIT_SECONDS', 1.0)
+
+    entry_id = client.post(
+        '/api/journal', json={'content': 'Watched this.', 'pendingAttachments': 1}
+    ).get_json()['id']
+    _link_video(entry_id)
+
+    assert _await_title(client, entry_id, timeout=8.0) == 'A title'
+    assert captured_prompt['context'] is None
+
+
+def _set(attachment_id, **columns):
+    from backend.db.connection import get_db
+    db = get_db()
+    db.execute(
+        'UPDATE journal_attachments SET '
+        + ', '.join(f'{c} = ?' for c in columns) + ' WHERE id = ?',
+        (*columns.values(), attachment_id),
+    )
+    db.commit()
+
+
+def test_an_audio_description_does_not_hold_the_title(client, monkeypatch):
+    """Only a *video's* summary is waited on. An audio clip's ambient
+    description auto-fires on upload and never reaches the title call, so
+    waiting on it would cost every dictated entry a delay for nothing."""
+    monkeypatch.setattr(llm_jobs_mod, 'enqueue', lambda *a, **k: None)
+    entry_id = client.post('/api/journal', json={'content': 'A day.'}).get_json()['id']
+
+    from backend.db.connection import get_db
+    from ulid import ULID
+    db = get_db()
+    db.execute(
+        "INSERT INTO journal_attachments(id, entry_id, kind, name, path, position,"
+        " transcript_status, description_status, created_at)"
+        " VALUES (?,?,'audio','memo.m4a','',0,'idle','running',?)",
+        (str(ULID()), entry_id, int(time.time())),
+    )
+    db.commit()
+
+    assert journal_routes._attachments_settled(entry_id, 1)
+
+
 def test_a_waiting_thread_can_be_cancelled_and_drained(client, monkeypatch):
     """The contract `conftest.py` relies on, pinned.
 

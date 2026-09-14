@@ -13,6 +13,7 @@ GPU leaves the summary queued rather than recording it as a permanent failure.
 """
 import json
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -157,6 +158,30 @@ def _row(attachment_id):
     return get_db().execute(
         'SELECT * FROM journal_attachments WHERE id=?', (attachment_id,)
     ).fetchone()
+
+
+def _set_row(attachment_id, **columns):
+    db = get_db()
+    db.execute(
+        'UPDATE journal_attachments SET '
+        + ', '.join(f'{c} = ?' for c in columns)
+        + ' WHERE id = ?',
+        (*columns.values(), attachment_id),
+    )
+    db.commit()
+
+
+def _insert_attachment(entry_id, **columns):
+    columns = {'id': str(ULID()), 'entry_id': entry_id, 'path': '', 'position': 0,
+               'created_at': int(time.time()), **columns}
+    db = get_db()
+    db.execute(
+        f"INSERT INTO journal_attachments({', '.join(columns)})"
+        f" VALUES ({', '.join('?' * len(columns))})",
+        tuple(columns.values()),
+    )
+    db.commit()
+    return columns['id']
 
 
 # --- validation -------------------------------------------------------------
@@ -566,16 +591,99 @@ def test_deleting_the_attachment_clears_both_roots(
 
 # --- how it interacts with the rest of the entry ----------------------------
 
-def test_an_importing_video_does_not_hold_up_the_entrys_title(
+def test_an_importing_video_holds_the_entrys_title(
     client, entry_id, archive_root, monkeypatch
 ):
-    """`_attachments_settled` gates the metadata wait on transcript_status, so a
-    half-hour download must not land as 'running' — the title would wait out the
-    full 300s cap and then time out anyway."""
+    """A video is what an entry that says "watched this" is about, so the title
+    waits for it — through `import_status`, not through `transcript_status`,
+    which stays 'idle' because nothing has been transcribed yet."""
     _fake_ytdlp(monkeypatch)
     a = _attach(client, entry_id).get_json()
     assert _row(a['id'])['transcript_status'] == 'idle'
+    assert _row(a['id'])['import_status'] == 'importing'
+    assert not journal_routes._attachments_settled(entry_id, 1)
+    assert journal_routes._entry_has_video(entry_id)
+
+
+def test_a_finished_import_with_no_summary_coming_settles(
+    client, entry_id, archive_root, monkeypatch, sync_import
+):
+    """The wait has to end. Once the import is done and the summary has resolved
+    — here to nothing, because the model returned none — the title goes."""
+    jobs = _jobs(monkeypatch)
+    _fake_ytdlp(monkeypatch)
+    monkeypatch.setattr('backend.ai.youtube.summarize_video',
+                        lambda title, transcript: None)
+    a = _attach(client, entry_id).get_json()
+
+    # Transcript in hand, summary queued: still not settled.
+    assert _row(a['id'])['import_status'] == 'ready'
+    assert _row(a['id'])['description_status'] == 'running'
+    assert not journal_routes._attachments_settled(entry_id, 1)
+
+    jobs[0][1]()
+    assert _row(a['id'])['description_status'] == 'idle'
     assert journal_routes._attachments_settled(entry_id, 1)
+
+
+def test_a_summary_of_nothing_releases_the_title(
+    client, entry_id, archive_root, monkeypatch, sync_import
+):
+    """The summarizer's silent early return — no transcript to summarize — has
+    to clear the pending mark, or the title waits out the full video cap for a
+    summary nobody is going to write."""
+    _fake_ytdlp(monkeypatch)
+    a = _attach(client, entry_id).get_json()
+    journal_routes._queue_video_summary(a['id'], entry_id, 'Talk')
+    _set_row(a['id'], transcript='', transcript_status='idle')
+    assert _row(a['id'])['description_status'] == 'running'
+
+    journal_routes._summarize_youtube_bg(a['id'], entry_id, 'Talk', now=True)
+    assert _row(a['id'])['description_status'] == 'idle'
+
+
+def test_the_title_is_generated_from_the_videos_summary(
+    client, entry_id, archive_root, monkeypatch, sync_import
+):
+    """The point of all of it: what the video turned out to be about is what
+    `generate_journal_metadata` is handed."""
+    jobs = _jobs(monkeypatch)
+    _fake_ytdlp(monkeypatch)
+    monkeypatch.setattr(
+        'backend.ai.youtube.summarize_video',
+        lambda title, transcript: 'It explains gradient descent.',
+    )
+    _attach(client, entry_id)
+    jobs[0][1]()
+
+    context = journal_routes._metadata_context(entry_id)
+    assert 'gradient descent' in context
+    assert context.startswith('Video "')
+
+
+def test_the_transcript_stands_in_for_a_missing_summary(
+    client, entry_id, archive_root, monkeypatch, sync_import
+):
+    """A video the GPU was paused through still tells the title what it was
+    about — truncated, so a lecture cannot crowd out the entry."""
+    _fake_ytdlp(monkeypatch)
+    a = _attach(client, entry_id).get_json()
+    long_text = 'gradient descent. ' * 400
+    _set_row(a['id'], transcript=long_text, transcript_status='done',
+             description=None, description_status='running')
+
+    context = journal_routes._metadata_context(entry_id)
+    assert 'what was said' in context
+    assert context.endswith('…')
+    assert len(context) < len(long_text)
+
+
+def test_audio_is_still_kept_out_of_the_title(client, entry_id):
+    """A dictated clip's transcript is already the entry's own text; feeding it
+    back would title the entry from a duplicate of itself."""
+    _insert_attachment(entry_id, kind='audio', name='clip.webm',
+                       transcript='I went for a walk.', transcript_status='done')
+    assert journal_routes._metadata_context(entry_id) is None
 
 
 def test_polish_context_includes_a_watched_videos_summary(
