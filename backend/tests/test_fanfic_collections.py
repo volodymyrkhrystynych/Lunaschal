@@ -67,6 +67,59 @@ def test_parsers():
         sites.parse_patreon(patreon(False))
 
 
+def dated_list(added):
+    return f'''<form><table id="gui_table1"><tr>
+      <td><a href="/s/123/1/Story">Story</a></td>
+      <td><a href="/u/42/Writer">Writer</a></td><td>Books</td>
+      <td>09-12-2026</td><td>{added}</td><td>Remove</td>
+      </tr></table></form>'''
+
+
+@pytest.mark.parametrize('added,expected', [('03-14-2019', 1552521600),
+                                           ('invalid', None), ('', None)])
+def test_list_addition_dates_are_not_story_updates(added, expected):
+    for path, field in [('favorites', 'favorited_at'), ('alert', 'followed_at')]:
+        refs, _ = sites.parse_collection(dated_list(added),
+                                        f'https://www.fanfiction.net/{path}/story.php')
+        assert getattr(refs[0], field) == expected
+    refs, _ = sites.parse_collection(
+        '<div id="content_wrapper_inner"><a href="/s/123/1/">Story</a>'
+        '<span data-xutime="1552521600">Published</span></div>',
+        'https://www.fanfiction.net/u/42/Reader')
+    assert refs[0].favorited_at is None and refs[0].followed_at is None
+
+
+def test_list_dates_enrich_existing_story_without_redownload(client, monkeypatch):
+    ref = sites.parse_work_url('https://www.fanfiction.net/s/123/1/')
+    fic_id, _ = collections.queue_work(ref)
+    monkeypatch.setattr(collections, '_fetch', lambda url: response(ffn()))
+    download.run_drain_pending()
+    for path, date in [('favorites', '03-14-2019'), ('alert', '03-15-2019')]:
+        refs, _ = sites.parse_collection(dated_list(date),
+                                        f'https://www.fanfiction.net/{path}/story.php')
+        assert collections.queue_work(refs[0]) == (fic_id, False)
+    collections.queue_work(ref)  # A scan without dates must retain saved history.
+    db = get_db()
+    assert db.execute('SELECT COUNT(*) FROM fics').fetchone()[0] == 1
+    assert db.execute('SELECT update_pending FROM fics').fetchone()[0] == 0
+    collections.run_work(fic_id, ref.url)  # Metadata refresh must also retain it.
+    result = client.get('/api/fanfic').json
+    assert result[0]['sourceFavoritedAt'].startswith('2019-03-14')
+    assert result[0]['sourceFollowedAt'].startswith('2019-03-15')
+
+
+def test_source_date_migration_is_idempotent():
+    from backend.db.connection import _ensure_fic_source_dates
+    db = sqlite3.connect(':memory:')
+    db.execute('CREATE TABLE fics(id TEXT PRIMARY KEY, title TEXT)')
+    db.execute("INSERT INTO fics VALUES ('old','Keep')")
+    _ensure_fic_source_dates(db)
+    db.execute('UPDATE fics SET source_favorited_at=1552521600')
+    _ensure_fic_source_dates(db)
+    assert db.execute('SELECT * FROM fics').fetchone() == ('old', 'Keep', 1552521600, None)
+    db.close()
+
+
 def test_ao3_one_shot_and_login_wall():
     ref = sites.parse_work_url('https://archiveofourown.org/works/12')
     book = sites.parse_ao3('''<div id="workskin"><div class="preface"><h2 class="title">One</h2></div>

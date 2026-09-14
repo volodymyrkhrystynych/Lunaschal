@@ -139,6 +139,8 @@ def create_app():
 
     if not os.environ.get('LUNASCHAL_NO_SCHEDULERS'):
         from backend.fanfic.collections import start_scans
+        from backend.fanfic.pacing import start_scheduler
+        start_scheduler()
         start_scans()
         from backend.ai.jobs import start_job_worker
         start_job_worker()

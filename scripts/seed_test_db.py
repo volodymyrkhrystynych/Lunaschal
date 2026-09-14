@@ -521,6 +521,14 @@ def seed_food(db, recipe_id):
 
 
 def seed_fanfic(db, journal_ids):
+    db.execute("INSERT INTO fanfic_site_limits(domain) VALUES ('fanfiction.net')")
+    db.execute(
+        'INSERT INTO fics(id,title,source_type,site,thread_id,download_status,'
+        'source_favorited_at,source_followed_at,created_at,updated_at) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?)',
+        (new_id(), 'An old favorite (demo)', 'fanfiction', 'fanfiction.net',
+         'demo-story', 'complete', ts(365 * 7), ts(365 * 6), ts(15), ts(15)),
+    )
     from backend.fanfic.storage import fic_dir
 
     fic_id = new_id()

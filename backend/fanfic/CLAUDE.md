@@ -29,6 +29,29 @@ keys temporarily disabled and verifies references before committing.
 
 **Update checks come in two tiers, because an edit is invisible from outside the post.** XenForo raises no alert when an author revises an existing chapter and leaves the threadmarks index untouched, so nothing about the fic looks different until you re-read the post itself.
 
+**FF.net pacing** is owned by `pacing.py`: at least 15 seconds between page
+requests, including redirects/retries. `fanfic_site_limits` persists the next
+request time, cooldown, challenge pause and rate-limit count. HTTP 429 honors
+Retry-After (seconds or an HTTP date); absent/invalid values use a 15-minute
+exponential cooldown capped at one day. Cloudflare challenges pause indefinitely
+until the Library banner's Resume button is used. Resume cannot shorten a server
+cooldown. Deferred work retains its queue flag, deep-update intent and saved
+chapters; collection scans retain their current page. Other sites remain eligible.
+A five-second recovery loop restarts eligible queues after cooldown or application
+restart, and is disabled by `LUNASCHAL_NO_SCHEDULERS`. Browser-based retrieval is
+not implemented; a new challenge after manual resume pauses the site again.
+
+FF.net collection scans preserve `fics.source_favorited_at` and
+`source_followed_at` separately. Account-list addition dates are stored at UTC
+midnight and displayed in UTC to preserve the calendar date. The six-column
+account table puts Updated before Added (see the
+[ffn-parser source embedded in FanFiction Enhancements](https://greasyfork.org/en/scripts/491097-fanfiction-enhancements/code)).
+Public profile publication/update timestamps are never used as addition dates.
+Missing dates remain NULL; rescanning enriches existing canonical story rows
+without requeueing completed downloads or erasing previously saved dates.
+Library cards show both source dates independently of the local import date;
+description refreshes do not overwrite this history.
+
 - A **cheap** check looks only for chapters we don't have. It diffs the threadmarks index's post ids against the stored ones and resumes at the reader page holding the first missing chapter — one index fetch per ~50 threadmarks per category, and no reader fetch at all when nothing is missing. Three things about it are load-bearing, and all three were bugs:
   - **`Statistics (N threadmarks)` is never used to skip a category.** It counts a different population than our rows do — threadmarks get recategorised, renamed and deleted on long threads — so the two drift apart, and every count-based shortcut fails in one of two ways. `count <= rows` latched a fic shut permanently the moment the site's count fell below ours (`test_check_updates_survives_the_site_losing_a_threadmark`): this is the root cause of recently-updated fics never downloading, and a category losing a couple of _non-chapter_ threadmarks is enough to trigger it. `count == rows` then still agreed a category was current when it had swapped two threadmarks for two others (`test_check_updates_sees_swapped_threadmarks_at_an_unchanged_count`). Post ids are the only comparison that can't be fooled.
   - **The resume page comes from the index position, never from our row count.** Count arithmetic overshoots whenever there's a gap, so a chapter missing from the middle pushed the walk past the very page holding it and stayed missing forever.

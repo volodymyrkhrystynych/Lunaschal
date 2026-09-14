@@ -3,8 +3,8 @@
 import json
 import re
 from html import escape
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse, urlencode
 
 from bs4 import BeautifulSoup
@@ -19,6 +19,8 @@ class WorkRef:
     source_type: str
     id: str
     url: str
+    favorited_at: int | None = None
+    followed_at: int | None = None
 
 
 def parse_work_url(url: str) -> WorkRef | None:
@@ -193,6 +195,16 @@ def parse_collection(html: str, url: str) -> tuple[list[WorkRef], str | None]:
     for a in links:
         ref = parse_work_url(urljoin(url, a.get('href', '')))
         if ref and ref.site == host.removeprefix('www.'):
+            if ref.site == 'fanfiction.net':
+                added = _list_added_at(a)
+                if urlparse(url).path == '/favorites/story.php':
+                    ref = replace(ref, favorited_at=added)
+                elif urlparse(url).path == '/alert/story.php':
+                    ref = replace(ref, followed_at=added)
+                old = refs.get(ref.url)
+                if old:
+                    ref = replace(ref, favorited_at=ref.favorited_at or old.favorited_at,
+                                  followed_at=ref.followed_at or old.followed_at)
             refs[ref.url] = ref
     next_link = soup.select_one('a[rel=next], .pagination .next a, a.next_page')
     if next_link is None:
@@ -202,6 +214,61 @@ def parse_collection(html: str, url: str) -> tuple[list[WorkRef], str | None]:
     if next_url and urlparse(next_url).path != urlparse(url).path:
         raise ValueError('Unexpected collection pagination path')
     return list(refs.values()), next_url
+
+
+def _parse_added_date(node):
+    """Read only an explicitly identified addition-date field."""
+    timestamp = node.get('data-xutime')
+    if timestamp is None:
+        stamp = node.select_one('[data-xutime]')
+        timestamp = stamp.get('data-xutime') if stamp else None
+    if timestamp is not None:
+        try:
+            value = int(timestamp)
+            return value if 0 < value <= 253402300799 else None
+        except (TypeError, ValueError):
+            return None
+    raw = node.get('datetime') or _text(node)
+    raw = re.sub(r'^(?:Date\s+)?(?:Added|Favorited|Followed)(?:\s+on)?\s*:?\s*', '', raw, flags=re.I)
+    for fmt in ('%m/%d/%Y', '%m/%d/%y', '%m-%d-%Y', '%m-%d-%y', '%Y-%m-%d', '%b %d, %Y'):
+        try:
+            return int(datetime.strptime(raw.strip(), fmt).replace(tzinfo=timezone.utc).timestamp())
+        except ValueError:
+            pass
+    return None
+
+
+def _list_added_at(link):
+    row = link.find_parent('tr')
+    if row is None:
+        return None
+    cells = row.find_all(['td', 'th'], recursive=False)
+    # Prefer a Date Added column; published/updated timestamps elsewhere in
+    # the same story row must never be mistaken for the user's history.
+    table = row.find_parent('table')
+    if table:
+        for header in table.find_all('tr'):
+            if header.find_parent('table') is not table:
+                continue
+            labels = header.find_all(['td', 'th'], recursive=False)
+            for index, label in enumerate(labels):
+                if re.fullmatch(r'(?:date\s+)?(?:added|favorited|followed)', _text(label), re.I):
+                    if index < len(cells):
+                        return _parse_added_date(cells[index])
+    for cell in cells:
+        if re.match(r'^(?:Date\s+)?(?:Added|Favorited|Followed)(?:\s+on)?\s*:', _text(cell), re.I):
+            return _parse_added_date(cell)
+        for node in cell.select('[title], [data-label]'):
+            label = node.get('data-label') or node.get('title', '')
+            if re.fullmatch(r'(?:date\s+)?(?:added|favorited|followed)', label, re.I):
+                return _parse_added_date(node)
+    # FF.net's account lists have six columns: story, author, category,
+    # updated, added, remove. Public profile story cards do not use this layout.
+    if (table and table.get('id') == 'gui_table1' and len(cells) == 6
+            and cells[0].find('a', href=re.compile(r'/s/\d+/'))
+            and cells[1].find('a', href=re.compile(r'/u/\d+/'))):
+        return _parse_added_date(cells[4])
+    return None
 
 
 def parse_patreon_collection(data: dict, url: str):
