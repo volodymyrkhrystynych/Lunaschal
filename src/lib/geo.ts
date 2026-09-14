@@ -44,3 +44,14 @@ export function currentPosition(
     );
   });
 }
+
+/**
+ * How a fix reads in the composer: four decimals, which is ~11 m — enough to
+ * tell two places apart and short enough to sit on one line of a phone.
+ * Deliberately not reverse-geocoded: that is a network call to somebody else's
+ * service, and this app resolves nothing it does not have to.
+ */
+export function formatCoords(coords: Coords | null): string {
+  if (!coords) return '';
+  return `${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)}`;
+}

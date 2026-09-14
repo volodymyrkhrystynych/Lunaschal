@@ -108,6 +108,14 @@ export interface JournalCreateVars {
    * simply arrives with nothing to wait for, and titles from its text).
    */
   pendingAttachments?: number;
+  /**
+   * The device fix the composer asked for. Two plain numbers, so a create
+   * queued offline still lands located when the phone next has signal — which
+   * is the case that most needs it, since a photo taken out of signal has no
+   * EXIF GPS either.
+   */
+  latitude?: number;
+  longitude?: number;
 }
 export interface JournalUpdateVars {
   id: string;
@@ -500,6 +508,8 @@ const journalCreateCfg = (
       title: vars.title ?? null,
       tags: vars.tags ? JSON.stringify(vars.tags) : null,
       curatedTags: [],
+      latitude: vars.latitude ?? null,
+      longitude: vars.longitude ?? null,
       createdAt: nowIso,
       updatedAt: nowIso,
     };

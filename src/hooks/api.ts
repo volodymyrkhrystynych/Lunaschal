@@ -76,6 +76,14 @@ export interface JournalEntry {
   ideaId?: string | null;
   ideaTitle?: string | null;
   attachments?: JournalAttachment[];
+  /**
+   * Where the entry was written, when the composer's location button was
+   * pressed and the device answered. Null otherwise — the ask is explicit, so
+   * most entries have none, and a photo taken through the camera has no EXIF
+   * GPS of its own to fall back on.
+   */
+  latitude?: number | null;
+  longitude?: number | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -2911,6 +2919,13 @@ export const api = {
        * metadata job waits for them (capped) and titles from both.
        */
       pendingAttachments?: number;
+      /**
+       * The device fix, when the composer asked for one. It is the entry's own
+       * location *and* the fallback location for every photo attached to it —
+       * see backend/routes/journal.py's `_entry_coords`.
+       */
+      latitude?: number;
+      longitude?: number;
     }) => post<{ id: string }>('/api/journal', data),
     // Mirrors the STT_JOURNAL_KEY voice shortcut (stt/listener.py): save the
     // raw transcript immediately, polish it in the background. `id` is passed
