@@ -165,6 +165,7 @@ def init_db() -> None:
     _repoint_vision_at_qwen36(db)
     _ensure_attachment_description_columns(db)
     _ensure_journal_attachment_location(db)
+    _ensure_journal_entry_location(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
     _ensure_todo_priority(db)
@@ -1814,6 +1815,21 @@ def _ensure_attachment_description_columns(db: sqlite3.Connection) -> None:
         )
     if 'description_error' not in cols:
         db.execute('ALTER TABLE journal_attachments ADD COLUMN description_error TEXT')
+    db.commit()
+
+
+def _ensure_journal_entry_location(db: sqlite3.Connection) -> None:
+    """Where the entry was written — see the column comment in schema.sql.
+
+    Separate from `journal_attachments.latitude`, which is EXIF read off one
+    photo: this is the device fix the composer asked for, and it is what a
+    text-only or dictated entry has instead.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_entries)')}
+    if 'latitude' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN latitude REAL')
+    if 'longitude' not in cols:
+        db.execute('ALTER TABLE journal_entries ADD COLUMN longitude REAL')
     db.commit()
 
 
