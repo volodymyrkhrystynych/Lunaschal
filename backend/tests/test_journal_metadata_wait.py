@@ -216,28 +216,206 @@ def test_attachments_settled_needs_both_the_count_and_the_status(client, monkeyp
     assert journal_routes._attachments_settled(entry_id, 1) is True
 
 
-def test_the_context_is_photos_only(client, monkeypatch):
-    """Audio and video have their own description column and their own consumer.
-    A speech transcript is already the entry's text on the dictation path, and
-    feeding it back would title the entry from a copy of itself."""
+def _audio_entry(client, monkeypatch, body, **columns):
     monkeypatch.setattr(llm_jobs_mod, 'enqueue', lambda *a, **k: None)
-    entry_id = client.post('/api/journal', json={'content': 'A day.'}).get_json()['id']
+    entry_id = client.post('/api/journal', json={'content': body}).get_json()['id']
     client.post(
         f'/api/journal/{entry_id}/attachments',
         data={'file': (io.BytesIO(b'\x00' * 32), 'memo.m4a', 'audio/mp4')},
         content_type='multipart/form-data',
     )
+    from backend.db.connection import get_db
+    db = get_db()
+    db.execute(
+        'UPDATE journal_attachments SET '
+        + ', '.join(f'{c} = ?' for c in columns) + ' WHERE entry_id = ?',
+        (*columns.values(), entry_id),
+    )
+    db.commit()
+    return entry_id
+
+
+def test_a_transcript_already_in_the_body_is_not_fed_back(client, monkeypatch):
+    """The dictation path appends a clip's transcript to the entry verbatim.
+    Offering it again as context would title the entry from a copy of itself —
+    which is what the old blanket exclusion of audio was really about."""
+    entry_id = _audio_entry(
+        client, monkeypatch, 'Spoken words.',
+        transcript_status='done', transcript='Spoken words.',
+    )
+
+    assert journal_routes._metadata_context(entry_id) is None
+
+
+def test_a_transcript_the_body_has_never_seen_is_context(client, monkeypatch):
+    """A clip transcribed without being merged, or merged in from another
+    entry, carries words the body does not have. Those are exactly what the
+    title is missing."""
+    entry_id = _audio_entry(
+        client, monkeypatch, 'Notes from the walk.',
+        transcript_status='done', transcript='I saw a heron by the weir.',
+    )
+
+    context = journal_routes._metadata_context(entry_id)
+    assert 'heron by the weir' in context
+    assert context.startswith('Recording "')
+
+
+def test_a_recordings_description_always_reaches_the_title(client, monkeypatch):
+    """The non-speech description is the one account of a clip the entry's own
+    text can never contain, so it is offered whatever the body says."""
+    entry_id = _audio_entry(
+        client, monkeypatch, 'A walk.',
+        description_status='done', description='Heavy rain and a passing train.',
+    )
+
+    context = journal_routes._metadata_context(entry_id)
+    assert 'Heavy rain' in context
+
+
+def _record_button_entry(client, monkeypatch=None, **columns):
+    """What the bottom bar's Record button makes: an entry with no body at all
+    and one clip, through the route that button actually posts to.
+
+    `monkeypatch` stubs the job queue out, for the tests that only want the row.
+    A test watching a trigger fire must leave it off — stubbing `enqueue` is
+    stubbing the thing under test."""
+    if monkeypatch is not None:
+        monkeypatch.setattr(llm_jobs_mod, 'enqueue', lambda *a, **k: None)
+    res = client.post(
+        '/api/journal/recordings',
+        data={'file': (io.BytesIO(b'\x00' * 32), 'recording.webm', 'audio/webm')},
+        content_type='multipart/form-data',
+    ).get_json()
+    from backend.db.connection import get_db
+    db = get_db()
+    if columns:
+        db.execute(
+            'UPDATE journal_attachments SET '
+            + ', '.join(f'{c} = ?' for c in columns) + ' WHERE id = ?',
+            (*columns.values(), res['attachment']['id']),
+        )
+        db.commit()
+    return res['id'], res['attachment']['id']
+
+
+def test_a_bare_recording_is_titled_from_its_description_alone(client, monkeypatch):
+    """The entry the whole change is for. Record leaves the body empty and never
+    asks for a title, so the description is not merely the best account of the
+    entry — it is the only one there is."""
+    entry_id, _ = _record_button_entry(
+        client, monkeypatch,
+        description_status='done', description='Heavy rain and a passing train.',
+    )
+
+    assert _entry_body(entry_id) == ''
+    context = journal_routes._metadata_context(entry_id)
+    assert 'Heavy rain' in context
+
+
+def _entry_body(entry_id):
+    from backend.db.connection import get_db
+    row = get_db().execute(
+        'SELECT content, raw_content FROM journal_entries WHERE id=?', (entry_id,)
+    ).fetchone()
+    return (row['raw_content'] or row['content'] or '').strip()
+
+
+# --- the three late arrivals that retitle ------------------------------------
+
+def _titles(monkeypatch):
+    """Every title `_generate_metadata_bg` writes, in order, with the context it
+    was given. The jobs run inline (`run_jobs_sync`), so a trigger that fires
+    lands here synchronously."""
+    seen = []
+
+    def fake(content, context=None):
+        seen.append({'content': content, 'context': context})
+        return {'title': f'Title {len(seen)}', 'tags': ['memory']}
+
+    monkeypatch.setattr(journal_routes, 'generate_journal_metadata', fake)
+    return seen
+
+
+def test_a_description_landing_retitles_the_entry(client, monkeypatch, inline_bg):
+    """The Record button never asks for a title — the route does not call
+    `_generate_metadata_bg` at all — so without this the entry stays untitled
+    forever, however much the server works out about the clip."""
+    seen = _titles(monkeypatch)
+    entry_id, attachment_id = _record_button_entry(client)
+    assert client.get(f'/api/journal/{entry_id}').get_json().get('title') is None
+
+    monkeypatch.setattr(journal_routes, '_do_attachment_audio_description',
+                        lambda _p, _n: 'Heavy rain and a passing train.')
+    assert client.post(
+        f'/api/journal/attachments/{attachment_id}/describe-audio'
+    ).status_code == 202
+
+    assert client.get(f'/api/journal/{entry_id}').get_json()['title'] == 'Title 1'
+    assert 'Heavy rain' in seen[0]['context']
+
+
+def test_a_failed_description_does_not_retitle(client, monkeypatch, inline_bg):
+    """Nothing was learned, so there is nothing to retitle from — and a second
+    pass would overwrite a good title with one generated from the same inputs."""
+    seen = _titles(monkeypatch)
+    entry_id, attachment_id = _record_button_entry(client)
+
+    def boom(_p, _n):
+        raise RuntimeError('no audio model')
+
+    monkeypatch.setattr(journal_routes, '_do_attachment_audio_description', boom)
+    client.post(f'/api/journal/attachments/{attachment_id}/describe-audio')
+
+    assert seen == []
+
+
+def test_transcribing_without_merging_still_retitles(
+    client, monkeypatch, inline_bg
+):
+    """The attachment's own Transcribe button writes the transcript to the row
+    and deliberately not into the body (`into_entry=False`), so the merge branch
+    that used to be the only titling trigger never fires for it."""
+    seen = _titles(monkeypatch)
+    entry_id, attachment_id = _record_button_entry(client)
+
+    monkeypatch.setattr(journal_routes, '_do_attachment_audio',
+                        lambda _p: 'I saw a heron by the weir.')
+    assert client.post(
+        f'/api/journal/attachments/{attachment_id}/transcribe'
+    ).status_code == 202
+
+    assert _entry_body(entry_id) == ''  # not merged, by design
+    assert client.get(f'/api/journal/{entry_id}').get_json()['title'] == 'Title 1'
+    assert 'heron by the weir' in seen[0]['context']
+
+
+def test_merging_a_recording_retitles_the_target(client, monkeypatch, inline_bg):
+    """The third late arrival, and the only one the user triggers by hand: the
+    target gains a clip, and with it everything said and heard in it, none of
+    which existed when it was titled."""
+    seen = _titles(monkeypatch)
+    target = client.post(
+        '/api/journal', json={'content': 'Notes from the walk.'}
+    ).get_json()['id']
+    source, attachment_id = _record_button_entry(client)
 
     from backend.db.connection import get_db
     db = get_db()
     db.execute(
-        "UPDATE journal_attachments SET transcript_status='done',"
-        " transcript='Spoken words.' WHERE entry_id=?",
-        (entry_id,),
+        "UPDATE journal_attachments SET description_status='done',"
+        " description='Heavy rain and a passing train.' WHERE id=?",
+        (attachment_id,),
     )
     db.commit()
+    seen.clear()
 
-    assert journal_routes._metadata_context(entry_id) is None
+    res = client.post(f'/api/journal/{source}/merge', json={'targetId': target})
+    assert res.status_code == 200
+
+    assert seen and 'Heavy rain' in seen[-1]['context']
+    assert seen[-1]['content'] == 'Notes from the walk.'
+    assert client.get(f'/api/journal/{target}').get_json()['title'].startswith('Title ')
 
 
 # --- a video is the slow case, and gets its own cap --------------------------

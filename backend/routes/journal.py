@@ -497,6 +497,29 @@ def _is_voice_only_entry(db, entry_id: str) -> bool:
     return len(attachments) == 1 and attachments[0]['kind'] == 'audio'
 
 
+# --- the one-time recording backfill -----------------------------------------
+
+@bp.get('/backfill/recordings')
+def recording_backfill_status():
+    """What a run would do, and how the running one is getting on.
+
+    Both halves in one response because the panel shows one or the other and
+    never both: before a run it is "112 clips, 24 entries", during it a bar.
+    """
+    from backend.journal import backfill
+
+    return jsonify({**backfill.counts(), 'progress': backfill.status()})
+
+
+@bp.post('/backfill/recordings')
+def start_recording_backfill():
+    from backend.journal import backfill
+
+    if not backfill.start():
+        return jsonify({'error': 'Already running'}), 409
+    return jsonify(backfill.status()), 202
+
+
 @bp.get('/<id>/merge-candidates')
 def merge_candidates(id):
     """Other entries from the same local day as `id`, for the merge picker —
@@ -560,6 +583,12 @@ def merge_entry(id):
     db.execute('DELETE FROM journal_entries WHERE id=?', (id,))
     db.commit()
     _notify_subscribers(target_id)
+
+    # The target has just gained a recording, and with it whatever was said and
+    # heard in it — none of which was there when it was titled. This is the
+    # third of the three late arrivals `_retitle_bg` exists for, and the only
+    # one the user triggers by hand.
+    _retitle_bg(target_id)
 
     merged = row_to_dict(
         db.execute('SELECT * FROM journal_entries WHERE id=?', (target_id,)).fetchone()
@@ -1577,6 +1606,16 @@ def _describe_attachment_bg(attachment_id: str, entry_id: str, path: str,
             _notify_subscribers(entry_id)
         except Exception as e:
             print(f'Failed to record audio description result for {attachment_id}: {e}')
+            return
+
+        # The description is context the entry's own text can never hold, and
+        # for a clip saved by the bottom bar's Record button it is the only
+        # account of the entry there is — so the title is regenerated now that
+        # it exists. Deliberately *not* waited on by `_attachments_settled`
+        # (which would delay every dictated entry's title for a line that only
+        # colours it): retitling after the fact is what buys that back.
+        if text:
+            _retitle_bg(entry_id)
 
     if now:
         _run()
@@ -1715,6 +1754,25 @@ def _queue_video_summary(attachment_id: str, entry_id: str, title: str) -> None:
         print(f'Failed to mark summary pending for {attachment_id}: {e}')
     jobs.enqueue('journal.summarize_youtube', attachment_id,
                  {'entry_id': entry_id, 'title': title})
+
+
+def _retitle_bg(entry_id: str, *, now: bool = False) -> None:
+    """Regenerate an entry's title and tags from everything now known about it.
+
+    The one entry point for "something arrived late". Three things can: a clip's
+    transcript, a clip's non-speech description, and a whole recording merged in
+    from another entry. None of them is on screen when the entry is created, and
+    two of them are minutes of model work behind it.
+
+    It reads the body itself rather than taking it as an argument, because every
+    caller is a background worker that has been holding a stale copy since
+    before the transcript it just wrote.
+
+    `now=True` runs it on this thread instead of queueing it — the backfill
+    wants its progress count to mean "entries actually titled", which a job it
+    merely enqueued would not.
+    """
+    _generate_metadata_bg(entry_id, _entry_raw_text(entry_id) or '', now=now)
 
 
 def _do_attachment_caption(path: str, name: str) -> str:
@@ -1857,6 +1915,14 @@ def _transcribe_attachment_bg(
                 _polish_bg(entry_id, body)
                 _generate_metadata_bg(entry_id, body)
 
+            # A recording transcribed *without* being merged — the attachment's
+            # own Transcribe button, or a clip merged in from another entry —
+            # has words the body has never seen, and `_metadata_context` now
+            # reaches them. The merge branch above has already retitled, so this
+            # is only for the case it skipped.
+            if not merge and text and kind in ('audio', 'video'):
+                _retitle_bg(entry_id)
+
             # A watched video's words are not the entry's words (so `merge` is
             # false for one), but they are the only thing the summary can be
             # written from — and this is the point at which they exist. Queued
@@ -1992,11 +2058,18 @@ def wait_metadata_idle(timeout: float = 10.0) -> bool:
     return not any(thread.is_alive() for thread in threads)
 
 
-# How much of a video's own words may stand in for a summary of them. The same
+# How much of an attachment's own words may reach the title call. The same
 # number and the same head-first truncation as `_CHAPTER_TEXT_MAX_CHARS` in
 # backend/ai/journal.py, for the same reason: context that outweighs the entry
 # stops being context.
-_VIDEO_TEXT_MAX_CHARS = 2000
+_MEDIA_TEXT_MAX_CHARS = 2000
+
+
+def _clip(text: str) -> str:
+    text = text.strip()
+    if len(text) > _MEDIA_TEXT_MAX_CHARS:
+        return text[:_MEDIA_TEXT_MAX_CHARS] + '…'
+    return text
 
 
 def _metadata_context(entry_id: str) -> str | None:
@@ -2008,11 +2081,17 @@ def _metadata_context(entry_id: str) -> str | None:
     with the least to build it from, and the import pipeline has already produced
     both a transcript and a summary of exactly what it was about.
 
-    **Audio stays out.** It has its own description column and its own consumer
-    (`_attachment_polish_context`), and a transcript of speech is already the
-    entry's text in the dictation path — feeding it back would title the entry
-    from a duplicate of itself. A video's words are not the writer's words, so
-    that reasoning doesn't reach it.
+    **Recordings are here too, and the rule for them has two halves.** Their
+    non-speech description (`backend/ai/audio_description.py` — the rain, the
+    café, the dog) always comes: it is the one account of a clip that the
+    entry's own text can never contain, and for an entry made by the bottom
+    bar's Record button it is the only account of anything at all. Their
+    *transcript* comes only when the entry's body does not already contain it —
+    the dictation path appends it verbatim through `_append_entry_text`, and
+    feeding it back would title the entry from a duplicate of itself. That is
+    the old blanket exclusion of audio, narrowed to the case it was actually
+    about: a clip merged in from another entry, or transcribed without being
+    merged, has words the body has never seen.
 
     The summary is preferred over the transcript: it is what a model call was
     already spent condensing, and it is short enough to read as one line. The
@@ -2020,28 +2099,42 @@ def _metadata_context(entry_id: str) -> str | None:
     was paused through. Each line labels itself; the system prompt is told what
     the labels mean, rather than the block carrying one heading for all of them.
     """
-    rows = get_db().execute(
+    db = get_db()
+    rows = db.execute(
         'SELECT kind, name, transcript, transcript_status,'
         ' description, description_status'
         ' FROM journal_attachments'
-        " WHERE entry_id=? AND kind IN ('image','youtube')"
+        " WHERE entry_id=? AND kind IN ('image','youtube','audio','video')"
         ' ORDER BY position',
         (entry_id,),
     ).fetchall()
+    body = _entry_raw_text(entry_id) or ''
     lines: list[str] = []
     for r in rows:
         transcribed = r['transcript_status'] == 'done' and r['transcript']
+        described = r['description_status'] == 'done' and r['description']
         if r['kind'] == 'image':
             if transcribed:
                 lines.append(f"Photo — {r['name']}: {r['transcript']}")
             continue
-        if r['description_status'] == 'done' and r['description']:
-            lines.append(f"""Video "{r['name']}" — {r['description']}""")
-        elif transcribed:
-            text = r['transcript'].strip()
-            if len(text) > _VIDEO_TEXT_MAX_CHARS:
-                text = text[:_VIDEO_TEXT_MAX_CHARS] + '…'
-            lines.append(f"""Video "{r['name']}", what was said — {text}""")
+        if r['kind'] == 'youtube':
+            if described:
+                lines.append(f"""Video "{r['name']}" — {r['description']}""")
+            elif transcribed:
+                lines.append(
+                    f"""Video "{r['name']}", what was said — {_clip(r['transcript'])}"""
+                )
+            continue
+        label = 'Recording' if r['kind'] == 'audio' else 'Video'
+        if described:
+            lines.append(f"""{label} "{r['name']}" — {r['description']}""")
+        # Containment, not a flag: `into_entry` is known when the transcription
+        # is queued and forgotten by the time anything asks this. The append is
+        # verbatim, so "is it already in the body" is exactly answerable.
+        if transcribed and r['transcript'].strip() not in body:
+            lines.append(
+                f"""{label} "{r['name']}", what was said — {_clip(r['transcript'])}"""
+            )
     return '\n'.join(lines) or None
 
 

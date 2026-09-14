@@ -678,11 +678,16 @@ def test_the_transcript_stands_in_for_a_missing_summary(
     assert len(context) < len(long_text)
 
 
-def test_audio_is_still_kept_out_of_the_title(client, entry_id):
-    """A dictated clip's transcript is already the entry's own text; feeding it
-    back would title the entry from a duplicate of itself."""
+def test_a_dictated_clips_own_words_are_not_fed_back(client, entry_id):
+    """A transcript the body already holds is a copy of the entry, not context
+    for it. Covered properly in test_journal_metadata_wait.py; pinned here so
+    the video work cannot quietly re-widen it."""
+    body = get_db().execute(
+        'SELECT raw_content, content FROM journal_entries WHERE id=?', (entry_id,)
+    ).fetchone()
     _insert_attachment(entry_id, kind='audio', name='clip.webm',
-                       transcript='I went for a walk.', transcript_status='done')
+                       transcript=body['raw_content'] or body['content'],
+                       transcript_status='done')
     assert journal_routes._metadata_context(entry_id) is None
 
 
