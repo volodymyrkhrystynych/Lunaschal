@@ -299,11 +299,17 @@ def _queue_words(
             logger.warning('could not read captions for %s: %s', attachment_id, e)
 
     if text:
+        # `description_status='running'` in the same write as the transcript:
+        # it is what tells `_attachments_settled` the summary is still coming,
+        # and the entry's title waits on that rather than being written from the
+        # text alone while the video it is about is still being read.
         _set(
             attachment_id,
             transcript=text,
             transcript_status='done',
             transcript_error=None,
+            description_status='running',
+            description_error=None,
         )
         _notify(entry_id)
         jobs.enqueue(

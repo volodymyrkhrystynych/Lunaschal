@@ -1407,10 +1407,14 @@ def attach_link(entry_id):
         (entry_id,),
     ).fetchone()['next']
 
-    # `transcript_status` stays 'idle', not 'running': it is what
-    # `_attachments_settled` reads, and a download that can take half an hour
-    # would otherwise hold the entry's title generation for its full wait cap
-    # and then time out anyway. The download has its own `import_status`.
+    # `transcript_status` stays 'idle', not 'running': whether this video has
+    # been transcribed is a different question from whether it has finished
+    # downloading, and `import_status` is the column that answers the second.
+    # `_attachments_settled` reads both, and holds the entry's title until this
+    # row leaves 'importing' — a video is the whole subject of an entry that
+    # says "watched this", so titling before it has been read titles from
+    # nothing. The long cap (`_METADATA_VIDEO_WAIT_SECONDS`) is what bounds the
+    # wait for a fetch that never resolves.
     cur = db.execute(
         'INSERT OR IGNORE INTO journal_attachments'
         '(id, entry_id, kind, name, path, position, source_url,'
@@ -1643,6 +1647,11 @@ def _summarize_youtube_bg(
                 return
             transcript = row['transcript'] or ''
             if not transcript.strip():
+                # Nothing to summarize, and nothing more coming. Say so rather
+                # than returning: `_attachments_settled` reads this column, and
+                # a 'running' nobody will ever resolve parks the entry's title
+                # for the whole video cap.
+                _clear_summary_pending(attachment_id)
                 return
             text = summarize_video(title or row['name'] or '', transcript)
             status, error = ('done', None) if text else ('idle', None)
@@ -1669,8 +1678,43 @@ def _summarize_youtube_bg(
     if now:
         _run()
     else:
-        jobs.enqueue('journal.summarize_youtube', attachment_id,
-                     {'entry_id': entry_id, 'title': title})
+        _queue_video_summary(attachment_id, entry_id, title)
+
+
+def _clear_summary_pending(attachment_id: str) -> None:
+    """Take a video's summary out of 'running' when none is coming after all."""
+    try:
+        db = get_db()
+        db.execute(
+            "UPDATE journal_attachments SET description_status='idle'"
+            " WHERE id=? AND description_status='running'",
+            (attachment_id,),
+        )
+        db.commit()
+    except Exception as e:
+        print(f'Failed to clear summary state for {attachment_id}: {e}')
+
+
+def _queue_video_summary(attachment_id: str, entry_id: str, title: str) -> None:
+    """Queue the summary, and record that it is queued.
+
+    The column is what makes 'the summary is coming' distinguishable from 'there
+    will never be one' — both were 'idle' before, and `_attachments_settled`
+    cannot hold the title for a state it cannot see. Written before the enqueue,
+    so the worker can never resolve it ahead of the row that says it is pending.
+    """
+    try:
+        db = get_db()
+        db.execute(
+            "UPDATE journal_attachments SET description_status='running',"
+            ' description_error=NULL WHERE id=?',
+            (attachment_id,),
+        )
+        db.commit()
+    except Exception as e:
+        print(f'Failed to mark summary pending for {attachment_id}: {e}')
+    jobs.enqueue('journal.summarize_youtube', attachment_id,
+                 {'entry_id': entry_id, 'title': title})
 
 
 def _do_attachment_caption(path: str, name: str) -> str:
@@ -1820,8 +1864,7 @@ def _transcribe_attachment_bg(
             # share one FIFO worker: enqueued together, the summarizer would run
             # first and read an empty transcript.
             if kind == 'youtube' and text:
-                jobs.enqueue('journal.summarize_youtube', attachment_id,
-                             {'entry_id': entry_id, 'title': name})
+                _queue_video_summary(attachment_id, entry_id, name)
         except Exception as e:
             print(f'Failed to record transcription result for {attachment_id}: {e}')
 
@@ -1902,6 +1945,13 @@ def retry_voice_draft(id):
 # never resolves — an upload that failed after the entry was created, or a tab
 # closed between the two requests — not as a latency budget.
 _METADATA_WAIT_SECONDS = 300.0
+
+# The same cap for an entry with a video on it. Much larger because the work is
+# of a different order: yt-dlp fetching a talk, then a transcription pass over
+# it, then the summary — none of which the composer waits for. The title is what
+# waits instead, and an entry whose video never resolves is titled from its own
+# text at the end of this rather than never.
+_METADATA_VIDEO_WAIT_SECONDS = 1800.0
 _METADATA_POLL_SECONDS = 2.0
 
 
@@ -1942,24 +1992,57 @@ def wait_metadata_idle(timeout: float = 10.0) -> bool:
     return not any(thread.is_alive() for thread in threads)
 
 
-def _metadata_context(entry_id: str) -> str | None:
-    """Captions of the entry's photos, for the title/tags call.
+# How much of a video's own words may stand in for a summary of them. The same
+# number and the same head-first truncation as `_CHAPTER_TEXT_MAX_CHARS` in
+# backend/ai/journal.py, for the same reason: context that outweighs the entry
+# stops being context.
+_VIDEO_TEXT_MAX_CHARS = 2000
 
-    Images only. Audio and video have their own description column and their own
-    consumer (`_attachment_polish_context`); a transcript of speech is already
-    the entry's text in the dictation path, and feeding it back in would title
-    the entry from a duplicate of itself.
+
+def _metadata_context(entry_id: str) -> str | None:
+    """What is attached to the entry, for the title/tags call.
+
+    Photos and watched videos. A video is the same relationship to an entry that
+    a fic chapter is to reader commentary (`generate_fic_commentary_metadata`):
+    "watched this" plus a link is the entry that most needs a title and the one
+    with the least to build it from, and the import pipeline has already produced
+    both a transcript and a summary of exactly what it was about.
+
+    **Audio stays out.** It has its own description column and its own consumer
+    (`_attachment_polish_context`), and a transcript of speech is already the
+    entry's text in the dictation path — feeding it back would title the entry
+    from a duplicate of itself. A video's words are not the writer's words, so
+    that reasoning doesn't reach it.
+
+    The summary is preferred over the transcript: it is what a model call was
+    already spent condensing, and it is short enough to read as one line. The
+    transcript is the fallback for a video whose summary failed, or that the GPU
+    was paused through. Each line labels itself; the system prompt is told what
+    the labels mean, rather than the block carrying one heading for all of them.
     """
     rows = get_db().execute(
-        'SELECT name, transcript FROM journal_attachments'
-        " WHERE entry_id=? AND kind='image'"
-        " AND transcript_status='done' AND transcript IS NOT NULL"
+        'SELECT kind, name, transcript, transcript_status,'
+        ' description, description_status'
+        ' FROM journal_attachments'
+        " WHERE entry_id=? AND kind IN ('image','youtube')"
         ' ORDER BY position',
         (entry_id,),
     ).fetchall()
-    if not rows:
-        return None
-    return '\n'.join(f"{r['name']}: {r['transcript']}" for r in rows)
+    lines: list[str] = []
+    for r in rows:
+        transcribed = r['transcript_status'] == 'done' and r['transcript']
+        if r['kind'] == 'image':
+            if transcribed:
+                lines.append(f"Photo — {r['name']}: {r['transcript']}")
+            continue
+        if r['description_status'] == 'done' and r['description']:
+            lines.append(f"""Video "{r['name']}" — {r['description']}""")
+        elif transcribed:
+            text = r['transcript'].strip()
+            if len(text) > _VIDEO_TEXT_MAX_CHARS:
+                text = text[:_VIDEO_TEXT_MAX_CHARS] + '…'
+            lines.append(f"""Video "{r['name']}", what was said — {text}""")
+    return '\n'.join(lines) or None
 
 
 def _fic_commentary_metadata_input(entry_id: str) -> dict | None:
@@ -1987,20 +2070,50 @@ def _fic_commentary_metadata_input(entry_id: str) -> dict | None:
 
 def _attachments_settled(entry_id: str, expected: int) -> bool:
     """True once every attachment the client said it would upload has arrived
-    and none is still being captioned.
+    and none of it is still being read.
 
     Both halves are needed. Counting rows alone races the upload requests, which
     the composer sends one at a time after the create; checking statuses alone
     would look settled at the instant the entry exists, before any of them is
     there.
+
+    A video is unsettled for longer than a photo, and through two more columns:
+    it is still downloading while `import_status='importing'`, and its summary is
+    still queued while `description_status='running'`. Both are checked for
+    `kind='youtube'` only — an audio attachment's ambient description auto-fires
+    on upload and never reaches `_metadata_context`, so waiting on it would buy
+    the title nothing.
     """
     rows = get_db().execute(
-        'SELECT transcript_status FROM journal_attachments WHERE entry_id=?',
+        'SELECT kind, import_status, transcript_status, description_status'
+        ' FROM journal_attachments WHERE entry_id=?',
         (entry_id,),
     ).fetchall()
     if len(rows) < expected:
         return False
-    return not any(r['transcript_status'] == 'running' for r in rows)
+    for r in rows:
+        if r['transcript_status'] == 'running':
+            return False
+        if r['kind'] == 'youtube' and (
+            r['import_status'] == 'importing'
+            or r['description_status'] == 'running'
+        ):
+            return False
+    return True
+
+
+def _entry_has_video(entry_id: str) -> bool:
+    """Whether the entry has a watched video on it, and so gets the long cap.
+
+    Asked per poll rather than once when the waiter starts: the link row is
+    inserted by `attach_link`, a separate request that lands *after* the create
+    the waiter was spawned from, so at start it is usually not there yet.
+    """
+    return get_db().execute(
+        "SELECT 1 FROM journal_attachments WHERE entry_id=? AND kind='youtube'"
+        ' LIMIT 1',
+        (entry_id,),
+    ).fetchone() is not None
 
 
 def _generate_metadata_bg(
@@ -2047,11 +2160,14 @@ def _generate_metadata_bg(
 
     def _wait_then_run():
         try:
-            deadline = time.monotonic() + _METADATA_WAIT_SECONDS
+            started = time.monotonic()
+            deadline = started + _METADATA_WAIT_SECONDS
             while time.monotonic() < deadline:
                 try:
                     if _attachments_settled(journal_id, expect_attachments):
                         break
+                    if _entry_has_video(journal_id):
+                        deadline = started + _METADATA_VIDEO_WAIT_SECONDS
                 except Exception as e:
                     print(f'Metadata wait failed for {journal_id}: {e}')
                     break

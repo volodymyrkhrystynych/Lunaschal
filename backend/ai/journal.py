@@ -116,11 +116,13 @@ _METADATA_SYSTEM = (
     '- "tags": an array of 1-3 tags chosen ONLY from this exact list:\n'
     f"  {', '.join(JOURNAL_TAGS)}\n"
     'Example: {"title": "Productive morning coding session", "tags": ["work", "coding"]}\n'
-    'An entry may be followed by descriptions of the photos attached to it. '
-    'Those describe the same moment, so use them — especially when the written '
-    'entry is short or says nothing about what it is about. The title still '
-    "names the entry, not the photograph: prefer the writer's own words where "
-    'there are any.'
+    'An entry may be followed by descriptions of what is attached to it: the '
+    'photos taken, and what a video the writer watched was about. Those are the '
+    'same moment, so use them — especially when the written entry is short or '
+    'says nothing about what it is about. The title still names the entry, not '
+    "the photograph and not the video: prefer the writer's own words where "
+    'there are any, and let the attachments make the title specific rather than '
+    'become its subject.'
 )
 
 # The enum turns "chosen ONLY from this exact list" from a prompt request into a
@@ -142,11 +144,17 @@ _METADATA_SCHEMA = {
 def generate_journal_metadata(content: str, context: str | None = None) -> dict:
     """Title and tags for one entry.
 
-    `context` carries the captions of the entry's photo attachments (see
-    `backend/routes/journal.py`'s `_metadata_context`), appended the way
-    `polish_journal_entry` appends its own. It matters most for the entries that
-    need a title most: "look at this" plus a photo used to produce a title about
-    nothing, because nothing about the picture had ever reached this call.
+    `context` carries what is attached to the entry — its photo captions, and
+    what a watched video was about (see `backend/routes/journal.py`'s
+    `_metadata_context`) — appended the way `polish_journal_entry` appends its
+    own. It matters most for the entries that need a title most: "look at this"
+    plus a photo, or "watched this" plus a link, used to produce a title about
+    nothing, because nothing about what was attached had ever reached this call.
+
+    The lines carry their own labels, the way `generate_fic_commentary_metadata`
+    builds its context block: a single hard-coded "Attached photos:" heading
+    mislabelled a video to the model, and the caller is the only one that knows
+    which kind each line came from.
 
     An entry with no text at all still generates when there is context — a
     photo-only entry is a real thing to write.
@@ -158,7 +166,7 @@ def generate_journal_metadata(content: str, context: str | None = None) -> dict:
             return {}
         prompt = content
         if context:
-            prompt = f'{content}\n\n---\nAttached photos:\n{context}'.lstrip()
+            prompt = f'{content}\n\n---\n{context}'.lstrip()
         data = chat_json(prompt, system=_METADATA_SYSTEM, schema=_METADATA_SCHEMA)
         # normalize_tags dedupes, which the grammar makes necessary: constrained to
         # a short enum the model will happily emit ["problem", "problem"] to fill
