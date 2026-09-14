@@ -46,7 +46,12 @@ const { CHAPTERS, FIC } = vi.hoisted(() => {
 vi.mock('../../hooks/api', () => ({
   api: {
     fanfic: {
-      collections: { list: vi.fn().mockResolvedValue([]), start: vi.fn() },
+      collections: {
+        list: vi.fn().mockResolvedValue([]),
+        start: vi.fn(),
+        limit: vi.fn().mockResolvedValue({ paused: false, cooldownUntil: 0 }),
+        resume: vi.fn(),
+      },
       get: vi.fn().mockResolvedValue(FIC),
       markOpened: vi.fn().mockResolvedValue({ success: true }),
       list: vi.fn().mockResolvedValue([FIC]),
@@ -169,6 +174,22 @@ describe('Library infinite scroll', () => {
 });
 
 describe('Library views and expandable details', () => {
+  it('shows original favorite and follow dates separately from import time', async () => {
+    const { api } = await import('../../hooks/api');
+    vi.mocked(api.fanfic.list).mockResolvedValueOnce([
+      {
+        ...FIC,
+        sourceFavoritedAt: '2019-03-14T00:00:00Z',
+        sourceFollowedAt: '2019-03-15T00:00:00Z',
+      },
+    ]);
+    renderFanfic();
+    expect(
+      await screen.findByText('Favorited on FF.net Mar 14, 2019')
+    ).toBeTruthy();
+    expect(screen.getByText('Followed on FF.net Mar 15, 2019')).toBeTruthy();
+  });
+
   beforeEach(() => {
     localStorage.clear();
     Element.prototype.scrollIntoView = vi.fn();

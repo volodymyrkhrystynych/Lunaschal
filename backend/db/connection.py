@@ -15,6 +15,7 @@ _conn: sqlite3.Connection | None = None
 TIMESTAMP_COLS = frozenset({
     'created_at', 'updated_at', 'next_review', 'completed_at',
     'posted_at', 'last_checked_at', 'last_opened_at', 'edited_at', 'started_at', 'ended_at', 'due',
+    'source_favorited_at', 'source_followed_at',
     'generated_at', 'last_researched_at', 'assessed_at', 'answered_at',
     'researched_at', 'last_practiced_at', 'last_recall_at',
     'received_at', 'classified_at', 'last_synced_at', 'token_expires_at',
@@ -179,6 +180,7 @@ def init_db() -> None:
     _ensure_fic_library_dates(db)
     from backend.db.fic_sources_migration import ensure_fic_sources
     ensure_fic_sources(db)
+    _ensure_fic_source_dates(db)
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
@@ -475,6 +477,14 @@ def _ensure_calendar_categories(db: sqlite3.Connection) -> None:
             added = True
     if added:
         db.commit()
+
+
+def _ensure_fic_source_dates(db: sqlite3.Connection) -> None:
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fics)')}
+    for name in ('source_favorited_at', 'source_followed_at'):
+        if name not in cols:
+            db.execute(f'ALTER TABLE fics ADD COLUMN {name} INTEGER')
+    db.commit()
 
 
 def _ensure_fic_review_columns(db: sqlite3.Connection) -> None:

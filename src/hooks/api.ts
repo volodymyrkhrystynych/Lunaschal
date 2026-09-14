@@ -177,6 +177,8 @@ export interface FicDownloadProgress {
 }
 
 export interface Fic {
+  sourceFavoritedAt?: string | null;
+  sourceFollowedAt?: string | null;
   id: string;
   title: string;
   author: string | null;
@@ -3420,6 +3422,14 @@ export const api = {
         put<{ success: boolean }>('/api/fanfic/cookies', { domain, cookie }),
     },
     collections: {
+      limit: () =>
+        get<{
+          paused: boolean;
+          cooldownUntil: number;
+          reason: string | null;
+          interval: number;
+        }>('/api/fanfic/site-limit'),
+      resume: () => post<{ success: boolean }>('/api/fanfic/site-limit/resume'),
       list: () => get<CollectionScan[]>('/api/fanfic/collections'),
       start: (site: string, collection: string, username: string) =>
         post<{ id: string }>('/api/fanfic/collections', {

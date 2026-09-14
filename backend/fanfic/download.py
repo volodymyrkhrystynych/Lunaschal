@@ -205,6 +205,7 @@ def _fetch(url: str, *, same_host: bool = False):
 
 
 def _fetch_serial(url: str, *, same_host: bool = False):
+    from backend.fanfic import pacing
     # QQ rate-limits bursts with transient 403s that can outlast a short
     # pause, so back off progressively before giving up. Cloudflare
     # challenges are recognized and not retried — they need cookies, not
@@ -217,6 +218,7 @@ def _fetch_serial(url: str, *, same_host: bool = False):
             from backend.fanfic.sites import same_site_url
             target = url
             for redirect in range(6):
+                pacing.before_request(target)
                 resp = _http_get(target, headers=_headers(target), cookies=_cookies_for(target),
                                  timeout=20, allow_redirects=False)
                 if resp.status_code not in (301, 302, 303, 307, 308):
@@ -227,8 +229,14 @@ def _fetch_serial(url: str, *, same_host: bool = False):
                     raise FetchBlockedError('Invalid or excessive site redirects')
                 target = same_site_url(location, target)
         else:
+            pacing.before_request(url)
             resp = _http_get(url, headers=_headers(url), cookies=_cookies_for(url), timeout=20)
         marker = _blocked_marker(resp)
+        if pacing.applies(url) and (marker is not None or resp.status_code == 429):
+            try:
+                pacing.suspend(resp, challenge=marker is not None)
+            finally:
+                resp.close()
         if marker is not None:
             domain = urlparse(url).netloc
             ua_source = 'a saved browser UA' if _user_agent_for(domain) else 'the default UA'
@@ -995,6 +1003,8 @@ def run_drain_pending() -> None:
         row = db.execute(
             "SELECT id, deep_pending FROM fics WHERE update_pending=1"
             " AND download_status != 'downloading'"
+            " AND NOT EXISTS (SELECT 1 FROM fanfic_site_limits l WHERE l.domain=fics.site"
+            " AND (l.paused=1 OR l.cooldown_until>unixepoch()))"
             ' ORDER BY updated_at LIMIT 1').fetchone()
         if not row:
             return

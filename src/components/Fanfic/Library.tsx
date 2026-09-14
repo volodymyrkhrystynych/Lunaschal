@@ -22,6 +22,7 @@ import { ItemCard } from '../ItemCard';
 import { LoadingState, EmptyState } from '../LoadStates';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { CollectionImport } from './CollectionImport';
+import { SiteLimit } from './SiteLimit';
 import { useCollectionScans } from './useCollectionScans';
 
 interface LibraryProps {
@@ -31,11 +32,12 @@ interface LibraryProps {
 const formatWords = (n: number) =>
   n >= 1000 ? `${Math.round(n / 1000)}k words` : `${n} words`;
 
-const formatDate = (date: string) =>
+const formatDate = (date: string, timeZone?: string) =>
   new Intl.DateTimeFormat('en-US', {
     year: 'numeric',
     month: 'short',
     day: 'numeric',
+    timeZone,
   }).format(new Date(date));
 
 const PAGE_SIZE = 50;
@@ -322,6 +324,7 @@ export function Library({ onOpen }: LibraryProps) {
         </div>
       )}
 
+      <SiteLimit />
       {showImport && (
         <div className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
           <div
@@ -689,6 +692,16 @@ function FicCard({
             )}
             {fic.wordCount > 0 && <span>{formatWords(fic.wordCount)}</span>}
             <span>added {formatDate(fic.createdAt)}</span>
+            {fic.sourceFavoritedAt && (
+              <span>
+                Favorited on FF.net {formatDate(fic.sourceFavoritedAt, 'UTC')}
+              </span>
+            )}
+            {fic.sourceFollowedAt && (
+              <span>
+                Followed on FF.net {formatDate(fic.sourceFollowedAt, 'UTC')}
+              </span>
+            )}
           </div>
 
           {fic.tags && fic.tags.length > 0 && (

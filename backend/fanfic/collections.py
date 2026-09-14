@@ -7,7 +7,7 @@ import time
 from ulid import ULID
 
 from backend.db.connection import get_db
-from backend.fanfic import download, sites
+from backend.fanfic import download, sites, pacing
 from backend.fanfic.sanitize import sanitize_chapter_html, html_to_text
 from backend.fanfic.xenforo import ReaderPost
 
@@ -34,6 +34,11 @@ def queue_work(ref: sites.WorkRef) -> tuple[str, bool]:
         fic_id = row['id']
         if row['download_status'] == 'error':
             db.execute('UPDATE fics SET update_pending=1 WHERE id=?', (fic_id,))
+    # Scanning an existing story enriches its history without downloading it
+    # again. Missing dates on later scans never erase a previously saved date.
+    db.execute('UPDATE fics SET source_favorited_at=COALESCE(?,source_favorited_at),'
+               'source_followed_at=COALESCE(?,source_followed_at) WHERE id=?',
+               (ref.favorited_at, ref.followed_at, fic_id))
     db.commit()
     return fic_id, created
 
@@ -96,6 +101,11 @@ def run_work(fic_id: str, url: str, deep: bool = False) -> None:
             download._bump_progress(fic_id, 1)
         download._finalize_fic(db, fic_id, None)
         download._update_progress(fic_id, phase='done', done=True)
+    except pacing.DeferredDownload as exc:
+        db.execute("UPDATE fics SET download_status='error',update_pending=1,deep_pending=?,"
+                   'download_error=? WHERE id=?', (int(deep), str(exc), fic_id))
+        db.commit()
+        download._update_progress(fic_id, phase='paused', error=str(exc), done=True)
     except Exception as exc:
         download._fail_fic(fic_id, str(exc))
 
@@ -157,6 +167,10 @@ def run_scan(scan_id: str) -> None:
             db.commit()
         db.execute("UPDATE fanfic_collection_scans SET status='complete',error=NULL WHERE id=?", (scan_id,))
         db.commit()
+    except pacing.DeferredDownload as exc:
+        db.execute("UPDATE fanfic_collection_scans SET status='pending',error=? WHERE id=?",
+                   (str(exc), scan_id))
+        db.commit()
     except Exception as exc:
         db.execute("UPDATE fanfic_collection_scans SET status='error',error=?,updated_at=? WHERE id=?",
                    (str(exc), int(time.time()), scan_id))
@@ -176,6 +190,9 @@ def start_scans() -> None:
             while True:
                 with _lock:
                     row = get_db().execute("SELECT id FROM fanfic_collection_scans WHERE status='pending'"
+                                           ' AND NOT EXISTS (SELECT 1 FROM fanfic_site_limits l'
+                                           ' WHERE l.domain=fanfic_collection_scans.site'
+                                           ' AND (l.paused=1 OR l.cooldown_until>unixepoch()))'
                                            ' ORDER BY updated_at LIMIT 1').fetchone()
                     if row is None:
                         break
@@ -183,7 +200,10 @@ def start_scans() -> None:
         finally:
             with _lock:
                 _running = False
-                pending = get_db().execute("SELECT 1 FROM fanfic_collection_scans WHERE status='pending' LIMIT 1").fetchone()
+                pending = get_db().execute("SELECT 1 FROM fanfic_collection_scans WHERE status='pending'"
+                                          ' AND NOT EXISTS (SELECT 1 FROM fanfic_site_limits l'
+                                          ' WHERE l.domain=fanfic_collection_scans.site'
+                                          ' AND (l.paused=1 OR l.cooldown_until>unixepoch())) LIMIT 1').fetchone()
             if pending:
                 start_scans()
             download.start_drain()

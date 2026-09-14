@@ -14,6 +14,7 @@ from backend.fanfic.xenforo import KNOWN_SITES, UnsupportedUrlError
 bp = Blueprint('fanfic', __name__, url_prefix='/api/fanfic')
 
 _LIST_COLS = (
+    'source_favorited_at, source_followed_at,'
     'id, title, author, source_type, source_url, site, cover_path, word_count,'
     ' chapter_count, download_status, download_error, update_pending, deep_pending,'
     ' last_read_chapter_id, last_checked_at, last_opened_at, rating, review,'
@@ -580,6 +581,23 @@ def list_collection_scans():
     return jsonify([row_to_dict(r) for r in get_db().execute(
         'SELECT id,site,collection,username,status,found,imported,skipped,pages,error,updated_at'
         ' FROM fanfic_collection_scans ORDER BY updated_at DESC')])
+
+
+@bp.get('/site-limit')
+def site_limit():
+    from backend.fanfic import pacing
+    s = pacing.state()
+    return jsonify({'paused': bool(s['paused']), 'cooldownUntil': s['cooldown_until'],
+                    'reason': s['reason'], 'interval': pacing.INTERVAL})
+
+
+@bp.post('/site-limit/resume')
+def resume_site_limit():
+    from backend.fanfic import pacing
+    pacing.resume()
+    collections.start_scans()
+    download.start_drain()
+    return jsonify({'success': True})
 
 
 @bp.post('/collections')
