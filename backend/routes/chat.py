@@ -1,6 +1,7 @@
 import time
 import json
 import logging
+import threading
 from flask import Blueprint, jsonify, request, Response, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict
@@ -718,6 +719,17 @@ class _GenerationFailed(RuntimeError):
 
 
 def _accept_calendar(db, data: dict, ctx: dict) -> dict:
+    day = ctx.get('reconstructionDay')
+    if day:
+        from backend.briefing_events import validate_event, calendar_for_day, _title
+        try:
+            validated = validate_event(data, day)
+        except (ValueError, TypeError) as e:
+            raise _AcceptRejected(str(e)) from e
+        if any(_title(e['title']) == _title(validated['title']) for e in calendar_for_day(db, day)):
+            raise _AcceptRejected('An event with this title already exists on that day; review or dismiss this suggestion')
+        data.clear()
+        data.update(validated)
     title = (data.get('title') or '').strip()
     if not title:
         raise _AcceptRejected('title required')
@@ -735,10 +747,13 @@ def _accept_calendar(db, data: dict, ctx: dict) -> dict:
 
     now = int(time.time())
     id = str(ULID())
+    description = data.get('description', '')
+    if day and data.get('location'):
+        description = f"{description}\n\nLocation: {data['location']}".strip()
     db.execute(
         'INSERT INTO calendar_events(id, title, description, date, time, end_time,'
         ' all_day, tags, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-        (id, title, data.get('description', ''), when, start, end,
+        (id, title, description, when, start, end,
          1 if all_day else 0, json.dumps(data.get('tags', [])), now),
     )
     return {'id': id}
@@ -1031,8 +1046,19 @@ _ACCEPT_HANDLERS = {
 }
 
 
+_proposal_resolution_lock = threading.Lock()
+
+
 @bp.post('/proposals/<message_id>/<proposal_id>')
 def resolve_proposal(message_id, proposal_id):
+    # Two devices can approve at once. Read, write the event, and update the
+    # metadata under one lock so both cannot observe the same pending card.
+    # This app shares one SQLite connection across its request threads.
+    with _proposal_resolution_lock:
+        return _resolve_proposal(message_id, proposal_id)
+
+
+def _resolve_proposal(message_id, proposal_id):
     """Accept or dismiss one delegate confirm card in place. A proposal is
     stamped with a stable id and 'pending' status the moment the run that
     staged it finishes, so this is the only place one ever leaves that state
@@ -1079,7 +1105,8 @@ def resolve_proposal(message_id, proposal_id):
             # `ctx` carries what the payload deliberately can't: which message
             # this card hangs off, so a handler can reach the photo and the
             # verbatim transcript without either becoming an editable field.
-            result = handler(db, data, {'messageId': message_id})
+            result = handler(db, data, {'messageId': message_id,
+                                       'reconstructionDay': proposal.get('reconstructionDay')})
         except _AcceptRejected as e:
             # Left 'pending' on purpose: a card that failed validation is one
             # the user still has to fix, so it must not collapse to a resolved

@@ -97,10 +97,12 @@ function ProposalForm({
   kind,
   data,
   set,
+  reconstructed = false,
 }: {
   kind: string;
   data: Record<string, unknown>;
   set: (patch: Record<string, unknown>) => void;
+  reconstructed?: boolean;
 }) {
   switch (kind) {
     case 'calendar': {
@@ -120,6 +122,16 @@ function ProposalForm({
             placeholder="More information…"
             className={`${fieldClass} w-full text-xs`}
           />
+          {'location' in data && (
+            <Field label="Location">
+              <input
+                value={str(data, 'location')}
+                onChange={e => set({ location: e.target.value })}
+                placeholder="Unknown"
+                className={`${fieldClass} flex-1`}
+              />
+            </Field>
+          )}
           <div className="flex flex-wrap gap-x-4 gap-y-1.5">
             <Field label="Date">
               <input
@@ -132,20 +144,22 @@ function ProposalForm({
             {/* An all-day event is explicitly the whole day, not merely
                 untimed, so ticking it clears the clocks rather than leaving
                 them to be silently ignored on save. */}
-            <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
-              <input
-                type="checkbox"
-                checked={allDay}
-                onChange={e =>
-                  set(
-                    e.target.checked
-                      ? { allDay: true, time: null, endTime: null }
-                      : { allDay: false }
-                  )
-                }
-              />
-              All day
-            </label>
+            {!reconstructed && (
+              <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
+                <input
+                  type="checkbox"
+                  checked={allDay}
+                  onChange={e =>
+                    set(
+                      e.target.checked
+                        ? { allDay: true, time: null, endTime: null }
+                        : { allDay: false }
+                    )
+                  }
+                />
+                All day
+              </label>
+            )}
             {!allDay && (
               <>
                 <Field label="From">
@@ -373,9 +387,33 @@ function PendingCard({
   return (
     <div className="rounded-lg border border-white/10 bg-[var(--color-surface)]/60 p-3">
       <div className="text-sm font-medium text-[var(--color-text)] mb-2">
-        {HEADLINE[proposal.kind] ?? 'Save this?'}
+        {proposal.reconstructionDay
+          ? `Suggested event · ${proposal.reconstructionDay}`
+          : (HEADLINE[proposal.kind] ?? 'Save this?')}
       </div>
-      <ProposalForm kind={proposal.kind} data={data} set={set} />
+      {proposal.evidence && (
+        <p className="text-xs text-[var(--color-text-muted)] mb-2">
+          {proposal.evidence}
+        </p>
+      )}
+      {!!proposal.sources?.length && (
+        <details className="text-xs text-[var(--color-text-muted)] mb-2">
+          <summary>Supporting entries</summary>
+          <ul>
+            {proposal.sources.map(source => (
+              <li key={source.id}>
+                {source.label} · {source.recordedAt}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      <ProposalForm
+        kind={proposal.kind}
+        data={data}
+        set={set}
+        reconstructed={!!proposal.reconstructionDay}
+      />
       <div className="flex gap-2 justify-end mt-2">
         <button
           onClick={() => onResolve('dismiss', data)}
@@ -391,7 +429,9 @@ function PendingCard({
         >
           {busy
             ? ACCEPT_PENDING_LABEL[proposal.kind]
-            : ACCEPT_LABEL[proposal.kind]}
+            : proposal.reconstructionDay
+              ? 'Approve event'
+              : ACCEPT_LABEL[proposal.kind]}
         </button>
       </div>
       {error && <div className="mt-2 text-xs text-red-400">{error}</div>}
@@ -437,6 +477,9 @@ export function DelegateProposals({ messageId, proposals }: Props) {
 
   return (
     <div className="mt-2 space-y-2">
+      {proposals.some(p => p.reconstructionDay) && (
+        <p className="text-sm font-medium">Suggested events from yesterday</p>
+      )}
       {proposals.map(p => {
         if (p.status !== 'pending') {
           return (

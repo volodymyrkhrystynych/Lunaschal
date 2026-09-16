@@ -9,8 +9,65 @@ immediate write the user cannot see is one they cannot undo.
 from flask import Blueprint, jsonify, request
 
 from backend import memory, observations
+import sqlite3
+import time
+from ulid import ULID
+from backend.db.connection import get_db, row_to_dict
+from backend.geo import coord_pair
+from backend.places import list_places
 
 bp = Blueprint('memory', __name__, url_prefix='/api/memory')
+
+
+@bp.get('/places')
+def places():
+    return jsonify([row_to_dict(r) for r in list_places(get_db())])
+
+
+@bp.put('/places/<place_id>')
+@bp.post('/places')
+def save_place(place_id=None):
+    body = request.get_json(silent=True) or {}
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Place must be an object'}), 400
+    name, notes = body.get('name'), body.get('notes', '')
+    if not isinstance(name, str) or not name.strip() or len(name) > 120:
+        return jsonify({'error': 'Place name must contain 1–120 characters'}), 400
+    if not isinstance(notes, str) or len(notes) > 2000:
+        return jsonify({'error': 'Place notes must be at most 2000 characters'}), 400
+    lat, lon = body.get('latitude'), body.get('longitude')
+    pair = coord_pair(lat, lon)
+    if (lat is not None or lon is not None) and (isinstance(lat, bool) or isinstance(lon, bool) or not pair or abs(pair[0]) > 90):
+        return jsonify({'error': 'Provide both valid latitude and longitude, or leave both empty'}), 400
+    radius = body.get('radiusM', 150)
+    if isinstance(radius, bool) or not isinstance(radius, int) or not 10 <= radius <= 5000:
+        return jsonify({'error': 'Matching radius must be 10–5000 metres'}), 400
+    db = get_db()
+    if place_id and not db.execute('SELECT 1 FROM saved_places WHERE id=?', (place_id,)).fetchone():
+        return jsonify({'error': 'Place not found'}), 404
+    now = int(time.time())
+    place_id = place_id or str(ULID())
+    try:
+        db.execute(
+            'INSERT INTO saved_places(id,name,notes,latitude,longitude,radius_m,created_at,updated_at)'
+            ' VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,'
+            ' notes=excluded.notes,latitude=excluded.latitude,longitude=excluded.longitude,'
+            ' radius_m=excluded.radius_m,updated_at=excluded.updated_at',
+            (place_id, name.strip(), notes.strip(), *(pair or (None, None)), radius, now, now),
+        )
+        db.commit()
+    except sqlite3.IntegrityError:
+        db.rollback()
+        return jsonify({'error': 'A place with that name already exists'}), 400
+    return jsonify(row_to_dict(db.execute('SELECT * FROM saved_places WHERE id=?', (place_id,)).fetchone()))
+
+
+@bp.delete('/places/<place_id>')
+def delete_place(place_id):
+    db = get_db()
+    db.execute('DELETE FROM saved_places WHERE id=?', (place_id,))
+    db.commit()
+    return jsonify({'ok': True})
 
 
 @bp.get('')

@@ -67,7 +67,7 @@ export function BriefingSection() {
       queryClient.invalidateQueries({ queryKey: ['chat', 'today'] });
       queryClient.invalidateQueries({ queryKey: ['chatTodos'] });
       setStatus(
-        `Briefing ready — ${result.todosAdded} to-do${result.todosAdded === 1 ? '' : 's'} added to today's chat bar.`
+        `Briefing ready — ${result.todosAdded} to-do${result.todosAdded === 1 ? '' : 's'} added to today's chat bar; ${result.eventsSuggested ?? 0} event suggestions ready to review.`
       );
       setTimeout(() => setStatus(null), 5000);
     },
@@ -103,7 +103,10 @@ export function BriefingSection() {
       <p className="text-sm text-[var(--color-text-muted)]">
         While the machine is on overnight, an agent reads your recent journal,
         tasks, calendar and reviews, then leaves a morning briefing as the first
-        message of the day's chat and adds any suggested to-dos.
+        message of the day's chat and adds any suggested to-dos. It also reads
+        yesterday’s full journal feed and calendar to suggest missing events for
+        you to edit and approve. Saved Places helps it interpret recorded
+        locations.
       </p>
       <label className="flex items-center gap-3 cursor-pointer select-none">
         <div

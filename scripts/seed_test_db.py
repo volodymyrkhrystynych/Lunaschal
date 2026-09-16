@@ -1765,6 +1765,11 @@ def seed_files():
 def seed_memory(db):
     """The one standing document about the user, plus the revisions every write
     snapshots (backend/memory.py). Nothing but Settings → Memory writes it."""
+    db.execute(
+        'INSERT INTO saved_places(id,name,notes,latitude,longitude,radius_m,created_at,updated_at)'
+        ' VALUES (?,?,?,?,?,?,?,?)',
+        (new_id(), 'Home', 'Fictional demo location', 43.65, -79.38, 150, ts(2), ts(2)),
+    )
     content = (
         "Lives in Toronto. Writes in the mornings.\n\n"
         "Names that dictation tends to mangle: Lyra Ashworth (a character), "

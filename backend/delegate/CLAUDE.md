@@ -50,6 +50,30 @@ Things to know:
 - **HEIC is transcoded to JPEG at the door** (`backend/imaging.py`, lifted out of `routes/food.py` — it also owns the `register_heif_opener()` call now). Browsers won't render HEIC and `images.py` refuses to send it, so converting on upload is what keeps every consumer downstream from having to know.
 - One bad file in a multi-photo upload is skipped, not fatal — the user picked all of them deliberately.
 
+## Overnight event reconstruction and saved places
+
+The briefing also returns `events`, grounded in `backend/briefing_events.py`'s
+complete previous 04:00–04:00 feed and recurrence-expanded calendar. Journal
+and food text, chapter-commentary links, attachment text/coordinates, user chat,
+transcriptions, task events, filed papers/study notes and newspaper reading
+state all contribute. Media is represented by its available text/metadata;
+unread newspapers and fictional content must not become real-life activities.
+Saved places (`saved_places`, Settings → Saved Places, `/api/memory/places`)
+are user-owned names/notes with optional coordinates and matching radius. They
+ride in normal chat too. GPS matches are local, may be ambiguous, and describe
+capture location rather than necessarily the narrated activity's location.
+
+Suggestions use the existing durable `calendar` proposal cards, with
+`reconstructionDay`, `evidence`, `sources`, and an original evidence/time
+`fingerprint` alongside `data`. No calendar row exists before approval. The
+card edits times and location; approval revalidates the source 4am day and
+persists the location in the calendar description. The original fingerprint
+survives edits so a forced rerun cannot re-propose the original span. Existing
+calendar titles and past suggestions (including dismissals) also suppress
+duplicates; semantic duplication is judged by the model against that context.
+Briefing invocations and proposal resolutions each serialize inside the single
+server process to prevent concurrent triggers/approvals from duplicating rows.
+
 ## Memory (`backend/memory.py`, `backend/observations.py`, `backend/routes/memory.py`, Settings → Memory)
 
 **Two stores, and the split is the point.** The document (`user_memory`) is the user's: one page of free text, read into **every** chat system prompt as the first block in `build_chat_system_prompt`, and the only block that is the same tomorrow. Its most concrete job is speech-to-text — a name written down once is a name transcribed correctly from then on. The observations (`assistant_observations`) are the assistant's own: short one-line facts it wrote itself with `remember`, sitting in the second block, marked in the prompt as its notes rather than the user's so the two do not read as carrying equal authority.

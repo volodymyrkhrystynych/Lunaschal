@@ -29,6 +29,62 @@ function renderProposals(proposals: DelegateProposalRecord[]) {
 const resolveProposal = () => vi.mocked(api.chat.resolveProposal);
 
 describe('pending cards', () => {
+  it('reviews reconstructed evidence and saves edited time and location', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: { id: 'y1', kind: 'calendar', status: 'accepted', data: {} },
+    });
+    renderProposals([
+      {
+        id: 'y1',
+        kind: 'calendar',
+        status: 'pending',
+        reconstructionDay: '2026-08-04',
+        evidence: 'Morning chores described in the evening; times estimated.',
+        sources: [
+          {
+            id: 'journal:j1',
+            label: 'Evening recap',
+            recordedAt: '2026-08-04T21:00:00',
+          },
+        ],
+        data: {
+          title: 'Chores',
+          date: '2026-08-04',
+          time: '07:00',
+          endTime: '09:00',
+          location: 'Home',
+        },
+      },
+    ]);
+    expect(screen.getByText('Suggested events from yesterday')).toBeTruthy();
+    expect(
+      screen.getByText(
+        'Morning chores described in the evening; times estimated.'
+      )
+    ).toBeTruthy();
+    expect(screen.getByText(/Evening recap/)).toBeTruthy();
+    expect(screen.queryByLabelText('All day')).toBeNull();
+    fireEvent.change(screen.getByLabelText('Location'), {
+      target: { value: 'Work' },
+    });
+    fireEvent.change(screen.getByLabelText('From'), {
+      target: { value: '08:00' },
+    });
+    fireEvent.click(screen.getByText('Approve event'));
+    await waitFor(() =>
+      expect(resolveProposal()).toHaveBeenCalledWith(
+        'm1',
+        'y1',
+        'accept',
+        expect.objectContaining({
+          location: 'Work',
+          time: '08:00',
+          date: '2026-08-04',
+        })
+      )
+    );
+  });
+
   it('renders a calendar proposal with its title, date and tags', () => {
     renderProposals([
       {
