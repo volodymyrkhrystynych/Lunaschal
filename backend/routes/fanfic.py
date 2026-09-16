@@ -81,6 +81,17 @@ def _attach_library_meta(dicts: list[dict]) -> list[dict]:
     return dicts
 
 
+def _source_filter(where: list[str], params: list) -> None:
+    source = request.args.get('source')
+    if not source:
+        return
+    if source in KNOWN_SITES:
+        where.append('site = ?')
+    else:
+        where.append('source_type = ?')
+    params.append(source)
+
+
 @bp.get('')
 def list_fics():
     limit = min(int(request.args.get('limit', 100)), 200)
@@ -99,6 +110,7 @@ def list_fics():
         where.append('EXISTS (SELECT 1 FROM fic_site_tags'
                      ' WHERE name=? AND fic_id=fics.id)')
         params.append(tag)
+    _source_filter(where, params)
     where_sql = f" WHERE {' AND '.join(where)}" if where else ''
     # All and folder views follow chapter publication activity. Recent is
     # reading history, deliberately independent of forum publication dates.
@@ -134,8 +146,10 @@ def search():
     clause = ("(title LIKE ? ESCAPE '\\' OR EXISTS"
               " (SELECT 1 FROM fic_site_tags"
               "  WHERE fic_id = fics.id AND name LIKE ? ESCAPE '\\'))")
-    where_sql = ' AND '.join(clause for _ in words)
+    where = [clause for _ in words]
     params = [p for w in words for p in (_like_pattern(w), _like_pattern(w))]
+    _source_filter(where, params)
+    where_sql = ' AND '.join(where)
     rows = get_db().execute(
         f'SELECT {_LIST_COLS} FROM fics WHERE {where_sql}'
         f' ORDER BY {_LATEST_ACTIVITY_ORDER} LIMIT 100',

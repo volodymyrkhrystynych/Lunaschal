@@ -3371,6 +3371,7 @@ export const api = {
       folderId?: string;
       tag?: string;
       sort?: 'recent';
+      source?: string;
     }) => {
       const qp = new URLSearchParams();
       if (params?.limit !== undefined) qp.set('limit', String(params.limit));
@@ -3378,6 +3379,7 @@ export const api = {
       if (params?.folderId) qp.set('folderId', params.folderId);
       if (params?.tag) qp.set('tag', params.tag);
       if (params?.sort) qp.set('sort', params.sort);
+      if (params?.source) qp.set('source', params.source);
       return get<Fic[]>(`/api/fanfic?${qp}`);
     },
     tags: () => get<FicTagCount[]>('/api/fanfic/tags'),
@@ -3405,8 +3407,11 @@ export const api = {
       ficId: string,
       data: { rating?: number | null; review?: string | null }
     ) => patch<{ success: boolean }>(`/api/fanfic/${ficId}/review`, data),
-    search: (query: string) =>
-      get<Fic[]>(`/api/fanfic/search?query=${encodeURIComponent(query)}`),
+    search: (query: string, source?: string) => {
+      const qp = new URLSearchParams({ query });
+      if (source) qp.set('source', source);
+      return get<Fic[]>(`/api/fanfic/search?${qp}`);
+    },
     get: (id: string) => get<Fic>(`/api/fanfic/${id}`),
     markOpened: (id: string) =>
       post<{ success: boolean }>(`/api/fanfic/${id}/opened`, {}),
