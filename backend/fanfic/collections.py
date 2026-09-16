@@ -13,6 +13,18 @@ from backend.fanfic.xenforo import ReaderPost
 
 _lock = threading.Lock()
 _running = False
+# Set to cut a deferral sleep short when a scan becomes runnable — a
+# user asking for one must not wait out somebody else's backoff.
+_wake = threading.Event()
+
+# How long to wait before re-running a scan whose page fetch failed for a
+# reason that is nobody's decision — a timeout, a dropped connection, a CDN
+# answering 525 for a URL that works seconds later. One entry per attempt;
+# running out of entries is what turns a deferral into a real error, so a
+# site that is genuinely gone stops being retried instead of looping against
+# it forever. The page position is already checkpointed in remaining_urls,
+# so each retry resumes rather than restarting.
+RETRY_SCHEDULE = (60, 300, 900)
 
 
 def _fetch(url):
@@ -131,7 +143,10 @@ def create_scan(site: str, collection: str, username: str) -> str:
                          ' WHERE site=? AND collection=? AND username=?',
                          (site, collection, username)).fetchone()
         if row and row['status'] != 'complete':
-            db.execute("UPDATE fanfic_collection_scans SET status='pending',error=NULL WHERE id=?",
+            # Asking again is asking for now: drop any deferral so the worker
+            # picks the scan up on this pass rather than at its backoff.
+            db.execute("UPDATE fanfic_collection_scans SET status='pending',error=NULL,"
+                       'attempts=0,retry_after=0 WHERE id=?',
                        (row['id'],))
             db.commit()
             return row['id']
@@ -140,7 +155,8 @@ def create_scan(site: str, collection: str, username: str) -> str:
                    '(id,site,collection,username,remaining_urls,status,updated_at)'
                    " VALUES (?,?,?,?,?,'pending',?) ON CONFLICT(id) DO UPDATE SET"
                    " remaining_urls=excluded.remaining_urls,status='pending',error=NULL,"
-                   'found=0,imported=0,skipped=0,pages=0,updated_at=excluded.updated_at',
+                   'found=0,imported=0,skipped=0,pages=0,attempts=0,retry_after=0,'
+                   'updated_at=excluded.updated_at',
                    (scan_id, site, collection, username, json.dumps(urls), int(time.time())))
         db.commit()
         return scan_id
@@ -172,8 +188,11 @@ def run_scan(scan_id: str) -> None:
                 imported += int(created)
             urls = ([next_url] if next_url else []) + urls[1:]
             pages += 1
+            # A page that came back resets the deferral counter: a long walk
+            # that meets one flaky page every few hundred must not accumulate
+            # its way to a permanent error.
             db.execute('UPDATE fanfic_collection_scans SET remaining_urls=?,found=?,imported=?,skipped=?,'
-                       'pages=?,updated_at=? WHERE id=?',
+                       'pages=?,attempts=0,retry_after=0,updated_at=? WHERE id=?',
                        (json.dumps(urls), found, imported, skipped, pages, int(time.time()), scan_id))
             db.commit()
         db.execute("UPDATE fanfic_collection_scans SET status='complete',error=NULL WHERE id=?", (scan_id,))
@@ -183,38 +202,72 @@ def run_scan(scan_id: str) -> None:
                    (str(exc), scan_id))
         db.commit()
     except Exception as exc:
-        db.execute("UPDATE fanfic_collection_scans SET status='error',error=?,updated_at=? WHERE id=?",
-                   (str(exc), int(time.time()), scan_id))
+        attempts = (row['attempts'] or 0) + 1
+        if download.is_transient(exc) and attempts <= len(RETRY_SCHEDULE):
+            # Stay pending so the worker resumes from remaining_urls, but not
+            # before retry_after — re-running immediately is a busy loop
+            # against a site that just failed to answer.
+            db.execute("UPDATE fanfic_collection_scans SET status='pending',error=?,attempts=?,"
+                       'retry_after=?,updated_at=? WHERE id=?',
+                       (str(exc), attempts, int(time.time()) + RETRY_SCHEDULE[attempts - 1],
+                        int(time.time()), scan_id))
+        else:
+            db.execute("UPDATE fanfic_collection_scans SET status='error',error=?,attempts=?,"
+                       'retry_after=0,updated_at=? WHERE id=?',
+                       (str(exc), attempts, int(time.time()), scan_id))
         db.commit()
+
+
+# A scan the worker may pick up right now: pending, its site not paused or
+# cooling down, and past any deferral from a failed page fetch.
+_RUNNABLE_SQL = ("SELECT id FROM fanfic_collection_scans WHERE status='pending'"
+                 ' AND retry_after<=unixepoch()'
+                 ' AND NOT EXISTS (SELECT 1 FROM fanfic_site_limits l'
+                 ' WHERE l.domain=fanfic_collection_scans.site'
+                 ' AND (l.paused=1 OR l.cooldown_until>unixepoch()))')
+
+
+def _next_retry_wait() -> float | None:
+    """Seconds until the soonest deferred scan is runnable, or None if there
+    is no deferred scan to wait for."""
+    row = get_db().execute("SELECT MIN(retry_after) AS due FROM fanfic_collection_scans"
+                           " WHERE status='pending' AND retry_after>unixepoch()").fetchone()
+    return max(0.0, row['due'] - time.time()) if row and row['due'] else None
 
 
 def start_scans() -> None:
     global _running
     with _lock:
         if _running:
+            # A worker already exists but may be sleeping out a deferral.
+            _wake.set()
             return
         _running = True
 
     def worker():
         global _running
+        _wake.clear()
         try:
             while True:
                 with _lock:
-                    row = get_db().execute("SELECT id FROM fanfic_collection_scans WHERE status='pending'"
-                                           ' AND NOT EXISTS (SELECT 1 FROM fanfic_site_limits l'
-                                           ' WHERE l.domain=fanfic_collection_scans.site'
-                                           ' AND (l.paused=1 OR l.cooldown_until>unixepoch()))'
-                                           ' ORDER BY updated_at LIMIT 1').fetchone()
-                    if row is None:
+                    row = get_db().execute(_RUNNABLE_SQL + ' ORDER BY updated_at LIMIT 1').fetchone()
+                    wait = None if row is not None else _next_retry_wait()
+                    if row is None and wait is None:
                         break
+                if row is None:
+                    # Nothing to run yet, but a deferred scan is due later.
+                    # Hold the thread rather than exiting: whoever deferred
+                    # the scan is the only one who knows it needs waking, and
+                    # nothing else polls this table. Capped at a minute so a
+                    # cooldown that lifts elsewhere isn't waited out in full.
+                    _wake.wait(min(wait, 60))
+                    _wake.clear()
+                    continue
                 run_scan(row['id'])
         finally:
             with _lock:
                 _running = False
-                pending = get_db().execute("SELECT 1 FROM fanfic_collection_scans WHERE status='pending'"
-                                          ' AND NOT EXISTS (SELECT 1 FROM fanfic_site_limits l'
-                                          ' WHERE l.domain=fanfic_collection_scans.site'
-                                          ' AND (l.paused=1 OR l.cooldown_until>unixepoch())) LIMIT 1').fetchone()
+                pending = get_db().execute(_RUNNABLE_SQL + ' LIMIT 1').fetchone()
             if pending:
                 start_scans()
             download.start_drain()

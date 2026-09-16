@@ -183,6 +183,7 @@ def init_db() -> None:
     from backend.db.fic_sources_migration import ensure_fic_sources
     ensure_fic_sources(db)
     _ensure_fic_source_dates(db)
+    _ensure_collection_scan_retry(db)
     _ensure_site_cookie_user_agent(db)
     _repair_escaped_image_fallbacks(db)
     _ensure_paper_archive_requested(db)
@@ -486,6 +487,21 @@ def _ensure_fic_source_dates(db: sqlite3.Connection) -> None:
     for name in ('source_favorited_at', 'source_followed_at'):
         if name not in cols:
             db.execute(f'ALTER TABLE fics ADD COLUMN {name} INTEGER')
+    db.commit()
+
+
+def _ensure_collection_scan_retry(db: sqlite3.Connection) -> None:
+    """When a deferred collection scan may be picked up again, and how many
+    times running it has already been deferred. Both default to 0, which is
+    exactly the state a scan that has never failed is in, so existing rows
+    need no backfill."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fanfic_collection_scans)')}
+    if 'retry_after' not in cols:
+        db.execute('ALTER TABLE fanfic_collection_scans'
+                   ' ADD COLUMN retry_after INTEGER NOT NULL DEFAULT 0')
+    if 'attempts' not in cols:
+        db.execute('ALTER TABLE fanfic_collection_scans'
+                   ' ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0')
     db.commit()
 
 

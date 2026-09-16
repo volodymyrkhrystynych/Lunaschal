@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCollectionScans } from './useCollectionScans';
 import { api } from '@/hooks/api';
-import { siteLabel } from '@/lib/fanfic';
+import { scanStatus, siteLabel } from '@/lib/fanfic';
 
 const choices: Record<string, [string, string][]> = {
   'fanfiction.net': [
@@ -100,20 +100,22 @@ export function CollectionImport() {
         Story text is saved in the reader. Patreon video, audio and attachment
         downloads are not included.
       </p>
-      {scans.data?.map(scan => (
-        <div key={scan.id} className="text-sm" role="status">
-          {siteLabel(scan.site)} · {scan.collection}:{' '}
-          {scan.status === 'pending'
-            ? 'Scanning'
-            : scan.status === 'error'
-              ? 'Stopped'
-              : 'Scan complete'}{' '}
-          · {scan.pages} pages · {scan.imported} queued ·{' '}
-          {scan.found - scan.imported} already in library
-          {scan.skipped > 0 && ` · ${scan.skipped} locked posts skipped`}
-          {scan.error && <p className="text-red-400">{scan.error}</p>}
-        </div>
-      ))}
+      {scans.data?.map(scan => {
+        const state = scanStatus(scan);
+        return (
+          <div key={scan.id} className="text-sm" role="status">
+            {siteLabel(scan.site)} · {scan.collection}: {state.label} ·{' '}
+            {scan.pages} pages · {scan.imported} queued ·{' '}
+            {scan.found - scan.imported} already in library
+            {scan.skipped > 0 && ` · ${scan.skipped} locked posts skipped`}
+            {scan.error && (
+              <p className={state.retrying ? 'text-amber-400' : 'text-red-400'}>
+                {scan.error}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

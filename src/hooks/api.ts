@@ -58,6 +58,8 @@ export interface CollectionScan {
   skipped: number;
   pages: number;
   error: string | null;
+  /** Unix seconds; 0 unless the scan is waiting out a failed page fetch. */
+  retryAfter: number;
 }
 
 export interface JournalEntry {

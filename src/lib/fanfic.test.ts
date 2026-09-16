@@ -6,6 +6,7 @@ import {
   formatRating,
   groupChaptersByCategory,
   orderChapters,
+  scanStatus,
 } from './fanfic';
 import type { FicChapterSummary } from '@/hooks/api';
 
@@ -155,5 +156,55 @@ describe('formatRating', () => {
     expect(formatRating(undefined)).toBeNull();
     expect(formatRating(0)).toBeNull();
     expect(formatRating(6)).toBeNull();
+  });
+});
+
+describe('scanStatus', () => {
+  const later = Math.floor(Date.now() / 1000) + 600;
+  const earlier = Math.floor(Date.now() / 1000) - 600;
+
+  it('reports a running scan as scanning', () => {
+    expect(
+      scanStatus({ status: 'pending', error: null, retryAfter: 0 })
+    ).toEqual({
+      label: 'Scanning',
+      retrying: false,
+    });
+  });
+
+  it('calls a deferred scan retrying, not scanning or stopped', () => {
+    const state = scanStatus({
+      status: 'pending',
+      error: '525 Server Error',
+      retryAfter: later,
+    });
+    expect(state.retrying).toBe(true);
+    expect(state.label).toMatch(/^Retrying at /);
+  });
+
+  it('stops calling it retrying once its backoff has passed', () => {
+    // The worker is due to pick it up; the stale error is history, not a wait.
+    expect(
+      scanStatus({
+        status: 'pending',
+        error: '525 Server Error',
+        retryAfter: earlier,
+      })
+    ).toEqual({ label: 'Scanning', retrying: false });
+  });
+
+  it('reports terminal states plainly', () => {
+    expect(
+      scanStatus({ status: 'error', error: 'blocked', retryAfter: 0 })
+    ).toEqual({
+      label: 'Stopped',
+      retrying: false,
+    });
+    expect(
+      scanStatus({ status: 'complete', error: null, retryAfter: 0 })
+    ).toEqual({
+      label: 'Scan complete',
+      retrying: false,
+    });
   });
 });

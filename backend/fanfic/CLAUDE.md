@@ -18,7 +18,25 @@ queues canonical `(site, thread_id)` work identities through the existing persis
 scan; rerunning a completed scan starts at page one and skips existing works. A
 crash during a page can change its imported/already-present counts on replay, but
 cannot duplicate stories. Pending scans and interrupted downloads for these sites
-resume at startup, within the `LUNASCHAL_NO_SCHEDULERS` boundary. The shared fetch
+resume at startup, within the `LUNASCHAL_NO_SCHEDULERS` boundary.
+
+**A page fetch that fails for nobody's reason defers the scan; it does not end
+it.** AO3 sits behind a CDN that intermittently answers 525 (edge SSL handshake
+failed) or 502/504 for a URL that works seconds later, and a 525 used to fall
+straight past `_fetch_serial`'s backoff — `RETRY_STATUSES` now covers the whole
+5xx edge block alongside 403/429 — and then past `run_scan` into `status='error'`,
+stranding a checkpoint that only needed asking again. A scan whose failure
+`download.is_transient` recognizes (a timeout, a dropped connection, one of those
+statuses outliving the in-fetch retries) stays `pending` with `retry_after` set
+from `RETRY_SCHEDULE`, and the worker's one `_RUNNABLE_SQL` gate is what stops
+that from being a busy loop against a site that just failed to answer — the same
+job `fanfic_site_limits` already does for `DeferredDownload`, which is why that
+older path can get away with a bare `pending`. **Running out of schedule entries
+is what makes it a real error**, so a site that is genuinely gone stops being
+retried; `attempts` resets on every page that comes back, so a long walk meeting
+one flaky page every few hundred never accumulates its way there. A challenge
+page and a parse failure are not transient — they want cookies and a fix, not a
+timer. Starting the scan again clears the deferral: asking is asking for now. The shared fetch
 lock serializes requests and their delay. New sites only follow same-host HTTPS
 redirects so session cookies cannot be forwarded to unrelated hosts. Update adds
 missing chapters; Deep refreshes existing chapters in place, preserving their IDs,

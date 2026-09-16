@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -153,6 +154,19 @@ def test_source_date_migration_is_idempotent():
     db.execute('UPDATE fics SET source_favorited_at=1552521600')
     _ensure_fic_source_dates(db)
     assert db.execute('SELECT * FROM fics').fetchone() == ('old', 'Keep', 1552521600, None)
+    db.close()
+
+
+def test_scan_retry_migration_is_idempotent():
+    """A scan row that predates the deferral columns must come out
+    runnable, not stuck behind a retry_after nobody set."""
+    from backend.db.connection import _ensure_collection_scan_retry
+    db = sqlite3.connect(':memory:')
+    db.execute('CREATE TABLE fanfic_collection_scans(id TEXT PRIMARY KEY, status TEXT)')
+    db.execute("INSERT INTO fanfic_collection_scans VALUES ('old','pending')")
+    _ensure_collection_scan_retry(db)
+    _ensure_collection_scan_retry(db)
+    assert db.execute('SELECT * FROM fanfic_collection_scans').fetchone() == ('old', 'pending', 0, 0)
     db.close()
 
 
@@ -436,3 +450,128 @@ def test_queue_work_files_an_already_present_fic_into_its_bookmark_folders(clien
         'SELECT f.name FROM fic_folder_items i JOIN fic_folders f ON f.id=i.folder_id'
         ' WHERE i.fic_id=? ORDER BY f.position', (fic_id,))]
     assert names == ['to reread', 'favourites']
+
+
+# --- deferring a scan whose page fetch failed transiently ---
+#
+# AO3 sits behind a CDN that intermittently answers 525 (edge SSL handshake
+# failed) or 502/503 for a URL that works seconds later. A walk that stopped
+# on one of those used to end the whole scan as an error, stranding a
+# checkpoint that only needed asking again.
+
+
+def http_error(status):
+    import requests
+    resp = SimpleNamespace(status_code=status)
+    return requests.HTTPError(f'{status} Server Error', response=resp)
+
+
+def one_page_then(exc, monkeypatch):
+    """Scan a two-page FF.net favorites list whose second page raises."""
+    first = sites.collection_urls('fanfiction.net', 'favorites')[0]
+    second = first + '?page=2'
+    body = f'<div id="gui_table1"><a href="/s/123/1/">A</a></div><a rel="next" href="{second}">Next</a>'
+
+    def fetch(url):
+        if url == second:
+            raise exc
+        return response(body, url)
+
+    monkeypatch.setattr(collections, '_fetch', fetch)
+    scan_id = collections.create_scan('fanfiction.net', 'favorites', '')
+    collections.run_scan(scan_id)
+    return scan_id, second
+
+
+@pytest.mark.parametrize('status', [502, 503, 504, 520, 525, 527])
+def test_transient_status_defers_instead_of_failing(monkeypatch, status):
+    scan_id, second = one_page_then(http_error(status), monkeypatch)
+    row = get_db().execute('SELECT * FROM fanfic_collection_scans').fetchone()
+    assert row['status'] == 'pending'
+    assert row['attempts'] == 1
+    assert row['retry_after'] > time.time()
+    # The page that failed is still the head of the checkpoint, so resuming
+    # continues the walk rather than restarting it.
+    assert json.loads(row['remaining_urls'])[0] == second
+    assert row['found'] == 1
+
+
+def test_timeout_defers_and_a_good_page_clears_the_counter(monkeypatch):
+    import requests
+    scan_id, second = one_page_then(requests.Timeout('read timed out'), monkeypatch)
+    assert get_db().execute('SELECT attempts FROM fanfic_collection_scans').fetchone()[0] == 1
+    monkeypatch.setattr(collections, '_fetch',
+                        lambda url: response('<div id="gui_table1"></div>', url))
+    collections.run_scan(scan_id)
+    row = get_db().execute('SELECT * FROM fanfic_collection_scans').fetchone()
+    assert (row['status'], row['attempts'], row['retry_after']) == ('complete', 0, 0)
+
+
+def test_deferrals_run_out_and_become_an_error(monkeypatch):
+    scan_id, _ = one_page_then(http_error(525), monkeypatch)
+    for _ in range(len(collections.RETRY_SCHEDULE)):
+        assert get_db().execute('SELECT status FROM fanfic_collection_scans').fetchone()[0] == 'pending'
+        collections.run_scan(scan_id)
+    row = get_db().execute('SELECT status,attempts FROM fanfic_collection_scans').fetchone()
+    assert row['status'] == 'error'
+    assert row['attempts'] == len(collections.RETRY_SCHEDULE) + 1
+
+
+@pytest.mark.parametrize('exc', [
+    download.FetchBlockedError('challenge page'),
+    ValueError('Collection list not found'),
+])
+def test_non_transient_failures_still_stop_the_scan(monkeypatch, exc):
+    """A challenge page wants cookies and a parse failure wants a fix; neither
+    gets better by being asked again, so neither is deferred."""
+    one_page_then(exc, monkeypatch)
+    row = get_db().execute('SELECT status,retry_after FROM fanfic_collection_scans').fetchone()
+    assert (row['status'], row['retry_after']) == ('error', 0)
+
+
+def test_asking_again_clears_a_pending_deferral(monkeypatch):
+    one_page_then(http_error(525), monkeypatch)
+    collections.create_scan('fanfiction.net', 'favorites', '')
+    row = get_db().execute('SELECT status,attempts,retry_after FROM fanfic_collection_scans').fetchone()
+    assert tuple(row) == ('pending', 0, 0)
+
+
+def test_worker_skips_a_deferred_scan_until_it_is_due(monkeypatch):
+    """The gate the deferral rides on. Without it the worker re-picks the
+    row on its very next pass, which is a busy loop against a site that just
+    failed to answer — the reason DeferredDownload could get away with a
+    bare 'pending' (its site is in fanfic_site_limits cooldown, which this
+    same query already excludes)."""
+    scan_id, _ = one_page_then(http_error(525), monkeypatch)
+    db = get_db()
+    assert db.execute(collections._RUNNABLE_SQL).fetchall() == []
+    wait = collections._next_retry_wait()
+    assert wait is not None and 0 < wait <= collections.RETRY_SCHEDULE[0]
+
+    db.execute('UPDATE fanfic_collection_scans SET retry_after=? WHERE id=?',
+               (int(time.time()) - 1, scan_id))
+    db.commit()
+    assert [r['id'] for r in db.execute(collections._RUNNABLE_SQL)] == [scan_id]
+    assert collections._next_retry_wait() is None
+
+
+def test_worker_resumes_a_deferred_scan_once_it_is_due(monkeypatch):
+    """End to end: the page that 525'd is re-fetched and the walk finishes,
+    without the user touching anything."""
+    scan_id, second = one_page_then(http_error(525), monkeypatch)
+    monkeypatch.setattr(collections, '_fetch',
+                        lambda url: response('<div id="gui_table1"><a href="/s/124/1/">B</a></div>', url))
+    db = get_db()
+    db.execute('UPDATE fanfic_collection_scans SET retry_after=? WHERE id=?',
+               (int(time.time()) - 1, scan_id))
+    db.commit()
+
+    collections.start_scans()
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if db.execute('SELECT status FROM fanfic_collection_scans').fetchone()[0] == 'complete':
+            break
+        time.sleep(0.05)
+    row = db.execute('SELECT * FROM fanfic_collection_scans').fetchone()
+    assert (row['status'], row['found'], row['attempts']) == ('complete', 2, 0)
+    assert json.loads(row['remaining_urls']) == []

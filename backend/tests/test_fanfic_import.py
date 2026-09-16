@@ -2,6 +2,7 @@
 fixture HTML. Background threads are made synchronous so assertions can run
 right after the request returns."""
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -896,3 +897,46 @@ def test_cancellation_mid_import(client, fake_net, monkeypatch):
     rows = get_db().execute(
         "SELECT COUNT(*) AS n FROM fic_chapters WHERE fic_id='cancelme'").fetchone()
     assert rows['n'] == 2
+
+
+def test_fetch_retries_a_cdn_edge_failure(client, monkeypatch):
+    """525 is Cloudflare failing to reach the origin, not the site refusing
+    us. AO3 answers it intermittently for a URL that works seconds later,
+    and it used to fall straight through to raise_for_status — which is how
+    one flaky response ended a whole bookmarks walk."""
+    from types import SimpleNamespace
+
+    calls = {'n': 0}
+    sleeps: list[float] = []
+
+    def fake_get(url, headers=None, cookies=None, timeout=None, stream=False,
+                 allow_redirects=True):
+        calls['n'] += 1
+        status = 525 if calls['n'] < 3 else 200
+        return SimpleNamespace(status_code=status, headers={}, text='ok', url=url,
+                               raise_for_status=lambda: None)
+
+    monkeypatch.setattr(download, '_http_get', fake_get)
+    monkeypatch.setattr(download, 'time', SimpleNamespace(sleep=lambda s: sleeps.append(s)))
+
+    resp = download._fetch('https://archiveofourown.org/users/reader/bookmarks?page=2',
+                           same_host=True)
+    assert resp.status_code == 200
+    assert calls['n'] == 3
+    assert sleeps[:2] == [5, 15]
+
+
+def test_is_transient_separates_waiting_from_acting():
+    import requests
+
+    assert download.is_transient(requests.Timeout('read timed out'))
+    assert download.is_transient(requests.ConnectionError('reset'))
+    assert download.is_transient(requests.HTTPError(
+        response=SimpleNamespace(status_code=525)))
+    # A challenge wants cookies and a 404 wants a different URL. Neither is
+    # worth coming back to on a timer.
+    assert not download.is_transient(download.FetchBlockedError('challenge'))
+    assert not download.is_transient(requests.HTTPError(
+        response=SimpleNamespace(status_code=404)))
+    assert not download.is_transient(requests.HTTPError(response=None))
+    assert not download.is_transient(ValueError('unparseable'))

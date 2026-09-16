@@ -194,7 +194,35 @@ def _blocked_marker(resp) -> str | None:
 
 
 RETRY_BACKOFF = (5, 15, 30)
+
+# Statuses worth trying again, and none of them are the site saying no.
+# 403/429/503 are QQ's burst throttling and an ordinary rate limit; the 5xx
+# block above them is the CDN in front of a site failing to reach its own
+# origin — AO3 sits behind Cloudflare and intermittently answers 525 (edge
+# SSL handshake failed) or 502/504 for a request that succeeds seconds
+# later. Those used to fall straight through to raise_for_status(), so one
+# flaky response mid-walk ended a whole collection scan that a single retry
+# would have finished.
+RETRY_STATUSES = frozenset({403, 429, 502, 503, 504, *range(520, 528)})
 _fetch_lock = threading.Lock()
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Whether a failed fetch is worth coming back to later.
+
+    A blocked fetch is not: FetchBlockedError means a challenge page that
+    wants cookies, and retrying it just hammers the site. A timeout, a
+    dropped connection, or one of RETRY_STATUSES that outlived the in-fetch
+    backoff is the other kind — the request was fine and the far end was
+    briefly not.
+    """
+    import requests
+    if isinstance(exc, FetchBlockedError):
+        return False
+    if isinstance(exc, requests.HTTPError):
+        resp = getattr(exc, 'response', None)
+        return resp is not None and resp.status_code in RETRY_STATUSES
+    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
 
 
 def _fetch(url: str, *, same_host: bool = False):
@@ -243,7 +271,7 @@ def _fetch_serial(url: str, *, same_host: bool = False):
             raise FetchBlockedError(
                 f'{domain} {_BLOCKED_HINT} (HTTP {resp.status_code}, matched '
                 f'{marker!r}, request used {ua_source})')
-        if resp.status_code in (403, 429, 503) and backoff is not None:
+        if resp.status_code in RETRY_STATUSES and backoff is not None:
             print(f'Fanfic fetch got {resp.status_code} for {url}, retrying in {backoff}s')
             time.sleep(backoff)
             continue

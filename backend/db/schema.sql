@@ -790,6 +790,8 @@ CREATE TABLE IF NOT EXISTS fanfic_collection_scans (
     skipped INTEGER NOT NULL DEFAULT 0,
     pages INTEGER NOT NULL DEFAULT 0,
     error TEXT,
+    retry_after INTEGER NOT NULL DEFAULT 0,
+    attempts INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL,
     UNIQUE(site, collection, username)
 );
