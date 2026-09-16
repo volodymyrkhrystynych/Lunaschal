@@ -86,6 +86,25 @@ body {
   }
 }
 
+/* The fanfic Library's single filter line: ordering pills, a divider, then the
+   source pills. It is long by construction, so it scrolls sideways at every
+   width rather than wrapping (unlike `.tag-row`, which only does so on
+   phones). Children never shrink, or the pills would squash instead. */
+.filter-row {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-width: 0;
+  max-width: 100%;
+}
+.filter-row::-webkit-scrollbar {
+  display: none;
+}
+.filter-row > *,
+.filter-row > * > * {
+  flex-shrink: 0;
+}
+
 /* Reader pane for imported fanfic chapters (server-sanitized HTML). */
 .fanfic-prose {
   color: var(--color-text);

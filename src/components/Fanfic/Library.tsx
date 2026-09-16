@@ -295,11 +295,14 @@ export function Library({ onOpen }: LibraryProps) {
         />
       </div>
 
-      {!searchQuery && (
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
+      {/* One scrolling line: the folder/ordering pills, a divider, then the
+          source filters. They used to be two stacked rows, which on a phone
+          cost two lines of vertical space before a single book was visible. */}
+      <div className="filter-row flex items-center gap-2 mb-4">
+        {!searchQuery && (
+          <>
             {view === 'library' ? (
-              <div className="tag-row flex flex-wrap items-center gap-2 mb-4">
+              <div className="flex items-center gap-2">
                 {[
                   [null, 'All', 'Books ordered by latest chapter publication'],
                   ['recent', 'Recent', 'Books ordered by most recently opened'],
@@ -322,6 +325,7 @@ export function Library({ onOpen }: LibraryProps) {
                 folderId={folderId}
                 onSelect={setFolderId}
                 showDefaults={false}
+                className="flex items-center gap-2"
               />
             )}
             {tag && (
@@ -331,28 +335,30 @@ export function Library({ onOpen }: LibraryProps) {
                 title="Clear tag filter"
                 size="sm"
                 activeClassName="border-[var(--color-primary)] bg-[var(--color-primary)]/20 text-[var(--color-text)]"
-                className="mb-4"
                 label={`tag: ${tag} ✕`}
               />
             )}
-          </div>
+            <span
+              aria-hidden="true"
+              className="self-stretch w-px bg-white/15 mx-1"
+            />
+          </>
+        )}
+        <div
+          role="group"
+          aria-label="Filter by source"
+          className="flex items-center gap-2"
+        >
+          {SOURCE_FILTERS.map(([id, label]) => (
+            <TagPill
+              key={id}
+              active={source === id}
+              onClick={() => setSource(id)}
+              label={label}
+              size="sm"
+            />
+          ))}
         </div>
-      )}
-
-      <div
-        role="group"
-        aria-label="Filter by source"
-        className="flex flex-wrap gap-2 mb-4"
-      >
-        {SOURCE_FILTERS.map(([id, label]) => (
-          <TagPill
-            key={id}
-            active={source === id}
-            onClick={() => setSource(id)}
-            label={label}
-            size="sm"
-          />
-        ))}
       </div>
 
       <SiteLimit />
