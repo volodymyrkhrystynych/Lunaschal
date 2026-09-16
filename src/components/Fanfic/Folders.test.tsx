@@ -23,10 +23,16 @@ vi.mock('../../hooks/api', () => ({
   },
 }));
 
-const folder = (id: string, name: string, position: number) => ({
+const folder = (
+  id: string,
+  name: string,
+  position: number,
+  origin: 'manual' | 'import' = 'manual'
+) => ({
   id,
   name,
   position,
+  origin,
   ficCount: 0,
   createdAt: '',
   updatedAt: '',
@@ -195,5 +201,24 @@ describe('FolderPicker', () => {
     fireEvent.click(backdrop as Element);
 
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['fanfic'] });
+  });
+});
+
+describe('deleting a folder that came from a bookmark label', () => {
+  it('says the next sync will recreate it', async () => {
+    vi.mocked(api.fanfic.folders.list).mockResolvedValue([
+      folder('f1', 'First', 0),
+      folder('f2', 'Slow Burn', 1, 'import'),
+    ]);
+    renderBar('f2');
+    fireEvent.click(await screen.findByTitle('Delete folder'));
+    expect(await screen.findByText(/next sync will recreate it/)).toBeTruthy();
+  });
+
+  it('says nothing of the sort for a folder made by hand', async () => {
+    renderBar('f2');
+    fireEvent.click(await screen.findByTitle('Delete folder'));
+    await screen.findByText(/Fics inside are kept/);
+    expect(screen.queryByText(/next sync/)).toBeNull();
   });
 });

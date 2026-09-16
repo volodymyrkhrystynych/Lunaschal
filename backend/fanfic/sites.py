@@ -21,6 +21,9 @@ class WorkRef:
     url: str
     favorited_at: int | None = None
     followed_at: int | None = None
+    # The user's own tags on their bookmark of this work, not the work's
+    # tags. Only AO3's bookmark list carries any; everything else is ().
+    tags: tuple[str, ...] = ()
 
 
 def parse_work_url(url: str) -> WorkRef | None:
@@ -181,24 +184,47 @@ def collection_urls(site: str, collection: str, username: str = '') -> list[str]
     return choices[collection]
 
 
+def _bookmark_tags(row) -> list[str]:
+    """The bookmarker's own tags on one bookmark row.
+
+    AO3 renders a work's tags and the bookmarker's tags with the same
+    ul.tags markup, so the only thing separating them is the enclosing
+    div.own block the bookmark's byline, notes and tags all sit in. Reading
+    the row's tags wholesale would file every fandom, relationship and
+    freeform tag on the work as a folder.
+    """
+    return [_text(a) for a in row.select('.own ul.tags a.tag')]
+
+
 def parse_collection(html: str, url: str) -> tuple[list[WorkRef], str | None]:
     """Only list entries, never recommendation/navigation links elsewhere."""
     soup = BeautifulSoup(html, 'html.parser')
     if soup.select_one('input[type=password]'):
         raise ValueError('Session expired; save fresh request headers in Settings → Fanfic site cookies')
     host = urlparse(url).hostname
+    entries: list[tuple] = []
     if host == 'archiveofourown.org':
         container = soup.select_one('ol.bookmark.index, dl.subscription.index')
-        links = container.select('h4.heading a, dt a') if container else []
+        if container is not None and container.name == 'ol':
+            # Walk the bookmark rows rather than a flat link list: a
+            # bookmark's tags are the user's own filing and only mean
+            # anything attached to the work they were written on.
+            for row in container.find_all('li', recursive=False):
+                tags = _bookmark_tags(row)
+                entries += [(a, tags) for a in row.select('h4.heading a')]
+        elif container is not None:
+            entries = [(a, []) for a in container.select('dt a')]
     else:
         container = soup.select_one('#gui_table1, #content_wrapper_inner')
-        links = container.select('a[href]') if container else []
+        entries = [(a, []) for a in container.select('a[href]')] if container else []
     if container is None:
         raise ValueError('Collection list not found; check your session and the collection URL')
     refs = {}
-    for a in links:
+    for a, tags in entries:
         ref = parse_work_url(urljoin(url, a.get('href', '')))
         if ref and ref.site == host.removeprefix('www.'):
+            if tags:
+                ref = replace(ref, tags=tuple(tags))
             if ref.site == 'fanfiction.net':
                 added = _list_added_at(a)
                 if urlparse(url).path == '/favorites/story.php':

@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from ulid import ULID
 
 from backend.db.connection import get_db
-from backend.fanfic import storage, xenforo
+from backend.fanfic import personal_tags, storage, xenforo
 from backend.fanfic.sanitize import count_words, html_to_text, sanitize_chapter_html
 
 # Fallback UA for a domain with no stored cookie yet (or one saved before UA
@@ -418,6 +418,142 @@ def run_watched_scan(domain: str) -> None:
         _update_watch_progress(domain, error=error)
     finally:
         _update_watch_progress(domain, done=True)
+
+
+# --- bookmark-label scan ---
+#
+# The same walk as the watched-threads scan, over /account/bookmarks instead,
+# and with a second job: a bookmark's labels are the user's own filing of
+# that thread, so they are mirrored into library folders as they are read
+# (backend/fanfic/personal_tags.py). Separate checkpoint table from the
+# watched scan because the two walk different listings at different times;
+# progress registry and resume behaviour are otherwise identical.
+
+_bookmark_scan_progress: dict[str, dict] = {}
+_bookmark_scan_lock = threading.Lock()
+
+
+def get_bookmark_scan_progress(domain: str) -> dict | None:
+    with _bookmark_scan_lock:
+        p = _bookmark_scan_progress.get(domain)
+        return dict(p) if p else None
+
+
+def is_bookmark_scan_active(domain: str) -> bool:
+    with _bookmark_scan_lock:
+        p = _bookmark_scan_progress.get(domain)
+        return bool(p and not p.get('done'))
+
+
+def _update_bookmark_progress(domain: str, **kw) -> None:
+    with _bookmark_scan_lock:
+        if domain in _bookmark_scan_progress:
+            _bookmark_scan_progress[domain].update(kw)
+
+
+def bookmarks_url(domain: str, page: int = 1) -> str:
+    base = f'https://{domain}/account/bookmarks'
+    if page > 1:
+        base += f'?page={page}'
+    return base
+
+
+def fetch_bookmarks_page(domain: str, page: int) -> xenforo.BookmarksPage:
+    """Fetch and parse one page of a site's /account/bookmarks listing.
+    Requires a stored session cookie, same as fetch_watched_threads_page."""
+    resp = _fetch(bookmarks_url(domain, page))
+    bookmarks = xenforo.parse_bookmarks(resp.text, domain)
+    logged_out = '/login' in urlparse(str(resp.url)).path or \
+        (page == 1 and not bookmarks.items and '/login/login' in resp.text)
+    if logged_out:
+        raise FetchBlockedError(
+            f'{domain}: not logged in — paste a fresh Cookie header in'
+            ' Settings → Fanfic site cookies.')
+    return bookmarks
+
+
+def run_bookmark_scan(domain: str) -> None:
+    """Walk the domain's bookmarks from its checkpointed page, filing each
+    bookmarked thread into a folder per label and queueing any thread not
+    already in the library. Wraps back to page 1 after the last page so a
+    later click does a fresh pass, exactly like run_watched_scan."""
+    db = get_db()
+    now = int(time.time())
+    row = db.execute(
+        'SELECT next_page, found, imported, already_in_library'
+        ' FROM fanfic_bookmark_scans WHERE domain=?', (domain,)).fetchone()
+    if row is None:
+        db.execute(
+            'INSERT INTO fanfic_bookmark_scans(domain, next_page, updated_at)'
+            ' VALUES (?, 1, ?)', (domain, now))
+        db.commit()
+        page, found, imported, already = 1, 0, 0, 0
+    elif row['next_page'] <= 1:
+        page, found, imported, already = 1, 0, 0, 0
+    else:
+        page = row['next_page']
+        found, imported, already = row['found'], row['imported'], row['already_in_library']
+
+    with _bookmark_scan_lock:
+        _bookmark_scan_progress[domain] = {
+            'page': page, 'lastPage': None, 'found': found, 'imported': imported,
+            'alreadyInLibrary': already, 'foldered': 0, 'done': False, 'error': None,
+        }
+
+    foldered = 0
+    try:
+        while True:
+            with _bookmark_scan_lock:
+                if domain not in _bookmark_scan_progress:
+                    return
+            bookmarks = fetch_bookmarks_page(domain, page)
+            for item in bookmarks.items:
+                ref = item.ref
+                found += 1
+                existing = db.execute(
+                    'SELECT id FROM fics WHERE site=? AND thread_id=?',
+                    (ref.domain, ref.thread_id)).fetchone()
+                if existing:
+                    fic_id = existing['id']
+                    already += 1
+                else:
+                    fic_now = int(time.time())
+                    fic_id = str(ULID())
+                    placeholder = ref.slug.replace('-', ' ').strip() or 'Importing…'
+                    db.execute(
+                        'INSERT INTO fics(id, title, source_type, source_url, site, thread_id,'
+                        ' update_pending, created_at, updated_at) VALUES (?,?,?,?,?,?,1,?,?)',
+                        (fic_id, placeholder, 'xenforo', ref.thread_url, ref.domain,
+                         ref.thread_id, fic_now, fic_now))
+                    imported += 1
+                # Folders are filed before the fic is downloaded on purpose:
+                # a thread whose download later fails is still filed where the
+                # user put it, and the folder is what makes it findable.
+                if personal_tags.sync_personal_folders(db, fic_id, item.labels):
+                    foldered += 1
+            next_page = page + 1 if page < bookmarks.last_page else 1
+            db.execute(
+                'UPDATE fanfic_bookmark_scans SET next_page=?, found=?, imported=?,'
+                ' already_in_library=?, last_error=NULL, updated_at=? WHERE domain=?',
+                (next_page, found, imported, already, int(time.time()), domain))
+            db.commit()
+            shown_page = next_page if page >= bookmarks.last_page else page
+            _update_bookmark_progress(domain, page=shown_page, lastPage=bookmarks.last_page,
+                                      found=found, imported=imported,
+                                      alreadyInLibrary=already, foldered=foldered)
+            run_drain_pending()
+            if page >= bookmarks.last_page:
+                break
+            page += 1
+    except Exception as e:
+        error = str(e)
+        db.execute(
+            'UPDATE fanfic_bookmark_scans SET last_error=?, updated_at=? WHERE domain=?',
+            (error, int(time.time()), domain))
+        db.commit()
+        _update_bookmark_progress(domain, error=error)
+    finally:
+        _update_bookmark_progress(domain, done=True)
 
 
 # --- images ---

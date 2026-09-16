@@ -553,12 +553,27 @@ def seed_fanfic(db, journal_ids):
 
     folder_id = new_id()
     db.execute(
-        'INSERT INTO fic_folders (id, name, position, created_at, updated_at) VALUES (?, ?, 0, ?, ?)',
+        'INSERT INTO fic_folders (id, name, position, origin, created_at, updated_at)'
+        " VALUES (?, ?, 0, 'manual', ?, ?)",
         (folder_id, 'Currently reading', ts(15), ts(15)),
     )
     db.execute(
-        'INSERT INTO fic_folder_items (folder_id, fic_id, created_at) VALUES (?, ?, ?)',
+        'INSERT INTO fic_folder_items (folder_id, fic_id, origin, created_at)'
+        " VALUES (?, ?, 'manual', ?)",
         (folder_id, fic_id, ts(15)),
+    )
+    # The other half of the folder bar: a folder the bookmark-label sync made
+    # rather than the user, so the demo shows both origins side by side.
+    imported_folder_id = new_id()
+    db.execute(
+        'INSERT INTO fic_folders (id, name, position, origin, created_at, updated_at)'
+        " VALUES (?, ?, 1, 'import', ?, ?)",
+        (imported_folder_id, 'slow burn', ts(4), ts(4)),
+    )
+    db.execute(
+        'INSERT INTO fic_folder_items (folder_id, fic_id, origin, created_at)'
+        " VALUES (?, ?, 'import', ?)",
+        (imported_folder_id, fic_id, ts(4)),
     )
     first_chapter = db.execute(
         'SELECT id FROM fic_chapters WHERE fic_id = ? ORDER BY position LIMIT 1', (fic_id,)
@@ -589,6 +604,11 @@ def seed_fanfic(db, journal_ids):
         'INSERT INTO fanfic_watched_scans (domain, next_page, found, imported, already_in_library, updated_at) '
         'VALUES (?, ?, ?, ?, ?, ?)',
         ('forums.example.com', 3, 12, 1, 11, ts(2)),
+    )
+    db.execute(
+        'INSERT INTO fanfic_bookmark_scans (domain, next_page, found, imported, already_in_library, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?)',
+        ('forums.example.com', 1, 8, 0, 8, ts(2)),
     )
 
     db.execute(

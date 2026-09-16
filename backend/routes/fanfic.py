@@ -168,6 +168,11 @@ def list_cookies():
             'SELECT domain, next_page, found, imported, already_in_library, last_error'
             ' FROM fanfic_watched_scans').fetchall()
     }
+    bookmark_rows = {
+        r['domain']: r for r in db.execute(
+            'SELECT domain, next_page, found, imported, already_in_library, last_error'
+            ' FROM fanfic_bookmark_scans').fetchall()
+    }
     result = []
     for domain in sorted(KNOWN_SITES | sites.DOMAINS):
         entry = {
@@ -190,6 +195,23 @@ def list_cookies():
                 'page': r['next_page'], 'lastPage': None,
                 'found': r['found'], 'imported': r['imported'],
                 'alreadyInLibrary': r['already_in_library'],
+                'done': True, 'error': r['last_error'],
+            }
+        bookmark_progress = download.get_bookmark_scan_progress(domain)
+        if bookmark_progress:
+            entry['bookmarkScan'] = {
+                'page': bookmark_progress['page'], 'lastPage': bookmark_progress['lastPage'],
+                'found': bookmark_progress['found'], 'imported': bookmark_progress['imported'],
+                'alreadyInLibrary': bookmark_progress['alreadyInLibrary'],
+                'foldered': bookmark_progress['foldered'],
+                'done': bookmark_progress['done'], 'error': bookmark_progress['error'],
+            }
+        elif domain in bookmark_rows:
+            r = bookmark_rows[domain]
+            entry['bookmarkScan'] = {
+                'page': r['next_page'], 'lastPage': None,
+                'found': r['found'], 'imported': r['imported'],
+                'alreadyInLibrary': r['already_in_library'], 'foldered': None,
                 'done': True, 'error': r['last_error'],
             }
         result.append(entry)
@@ -328,7 +350,7 @@ def list_site_tags():
 @bp.get('/folders')
 def list_folders():
     rows = get_db().execute(
-        'SELECT f.id, f.name, f.position, f.created_at, f.updated_at,'
+        'SELECT f.id, f.name, f.position, f.origin, f.created_at, f.updated_at,'
         ' COUNT(i.fic_id) AS fic_count'
         ' FROM fic_folders f'
         ' LEFT JOIN fic_folder_items i ON i.folder_id = f.id'
@@ -410,8 +432,13 @@ def add_fic_to_folder(fic_id):
         return jsonify({'error': 'Fic not found'}), 404
     if not db.execute('SELECT id FROM fic_folders WHERE id=?', (folder_id,)).fetchone():
         return jsonify({'error': 'Folder not found'}), 404
+    # Filing by hand claims the membership: an upgrade from 'import' is what
+    # stops the personal-tag sync from later unfiling something the user
+    # deliberately put here.
     db.execute(
-        'INSERT OR IGNORE INTO fic_folder_items(folder_id, fic_id, created_at) VALUES (?,?,?)',
+        'INSERT INTO fic_folder_items(folder_id, fic_id, origin, created_at)'
+        " VALUES (?,?,'manual',?) ON CONFLICT(folder_id, fic_id)"
+        " DO UPDATE SET origin='manual'",
         (folder_id, fic_id, int(time.time())))
     db.commit()
     return jsonify({'success': True})
@@ -494,6 +521,10 @@ def _start_drain_bg() -> None:
 
 def _start_watch_scan_bg(domain: str) -> None:
     threading.Thread(target=download.run_watched_scan, args=(domain,), daemon=True).start()
+
+
+def _start_bookmark_scan_bg(domain: str) -> None:
+    threading.Thread(target=download.run_bookmark_scan, args=(domain,), daemon=True).start()
 
 
 @bp.post('/import')
@@ -725,6 +756,29 @@ def scan_watched(domain):
     if download.is_watched_scan_active(domain):
         return jsonify({'error': 'A watched-threads scan is already running for this site'}), 409
     _start_watch_scan_bg(domain)
+    return jsonify({'started': True}), 202
+
+
+@bp.post('/scan-bookmarks/<domain>')
+def scan_bookmarks(domain):
+    """Walk a site's /account/bookmarks listing, filing every bookmarked
+    thread into a folder per bookmark label — the user's own filing, which
+    the library would otherwise have to be given by hand — and queueing any
+    bookmarked thread missing from the library. Background and resumable,
+    like scan-watched (backend/fanfic/download.py:run_bookmark_scan)."""
+    domain = domain.lower()
+    if domain.startswith('www.'):
+        domain = domain[4:]
+    if domain not in KNOWN_SITES:
+        return jsonify({'error': f'unknown domain: {domain}'}), 400
+    has_cookie = get_db().execute(
+        'SELECT 1 FROM site_cookies WHERE domain=?', (domain,)).fetchone()
+    if not has_cookie:
+        return jsonify({'error': 'No site cookie configured — paste your forum'
+                        ' session cookie in Settings → Fanfic site cookies first'}), 400
+    if download.is_bookmark_scan_active(domain):
+        return jsonify({'error': 'A bookmark scan is already running for this site'}), 409
+    _start_bookmark_scan_bg(domain)
     return jsonify({'started': True}), 202
 
 

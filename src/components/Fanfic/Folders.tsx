@@ -229,7 +229,14 @@ export function FolderBar({
       )}
       <ConfirmDialog
         open={confirmDelete}
-        title={`Delete folder "${active?.name}"? Fics inside are kept.`}
+        title={
+          `Delete folder "${active?.name}"? Fics inside are kept.` +
+          // An imported folder is a bookmark label on the site; deleting it
+          // here doesn't remove the label, so the next sync makes it again.
+          (active?.origin === 'import'
+            ? ' It came from a bookmark label, so the next sync will recreate it.'
+            : '')
+        }
         confirmLabel="Delete"
         danger
         onConfirm={() => {

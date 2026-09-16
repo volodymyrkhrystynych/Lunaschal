@@ -746,6 +746,16 @@ CREATE TABLE IF NOT EXISTS fanfic_watched_scans (
     updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS fanfic_bookmark_scans (
+    domain TEXT PRIMARY KEY,
+    next_page INTEGER NOT NULL DEFAULT 1,
+    found INTEGER NOT NULL DEFAULT 0,
+    imported INTEGER NOT NULL DEFAULT 0,
+    already_in_library INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS fanfic_site_limits (
     domain TEXT PRIMARY KEY,
     next_request REAL NOT NULL DEFAULT 0,
@@ -775,13 +785,18 @@ CREATE TABLE IF NOT EXISTS fic_folders (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
     position INTEGER NOT NULL DEFAULT 0,
+    origin TEXT NOT NULL DEFAULT 'manual' CHECK(origin IN ('manual','import')),
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
 
+-- origin records who filed this fic here: 'manual' is the user, 'import' is
+-- the personal-tag sync. Manual always wins -- the sync may only delete rows
+-- it owns, so a hand-filed fic survives a label disappearing on the site.
 CREATE TABLE IF NOT EXISTS fic_folder_items (
     folder_id TEXT NOT NULL REFERENCES fic_folders(id) ON DELETE CASCADE,
     fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    origin TEXT NOT NULL DEFAULT 'manual' CHECK(origin IN ('manual','import')),
     created_at INTEGER NOT NULL,
     PRIMARY KEY (folder_id, fic_id)
 );

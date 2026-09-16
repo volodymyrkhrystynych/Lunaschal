@@ -1,8 +1,23 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { api, type WatchedScanProgress } from '../../hooks/api';
+import {
+  api,
+  type BookmarkScanProgress,
+  type WatchedScanProgress,
+} from '../../hooks/api';
 
-function WatchedScanStatus({ scan }: { scan: WatchedScanProgress }) {
+/** Shared by both scans — they walk different listings with the same counters.
+ *  `noun` names what a page of that listing holds, and `foldered` is the one
+ *  number only the bookmark scan has. */
+function ScanStatus({
+  scan,
+  noun,
+  foldered,
+}: {
+  scan: WatchedScanProgress;
+  noun: string;
+  foldered?: number | null;
+}) {
   if (scan.error) {
     return (
       <p className="text-xs text-red-400 mt-2">Scan stopped: {scan.error}</p>
@@ -20,7 +35,8 @@ function WatchedScanStatus({ scan }: { scan: WatchedScanProgress }) {
   return (
     <p className="text-xs text-[var(--color-text-muted)] mt-2">
       Last scan: {scan.imported} imported, {scan.alreadyInLibrary} already in
-      library ({scan.found} watched threads seen)
+      library ({scan.found} {noun} seen)
+      {typeof foldered === 'number' ? `, ${foldered} filed into folders` : ''}
     </p>
   );
 }
@@ -31,12 +47,14 @@ function FanficCookieRow({
   updatedAt,
   hasUserAgent,
   watchedScan,
+  bookmarkScan,
 }: {
   domain: string;
   hasCookie: boolean;
   updatedAt: string | null;
   hasUserAgent: boolean;
   watchedScan?: WatchedScanProgress;
+  bookmarkScan?: BookmarkScanProgress;
 }) {
   const [value, setValue] = useState('');
   const queryClient = useQueryClient();
@@ -55,7 +73,14 @@ function FanficCookieRow({
       queryClient.invalidateQueries({ queryKey: ['fanfic', 'cookies'] }),
   });
 
+  const scanBookmarks = useMutation({
+    mutationFn: () => api.fanfic.scanBookmarks(domain),
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['fanfic', 'cookies'] }),
+  });
+
   const scanning = watchedScan && !watchedScan.done;
+  const scanningBookmarks = bookmarkScan && !bookmarkScan.done;
 
   return (
     <div className="p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
@@ -127,7 +152,7 @@ function FanficCookieRow({
       {!['fanfiction.net', 'archiveofourown.org', 'patreon.com'].includes(
         domain
       ) && (
-        <div className="mt-3 flex items-center justify-between">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           <button
             onClick={() => scanWatched.mutate()}
             disabled={!hasCookie || !!scanning || scanWatched.isPending}
@@ -140,6 +165,20 @@ function FanficCookieRow({
           >
             {scanning ? 'Scanning…' : 'Scan watched threads'}
           </button>
+          <button
+            onClick={() => scanBookmarks.mutate()}
+            disabled={
+              !hasCookie || !!scanningBookmarks || scanBookmarks.isPending
+            }
+            title={
+              hasCookie
+                ? 'Walk this site’s bookmarks and turn each bookmark’s labels into library folders'
+                : 'Save a cookie above first — scanning needs a logged-in session'
+            }
+            className="px-3 py-1.5 text-sm rounded border border-white/10 text-[var(--color-text)] hover:bg-white/5 disabled:opacity-50"
+          >
+            {scanningBookmarks ? 'Syncing…' : 'Sync bookmark labels'}
+          </button>
         </div>
       )}
       {['fanfiction.net', 'archiveofourown.org', 'patreon.com'].includes(
@@ -147,9 +186,18 @@ function FanficCookieRow({
       ) && (
         <p className="text-xs text-[var(--color-text-muted)] mt-3">
           Bulk import: Library → Import → My collections.
+          {domain === 'archiveofourown.org' &&
+            ' Bookmarking tags become folders on that scan.'}
         </p>
       )}
-      {watchedScan && <WatchedScanStatus scan={watchedScan} />}
+      {watchedScan && <ScanStatus scan={watchedScan} noun="watched threads" />}
+      {bookmarkScan && (
+        <ScanStatus
+          scan={bookmarkScan}
+          noun="bookmarks"
+          foldered={bookmarkScan.foldered}
+        />
+      )}
     </div>
   );
 }
@@ -161,7 +209,11 @@ export function FanficCookiesSection() {
   });
 
   useEffect(() => {
-    const scanning = cookies?.some(c => c.watchedScan && !c.watchedScan.done);
+    const scanning = cookies?.some(
+      c =>
+        (c.watchedScan && !c.watchedScan.done) ||
+        (c.bookmarkScan && !c.bookmarkScan.done)
+    );
     if (!scanning) return;
     const id = setInterval(() => refetch(), 2000);
     return () => clearInterval(id);
@@ -192,6 +244,7 @@ export function FanficCookiesSection() {
             updatedAt={c.updatedAt}
             hasUserAgent={c.hasUserAgent}
             watchedScan={c.watchedScan}
+            bookmarkScan={c.bookmarkScan}
           />
         ))}
       </div>

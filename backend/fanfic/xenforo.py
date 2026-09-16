@@ -268,6 +268,78 @@ def parse_watched_threads(html: str, domain: str) -> WatchedThreadsPage:
     return WatchedThreadsPage(refs=refs, last_page=_last_page(soup))
 
 
+@dataclass
+class BookmarkItem:
+    ref: ThreadRef
+    labels: list[str]
+
+
+@dataclass
+class BookmarksPage:
+    items: list[BookmarkItem]
+    last_page: int
+
+
+_LABEL_HREF = re.compile(r'/account/bookmarks')
+
+
+def _bookmark_labels(row) -> list[str]:
+    """The user's own labels on one bookmark row.
+
+    Labels are found by *href* — every one links back to the bookmark list
+    filtered to it (/account/bookmarks?label=…) — rather than by class, which
+    the three forums theme differently; the class selectors are only a
+    fallback for a theme that rewrites the link. Deduped case-insensitively
+    in page order, like parse_thread_tags.
+    """
+    anchors = [a for a in row.select('a[href]')
+               if _LABEL_HREF.search(a.get('href', ''))
+               and 'label' in parse_qs(urlparse(a['href']).query)]
+    if not anchors:
+        anchors = row.select('.bookmarkLabel, .js-bookmarkLabel, a.tagItem')
+    labels: list[str] = []
+    seen: set[str] = set()
+    for a in anchors:
+        name = _tag_text(a) or (parse_qs(urlparse(a.get('href', '')).query).get('label') or [''])[0]
+        name = re.sub(r'\s+', ' ', name).strip()
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            labels.append(name)
+    return labels
+
+
+def parse_bookmarks(html: str, domain: str) -> BookmarksPage:
+    """Bookmarks and their labels from an /account/bookmarks listing page.
+
+    XenForo renders bookmarks with the same structItem template as a thread
+    list, so this shares parse_watched_threads' row walk — including its
+    :not(.labelLink) rule, since a prefixed thread renders a filter pill
+    ahead of its real title link. A bookmark on a *post* links to
+    /threads/…/post-N, which resolves to the thread it is in: the library's
+    unit is the thread, so two bookmarks in one thread are one fic carrying
+    both sets of labels. Rows that don't resolve to a thread are skipped
+    rather than raising.
+    """
+    soup = BeautifulSoup(html, 'html.parser')
+    base = f'https://{domain}/'
+    rows = soup.select('.structItem--bookmark') or soup.select('.structItem')
+    merged: dict[str, BookmarkItem] = {}
+    for row in rows:
+        a = row.select_one('.structItem-title a[href]:not(.labelLink)')
+        if not a:
+            continue
+        ref = parse_thread_ref(urljoin(base, a['href']))
+        if not ref:
+            continue
+        item = merged.get(ref.thread_id)
+        if item is None:
+            merged[ref.thread_id] = BookmarkItem(ref=ref, labels=_bookmark_labels(row))
+            continue
+        seen = {label.lower() for label in item.labels}
+        item.labels += [label for label in _bookmark_labels(row) if label.lower() not in seen]
+    return BookmarksPage(items=list(merged.values()), last_page=_last_page(soup))
+
+
 def parse_thread_tags(html: str) -> list[str]:
     """Tags from a thread page's tag list. XenForo 2 renders them as
     <a class="tagItem"> anchors, either wrapped in a span.js-tagList or
