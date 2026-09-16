@@ -624,7 +624,7 @@ def check_updates(fic_id):
 @bp.get('/collections')
 def list_collection_scans():
     return jsonify([row_to_dict(r) for r in get_db().execute(
-        'SELECT id,site,collection,username,status,found,imported,skipped,pages,error,updated_at'
+        'SELECT id,site,collection,username,status,found,imported,skipped,pages,error,retry_after,updated_at'
         ' FROM fanfic_collection_scans ORDER BY updated_at DESC')])
 
 

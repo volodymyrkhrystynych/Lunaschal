@@ -107,6 +107,7 @@ it('reports a failed scan as stopped and preserves its counts', async () => {
       skipped: 0,
       pages: 2,
       error: 'Session expired',
+      retryAfter: 0,
     },
   ]);
   setup();
@@ -114,4 +115,29 @@ it('reports a failed scan as stopped and preserves its counts', async () => {
   expect(screen.getByRole('status').textContent).toContain(
     'Stopped · 2 pages · 6 queued · 2 already in library'
   );
+});
+
+it('shows a deferred scan as retrying rather than scanning or stopped', async () => {
+  // The scan is still pending and still holds its page position; the error
+  // is what it is waiting out, not something the user has to act on.
+  vi.mocked(api.fanfic.collections.list).mockResolvedValue([
+    {
+      id: 'scan',
+      site: 'archiveofourown.org',
+      collection: 'bookmarks',
+      username: 'reader',
+      status: 'pending',
+      found: 20,
+      imported: 20,
+      skipped: 0,
+      pages: 1,
+      error: '525 Server Error',
+      retryAfter: Math.floor(Date.now() / 1000) + 600,
+    },
+  ]);
+  setup();
+  const row = await screen.findByRole('status');
+  expect(row.textContent).toContain('Retrying at');
+  expect(row.textContent).not.toContain('Stopped');
+  expect(screen.getByText('525 Server Error').className).toContain('amber');
 });

@@ -106,3 +106,35 @@ export function formatRating(rating: number | null | undefined): string | null {
   if (!rating || rating < 1 || rating > 5) return null;
   return '★'.repeat(rating) + '☆'.repeat(5 - rating);
 }
+
+export interface ScanStatus {
+  label: string;
+  /** A failed page fetch the scan will come back to on its own, rather than
+   * something the user has to act on. */
+  retrying: boolean;
+}
+
+/** What a collection scan's row should say it is doing.
+ *
+ * A scan waiting out a transient fetch failure is still `pending` — it holds
+ * its page position and the worker resumes it — but it carries the error that
+ * deferred it. Reporting that as plain "Scanning" hides a stall, and reporting
+ * it as a failure invites a pointless restart, so it gets its own state.
+ */
+export function scanStatus(scan: {
+  status: 'pending' | 'complete' | 'error';
+  error: string | null;
+  retryAfter?: number;
+}): ScanStatus {
+  if (scan.status === 'complete')
+    return { label: 'Scan complete', retrying: false };
+  if (scan.status === 'error') return { label: 'Stopped', retrying: false };
+  const due = (scan.retryAfter ?? 0) * 1000;
+  if (scan.error && due > Date.now()) {
+    return {
+      label: `Retrying at ${new Date(due).toLocaleTimeString()}`,
+      retrying: true,
+    };
+  }
+  return { label: 'Scanning', retrying: false };
+}
