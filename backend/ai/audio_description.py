@@ -65,7 +65,10 @@ _MAX_TOKENS = 300
 
 # --- Window sizing -----------------------------------------------------------
 #
-# `ctx-size` for [gemma4-12b-omni] in llama/presets.ini. There is no way to ask
+# `ctx-size` for the audio presets in llama/presets.ini — [gemma4-12b-omni] and
+# [gemma4-e4b] deliberately hold the same number, because this mirror is one
+# constant and whichever of them `llama_audio_model` names is the one it has to
+# match. There is no way to ask
 # llama-server for it at runtime (see backend/ai/llm.py: the context window
 # belongs to the server, not the request), so it is mirrored here — the two have
 # to move together, and _MAX_WINDOW_SECONDS below is what makes the consequence
