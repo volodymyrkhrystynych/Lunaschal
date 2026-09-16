@@ -16,10 +16,13 @@ export function FolderBar({
   folderId,
   onSelect,
   showDefaults = true,
+  className = 'tag-row flex flex-wrap items-center gap-2 mb-4',
 }: {
   folderId: string | null;
   onSelect: (id: string | null) => void;
   showDefaults?: boolean;
+  /** Layout of the bar itself, so a caller can inline it into its own row. */
+  className?: string;
 }) {
   const [creating, setCreating] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -105,7 +108,7 @@ export function FolderBar({
   );
 
   return (
-    <div className="tag-row flex flex-wrap items-center gap-2 mb-4">
+    <div className={className}>
       {showDefaults && (
         <TagPill
           active={folderId === null}

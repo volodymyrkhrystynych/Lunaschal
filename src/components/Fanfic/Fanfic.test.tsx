@@ -136,6 +136,22 @@ describe('Library infinite scroll', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps the ordering pills and the source pills on one scrolling row', async () => {
+    renderFanfic();
+    await screen.findByText('Test Fic');
+
+    const row = screen
+      .getByRole('group', { name: 'Filter by source' })
+      .closest('.filter-row');
+    expect(row).not.toBeNull();
+    // The ordering pills must live in that same row, not a line above it.
+    for (const label of ['All', 'Recent', 'Unsorted']) {
+      expect(
+        row!.contains(screen.getByRole('button', { name: label, exact: true }))
+      ).toBe(true);
+    }
+  });
+
   it('applies source filters to browsing and search, and clears them', async () => {
     const { api } = await import('../../hooks/api');
     renderFanfic();
