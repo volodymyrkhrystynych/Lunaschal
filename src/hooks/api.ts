@@ -255,6 +255,8 @@ export interface FicFolder {
   id: string;
   name: string;
   position: number;
+  /** 'import' means the bookmark-label sync created it, not the user. */
+  origin: 'manual' | 'import';
   ficCount: number;
   createdAt: string;
   updatedAt: string;
@@ -302,12 +304,19 @@ export interface WatchedScanProgress {
   error: string | null;
 }
 
+export interface BookmarkScanProgress extends WatchedScanProgress {
+  /** Fics filed into at least one folder. Null for a finished scan read back
+   *  from its checkpoint, which doesn't keep the count. */
+  foldered: number | null;
+}
+
 export interface SiteCookieInfo {
   domain: string;
   hasCookie: boolean;
   updatedAt: string | null;
   hasUserAgent: boolean;
   watchedScan?: WatchedScanProgress;
+  bookmarkScan?: BookmarkScanProgress;
 }
 
 export interface Transcription {
@@ -3495,6 +3504,8 @@ export const api = {
     },
     scanWatched: (domain: string) =>
       post<{ started: boolean }>(`/api/fanfic/scan-watched/${domain}`),
+    scanBookmarks: (domain: string) =>
+      post<{ started: boolean }>(`/api/fanfic/scan-bookmarks/${domain}`),
   },
 
   calendar: {

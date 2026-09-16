@@ -397,3 +397,96 @@ def test_parse_watched_threads_empty_page():
         '<html><body>no watched threads</body></html>', 'forums.spacebattles.com')
     assert page.refs == []
     assert page.last_page == 1
+
+
+# --- /account/bookmarks: the user's own labels on a bookmarked thread ---
+
+BOOKMARKS_HTML = """
+<div class="structItemContainer">
+  <div class="structItem structItem--bookmark">
+    <div class="structItem-cell structItem-cell--main">
+      <div class="structItem-title">
+        <a class="labelLink" href="/account/bookmarks?prefix_id[0]=1" title="Add to filters">
+          <span class="label">NSFW</span>
+        </a>
+        <a href="/threads/a-worm-fic.11111/post-987">A Worm Fic</a>
+      </div>
+      <div class="structItem-minor">
+        <a href="/account/bookmarks?label=Slow+Burn">Slow Burn</a>
+        <a href="/account/bookmarks?label=Worm">Worm</a>
+        <a href="/account/bookmarks">All bookmarks</a>
+      </div>
+    </div>
+  </div>
+  <div class="structItem structItem--bookmark">
+    <div class="structItem-cell structItem-cell--main">
+      <div class="structItem-title">
+        <a href="/threads/an-unlabelled-fic.22222/">An Unlabelled Fic</a>
+      </div>
+    </div>
+  </div>
+  <div class="structItem structItem--bookmark">
+    <div class="structItem-cell structItem-cell--main">
+      <div class="structItem-title"><span>A deleted thread</span></div>
+    </div>
+  </div>
+</div>
+<div class="pageNav-main">
+  <a class="pageNav-page">1</a><a class="pageNav-page">4</a>
+</div>
+"""
+
+
+def test_parse_bookmarks_reads_labels_and_skips_unresolvable_rows():
+    page = xenforo.parse_bookmarks(BOOKMARKS_HTML, 'forums.spacebattles.com')
+    assert [(i.ref.thread_id, i.labels) for i in page.items] == [
+        ('11111', ['Slow Burn', 'Worm']),
+        ('22222', []),
+    ]
+    assert page.last_page == 4
+
+
+def test_parse_bookmarks_ignores_the_prefix_filter_pill():
+    # Same trap as the watched list: a prefixed thread renders a labelLink
+    # ahead of its title, and picking the first anchor grabs the filter pill.
+    page = xenforo.parse_bookmarks(BOOKMARKS_HTML, 'forums.spacebattles.com')
+    assert page.items[0].ref.slug == 'a-worm-fic'
+    assert 'NSFW' not in page.items[0].labels
+
+
+def test_parse_bookmarks_merges_two_bookmarks_in_one_thread():
+    # Post bookmarks resolve to their thread, and the library's unit is the
+    # thread — so two bookmarks in one thread are one fic with both labels.
+    html = """
+    <div class="structItem structItem--bookmark"><div class="structItem-title">
+      <a href="/threads/one-fic.55555/post-1">Ch 1</a>
+    </div><div class="structItem-minor">
+      <a href="/account/bookmarks?label=Worm">Worm</a>
+    </div></div>
+    <div class="structItem structItem--bookmark"><div class="structItem-title">
+      <a href="/threads/one-fic.55555/post-9">Ch 9</a>
+    </div><div class="structItem-minor">
+      <a href="/account/bookmarks?label=worm">worm</a>
+      <a href="/account/bookmarks?label=Favourites">Favourites</a>
+    </div></div>
+    """
+    page = xenforo.parse_bookmarks(html, 'forums.spacebattles.com')
+    assert len(page.items) == 1
+    assert page.items[0].labels == ['Worm', 'Favourites']
+
+
+def test_parse_bookmarks_falls_back_to_a_themed_label_class():
+    html = """
+    <div class="structItem"><div class="structItem-title">
+      <a href="/threads/themed.66666/">Themed</a>
+    </div><span class="bookmarkLabel">Reread</span></div>
+    """
+    page = xenforo.parse_bookmarks(html, 'forum.questionablequesting.com')
+    assert page.items[0].labels == ['Reread']
+
+
+def test_parse_bookmarks_empty_page():
+    page = xenforo.parse_bookmarks('<html><body>none</body></html>',
+                                   'forums.spacebattles.com')
+    assert page.items == []
+    assert page.last_page == 1

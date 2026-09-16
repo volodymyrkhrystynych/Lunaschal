@@ -176,6 +176,7 @@ def init_db() -> None:
     _ensure_calendar_categories(db)
     _ensure_fic_review_columns(db)
     _ensure_fic_folder_position(db)
+    _ensure_fic_folder_origin(db)
     _ensure_fic_update_pending(db)
     _ensure_fic_deep_scan_columns(db)
     _ensure_fic_library_dates(db)
@@ -506,6 +507,24 @@ def _ensure_fic_folder_position(db: sqlite3.Connection) -> None:
         db.executemany('UPDATE fic_folders SET position=? WHERE id=?',
                        [(i, r['id']) for i, r in enumerate(rows)])
         db.commit()
+
+
+def _ensure_fic_folder_origin(db: sqlite3.Connection) -> None:
+    """Who made this folder, and who filed each fic into it.
+
+    Every pre-existing folder and membership is the user's own work, so both
+    default to 'manual' — which is also what keeps the personal-tag sync off
+    them, since it only ever deletes rows it filed itself. The CHECK
+    constraints in schema.sql are deliberately not reproduced here: ALTER
+    TABLE ADD COLUMN cannot add one, and the values are written from a
+    closed set in code."""
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fic_folders)')}
+    if 'origin' not in cols:
+        db.execute("ALTER TABLE fic_folders ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual'")
+    item_cols = {r[1] for r in db.execute('PRAGMA table_info(fic_folder_items)')}
+    if 'origin' not in item_cols:
+        db.execute("ALTER TABLE fic_folder_items ADD COLUMN origin TEXT NOT NULL DEFAULT 'manual'")
+    db.commit()
 
 
 def _ensure_learning_attempts_speech_requested(db: sqlite3.Connection) -> None:

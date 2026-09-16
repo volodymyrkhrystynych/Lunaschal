@@ -26,6 +26,7 @@ vi.mock('../../hooks/api', () => ({
         put: vi.fn(),
       },
       scanWatched: vi.fn(),
+      scanBookmarks: vi.fn(),
     },
   },
 }));
@@ -137,4 +138,73 @@ it('sends a multi-line request-headers paste to the backend with its newlines in
       dump.trim()
     )
   );
+});
+
+it('syncs bookmark labels for a forum with a cookie, and not without one', async () => {
+  vi.mocked(api.fanfic.scanBookmarks).mockResolvedValue({ started: true });
+  renderSection();
+
+  const withCookie = (
+    await screen.findByText('forum.questionablequesting.com')
+  ).closest('div')!.parentElement as HTMLElement;
+  const button = within(withCookie).getByRole('button', {
+    name: 'Sync bookmark labels',
+  });
+  fireEvent.click(button);
+  await waitFor(() =>
+    expect(api.fanfic.scanBookmarks).toHaveBeenCalledWith(
+      'forum.questionablequesting.com'
+    )
+  );
+
+  // Scanning needs a logged-in session, so the button is dead without one.
+  const noCookie = (await screen.findByText('forums.spacebattles.com')).closest(
+    'div'
+  )!.parentElement as HTMLElement;
+  expect(
+    within(noCookie)
+      .getByRole('button', { name: 'Sync bookmark labels' })
+      .hasAttribute('disabled')
+  ).toBe(true);
+});
+
+it('reports a finished bookmark sync, including what it filed', async () => {
+  vi.mocked(api.fanfic.cookies.list).mockResolvedValue([
+    {
+      domain: 'forums.spacebattles.com',
+      hasCookie: true,
+      updatedAt: null,
+      hasUserAgent: true,
+      bookmarkScan: {
+        page: 1,
+        lastPage: 3,
+        found: 12,
+        imported: 2,
+        alreadyInLibrary: 10,
+        foldered: 9,
+        done: true,
+        error: null,
+      },
+    },
+  ]);
+  renderSection();
+  expect(await screen.findByText(/12 bookmarks seen/)).toBeTruthy();
+  expect(screen.getByText(/9 filed into folders/)).toBeTruthy();
+});
+
+it('offers no bookmark sync on AO3, whose bookmarks come in on the collection scan', async () => {
+  vi.mocked(api.fanfic.cookies.list).mockResolvedValue([
+    {
+      domain: 'archiveofourown.org',
+      hasCookie: true,
+      updatedAt: null,
+      hasUserAgent: false,
+    },
+  ]);
+  renderSection();
+  await screen.findByText('archiveofourown.org');
+  expect(
+    screen.queryByRole('button', { name: 'Sync bookmark labels' })
+  ).toBeNull();
+  expect(screen.getByText(/tags become folders on that scan/)).toBeTruthy();
 });

@@ -376,3 +376,63 @@ def test_migration_keeps_chapters_and_foreign_keys():
     db.execute("DELETE FROM fics WHERE id='fic'")
     assert not db.execute('SELECT * FROM fic_chapters').fetchall()
     db.close()
+
+
+# --- AO3 bookmark tags: the reader's own filing, not the work's tags ---
+
+BOOKMARKS = '''<ol class="bookmark index group">
+  <li class="bookmark blurb group">
+    <div class="header module"><h4 class="heading">
+      <a href="/works/12">Story</a> by <a rel="author" href="/users/Writer">Writer</a>
+    </h4></div>
+    <ul class="tags commas">
+      <li><a class="tag" href="/tags/Worm/works">Worm - Wildbow</a></li>
+      <li><a class="tag" href="/tags/ships/works">Taylor/Lisa</a></li>
+    </ul>
+    <div class="own user module group">
+      <h5 class="byline">Bookmarked by Reader</h5>
+      <ul class="meta tags commas">
+        <li><a class="tag" href="/tags/reread/works">to reread</a></li>
+        <li><a class="tag" href="/tags/fav/works">favourites</a></li>
+      </ul>
+    </div>
+  </li>
+  <li class="bookmark blurb group">
+    <div class="header module"><h4 class="heading"><a href="/series/9">A Series</a></h4></div>
+  </li>
+  <li class="bookmark blurb group">
+    <div class="header module"><h4 class="heading"><a href="/works/34">Untagged</a></h4></div>
+  </li>
+</ol>'''
+
+
+def test_bookmark_tags_are_the_readers_own_and_not_the_works():
+    refs, _ = sites.parse_collection(
+        BOOKMARKS, 'https://archiveofourown.org/users/Reader/bookmarks')
+    assert [(r.id, r.tags) for r in refs] == [
+        ('12', ('to reread', 'favourites')),
+        ('34', ()),
+    ]
+
+
+def test_subscriptions_carry_no_tags():
+    refs, _ = sites.parse_collection(
+        '<dl class="subscription index group"><dt><a href="/works/56">S</a></dt></dl>',
+        'https://archiveofourown.org/users/Reader/subscriptions?type=works')
+    assert [(r.id, r.tags) for r in refs] == [('56', ())]
+
+
+def test_queue_work_files_an_already_present_fic_into_its_bookmark_folders(client):
+    ref = sites.parse_work_url('https://archiveofourown.org/works/12')
+    fic_id, created = collections.queue_work(ref)
+    assert created
+    # A rescan is how folders stay current, so the tags have to land on the
+    # second pass over a story the library already has.
+    fic_id_again, created_again = collections.queue_work(
+        sites.WorkRef(ref.site, ref.source_type, ref.id, ref.url,
+                      tags=('to reread', 'favourites')))
+    assert (fic_id_again, created_again) == (fic_id, False)
+    names = [r['name'] for r in get_db().execute(
+        'SELECT f.name FROM fic_folder_items i JOIN fic_folders f ON f.id=i.folder_id'
+        ' WHERE i.fic_id=? ORDER BY f.position', (fic_id,))]
+    assert names == ['to reread', 'favourites']

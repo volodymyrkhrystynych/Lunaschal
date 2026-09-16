@@ -7,7 +7,7 @@ import time
 from ulid import ULID
 
 from backend.db.connection import get_db
-from backend.fanfic import download, sites, pacing
+from backend.fanfic import download, personal_tags, sites, pacing
 from backend.fanfic.sanitize import sanitize_chapter_html, html_to_text
 from backend.fanfic.xenforo import ReaderPost
 
@@ -40,6 +40,9 @@ def queue_work(ref: sites.WorkRef) -> tuple[str, bool]:
                'source_followed_at=COALESCE(?,source_followed_at) WHERE id=?',
                (ref.favorited_at, ref.followed_at, fic_id))
     db.commit()
+    # A rescan of the bookmarks is how folders stay current, so this runs for
+    # an already-present story too and not only for a fresh import.
+    personal_tags.sync_personal_folders(db, fic_id, ref.tags)
     return fic_id, created
 
 
