@@ -62,11 +62,15 @@ def parse_ffn(html: str, ref: WorkRef, chapter: int = 1):
     if content is None or title is None:
         raise ValueError('Story text unavailable; the story may be removed or the session blocked')
     options = soup.select('select[name=chapter] option') or soup.select('#chap_select option')
-    chapters = {int(o['value']): _text(o) for o in options if str(o.get('value', '')).isdigit()}
+    # Option end tags are optional in HTML, but html.parser nests unclosed
+    # options. Descendant text would include every subsequent chapter title.
+    chapters = {int(o['value']): ' '.join(o.find_all(string=True, recursive=False)).strip()
+                for o in options if str(o.get('value', '')).isdigit()}
     return {
         'title': _text(title), 'author': _text(soup.select_one('#profile_top a[href^="/u/"]')),
         'description': _text(soup.select_one('#profile_top div.xcontrast_txt')),
         'total': max(chapters, default=1),
+        'chapter_titles': chapters,
         'chapters': [(str(chapter), chapters.get(chapter, _text(title)), str(content), None)],
     }
 

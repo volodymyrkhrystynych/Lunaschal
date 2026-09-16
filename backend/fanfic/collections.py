@@ -61,6 +61,14 @@ def run_work(fic_id: str, url: str, deep: bool = False) -> None:
         download._update_progress(fic_id, phase='chapters', chaptersTotal=book['total'])
         existing = {r['source_post_id']: r['id'] for r in db.execute(
             'SELECT id,source_post_id FROM fic_chapters WHERE fic_id=?', (fic_id,))}
+        # The first FF.net page includes the whole chapter selector. Refresh
+        # titles even when existing chapter bodies do not need downloading.
+        if ref.source_type == 'fanfiction':
+            for position, title in book['chapter_titles'].items():
+                if title and str(position) in existing:
+                    db.execute('UPDATE fic_chapters SET title=? WHERE id=?',
+                               (title, existing[str(position)]))
+            db.commit()
         for position in range(1, book['total'] + 1):
             if download._cancelled(fic_id):
                 return
