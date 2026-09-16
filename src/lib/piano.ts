@@ -31,6 +31,8 @@ export interface PianoAttempt {
   notes: string | null;
 }
 
+export type PianoExerciseGroup = 'keys' | 'ear' | 'freeform' | 'repertoire';
+
 export interface PianoDailyExercise {
   id: string;
   exerciseKey: string;
@@ -39,6 +41,7 @@ export interface PianoDailyExercise {
   style: 'shared' | 'classical' | 'jazz';
   description: string;
   instructions: string;
+  group: PianoExerciseGroup;
   keyName: string | null;
   targetTempo: number | null;
   minutes: number;
@@ -48,7 +51,36 @@ export interface PianoDailyExercise {
   measureEnd: number | null;
   pieceTitle?: string | null;
   completedAt: string | null;
+  /** Consecutive most-recent runs with no wrong key press, capped at mastery. */
+  cleanStreak: number;
+  /** Seconds already spent on this exercise, summed over its recorded runs. */
+  practicedSeconds: number;
   latestAttempt: PianoAttempt | null;
+}
+
+export interface PianoExerciseGroups {
+  keys: PianoDailyExercise[];
+  ear: PianoDailyExercise[];
+  freeform: PianoDailyExercise[];
+  repertoire: PianoDailyExercise[];
+}
+
+/** Split a day's routine into the blocks the Today screen renders separately. */
+export function groupExercises(
+  exercises: PianoDailyExercise[]
+): PianoExerciseGroups {
+  const groups: PianoExerciseGroups = {
+    keys: [],
+    ear: [],
+    freeform: [],
+    repertoire: [],
+  };
+  for (const exercise of exercises) {
+    // An exercise from a day generated before groups existed still has to land
+    // somewhere, and the self-rated block is the one that needs nothing of it.
+    (groups[exercise.group] ?? groups.freeform).push(exercise);
+  }
+  return groups;
 }
 
 export interface PianoToday {

@@ -207,6 +207,18 @@ Keyboard-first, single-key navigation (the Pocket 2 has no usable mouse): WASD-s
 
 #### Torrents — see [docs/torrent-tab.md](docs/torrent-tab.md) for why the traffic cannot leak (qBittorrent shares gluetun's network namespace, so the kill switch is structural rather than a setting), why a container rather than a root `ip netns`, the four container details that are easy to get wrong (the WebUI is on **8081** because llama-server owns 8080, and both sides of that port mapping must match or qBittorrent's host-header check 401s everything), ProtonVPN port-forward syncing, and what exFAT costs.
 
+#### Piano (`backend/piano/`, `src/components/Piano/`)
+
+A day's routine is generated deterministically by `backend/piano/daily.py` and split into **two parts on the Today screen, Practice and Repertoire**, with Practice itself split three ways by each exercise's `group` column: `keys` (the falling-notes exercises), `ear` (the hidden phrase), `freeform` (the self-rated cards for work done away from the screen). The group is **data on the `Exercise` dataclass, not a predicate over `gradeable`/`notation`** — an exercise can grow generated notation without being drilled.
+
+The `keys` exercises are **one continuous session** (`KeysDrill.tsx`, engine in `src/components/Piano/index.tsx`, pure rules in `src/lib/pianoDrill.ts`), not a card each: an exercise falls, is played, and falls again with a fresh count-in until it has been played `CLEAN_RUNS_REQUIRED` times **in a row with no wrong key press**, or until its allotted `minutes` are spent. Three things follow from that:
+
+- **Clean is a key-press verdict and nothing else.** Timing, pulse, release and evenness are still computed and stored (they are what `_adaptive_key`/`_adaptive_tempo` read for tomorrow), but they never gate a run — letting a note go early to reposition a hand has to be free, or the drill punishes the thing it exists to teach.
+- **Every run is banked as an attempt; only the last one completes the exercise.** `record_attempt` honours a `complete` flag (defaulting true, so the self-rated cards are unchanged) and the drill sends `false` until the run that masters or times out. Before this, one sloppy pass marked the exercise done and `PianoToday` then showed it with no button, so the only way to practise twice was to start over from the library.
+- **Progress is derived from those rows, never stored.** `_serialize` computes `cleanStreak` (consecutive newest-first runs with `wrong_notes = 0`, capped) and `practicedSeconds`, so Pause/Exit and a reload resume rather than restart, with no session row to go stale. The budget is read only at run boundaries, so a run is never cut in half.
+
+The falling-note roll sizes itself to the window: `FallingNotes` measures its own box and derives how many beats are visible from that height, so a taller window buys lead time rather than bigger notes. A generated exercise emits `<staff>1</staff>` for everything, so the drill forces `hand='both'` and shows no hand selector.
+
 #### Fanfic library — see [`backend/fanfic/CLAUDE.md`](backend/fanfic/CLAUDE.md).
 
 #### Meetings — see [`backend/meetings/CLAUDE.md`](backend/meetings/CLAUDE.md).

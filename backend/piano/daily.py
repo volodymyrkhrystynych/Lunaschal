@@ -15,6 +15,10 @@ from backend.db.connection import row_to_dict
 LEVELS = ('beginner', 'intermediate', 'advanced')
 KEYS = ('C', 'G', 'D', 'A', 'E', 'F', 'B-flat', 'E-flat', 'A-flat')
 
+# Three consecutive runs with no wrong key press master an exercise. Mistakes are
+# counted on key presses alone: leaving a note early is repositioning, not an error.
+CLEAN_RUNS_REQUIRED = 3
+
 
 @dataclass(frozen=True)
 class Exercise:
@@ -27,36 +31,40 @@ class Exercise:
     minutes: int
     gradeable: bool = False
     notation: str | None = None
+    # Which block of the day this belongs to. 'keys' is the chained drill the falling
+    # notes drive; stated as data rather than derived from `notation`, so a future
+    # exercise can have generated notation and still not be drilled to mastery.
+    group: str = 'freeform'
 
 
 EXERCISES = (
     Exercise('five-finger', 'Five-finger warm-up', 'Warm-up', 'shared',
              'Relaxed, even fingers in today’s key.',
-             'Play slowly with loose wrists, legato up and down, hands separately then together.', 3, True, 'scale5'),
+             'Play slowly with loose wrists, legato up and down, hands separately then together.', 3, True, 'scale5', group='keys'),
     Exercise('scales', 'Scale and arpeggio', 'Technique', 'shared',
              'Build evenness and familiarity with every key.',
-             'Play two octaves up and down, then the tonic arpeggio. Accuracy comes before speed.', 6, True, 'scale'),
+             'Play two octaves up and down, then the tonic arpeggio. Accuracy comes before speed.', 6, True, 'scale', group='keys'),
     Exercise('classical-cadence', 'Classical cadence', 'Harmony', 'classical',
              'Connect tonic, predominant, and dominant harmony.',
-             'Play I–IV–I–V–I with smooth voice leading. Repeat softly and then with a shaped phrase.', 5, True, 'cadence'),
+             'Play I–IV–I–V–I with smooth voice leading. Repeat softly and then with a shaped phrase.', 5, True, 'cadence', group='keys'),
     Exercise('articulation', 'Articulation study', 'Technique', 'classical',
              'Coordinate touch, balance, and dynamic shape.',
-             'Repeat the five-finger pattern legato, staccato, then with a crescendo and diminuendo.', 4, True, 'scale5'),
+             'Repeat the five-finger pattern legato, staccato, then with a crescendo and diminuendo.', 4, True, 'scale5', group='keys'),
     Exercise('sight-reading', 'Sight-reading', 'Reading', 'classical',
              'Read forward without stopping.',
-             'Choose an unfamiliar short passage. Scan key, meter, and patterns, then play once at a steady slow pulse.', 5),
+             'Choose an unfamiliar short passage. Scan key, meter, and patterns, then play once at a steady slow pulse.', 5, group='freeform'),
     Exercise('ii-v-i', 'ii–V–I voice leading', 'Harmony', 'jazz',
              'Hear and connect the core jazz progression.',
-             'Play shell voicings in today’s key. Keep common tones and move every voice the shortest distance.', 5, True, 'jazz'),
+             'Play shell voicings in today’s key. Keep common tones and move every voice the shortest distance.', 5, True, 'jazz', group='keys'),
     Exercise('comping', 'Comping and time', 'Rhythm', 'jazz',
              'Practice space, swing feel, and chord placement.',
-             'Comp over a blues or standard with the metronome on 2 and 4. Leave space between phrases.', 5),
+             'Comp over a blues or standard with the metronome on 2 and 4. Leave space between phrases.', 5, group='freeform'),
     Exercise('guide-tone-solo', 'Guide-tone improvisation', 'Creative', 'jazz',
              'Connect melody to harmony using thirds and sevenths.',
-             'Improvise over ii–V–I using only guide tones. Sing a phrase first, then find it on the piano.', 5),
+             'Improvise over ii–V–I using only guide tones. Sing a phrase first, then find it on the piano.', 5, group='freeform'),
     Exercise('ear-phrase', 'Learn a phrase by ear', 'Ear', 'shared',
              'Turn listening into keyboard vocabulary.',
-             'Listen once, sing it back, then reproduce the phrase on MIDI. The notation stays hidden until you finish.', 5, True, 'ear'),
+             'Listen once, sing it back, then reproduce the phrase on MIDI. The notation stays hidden until you finish.', 5, True, 'ear', group='ear'),
 )
 BY_KEY = {item.key: item for item in EXERCISES}
 
@@ -219,6 +227,36 @@ def _allocate_minutes(plan: list[Exercise], total: int) -> list[int]:
     return values
 
 
+def clean_streak(attempts) -> int:
+    """Consecutive most-recent runs with no wrong key press, capped at mastery.
+
+    Self-rated exercises record no note counts at all; those rows carry no verdict
+    about key accuracy and so neither extend nor break a streak.
+    """
+    streak = 0
+    for attempt in attempts:
+        wrong = attempt['wrong_notes']
+        if wrong is None:
+            continue
+        if wrong:
+            break
+        streak += 1
+        if streak >= CLEAN_RUNS_REQUIRED:
+            break
+    return streak
+
+
+def _practiced_seconds(attempts) -> int:
+    total = 0
+    for attempt in attempts:
+        started = attempt['started_at']
+        finished = attempt['completed_at']
+        if started is None or finished is None or finished <= started:
+            continue
+        total += finished - started
+    return total
+
+
 def _serialize(db, row) -> dict:
     data = row_to_dict(row)
     definition = BY_KEY.get(row['exercise_key'])
@@ -227,6 +265,7 @@ def _serialize(db, row) -> dict:
             'title': definition.title, 'category': definition.category,
             'style': definition.style, 'description': definition.description,
             'instructions': definition.instructions, 'gradeable': definition.gradeable,
+            'group': definition.group,
         })
     else:
         piece = db.execute('SELECT title,composer FROM piano_pieces WHERE id=?', (row['piano_piece_id'],)).fetchone()
@@ -234,14 +273,20 @@ def _serialize(db, row) -> dict:
             'title': 'Repertoire focus', 'category': 'Repertoire', 'style': 'shared',
             'description': f"Work deliberately on {piece['title']}." if piece else 'Work on a saved piece.',
             'instructions': 'Practice the assigned measures slowly, isolate trouble spots, then reconnect the phrase.',
-            'gradeable': True, 'pieceTitle': piece['title'] if piece else None,
+            'gradeable': True, 'group': 'repertoire',
+            'pieceTitle': piece['title'] if piece else None,
             'pieceComposer': piece['composer'] if piece else None,
         })
-    attempt = db.execute(
-        'SELECT * FROM piano_exercise_attempts WHERE daily_exercise_id=? ORDER BY completed_at DESC LIMIT 1',
+    # Newest first: the drill rebuilds its streak and its spent time from these rows
+    # alone, so leaving the session and coming back resumes rather than restarts.
+    attempts = db.execute(
+        'SELECT * FROM piano_exercise_attempts WHERE daily_exercise_id=? '
+        'ORDER BY completed_at DESC, id DESC',
         (row['id'],),
-    ).fetchone()
-    data['latestAttempt'] = row_to_dict(attempt) if attempt else None
+    ).fetchall()
+    data['latestAttempt'] = row_to_dict(attempts[0]) if attempts else None
+    data['cleanStreak'] = clean_streak(attempts)
+    data['practicedSeconds'] = _practiced_seconds(attempts)
     return data
 
 
@@ -271,10 +316,13 @@ def record_attempt(db, daily_id: str, values: dict) -> dict | None:
          values.get('achievedTempo'), rating,
          (values.get('notes') or '').strip() or None, now),
     )
-    db.execute(
-        'UPDATE piano_daily_exercises SET completed_at=COALESCE(completed_at,?) WHERE id=?',
-        (now, daily_id),
-    )
+    # A drill run is banked as an attempt long before the exercise is finished, so
+    # completion is the caller's call rather than a side effect of recording one.
+    if values.get('complete', True):
+        db.execute(
+            'UPDATE piano_daily_exercises SET completed_at=COALESCE(completed_at,?) WHERE id=?',
+            (now, daily_id),
+        )
     db.commit()
     return row_to_dict(db.execute('SELECT * FROM piano_exercise_attempts WHERE id=?', (attempt_id,)).fetchone())
 

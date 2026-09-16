@@ -1,15 +1,23 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../hooks/api';
-import type {
-  PianoDailyExercise,
-  PianoHistoryDay,
-  PianoPreferences,
-  PianoToday as PianoTodayData,
+import {
+  groupExercises,
+  type PianoDailyExercise,
+  type PianoHistoryDay,
+  type PianoPreferences,
+  type PianoToday as PianoTodayData,
 } from '../../lib/piano';
+import {
+  CLEAN_RUNS_REQUIRED,
+  buildDrillQueue,
+  formatSpent,
+  streakDots,
+} from '../../lib/pianoDrill';
 
 export function PianoToday(props: {
   onPractice: (exercise: PianoDailyExercise) => Promise<void>;
   onRepertoire: (exercise: PianoDailyExercise) => Promise<void>;
+  onStartDrill: (exercises: PianoDailyExercise[]) => void;
 }) {
   const [today, setToday] = useState<PianoTodayData | null>(null);
   const [draft, setDraft] = useState<PianoPreferences | null>(null);
@@ -73,9 +81,15 @@ export function PianoToday(props: {
     );
   }
 
+  const groups = groupExercises(today.exercises);
   const completed = today.exercises.filter(item => item.completedAt).length;
+  const remaining = buildDrillQueue(groups.keys);
+  const started = groups.keys.some(
+    item => item.completedAt || item.practicedSeconds > 0
+  );
+
   return (
-    <div className="mx-auto max-w-5xl space-y-5">
+    <div className="mx-auto max-w-5xl space-y-6">
       <header className="rounded-lg border border-white/10 bg-[var(--color-surface)] p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -184,105 +198,169 @@ export function PianoToday(props: {
           {error}
         </div>
       )}
-      <div className="grid gap-4 md:grid-cols-2">
-        {today.exercises.map(exercise => (
-          <article
-            key={exercise.id}
-            className={`rounded-lg border p-4 ${exercise.completedAt ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-white/10 bg-[var(--color-surface)]'}`}
-          >
-            <div className="flex items-start justify-between gap-3">
+
+      <section aria-labelledby="piano-practice-heading" className="space-y-4">
+        <h3 id="piano-practice-heading" className="text-xl font-semibold">
+          Practice
+        </h3>
+
+        {groups.keys.length > 0 && (
+          <article className="rounded-lg border border-white/10 bg-[var(--color-surface)] p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-wide text-cyan-300">
-                  {exercise.category} · {exercise.style}
+                  Keys · one continuous run
                 </p>
-                <h4 className="mt-1 text-lg font-semibold">{exercise.title}</h4>
+                <h4 className="mt-1 text-lg font-semibold">
+                  Warm-up, technique and harmony
+                </h4>
               </div>
               <span className="rounded bg-white/10 px-2 py-1 text-xs">
-                {exercise.minutes} min
+                {groups.keys.reduce((total, item) => total + item.minutes, 0)}{' '}
+                min
               </span>
             </div>
-            <p className="mt-2 text-sm">{exercise.description}</p>
             <p className="mt-2 text-sm text-[var(--color-text-muted)]">
-              {exercise.instructions}
+              Each exercise falls again until you play it {CLEAN_RUNS_REQUIRED}{' '}
+              times in a row with no wrong key, or until its minutes are spent.
+              Only key presses count — letting a note go early to move your hand
+              is free.
             </p>
-            {(exercise.keyName || exercise.targetTempo) && (
-              <p className="mt-3 text-sm">
-                <strong>{exercise.keyName}</strong>
-                {exercise.targetTempo ? ` · ♩ = ${exercise.targetTempo}` : ''}
-              </p>
-            )}
-            {exercise.completedAt ? (
-              <>
-                <p className="mt-4 text-sm text-emerald-300">
-                  ✓ Complete
-                  {exercise.latestAttempt?.selfRating
-                    ? ` · ${exercise.latestAttempt.selfRating}/5`
-                    : ''}
-                </p>
-                {exercise.latestAttempt?.onsetAccuracy != null && (
-                  <p className="mt-2 text-xs text-[var(--color-text-muted)]">
-                    Timing {Math.round(exercise.latestAttempt.onsetAccuracy)}% ·{' '}
-                    pulse{' '}
-                    {Math.round(exercise.latestAttempt.tempoStability ?? 0)}%
-                    {exercise.latestAttempt.velocityEvenness != null
-                      ? ` · evenness ${Math.round(exercise.latestAttempt.velocityEvenness)}%`
-                      : ''}
-                    {exercise.latestAttempt.achievedTempo
-                      ? ` · ${Math.round(exercise.latestAttempt.achievedTempo)} BPM achieved`
-                      : ''}
-                  </p>
-                )}
-              </>
-            ) : exercise.exerciseKey === 'repertoire' ? (
+            <ul className="mt-3 space-y-1.5 text-sm">
+              {groups.keys.map(exercise => (
+                <li
+                  key={exercise.id}
+                  className="flex flex-wrap items-center gap-x-3 border-t border-white/10 pt-1.5"
+                >
+                  <span
+                    className={`mr-auto ${exercise.completedAt ? 'text-emerald-300' : ''}`}
+                  >
+                    {exercise.completedAt ? '✓ ' : ''}
+                    {exercise.title}
+                    {exercise.keyName ? ` · ${exercise.keyName}` : ''}
+                  </span>
+                  <span
+                    aria-label={`${exercise.title}: ${exercise.cleanStreak} of ${CLEAN_RUNS_REQUIRED} clean runs`}
+                    className="tracking-[0.2em] text-emerald-300"
+                  >
+                    {streakDots(exercise.cleanStreak)}
+                  </span>
+                  <span className="text-xs text-[var(--color-text-muted)]">
+                    {formatSpent(exercise.practicedSeconds, exercise.minutes)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            {remaining.length ? (
               <button
                 type="button"
-                onClick={() => void props.onRepertoire(exercise)}
+                onClick={() => props.onStartDrill(today.exercises)}
                 className="mt-4 rounded bg-[var(--color-primary)] px-3 py-2 text-sm text-white"
               >
-                Open {exercise.pieceTitle ?? 'piece'}
-              </button>
-            ) : exercise.gradeable ? (
-              <button
-                type="button"
-                onClick={() => void props.onPractice(exercise)}
-                className="mt-4 rounded bg-[var(--color-primary)] px-3 py-2 text-sm text-white"
-              >
-                Practice with MIDI
+                {started ? 'Resume practice' : 'Start practice'}
               </button>
             ) : (
-              <div className="mt-4 flex flex-wrap items-center gap-2">
-                <label className="text-sm">
-                  How did it feel?
-                  <select
-                    aria-label={`Rating for ${exercise.title}`}
-                    value={rating[exercise.id] ?? 3}
-                    onChange={event =>
-                      setRating({
-                        ...rating,
-                        [exercise.id]: Number(event.target.value),
-                      })
-                    }
-                    className="ml-2 rounded border border-white/20 bg-[var(--color-bg)] px-2 py-1"
-                  >
-                    {[1, 2, 3, 4, 5].map(value => (
-                      <option key={value} value={value}>
-                        {value}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button
-                  type="button"
-                  onClick={() => void complete(exercise)}
-                  className="rounded border border-emerald-500/50 px-3 py-1.5 text-sm text-emerald-300"
-                >
-                  Mark complete
-                </button>
-              </div>
+              <p className="mt-4 text-sm text-emerald-300">
+                ✓ Practice block complete
+              </p>
             )}
           </article>
-        ))}
-      </div>
+        )}
+
+        {groups.ear.length > 0 && (
+          <div className="grid gap-4 md:grid-cols-2">
+            {groups.ear.map(exercise => (
+              <ExerciseCard
+                key={exercise.id}
+                exercise={exercise}
+                groupLabel="Ear"
+                action={
+                  <button
+                    type="button"
+                    onClick={() => void props.onPractice(exercise)}
+                    className="mt-4 rounded bg-[var(--color-primary)] px-3 py-2 text-sm text-white"
+                  >
+                    Listen and play back
+                  </button>
+                }
+              />
+            ))}
+          </div>
+        )}
+
+        {groups.freeform.length > 0 && (
+          <div className="grid gap-4 md:grid-cols-2">
+            {groups.freeform.map(exercise => (
+              <ExerciseCard
+                key={exercise.id}
+                exercise={exercise}
+                groupLabel="Away from the screen"
+                action={
+                  <div className="mt-4 flex flex-wrap items-center gap-2">
+                    <label className="text-sm">
+                      How did it feel?
+                      <select
+                        aria-label={`Rating for ${exercise.title}`}
+                        value={rating[exercise.id] ?? 3}
+                        onChange={event =>
+                          setRating({
+                            ...rating,
+                            [exercise.id]: Number(event.target.value),
+                          })
+                        }
+                        className="ml-2 rounded border border-white/20 bg-[var(--color-bg)] px-2 py-1"
+                      >
+                        {[1, 2, 3, 4, 5].map(value => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => void complete(exercise)}
+                      className="rounded border border-emerald-500/50 px-3 py-1.5 text-sm text-emerald-300"
+                    >
+                      Mark complete
+                    </button>
+                  </div>
+                }
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {groups.repertoire.length > 0 && (
+        <section
+          aria-labelledby="piano-repertoire-heading"
+          className="space-y-4"
+        >
+          <h3 id="piano-repertoire-heading" className="text-xl font-semibold">
+            Repertoire
+          </h3>
+          <div className="grid gap-4 md:grid-cols-2">
+            {groups.repertoire.map(exercise => (
+              <ExerciseCard
+                key={exercise.id}
+                exercise={exercise}
+                groupLabel="Repertoire"
+                action={
+                  <button
+                    type="button"
+                    onClick={() => void props.onRepertoire(exercise)}
+                    className="mt-4 rounded bg-[var(--color-primary)] px-3 py-2 text-sm text-white"
+                  >
+                    Open {exercise.pieceTitle ?? 'piece'}
+                  </button>
+                }
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
       <details className="rounded-lg border border-white/10 bg-[var(--color-surface)] p-4">
         <summary className="cursor-pointer font-medium">
           Practice history
@@ -306,5 +384,64 @@ export function PianoToday(props: {
         </div>
       </details>
     </div>
+  );
+}
+
+function ExerciseCard(props: {
+  exercise: PianoDailyExercise;
+  groupLabel: string;
+  action: React.ReactNode;
+}) {
+  const { exercise } = props;
+  return (
+    <article
+      className={`rounded-lg border p-4 ${exercise.completedAt ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-white/10 bg-[var(--color-surface)]'}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-cyan-300">
+            {props.groupLabel} · {exercise.category}
+          </p>
+          <h4 className="mt-1 text-lg font-semibold">{exercise.title}</h4>
+        </div>
+        <span className="rounded bg-white/10 px-2 py-1 text-xs">
+          {exercise.minutes} min
+        </span>
+      </div>
+      <p className="mt-2 text-sm">{exercise.description}</p>
+      <p className="mt-2 text-sm text-[var(--color-text-muted)]">
+        {exercise.instructions}
+      </p>
+      {(exercise.keyName || exercise.targetTempo) && (
+        <p className="mt-3 text-sm">
+          <strong>{exercise.keyName}</strong>
+          {exercise.targetTempo ? ` · ♩ = ${exercise.targetTempo}` : ''}
+        </p>
+      )}
+      {exercise.completedAt ? (
+        <>
+          <p className="mt-4 text-sm text-emerald-300">
+            ✓ Complete
+            {exercise.latestAttempt?.selfRating
+              ? ` · ${exercise.latestAttempt.selfRating}/5`
+              : ''}
+          </p>
+          {exercise.latestAttempt?.onsetAccuracy != null && (
+            <p className="mt-2 text-xs text-[var(--color-text-muted)]">
+              Timing {Math.round(exercise.latestAttempt.onsetAccuracy)}% · pulse{' '}
+              {Math.round(exercise.latestAttempt.tempoStability ?? 0)}%
+              {exercise.latestAttempt.velocityEvenness != null
+                ? ` · evenness ${Math.round(exercise.latestAttempt.velocityEvenness)}%`
+                : ''}
+              {exercise.latestAttempt.achievedTempo
+                ? ` · ${Math.round(exercise.latestAttempt.achievedTempo)} BPM achieved`
+                : ''}
+            </p>
+          )}
+        </>
+      ) : (
+        props.action
+      )}
+    </article>
   );
 }

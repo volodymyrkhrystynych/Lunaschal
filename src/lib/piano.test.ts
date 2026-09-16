@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from 'vitest';
-import { parsePracticeSteps, stepIsComplete } from './piano';
+import {
+  groupExercises,
+  parsePracticeSteps,
+  stepIsComplete,
+  type PianoDailyExercise,
+} from './piano';
 import { renderMusicXml } from './verovio';
 import { buildFallingNotes } from './pianoVisualization';
 
@@ -95,5 +100,33 @@ describe('MusicXML practice timeline', () => {
     const pages = await renderMusicXml(SCORE);
     expect(pages[0]).toContain('<svg');
     expect(pages[0]).toContain('class="note"');
+  });
+});
+
+describe('groupExercises', () => {
+  const make = (id: string, group: string): PianoDailyExercise =>
+    ({ id, group }) as unknown as PianoDailyExercise;
+
+  it('splits a routine into the blocks Today renders separately', () => {
+    const groups = groupExercises([
+      make('a', 'keys'),
+      make('b', 'ear'),
+      make('c', 'freeform'),
+      make('d', 'repertoire'),
+      make('e', 'keys'),
+    ]);
+    expect(groups.keys.map(item => item.id)).toEqual(['a', 'e']);
+    expect(groups.ear.map(item => item.id)).toEqual(['b']);
+    expect(groups.freeform.map(item => item.id)).toEqual(['c']);
+    expect(groups.repertoire.map(item => item.id)).toEqual(['d']);
+  });
+
+  it('files a row from before groups existed under the self-rated block', () => {
+    // Those cards need nothing of the group beyond somewhere to render.
+    const groups = groupExercises([
+      make('old', undefined as unknown as string),
+    ]);
+    expect(groups.freeform.map(item => item.id)).toEqual(['old']);
+    expect(groups.keys).toEqual([]);
   });
 });

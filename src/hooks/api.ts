@@ -2817,6 +2817,8 @@ export const api = {
         achievedTempo?: number;
         selfRating?: number;
         notes?: string;
+        /** Drill runs bank an attempt without finishing the exercise. */
+        complete?: boolean;
       }
     ) => post<PianoAttempt>(`/api/piano/daily/${id}/attempts`, attempt),
     exerciseScore: async (id: string) => {

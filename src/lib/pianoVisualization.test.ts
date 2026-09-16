@@ -66,6 +66,18 @@ describe('piano visualization', () => {
     ).toEqual([-0.5, 1.5]);
   });
 
+  it('buys lead time from a taller roll rather than bigger notes', () => {
+    // The roll derives its visible beats from its measured height, so a short
+    // window shows fewer steps while every note keeps its own duration.
+    const short = buildFallingNotes(STEPS, 0, 'right', 1.5);
+    const tall = buildFallingNotes(STEPS, 0, 'right', 8);
+    expect(short.map(item => item.note)).toEqual([60, 64, 67]);
+    expect(tall.map(item => item.note)).toEqual([60, 64, 67, 69]);
+    expect(short.map(item => item.durationBeats)).toEqual(
+      tall.slice(0, short.length).map(item => item.durationBeats)
+    );
+  });
+
   it('formats MIDI pitches for readable note labels', () => {
     expect(midiNoteName(60)).toBe('C4');
     expect(midiNoteName(70)).toBe('A♯4');
