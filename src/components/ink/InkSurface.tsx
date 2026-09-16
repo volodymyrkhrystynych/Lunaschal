@@ -90,10 +90,10 @@ export interface InkSurfaceProps {
   color?: string;
   palette: InkPalette;
   touchPolicy: TouchPolicy;
-  /** The element carrying the non-passive touchmove guard under the `scroll`
-   * policy. Deliberately not this surface: on a scrolling page it is mounted
-   * only while its page is near the viewport, and the guard has to outlive
-   * that. */
+  /** The element carrying the non-passive touchmove guard, overriding this
+   * surface's own wrapper. Needed under the `scroll` policy and only there: on
+   * a scrolling page the ink layer is mounted only while its page is near the
+   * viewport, and the guard has to outlive that. */
   guardRef?: React.RefObject<Element | null>;
   minPointDistance?: number;
   maxPointsPerStroke?: number;
@@ -176,6 +176,11 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
     ref
   ) {
     const svgRef = useRef<SVGSVGElement>(null);
+    /** The HTML box around the ink. The touch guard and `touch-action`
+     * both go here rather than on the `<svg>`: WebKit ignores
+     * `touch-action` on an `<svg>` outright, which is what left the Paper
+     * page undrawable with an Apple Pencil. */
+    const wrapperRef = useRef<HTMLDivElement>(null);
     const stateRef = useRef<StrokeState>({
       strokes,
       history: [],
@@ -234,7 +239,7 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
     useInkTouchPolicy({
       policy: touchPolicy,
       marking: tool !== null,
-      guardRef: guardRef ?? svgRef,
+      guardRef: guardRef ?? wrapperRef,
       drawingRef: isDrawingRef,
     });
 
@@ -580,7 +585,13 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
     const shown = erasing ?? painted;
 
     return (
-      <div className="relative w-full h-full">
+      <div
+        ref={wrapperRef}
+        className="relative w-full h-full"
+        // Declared on the wrapper as well as the <svg>, because this is
+        // the half of the pair a browser is actually obliged to honour.
+        style={{ touchAction: touchActionFor(touchPolicy) }}
+      >
         <svg
           ref={svgRef}
           className={`w-full h-full block select-none ${className}`}

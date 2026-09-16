@@ -550,6 +550,19 @@ describe('the touch policy', () => {
     );
   });
 
+  // The <svg> carries it too, but WebKit ignores `touch-action` on an <svg>
+  // outright — so the wrapper is the half of the pair that a browser is
+  // obliged to act on, and the half a test has to pin.
+  it.each(['exclusive', 'scroll'] as const)(
+    'declares it on the HTML wrapper as well under %s',
+    touchPolicy => {
+      const { svg } = renderInk({ touchPolicy });
+      expect(svg.parentElement!.getAttribute('style')).toContain(
+        `touch-action: ${touchPolicy === 'exclusive' ? 'none' : 'pan-y pinch-zoom'}`
+      );
+    }
+  );
+
   function Guarded(props: Props) {
     const guardRef = useRef<HTMLDivElement>(null);
     return (
@@ -605,9 +618,49 @@ describe('the touch policy', () => {
     expect(touchMove(getByTestId('guard'), 'direct')).toBe(false);
   });
 
-  it('installs no guard where nothing scrolls', () => {
-    const { getByTestId } = render(<Guarded touchPolicy="exclusive" />);
-    expect(touchMove(getByTestId('guard'), 'stylus')).toBe(false);
+  // Where nothing scrolls, `touch-action: none` says everything this guard
+  // does — except that WebKit ignores it on an <svg>, so on an iPad the Pencil
+  // panned the page and the pen pointer was cancelled mid-stroke. Paper and
+  // the Study desk's page were undrawable; the newspaper, which has always had
+  // this listener, was not.
+  describe('where nothing scrolls', () => {
+    const exclusive = () => {
+      const view = renderInk({ touchPolicy: 'exclusive' });
+      return { ...view, wrapper: view.svg.parentElement! };
+    };
+
+    it('cancels the Pencil so it writes instead of panning the page', () => {
+      expect(touchMove(exclusive().wrapper, 'stylus')).toBe(true);
+    });
+
+    it('cancels a finger too, since there is nothing for it to scroll', () => {
+      const { wrapper } = exclusive();
+      expect(touchMove(wrapper, 'direct')).toBe(true);
+      expect(touchMove(wrapper, 'direct', 'direct')).toBe(true);
+    });
+
+    // The surface's own gestures — a swipe to flip the page, a two-finger tap
+    // for the eraser — are pointer events, which cancelling a touch stream
+    // does not touch.
+    it('leaves the surface its own finger gestures', () => {
+      const onSwipe = vi.fn();
+      const { svg, wrapper } = (() => {
+        const view = renderInk({ touchPolicy: 'exclusive', onSwipe });
+        return { ...view, wrapper: view.svg.parentElement! };
+      })();
+      touchMove(wrapper, 'direct');
+      send(svg, 'pointerdown', {
+        pointerType: 'touch',
+        clientX: 200,
+        clientY: 100,
+      });
+      send(svg, 'pointerup', {
+        pointerType: 'touch',
+        clientX: 100,
+        clientY: 100,
+      });
+      expect(onSwipe).toHaveBeenCalledWith('next');
+    });
   });
 });
 
