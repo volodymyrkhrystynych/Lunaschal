@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PianoHand, PracticeStep } from '../../lib/piano';
 import {
   buildFallingNotes,
@@ -16,6 +16,9 @@ interface Props {
 }
 
 const PIXELS_PER_BEAT = 58;
+/** The hit line sits 10px up; notes meet it 2px higher still. */
+const HIT_LINE_OFFSET = 12;
+const MIN_VISIBLE_BEATS = 4;
 
 export function FallingNotes({
   steps,
@@ -26,6 +29,20 @@ export function FallingNotes({
   hidden = false,
 }: Props) {
   const [frameTimeMs, setFrameTimeMs] = useState(() => performance.now());
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const [heightPx, setHeightPx] = useState(0);
+
+  // How far ahead the roll can show is a question about the window, not a constant:
+  // a taller roll buys more lead time rather than bigger notes.
+  useEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+    setHeightPx(box.clientHeight);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setHeightPx(box.clientHeight));
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (timelineStartMs === null) return;
@@ -42,25 +59,32 @@ export function FallingNotes({
     timelineStartMs === null
       ? undefined
       : ((frameTimeMs - timelineStartMs) * tempo) / 60_000;
+  const visibleBeats = Math.max(
+    MIN_VISIBLE_BEATS,
+    (heightPx - HIT_LINE_OFFSET) / PIXELS_PER_BEAT
+  );
   const notes = hidden
     ? []
-    : buildFallingNotes(steps, stepIndex, hand, 8, elapsedBeats);
+    : buildFallingNotes(steps, stepIndex, hand, visibleBeats, elapsedBeats);
 
   return (
     <div
+      ref={boxRef}
       aria-label="Falling note practice"
-      className="relative h-[28rem] min-w-[1040px] overflow-hidden rounded-t-xl border border-b-0 border-white/20 bg-gradient-to-b from-zinc-950 via-slate-950 to-zinc-900"
+      className="relative h-full min-h-[18rem] min-w-[1040px] overflow-hidden rounded-t-xl border border-b-0 border-white/20 bg-gradient-to-b from-zinc-950 via-slate-950 to-zinc-900"
     >
       <div className="pointer-events-none absolute inset-0 flex opacity-15">
         {Array.from({ length: 52 }, (_, index) => (
           <div key={index} className="flex-1 border-r border-white/30" />
         ))}
       </div>
-      {Array.from({ length: 8 }, (_, index) => (
+      {Array.from({ length: Math.ceil(visibleBeats) }, (_, index) => (
         <div
           key={index}
           className="pointer-events-none absolute inset-x-0 border-t border-white/10"
-          style={{ bottom: `${12 + (index + 1) * PIXELS_PER_BEAT}px` }}
+          style={{
+            bottom: `${HIT_LINE_OFFSET + (index + 1) * PIXELS_PER_BEAT}px`,
+          }}
         />
       ))}
       {notes.map(item => {
@@ -78,8 +102,8 @@ export function FallingNotes({
             style={{
               left: `${geometry.leftPercent}%`,
               width: `${geometry.widthPercent}%`,
-              bottom: `${12 + item.beatOffset * PIXELS_PER_BEAT}px`,
-              height: `${Math.max(24, Math.min(150, item.durationBeats * PIXELS_PER_BEAT))}px`,
+              bottom: `${HIT_LINE_OFFSET + item.beatOffset * PIXELS_PER_BEAT}px`,
+              height: `${Math.max(24, item.durationBeats * PIXELS_PER_BEAT)}px`,
             }}
           >
             {geometry.black ? '' : midiNoteName(item.note)}

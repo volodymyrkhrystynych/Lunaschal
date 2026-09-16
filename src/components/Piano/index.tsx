@@ -20,15 +20,30 @@ import {
   scorePerformance,
   type CapturedMidiEvent,
 } from '../../lib/pianoPractice';
+import { buildDrillQueue, nextStreak, runOutcome } from '../../lib/pianoDrill';
 import { FallingNotes } from './FallingNotes';
+import { KeysDrill, type DrillRunResult } from './KeysDrill';
 import { PianoArchive } from './PianoArchive';
 import { PianoKeyboard } from './PianoKeyboard';
 import { PianoToday } from './PianoToday';
 
+/** How long a finished run's verdict stays on screen before the next count-in. */
+const RUN_RESULT_MS = 1400;
+
+interface DrillState {
+  queue: PianoDailyExercise[];
+  index: number;
+  streak: number;
+  practicedSeconds: number;
+  runResult: DrillRunResult | null;
+  paused: boolean;
+  finished: boolean;
+}
+
 export function Piano() {
-  const [section, setSection] = useState<'today' | 'library' | 'archive'>(
-    'today'
-  );
+  const [section, setSection] = useState<
+    'today' | 'library' | 'archive' | 'drill'
+  >('today');
   const [devices, setDevices] = useState<MidiDevice[]>([]);
   const [deviceId, setDeviceId] = useState('');
   const [connected, setConnected] = useState(false);
@@ -67,6 +82,14 @@ export function Piano() {
   const [lastMetrics, setLastMetrics] = useState<ReturnType<
     typeof scorePerformance
   > | null>(null);
+  const [drill, setDrill] = useState<DrillState | null>(null);
+  const drillRef = useRef<DrillState | null>(null);
+  const drillTimerRef = useRef<number | null>(null);
+  const [drillLoading, setDrillLoading] = useState(false);
+  // Set once a score is in place; the run starts from an effect rather than inline,
+  // because `practiceSteps` is memoized off `score` and is stale in the same tick.
+  const [pendingStart, setPendingStart] = useState(false);
+  drillRef.current = drill;
 
   const allSteps = useMemo(
     () => (score ? parsePracticeSteps(score) : []),
@@ -160,42 +183,7 @@ export function Piano() {
           const next = stepIndexRef.current + 1;
           stepIndexRef.current = next;
           setStepIndex(next);
-          if (next >= stepsRef.current.length) {
-            practicingRef.current = false;
-            setPracticing(false);
-            stopMetronome();
-            const assignment = dailyExercise;
-            if (assignment) {
-              const metrics = scorePerformance(
-                stepsRef.current,
-                handRef.current,
-                capturedRef.current,
-                practiceTempo
-              );
-              setLastMetrics(metrics);
-              setEarReveal(true);
-              void api.piano
-                .completeExercise(assignment.id, {
-                  startedAt: attemptStartedRef.current ?? undefined,
-                  tempo: practiceTempo,
-                  correctNotes: stepsRef.current.reduce(
-                    (count, completedStep) =>
-                      count +
-                      notesForHand(completedStep, handRef.current).length,
-                    0
-                  ),
-                  wrongNotes: wrongNotesRef.current,
-                  onsetAccuracy: metrics.onsetAccuracy,
-                  durationAccuracy: metrics.durationAccuracy ?? undefined,
-                  tempoStability: metrics.tempoStability,
-                  velocityEvenness: metrics.velocityEvenness ?? undefined,
-                  achievedTempo: metrics.achievedTempo ?? undefined,
-                })
-                .catch(cause =>
-                  setError(errorMessage(cause, 'Could not save the attempt.'))
-                );
-            }
-          }
+          if (next >= stepsRef.current.length) finishRun();
         } else if (!notesForHand(step, handRef.current).includes(event.note)) {
           wrongNotesRef.current += 1;
           setWrongNotes(wrongNotesRef.current);
@@ -205,10 +193,19 @@ export function Piano() {
     return subscribeMidiEvents(receiveEvents);
   }, [connected, dailyExercise, practiceTempo]);
 
+  useEffect(() => {
+    if (!pendingStart || !connected || !practiceSteps.length) return;
+    if (drillRef.current?.paused) return;
+    setPendingStart(false);
+    startPractice();
+  }, [pendingStart, connected, practiceSteps]);
+
   useEffect(
     () => () => {
       void desktopApi()?.midi_close();
       stopMetronome();
+      if (drillTimerRef.current !== null)
+        window.clearTimeout(drillTimerRef.current);
     },
     []
   );
@@ -319,6 +316,204 @@ export function Piano() {
     }, interval * 4000);
   };
 
+  const clearRunState = () => {
+    setStepIndex(0);
+    stepIndexRef.current = 0;
+    setWrongNotes(0);
+    wrongNotesRef.current = 0;
+    capturedRef.current = [];
+  };
+
+  const setDrillState = (next: DrillState | null) => {
+    drillRef.current = next;
+    setDrill(next);
+  };
+
+  const cancelDrillTimer = () => {
+    if (drillTimerRef.current !== null)
+      window.clearTimeout(drillTimerRef.current);
+    drillTimerRef.current = null;
+  };
+
+  /**
+   * One run of the chained drill just ended. Bank it as an attempt either way — the
+   * metrics feed tomorrow's key and tempo — but only let it finish the exercise once
+   * it has been played clean three times in a row or spent its allotted minutes.
+   */
+  const finishRun = () => {
+    practicingRef.current = false;
+    setPracticing(false);
+    stopMetronome();
+    const assignment = dailyExercise;
+    if (!assignment) return;
+    const metrics = scorePerformance(
+      stepsRef.current,
+      handRef.current,
+      capturedRef.current,
+      practiceTempo
+    );
+    setLastMetrics(metrics);
+    setEarReveal(true);
+    const wrong = wrongNotesRef.current;
+    const startedAt = attemptStartedRef.current;
+    const attempt = {
+      startedAt: startedAt ?? undefined,
+      tempo: practiceTempo,
+      correctNotes: stepsRef.current.reduce(
+        (count, completedStep) =>
+          count + notesForHand(completedStep, handRef.current).length,
+        0
+      ),
+      wrongNotes: wrong,
+      onsetAccuracy: metrics.onsetAccuracy,
+      durationAccuracy: metrics.durationAccuracy ?? undefined,
+      tempoStability: metrics.tempoStability,
+      velocityEvenness: metrics.velocityEvenness ?? undefined,
+      achievedTempo: metrics.achievedTempo ?? undefined,
+    };
+    const save = (complete: boolean) =>
+      void api.piano
+        .completeExercise(assignment.id, { ...attempt, complete })
+        .catch(cause =>
+          setError(errorMessage(cause, 'Could not save the attempt.'))
+        );
+
+    const state = drillRef.current;
+    if (!state) {
+      save(true);
+      return;
+    }
+    const exercise = state.queue[state.index];
+    const runSeconds = startedAt
+      ? Math.max(0, Math.floor(Date.now() / 1000) - startedAt)
+      : 0;
+    const streak = nextStreak(state.streak, wrong);
+    const practicedSeconds = state.practicedSeconds + runSeconds;
+    const outcome = runOutcome({
+      streak,
+      practicedSeconds,
+      budgetSeconds: (exercise?.minutes ?? 0) * 60,
+    });
+    save(outcome !== 'repeat');
+    setDrillState({
+      ...state,
+      streak,
+      practicedSeconds,
+      runResult: { wrongNotes: wrong, outcome },
+    });
+    cancelDrillTimer();
+    drillTimerRef.current = window.setTimeout(() => {
+      drillTimerRef.current = null;
+      continueDrill();
+    }, RUN_RESULT_MS);
+  };
+
+  const loadDrillExercise = async (exercise: PianoDailyExercise) => {
+    setError(null);
+    setDrillLoading(true);
+    try {
+      const xml = await api.piano.exerciseScore(exercise.id);
+      setDailyExercise(exercise);
+      setPracticeTempo(exercise.targetTempo ?? 80);
+      setPiece(null);
+      setScore(xml);
+      // Every generated exercise writes <staff>1</staff>, so 'left' yields no steps.
+      setHand('both');
+      setLoopStart(1);
+      setLoopEnd(1);
+      setEarReveal(true);
+      setLastMetrics(null);
+      clearRunState();
+      setPendingStart(true);
+    } catch (cause) {
+      setError(errorMessage(cause, 'Could not open the exercise.'));
+    } finally {
+      setDrillLoading(false);
+    }
+  };
+
+  const continueDrill = () => {
+    const state = drillRef.current;
+    if (!state || state.paused) return;
+    if (state.runResult?.outcome === 'repeat') {
+      setDrillState({ ...state, runResult: null });
+      clearRunState();
+      setPendingStart(true);
+      return;
+    }
+    const index = state.index + 1;
+    if (index >= state.queue.length) {
+      setDrillState({ ...state, runResult: null, finished: true });
+      return;
+    }
+    const exercise = state.queue[index];
+    setDrillState({
+      ...state,
+      index,
+      streak: exercise.cleanStreak,
+      practicedSeconds: exercise.practicedSeconds,
+      runResult: null,
+    });
+    void loadDrillExercise(exercise);
+  };
+
+  const startDrill = (exercises: PianoDailyExercise[]) => {
+    const queue = buildDrillQueue(exercises);
+    if (!queue.length) return;
+    const first = queue[0];
+    setDrillState({
+      queue,
+      index: 0,
+      streak: first.cleanStreak,
+      practicedSeconds: first.practicedSeconds,
+      runResult: null,
+      paused: false,
+      finished: false,
+    });
+    setSection('drill');
+    void loadDrillExercise(first);
+  };
+
+  const pauseDrill = () => {
+    cancelDrillTimer();
+    practicingRef.current = false;
+    setPracticing(false);
+    setCountingIn(false);
+    stopMetronome();
+    setPendingStart(false);
+    const state = drillRef.current;
+    if (state) setDrillState({ ...state, paused: true });
+  };
+
+  const resumeDrill = () => {
+    const state = drillRef.current;
+    if (!state) return;
+    setDrillState({ ...state, paused: false });
+    // A half-played run cannot be picked up mid-air, so resuming replays it whole.
+    if (state.runResult) {
+      continueDrill();
+      return;
+    }
+    clearRunState();
+    setPendingStart(true);
+  };
+
+  const exitDrill = () => {
+    cancelDrillTimer();
+    practicingRef.current = false;
+    setPracticing(false);
+    setCountingIn(false);
+    stopMetronome();
+    setPendingStart(false);
+    setDrillState(null);
+    setDailyExercise(null);
+    setPiece(null);
+    setScore('');
+    setLastMetrics(null);
+    clearRunState();
+    setSection('today');
+  };
+
   const practiceDaily = async (exercise: PianoDailyExercise) => {
     setError(null);
     const isEarPhrase = exercise.exerciseKey === 'ear-phrase';
@@ -389,7 +584,10 @@ export function Piano() {
             <button
               key={value}
               type="button"
-              onClick={() => setSection(value)}
+              onClick={() => {
+                if (section === 'drill') exitDrill();
+                setSection(value);
+              }}
               className={`rounded px-2 py-1.5 capitalize ${
                 section === value
                   ? 'bg-[var(--color-primary)] text-white'
@@ -468,6 +666,12 @@ export function Piano() {
             Browse large collections on the external backup drive. Star a
             MusicXML score to add it here for practice.
           </p>
+        ) : section === 'drill' ? (
+          <p className="mt-4 text-sm text-[var(--color-text-muted)]">
+            Each exercise repeats until you play it three times in a row with no
+            wrong key, or until its minutes are spent. Pause or exit whenever —
+            the streak is kept.
+          </p>
         ) : (
           <p className="mt-4 text-sm text-[var(--color-text-muted)]">
             A balanced routine of technique, harmony, listening, and repertoire
@@ -476,13 +680,60 @@ export function Piano() {
         )}
       </aside>
 
-      <div className="flex-1 space-y-5 overflow-auto p-5">
+      <div
+        className={`flex-1 p-5 ${
+          section === 'drill' || (section === 'library' && piece)
+            ? 'flex min-h-0 flex-col gap-4 overflow-hidden'
+            : 'space-y-5 overflow-auto'
+        }`}
+      >
         {section === 'archive' ? (
           <PianoArchive onLibraryChanged={refreshPieces} />
         ) : section === 'today' ? (
           <PianoToday
             onPractice={practiceDaily}
             onRepertoire={openDailyRepertoire}
+            onStartDrill={startDrill}
+          />
+        ) : section === 'drill' ? (
+          <KeysDrill
+            exercise={drill ? (drill.queue[drill.index] ?? null) : null}
+            position={drill?.index ?? 0}
+            total={drill?.queue.length ?? 0}
+            streak={drill?.streak ?? 0}
+            practicedSeconds={drill?.practicedSeconds ?? 0}
+            steps={practiceSteps}
+            stepIndex={stepIndex}
+            tempo={practiceTempo}
+            timelineStartMs={practiceTimelineStartMs}
+            activeNotes={activeNotes}
+            wrongNotes={wrongNotes}
+            countingIn={countingIn}
+            practicing={practicing}
+            paused={drill?.paused ?? false}
+            loading={drillLoading}
+            finished={drill?.finished ?? false}
+            connected={connected}
+            runResult={drill?.runResult ?? null}
+            error={error}
+            midiControls={
+              <MidiControls
+                devices={devices}
+                deviceId={deviceId}
+                connected={connected}
+                sustain={sustain}
+                onDevice={setDeviceId}
+                onConnect={connect}
+                onDisconnect={async () => {
+                  await desktopApi()?.midi_close();
+                  setConnected(false);
+                }}
+                onRefresh={refreshDevices}
+              />
+            }
+            onPause={pauseDrill}
+            onResume={resumeDrill}
+            onExit={exitDrill}
           />
         ) : (
           <>
@@ -564,25 +815,25 @@ export function Piano() {
                   <div className="rounded border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm">
                     Timing {lastMetrics.onsetAccuracy}% · pulse{' '}
                     {lastMetrics.tempoStability}%
-                    {lastMetrics.durationAccuracy != null
-                      ? ` · releases ${lastMetrics.durationAccuracy}%`
-                      : ''}
                     {lastMetrics.achievedTempo
                       ? ` · ${lastMetrics.achievedTempo} BPM`
                       : ''}
                   </div>
                 )}
-                <div className="overflow-x-auto rounded-xl shadow-2xl shadow-black/30">
-                  <FallingNotes
-                    steps={practiceSteps}
-                    stepIndex={stepIndex}
-                    hand={hand}
-                    tempo={practiceTempo}
-                    timelineStartMs={practiceTimelineStartMs}
-                    hidden={
-                      dailyExercise?.exerciseKey === 'ear-phrase' && !earReveal
-                    }
-                  />
+                <div className="flex min-h-0 flex-1 flex-col overflow-x-auto rounded-xl shadow-2xl shadow-black/30">
+                  <div className="min-h-0 flex-1">
+                    <FallingNotes
+                      steps={practiceSteps}
+                      stepIndex={stepIndex}
+                      hand={hand}
+                      tempo={practiceTempo}
+                      timelineStartMs={practiceTimelineStartMs}
+                      hidden={
+                        dailyExercise?.exerciseKey === 'ear-phrase' &&
+                        !earReveal
+                      }
+                    />
+                  </div>
                   <PianoKeyboard activeNotes={activeNotes} />
                 </div>
                 {loadingScore && (
