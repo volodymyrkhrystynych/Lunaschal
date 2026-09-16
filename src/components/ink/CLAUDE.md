@@ -122,10 +122,32 @@ not supply a stroke model or a pointer loop.**
   scrolls, so there is no gesture to preserve, and pointer events, which is
   where the swipe and the two-finger tap live, are untouched. `scroll` cancels
   only an all-stylus touch while a marking tool is active, plus any touch while
-  a stroke is in flight, and puts the listener on the **page box, not the ink
-  layer**: there the ink layer is mounted only while its page is near the
-  viewport, and the guard has to outlive that. That is what `guardRef` is for,
-  and why it is needed there and nowhere else.
+  a stroke is in flight, and additionally has to put the listener on the **page
+  box, not the ink layer**, since there the ink layer is mounted only while its
+  page is near the viewport and the guard has to outlive that.
+
+  **Which element is guarded matters as much as what is cancelled, and this is
+  the half that took two goes to get right.** A palm rests where it likes, not
+  only on the ink. Paper centres an A4 sheet with grey margins either side, so a
+  hand writing near an edge puts its palm on the margin, outside the ink layer
+  entirely; a guard mounted on the ink alone never sees that touch, WebKit pairs
+  it with the nib — two contacts are a pinch as far as it is concerned — and the
+  pen pointer is cancelled a few pixels in. That is the _dot_ the Pencil laid
+  down once the `touch-action` half was fixed and drawing still did not work. So
+  `guardRef` is not a scrolling-surface quirk: every surface hands over
+  everything a palm can reach while the pen is down, which for Paper is the
+  editor's whole stage. `exclusive` also refuses Safari's
+  `gesturestart`/`gesturechange` on that element, the last route by which a
+  second contact can claim the pen.
+
+- **`onPointerLeave` ends a stroke only when the capture is not held**, and is
+  wired only under `exclusive`. While the capture is held, boundary events are
+  retargeted to the surface and a leave cannot mean the stroke is over — but
+  WebKit dispatches one anyway during a pen stroke on an `<svg>`, which ended
+  the stroke early for the same symptom and from the other direction. What the
+  handler is actually for is the case where there is no capture: a mouse dragged
+  off the page on a desktop, where `setPointerCapture` was refused or never
+  applied.
 
 - **A cancelled stroke splits the same way**, and deliberately is not unified.
   Under `exclusive` it is committed: the ink was drawn, is on screen, and a

@@ -79,6 +79,12 @@ export interface PaperSurfaceHandle {
 
 interface PaperSurfaceProps {
   pageId: string;
+  /** The area a palm can rest on while the pen is down — the editor's whole
+   * stage, not this page. An A4 sheet is centred with grey margins either side,
+   * and a hand writing near an edge puts its palm on the margin: a guard
+   * mounted on the ink alone never sees that touch, WebKit pairs it with the
+   * nib as a pinch, and the pen pointer is cancelled mid-stroke. */
+  guardRef?: React.RefObject<Element | null>;
   /** Pictures pasted onto the page, drawn beneath the ink. Interaction lives in
    * the DOM overlay above this surface, not here — see PaperImageLayer. */
   images?: PageImage[];
@@ -124,6 +130,7 @@ export const PaperSurface = forwardRef<PaperSurfaceHandle, PaperSurfaceProps>(
   function PaperSurface(
     {
       pageId,
+      guardRef,
       images = NO_IMAGES,
       initialStrokes,
       initialSize,
@@ -319,6 +326,7 @@ export const PaperSurface = forwardRef<PaperSurfaceHandle, PaperSurfaceProps>(
         // The page is the screen: nothing scrolls, so a finger is free to mean
         // a page flip or an eraser toggle instead.
         touchPolicy="exclusive"
+        guardRef={guardRef}
         backdrop={backdrop}
         onEdit={persistBuffer}
         onStateChange={onStateChange}

@@ -57,6 +57,21 @@ export const touchActionFor = (policy: TouchPolicy): string =>
  * `touchmove` passively, so an `onTouchMove` prop cannot `preventDefault` at
  * all. And `preventDefault` on `pointerdown` does not stop a WebKit pan —
  * cancelling the touch stream is the only thing that does.
+ *
+ * `exclusive` additionally refuses Safari's `gesturestart`/`gesturechange`. A
+ * pinch is the one thing that can still claim the pen mid-stroke — the palm and
+ * the nib are two contacts, and that is a pinch as far as WebKit is concerned —
+ * and nothing under a surface that *is* the screen should be zooming anyway.
+ * They are Safari-only and simply never fire elsewhere.
+ *
+ * **Which element is guarded matters as much as what it cancels.** A palm rests
+ * where it likes, not only on the ink: Paper centres an A4 sheet with grey
+ * margins either side, and a hand writing near an edge puts its palm on the
+ * margin, outside the ink layer entirely. A guard mounted on the ink alone
+ * never sees that touch, WebKit pairs it with the nib, and the pen pointer is
+ * cancelled — a dot, and nothing more. So a surface with room around it passes
+ * the whole stage as `guardRef`, exactly as a scrolling surface passes its page
+ * box.
  */
 export function useInkTouchPolicy({
   policy,
@@ -67,8 +82,9 @@ export function useInkTouchPolicy({
   policy: TouchPolicy;
   /** Whether a tool that lays down ink is selected. */
   marking: boolean;
-  /** The element to guard. For a scrolling surface this is the page box, not
-   * the ink layer: it stays mounted when the ink layer does not. */
+  /** The element to guard, which should be everything a palm can reach while
+   * the pen is down — not merely the ink. For a scrolling surface it is the
+   * page box, which also stays mounted when the ink layer does not. */
   guardRef: RefObject<Element | null>;
   /** Read at event time — true while a stroke is being drawn. */
   drawingRef: RefObject<boolean>;
@@ -92,6 +108,17 @@ export function useInkTouchPolicy({
       if (drawingRef.current || (marking && stylus)) event.preventDefault();
     };
     element.addEventListener('touchmove', onTouchMove, { passive: false });
-    return () => element.removeEventListener('touchmove', onTouchMove);
+    if (policy !== 'exclusive') {
+      return () => element.removeEventListener('touchmove', onTouchMove);
+    }
+    // Safari-only, and the last way a second contact can take the pen away.
+    const onGesture = (event: Event) => event.preventDefault();
+    element.addEventListener('gesturestart', onGesture, { passive: false });
+    element.addEventListener('gesturechange', onGesture, { passive: false });
+    return () => {
+      element.removeEventListener('touchmove', onTouchMove);
+      element.removeEventListener('gesturestart', onGesture);
+      element.removeEventListener('gesturechange', onGesture);
+    };
   }, [policy, marking, guardRef, drawingRef]);
 }
