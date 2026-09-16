@@ -103,16 +103,29 @@ not supply a stroke model or a pointer loop.**
     finger belongs to the browser in every tool, so it keeps native momentum
     scrolling and pinch-zoom, and the app claims **no** gestures.
 
-  Under `scroll` the Pencil is held off the scroller by a **native, non-passive
-  `touchmove` listener**, and every part of that sentence was paid for:
-  `touch-action` cannot tell a pen from a finger (and WebKit ignores it outright
-  on an `<svg>`, which this is), `preventDefault` on `pointerdown` does not stop
-  an iPadOS scroll, once that scroll starts the pen pointer is _cancelled_
-  mid-stroke — which is what "the Pencil scrolls instead of writing" was — and
-  React attaches `touchmove` passively, so a prop cannot do it. The listener
-  goes on the **page box, not the ink layer**: on a scrolling surface the ink
-  layer is mounted only while its page is near the viewport, and the guard has
-  to outlive that.
+  **Both are enforced by a native, non-passive `touchmove` listener, and
+  `exclusive` needing one is the non-obvious half.** Every part of that sentence
+  was paid for: `touch-action` cannot tell a pen from a finger,
+  `preventDefault` on `pointerdown` does not stop an iPadOS scroll, once that
+  scroll starts the pen pointer is _cancelled_ mid-stroke — which is what "the
+  Pencil scrolls instead of writing" was — and React attaches `touchmove`
+  passively, so a prop cannot do it. The clause that caught `exclusive` out is
+  that **WebKit ignores `touch-action` on an `<svg>`**, and the ink layer is an
+  `<svg>`: declaring `none` there said the right thing to every browser obliged
+  to listen and nothing at all to the only one an Apple Pencil arrives through,
+  so Paper and the Study desk's page were undrawable on an iPad while the
+  newspaper — which had the listener from the start — worked. A mouse generates
+  no touch stream, which is why a desktop never saw it. So `touch-action` is now
+  declared on the surface's HTML wrapper as well as the `<svg>`, and the
+  listener is installed under either policy; what they cancel differs.
+  `exclusive` cancels **every** touch unconditionally — nothing underneath
+  scrolls, so there is no gesture to preserve, and pointer events, which is
+  where the swipe and the two-finger tap live, are untouched. `scroll` cancels
+  only an all-stylus touch while a marking tool is active, plus any touch while
+  a stroke is in flight, and puts the listener on the **page box, not the ink
+  layer**: there the ink layer is mounted only while its page is near the
+  viewport, and the guard has to outlive that. That is what `guardRef` is for,
+  and why it is needed there and nowhere else.
 
 - **A cancelled stroke splits the same way**, and deliberately is not unified.
   Under `exclusive` it is committed: the ink was drawn, is on screen, and a

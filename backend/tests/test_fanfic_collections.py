@@ -67,6 +67,42 @@ def test_parsers():
         sites.parse_patreon(patreon(False))
 
 
+@pytest.mark.parametrize('closed', [True, False])
+def test_ffn_chapter_titles_do_not_include_later_options(closed):
+    labels = ['1. awakening', '2. act of freedom', '3. new hood in the hood',
+              '4. the hood in the hood', '5. smal offer', '6. no options & more']
+    options = ''.join(f'<option value="{i}">{label.replace("&", "&amp;")}'
+                      + ('</option>' if closed else '')
+                      for i, label in enumerate(labels, 1))
+    html = ffn().split('<select')[0] + f'<select id="chap_select">{options}</select>'
+    html += '<div id="storytext">Chapter body</div>'
+    ref = sites.parse_work_url('https://www.fanfiction.net/s/123/1/')
+    for i, label in enumerate(labels, 1):
+        book = sites.parse_ffn(html, ref, i)
+        assert book['chapters'][0][1] == label
+        assert book['total'] == 6
+
+
+def test_ffn_update_repairs_titles_without_redownloading_existing_chapters(monkeypatch):
+    ref = sites.parse_work_url('https://www.fanfiction.net/s/123/1/')
+    fic_id, _ = collections.queue_work(ref)
+    monkeypatch.setattr(collections, '_fetch', lambda url: response(ffn()))
+    download.run_drain_pending()
+    db = get_db()
+    before = [dict(r) for r in db.execute('SELECT * FROM fic_chapters ORDER BY position')]
+    db.execute("UPDATE fic_chapters SET title='First Second' WHERE position=1")
+    db.commit()
+    calls = []
+    def fetch(url):
+        calls.append(url)
+        return response(ffn().replace('</option>', ''))
+    monkeypatch.setattr(collections, '_fetch', fetch)
+    collections.run_work(fic_id, ref.url)
+    after = [dict(r) for r in db.execute('SELECT * FROM fic_chapters ORDER BY position')]
+    assert after == before
+    assert calls == [ref.url]
+
+
 def dated_list(added):
     return f'''<form><table id="gui_table1"><tr>
       <td><a href="/s/123/1/Story">Story</a></td>

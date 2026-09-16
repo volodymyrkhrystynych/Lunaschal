@@ -52,6 +52,12 @@ without requeueing completed downloads or erasing previously saved dates.
 Library cards show both source dates independently of the local import date;
 description refreshes do not overwrite this history.
 
+FF.net chapter selectors may omit option end tags. Read only each option's
+direct text: `html.parser` nests later options, so recursive text concatenates
+the remaining titles. Successful ordinary update checks refresh saved chapter
+titles from the first page's selector, repairing older imports without fetching
+existing chapter bodies or changing their IDs and reading state.
+
 - A **cheap** check looks only for chapters we don't have. It diffs the threadmarks index's post ids against the stored ones and resumes at the reader page holding the first missing chapter — one index fetch per ~50 threadmarks per category, and no reader fetch at all when nothing is missing. Three things about it are load-bearing, and all three were bugs:
   - **`Statistics (N threadmarks)` is never used to skip a category.** It counts a different population than our rows do — threadmarks get recategorised, renamed and deleted on long threads — so the two drift apart, and every count-based shortcut fails in one of two ways. `count <= rows` latched a fic shut permanently the moment the site's count fell below ours (`test_check_updates_survives_the_site_losing_a_threadmark`): this is the root cause of recently-updated fics never downloading, and a category losing a couple of _non-chapter_ threadmarks is enough to trigger it. `count == rows` then still agreed a category was current when it had swapped two threadmarks for two others (`test_check_updates_sees_swapped_threadmarks_at_an_unchanged_count`). Post ids are the only comparison that can't be fooled.
   - **The resume page comes from the index position, never from our row count.** Count arithmetic overshoots whenever there's a gap, so a chapter missing from the middle pushed the walk past the very page holding it and stayed missing forever.

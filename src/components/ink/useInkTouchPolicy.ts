@@ -8,9 +8,9 @@ import { useEffect, type RefObject } from 'react';
  * and a newspaper column that did not would be unreadable.
  *
  *  - `exclusive` — the surface *is* the screen (the Paper editor, and the Study
- *    desk's embedded page). Nothing scrolls, so `touch-action: none` and a
- *    finger is free to mean something else: a swipe flips the page, a
- *    two-finger tap toggles the eraser.
+ *    desk's embedded page). Nothing scrolls, so no touch on it may reach the
+ *    browser as a gesture, and a finger is free to mean something else: a swipe
+ *    flips the page, a two-finger tap toggles the eraser.
  *  - `scroll` — the surface is drawn over a scrolling column (the newspaper
  *    reader). A finger belongs to the browser in every tool, so it keeps native
  *    momentum scrolling and pinch-zoom, and the app claims no gestures at all.
@@ -25,27 +25,38 @@ export const touchActionFor = (policy: TouchPolicy): string =>
   policy === 'exclusive' ? 'none' : 'pan-y pinch-zoom';
 
 /**
- * Under `scroll`, hold the Pencil off the scroller so it writes instead.
+ * Hold the browser off the touch stream so the Pencil writes instead.
  *
- * iPadOS gives exactly one way to do that: cancel the touch stream itself.
- * `touch-action` is not enough — WebKit ignores it on an `<svg>`, and even
- * where it is honoured it cannot tell a pen from a finger — and
- * `preventDefault` on `pointerdown` does not stop a WebKit scroll either. Once
- * that scroll starts the pen pointer is *cancelled* mid-stroke, which is
- * exactly what "the Pencil scrolls instead of writing" was.
+ * **Both policies need a native listener, and `exclusive` needing one is not
+ * obvious.** It declares `touch-action: none`, which says exactly what it
+ * wants — but WebKit ignores `touch-action` on an `<svg>`, and the ink layer
+ * *is* an `<svg>`. So on iPadOS the declaration did nothing, the Pencil's
+ * touches were WebKit's to pan with, and once that pan started the pen pointer
+ * was *cancelled* mid-stroke: drawing on a Paper page (and so on the Study
+ * desk's page) did not work at all, while the newspaper — which has had this
+ * listener from the start — did. With a mouse there is no touch stream to
+ * claim, which is why a desktop never saw it. The listener now rides on the
+ * surface's own HTML wrapper, where `touch-action` is also honoured, so the
+ * declaration and the listener say the same thing twice rather than once.
  *
- * So: an all-stylus touch is cancelled while a marking tool is active, and
- * *any* touch is cancelled while a stroke is in flight, which is what stops a
- * resting palm dragging the page out from under the nib. A mixed
- * finger-and-stylus set is left alone — only two contacts can pinch-zoom, and
- * that has to keep working. Read mode blocks nothing, so the Pencil scrolls
- * there like a finger.
+ * What the two policies cancel differs, and follows from the same question as
+ * the policy itself:
  *
- * It has to be a native non-passive listener: React attaches `touchmove`
- * passively, so an `onTouchMove` prop cannot `preventDefault` at all.
+ *  - `exclusive` — *every* touch, unconditionally. Nothing underneath scrolls
+ *    or zooms, so there is no gesture to preserve; this is `touch-action: none`
+ *    expressed the one way WebKit acts on. Pointer events are untouched, so the
+ *    surface's own finger gestures still resolve.
+ *  - `scroll` — an all-stylus touch while a marking tool is active, and *any*
+ *    touch while a stroke is in flight, which is what stops a resting palm
+ *    dragging the page out from under the nib. A mixed finger-and-stylus set is
+ *    left alone — only two contacts can pinch-zoom, and that has to keep
+ *    working. Read mode blocks nothing, so the Pencil scrolls there like a
+ *    finger.
  *
- * `exclusive` needs none of this — `touch-action: none` already means no touch
- * on the surface scrolls anything.
+ * It has to be a native non-passive listener under either: React attaches
+ * `touchmove` passively, so an `onTouchMove` prop cannot `preventDefault` at
+ * all. And `preventDefault` on `pointerdown` does not stop a WebKit pan —
+ * cancelling the touch stream is the only thing that does.
  */
 export function useInkTouchPolicy({
   policy,
@@ -63,13 +74,16 @@ export function useInkTouchPolicy({
   drawingRef: RefObject<boolean>;
 }): void {
   useEffect(() => {
-    if (policy !== 'scroll') return;
     const element = guardRef.current;
     if (!element) return;
     // Typed as a bare Event because the guard element is only known to be an
     // Element (an <svg> on one surface, a <div> on the other), and TypeScript's
     // touch event map is declared on HTMLElement.
     const onTouchMove = (event: Event) => {
+      if (policy === 'exclusive') {
+        event.preventDefault();
+        return;
+      }
       const touches = Array.from(
         (event as TouchEvent).touches
       ) as StylusTouch[];
