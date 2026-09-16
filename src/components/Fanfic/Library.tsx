@@ -42,6 +42,19 @@ const formatDate = (date: string, timeZone?: string) =>
 
 const PAGE_SIZE = 50;
 
+const SOURCE_FILTERS = [
+  ['', 'All sources'],
+  ['forums.spacebattles.com', SITE_LABELS.spacebattles],
+  ['forums.sufficientvelocity.com', SITE_LABELS.sufficientvelocity],
+  ['forum.questionablequesting.com', SITE_LABELS.questionablequesting],
+  ['fanfiction', SITE_LABELS.fanfiction],
+  ['ao3', SITE_LABELS.ao3],
+  ['patreon', SITE_LABELS.patreon],
+  ['epub', 'EPUB'],
+  ['docx', 'DOCX'],
+  ['pdf', 'PDF'],
+] as const;
+
 export function Library({ onOpen }: LibraryProps) {
   useCollectionScans();
   const [view, setView] = useState<'library' | 'folders'>('library');
@@ -54,6 +67,7 @@ export function Library({ onOpen }: LibraryProps) {
   const [importError, setImportError] = useState<string | null>(null);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [tag, setTag] = useState<string | null>(null);
+  const [source, setSource] = useState('');
   const [showDelete, setShowDelete] = useState(false);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
   const [ficToDelete, setFicToDelete] = useState<Fic | null>(null);
@@ -64,11 +78,12 @@ export function Library({ onOpen }: LibraryProps) {
   const queryClient = useQueryClient();
 
   const listQuery = useInfiniteQuery({
-    queryKey: ['fanfic', 'list', folderId, tag],
+    queryKey: ['fanfic', 'list', folderId, tag, source],
     queryFn: ({ pageParam }) =>
       api.fanfic.list({
         folderId: folderId && folderId !== 'recent' ? folderId : undefined,
         tag: tag ?? undefined,
+        source: source || undefined,
         sort: folderId === 'recent' ? 'recent' : undefined,
         limit: PAGE_SIZE,
         offset: pageParam,
@@ -90,8 +105,8 @@ export function Library({ onOpen }: LibraryProps) {
   });
 
   const searchResults = useQuery({
-    queryKey: ['fanfic', 'search', searchQuery],
-    queryFn: () => api.fanfic.search(searchQuery),
+    queryKey: ['fanfic', 'search', searchQuery, source],
+    queryFn: () => api.fanfic.search(searchQuery, source || undefined),
     enabled: !!searchQuery,
   });
 
@@ -324,6 +339,22 @@ export function Library({ onOpen }: LibraryProps) {
         </div>
       )}
 
+      <div
+        role="group"
+        aria-label="Filter by source"
+        className="flex flex-wrap gap-2 mb-4"
+      >
+        {SOURCE_FILTERS.map(([id, label]) => (
+          <TagPill
+            key={id}
+            active={source === id}
+            onClick={() => setSource(id)}
+            label={label}
+            size="sm"
+          />
+        ))}
+      </div>
+
       <SiteLimit />
       {showImport && (
         <div className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
@@ -494,7 +525,7 @@ export function Library({ onOpen }: LibraryProps) {
         {fics?.length === 0 && !isLoading && (
           <EmptyState
             title={
-              searchQuery
+              searchQuery || source
                 ? 'No fics match'
                 : view === 'folders' && !folderId
                   ? 'Choose a folder to browse and group its books.'

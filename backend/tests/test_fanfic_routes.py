@@ -50,6 +50,55 @@ def test_get_404(client):
     assert client.get('/api/fanfic/chapters/nope').status_code == 404
 
 
+SOURCES = [
+    ('xenforo', 'forums.spacebattles.com'),
+    ('xenforo', 'forums.sufficientvelocity.com'),
+    ('xenforo', 'forum.questionablequesting.com'),
+    ('fanfiction', 'www.fanfiction.net'),
+    ('ao3', 'archiveofourown.org'),
+    ('patreon', 'www.patreon.com'),
+    ('epub', None), ('docx', None), ('pdf', None),
+]
+
+
+@pytest.mark.parametrize('source_type,site', SOURCES)
+def test_source_filters_list_and_search(client, source_type, site):
+    db = get_db()
+    ids = {}
+    for kind, host in SOURCES:
+        fic_id, _ = make_fic('Matching story')
+        db.execute('UPDATE fics SET source_type=?, site=? WHERE id=?',
+                   (kind, host, fic_id))
+        ids[(kind, host)] = fic_id
+    db.commit()
+    source = site if source_type == 'xenforo' else source_type
+    for path in ['/api/fanfic?', '/api/fanfic/search?query=Matching&']:
+        response = client.get(f'{path}source={source}')
+        assert response.status_code == 200
+        assert [row['id'] for row in response.get_json()] == [ids[(source_type, site)]]
+    assert len(client.get('/api/fanfic').get_json()) == len(SOURCES)
+
+
+def test_source_filter_combines_with_tags_folders_and_pagination(client):
+    db = get_db()
+    expected = []
+    for index in range(6):
+        fic_id, _ = make_fic(f'Matching story {index}')
+        db.execute('UPDATE fics SET source_type=?, site=NULL, last_opened_at=? WHERE id=?',
+                   ('epub' if index % 2 else 'pdf', index + 1, fic_id))
+        db.execute('INSERT INTO fic_site_tags(fic_id, name, created_at) VALUES (?,?,?)',
+                   (fic_id, 'Adventure', 1))
+        if index % 2:
+            expected.insert(0, fic_id)
+    db.commit()
+    rows = client.get('/api/fanfic', query_string={
+        'source': 'epub', 'tag': 'Adventure', 'folderId': 'unsorted',
+        'sort': 'recent', 'limit': 1, 'offset': 1,
+    }).get_json()
+    assert [row['id'] for row in rows] == expected[1:2]
+    assert client.get('/api/fanfic?source=epub&tag=Missing').get_json() == []
+
+
 def test_list_includes_expandable_details(client):
     fic_id, _ = make_fic()
     db = get_db()

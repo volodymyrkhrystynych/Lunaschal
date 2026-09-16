@@ -55,6 +55,7 @@ vi.mock('../../hooks/api', () => ({
       get: vi.fn().mockResolvedValue(FIC),
       markOpened: vi.fn().mockResolvedValue({ success: true }),
       list: vi.fn().mockResolvedValue([FIC]),
+      search: vi.fn().mockResolvedValue([FIC]),
       folders: vi.fn().mockResolvedValue([]),
       chapters: vi.fn().mockResolvedValue(CHAPTERS),
       chapter: vi.fn().mockResolvedValue({
@@ -133,6 +134,43 @@ describe('Library infinite scroll', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('applies source filters to browsing and search, and clears them', async () => {
+    const { api } = await import('../../hooks/api');
+    renderFanfic();
+    await screen.findByText('Test Fic');
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'SpaceBattles', exact: true })
+    );
+    await waitFor(() =>
+      expect(api.fanfic.list).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          source: 'forums.spacebattles.com',
+          offset: 0,
+        })
+      )
+    );
+    fireEvent.change(screen.getByPlaceholderText('Search titles and tags...'), {
+      target: { value: 'Test' },
+    });
+    await waitFor(() =>
+      expect(api.fanfic.search).toHaveBeenLastCalledWith(
+        'Test',
+        'forums.spacebattles.com'
+      )
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'PDF', exact: true }));
+    await waitFor(() =>
+      expect(api.fanfic.search).toHaveBeenLastCalledWith('Test', 'pdf')
+    );
+    fireEvent.click(
+      screen.getByRole('button', { name: 'All sources', exact: true })
+    );
+    await waitFor(() =>
+      expect(api.fanfic.search).toHaveBeenLastCalledWith('Test', undefined)
+    );
   });
 
   it('fetches the next page once the sentinel intersects', async () => {
