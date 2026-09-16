@@ -5,11 +5,13 @@ Gathering and prompt-building are kept pure and LLM-free so they can be
 unit-tested; only `generate_briefing` hits the model (via `chat_json`).
 """
 import time
+import json
 from datetime import datetime, date, timedelta
 
 from backend.ai.chat import get_recent_journal_entries, format_journal_context
 from backend.ai.llm import chat_json
 from backend.day_boundary import day_key_for
+from backend.briefing_events import gather_day, EVENT_SCHEMA, RECONSTRUCTION_PROMPT
 
 # How far ahead the calendar lookahead reaches, in days (today + this many).
 CALENDAR_LOOKAHEAD_DAYS = 3
@@ -107,6 +109,7 @@ def gather_briefing_context(now: int | None = None) -> dict:
         'calendar': _upcoming_calendar(db, today, horizon),
         'learning_due': learning_due_count(db, now),
         'life_wiki': life_wiki_index(),
+        'yesterday': gather_day(db, today),
     }
 
 
@@ -177,8 +180,11 @@ def build_briefing_prompt(context: dict) -> str:
                 context['calendar'], context['learning_due'], articles)):
         lines.append('(No recent journal, tasks, to-dos, calendar events, or reviews.)')
 
+    if context.get('yesterday'):
+        lines += ['Previous day evidence for calendar reconstruction (JSON):',
+                  json.dumps(context['yesterday'], ensure_ascii=False), '']
     lines.append(
-        "Write the check-in and lay out today's plan as instructed."
+        "Write the check-in, today's plan, and yesterday's missing event suggestions as instructed."
     )
     return '\n'.join(lines)
 
@@ -187,7 +193,7 @@ SYSTEM_PROMPT = (
     "You are Lunaschal acting as the user's personal secretary. Overnight you've "
     "read through their journal, tasks, to-dos, calendar, and study reviews, and "
     "now you leave a short briefing waiting for them in the morning chat.\n\n"
-    "Your answer has two parts and they must not duplicate each other.\n\n"
+    "Your answer has three parts: briefing, todos, and events.\n\n"
     "\"briefing\" is the check-in only: a warm, concise few sentences that reflect "
     "what they've been living and thinking about and how you're framing their day. "
     "Be encouraging, not naggy. Do NOT list the day's tasks here.\n\n"
@@ -209,14 +215,14 @@ SYSTEM_PROMPT = (
     "linkedTitle is \"Buy milk\". Use null when the item is genuinely new. Match "
     "on meaning, not wording: \"Get groceries\" and \"Buy groceries\" are the "
     "same task.\n\n"
-    "Respond with a JSON object of exactly this shape:\n"
+    "Respond with a JSON object with these fields plus the events array described below:\n"
     '{"briefing": "<markdown check-in>", '
     '"todos": [{"title": "string", "priority": 1-5, "list": "todo", '
     '"due": <unix seconds or null>, '
     '"linkedTitle": <existing item title or null>}]}\n'
     "priority is 1 (low) to 5 (high); use 3 when unsure. list is usually \"todo\". "
     "Omit due (or use null) unless a date is clearly implied."
-)
+) + RECONSTRUCTION_PROMPT
 
 # Grammar-enforced shape of the briefing completion. llama-server compiles this
 # into GBNF, so "prose instead of JSON" and "wrong key names" stop being possible
@@ -227,6 +233,7 @@ BRIEFING_SCHEMA = {
     'type': 'object',
     'properties': {
         'briefing': {'type': 'string'},
+        'events': EVENT_SCHEMA,
         'todos': {
             'type': 'array',
             'maxItems': MAX_BRIEFING_TODOS,
@@ -244,7 +251,7 @@ BRIEFING_SCHEMA = {
             },
         },
     },
-    'required': ['briefing', 'todos'],
+    'required': ['briefing', 'todos', 'events'],
     'additionalProperties': False,
 }
 

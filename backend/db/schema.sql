@@ -102,6 +102,19 @@ CREATE TABLE IF NOT EXISTS journal_voice_drafts (
 CREATE INDEX IF NOT EXISTS idx_journal_voice_drafts_status
     ON journal_voice_drafts(status, created_at);
 
+-- User-owned place names. Coordinates are optional; notes can describe an
+-- address or aliases even before a GPS fix is available.
+CREATE TABLE IF NOT EXISTS saved_places (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    notes TEXT NOT NULL DEFAULT '',
+    latitude REAL,
+    longitude REAL,
+    radius_m INTEGER NOT NULL DEFAULT 150,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS calendar_events (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,

@@ -8,6 +8,7 @@ import { STTStatusSection } from './STTStatusSection';
 import { ShortcutsSection } from './ShortcutsSection';
 import { NudgeSection } from './NudgeSection';
 import { WeatherSection } from './WeatherSection';
+import { PlacesSection } from './PlacesSection';
 import { BriefingSection } from './BriefingSection';
 import { ReposSection } from './ReposSection';
 import { ResearchSection } from './ResearchSection';
@@ -155,6 +156,10 @@ export function Settings() {
 
           <CollapsibleSection title="Overnight Briefing">
             <BriefingSection />
+          </CollapsibleSection>
+
+          <CollapsibleSection title="Saved Places">
+            <PlacesSection />
           </CollapsibleSection>
 
           <CollapsibleSection title="Repositories">

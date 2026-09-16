@@ -706,6 +706,9 @@ export interface ProposedTodo {
 // resolved in place by POST /api/chat/proposals/<messageId>/<id> — the only
 // place `status` ever changes, so a card survives a reload until it actually is.
 export interface DelegateProposalRecord {
+  reconstructionDay?: string;
+  evidence?: string;
+  sources?: { id: string; label: string; recordedAt: string }[];
   id: string;
   kind:
     'calendar' | 'calorie' | 'food' | 'recipe' | 'recipe_link' | 'flashcards';
@@ -2787,6 +2790,17 @@ async function uploadForBlob(url: string, form: FormData): Promise<Blob> {
 
 // --- API namespaces ---
 
+export interface SavedPlaceInput {
+  name: string;
+  notes: string;
+  latitude: number | null;
+  longitude: number | null;
+  radiusM: number;
+}
+export interface SavedPlace extends SavedPlaceInput {
+  id: string;
+}
+
 export const api = {
   auth: {
     status: () => get<AuthStatus>('/api/auth/status'),
@@ -3902,6 +3916,7 @@ export const api = {
         messageId: string;
         briefing: string;
         todosAdded: number;
+        eventsSuggested: number;
       }>('/api/chat/briefing/run', {}),
     // `data` carries the card's edited values on accept — the card is a form,
     // so what gets written is what the user is looking at, not what the model
@@ -3922,6 +3937,13 @@ export const api = {
   // prompt. These routes are its only write path — chat used to edit it itself,
   // with no confirm card, and no longer can.
   memory: {
+    places: () => get<SavedPlace[]>('/api/memory/places'),
+    savePlace: (place: SavedPlaceInput, id?: string) =>
+      id
+        ? put<SavedPlace>(`/api/memory/places/${id}`, place)
+        : post<SavedPlace>('/api/memory/places', place),
+    deletePlace: (id: string) =>
+      del<{ ok: boolean }>(`/api/memory/places/${id}`),
     get: () => get<UserMemory>('/api/memory'),
     update: (content: string) => put<UserMemory>('/api/memory', { content }),
     revisions: () => get<MemoryRevision[]>('/api/memory/revisions'),

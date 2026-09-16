@@ -251,6 +251,7 @@ def format_plate_context(now: int | None = None) -> str:
 
 def build_chat_system_prompt(now: int | None = None) -> str:
     from backend.memory import format_memory_context
+    from backend.places import format_places_context
     from backend.observations import format_observations_context
 
     # Ordered least- to most-volatile, and that ordering is load-bearing: this
@@ -262,6 +263,7 @@ def build_chat_system_prompt(now: int | None = None) -> str:
     # it on every tick.
     blocks = [
         format_memory_context(),
+        format_places_context(),
         format_life_wiki_context(),
         format_observations_context(),
         format_journal_context(get_recent_journal_entries(now), now),

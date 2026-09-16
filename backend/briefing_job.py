@@ -17,6 +17,7 @@ completion at all) falls back to `fallback_plan`, built from their own lists.
 """
 import json
 import time
+import threading
 
 from ulid import ULID
 
@@ -31,6 +32,7 @@ from backend.ai.briefing import (
     MAX_BRIEFING_TODOS,
 )
 from backend.ai.llm import EmptyCompletion
+from backend.briefing_events import stage_events
 from backend.routes.tasks import (
     _parse_priority, _parse_due, _today_chat_todo_titles,
 )
@@ -103,7 +105,17 @@ def _seed_chat_todos(db, proposed: list, today: str, now: int) -> int:
     return inserted
 
 
+_briefing_lock = threading.Lock()
+
+
 def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
+    # A manual trigger can race the nightly daemon. Serialize through staging
+    # so its duplicate check sees the proposals the other invocation stored.
+    with _briefing_lock:
+        return _run_briefing(now, force)
+
+
+def _run_briefing(now: int | None = None, force: bool = False) -> dict | None:
     """Generate and store today's briefing. Returns a summary dict, or None if it
     was skipped (AI unconfigured, or a briefing already exists and not forced)."""
     if not is_ai_configured():
@@ -148,6 +160,9 @@ def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         return None
 
     metadata = {'briefing': True}
+    proposals = stage_events(db, result.get('events', []), context.get('yesterday'))
+    if proposals:
+        metadata['proposals'] = proposals
     if degraded:
         metadata['degraded'] = True
     message_id = str(ULID())
@@ -163,5 +178,6 @@ def run_briefing(now: int | None = None, force: bool = False) -> dict | None:
         'messageId': message_id,
         'briefing': briefing,
         'todosAdded': inserted,
+        'eventsSuggested': len(proposals),
         'degraded': degraded,
     }
