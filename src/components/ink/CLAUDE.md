@@ -140,6 +140,18 @@ not supply a stroke model or a pointer loop.**
   `gesturestart`/`gesturechange` on that element, the last route by which a
   second contact can claim the pen.
 
+  **A guard that wide then has to let controls through.** Cancelling a
+  `touchmove` also cancels the click — the Touch Events spec says the
+  compatibility mouse events must not be dispatched once one is prevented, and
+  WebKit obeys — and a Pencil tap always wobbles a pixel or two, so it always
+  produces one. Since Paper's tool panel floats _inside_ the stage, guarding the
+  stage indiscriminately left the pen able to draw but unable to press
+  pen/highlighter/eraser, while the newspaper's pen could still press its own
+  panel, which floats outside its page box. So a touch that _began_ on a control
+  is let through (a touch event's target is where it began, which is exactly the
+  question) — unless a stroke is in flight, which outranks it: a palm that
+  happens to come down on the panel must still not take the pen away.
+
 - **`onPointerLeave` ends a stroke only when the capture is not held**, and is
   wired only under `exclusive`. While the capture is held, boundary events are
   retargeted to the surface and a leave cannot mean the stroke is over — but

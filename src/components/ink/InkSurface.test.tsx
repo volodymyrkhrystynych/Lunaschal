@@ -639,6 +639,33 @@ describe('the touch policy', () => {
       expect(touchMove(wrapper, 'direct', 'direct')).toBe(true);
     });
 
+    // Cancelling a touchmove also cancels the click — the Touch Events spec
+    // says the compatibility mouse events must not be dispatched once one is
+    // prevented, and WebKit obeys. A Pencil tap always wobbles a pixel or two,
+    // so guarding a region containing the floating tool panel left the pen
+    // unable to press pen/highlighter/eraser at all.
+    it('lets a touch that began on a control keep its click', () => {
+      const { wrapper } = exclusive();
+      const button = document.createElement('button');
+      wrapper.appendChild(button);
+      // Dispatched from the button: a touch event's target is where the touch
+      // began, which is the question the guard asks.
+      expect(touchMove(button, 'stylus')).toBe(false);
+    });
+
+    // ...but not at the cost of palm rejection: a stroke in flight outranks it.
+    it('still cancels a touch on a control while a stroke is in flight', () => {
+      const { svg, wrapper } = exclusive();
+      const button = document.createElement('button');
+      wrapper.appendChild(button);
+      send(svg, 'pointerdown', {
+        pointerType: 'pen',
+        clientX: 50,
+        clientY: 50,
+      });
+      expect(touchMove(button, 'direct')).toBe(true);
+    });
+
     // The palm and the nib are two contacts, which is a pinch as far as WebKit
     // is concerned — and a pinch takes the pen away mid-stroke. Nothing under a
     // surface that *is* the screen should be zooming anyway.

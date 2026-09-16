@@ -1487,4 +1487,33 @@ describe('the palm guard', () => {
     stage.dispatchEvent(onMargin);
     expect(onMargin.defaultPrevented).toBe(true);
   });
+
+  // ...but the tool panel floats *inside* that stage, and cancelling a
+  // touchmove also cancels the click: the Touch Events spec says the
+  // compatibility mouse events must not be dispatched once one is prevented.
+  // A Pencil tap always wobbles a pixel or two, so guarding the stage
+  // indiscriminately left the pen unable to press pen/highlighter/eraser at
+  // all — while it could still press them in the newspaper, whose guard is the
+  // page box and whose panel floats outside it.
+  it('leaves the pen able to press the tool panel floating over it', async () => {
+    const { container } = renderEditor();
+    const page = await waitFor(() => {
+      const c = container.querySelector('svg[aria-label="Page"]');
+      expect(c).toBeTruthy();
+      return c!;
+    });
+    const stage = page.closest('.flex-1.relative')!;
+    const eraser = await screen.findByLabelText('Eraser');
+    // The panel floats inside the guarded stage; without this the assertion
+    // below would pass for the wrong reason.
+    expect(stage.contains(eraser)).toBe(true);
+
+    const onButton = new Event('touchmove', {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.assign(onButton, { touches: [{ touchType: 'stylus' }] });
+    eraser.dispatchEvent(onButton);
+    expect(onButton.defaultPrevented).toBe(false);
+  });
 });

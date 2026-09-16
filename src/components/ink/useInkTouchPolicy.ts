@@ -21,6 +21,24 @@ export type TouchPolicy = 'exclusive' | 'scroll';
 // Pencil reaches us through; elsewhere the field is simply absent.
 type StylusTouch = Touch & { touchType?: 'direct' | 'stylus' };
 
+/** Things a touch can land on that are being *pressed*, not drawn over. */
+const CONTROL = 'button, a, input, select, textarea, label, [role="button"]';
+
+/** Did this touch begin on a control?
+ *
+ * A touch event's target is where the touch *started*, which is exactly the
+ * question. It matters because cancelling a `touchmove` also cancels the click:
+ * the Touch Events spec says a user agent that has had `touchstart` or
+ * `touchmove` prevented must not dispatch the compatibility mouse events, and
+ * WebKit obeys. A Pencil tap always wobbles a pixel or two, so it always
+ * produces a `touchmove` — which is how guarding the Paper editor's whole stage
+ * (the floating tool panel is inside it) left the pen unable to press
+ * pen/highlighter/eraser at all, while the newspaper, whose guard is the page
+ * box and whose panel floats outside it, was unaffected.
+ */
+const onControl = (target: EventTarget | null): boolean =>
+  target instanceof Element && target.closest(CONTROL) !== null;
+
 export const touchActionFor = (policy: TouchPolicy): string =>
   policy === 'exclusive' ? 'none' : 'pan-y pinch-zoom';
 
@@ -96,6 +114,11 @@ export function useInkTouchPolicy({
     // Element (an <svg> on one surface, a <div> on the other), and TypeScript's
     // touch event map is declared on HTMLElement.
     const onTouchMove = (event: Event) => {
+      // Pressing a control is never the browser about to pan with the page, and
+      // swallowing it costs the control its click. A stroke in flight outranks
+      // that: nothing may take the pen away mid-stroke, a palm that happens to
+      // land on the panel included.
+      if (!drawingRef.current && onControl(event.target)) return;
       if (policy === 'exclusive') {
         event.preventDefault();
         return;
