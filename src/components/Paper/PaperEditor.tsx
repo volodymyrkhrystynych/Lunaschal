@@ -1418,6 +1418,10 @@ export function PaperEditor({
               key={currentPage.id}
               ref={canvasRef}
               pageId={currentPage.id}
+              // The stage, not the sheet: the grey margins either side of the
+              // page are where a writing hand actually rests its palm, and a
+              // touch there is what WebKit was pairing with the nib.
+              guardRef={stageRef}
               images={shownImages}
               initialStrokes={initialStrokes}
               initialSize={initialSize}

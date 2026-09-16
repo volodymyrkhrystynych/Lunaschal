@@ -1458,3 +1458,33 @@ describe('a keydown with no mappable key', () => {
     await waitFor(() => expect(api.paper.savePage).toHaveBeenCalled());
   });
 });
+
+describe('the palm guard', () => {
+  // An A4 sheet is centred with grey margins either side, and a hand writing
+  // near an edge rests its palm on the margin — outside the ink layer
+  // entirely. A guard mounted on the ink alone never sees that touch, WebKit
+  // pairs it with the nib as a pinch, and the pen pointer is cancelled
+  // mid-stroke: an Apple Pencil laid down a dot and stopped. So the editor
+  // hands its whole stage to the surface as the element to guard.
+  it('cancels a touch on the margin beside the page, not only on it', async () => {
+    const { container } = renderEditor();
+    const page = await waitFor(() => {
+      const c = container.querySelector('svg[aria-label="Page"]');
+      expect(c).toBeTruthy();
+      return c!;
+    });
+    // The stage is the scrolling-free area the sheet is centred in; the sheet
+    // sits inside it, so anything above the sheet in the tree is margin.
+    const stage = page.closest('.flex-1.relative')!;
+    expect(stage).toBeTruthy();
+    expect(stage.contains(page)).toBe(true);
+
+    const onMargin = new Event('touchmove', {
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.assign(onMargin, { touches: [{ touchType: 'direct' }] });
+    stage.dispatchEvent(onMargin);
+    expect(onMargin.defaultPrevented).toBe(true);
+  });
+});

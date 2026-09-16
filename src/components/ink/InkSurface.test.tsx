@@ -639,6 +639,18 @@ describe('the touch policy', () => {
       expect(touchMove(wrapper, 'direct', 'direct')).toBe(true);
     });
 
+    // The palm and the nib are two contacts, which is a pinch as far as WebKit
+    // is concerned — and a pinch takes the pen away mid-stroke. Nothing under a
+    // surface that *is* the screen should be zooming anyway.
+    it('refuses the pinch that would take the pen away', () => {
+      const { wrapper } = exclusive();
+      for (const name of ['gesturestart', 'gesturechange']) {
+        const event = new Event(name, { bubbles: true, cancelable: true });
+        wrapper.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(true);
+      }
+    });
+
     // The surface's own gestures — a swipe to flip the page, a two-finger tap
     // for the eraser — are pointer events, which cancelling a touch stream
     // does not touch.
@@ -661,6 +673,61 @@ describe('the touch policy', () => {
       });
       expect(onSwipe).toHaveBeenCalledWith('next');
     });
+  });
+});
+
+describe('the pointer leaving the box', () => {
+  // Only wired where nothing scrolls, and only a fallback even there. While the
+  // capture is held a leave cannot mean the stroke is over — WebKit dispatches
+  // one anyway during a pen stroke on an <svg>, and taking it at face value
+  // ended the stroke a few pixels in: an Apple Pencil laid down a dot and
+  // stopped.
+  const drawTo = (svg: Element, x: number) => {
+    send(svg, 'pointerdown', { pointerType: 'pen', clientX: 10, clientY: 10 });
+    send(svg, 'pointermove', { pointerType: 'pen', clientX: x, clientY: 10 });
+  };
+
+  /** React synthesizes `onPointerLeave` from `pointerout` plus a
+   * `relatedTarget` outside the element, so dispatching a bare `pointerleave`
+   * reaches no handler at all — a test that did would pass without running any
+   * of this. */
+  const leave = (svg: Element) =>
+    send(svg, 'pointerout', {
+      pointerType: 'pen',
+      clientX: 40,
+      clientY: 10,
+      relatedTarget: document.body,
+    });
+
+  it('does not end a stroke this surface has the capture for', () => {
+    const { ref, svg } = renderInk({ touchPolicy: 'exclusive' });
+    svg.hasPointerCapture = () => true;
+    drawTo(svg, 40);
+    leave(svg);
+    expect(strokesOf(ref)).toHaveLength(0); // still in flight, not committed
+    send(svg, 'pointermove', { pointerType: 'pen', clientX: 90, clientY: 10 });
+    send(svg, 'pointerup', { pointerType: 'pen', clientX: 90, clientY: 10 });
+    expect(strokesOf(ref)).toHaveLength(1);
+  });
+
+  // What the handler is actually for: a mouse dragged off the page where the
+  // capture was refused or never applied.
+  it('ends one it does not hold the capture for', () => {
+    const { ref, svg } = renderInk({ touchPolicy: 'exclusive' });
+    svg.hasPointerCapture = () => false;
+    drawTo(svg, 40);
+    leave(svg);
+    expect(strokesOf(ref)).toHaveLength(1);
+  });
+
+  it('is not wired at all where the page under it scrolls', () => {
+    const { ref, svg } = renderInk({ touchPolicy: 'scroll' });
+    svg.hasPointerCapture = () => false;
+    drawTo(svg, 40);
+    leave(svg);
+    expect(strokesOf(ref)).toHaveLength(0);
+    send(svg, 'pointerup', { pointerType: 'pen', clientX: 90, clientY: 10 });
+    expect(strokesOf(ref)).toHaveLength(1);
   });
 });
 

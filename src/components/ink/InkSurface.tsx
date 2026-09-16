@@ -534,6 +534,27 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
       finishDrawing(native.pointerId, true);
     };
 
+    /** The pointer left the box.
+     *
+     * Only wired under `exclusive`, and only a fallback even there: while the
+     * capture is held, boundary events are retargeted to this surface and a
+     * leave cannot mean the stroke is over. WebKit dispatches one anyway during
+     * a pen stroke on an `<svg>`, and taking it at face value ended the stroke
+     * a few pixels in — an Apple Pencil on a Paper page laid down a dot and
+     * stopped. So a leave ends a stroke only when the capture is *not* held,
+     * which is the case this exists for: a mouse dragged off the page on a
+     * desktop, where `setPointerCapture` was refused or never applied. */
+    const onPointerLeaveEnd = (e: React.PointerEvent<SVGSVGElement>) => {
+      const native = e.nativeEvent;
+      if (
+        native.pointerType !== 'touch' &&
+        svgRef.current?.hasPointerCapture?.(native.pointerId)
+      ) {
+        return;
+      }
+      onPointerUp(e);
+    };
+
     const onPointerCancel = (e: React.PointerEvent<SVGSVGElement>) => {
       if (e.nativeEvent.pointerType === 'touch') {
         const t = touchRef.current;
@@ -610,7 +631,7 @@ export const InkSurface = forwardRef<InkSurfaceHandle, InkSurfaceProps>(
           // under the pointer as a matter of course, and ending a stroke every
           // time the nib crossed a page gutter would be a bug you could only
           // reproduce on the hardware.
-          onPointerLeave={exclusive ? onPointerUp : undefined}
+          onPointerLeave={exclusive ? onPointerLeaveEnd : undefined}
         >
           {backdrop != null && <g data-ink-backdrop="">{backdrop}</g>}
           <g data-ink-strokes="">
