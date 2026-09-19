@@ -6,7 +6,8 @@ transcription lands on the row as an error the UI can show rather than
 disappearing into a background thread, an upload *does* auto-fire the
 non-speech audio description when an audio model is configured (but stays
 idle, not erroring, when it isn't), and an image upload picks up its capture
-location from EXIF GPS the same way the food log does.
+location from EXIF GPS the same way the food log does — while keeping the rest
+of the photo's metadata whole beside it.
 """
 import io
 
@@ -20,14 +21,19 @@ from backend.journal import storage
 from backend.routes import journal as journal_routes
 
 
-def _exif_jpeg(gps=('N', (43.0, 39.0, 11.0), 'W', (79.0, 22.0, 59.0))):
-    """A tiny JPEG carrying a GPS fix (or none, if gps=None)."""
+def _exif_jpeg(gps=('N', (43.0, 39.0, 11.0), 'W', (79.0, 22.0, 59.0)), camera=True):
+    """A tiny JPEG carrying a GPS fix (or none, if gps=None) and, by default,
+    the camera tags a real photo would also have."""
     img = Image.new('RGB', (8, 8), (120, 120, 120))
     exif = img.getexif()
     if gps:
         lat_ref, lat, lon_ref, lon = gps
         g = exif.get_ifd(0x8825)
         g[1], g[2], g[3], g[4] = lat_ref, lat, lon_ref, lon
+    if camera:
+        exif[0x010F], exif[0x0110] = 'Apple', 'iPhone 15 Pro'
+        sub = exif.get_ifd(0x8769)
+        sub[0x9003], sub[0x829D] = '2026:03:14 09:41:02', 1.78
     buf = io.BytesIO()
     img.save(buf, 'JPEG', exif=exif)
     return buf.getvalue()
@@ -229,6 +235,54 @@ def test_upload_leaves_location_null_without_gps(client, entry_id):
                 data=_exif_jpeg(gps=None)).get_json()
     assert a['latitude'] is None
     assert a['longitude'] is None
+
+
+def test_upload_keeps_the_rest_of_the_exif(client, entry_id):
+    """The location gets its own columns because the app reasons about it; the
+    rest is the record of the photograph and is kept whole."""
+    a = _upload(client, entry_id, filename='view.jpg', mime='image/jpeg',
+                data=_exif_jpeg()).get_json()
+    assert a['exif']['Make'] == 'Apple'
+    assert a['exif']['Model'] == 'iPhone 15 Pro'
+    assert a['exif']['DateTimeOriginal'] == '2026:03:14 09:41:02'
+    assert a['exif']['GPS']['GPSLatitudeRef'] == 'N'
+
+
+def test_exif_arrives_as_an_object_not_a_string(client, entry_id):
+    """Stored as text, handed over parsed — a client that had to parse it again
+    to read one tag would be doing our job."""
+    _upload(client, entry_id, filename='view.jpg', mime='image/jpeg',
+            data=_exif_jpeg())
+    listed = client.get(f'/api/journal/{entry_id}/attachments').get_json()
+    assert isinstance(listed[0]['exif'], dict)
+
+
+def test_upload_without_exif_stores_none(client, entry_id):
+    image = Image.new('RGB', (4, 4))
+    buf = io.BytesIO()
+    image.save(buf, 'JPEG')
+    a = _upload(client, entry_id, filename='plain.jpg', mime='image/jpeg',
+                data=buf.getvalue()).get_json()
+    assert a['exif'] is None
+
+
+def test_a_corrupt_exif_blob_reads_as_absent(client, entry_id):
+    """The column is written only by us, so a row that fails to parse is corrupt
+    rather than differently shaped — and losing the whole attachment list over
+    one bad blob would hide the entry."""
+    a = _upload(client, entry_id, filename='view.jpg', mime='image/jpeg',
+                data=_exif_jpeg()).get_json()
+    from backend.db.connection import get_db
+    db = get_db()
+    db.execute("UPDATE journal_attachments SET exif='{not json' WHERE id=?", (a['id'],))
+    db.commit()
+    listed = client.get(f'/api/journal/{entry_id}/attachments').get_json()
+    assert listed[0]['exif'] is None
+
+
+def test_audio_upload_has_no_exif(client, entry_id):
+    a = _upload(client, entry_id).get_json()
+    assert a['exif'] is None
 
 
 def test_audio_upload_has_no_location(client, entry_id):

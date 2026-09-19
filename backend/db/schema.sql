@@ -51,6 +51,14 @@ CREATE TABLE IF NOT EXISTS journal_attachments (
     -- carries no GPS EXIF, or for non-image attachments.
     latitude REAL,
     longitude REAL,
+    -- Everything else the camera wrote, as a JSON object keyed by standard EXIF
+    -- tag name (backend/food/exif.py's extract_exif_block) — body, lens,
+    -- exposure, orientation, dimensions, and a nested GPS map. NULL for a
+    -- non-image attachment, for a photo whose EXIF was stripped, and for every
+    -- row predating the column. Deliberately a blob rather than columns: the
+    -- set of tags is open-ended and per-vendor, and the app reads it for
+    -- display rather than querying it.
+    exif TEXT,
     -- The five below are for kind='youtube' only: a video watched and commented
     -- on, downloaded at 720p and kept on the archive drive rather than under
     -- ./data/journal/ (backend/journal/archive.py). Its poster stays on the SSD
