@@ -166,6 +166,7 @@ def init_db() -> None:
     _repoint_vision_at_qwen36(db)
     _ensure_attachment_description_columns(db)
     _ensure_journal_attachment_location(db)
+    _ensure_journal_attachment_exif(db)
     _ensure_journal_entry_location(db)
     _ensure_todo_completed_at(db)
     _ensure_todo_list_columns(db)
@@ -1892,6 +1893,19 @@ def _ensure_journal_attachment_location(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE journal_attachments ADD COLUMN latitude REAL')
     if 'longitude' not in cols:
         db.execute('ALTER TABLE journal_attachments ADD COLUMN longitude REAL')
+    db.commit()
+
+
+def _ensure_journal_attachment_exif(db: sqlite3.Connection) -> None:
+    """The rest of a photo's EXIF — see the column comment in schema.sql.
+
+    Nothing backfills it: the tags live in the uploaded file, which is still on
+    disk, but re-reading every image on startup is minutes of work for metadata
+    nobody has asked to see yet. Existing photos read as having none.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(journal_attachments)')}
+    if 'exif' not in cols:
+        db.execute('ALTER TABLE journal_attachments ADD COLUMN exif TEXT')
     db.commit()
 
 

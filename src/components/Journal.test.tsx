@@ -1002,6 +1002,7 @@ describe('Journal merge picker', () => {
         descriptionError: null,
         latitude: null,
         longitude: null,
+        exif: null,
         createdAt: '2026-07-02T10:00:00Z',
       },
     ],

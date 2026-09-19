@@ -147,6 +147,16 @@ export interface JournalAttachment {
   /** EXIF-derived capture location, images only. Null when the photo carries no GPS EXIF. */
   latitude: number | null;
   longitude: number | null;
+  /**
+   * Everything else the camera wrote, keyed by standard EXIF tag name — body,
+   * lens, exposure, orientation, dimensions, and a nested `GPS` map. Values are
+   * whatever the tag holds, which is why this is not a named interface: the set
+   * of tags is open-ended and per-vendor, so anything reading a specific one
+   * must narrow it at the point of use. Null for a non-image attachment, for a
+   * photo whose EXIF was stripped, and for anything uploaded before the column
+   * existed (nothing backfills it).
+   */
+  exif: Record<string, unknown> | null;
   /** The canonical watch URL, `youtube` only. */
   sourceUrl?: string | null;
   /** Runtime in seconds, `youtube` only. Known before the download finishes. */

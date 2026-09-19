@@ -675,7 +675,7 @@ _ATTACHMENT_COLS = (
     'id, entry_id, kind, name, path, mime, size, position,'
     ' transcript, transcript_status, transcript_error,'
     ' description, description_status, description_error,'
-    ' latitude, longitude, source_url, duration_seconds, thumb_path,'
+    ' latitude, longitude, exif, source_url, duration_seconds, thumb_path,'
     ' import_status, import_error, created_at'
 )
 
@@ -693,6 +693,16 @@ def _attachment_dict(row) -> dict:
         d['url'] = f'/api/journal/attachments/{row["id"]}/file'
     if thumb:
         d['thumbnailUrl'] = f'/api/journal/attachments/{row["id"]}/thumbnail'
+    # Stored as text, handed over as an object — a client that got a JSON string
+    # back would have to parse it a second time to read one tag. Unparseable is
+    # treated as absent: the column is written only by us, so a row that fails
+    # here is corrupt rather than differently shaped, and failing the whole
+    # attachment list over one bad blob would hide the entry.
+    if d.get('exif'):
+        try:
+            d['exif'] = json.loads(d['exif'])
+        except (TypeError, ValueError):
+            d['exif'] = None
     return d
 
 
@@ -793,11 +803,19 @@ def _store_attachment(
     # the EXIF read above finds nothing and this is the only location there is.
     # EXIF still wins when it exists — it says where the picture was taken,
     # while the entry's fix only says where it was written.
+    #
+    # The rest of the EXIF is kept alongside it, whole. The location is pulled
+    # out into its own columns because the app reasons about it — a map, a
+    # fallback, a validator; the block is the record of the photograph itself
+    # and is read back for display, never queried.
     latitude = longitude = None
+    exif_block = None
     if kind == 'image':
-        from backend.food.exif import extract_photo_meta
+        from backend.food.exif import extract_exif_block, extract_photo_meta
         meta = extract_photo_meta(path)
         latitude, longitude = meta['latitude'], meta['longitude']
+        block = extract_exif_block(path)
+        exif_block = json.dumps(block) if block else None
     if latitude is None:
         latitude, longitude = _entry_coords(entry_id)
 
@@ -831,11 +849,12 @@ def _store_attachment(
         cur = db.execute(
             'INSERT OR IGNORE INTO journal_attachments'
             '(id, entry_id, kind, name, path, mime, size, position,'
-            ' transcript_status, description_status, latitude, longitude, created_at)'
-            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            ' transcript_status, description_status, latitude, longitude, exif,'
+            ' created_at)'
+            ' VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
             (attachment_id, entry_id, kind, name, str(path), file.mimetype or None,
              size, position, transcript_status, description_status,
-             latitude, longitude,
+             latitude, longitude, exif_block,
              created_at if created_at is not None else int(time.time())),
         )
         db.commit()
