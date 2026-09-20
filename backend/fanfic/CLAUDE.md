@@ -53,9 +53,17 @@ The one unverified piece is XenForo's bookmark-page markup, which differs by the
 
 **Update checks come in two tiers, because an edit is invisible from outside the post.** XenForo raises no alert when an author revises an existing chapter and leaves the threadmarks index untouched, so nothing about the fic looks different until you re-read the post itself.
 
-**FF.net pacing** is owned by `pacing.py`: at least 15 seconds between page
+**FF.net pacing** is owned by `pacing.py`: ten minutes by default between page
 requests, including redirects/retries. `fanfic_site_limits` persists the next
-request time, cooldown, challenge pause and rate-limit count. HTTP 429 honors
+request time and configurable `request_interval` across restarts. Library and
+import controls let the user save the interval in minutes (15 seconds to one day).
+Changes recalculate the current wait without clearing pauses or server cooldowns.
+Library and import controls offer Pause / Resume;
+manual pauses use the persistent site pause and stop before the next request,
+while an in-flight request can finish. Waiting checks for a pause every second
+and releases the shared fetch lock so other sites can fetch during the interval.
+The status shows the earliest next request time. Cooldown, pause and rate-limit
+count also persist. HTTP 429 honors
 Retry-After (seconds or an HTTP date); absent/invalid values use a 15-minute
 exponential cooldown capped at one day. Cloudflare challenges pause indefinitely
 until the Library banner's Resume button is used. Resume cannot shorten a server

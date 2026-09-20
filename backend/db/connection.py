@@ -82,6 +82,13 @@ def get_db() -> sqlite3.Connection:
     return _conn
 
 
+def _ensure_fanfic_request_interval(db):
+    cols = {r[1] for r in db.execute('PRAGMA table_info(fanfic_site_limits)')}
+    if 'request_interval' not in cols:
+        db.execute('ALTER TABLE fanfic_site_limits ADD COLUMN request_interval INTEGER NOT NULL DEFAULT 600')
+        db.commit()
+
+
 def init_db() -> None:
     db = get_db()
     schema = (Path(__file__).parent / 'schema.sql').read_text()
@@ -109,6 +116,7 @@ def init_db() -> None:
     _init_emails_fts(db)
     _init_messages_fts(db)
     _drop_vector_tables(db)
+    _ensure_fanfic_request_interval(db)
     _ensure_network_code(db)
     _ensure_newspaper_downloads(db)
     _ensure_newspaper_last_read_at(db)

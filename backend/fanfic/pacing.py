@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from backend.db.connection import get_db
 
 DOMAIN = 'fanfiction.net'
-INTERVAL = 15
+INTERVAL = 600
 _lock = threading.Lock()
 
 
@@ -22,7 +22,24 @@ def applies(url):
 def state():
     row = get_db().execute('SELECT * FROM fanfic_site_limits WHERE domain=?', (DOMAIN,)).fetchone()
     return dict(row) if row else {'domain': DOMAIN, 'next_request': 0, 'cooldown_until': 0,
-                                'strikes': 0, 'paused': 0, 'reason': None}
+                                'strikes': 0, 'paused': 0, 'reason': None,
+                                'request_interval': INTERVAL}
+
+
+def set_interval(seconds):
+    if type(seconds) is not int or not 15 <= seconds <= 86400:
+        raise ValueError('Request interval must be a whole number of seconds between 15 and 86400')
+    with _lock:
+        s = state()
+        # Recalculate the wait from the last reserved request. Server cooldowns
+        # and pauses remain independent of the user's chosen interval.
+        next_request = (s['next_request'] - s['request_interval'] + seconds
+                        if s['next_request'] else 0)
+        db = get_db()
+        db.execute('INSERT INTO fanfic_site_limits(domain,request_interval,next_request) VALUES (?,?,?)'
+                   ' ON CONFLICT(domain) DO UPDATE SET request_interval=excluded.request_interval,'
+                   ' next_request=excluded.next_request', (DOMAIN, seconds, next_request))
+        db.commit()
 
 
 def ready():
@@ -30,7 +47,7 @@ def ready():
     return not s['paused'] and s['cooldown_until'] <= time.time()
 
 
-def before_request(url):
+def before_request(url, *, wait_for=None):
     if not applies(url):
         return
     # Called under download's fetch lock, including redirects and retries.
@@ -45,10 +62,22 @@ def before_request(url):
                 db = get_db()
                 db.execute('INSERT INTO fanfic_site_limits(domain,next_request) VALUES (?,?)'
                            ' ON CONFLICT(domain) DO UPDATE SET next_request=excluded.next_request',
-                           (DOMAIN, now + INTERVAL))
+                           (DOMAIN, now + s['request_interval']))
                 db.commit()
                 return
-        time.sleep(min(wait, INTERVAL))
+        # Recheck pauses promptly, including ones requested during the wait.
+        (wait_for or time.sleep)(min(wait, 1))
+
+
+def pause():
+    with _lock:
+        db = get_db()
+        db.execute('INSERT INTO fanfic_site_limits(domain,paused,reason) VALUES (?,1,?)'
+                   ' ON CONFLICT(domain) DO UPDATE SET paused=1,'
+                   ' reason=CASE WHEN fanfic_site_limits.paused=1 THEN fanfic_site_limits.reason'
+                   ' ELSE excluded.reason END',
+                   (DOMAIN, 'FF.net downloads paused by you.'))
+        db.commit()
 
 
 def retry_delay(value, now):
@@ -70,7 +99,7 @@ def suspend(response, challenge=False):
         delay = retry_delay(response.headers.get('Retry-After'), now)
         if delay is None:
             delay = min(900 * 2 ** (strikes - 1), 86400)
-        until = max(s['cooldown_until'], now + max(INTERVAL, delay))
+        until = max(s['cooldown_until'], now + max(s['request_interval'], delay))
         reason = ('FF.net requires a browser challenge. Open the site in Firefox, refresh your '
                   'saved session if needed, then resume downloads.' if challenge else
                   'FF.net rate limit: downloads will resume after the cooldown.')
@@ -79,7 +108,8 @@ def suspend(response, challenge=False):
                    ' VALUES (?,?,?,?,?) ON CONFLICT(domain) DO UPDATE SET'
                    ' cooldown_until=excluded.cooldown_until,strikes=excluded.strikes,'
                    ' paused=excluded.paused,reason=excluded.reason',
-                   (DOMAIN, s['cooldown_until'] if challenge else until, strikes, int(challenge), reason))
+                   (DOMAIN, s['cooldown_until'] if challenge else until, strikes,
+                    int(challenge or s['paused']), s['reason'] if s['paused'] else reason))
         db.commit()
     raise DeferredDownload(reason)
 

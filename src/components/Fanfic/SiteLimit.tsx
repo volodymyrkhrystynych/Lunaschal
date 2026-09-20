@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
+import { useState } from 'react';
 
 export function SiteLimit() {
+  const [minutes, setMinutes] = useState<string | null>(null);
   const client = useQueryClient();
   const status = useQuery({
     queryKey: ['fanfic', 'site-limit'],
@@ -12,8 +14,20 @@ export function SiteLimit() {
     mutationFn: api.fanfic.collections.resume,
     onSuccess: () => client.invalidateQueries({ queryKey: ['fanfic'] }),
   });
+  const pause = useMutation({
+    mutationFn: api.fanfic.collections.pause,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['fanfic'] }),
+  });
+  const interval = useMutation({
+    mutationFn: api.fanfic.collections.setInterval,
+    onSuccess: async () => {
+      await client.invalidateQueries({ queryKey: ['fanfic', 'site-limit'] });
+      setMinutes(null);
+    },
+  });
   const s = status.data;
-  if (!s || (!s.paused && s.cooldownUntil * 1000 <= Date.now())) return null;
+  if (!s) return null;
+  const cooling = s.cooldownUntil * 1000 > Date.now();
   return (
     <div
       role="status"
@@ -21,35 +35,63 @@ export function SiteLimit() {
     >
       <p>
         {s.paused
-          ? 'FF.net downloads paused: browser verification required.'
-          : 'FF.net downloads cooling down.'}
+          ? s.reason || 'FF.net downloads paused.'
+          : cooling
+            ? 'FF.net downloads cooling down.'
+            : `FF.net imports and updates: one request every ${s.interval / 60} minutes.`}
       </p>
-      {s.cooldownUntil * 1000 > Date.now() && (
+      {!s.paused && s.nextRequest * 1000 > Date.now() && (
         <p>
-          Next attempt after {new Date(s.cooldownUntil * 1000).toLocaleString()}
-          .
+          Next request no earlier than{' '}
+          {new Date(s.nextRequest * 1000).toLocaleString()}.
         </p>
       )}
       <p>
         Queued stories and saved chapters are retained. Other sites can
         continue.
       </p>
-      {s.paused && (
-        <>
-          <p>
-            Open FF.net in Firefox and complete any challenge. Refresh your
-            saved site cookies if needed.
-          </p>
-          <button
-            className="mt-2 rounded border px-3 py-1"
-            disabled={resume.isPending}
-            onClick={() => resume.mutate()}
-          >
-            Resume FF.net downloads
-          </button>
-        </>
-      )}
+      <p>
+        Pause takes effect before the next request; a request already in
+        progress may finish.
+      </p>
+      <button
+        className="mt-2 rounded border px-3 py-1"
+        disabled={resume.isPending || pause.isPending}
+        onClick={() => (s.paused ? resume.mutate() : pause.mutate())}
+      >
+        {s.paused ? 'Resume FF.net downloads' : 'Pause FF.net downloads'}
+      </button>
+      <form
+        className="mt-3 flex flex-wrap items-center gap-2"
+        onSubmit={event => {
+          event.preventDefault();
+          interval.mutate(Math.round(Number(minutes ?? s.interval / 60) * 60));
+        }}
+      >
+        <label>
+          Minutes between FF.net requests{' '}
+          <input
+            type="number"
+            min="0.25"
+            max="1440"
+            step="0.25"
+            required
+            className="w-24 rounded border border-white/20 bg-[var(--color-bg)] p-1"
+            value={minutes ?? s.interval / 60}
+            disabled={interval.isPending}
+            onChange={event => setMinutes(event.target.value)}
+          />
+        </label>
+        <button
+          className="rounded border px-3 py-1"
+          disabled={interval.isPending}
+        >
+          {interval.isPending ? 'Saving…' : 'Save interval'}
+        </button>
+      </form>
       {resume.error && <p role="alert">{resume.error.message}</p>}
+      {pause.error && <p role="alert">{pause.error.message}</p>}
+      {interval.error && <p role="alert">{interval.error.message}</p>}
     </div>
   );
 }

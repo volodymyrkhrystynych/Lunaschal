@@ -361,7 +361,7 @@ export function Library({ onOpen }: LibraryProps) {
         </div>
       </div>
 
-      <SiteLimit />
+      {!(showImport && importMode === 'collection') && <SiteLimit />}
       {showImport && (
         <div className="mb-4 p-4 bg-[var(--color-surface)] rounded-lg border border-white/10">
           <div

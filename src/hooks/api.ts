@@ -3561,10 +3561,14 @@ export const api = {
         get<{
           paused: boolean;
           cooldownUntil: number;
+          nextRequest: number;
           reason: string | null;
           interval: number;
         }>('/api/fanfic/site-limit'),
       resume: () => post<{ success: boolean }>('/api/fanfic/site-limit/resume'),
+      pause: () => post<{ success: boolean }>('/api/fanfic/site-limit/pause'),
+      setInterval: (interval: number) =>
+        put('/api/fanfic/site-limit', { interval }),
       list: () => get<CollectionScan[]>('/api/fanfic/collections'),
       start: (site: string, collection: string, username: string) =>
         post<{ id: string }>('/api/fanfic/collections', {
