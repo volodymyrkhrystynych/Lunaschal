@@ -125,7 +125,8 @@ def gather_day(db, today: str) -> dict:
         location['recordedAt'] = datetime.fromtimestamp(location['created_at']).isoformat()
         location['nearbyPlaces'] = nearby_places(location['latitude'], location['longitude'], places)
     from backend.memory import get_memory
-    return {'day': day, 'start': datetime.fromtimestamp(start).isoformat(),
+    return {'day': day, 'nextDate': (date.fromisoformat(day) + timedelta(days=1)).isoformat(),
+            'start': datetime.fromtimestamp(start).isoformat(),
             'end': datetime.fromtimestamp(end).isoformat(), 'sources': sources,
             'calendar': calendar_for_day(db, day), 'places': places,
             'locationObservations': locations, 'userMemory': get_memory(),
@@ -165,8 +166,11 @@ morning chores, leisure reading, and family time. Never duplicate the two events
 Infer approximate time ranges only when supported by anchors or the account;
 explain estimates and uncertainty in evidence. Leave unknown clocks null. Do
 not stretch a few observations to occupy an entire gap without support.
-Use the actual calendar date for timed activities after midnight (before 04:00
-still belongs to yesterday); use yesterday's day key for untimed activities.
+The day runs 04:00 to 04:00, so it ends on the calendar date named by
+"nextDate": an activity between midnight and 04:00 belongs to this day and is
+dated nextDate, not the day key. Untimed activities use the day key. Late-night
+accounts are ordinary evidence, not a special case -- an entry recorded at 03:00
+describing the previous two hours supports an event from 01:00 to 03:00.
 Known places and memory can resolve names like home/work. nearbyPlaces are GPS
 matches within a user-set radius, not certainty. Multiple matches are ambiguous.
 Capture location describes where something was recorded, not necessarily where
@@ -207,6 +211,17 @@ def validate_event(data: dict, day: str) -> dict:
     else:
         start, end = day_bounds(day)
         at = datetime.fromisoformat(f"{when}T{result['time']}")
+        # The small hours are the tail of the 4am day, not a date error. Inside
+        # one window there is exactly one 01:30, and it falls on the calendar
+        # date after the key -- there is no 01:30 on the key's own date at all.
+        # So a small-hours clock filed under the day key is unambiguous, and
+        # rolling it is lossless. It used to raise, and stage_events swallows a
+        # ValueError, so an activity narrated at 3am ("the last two hours") was
+        # dropped with no trace whenever the model wrote the day key it had
+        # been handed. Matches how endTime already wraps past midnight below.
+        if when == day and at.timestamp() < start:
+            at += timedelta(days=1)
+            when = result['date'] = at.date().isoformat()
         if not start <= at.timestamp() < end:
             raise ValueError('Activity must stay within the previous 4am day')
         if result['endTime']:

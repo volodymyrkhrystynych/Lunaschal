@@ -125,6 +125,8 @@ def test_proposals_edit_accept_dismiss_and_rerun(client, monkeypatch):
     assert db.execute('SELECT COUNT(*) FROM calendar_events').fetchone()[0] == 1
 
 
+# {'time': '03:00'} rolls to the small hours of TODAY (see the roll test) and is
+# then rejected for running to 09:00, past the 04:00 boundary -- still a bad edit.
 @pytest.mark.parametrize('patch', [{'date': TODAY}, {'time': '99:00'}, {'time': '03:00'},
                                   {'endTime': '05:00'}, {'allDay': True}, {'title': []}])
 def test_bad_edits_leave_pending(client, monkeypatch, patch):
@@ -141,6 +143,51 @@ def test_late_night_and_untimed_validation():
     assert validate_event({**event(), 'date': TODAY, 'time': '01:00', 'endTime': '03:00'}, DAY)['date'] == TODAY
     assert validate_event({**event(), 'time': '23:00', 'endTime': '02:00'}, DAY)['date'] == DAY
     assert validate_event({**event(), 'time': None, 'endTime': None}, DAY)['time'] is None
+
+
+def test_small_hours_roll_to_the_next_calendar_date():
+    """A 01:00 filed under the day key is the tail of that 4am day, not an error.
+
+    There is no 01:00 on DAY inside DAY's window, so the date is unambiguous and
+    gets corrected rather than rejected -- which is what kept an activity
+    narrated at 3am out of the suggestions entirely.
+    """
+    rolled = validate_event({**event(), 'time': '01:00', 'endTime': '03:00'}, DAY)
+    assert (rolled['date'], rolled['time'], rolled['endTime']) == (TODAY, '01:00', '03:00')
+    # 03:59 is the last minute that rolls; 04:00 is already the day's own start.
+    assert validate_event({**event(), 'time': '03:59', 'endTime': None}, DAY)['date'] == TODAY
+    assert validate_event({**event(), 'time': '04:00', 'endTime': None}, DAY)['date'] == DAY
+    # Rolling does not buy extra room: the span must still finish by 04:00.
+    with pytest.raises(ValueError):
+        validate_event({**event(), 'time': '02:00', 'endTime': '09:00'}, DAY)
+    # Only the day key rolls. A date that is neither bound stays an error.
+    with pytest.raises(ValueError):
+        validate_event({**event(), 'date': '2026-07-11', 'time': '01:00', 'endTime': None}, DAY)
+
+
+def test_three_am_account_of_the_last_two_hours_is_staged(client, monkeypatch):
+    """End to end: the model writes the day key it was handed for a 01:00 event.
+
+    stage_events swallows validation errors, so before the roll this suggestion
+    vanished silently instead of reaching the card.
+    """
+    journal('late', 'It is 3am. I spent the last two hours sorting photographs.', END - 3600)
+    get_db().commit()
+    late = {**event('Sorting photographs'), 'date': DAY, 'time': '01:00', 'endTime': '03:00',
+            'sourceIds': ['journal:late'], 'evidence': '3am entry describes the previous two hours.'}
+    result, proposals = prepare(monkeypatch, [late])
+    assert result['eventsSuggested'] == 1
+    assert proposals[0]['data']['date'] == TODAY
+    assert proposals[0]['data']['time'] == '01:00'
+    # And it saves onto the right calendar date when accepted.
+    assert client.post(f"/api/chat/proposals/{result['messageId']}/{proposals[0]['id']}",
+                       json={'action': 'accept'}).status_code == 200
+    row = get_db().execute('SELECT date,time,end_time FROM calendar_events').fetchone()
+    assert (row['date'], row['time'], row['end_time']) == (TODAY, '01:00', '03:00')
+
+
+def test_gather_day_names_the_dates_at_both_ends():
+    assert (gather_day(get_db(), TODAY)['day'], gather_day(get_db(), TODAY)['nextDate']) == (DAY, TODAY)
 
 
 def test_unknown_sources_duplicates_and_new_calendar_event(client, monkeypatch):
