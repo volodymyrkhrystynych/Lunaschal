@@ -354,7 +354,9 @@ def search_many(queries, *, per_query: int = RESULTS_PER_QUERY,
     from backend.offline_knowledge import kinds as kinds_mod
 
     queries = [q for q in (queries or []) if str(q).strip()]
-    if not queries:
+    # Registry history survives removing the folder setting, but must not
+    # keep that library active. configured_root also honors KNOWLEDGE_ROOT.
+    if not queries or configured_root() is None:
         return {'results': [], 'searched': [], 'skipped': 0, 'tookMs': 0}
     limit = max(1, min(MAX_RESULTS, int(limit)))
     started = time.monotonic()
@@ -385,7 +387,9 @@ def search_many(queries, *, per_query: int = RESULTS_PER_QUERY,
         # a requested 10 while a 50-hit archive sat right there. The quota
         # governs the output; the fetch is a flat per-archive depth, which also
         # makes rank position comparable between a tiny index and a huge one.
-        per_archive = per_query
+        # One archive may need to fill the entire output when it is the only
+        # source (or the other sources have no hits).
+        per_archive = max(per_query, limit)
         for row in items:
             if time.monotonic() > deadline:
                 skipped += 1

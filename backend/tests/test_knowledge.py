@@ -603,6 +603,40 @@ def test_search_route_returns_an_envelope_with_coverage(client, monkeypatch, tmp
     assert not any(k.startswith('_') for k in body['results'][0])
 
 
+@pytest.mark.parametrize('fulltext', [True, False])
+def test_search_route_fills_limit_from_one_archive(client, monkeypatch, tmp_path, fulltext):
+    fake_library(monkeypatch, tmp_path, [
+        ('wikipedia_en_all.zim', wiki(
+            ftindex=fulltext, results={'moon': [f'Moon_{i}' for i in range(50)]})),
+    ])
+    response = client.get('/api/knowledge/search?q=moon&limit=20')
+    assert response.status_code == 200
+    assert len(response.json['results']) == 20
+
+
+def test_clearing_config_stops_search_but_preserves_registry(client, monkeypatch, tmp_path):
+    monkeypatch.delenv('KNOWLEDGE_ROOT', raising=False)
+    lib = fake_library(monkeypatch, tmp_path, [
+        ('wikipedia_en_all.zim', wiki(results={'moon': ['Moon']})),
+    ])
+    registry.sync()
+    ident = archive.archive_id(lib['paths'][0])
+    registry.set_kind(ident, 'docs')
+    lib['opens'].clear()
+
+    assert client.put('/api/knowledge/config', json={'path': ''}).status_code == 200
+    body = client.get('/api/knowledge/search?q=moon').get_json()
+    assert body['results'] == []
+    assert body['searched'] == 0
+    assert archive.model_search(['moon'])[1]['count'] == 0
+    assert lib['opens'] == {}
+    assert registry.row(ident)['kind'] == 'docs'
+
+    # Reconfiguring the library restores search and retains user corrections.
+    client.put('/api/knowledge/config', json={'path': str(lib['root'])})
+    assert client.get('/api/knowledge/search?q=moon').json['results'][0]['archiveKind'] == 'docs'
+
+
 def test_search_route_can_be_scoped_to_one_kind(client, monkeypatch, tmp_path):
     fake_library(monkeypatch, tmp_path, [
         ('askubuntu.com_en_all_2026-06.zim', FakeArchive(
