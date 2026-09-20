@@ -917,7 +917,7 @@ export interface AppSettings {
 export type KnowledgeKind = 'encyclopedia' | 'qa' | 'docs' | 'other';
 
 /**
- * `no_fulltext` is a state, not a failure: every DevDocs archive Kiwix
+ * `no_fulltext` is a state, not a failure: an archive Kiwix
  * publishes is built without a fulltext index and answers by title instead.
  */
 export type KnowledgeHealth =
@@ -981,6 +981,75 @@ export interface KnowledgeRescan {
 export interface KnowledgeConfig {
   path: string;
   exists: boolean;
+  /**
+   * Whether downloads can be saved into the archive folder. Four states
+   * rather than a boolean: an unplugged drive, a read-only mount and a
+   * permissions problem are three different things to go and fix, and
+   * `os.access` cannot tell the last two apart.
+   */
+  writeState?: 'unset' | 'missing' | 'readonly' | 'permissions' | 'writable';
+  writeReason?: string | null;
+}
+
+export interface KnowledgeCatalogEntry {
+  uuid: string;
+  /** The catalogue's undated slug, e.g. `devdocs_en_sinon`. */
+  name: string;
+  title: string;
+  summary: string;
+  language: string;
+  flavour: string;
+  category: string;
+  creator: string;
+  tags: string;
+  kind: KnowledgeKind;
+  /**
+   * What the *catalogue* claims about a fulltext index — not reliable. It
+   * tags all 231 DevDocs entries `_ftindex:no`, yet those archives report
+   * having one when opened. The installed archive's `health` is the truth.
+   */
+  ftindex: boolean;
+  articleCount: number | null;
+  mediaCount: number | null;
+  issued: string;
+  meta4Url: string;
+  /** The OPDS `length`, which disagrees slightly with the Metalink size. */
+  approxSize: number | null;
+}
+
+export interface KnowledgeCatalogPage {
+  entries: KnowledgeCatalogEntry[];
+  total: number;
+  start: number;
+}
+
+export interface KnowledgeFacet {
+  label: string;
+  code: string;
+  count: number | null;
+}
+
+export interface KnowledgeFacets {
+  categories: KnowledgeFacet[];
+  languages: KnowledgeFacet[];
+}
+
+export type KnowledgeDownloadStatus =
+  'queued' | 'downloading' | 'verifying' | 'paused' | 'done' | 'error';
+
+export interface KnowledgeDownload {
+  id: string;
+  name: string;
+  filename: string;
+  title: string;
+  status: KnowledgeDownloadStatus;
+  error: string | null;
+  totalBytes: number | null;
+  downloadedBytes: number;
+  bytesPerSecond?: number | null;
+  sourceUrl: string;
+  createdAt: number;
+  finishedAt: number | null;
 }
 
 export interface WhisperModel {
@@ -4071,6 +4140,33 @@ export const api = {
         .split('/')
         .map(encodeURIComponent)
         .join('/')}`,
+    catalog: (filters: Record<string, string | number | undefined>) => {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(filters)) {
+        if (value !== undefined && value !== '') params.set(key, String(value));
+      }
+      return get<KnowledgeCatalogPage>(`/api/knowledge/catalog?${params}`);
+    },
+    facets: () => get<KnowledgeFacets>('/api/knowledge/catalog/facets'),
+    downloads: () => get<KnowledgeDownload[]>('/api/knowledge/downloads'),
+    // Only the slug and uuid go up: the server re-resolves the entry against
+    // the catalogue, so a browser cannot choose the mirror or the size.
+    download: (name: string, uuid: string) =>
+      post<KnowledgeDownload>('/api/knowledge/downloads', { name, uuid }),
+    pauseDownload: (id: string) =>
+      post<KnowledgeDownload>(
+        `/api/knowledge/downloads/${encodeURIComponent(id)}/pause`,
+        {}
+      ),
+    resumeDownload: (id: string) =>
+      post<KnowledgeDownload>(
+        `/api/knowledge/downloads/${encodeURIComponent(id)}/resume`,
+        {}
+      ),
+    deleteDownload: (id: string) =>
+      del<{ deleted: boolean }>(
+        `/api/knowledge/downloads/${encodeURIComponent(id)}`
+      ),
   },
 
   files: {

@@ -1,7 +1,11 @@
 """Discovery, search and article reads over Kiwix ZIM files.
 
 The archive drive remains the source of truth: Lunaschal stores only its root
-path in settings and never writes beside, copies, or modifies a ZIM file.
+path in settings and never modifies, renames or deletes a ZIM file it finds
+there. It is no longer true that it never *writes* there --
+`backend/offline_knowledge/download.py` saves catalogue downloads into the
+same folder, as `<name>.zim.part` renamed into place once the checksum
+matches. That is the only thing in this package that writes to the root.
 
 **Search is federated, and that is the whole design.** The first version walked
 the archives in filename order and stopped as soon as the global result limit
@@ -19,11 +23,13 @@ Two things measured on the real library shaped this, and neither is obvious:
   pool -- the bindings hold the GIL for the duration of a search. So the lever
   is searching *fewer* archives, not searching them at once. The per-path locks
   below are about not blocking an unrelated article read, not about throughput.
-* **Half the interesting archives have no fulltext index.** Every DevDocs ZIM
-  Kiwix publishes is `_ftindex:no`, as are 7 of the 181 Stack Exchange ones.
-  `Searcher` returns nothing at all for those; they answer through
-  `SuggestionSearcher`, which queries the title index. An archive without a
-  fulltext index is a normal archive here, not a broken one.
+* **Some archives have no fulltext index.** `Searcher` returns nothing at
+  all for those; they answer through `SuggestionSearcher`, which queries the
+  title index. An archive without a fulltext index is a normal archive here,
+  not a broken one. Which archives those are is read from libzim, never from
+  the Kiwix catalogue: the catalogue tags all 231 DevDocs entries
+  `_ftindex:no` and is wrong -- two of them, opened directly, both report
+  `has_fulltext_index == True` and carry no such tag of their own.
 """
 from __future__ import annotations
 

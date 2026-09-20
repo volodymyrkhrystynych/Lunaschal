@@ -36,9 +36,9 @@ describe('healthBadge', () => {
   });
 
   it('treats a missing fulltext index as information, not an error', () => {
-    // Every DevDocs archive Kiwix publishes is built this way and is still
-    // searched by title; showing it red would be telling the user to fix
-    // something that is working as designed.
+    // An archive built this way is still searched, by title; showing it red
+    // would be telling the user to fix something that is working as
+    // designed.
     expect(healthBadge('no_fulltext')?.tone).toBe('warn');
   });
 

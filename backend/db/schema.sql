@@ -2229,3 +2229,48 @@ CREATE INDEX IF NOT EXISTS idx_knowledge_archives_kind
     ON knowledge_archives(enabled, kind);
 CREATE INDEX IF NOT EXISTS idx_knowledge_archives_uuid
     ON knowledge_archives(zim_uuid);
+
+-- Archives being fetched from the Kiwix catalogue.
+--
+-- The transfer is resumable, which is the whole reason this is a table and not
+-- an in-memory job: Stack Overflow is 107 GB, and a download that cannot
+-- survive a restart cannot be completed on a machine anybody actually uses.
+-- The row is the durable half; `backend/offline_knowledge/download.py` holds
+-- the live rate and ETA in memory, the way the fanfic queue does.
+CREATE TABLE IF NOT EXISTS knowledge_downloads (
+    id TEXT PRIMARY KEY,
+    -- The catalogue's undated slug (`devdocs_en_sinon`). Stable across builds,
+    -- where `filename` carries the date (`devdocs_en_sinon_2026-08.zim`) --
+    -- which is what a future "a newer build exists" check would compare.
+    zim_name TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    catalog_uuid TEXT NOT NULL DEFAULT '',
+    meta4_url TEXT NOT NULL DEFAULT '',
+    -- The mirror currently in use, out of the priority-ordered list the
+    -- Metalink gave. Recorded so a failure names the host that failed.
+    source_url TEXT NOT NULL DEFAULT '',
+    total_bytes INTEGER,
+    downloaded_bytes INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT,
+    md5 TEXT,
+    -- sha-1 over fixed-length pieces, from the Metalink. This is what lets a
+    -- resumed transfer be checked *before* its last byte: without it, a `.part`
+    -- left over from a build the mirror has since rotated is only caught by the
+    -- whole-file hash, after all 107 GB have been fetched again.
+    piece_length INTEGER,
+    pieces_sha1 TEXT,
+    dest_path TEXT NOT NULL,
+    -- 'verifying' is a status of its own because a transfer assembled across
+    -- two sessions cannot carry an incremental hash -- the file has to be read
+    -- back once it is whole.
+    status TEXT NOT NULL DEFAULT 'queued'
+        CHECK(status IN ('queued','downloading','verifying','paused','done','error')),
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    finished_at INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_downloads_status
+    ON knowledge_downloads(status, created_at DESC);

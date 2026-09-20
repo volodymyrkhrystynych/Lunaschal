@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<metalink xmlns="urn:ietf:params:xml:ns:metalink">
+  <generator>MirrorBrain/2.19.0</generator>
+  <origin dynamic="true">https://lb.download.kiwix.org/zim/devdocs/devdocs_en_sinon_2026-08.zim.meta4</origin>
+  <published>2026-09-20T02:32:50Z</published>
+  <publisher>
+    <name>Kiwix project</name>
+    <url>https://kiwix.org</url>
+  </publisher>
+
+  <file name="devdocs_en_sinon_2026-08.zim">
+    <size>361379</size>
+
+    <!-- <mtime>1785675097</mtime> -->
+
+    <!-- internal id: 9080 -->
+    <hash type="md5">494d9057e33ef0fdfc3cf108605b0e08</hash>
+    <hash type="sha-1">57c8498abb1acadc23a96bcc615bde439a360695</hash>
+    <hash type="sha-256">2689ed4abaaeaf766bf9541596e5d59ea8065d0c0e0e0dcaf48e86e4d2087769</hash>
+    <pieces length="4194304" type="sha-1">
+      <hash>57c8498abb1acadc23a96bcc615bde439a360695</hash>
+    </pieces>
+
+
+    <!-- Found 9 mirrors: 0 in the same network prefix, 0 in the same autonomous system,
+         1 handling this country, 0 in the same region, 3 elsewhere -->
+
+    <!-- Mirrors in the same network (unknown): -->
+
+    <!-- Mirrors in the same AS (unknown): -->
+
+    <!-- Mirrors which handle this country (CA): -->
+    <url location="ca" priority="1">https://mirror-sites-ca.mblibrary.info/mirror-sites/download.kiwix.org/zim/devdocs/devdocs_en_sinon_2026-08.zim</url>
+
+    <!-- Mirrors in the same continent (NA): -->
+
+    <!-- Mirrors in the rest of the world: -->
+    <url location="nl" priority="2">https://ftp.nluug.nl/pub/kiwix/zim/devdocs/devdocs_en_sinon_2026-08.zim</url>
+    <url location="fr" priority="3">https://mirror.download.kiwix.org/zim/devdocs/devdocs_en_sinon_2026-08.zim</url>
+    <url location="aq" priority="4">https://mirror-sites-in.mblibrary.info/mirror-sites/download.kiwix.org/zim/devdocs/devdocs_en_sinon_2026-08.zim</url>
+  </file>
+</metalink>

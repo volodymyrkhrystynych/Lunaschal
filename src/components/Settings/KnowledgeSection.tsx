@@ -21,8 +21,15 @@ export function KnowledgeSection() {
   return (
     <div className="space-y-2">
       <p className="text-xs text-[var(--color-text-muted)]">
-        Lunaschal reads .zim files in place and never modifies this folder.
+        Lunaschal reads .zim files in place and never modifies the ones already
+        here. Archives downloaded from the Kiwix catalogue are saved into this
+        folder, so it has to be writable.
       </p>
+      {config.data?.writeState &&
+        config.data.writeState !== 'writable' &&
+        config.data.writeState !== 'unset' && (
+          <p className="text-xs text-amber-400">{config.data.writeReason}</p>
+        )}
       <div className="flex items-start gap-2">
         <code className="text-xs text-[var(--color-text)] break-all">
           {config.data?.path || 'not set'}
@@ -41,7 +48,7 @@ export function KnowledgeSection() {
       {picking && (
         <FolderPicker
           title="Choose a ZIM archive folder"
-          showWritableWarnings={false}
+          showWritableWarnings
           initialPath={config.data?.path || '/'}
           onClose={() => setPicking(false)}
           onSelect={path => {

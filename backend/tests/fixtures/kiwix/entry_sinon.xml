@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+  <entry>
+    <id>urn:uuid:f3f050f7-d3d4-65ea-641b-652abb5a1613</id>
+    <title>Sinon.JS Docs</title>
+    <updated>2026-08-02T00:00:00Z</updated>
+    <summary>Sinon.JS documentation, by DevDocs</summary>
+    <language>eng</language>
+    <name>devdocs_en_sinon</name>
+    <flavour></flavour>
+    <category></category>
+    <tags>devdocs;sinon;_ftindex:no;_pictures:yes;_videos:yes;_details:yes</tags>
+    <articleCount>15</articleCount>
+    <mediaCount>0</mediaCount>
+    <link rel="http://opds-spec.org/image/thumbnail"
+          href="/catalog/v2/illustration/f3f050f7-d3d4-65ea-641b-652abb5a1613/?size=48"
+          type="image/png;width=48;height=48;scale=1"/>
+    <link type="text/html" href="https://browse.library.kiwix.org/content/devdocs_en_sinon_2026-08" />
+    <author>
+      <name>DevDocs</name>
+    </author>
+    <publisher>
+      <name>openZIM</name>
+    </publisher>
+    <dc:issued>2026-08-02T00:00:00Z</dc:issued>
+    <link rel="http://opds-spec.org/acquisition/open-access" type="application/x-zim" href="https://lb.download.kiwix.org/zim/devdocs/devdocs_en_sinon_2026-08.zim.meta4" length="361472" />
+  </entry>
