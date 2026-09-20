@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:dc="http://purl.org/dc/terms/"
+      xmlns:opds="https://specs.opds.io/opds-1.2"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <id>cb106875-67d0-ca74-c439-420baf2ed461</id>
+
+  <link rel="self"
+        href="/catalog/v2/entries?count=3&amp;tag=devdocs"
+        type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+  <link rel="start"
+        href="/catalog/v2/root.xml"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="up"
+        href="/catalog/v2/root.xml"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+
+  <title>Filtered Entries (count=3&amp;tag=devdocs)</title>
+  <updated>2026-09-20T02:32:49Z</updated>
+  <totalResults>231</totalResults>
+  <startIndex>0</startIndex>
+  <itemsPerPage>3</itemsPerPage>
+  <entry>
+    <id>urn:uuid:f3f050f7-d3d4-65ea-641b-652abb5a1613</id>
+    <title>Sinon.JS Docs</title>
+    <updated>2026-08-02T00:00:00Z</updated>
+    <summary>Sinon.JS documentation, by DevDocs</summary>
+    <language>eng</language>
+    <name>devdocs_en_sinon</name>
+    <flavour></flavour>
+    <category></category>
+    <tags>devdocs;sinon;_ftindex:no;_pictures:yes;_videos:yes;_details:yes</tags>
+    <articleCount>15</articleCount>
+    <mediaCount>0</mediaCount>
+    <link rel="http://opds-spec.org/image/thumbnail"
+          href="/catalog/v2/illustration/f3f050f7-d3d4-65ea-641b-652abb5a1613/?size=48"
+          type="image/png;width=48;height=48;scale=1"/>
+    <link type="text/html" href="https://browse.library.kiwix.org/content/devdocs_en_sinon_2026-08" />
+    <author>
+      <name>DevDocs</name>
+    </author>
+    <publisher>
+      <name>openZIM</name>
+    </publisher>
+    <dc:issued>2026-08-02T00:00:00Z</dc:issued>
+    <link rel="http://opds-spec.org/acquisition/open-access" type="application/x-zim" href="https://lb.download.kiwix.org/zim/devdocs/devdocs_en_sinon_2026-08.zim.meta4" length="361472" />
+  </entry>
+  <entry>
+    <id>urn:uuid:d355d89f-39df-4de6-c2a0-66dff5af6733</id>
+    <title>Rust Docs</title>
+    <updated>2026-07-03T00:00:00Z</updated>
+    <summary>Rust documentation, by DevDocs</summary>
+    <language>eng</language>
+    <name>devdocs_en_rust</name>
+    <flavour></flavour>
+    <category></category>
+    <tags>devdocs;rust;_ftindex:no;_pictures:yes;_videos:yes;_details:yes</tags>
+    <articleCount>2983</articleCount>
+    <mediaCount>0</mediaCount>
+    <link rel="http://opds-spec.org/image/thumbnail"
+          href="/catalog/v2/illustration/d355d89f-39df-4de6-c2a0-66dff5af6733/?size=48"
+          type="image/png;width=48;height=48;scale=1"/>
+    <link type="text/html" href="https://browse.library.kiwix.org/content/devdocs_en_rust_2026-07" />
+    <author>
+      <name>DevDocs</name>
+    </author>
+    <publisher>
+      <name>openZIM</name>
+    </publisher>
+    <dc:issued>2026-07-03T00:00:00Z</dc:issued>
+    <link rel="http://opds-spec.org/acquisition/open-access" type="application/x-zim" href="https://lb.download.kiwix.org/zim/devdocs/devdocs_en_rust_2026-07.zim.meta4" length="6176768" />
+  </entry>
+  <entry>
+    <id>urn:uuid:3fe20b70-ba27-e554-98ab-15e24acf5d42</id>
+    <title>QUnit Docs</title>
+    <updated>2026-07-03T00:00:00Z</updated>
+    <summary>QUnit documentation, by DevDocs</summary>
+    <language>eng</language>
+    <name>devdocs_en_qunit</name>
+    <flavour></flavour>
+    <category></category>
+    <tags>devdocs;qunit;_ftindex:no;_pictures:yes;_videos:yes;_details:yes</tags>
+    <articleCount>79</articleCount>
+    <mediaCount>0</mediaCount>
+    <link rel="http://opds-spec.org/image/thumbnail"
+          href="/catalog/v2/illustration/3fe20b70-ba27-e554-98ab-15e24acf5d42/?size=48"
+          type="image/png;width=48;height=48;scale=1"/>
+    <link type="text/html" href="https://browse.library.kiwix.org/content/devdocs_en_qunit_2026-07" />
+    <author>
+      <name>DevDocs</name>
+    </author>
+    <publisher>
+      <name>openZIM</name>
+    </publisher>
+    <dc:issued>2026-07-03T00:00:00Z</dc:issued>
+    <link rel="http://opds-spec.org/acquisition/open-access" type="application/x-zim" href="https://lb.download.kiwix.org/zim/devdocs/devdocs_en_qunit_2026-07.zim.meta4" length="450560" />
+  </entry>
+</feed>

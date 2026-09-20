@@ -13,6 +13,13 @@ vi.mock('@/hooks/api', () => ({
       search: vi.fn(),
       rescan: vi.fn(),
       updateArchive: vi.fn(),
+      downloads: vi.fn(),
+      catalog: vi.fn(),
+      facets: vi.fn(),
+      download: vi.fn(),
+      pauseDownload: vi.fn(),
+      resumeDownload: vi.fn(),
+      deleteDownload: vi.fn(),
       contentUrl: (id: string, path: string) =>
         `/api/knowledge/archives/${id}/content/${path}`,
     },
@@ -25,6 +32,13 @@ const knowledge = api.knowledge as unknown as {
   search: ReturnType<typeof vi.fn>;
   rescan: ReturnType<typeof vi.fn>;
   updateArchive: ReturnType<typeof vi.fn>;
+  downloads: ReturnType<typeof vi.fn>;
+  catalog: ReturnType<typeof vi.fn>;
+  facets: ReturnType<typeof vi.fn>;
+  download: ReturnType<typeof vi.fn>;
+  pauseDownload: ReturnType<typeof vi.fn>;
+  resumeDownload: ReturnType<typeof vi.fn>;
+  deleteDownload: ReturnType<typeof vi.fn>;
 };
 
 function archive(over: Partial<KnowledgeArchive> = {}): KnowledgeArchive {
@@ -51,6 +65,9 @@ beforeEach(() => {
     skipped: 0,
     tookMs: 4,
   });
+  knowledge.downloads.mockResolvedValue([]);
+  knowledge.catalog.mockResolvedValue({ entries: [], total: 0, start: 0 });
+  knowledge.facets.mockResolvedValue({ categories: [], languages: [] });
 });
 
 function renderKnowledge() {

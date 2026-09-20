@@ -88,8 +88,10 @@ def _probe(path: Path) -> dict:
         has_title_index=int(has_title),
     )
     if not has_ft:
-        # Not an error. Every DevDocs archive Kiwix publishes is `_ftindex:no`,
-        # and the title index still answers -- see archive.search_many.
+        # Not an error: the title index still answers -- see
+        # archive.search_many. Derived from libzim rather than from the
+        # catalogue's `_ftindex` tag, which is not reliable (it marks all 231
+        # DevDocs entries as unindexed; the archives themselves are not).
         row['health'] = 'no_fulltext'
     return row
 
@@ -225,8 +227,8 @@ def rows(*, enabled_only: bool = True, kinds_wanted=None,
     if enabled_only:
         where.append('enabled = 1')
     if healthy_only:
-        # 'no_fulltext' is included on purpose: those archives are searchable
-        # through the title index, which is the whole DevDocs collection.
+        # 'no_fulltext' is included on purpose: those archives are still
+        # searchable, through the title index.
         where.append("health IN ('ok','no_fulltext')")
     if kinds_wanted:
         where.append('kind IN (%s)' % ','.join('?' * len(kinds_wanted)))

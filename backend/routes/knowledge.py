@@ -7,7 +7,7 @@ from flask import Blueprint, Response, jsonify, request
 from bs4 import BeautifulSoup
 
 from backend.db.connection import get_db
-from backend.offline_knowledge import archive, kinds, registry
+from backend.offline_knowledge import archive, catalog, download, kinds, registry
 
 bp = Blueprint('knowledge', __name__, url_prefix='/api/knowledge')
 
@@ -22,7 +22,17 @@ _checks_guard = threading.Lock()
 @bp.get('/config')
 def get_config():
     root = archive.configured_root()
-    return jsonify({'path': str(root) if root else '', 'exists': bool(root and root.is_dir())})
+    # `writeState` is new with the downloader: the reader only ever needed to
+    # know whether the folder was there. Four states rather than a boolean --
+    # an unplugged drive, a read-only mount and a permissions problem are three
+    # different things to go and fix.
+    state = download.root_state()
+    return jsonify({
+        'path': str(root) if root else '',
+        'exists': bool(root and root.is_dir()),
+        'writeState': state['state'],
+        'writeReason': state['reason'],
+    })
 
 
 @bp.put('/config')
@@ -160,6 +170,101 @@ def search():
         'skipped': found['skipped'],
         'tookMs': found['tookMs'],
     })
+
+
+@bp.get('/catalog')
+def catalog_entries():
+    """A page of the Kiwix catalogue. Filters are forwarded, not invented --
+    `catalog.ALLOWED_FILTERS` is the whitelist, so this proxy cannot be pointed
+    at an arbitrary query."""
+    filters = {k: v for k, v in request.args.items() if k in catalog.ALLOWED_FILTERS}
+    try:
+        entries, total = catalog.fetch_entries(**filters)
+    except catalog.CatalogUnavailable as exc:
+        return jsonify({'error': str(exc)}), 502
+    try:
+        start = max(int(request.args.get('start') or 0), 0)
+    except (TypeError, ValueError):
+        start = 0
+    return jsonify({'entries': entries, 'total': total, 'start': start})
+
+
+@bp.get('/catalog/facets')
+def catalog_facets():
+    try:
+        return jsonify(catalog.fetch_facets())
+    except catalog.CatalogUnavailable as exc:
+        return jsonify({'error': str(exc)}), 502
+
+
+def _public_download(row: dict) -> dict:
+    live = download.progress(row['id']) or {}
+    return {
+        'id': row['id'],
+        'name': row['zim_name'],
+        'filename': row['filename'],
+        'title': row['title'],
+        'status': row['status'],
+        'error': row['error'],
+        'totalBytes': row['total_bytes'],
+        # The live counter wins while a thread is running: the column is only
+        # checkpointed every 16 MiB, so the row alone would make a healthy
+        # download look stalled between writes.
+        'downloadedBytes': live.get('downloadedBytes', row['downloaded_bytes']),
+        'bytesPerSecond': live.get('bytesPerSecond'),
+        'sourceUrl': row['source_url'],
+        'createdAt': row['created_at'],
+        'finishedAt': row['finished_at'],
+    }
+
+
+@bp.get('/downloads')
+def list_downloads():
+    return jsonify([_public_download(row) for row in download.rows()])
+
+
+@bp.post('/downloads')
+def start_download():
+    body = request.json or {}
+    name = str(body.get('name') or '').strip()
+    uuid = str(body.get('uuid') or '').strip()
+    if not name:
+        return jsonify({'error': 'name is required'}), 400
+    try:
+        # Re-resolved from the catalogue rather than trusted from the browser:
+        # the mirror list and the size decide where bytes come from and how
+        # much disk is reserved, and neither should be client input.
+        entry = catalog.fetch_entry(name, uuid)
+        if not entry or not entry.get('meta4Url'):
+            return jsonify({'error': 'That archive is not in the catalogue.'}), 404
+        meta = catalog.fetch_meta4(entry['meta4Url'])
+    except catalog.CatalogUnavailable as exc:
+        return jsonify({'error': str(exc)}), 502
+    try:
+        return jsonify(_public_download(download.queue(entry, meta))), 201
+    except download.DownloadRefused as exc:
+        return jsonify({'error': str(exc)}), 409
+
+
+@bp.post('/downloads/<download_id>/pause')
+def pause_download(download_id: str):
+    row = download.pause(download_id)
+    return (jsonify(_public_download(row)) if row
+            else (jsonify({'error': 'Download not found'}), 404))
+
+
+@bp.post('/downloads/<download_id>/resume')
+def resume_download(download_id: str):
+    row = download.resume(download_id)
+    return (jsonify(_public_download(row)) if row
+            else (jsonify({'error': 'Download not found'}), 404))
+
+
+@bp.delete('/downloads/<download_id>')
+def delete_download(download_id: str):
+    if not download.delete(download_id):
+        return jsonify({'error': 'Download not found'}), 404
+    return jsonify({'deleted': True})
 
 
 @bp.get('/archives/<archive_id>/content/<path:entry_path>')

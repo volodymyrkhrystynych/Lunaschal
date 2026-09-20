@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:dc="http://purl.org/dc/terms/"
+      xmlns:opds="https://specs.opds.io/opds-1.2"
+      xmlns:thr="http://purl.org/syndication/thread/1.0">
+  <id>1a0219c2-106d-d875-8860-93fdf511f0c5</id>
+  <link rel="self"
+        href="/catalog/v2/languages"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <link rel="start"
+        href="/catalog/v2/root.xml"
+        type="application/atom+xml;profile=opds-catalog;kind=navigation"/>
+  <title>List of languages</title>
+  <updated>2026-09-20T02:29:46Z</updated>
+
+  <entry>
+    <title>Abkhazian</title>
+    <dc:language>abk</dc:language>
+    <thr:count>2</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=abk"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>7b80e51f-16c8-7251-5f0d-cc8be9d0f198</id>
+  </entry>
+  <entry>
+    <title>Achinese</title>
+    <dc:language>ace</dc:language>
+    <thr:count>2</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=ace"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>f7dd039e-f77f-3340-e370-ff39f2beadca</id>
+  </entry>
+  <entry>
+    <title>Adyghe</title>
+    <dc:language>ady</dc:language>
+    <thr:count>2</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=ady"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>dab5e1cb-fb0f-b9f0-1750-23e1286b8cbe</id>
+  </entry>
+  <entry>
+    <title>Afrikaans</title>
+    <dc:language>afr</dc:language>
+    <thr:count>11</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=afr"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>ef1c65f4-c6f8-1b23-001e-d487ab765e5c</id>
+  </entry>
+  <entry>
+    <title>Akan</title>
+    <dc:language>aka</dc:language>
+    <thr:count>2</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=aka"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>da66d724-637b-7781-4aca-c0afc3fdfb9e</id>
+  </entry>
+  <entry>
+    <title>Aleut</title>
+    <dc:language>ale</dc:language>
+    <thr:count>1</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=ale"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>5714177a-9c58-18a5-c159-3e1d20d5a645</id>
+  </entry>
+  <entry>
+    <title>Southern Altai</title>
+    <dc:language>alt</dc:language>
+    <thr:count>2</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=alt"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>8dc7f858-196e-ad40-e308-2d5cc43e9974</id>
+  </entry>
+  <entry>
+    <title>አማርኛ</title>
+    <dc:language>amh</dc:language>
+    <thr:count>6</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=amh"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>f2ac7e2e-2ba3-facc-5a70-afac552ad3b3</id>
+  </entry>
+  <entry>
+    <title>English</title>
+    <dc:language>eng</dc:language>
+    <thr:count>1301</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=eng"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>8cafcf99-af11-54c2-295d-f05e5fbb34fc</id>
+  </entry>
+  <entry>
+    <title>français</title>
+    <dc:language>fra</dc:language>
+    <thr:count>517</thr:count>
+    <link rel="subsection"
+          href="/catalog/v2/entries?lang=fra"
+          type="application/atom+xml;profile=opds-catalog;kind=acquisition"/>
+    <updated>2026-09-20T02:29:46Z</updated>
+    <id>df09d836-0c0e-8b57-4e62-6eceed74e02a</id>
+  </entry>
+</feed>

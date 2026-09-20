@@ -11,8 +11,9 @@ covered separately in
 ## Current product scope
 
 The library is one or more current ZIM archives on the user's archive drive.
-The user downloads and updates them outside Lunaschal, points Settings at the
-containing folder, and Lunaschal reads them in place.
+The user points Settings at the containing folder, and Lunaschal reads them in
+place — and, since the catalogue browser shipped, can also fetch new ones into
+that same folder from the Kiwix mirrors.
 
 Three source families are supported and searched together:
 
@@ -43,12 +44,27 @@ Two further facts, both measured rather than assumed, shaped the fix:
   `Archive` objects took 0.097 s serially and 0.109 s through a four-thread
   pool — python-libzim holds the GIL for the duration of a search. The lever is
   searching _fewer_ archives, not searching them at once.
-- **Half the interesting archives have no fulltext index.** Every DevDocs ZIM
-  Kiwix publishes is tagged `_ftindex:no`, as are 7 of the 181 Stack Exchange
-  ones. `Searcher` returns nothing at all for those. They answer through
-  `libzim.suggestion.SuggestionSearcher`, which queries the title index — so a
-  no-fulltext archive is a normal archive here, not a broken one, and the UI
-  says "title search only" in amber rather than flagging an error.
+- **Some archives have no fulltext index, and the catalogue is not a reliable
+  guide to which.** `Searcher` returns nothing at all for such an archive;
+  they answer through `libzim.suggestion.SuggestionSearcher`, which queries
+  the title index — so a no-fulltext archive is a normal archive here, not a
+  broken one, and the UI says "title search only" in amber rather than
+  flagging an error.
+
+  **Correction to the original research.** This was first written as "every
+  DevDocs ZIM Kiwix publishes is `_ftindex:no`", taken from the catalogue,
+  where all 231 DevDocs entries do carry that tag. The archives themselves
+  disagree: `devdocs_en_sinon_2026-08.zim` and `devdocs_en_qunit_2026-07.zim`
+  were both downloaded and opened, and both report `has_fulltext_index ==
+True` from libzim while carrying no `_ftindex` tag of their own at all
+  (their entire `Tags` is `devdocs;sinon` / `devdocs;qunit`). The flag exists
+  only in the library server's generated metadata and is wrong there. Nothing
+  in the reader depended on the wrong version — `registry._probe` has always
+  asked libzim rather than the catalogue — but the **catalogue browser** can
+  only show what the catalogue claims, so it is worded as a claim
+  ("catalogue says: no fulltext index") and re-derived from the file once it
+  is on disk. 7 of the 181 Stack Exchange entries are tagged the same way and
+  have not been checked against their archives.
 
 ## Why libzim is embedded
 
@@ -137,7 +153,26 @@ Python dependencies live in `requirements.txt`:
 
 Settings → **Knowledge Library** writes the selected directory to
 `settings.knowledge_root`. `KNOWLEDGE_ROOT` is the fallback when that database
-value is empty. ZIM files are discovered recursively and never modified.
+value is empty. ZIM files are discovered recursively, and an archive already in
+the folder is never modified.
+
+**The folder is no longer read-only to Lunaschal.** The reader half of this
+feature promised never to write into the archive directory at all; the
+downloader retires that promise deliberately, on the user's decision to have
+one root rather than two. A finished download is renamed into place there, so
+it joins the library with no copy and no second path to configure. What
+replaces the promise is a narrower one: _an archive already in the folder is
+never written to, renamed, or deleted._ Only `<name>.zim.part` files the
+downloader created itself are.
+
+That introduces a state the reader never had to consider — the root can be
+unwritable — and `download.root_state()` distinguishes four cases because each
+is a different thing to go and fix: `unset`, `missing` (the drive is
+unplugged), `readonly` (an `ST_RDONLY` mount, wanting fsck) and `permissions`
+(a read-write mount this user cannot write to, wanting `uid=`/`gid=` in fstab,
+which is what exFAT needs since it stores no POSIX ownership). `os.access`
+answers False for the last two alike, which is why the split exists — the same
+split `backend/routes/backup.py` makes.
 
 The demo launcher rebuilds `data/test-run/lunaschal-test.db` every time it
 starts. A folder selected through the test UI is therefore temporary and must
@@ -239,6 +274,84 @@ search. The stable identity lets a later turn reopen the article. Raw tool
 results are not replayed forever, and compaction never deletes or rewrites the
 original chat messages.
 
+## Getting archives
+
+`backend/offline_knowledge/catalog.py` reads the Kiwix catalogue and
+`download.py` fetches from it; both are reached through the existing
+`knowledge` blueprint. Five things about the upstream service are not
+guessable and each one shaped the code:
+
+- `library.kiwix.org/catalog/v2/…` **301s to `opds.library.kiwix.org`**, and
+  the response is **Atom/OPDS XML, not JSON**, despite the "v2". Parsed with
+  stdlib `ElementTree`; BeautifulSoup is the HTML tool.
+- The acquisition link is a **`.meta4` (Metalink 4), not the `.zim`** —
+  fetching the `href` as if it were the archive gets a 2 KB XML file with a
+  `.zim` name. The Metalink carries the authoritative size, md5/sha-1/sha-256,
+  a sha-1 piece list, and a priority-ordered mirror list. Its `<size>` and the
+  OPDS `length` **disagree** (361379 against 361472 on the entry this was
+  verified against) and the Metalink wins: it is what the mirrors serve, and
+  reserving disk against the other number is how a transfer fails at 99%.
+- **`/catalog/v2/entry/<uuid>` is unusable.** It answers 200 with a bare
+  `<entry>` root that uses an undeclared `dc:` prefix — not well-formed XML.
+  One archive is re-resolved through `/entries?name=<slug>` instead; the slug
+  is not unique (`wikipedia_en_all` matches three flavours), so the uuid picks
+  between them.
+- **`q` matches title words, not slugs**: `q=stackoverflow` returns nothing
+  where `q=Stack Overflow` returns four. The search box says so.
+- `lang=` takes ISO-639-3 and **does** narrow (`eng` → 1301, `fra` → 517). An
+  earlier note here said it did not; that came from testing it against
+  `category=stack_exchange`, all 181 entries of which are English.
+  `category=` has 16 values and **there is no `devdocs` category** — DevDocs
+  is reachable only as `tag=devdocs` (231 entries).
+
+An error page is not an empty library: `<html>503</html>` is perfectly
+well-formed XML, so the parser checks the root element and raises rather than
+reporting zero results.
+
+### How a download survives things
+
+One at a time, in queue order — the mirrors are donated bandwidth and the
+drive is one spindle. Then, in order:
+
+1. The destination is checked (the four states above) and `shutil.disk_usage`
+   must show `size × 1.05` free, **before a byte is fetched**.
+2. Every candidate mirror goes through `backend.research.web.assert_public_url`
+   — the catalogue chooses these hosts, so this is the SSRF shape, not
+   `backend/repos/git.py`'s, whose threat is git's own transports.
+3. Bytes land in `<filename>.zim.part` with a `Range` request, checkpointed to
+   `downloaded_bytes` every 16 MiB rather than every chunk. **A 200 answer to
+   a Range request means the server ignored it**, and is treated as "start
+   over": appending a whole file to a partial one writes a second copy into
+   the middle of the first, and nothing notices until the checksum fails.
+4. **A resumed `.part` is verified against the piece hashes first**, and
+   truncated back to the last piece that matches. This is the one genuinely
+   non-obvious part. A mirror may have rotated to a newer build between
+   sessions; without the piece check, appending to yesterday's bytes is only
+   caught by the whole-file hash, by which point the alternative to keeping
+   the file is fetching 107 GB again. Re-reading the part at 4 MiB per sha-1
+   is a couple of minutes.
+5. `verifying` is a status of its own, because a transfer assembled across two
+   sessions cannot carry an incremental hash — the finished file is read back
+   once.
+6. **On mismatch the `.part` is kept and nothing is renamed.** A half-good
+   file that is obviously a `.part` can be resumed or deleted; the same bytes
+   under a real `.zim` name are a corrupt archive the reader will open.
+7. On success: rename in place, `registry.sync(force=True)`, and write
+   `expected_size` — which is what makes the `truncated` health state
+   reachable.
+
+`_reset_stale_knowledge_downloads` parks an interrupted row at **`paused`, not
+`error`**, keeping `downloaded_bytes`: the bytes on disk are the point of a
+resumable transfer. It does not restart anything either — deciding on its own
+to pull the remaining 90 GB is not a startup path's call. Resume is a button.
+
+### Deliberately not built
+
+**No "a newer build is available" check.** The catalogue's `<name>` is the
+undated slug and the filename carries the date, so the comparison is already
+possible from stored data; it wants a decision about what happens to the
+superseded file, and that is a separate change.
+
 ## Known limitations
 
 These are known gaps, not promises already provided by the UI:
@@ -252,7 +365,9 @@ These are known gaps, not promises already provided by the UI:
    persistent selected article, bookmarks, annotations, or article table of
    contents.
 4. **Manual search has no pagination or language filter.** It can be scoped to
-   a `kind`, but not paged, and has no LLM-generated query expansion.
+   a `kind`, but not paged, and has no LLM-generated query expansion. (The
+   _catalogue_ browser does have a language filter; the search over installed
+   archives does not.)
 5. **Search snippets may be empty.** The installed `libzim` binding yields
    entry paths rather than rich result objects, and a title-index hit has no
    snippet to give by construction.
@@ -266,6 +381,16 @@ These are known gaps, not promises already provided by the UI:
    design and the most likely thing to revisit.
 8. **Cold-search cost on a 107 GB archive is unmeasured.** All timings above
    are warm; the time budget exists partly because of that uncertainty.
+9. **The catalogue browser does not page.** It asks for the first `count`
+   entries of a filter and shows how many matched, so narrowing is done with
+   the search box and the pickers rather than by scrolling. `start` is
+   plumbed through and unused.
+10. **Nothing reports that an installed archive has a newer build.** See
+    "Deliberately not built" above.
+11. **A resumed download re-reads the whole `.part` to verify its pieces.**
+    On 107 GB that is a couple of minutes before the first new byte. It is
+    the right trade against re-fetching, but it is not free and there is no
+    progress shown for it.
 
 ## Deferred roadmap
 
@@ -273,9 +398,10 @@ These are known gaps, not promises already provided by the UI:
 
 Fair per-archive quotas with a global merge, per-archive enable/disable,
 source/kind metadata, health states, and the title-index path all shipped on
-`feat/knowledge-federated-search`. What is still open from that list: how
-duplicate articles and multiple snapshot dates should rank when the same page
-exists in two archives.
+`feat/knowledge-federated-search`. Kiwix catalogue browsing and resumable,
+checksum-verified downloads shipped on `feat/knowledge-catalogue`. What is
+still open from that list: how duplicate articles and multiple snapshot dates
+should rank when the same page exists in two archives.
 
 ### Correctness and reader improvements
 
@@ -291,19 +417,6 @@ exists in two archives.
   navigation, and friendly article-loading failures.
 - Track iframe navigation so internal links, back, and forward stay inside
   the reader state, and add reader tests for that navigation.
-
-### Next
-
-**Kiwix catalogue browsing and resumable downloads** is the next branch. The
-catalogue is at `opds.library.kiwix.org/catalog/v2/entries` (the
-`library.kiwix.org` host 301s there), and it is Atom/OPDS **XML**, not JSON,
-despite the "v2". Each entry's acquisition link is a `.meta4` (Metalink 4)
-rather than the `.zim`, carrying the authoritative size, md5/sha-1/sha-256, and
-a priority-ordered mirror list; the mirrors answer `Accept-Ranges: bytes`, so
-resume works. `q` matches title words and not slugs (`q=stackoverflow` returns
-nothing; `q=Stack Overflow` returns four). Downloads should land in a
-**separate** root, not `knowledge_root` — the promise that Lunaschal never
-writes into the archive directory is worth keeping literally true.
 
 ### Optional future capabilities
 
@@ -326,7 +439,16 @@ Relevant automated coverage lives in:
   DevDocs collection opens at most 8 per search; a disabled archive is never
   opened; one unreadable archive does not fail the search; four query variants
   cost one archive visit), the title-index path, and every route;
-- `src/lib/knowledge.test.ts` and `src/components/Knowledge/Knowledge.test.tsx`;
+- `backend/tests/test_knowledge_catalog.py` — catalogue and Metalink parsing
+  against checked-in fixtures captured from the live service
+  (`backend/tests/fixtures/kiwix/`, so no test needs the network), the four
+  unwritable-root states, piece verification and rollback, resume with a
+  `Range` header, a server that ignores `Range`, a checksum mismatch keeping
+  the `.part` and publishing nothing, the disk-space and SSRF refusals, the
+  restart reset, and the routes;
+- `src/lib/knowledge.test.ts`, `src/lib/knowledgeDownloads.test.ts`,
+  `src/components/Knowledge/Knowledge.test.tsx` and
+  `src/components/Knowledge/CatalogPanel.test.tsx`;
 - `backend/tests/test_delegate_chat.py`;
 - `backend/tests/test_chat_compaction.py`; and
 - `src/lib/agentSteps.test.ts`.
@@ -340,3 +462,16 @@ ranking, and reader rendering.
 lists under Documentation with an amber "title search only" badge, that a query
 naming `lit` reaches it through the title index, and that a generic query still
 returns Wikipedia first.
+
+**Manual smoke test for the downloader**, since every unit test above runs
+against a fixture: queue `devdocs_en_sinon_2026-08.zim` from the DevDocs
+shortcut — 361 KB. Confirm the file lands in the archive folder, that
+`sha256sum` gives
+`2689ed4abaaeaf766bf9541596e5d59ea8065d0c0e0e0dcaf48e86e4d2087769`, and that
+it appears in the archive list as Documentation without a manual rescan —
+**and note that it lists as healthy, not "title search only", even though the
+catalogue tagged it `_ftindex:no`**; that disagreement is real and is
+explained under "Why libzim is embedded". Then kill the process part-way
+through something larger,
+restart, and confirm the row reads `paused` with its bytes intact and that
+Resume finishes it.

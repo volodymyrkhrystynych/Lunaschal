@@ -1808,7 +1808,7 @@ def seed_memory(db):
 
 
 def seed_knowledge(db):
-    """One offline-library archive row.
+    """One offline-library archive row, and the download that produced it.
 
     `settings.knowledge_root` is deliberately left unset. Every other seeder
     can manufacture its own media, but a ZIM cannot be faked — the smallest
@@ -1832,6 +1832,25 @@ def seed_knowledge(db):
          'devdocs_en_lit_2026-07.zim', 'Lit', 'eng', '2026-07', '', 739061, 412,
          'docs', 'derived', 'devdocs lit', 1, 0, 1, 'no_fulltext',
          now, now, now),
+    )
+    # The download that put it there. `status='done'` on purpose: every
+    # in-flight status is rewritten by _reset_stale_knowledge_downloads on the
+    # next start, so seeding one would seed a row that changes under the demo.
+    db.execute(
+        'INSERT INTO knowledge_downloads (id, zim_name, filename, title, '
+        'catalog_uuid, meta4_url, source_url, total_bytes, downloaded_bytes, '
+        'sha256, md5, piece_length, pieces_sha1, dest_path, status, '
+        'created_at, updated_at, finished_at) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        (new_id(), 'devdocs_en_lit', 'devdocs_en_lit_2026-07.zim', 'Lit Docs',
+         '00000000-0000-4000-8000-000000000001',
+         'https://download.kiwix.org/zim/devdocs/devdocs_en_lit_2026-07.zim.meta4',
+         'https://mirror.download.kiwix.org/zim/devdocs/devdocs_en_lit_2026-07.zim',
+         739061, 739061,
+         '0000000000000000000000000000000000000000000000000000000000000000',
+         '00000000000000000000000000000000', 4194304, '[]',
+         '/media/archive/kiwix/devdocs_en_lit_2026-07.zim', 'done',
+         ts(3), ts(3), ts(3)),
     )
 
 

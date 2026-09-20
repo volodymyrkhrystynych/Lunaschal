@@ -218,6 +218,7 @@ def init_db() -> None:
     # in-flight torrent state that a restart could orphan. See the comment on
     # the `torrents` table in schema.sql.
     _reset_stale_fic_downloads(db)
+    _reset_stale_knowledge_downloads(db)
     _reset_stale_study_imports(db)
     _reset_stale_meetings(db)
     _reset_stale_attachment_transcripts(db)
@@ -918,6 +919,32 @@ def _ensure_study_archive_requested(db: sqlite3.Connection) -> None:
     if 'archive_requested_at' not in cols:
         db.execute('ALTER TABLE study_sources ADD COLUMN archive_requested_at INTEGER')
         db.commit()
+
+
+def _reset_stale_knowledge_downloads(db: sqlite3.Connection) -> None:
+    """Same orphaning as _reset_stale_fic_downloads, resolved the other way.
+
+    A row still 'downloading' or 'verifying' at startup has no thread left to
+    finish it, for the same reason a fic's does not. But it is reset to
+    **'paused', not 'error'**: the `.part` file and `downloaded_bytes` are the
+    entire point of a resumable transfer, so the bytes already on disk are an
+    asset to be kept rather than a failure to be reported. Nor is it restarted
+    automatically — deciding on its own to pull the remaining 90 GB of a Stack
+    Overflow archive is not something a startup path gets to do. Resume is a
+    button.
+    """
+    if not db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+        " AND name='knowledge_downloads'"
+    ).fetchone():
+        return
+    db.execute(
+        "UPDATE knowledge_downloads SET status='paused',"
+        " error='Interrupted by an app restart — press Resume to continue.',"
+        " updated_at=? WHERE status IN ('downloading','verifying')",
+        (int(time.time()),),
+    )
+    db.commit()
 
 
 def _reset_stale_study_imports(db: sqlite3.Connection) -> None:

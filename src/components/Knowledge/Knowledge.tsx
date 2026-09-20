@@ -4,11 +4,14 @@ import { api, type KnowledgeSearchResult } from '../../hooks/api';
 import { LoadingState, ErrorBanner } from '../LoadStates';
 import { KIND_CHIPS, searchCoverage } from '../../lib/knowledge';
 import { ArchiveList } from './ArchiveList';
+import { CatalogPanel } from './CatalogPanel';
+import { DownloadStrip } from './DownloadStrip';
 
 export function Knowledge() {
   const [input, setInput] = useState('');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<KnowledgeSearchResult | null>(null);
+  const [adding, setAdding] = useState(false);
   const client = useQueryClient();
   const config = useQuery({
     queryKey: ['knowledge', 'config'],
@@ -82,15 +85,25 @@ export function Knowledge() {
 
       <div className="flex-1 min-h-0 flex flex-col md:flex-row">
         <aside className="md:w-80 md:border-r border-white/10 overflow-y-auto p-3 shrink-0 max-h-[42%] md:max-h-none">
-          {!query && (
+          {!query && adding && (
+            <CatalogPanel onClose={() => setAdding(false)} />
+          )}
+          {!query && !adding && (
             <>
-              <div className="flex items-center mb-2">
+              <div className="flex items-center gap-1 mb-2">
                 <h2 className="text-sm font-semibold">Archives</h2>
+                <button
+                  type="button"
+                  onClick={() => setAdding(true)}
+                  className="ml-auto px-2 py-0.5 rounded text-[11px] border border-white/10 text-[var(--color-primary)]"
+                >
+                  Add archives
+                </button>
                 <button
                   type="button"
                   onClick={() => rescan.mutate()}
                   disabled={rescan.isPending}
-                  className="ml-auto px-2 py-0.5 rounded text-[11px] border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                  className="px-2 py-0.5 rounded text-[11px] border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
                 >
                   {rescan.isPending ? 'Scanning…' : 'Rescan'}
                 </button>
@@ -99,6 +112,9 @@ export function Knowledge() {
               {archives.data && <ArchiveList archives={archives.data} />}
             </>
           )}
+          {/* Outside the !query branch on purpose: a download running while
+              you read a search result is still worth seeing finish. */}
+          <DownloadStrip />
           {query && (
             <>
               <h2 className="text-sm font-semibold mb-2">
