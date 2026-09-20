@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.db.connection import get_db
-from backend.fanfic import collections, download, sites
+from backend.fanfic import collections, download, sites, pacing
 
 
 def response(text='', url='https://www.fanfiction.net/favorites/story.php', data=None):
@@ -313,6 +313,30 @@ def test_failed_chapter_is_resumable(monkeypatch):
     collections.queue_work(ref)
     download.run_drain_pending()
     assert get_db().execute('SELECT chapter_count FROM fics').fetchone()[0] == 2
+
+
+def test_manual_pause_mid_import_keeps_chapter_and_resumes(monkeypatch):
+    calls = []
+    def fetch(url):
+        calls.append(url)
+        if '/2/' in url:
+            pacing.pause()
+            pacing.before_request(url)
+        return response(ffn(), url)
+    monkeypatch.setattr(collections, '_fetch', fetch)
+    ref = sites.parse_work_url('https://www.fanfiction.net/s/123/1/')
+    fic_id, _ = collections.queue_work(ref)
+    download.run_drain_pending()
+    db = get_db()
+    chapter_id = db.execute('SELECT id FROM fic_chapters').fetchone()[0]
+    assert db.execute('SELECT update_pending FROM fics').fetchone()[0] == 1
+    download.run_drain_pending()
+    assert len(calls) == 2  # Paused queue does not send more requests.
+    pacing.resume()
+    monkeypatch.setattr(collections, '_fetch', lambda u: response(ffn(2), u))
+    download.run_drain_pending()
+    assert db.execute('SELECT chapter_count,update_pending FROM fics').fetchone()[:] == (2, 0)
+    assert db.execute('SELECT id FROM fic_chapters WHERE position=1').fetchone()[0] == chapter_id
 
 
 def test_ao3_one_shot_growing_keeps_first_chapter_id(monkeypatch):

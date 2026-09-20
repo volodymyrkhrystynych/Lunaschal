@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCollectionScans } from './useCollectionScans';
 import { api } from '@/hooks/api';
 import { scanStatus, siteLabel } from '@/lib/fanfic';
+import { SiteLimit } from './SiteLimit';
 
 const choices: Record<string, [string, string][]> = {
   'fanfiction.net': [
@@ -96,6 +97,7 @@ export function CollectionImport() {
           {(start.error || scans.error)?.message}
         </p>
       )}
+      {site === 'fanfiction.net' && <SiteLimit />}
       <p className="text-xs text-[var(--color-text-muted)]">
         Story text is saved in the reader. Patreon video, audio and attachment
         downloads are not included.

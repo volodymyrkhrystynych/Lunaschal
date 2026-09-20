@@ -633,7 +633,26 @@ def site_limit():
     from backend.fanfic import pacing
     s = pacing.state()
     return jsonify({'paused': bool(s['paused']), 'cooldownUntil': s['cooldown_until'],
-                    'reason': s['reason'], 'interval': pacing.INTERVAL})
+                    'reason': s['reason'], 'interval': s['request_interval'],
+                    'nextRequest': max(s['next_request'], s['cooldown_until'])})
+
+
+@bp.put('/site-limit')
+def set_site_limit():
+    from backend.fanfic import pacing
+    body = request.get_json(silent=True)
+    try:
+        pacing.set_interval(body.get('interval') if isinstance(body, dict) else None)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return site_limit()
+
+
+@bp.post('/site-limit/pause')
+def pause_site_limit():
+    from backend.fanfic import pacing
+    pacing.pause()
+    return jsonify({'success': True})
 
 
 @bp.post('/site-limit/resume')

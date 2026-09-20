@@ -11,6 +11,9 @@ vi.mock('@/hooks/api', () => ({
       collections: {
         list: vi.fn(),
         start: vi.fn(),
+        limit: vi.fn().mockResolvedValue(undefined),
+        pause: vi.fn(),
+        resume: vi.fn(),
       },
     },
   },
@@ -45,6 +48,24 @@ it('starts favorites and follows together by default', async () => {
       'all',
       ''
     )
+  );
+});
+
+it('offers a persistent pause control in the FF.net import', async () => {
+  vi.mocked(api.fanfic.collections.limit).mockResolvedValueOnce({
+    paused: false,
+    cooldownUntil: 0,
+    nextRequest: 0,
+    interval: 600,
+    reason: null,
+  });
+  vi.mocked(api.fanfic.collections.pause).mockResolvedValue({ success: true });
+  setup();
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Pause FF.net downloads' })
+  );
+  await waitFor(() =>
+    expect(api.fanfic.collections.pause).toHaveBeenCalledOnce()
   );
 });
 

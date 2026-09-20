@@ -779,6 +779,7 @@ CREATE TABLE IF NOT EXISTS fanfic_bookmark_scans (
 
 CREATE TABLE IF NOT EXISTS fanfic_site_limits (
     domain TEXT PRIMARY KEY,
+    request_interval INTEGER NOT NULL DEFAULT 600,
     next_request REAL NOT NULL DEFAULT 0,
     cooldown_until REAL NOT NULL DEFAULT 0,
     strikes INTEGER NOT NULL DEFAULT 0,

@@ -232,6 +232,15 @@ def _fetch(url: str, *, same_host: bool = False):
         return _fetch_serial(url, same_host=same_host)
 
 
+def _wait_for_pacing(seconds):
+    # _fetch owns this lock. A long FF.net interval must not block other sites.
+    _fetch_lock.release()
+    try:
+        time.sleep(seconds)
+    finally:
+        _fetch_lock.acquire()
+
+
 def _fetch_serial(url: str, *, same_host: bool = False):
     from backend.fanfic import pacing
     # QQ rate-limits bursts with transient 403s that can outlast a short
@@ -246,7 +255,7 @@ def _fetch_serial(url: str, *, same_host: bool = False):
             from backend.fanfic.sites import same_site_url
             target = url
             for redirect in range(6):
-                pacing.before_request(target)
+                pacing.before_request(target, wait_for=_wait_for_pacing)
                 resp = _http_get(target, headers=_headers(target), cookies=_cookies_for(target),
                                  timeout=20, allow_redirects=False)
                 if resp.status_code not in (301, 302, 303, 307, 308):
@@ -257,7 +266,7 @@ def _fetch_serial(url: str, *, same_host: bool = False):
                     raise FetchBlockedError('Invalid or excessive site redirects')
                 target = same_site_url(location, target)
         else:
-            pacing.before_request(url)
+            pacing.before_request(url, wait_for=_wait_for_pacing)
             resp = _http_get(url, headers=_headers(url), cookies=_cookies_for(url), timeout=20)
         marker = _blocked_marker(resp)
         if pacing.applies(url) and (marker is not None or resp.status_code == 429):

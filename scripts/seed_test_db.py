@@ -537,7 +537,7 @@ def seed_food(db, recipe_id):
 
 
 def seed_fanfic(db, journal_ids):
-    db.execute("INSERT INTO fanfic_site_limits(domain) VALUES ('fanfiction.net')")
+    db.execute("INSERT INTO fanfic_site_limits(domain,request_interval) VALUES ('fanfiction.net',600)")
     db.execute(
         'INSERT INTO fics(id,title,source_type,site,thread_id,download_status,'
         'source_favorited_at,source_followed_at,created_at,updated_at) '

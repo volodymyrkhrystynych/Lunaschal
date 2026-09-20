@@ -22,10 +22,53 @@ def test_pacing_reserves_slot_and_waits(monkeypatch):
     monkeypatch.setattr(pacing.time, 'sleep', sleep)
     pacing.before_request('https://www.fanfiction.net/s/1/1/')
     pacing.before_request('https://m.fanfiction.net/s/2/1/')
-    assert sleeps == [15]
-    assert pacing.state()['next_request'] == 1030
+    assert sum(sleeps) == 600
+    assert max(sleeps) <= 1
+    assert pacing.state()['next_request'] == 2200
     pacing.before_request('https://archiveofourown.org/works/1')
-    assert sleeps == [15]
+    assert sum(sleeps) == 600
+
+
+def test_manual_pause_persists_and_resume_preserves_spacing(client, monkeypatch):
+    from backend.db import connection
+    monkeypatch.setattr(pacing.time, 'time', lambda: 1000)
+    monkeypatch.setattr(collections, 'start_scans', lambda: None)
+    monkeypatch.setattr(download, 'start_drain', lambda: None)
+    pacing.before_request('https://www.fanfiction.net/s/1/1/')
+    assert client.post('/api/fanfic/site-limit/pause').status_code == 200
+    connection._conn.close()
+    connection._conn = None
+    status = client.get('/api/fanfic/site-limit').json
+    assert status['paused']
+    assert status['reason'] == 'FF.net downloads paused by you.'
+    assert status['nextRequest'] == 1600
+    with pytest.raises(pacing.DeferredDownload):
+        pacing.before_request('https://www.fanfiction.net/s/1/2/')
+    client.post('/api/fanfic/site-limit/resume')
+    assert not pacing.state()['paused']
+    assert pacing.state()['next_request'] == 1600
+
+
+def test_pause_during_interval_releases_fetch_lock_and_stops_request(monkeypatch):
+    monkeypatch.setattr(pacing.time, 'time', lambda: 1000)
+    pacing.before_request('https://www.fanfiction.net/s/1/1/')
+    def wait(seconds):
+        assert seconds <= 1
+        assert download._fetch_lock.acquire(blocking=False)
+        download._fetch_lock.release()
+        pacing.pause()
+    monkeypatch.setattr(pacing.time, 'sleep', wait)
+    monkeypatch.setattr(download, '_http_get', lambda *a, **kw: pytest.fail('Paused request sent'))
+    with pytest.raises(pacing.DeferredDownload):
+        download._fetch('https://www.fanfiction.net/s/1/2/', same_host=True)
+
+
+def test_rate_limit_response_cannot_clear_manual_pause():
+    pacing.pause()
+    with pytest.raises(pacing.DeferredDownload):
+        pacing.suspend(response())
+    assert pacing.state()['paused']
+    assert pacing.state()['reason'] == 'FF.net downloads paused by you.'
 
 
 def test_retry_after_formats():
@@ -34,6 +77,55 @@ def test_retry_after_formats():
     assert pacing.retry_delay(format_datetime(datetime.fromtimestamp(now + 3600, timezone.utc)), now) == 3600
     assert pacing.retry_delay('broken', now) is None
     assert pacing.retry_delay('-1', now) is None
+
+
+def test_interval_api_persists_and_adjusts_wait_without_clearing_limits(client, monkeypatch):
+    from backend.db import connection
+    monkeypatch.setattr(pacing.time, 'time', lambda: 1000)
+    pacing.before_request('https://www.fanfiction.net/s/1/1/')
+    with pytest.raises(pacing.DeferredDownload):
+        pacing.suspend(response(headers={'Retry-After': '7200'}))
+    pacing.pause()
+    result = client.put('/api/fanfic/site-limit', json={'interval': 1200})
+    assert result.status_code == 200
+    assert pacing.state()['next_request'] == 2200
+    assert result.json['paused']
+    assert result.json['cooldownUntil'] == 8200
+    connection._conn.close()
+    connection._conn = None
+    assert client.get('/api/fanfic/site-limit').json['interval'] == 1200
+    client.put('/api/fanfic/site-limit', json={'interval': 60})
+    assert pacing.state()['next_request'] == 1060
+    assert pacing.state()['cooldown_until'] == 8200
+
+
+@pytest.mark.parametrize('value', [None, True, '600', 14, 86401, 60.5])
+def test_invalid_interval_rejected(client, value):
+    assert client.put('/api/fanfic/site-limit', json={'interval': value}).status_code == 400
+    assert pacing.state()['request_interval'] == 600
+
+
+def test_configured_interval_controls_requests(monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(pacing.time, 'time', lambda: clock[0])
+    monkeypatch.setattr(pacing.time, 'sleep', lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    pacing.set_interval(120)
+    pacing.before_request('https://www.fanfiction.net/s/1/1/')
+    pacing.before_request('https://www.fanfiction.net/s/1/2/')
+    assert clock[0] == 1120
+    assert pacing.state()['next_request'] == 1240
+
+
+def test_interval_migration_is_idempotent_and_preserves_existing_pause():
+    import sqlite3
+    from backend.db.connection import _ensure_fanfic_request_interval
+    with sqlite3.connect(':memory:') as db:
+        db.execute('CREATE TABLE fanfic_site_limits(domain TEXT PRIMARY KEY, paused INTEGER)')
+        db.execute("INSERT INTO fanfic_site_limits VALUES ('fanfiction.net',1)")
+        _ensure_fanfic_request_interval(db)
+        db.execute('UPDATE fanfic_site_limits SET request_interval=1200')
+        _ensure_fanfic_request_interval(db)
+        assert db.execute('SELECT paused,request_interval FROM fanfic_site_limits').fetchone() == (1, 1200)
 
 
 def test_cooldown_persists_and_manual_resume_cannot_shorten_it(monkeypatch):
