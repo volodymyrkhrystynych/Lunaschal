@@ -2170,3 +2170,62 @@ CREATE INDEX IF NOT EXISTS idx_llm_jobs_pending
 -- same shape is fine, which is why this is partial rather than a plain UNIQUE.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_llm_jobs_unique_pending
     ON llm_jobs(kind, target_id) WHERE status = 'pending';
+
+-- What the offline knowledge library contains (backend/offline_knowledge/).
+--
+-- The ZIM files themselves stay the source of truth and are never written to;
+-- this table is a cache of what a scan found, plus the two things a scan
+-- cannot know: whether the user wants an archive searched, and whether it is
+-- healthy. It exists because the alternative is an rglob-and-open across
+-- hundreds of files on every search -- and `_resolve()` used to do exactly
+-- that on every *article read* as well.
+--
+-- `id` is archive_id(path), the same sha prefix that is already baked into
+-- every content URL and into the `evidence.archiveId` of every past chat
+-- message, so adopting this table invalidates nothing. `zim_uuid` is the
+-- archive's own identity: a file moved or renamed inside the root re-adopts
+-- its row through it rather than silently reappearing as a new, default-on
+-- archive with its health forgotten.
+CREATE TABLE IF NOT EXISTS knowledge_archives (
+    id TEXT PRIMARY KEY,
+    zim_uuid TEXT,
+    path TEXT NOT NULL,
+    filename TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    language TEXT NOT NULL DEFAULT '',
+    zim_date TEXT NOT NULL DEFAULT '',
+    flavour TEXT NOT NULL DEFAULT '',
+    size INTEGER NOT NULL DEFAULT 0,
+    article_count INTEGER,
+    -- Quotas are applied per kind, so one 107 GB Q&A dump cannot spend every
+    -- result slot before an encyclopedia is queried. See offline_knowledge/kinds.py.
+    kind TEXT NOT NULL DEFAULT 'other'
+        CHECK(kind IN ('encyclopedia','qa','docs','other')),
+    -- A rescan re-derives `kind`; it must not overwrite a correction the user
+    -- made by hand, which is the only thing this column is for.
+    kind_source TEXT NOT NULL DEFAULT 'derived'
+        CHECK(kind_source IN ('derived','user')),
+    -- Subject tokens ('devdocs lit'). A narrow archive is opened only when the
+    -- query mentions one of them -- the difference between consulting 8 of the
+    -- DevDocs collection and mmapping all ~600.
+    match_terms TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    has_fulltext_index INTEGER NOT NULL DEFAULT 1,
+    has_title_index INTEGER NOT NULL DEFAULT 1,
+    -- 'no_fulltext' is a state, not a failure: every DevDocs archive Kiwix
+    -- publishes is `_ftindex:no`, and they are still searchable by title.
+    -- 'truncated' and `expected_size` are written by the downloader.
+    health TEXT NOT NULL DEFAULT 'ok'
+        CHECK(health IN ('ok','no_fulltext','unreadable','truncated','missing')),
+    health_error TEXT,
+    expected_size INTEGER,
+    scanned_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- Every search starts by asking for the enabled archives of a given kind.
+CREATE INDEX IF NOT EXISTS idx_knowledge_archives_kind
+    ON knowledge_archives(enabled, kind);
+CREATE INDEX IF NOT EXISTS idx_knowledge_archives_uuid
+    ON knowledge_archives(zim_uuid);

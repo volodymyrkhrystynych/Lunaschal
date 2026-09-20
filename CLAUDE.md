@@ -219,6 +219,16 @@ The `keys` exercises are **one continuous session** (`KeysDrill.tsx`, engine in 
 
 The falling-note roll sizes itself to the window: `FallingNotes` measures its own box and derives how many beats are visible from that height, so a taller window buys lead time rather than bigger notes. A generated exercise emits `<staff>1</staff>` for everything, so the drill forces `hand='both'` and shows no hand selector.
 
+#### Knowledge (`backend/offline_knowledge/`, `src/components/Knowledge/`)
+
+An offline reader and chat source over Kiwix ZIM archives under `settings.knowledge_root` (env `KNOWLEDGE_ROOT`), read in place and never written to. Design record: [docs/knowledge-tab.md](docs/knowledge-tab.md).
+
+**The library is plural, and search is federated because of what that costs.** The first version walked archives in filename order and stopped at the global result limit — invisible with one Wikipedia, fatal the moment `stackoverflow.com_en_all` (107 GB) sorts before `wikipedia_` and spends every slot first. `archive.search_many` now selects from the **registry** (`knowledge_archives`) without opening anything, giving each _kind_ (`encyclopedia`/`qa`/`docs`/`other`, `kinds.py`) at most `MAX_ARCHIVES_PER_CLASS` archives and a share of the output; it searches **archive-outer, query-inner** so four model variants cost N visits rather than 4N; then merges globally, ranking by `_title_match` first because rank position inside a 739 KB index and a 30-million-article index mean nothing to each other. Fetch depth is deliberately **not** the output quota — fetching only what may be returned leaves nothing to redistribute when another class under-delivers.
+
+Three things that look like bugs and are not. **A ZIM with no fulltext index is normal**: every DevDocs archive Kiwix publishes is `_ftindex:no` and answers through `libzim.suggestion.SuggestionSearcher` on the title index, so the badge is amber "title search only", not an error. **Parallelism is absent on purpose** — measured, 16 warm searches across 4 archives took 0.097 s serially and 0.109 s across four threads, since python-libzim holds the GIL through a search; the per-path locks exist so a chat search does not block an unrelated iframe read, not for throughput. **An unavailable root is not an emptied library** — `registry.sync()` returns early rather than marking every row `missing` because an external drive was not mounted yet, and a renamed file re-adopts its row through `zim_uuid` instead of returning as a fresh default-on archive.
+
+The registry also exists for cost: search used to rglob the root, and `_resolve()` rglobbed it again on **every article read** — a directory walk per image in a rendered page. Both are indexed SELECTs now. `kind` is derived from ZIM metadata (`Tags`'s `_category:`, the `devdocs` tag) with filename patterns as fallback, and a user correction sets `kind_source='user'` so a rescan cannot undo it.
+
 #### Fanfic library — see [`backend/fanfic/CLAUDE.md`](backend/fanfic/CLAUDE.md).
 
 #### Meetings — see [`backend/meetings/CLAUDE.md`](backend/meetings/CLAUDE.md).

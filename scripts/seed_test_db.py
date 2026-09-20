@@ -1807,6 +1807,34 @@ def seed_memory(db):
         )
 
 
+def seed_knowledge(db):
+    """One offline-library archive row.
+
+    `settings.knowledge_root` is deliberately left unset. Every other seeder
+    can manufacture its own media, but a ZIM cannot be faked — the smallest
+    real one Kiwix publishes is still hundreds of kilobytes of indexed binary,
+    and this script ships in a public repo. So the demo's Knowledge tab shows
+    its genuine unconfigured state, and this row exists to document the shape
+    of a scanned archive (and to satisfy the every-table-is-seeded check).
+
+    `health='no_fulltext'` on purpose: it is the state the whole DevDocs
+    collection is in, and the one most likely to be mistaken for an error.
+    """
+    now = ts(0)
+    db.execute(
+        'INSERT INTO knowledge_archives (id, zim_uuid, path, filename, title, '
+        'language, zim_date, flavour, size, article_count, kind, kind_source, '
+        'match_terms, enabled, has_fulltext_index, has_title_index, health, '
+        'scanned_at, created_at, updated_at) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        ('0000000000000000demo', '00000000-0000-4000-8000-000000000000',
+         '/media/archive/kiwix/devdocs_en_lit_2026-07.zim',
+         'devdocs_en_lit_2026-07.zim', 'Lit', 'eng', '2026-07', '', 739061, 412,
+         'docs', 'derived', 'devdocs lit', 1, 0, 1, 'no_fulltext',
+         now, now, now),
+    )
+
+
 def seed_infra(db):
     """Settings, MCP servers, the transcription log and the task-event feed.
 
@@ -1926,6 +1954,7 @@ def main() -> None:
     seed_study(db)
     seed_files()
     seed_memory(db)
+    seed_knowledge(db)
     seed_infra(db)
 
     db.commit()
