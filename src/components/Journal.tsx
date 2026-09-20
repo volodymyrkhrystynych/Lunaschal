@@ -44,6 +44,7 @@ import {
   rejectedFilesMessage,
 } from '../lib/journalAttachments';
 import { AttachmentButtons } from './AttachmentButtons';
+import { ChatClips, clipAttachments, photoAttachments } from './Chat/ChatClips';
 import { ImageLightbox, useLightbox } from './ImageLightbox';
 import { ItemCard } from './ItemCard';
 import { JournalAttachments } from './JournalAttachments';
@@ -1618,6 +1619,7 @@ const SavedChatItem = memo(function SavedChatItem({
   conversation: DatedConversation;
 }) {
   const [open, setOpen] = useState(false);
+  const lightbox = useLightbox();
   const { data, isLoading } = useQuery({
     queryKey: ['chat', 'conversation', conversation.id],
     queryFn: () => api.chat.getConversation(conversation.id),
@@ -1664,6 +1666,12 @@ const SavedChatItem = memo(function SavedChatItem({
           // The day's plan is the record of what actually got done, so it has
           // to survive the chat-day rollover into the feed's history.
           const proposedTodos = parseProposedTodos(m.metadata);
+          // What was spoken and what was photographed are part of the day as
+          // much as the words are, and this card is the only place a past chat
+          // can be read — ChatPanel only ever shows the current chat day.
+          // Same split as there: clips are an <audio> bar, pictures a strip.
+          const photos = photoAttachments(m.attachments);
+          const clips = clipAttachments(m.attachments);
           return (
             <div
               key={m.id}
@@ -1672,11 +1680,33 @@ const SavedChatItem = memo(function SavedChatItem({
               <div
                 className={`content-text max-w-[85%] rounded-lg px-3 py-1.5 text-sm ${m.role === 'user' ? 'bg-[var(--color-primary)]/80 text-white' : 'bg-white/5 text-[var(--color-text)]'}`}
               >
-                {m.role === 'user' ? (
-                  <div className="whitespace-pre-wrap">{m.content}</div>
-                ) : (
-                  <MessageMarkdown content={m.content} />
+                {photos.length > 0 && (
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    {photos.map(attachment => (
+                      <button
+                        key={attachment.id}
+                        type="button"
+                        onClick={() => lightbox.open(attachment.url)}
+                      >
+                        <img
+                          src={attachment.url}
+                          // The reading is the alt text for ChatPanel's
+                          // reason: it is the only thing the model ever saw
+                          // of this picture.
+                          alt={attachment.description || 'Attached photo'}
+                          className="max-h-32 rounded"
+                        />
+                      </button>
+                    ))}
+                  </div>
                 )}
+                <ChatClips clips={clips} />
+                {m.content.trim().length > 0 &&
+                  (m.role === 'user' ? (
+                    <div className="whitespace-pre-wrap">{m.content}</div>
+                  ) : (
+                    <MessageMarkdown content={m.content} />
+                  ))}
                 {proposedTodos.length > 0 && (
                   <ProposedTodoHistory items={proposedTodos} />
                 )}
@@ -1685,6 +1715,7 @@ const SavedChatItem = memo(function SavedChatItem({
           );
         })}
       </div>
+      <ImageLightbox src={lightbox.src} onClose={lightbox.close} />
     </details>
   );
 });
