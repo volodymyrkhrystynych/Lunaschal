@@ -184,6 +184,7 @@ export function CatalogPanel({ onClose }: { onClose: () => void }) {
             setFilters(current => ({
               ...current,
               lang: event.target.value || undefined,
+              start: undefined,
             }))
           }
           className="ml-auto bg-[var(--color-surface)] border border-white/10 rounded px-1 py-0.5 text-[11px]"
@@ -206,7 +207,10 @@ export function CatalogPanel({ onClose }: { onClose: () => void }) {
       )}
       {page.data && (
         <p className="text-[11px] text-[var(--color-text-muted)]">
-          {page.data.entries.length} of {page.data.total}
+          {page.data.entries.length > 0
+            ? `${page.data.start + 1}–${page.data.start + page.data.entries.length}`
+            : '0'}{' '}
+          of {page.data.total}
         </p>
       )}
 
@@ -222,6 +226,39 @@ export function CatalogPanel({ onClose }: { onClose: () => void }) {
           />
         ))}
       </div>
+      {page.data && (
+        <div className="flex justify-between gap-2 text-xs">
+          <button
+            type="button"
+            disabled={page.data.start === 0}
+            className="px-2 py-1 rounded border border-white/10 disabled:opacity-40"
+            onClick={() =>
+              setFilters(current => ({
+                ...current,
+                start: String(Math.max(0, page.data!.start - 24)),
+              }))
+            }
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            disabled={
+              page.data.entries.length === 0 ||
+              page.data.start + page.data.entries.length >= page.data.total
+            }
+            className="px-2 py-1 rounded border border-white/10 disabled:opacity-40"
+            onClick={() =>
+              setFilters(current => ({
+                ...current,
+                start: String(page.data!.start + page.data!.entries.length),
+              }))
+            }
+          >
+            Next
+          </button>
+        </div>
+      )}
     </div>
   );
 }

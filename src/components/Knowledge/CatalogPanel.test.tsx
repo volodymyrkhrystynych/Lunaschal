@@ -95,15 +95,11 @@ beforeEach(() => {
 });
 
 function renderWith(node: React.ReactNode) {
-  render(
-    <QueryClientProvider
-      client={
-        new QueryClient({ defaultOptions: { queries: { retry: false } } })
-      }
-    >
-      {node}
-    </QueryClientProvider>
-  );
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  render(<QueryClientProvider client={client}>{node}</QueryClientProvider>);
+  return client;
 }
 
 it("reports the catalogue's fulltext claim as a claim, before downloading", async () => {
@@ -118,7 +114,7 @@ it('shows how much of the catalogue the filter actually matched', async () => {
   renderWith(<CatalogPanel onClose={() => {}} />);
   // "1 of 231", not "1 result" — a page count presented as a match count
   // would misdescribe the library.
-  expect(await screen.findByText('1 of 231')).toBeTruthy();
+  expect(await screen.findByText('1–1 of 231')).toBeTruthy();
 });
 
 it('sends only the slug and uuid when queueing, never the mirror', async () => {
@@ -213,3 +209,78 @@ it('hides itself entirely once nothing is in flight', async () => {
   // things still happening.
   expect(container.textContent).toBe('');
 });
+
+it('refreshes installed archives when a polled download finishes', async () => {
+  knowledge.downloads.mockResolvedValue([download()]);
+  const client = renderWith(
+    <>
+      <CatalogPanel onClose={() => {}} />
+      <DownloadStrip />
+    </>
+  );
+  expect(await screen.findByText('Pause')).toBeTruthy();
+  await waitFor(() => expect(knowledge.archives).toHaveBeenCalledTimes(1));
+  knowledge.archives.mockResolvedValue([{ filename: download().filename }]);
+  knowledge.downloads.mockResolvedValue([download({ status: 'done' })]);
+  await client.refetchQueries({ queryKey: ['knowledge', 'downloads'] });
+  expect(await screen.findByText('Installed')).toBeTruthy();
+  expect(screen.queryByText('Pause')).toBeNull();
+  expect(knowledge.archives).toHaveBeenCalledTimes(2);
+  await client.refetchQueries({ queryKey: ['knowledge', 'downloads'] });
+  expect(knowledge.archives).toHaveBeenCalledTimes(2);
+});
+
+it('browses beyond the first page and returns to the previous page', async () => {
+  knowledge.catalog.mockImplementation(async filters => {
+    const start = Number(filters.start ?? 0);
+    return {
+      start,
+      total: 25,
+      entries: Array.from({ length: start === 0 ? 24 : 1 }, (_, i) =>
+        entry({
+          uuid: `u${start + i}`,
+          title: `Archive ${start + i}`,
+        })
+      ),
+    };
+  });
+  renderWith(<CatalogPanel onClose={() => {}} />);
+  expect(await screen.findByText('1–24 of 25')).toBeTruthy();
+  expect((screen.getByText('Previous') as HTMLButtonElement).disabled).toBe(
+    true
+  );
+  fireEvent.click(screen.getByText('Next'));
+  expect(await screen.findByText('25–25 of 25')).toBeTruthy();
+  expect(screen.getByText('Archive 24')).toBeTruthy();
+  expect((screen.getByText('Next') as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.click(screen.getByText('Previous'));
+  expect(await screen.findByText('1–24 of 25')).toBeTruthy();
+});
+
+it.each(['language', 'search', 'shortcut'])(
+  'resets pagination after changing %s',
+  async change => {
+    knowledge.catalog.mockImplementation(async filters => ({
+      entries: [entry()],
+      total: 50,
+      start: Number(filters.start ?? 0),
+    }));
+    renderWith(<CatalogPanel onClose={() => {}} />);
+    fireEvent.click(await screen.findByText('Next'));
+    expect(await screen.findByText('2–2 of 50')).toBeTruthy();
+    if (change === 'language') {
+      fireEvent.change(screen.getByLabelText('Language'), {
+        target: { value: 'eng' },
+      });
+    } else if (change === 'search') {
+      fireEvent.change(screen.getByLabelText('Search the Kiwix catalogue'), {
+        target: { value: 'Python' },
+      });
+      fireEvent.click(screen.getByText('Search'));
+    } else {
+      fireEvent.click(screen.getByText('Stack Exchange'));
+    }
+    expect(await screen.findByText('1–1 of 50')).toBeTruthy();
+    expect(knowledge.catalog.mock.lastCall?.[0].start).toBeUndefined();
+  }
+);

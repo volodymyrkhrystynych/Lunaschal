@@ -508,15 +508,16 @@ def test_deleting_a_download_removes_its_part_file(monkeypatch, library):
 
 # --- the restart reset ---
 
+@pytest.mark.parametrize('status', ['queued', 'downloading', 'verifying'])
 def test_a_restart_parks_an_interrupted_download_at_paused_with_its_bytes(
-        monkeypatch, library):
+        monkeypatch, library, status):
     from backend.db import connection
 
     with library['app'].app_context():
         db = get_db()
         db.execute(
-            "UPDATE knowledge_downloads SET status='downloading', "
-            'downloaded_bytes=8192 WHERE id=?', (library['row']['id'],))
+            "UPDATE knowledge_downloads SET status=?, "
+            'downloaded_bytes=8192 WHERE id=?', (status, library['row']['id']))
         db.commit()
         connection._reset_stale_knowledge_downloads(db)
         row = download.row(library['row']['id'])

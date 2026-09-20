@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type KnowledgeDownload } from '../../hooks/api';
 import {
@@ -111,12 +112,22 @@ function DownloadRow({ download }: { download: KnowledgeDownload }) {
  * itself appears in the list above, which is the better place to see it.
  */
 export function DownloadStrip() {
+  const client = useQueryClient();
+  const completed = useRef(new Set<string>());
   const downloads = useQuery({
     queryKey: ['knowledge', 'downloads'],
     queryFn: api.knowledge.downloads,
     refetchInterval: query =>
       (query.state.data ?? []).some(isActive) ? 1000 : false,
   });
+
+  useEffect(() => {
+    const done = (downloads.data ?? []).filter(item => item.status === 'done');
+    if (done.some(item => !completed.current.has(item.id))) {
+      void client.invalidateQueries({ queryKey: ['knowledge', 'archives'] });
+    }
+    for (const item of done) completed.current.add(item.id);
+  }, [downloads.data, client]);
 
   const active = (downloads.data ?? []).filter(isActive);
   if (!active.length) return null;

@@ -924,8 +924,9 @@ def _ensure_study_archive_requested(db: sqlite3.Connection) -> None:
 def _reset_stale_knowledge_downloads(db: sqlite3.Connection) -> None:
     """Same orphaning as _reset_stale_fic_downloads, resolved the other way.
 
-    A row still 'downloading' or 'verifying' at startup has no thread left to
-    finish it, for the same reason a fic's does not. But it is reset to
+    A row still 'queued', 'downloading' or 'verifying' at startup has no
+    worker left to finish it. Queued rows also need recovery because the
+    worker only starts on queue/resume gestures. Each row is reset to
     **'paused', not 'error'**: the `.part` file and `downloaded_bytes` are the
     entire point of a resumable transfer, so the bytes already on disk are an
     asset to be kept rather than a failure to be reported. Nor is it restarted
@@ -941,7 +942,7 @@ def _reset_stale_knowledge_downloads(db: sqlite3.Connection) -> None:
     db.execute(
         "UPDATE knowledge_downloads SET status='paused',"
         " error='Interrupted by an app restart — press Resume to continue.',"
-        " updated_at=? WHERE status IN ('downloading','verifying')",
+        " updated_at=? WHERE status IN ('queued','downloading','verifying')",
         (int(time.time()),),
     )
     db.commit()
