@@ -1,23 +1,15 @@
 import { FormEvent, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type KnowledgeSearchResult } from '../../hooks/api';
 import { LoadingState, ErrorBanner } from '../LoadStates';
-
-function sizeLabel(bytes: number): string {
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  return `${value.toFixed(unit < 2 ? 0 : 1)} ${units[unit]}`;
-}
+import { KIND_CHIPS, searchCoverage } from '../../lib/knowledge';
+import { ArchiveList } from './ArchiveList';
 
 export function Knowledge() {
   const [input, setInput] = useState('');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<KnowledgeSearchResult | null>(null);
+  const client = useQueryClient();
   const config = useQuery({
     queryKey: ['knowledge', 'config'],
     queryFn: api.knowledge.config,
@@ -31,6 +23,12 @@ export function Knowledge() {
     queryKey: ['knowledge', 'search', query],
     queryFn: () => api.knowledge.search(query),
     enabled: query.length > 0,
+  });
+  const rescan = useMutation({
+    mutationFn: api.knowledge.rescan,
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['knowledge'] });
+    },
   });
 
   const submit = (event: FormEvent) => {
@@ -62,6 +60,8 @@ export function Knowledge() {
     );
   }
 
+  const coverage = results.data ? searchCoverage(results.data) : null;
+
   return (
     <div className="flex-1 min-h-0 flex flex-col text-[var(--color-text)]">
       <form
@@ -84,33 +84,19 @@ export function Knowledge() {
         <aside className="md:w-80 md:border-r border-white/10 overflow-y-auto p-3 shrink-0 max-h-[42%] md:max-h-none">
           {!query && (
             <>
-              <h2 className="text-sm font-semibold mb-2">Archives</h2>
-              {archives.isError && <ErrorBanner error={archives.error} />}
-              {archives.data?.length === 0 && (
-                <p className="text-sm text-[var(--color-text-muted)]">
-                  No .zim files found in this folder.
-                </p>
-              )}
-              <div className="space-y-2">
-                {archives.data?.map(item => (
-                  <div
-                    key={item.id}
-                    className="rounded border border-white/10 p-3 bg-[var(--color-surface)]"
-                  >
-                    <div className="font-medium text-sm">{item.title}</div>
-                    <div className="text-xs text-[var(--color-text-muted)] mt-1">
-                      {[item.date, item.language, sizeLabel(item.size)]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </div>
-                    {item.error && (
-                      <div className="text-xs text-red-400 mt-1">
-                        {item.error}
-                      </div>
-                    )}
-                  </div>
-                ))}
+              <div className="flex items-center mb-2">
+                <h2 className="text-sm font-semibold">Archives</h2>
+                <button
+                  type="button"
+                  onClick={() => rescan.mutate()}
+                  disabled={rescan.isPending}
+                  className="ml-auto px-2 py-0.5 rounded text-[11px] border border-white/10 text-[var(--color-text-muted)] hover:text-[var(--color-text)]"
+                >
+                  {rescan.isPending ? 'Scanning…' : 'Rescan'}
+                </button>
               </div>
+              {archives.isError && <ErrorBanner error={archives.error} />}
+              {archives.data && <ArchiveList archives={archives.data} />}
             </>
           )}
           {query && (
@@ -124,13 +110,16 @@ export function Knowledge() {
                 </p>
               )}
               {results.isError && <ErrorBanner error={results.error} />}
-              {results.data?.length === 0 && (
+              {results.data?.results.length === 0 && (
                 <p className="text-sm text-[var(--color-text-muted)]">
                   Nothing found.
                 </p>
               )}
+              {coverage && (
+                <p className="text-xs text-amber-400 mb-2">{coverage}</p>
+              )}
               <div className="space-y-1">
-                {results.data?.map(item => (
+                {results.data?.results.map(item => (
                   <button
                     key={`${item.archiveId}:${item.path}`}
                     type="button"
@@ -138,9 +127,14 @@ export function Knowledge() {
                     className={`w-full text-left rounded p-2 border ${selected === item ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10' : 'border-transparent hover:bg-white/5'}`}
                   >
                     <div className="text-sm font-medium">{item.title}</div>
-                    <div className="text-xs text-[var(--color-text-muted)]">
-                      {item.archiveTitle}
-                      {item.archiveDate ? ` · ${item.archiveDate}` : ''}
+                    <div className="text-xs text-[var(--color-text-muted)] flex items-center gap-1">
+                      <span className="px-1 rounded bg-white/10 shrink-0">
+                        {KIND_CHIPS[item.archiveKind] ?? item.archiveKind}
+                      </span>
+                      <span className="truncate">
+                        {item.archiveTitle}
+                        {item.archiveDate ? ` · ${item.archiveDate}` : ''}
+                      </span>
                     </div>
                   </button>
                 ))}

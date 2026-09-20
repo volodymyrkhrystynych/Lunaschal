@@ -913,6 +913,16 @@ export interface AppSettings {
   knowledgeRoot: string;
 }
 
+/** What sort of source an archive is. Quotas are applied per kind. */
+export type KnowledgeKind = 'encyclopedia' | 'qa' | 'docs' | 'other';
+
+/**
+ * `no_fulltext` is a state, not a failure: every DevDocs archive Kiwix
+ * publishes is built without a fulltext index and answers by title instead.
+ */
+export type KnowledgeHealth =
+  'ok' | 'no_fulltext' | 'unreadable' | 'truncated' | 'missing';
+
 export interface KnowledgeArchive {
   id: string;
   filename: string;
@@ -920,19 +930,52 @@ export interface KnowledgeArchive {
   description?: string;
   language?: string;
   date?: string;
+  flavour?: string;
   articleCount?: number | null;
   size: number;
+  kind: KnowledgeKind;
+  kindSource?: 'derived' | 'user';
+  enabled: boolean;
   hasFulltextIndex?: boolean;
-  error?: string;
+  hasTitleIndex?: boolean;
+  health: KnowledgeHealth;
+  error?: string | null;
+  check?: {
+    state: 'running' | 'ok' | 'failed';
+    startedAt: number;
+    finishedAt: number | null;
+    error: string | null;
+  };
 }
 
 export interface KnowledgeSearchResult {
   archiveId: string;
   archiveTitle: string;
   archiveDate: string;
+  archiveKind: KnowledgeKind;
   path: string;
   title: string;
   snippet: string;
+  /** Which index answered -- a title hit carries no snippet. */
+  matchKind: 'fulltext' | 'title';
+}
+
+export interface KnowledgeSearchResponse {
+  results: KnowledgeSearchResult[];
+  /** How many archives were actually queried. */
+  searched: number;
+  /** Archives skipped for the time budget or a read error. */
+  skipped: number;
+  tookMs: number;
+}
+
+export interface KnowledgeRescan {
+  added: number;
+  changed: number;
+  missing: number;
+  total: number;
+  rootAvailable?: boolean;
+  archives: KnowledgeArchive[];
 }
 
 export interface KnowledgeConfig {
@@ -4002,9 +4045,26 @@ export const api = {
     setConfig: (path: string) =>
       put<KnowledgeConfig>('/api/knowledge/config', { path }),
     archives: () => get<KnowledgeArchive[]>('/api/knowledge/archives'),
-    search: (query: string, limit = 20) =>
-      get<KnowledgeSearchResult[]>(
-        `/api/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}`
+    rescan: () => post<KnowledgeRescan>('/api/knowledge/archives/rescan', {}),
+    updateArchive: (
+      id: string,
+      changes: { enabled?: boolean; kind?: KnowledgeKind }
+    ) =>
+      patch<KnowledgeArchive>(
+        `/api/knowledge/archives/${encodeURIComponent(id)}`,
+        changes
+      ),
+    verify: (id: string) =>
+      post<KnowledgeArchive['check']>(
+        `/api/knowledge/archives/${encodeURIComponent(id)}/verify`,
+        {}
+      ),
+    search: (query: string, limit = 20, kinds?: KnowledgeKind[]) =>
+      get<KnowledgeSearchResponse>(
+        `/api/knowledge/search?q=${encodeURIComponent(query)}&limit=${limit}` +
+          (kinds?.length
+            ? kinds.map(k => `&kind=${encodeURIComponent(k)}`).join('')
+            : '')
       ),
     contentUrl: (archiveId: string, path: string) =>
       `/api/knowledge/archives/${encodeURIComponent(archiveId)}/content/${path
