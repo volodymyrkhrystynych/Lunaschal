@@ -390,10 +390,10 @@ describe('isActivityType', () => {
     // A type with no colour renders a transparent heatmap cell, which reads as
     // a rest day; two types sharing one is a chart that lies.
     expect(Object.keys(ACTIVITY_LABELS).sort()).toEqual(
-      [...ACTIVITY_TYPES].sort()
+      [...ACTIVITY_TYPES, 'unassigned'].sort()
     );
     expect(Object.keys(ACTIVITY_COLORS).sort()).toEqual(
-      [...ACTIVITY_TYPES].sort()
+      [...ACTIVITY_TYPES, 'unassigned'].sort()
     );
     const hues = ACTIVITY_TYPES.map(t => ACTIVITY_COLORS[t]);
     expect(new Set(hues).size).toBe(ACTIVITY_TYPES.length);

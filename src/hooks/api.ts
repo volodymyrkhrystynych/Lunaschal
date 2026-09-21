@@ -2433,9 +2433,9 @@ export interface FoodJournalItem {
 // to-dos through api.tasks/api.todos rather than a parallel list of its own.
 
 // The activity types, in the priority order the heatmap resolves ties by.
-// Kept structurally identical to ACTIVITY_TYPES in src/lib/lifestyle.ts and
-// backend/lifestyle/activity.py.
+// The five selectable locations plus an unrated-location state for quick sets.
 export type ActivityTypeId =
+  | 'unassigned'
   | 'goodlife_brother'
   | 'goodlife_alone'
   | 'building'
@@ -2462,6 +2462,9 @@ export interface WorkoutExercise {
 }
 
 export interface WorkoutSession {
+  captureKind?: 'strength' | 'outdoor' | null;
+  startedAt?: string | null;
+  endedAt?: string | null;
   id: string;
   /** Local 'YYYY-MM-DD', not a timestamp. */
   date: string;
@@ -4863,6 +4866,15 @@ export const api = {
 
   lifestyle: {
     workouts: {
+      recentExercises: () =>
+        get<{ name: string; displayName: string }[]>(
+          '/api/lifestyle/workouts/recent-exercises'
+        ),
+      addEntry: (data: { text: string; exercise?: string }) =>
+        post<{ session: WorkoutSession; exercise: string }>(
+          '/api/lifestyle/workouts/entries',
+          data
+        ),
       list: (params?: { limit?: number; offset?: number }) => {
         const qp = new URLSearchParams();
         if (params?.limit !== undefined) qp.set('limit', String(params.limit));

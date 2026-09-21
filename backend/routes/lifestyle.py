@@ -14,6 +14,7 @@ import re
 import time
 from datetime import date as date_cls, timedelta
 from io import BytesIO
+from threading import RLock
 from types import SimpleNamespace
 
 from flask import Blueprint, jsonify, request, send_file
@@ -27,6 +28,7 @@ from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.lifestyle import storage
 from backend.lifestyle.activity import is_activity_type, summarize_day
 from backend.lifestyle.exercises import canonicalize, display_name
+from backend.lifestyle.quick_entry import parse_entry
 from backend.lifestyle.trends import week_start, weekly_series
 
 bp = Blueprint('lifestyle', __name__, url_prefix='/api/lifestyle')
@@ -94,9 +96,88 @@ def _parse_float(value, name, low, high):
 # --- Workout sessions --------------------------------------------------------
 
 _SESSION_COLS = (
+    'capture_kind, started_at, ended_at, '
     'id, date, location_type, duration_minutes, intensity_rating, raw_text, '
     'notes, parse_status, created_at, updated_at'
 )
+
+_capture_lock = RLock()
+
+
+@bp.get('/workouts/recent-exercises')
+def recent_workout_exercises():
+    rows = get_db().execute(
+        'SELECT e.name_canonical, MAX(COALESCE(e.logged_at, s.created_at)) AS recent '
+        'FROM workout_exercises e JOIN workout_sessions s ON s.id=e.session_id '
+        'GROUP BY e.name_canonical ORDER BY recent DESC, MAX(e.logged_order) DESC, MAX(e.rowid) DESC LIMIT 10'
+    ).fetchall()
+    return jsonify([{'name': r['name_canonical'], 'displayName': display_name(r['name_canonical'])} for r in rows])
+
+
+@bp.post('/workouts/entries')
+def capture_workout_entry():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'error': 'Expected an entry object'}), 400
+    db = get_db()
+    try:
+        entry = parse_entry(body.get('text'), body.get('exercise'), _known_exercise_names(db))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    raw_text = body['text'].strip()
+    if raw_text[0].isdigit():
+        # Keep the selected name alongside shorthand in the readable raw log.
+        raw_text = entry['raw_name'] + ' ' + raw_text
+    now = int(time.time())
+    # Separate capture time from updated_at: rating a workout never extends it.
+    with _capture_lock:
+        session = None
+        if entry['kind'] == 'strength':
+            session = db.execute(
+                "SELECT * FROM workout_sessions WHERE capture_kind='strength' "
+                'AND ended_at > ? AND ended_at <= ? ORDER BY ended_at DESC LIMIT 1',
+                (now - 3600, now),
+            ).fetchone()
+        try:
+            if session:
+                sid = session['id']
+                db.execute(
+                    'UPDATE workout_sessions SET ended_at=?, updated_at=?, duration_minutes=?, '
+                    "raw_text=COALESCE(raw_text, '') || char(10) || ? WHERE id=?",
+                    (now, now, (now - session['started_at']) // 60, raw_text, sid),
+                )
+            else:
+                sid = str(ULID())
+                start = now - (entry['duration'] or 0) * 60
+                db.execute(
+                    'INSERT INTO workout_sessions '
+                    '(id,date,location_type,raw_text,parse_status,created_at,updated_at,capture_kind,started_at,ended_at,duration_minutes) '
+                    "VALUES (?,?,?,?, 'done',?,?,?,?,?,?)",
+                    (sid, day_key_for(start), 'outside' if entry['kind'] == 'outdoor' else 'unassigned',
+                     raw_text,
+                     now, now, entry['kind'], start, now, entry['duration']),
+                )
+            ex = db.execute('SELECT id FROM workout_exercises WHERE session_id=? AND name_canonical=?',
+                            (sid, entry['name'])).fetchone()
+            if ex:
+                eid = ex['id']
+                db.execute('UPDATE workout_exercises SET logged_at=? WHERE id=?', (now, eid))
+            else:
+                eid = str(ULID())
+                db.execute('INSERT INTO workout_exercises (id,session_id,name_raw,name_canonical,position,logged_at) '
+                           'VALUES (?,?,?,?,(SELECT COUNT(*) FROM workout_exercises WHERE session_id=?),?)',
+                           (eid, sid, entry['raw_name'], entry['name'], sid, now))
+            if entry['kind'] == 'strength':
+                db.execute('INSERT INTO workout_sets (id,exercise_id,weight,reps,set_order) '
+                           'VALUES (?,?,?,?,(SELECT COUNT(*) FROM workout_sets WHERE exercise_id=?))',
+                           (str(ULID()), eid, entry['weight'], entry['reps'], eid))
+            db.execute('UPDATE workout_exercises SET logged_order=(SELECT COALESCE(MAX(logged_order),0)+1 FROM workout_exercises) WHERE id=?', (eid,))
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+    row = db.execute(f'SELECT {_SESSION_COLS} FROM workout_sessions WHERE id=?', (sid,)).fetchone()
+    return jsonify({'session': _sessions_with_exercises(db, [row])[0], 'exercise': entry['name']}), 201
 
 
 def _session_exercises(db, session_ids: list[str]) -> dict[str, list[dict]]:
@@ -274,13 +355,17 @@ def update_workout(session_id):
     body = request.get_json(silent=True) or {}
     db = get_db()
     row = db.execute(
-        'SELECT raw_text FROM workout_sessions WHERE id=?', (session_id,)
+        'SELECT raw_text, capture_kind FROM workout_sessions WHERE id=?', (session_id,)
     ).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
 
     updates: dict = {}
+    if row['capture_kind'] and 'rawText' in body:
+        return jsonify({'error': 'Quick entries cannot be replaced by an AI parse'}), 400
     if 'locationType' in body:
+        if row['capture_kind'] == 'outdoor' and body['locationType'] != 'outside':
+            return jsonify({'error': 'Walking and cycling are outdoor activities'}), 400
         if not is_activity_type(body['locationType']):
             return jsonify({'error': 'locationType must be one of the four activity types'}), 400
         updates['location_type'] = body['locationType']
@@ -330,10 +415,12 @@ def reparse_workout(session_id):
     never loses data)."""
     db = get_db()
     row = db.execute(
-        'SELECT raw_text FROM workout_sessions WHERE id=?', (session_id,)
+        'SELECT raw_text, capture_kind FROM workout_sessions WHERE id=?', (session_id,)
     ).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
+    if row['capture_kind']:
+        return jsonify({'error': 'Quick entries are already structured'}), 400
     if not row['raw_text']:
         return jsonify({'error': 'no raw text to parse'}), 400
     text = row['raw_text']

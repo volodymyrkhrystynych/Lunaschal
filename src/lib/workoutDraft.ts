@@ -15,6 +15,7 @@ const STORAGE_KEY = 'lunaschal:workoutDraft';
 export const DRAFT_SAVE_DELAY_MS = 300;
 
 export interface WorkoutDraft {
+  selectedExercise?: string;
   rawText: string;
   locationType: string | null;
   durationMinutes: string;
@@ -57,6 +58,9 @@ export function parseDraft(raw: string | null): WorkoutDraft | null {
   if (typeof parsed !== 'object' || parsed === null) return null;
   const d = parsed as Record<string, unknown>;
   const draft: WorkoutDraft = {
+    ...(typeof d.selectedExercise === 'string'
+      ? { selectedExercise: d.selectedExercise }
+      : {}),
     rawText: str(d.rawText),
     locationType: typeof d.locationType === 'string' ? d.locationType : null,
     durationMinutes: str(d.durationMinutes),
