@@ -227,6 +227,41 @@ describe('Library infinite scroll', () => {
   });
 });
 
+describe('FF.net rate-limit panel', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.scrollTo = vi.fn();
+  });
+
+  it('stays hidden until the import panel is opened', async () => {
+    renderFanfic();
+    await screen.findByText('Test Fic');
+    expect(
+      screen.queryByRole('button', { name: 'Pause FF.net downloads' })
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Import' }));
+    expect(
+      await screen.findByRole('button', { name: 'Pause FF.net downloads' })
+    ).toBeTruthy();
+  });
+
+  it('leaves it to CollectionImport on the My collections tab', async () => {
+    renderFanfic();
+    await screen.findByText('Test Fic');
+    fireEvent.click(screen.getByRole('button', { name: '+ Import' }));
+    await screen.findByRole('button', { name: 'Pause FF.net downloads' });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'My collections' }));
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole('button', { name: 'Pause FF.net downloads' })
+      ).toHaveLength(1)
+    );
+  });
+});
+
 describe('Library views and expandable details', () => {
   it('shows original favorite and follow dates separately from import time', async () => {
     const { api } = await import('../../hooks/api');
