@@ -80,6 +80,23 @@ _DISPATCH = {
 }
 
 
+def offline_toolbox() -> tuple[list[dict], dict]:
+    """(tools, dispatch) for a pass with no internet: the library and the wiki.
+
+    A function rather than a constant pair, because `offline_knowledge` reads
+    settings at call time. It exists so the unattended research pass *names*
+    what it wants: inheriting `ALL_TOOLS` by default is how that pass came to
+    have web access nobody had decided to give it, and an unattended outbound
+    request is exactly what a scheduled job should not make on its own.
+    """
+    from backend.offline_knowledge import tools as knowledge
+
+    tools = knowledge.TOOLS + wiki.TOOLS
+    dispatch = {t['function']['name']: knowledge for t in knowledge.TOOLS}
+    dispatch.update({t['function']['name']: wiki for t in wiki.TOOLS})
+    return tools, dispatch
+
+
 def _noop(*args, **kwargs) -> None:
     return None
 

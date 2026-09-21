@@ -146,6 +146,13 @@ def _settings() -> dict:
 # (`_migrate_websearch_search_to_research` in backend/db/connection.py) rather
 # than being read as a fallback here — a setting that works but appears nowhere
 # in Settings is worse than one that was migrated into view.
+# The providers `web_search` actually implements. The empty string is "none",
+# which is a valid stored value; anything else is a name nothing can serve, and
+# `backend/db/connection.py`'s `_clear_retired_search_provider` blanks one that
+# got stored before the provider was removed.
+SEARCH_PROVIDERS = ('', 'brave', 'searxng')
+
+
 def _search_setting(settings: dict, name: str) -> str:
     return (settings.get(f'research_{name}') or '').strip()
 

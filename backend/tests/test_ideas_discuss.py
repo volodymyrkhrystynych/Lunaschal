@@ -34,7 +34,7 @@ def _sse(response):
 def _stub_agent(monkeypatch, steps=None, sources=None):
     from backend.research import agent
     steps = steps if steps is not None else [
-        {'tool': 'web_search', 'arg': 'global search', 'ok': True, 'count': 3}
+        {'tool': 'local_knowledge_search', 'arg': 'global search', 'ok': True, 'count': 3}
     ]
     sources = sources if sources is not None else [{'url': 'https://ex.com/a', 'title': 'A'}]
 
@@ -132,7 +132,7 @@ def test_discuss_streams_tool_events_then_the_answer(client, monkeypatch):
     assert r.status_code == 200
     events = _sse(r)
 
-    assert events[0]['tool'] == 'web_search'
+    assert events[0]['tool'] == 'local_knowledge_search'
     assert ''.join(e['content'] for e in events if 'content' in e) == 'Use FTS5.'
     done = [e for e in events if e.get('done')][0]
     assert done['sources'] == [{'url': 'https://ex.com/a', 'title': 'A'}]
@@ -158,7 +158,7 @@ def test_discuss_persists_both_turns_with_the_tool_trace(client, monkeypatch):
     assert rows[1]['content'] == 'Use FTS5.'
     metadata = json.loads(rows[1]['metadata'])
     assert metadata['agent'] == 'ideas'
-    assert metadata['steps'][0]['tool'] == 'web_search'
+    assert metadata['steps'][0]['tool'] == 'local_knowledge_search'
     assert metadata['sources'][0]['url'] == 'https://ex.com/a'
 
 

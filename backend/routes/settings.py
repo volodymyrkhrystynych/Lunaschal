@@ -9,6 +9,7 @@ from flask import Blueprint, jsonify, request
 from backend.auth import NETWORK_MODE
 from backend.db.connection import build_update, get_db
 from backend.geo import parse_coord
+from backend.research.web import SEARCH_PROVIDERS
 
 _sleep_inhibitor: subprocess.Popen | None = None
 _INHIBIT_WHO = 'Lunaschal'
@@ -263,6 +264,17 @@ def update_ai():
                     value = max(30, min(7200, int(value)))
                 except (TypeError, ValueError):
                     continue
+            elif camel in ('researchSearchProvider', 'websearchSearchProvider'):
+                # 400 rather than the `continue` the numeric fields use: a
+                # provider silently not stored is how the app spent months
+                # unable to search while Settings showed the value as "None".
+                # `str(...)` before `.strip()`: a non-string body value (a
+                # number, a list, an object) has no `.strip`, and the
+                # AttributeError became a 500 where this branch's whole point
+                # is to answer 400 with the reason.
+                value = '' if value is None else str(value).strip().lower()
+                if value not in SEARCH_PROVIDERS:
+                    return jsonify({'error': f'Unknown search provider: {value!r}'}), 400
             elif camel in ('weatherDefaultLat', 'weatherDefaultLon'):
                 value = parse_coord(value)
                 if value is None:

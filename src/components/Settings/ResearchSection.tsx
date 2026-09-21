@@ -22,6 +22,13 @@ export function ResearchSection() {
     queryKey: ['ideas', 'repo-context'],
     queryFn: api.ideas.repoContext,
   });
+  // The offline library is what the background research pass actually gates
+  // on, so the warning below needs the resolved root, not the settings column
+  // (which misses a KNOWLEDGE_ROOT env override).
+  const { data: knowledge } = useQuery({
+    queryKey: ['knowledge', 'config'],
+    queryFn: api.knowledge.config,
+  });
 
   useEffect(() => {
     if (!settings) return;
@@ -264,10 +271,31 @@ export function ResearchSection() {
           </label>
         )}
 
-        {settings?.researchEnabled && !settings?.researchSearchProvider && (
+        {/* Two different warnings, because the background pass and the web are
+            no longer the same gate. `research_job.plan_next` stops on
+            `configured_root() is None` — the offline library — so a missing
+            library is what silently kills the nightly research, and a missing
+            provider costs it nothing at all. Keyed on the knowledge config
+            rather than `settings.knowledgeRoot` so a KNOWLEDGE_ROOT env
+            override reads as configured here too, exactly as the gate sees
+            it. */}
+        {settings?.researchEnabled && knowledge && !knowledge.path && (
           <p className="text-xs text-amber-400">
-            With no search provider the agent can still judge what's already
-            built, but it won't research anything new.
+            The background research pass reads the offline library, so with no
+            Knowledge root set it never runs — ideas are still assessed against
+            the repo. Set one in Settings → Knowledge.
+          </p>
+        )}
+
+        {/* Muted, not amber: "None" is a setting someone can mean. The
+            library warning above is amber because it describes something
+            silently not happening that the user switched on. */}
+        {!settings?.researchSearchProvider && (
+          <p className="text-xs text-[var(--color-text-muted)]">
+            With no provider no web search runs: the chat, Ideas and Writing
+            delegates fall back to the offline library alone, and Jobs skips
+            company research. The background research pass doesn't search the
+            web either way.
           </p>
         )}
       </div>

@@ -51,7 +51,7 @@ _lock = threading.Lock()
 
 
 def start(message_id: str, messages: list[dict], system_prompt: str, *,
-          tools_enabled: bool, conversation_id: str | None = None) -> "queue.Queue":
+          toolset: str, conversation_id: str | None = None) -> "queue.Queue":
     """Spawns the run; returns the queue the caller's SSE view should relay
     from. Puts (kind, payload) tuples, same shape as stream_reply, plus a
     terminal ('_end', None) once the thread is done (whether by 'done' or by
@@ -62,7 +62,7 @@ def start(message_id: str, messages: list[dict], system_prompt: str, *,
         _active.add(done)
     threading.Thread(
         target=_run,
-        args=(message_id, messages, system_prompt, tools_enabled, q, done,
+        args=(message_id, messages, system_prompt, toolset, q, done,
               conversation_id),
         daemon=True,
     ).start()
@@ -94,7 +94,7 @@ def _append_thinking(current: str, delta: str) -> str:
     return grown[:_MAX_THINKING] + _THINKING_TRUNCATED
 
 
-def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enabled: bool,
+def _run(message_id: str, messages: list[dict], system_prompt: str, toolset: str,
           q: "queue.Queue", done: "threading.Event | None" = None,
           conversation_id: str | None = None) -> None:
     db = get_db()
@@ -104,7 +104,7 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, tools_enable
     last_flush = 0.0
     try:
         for kind, payload in delegate_chat.stream_reply(
-                messages, system_prompt, tools_enabled=tools_enabled,
+                messages, system_prompt, toolset=toolset,
                 conversation_id=conversation_id):
             q.put((kind, payload))
             if kind == 'content':

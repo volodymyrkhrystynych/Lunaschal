@@ -331,3 +331,63 @@ def test_timeout_seconds_are_clamped(client):
 
     client.patch('/api/settings/ai', json={'researchSearchTimeoutSeconds': 'nope'})
     assert client.get('/api/settings').get_json()['researchSearchTimeoutSeconds'] == 120
+
+
+# --- The search provider is an allowlist, not free text ---
+
+def _stored_provider(client):
+    from backend.db.connection import get_db
+    return get_db().execute(
+        'SELECT research_search_provider FROM settings LIMIT 1'
+    ).fetchone()['research_search_provider']
+
+
+def test_patch_settings_refuses_a_provider_nothing_implements(client):
+    """400 rather than the silent `continue` the numeric fields use: a provider
+    stored but never served is how the app spent months unable to search while
+    Settings showed the value as "None"."""
+    client.patch('/api/settings/ai', json={'researchSearchProvider': 'brave'})
+
+    resp = client.patch('/api/settings/ai', json={'researchSearchProvider': 'tavily'})
+    assert resp.status_code == 400
+    assert 'tavily' in resp.get_json()['error']
+    assert _stored_provider(client) == 'brave'
+
+
+def test_patch_settings_accepts_the_providers_that_exist(client):
+    for provider in ('brave', 'searxng', ''):
+        resp = client.patch('/api/settings/ai',
+                            json={'researchSearchProvider': provider})
+        assert resp.status_code == 200
+        assert _stored_provider(client) == provider
+
+
+def test_the_allowlist_is_the_one_the_search_code_reads(client):
+    """Two lists would drift, and the drift would look exactly like this bug."""
+    from backend.research.web import SEARCH_PROVIDERS
+    from backend.db.connection import _KNOWN_SEARCH_PROVIDERS
+
+    assert set(SEARCH_PROVIDERS) == set(_KNOWN_SEARCH_PROVIDERS)
+
+
+def test_patch_settings_refuses_a_non_string_provider_with_400(client):
+    """A number or a list has no `.strip`, and the AttributeError escaped as a
+    500 — from the one branch written specifically to answer 400 with the
+    reason."""
+    client.patch('/api/settings/ai', json={'researchSearchProvider': 'brave'})
+
+    for bad in (7, ['brave'], {'name': 'brave'}, True):
+        resp = client.patch('/api/settings/ai',
+                            json={'researchSearchProvider': bad})
+        assert resp.status_code == 400, bad
+        assert 'search provider' in resp.get_json()['error']
+        assert _stored_provider(client) == 'brave'
+
+
+def test_patch_settings_treats_a_null_provider_as_none(client):
+    """JSON null is the wire's way of saying "unset", which is '' here."""
+    resp = client.patch('/api/settings/ai',
+                        json={'researchSearchProvider': None})
+
+    assert resp.status_code == 200
+    assert _stored_provider(client) == ''

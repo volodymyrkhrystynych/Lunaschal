@@ -63,8 +63,8 @@ def plan_next(now: int | None = None) -> tuple[str, str] | None:
     Assessment comes before research, always: it is cheap, needs no web access,
     and its output is what tells the research pass what to look for.
     """
+    from backend.offline_knowledge.archive import configured_root
     from backend.research.repo_job import current_snapshot
-    from backend.research.web import is_search_configured
 
     now = now or int(time.time())
     db = get_db()
@@ -81,9 +81,10 @@ def plan_next(now: int | None = None) -> tuple[str, str] | None:
             if _needs_assessment(db, idea, snapshot_id):
                 return ('assess', idea['id'])
 
-    # Researching without a search provider would just record that the web was
-    # unavailable, over and over.
-    if not is_search_configured():
+    # This pass reads the offline library; with no library there is nothing to
+    # read, and running anyway would just record that, over and over. (It used
+    # to be a search-provider check, back when the pass searched the web.)
+    if configured_root() is None:
         return None
 
     for idea in ideas:
@@ -139,10 +140,14 @@ def run_research_task(idea_id: str, cancel=None) -> dict:
     _set_state(idea_id, 'running')
     checkpoint = agent.make_checkpoint(cancel=cancel)
     try:
+        # Named explicitly rather than inherited from `agent.ALL_TOOLS`: this
+        # pass is scheduled, unattended and turned on by a checkbox, and the
+        # default toolbox is what quietly gave it the web.
+        tools, dispatch = agent.offline_toolbox()
         result = agent.gather(
             GATHER_SYSTEM,
             build_gather_request(idea, discuss.build_context(idea_id)),
-            checkpoint=checkpoint,
+            tools=tools, dispatch=dispatch, checkpoint=checkpoint,
         )
         transcript = flatten_transcript(result.get('messages') or [])
 

@@ -20,18 +20,23 @@ MAX_TRANSCRIPT_CHARS = 16000
 GATHER_SYSTEM = """You research a feature idea for Lunaschal, a single-user, \
 local-first life-management app, so that its owner can decide how to build it.
 
-Use your tools to find how other people have solved this problem: prior art, \
-the standard approaches, the trade-offs people report after living with them, \
-and anything that would be expensive to learn the hard way.
+You are working offline. You have your own research wiki and the owner's local \
+reference library; there is no web access in this pass.
 
-Check your own wiki first — you may already have notes on this. Then search \
-the web for what is missing.
+Check the wiki first with wiki_list and wiki_search — you may already have \
+notes on this. Then search the reference library with local_knowledge_search, \
+giving two to four complementary queries in one call: the problem-space term, \
+the full question, and any plausible near-synonyms.
 
 A search result is a title and a snippet; it is not a source, and it is not \
-enough to write from. Once a search turns up something substantive, open it \
-with web_fetch and read it. Prefer two or three pages read properly over ten \
+enough to write from. Open the best one to three with local_knowledge_read and \
+actually read them. Prefer two or three articles read properly over ten \
 searches skimmed — the notes you write are only as good as the pages behind \
-them, and only pages you actually opened are recorded as sources.
+them, and only articles you actually opened are recorded as sources.
+
+If the library does not cover this, say so and stop. Writing an article from \
+what you already believe is worse than writing none: it will be retrieved \
+later and believed.
 
 Do not research Lunaschal itself; you are given its inventory and it is \
 authoritative."""
@@ -46,7 +51,8 @@ is what makes a note useful again next year.
 
 Rules:
 - Only write what your research actually supports. If you found little, return \
-no articles; an empty wiki beats a confident wrong one.
+no articles; an empty wiki beats a confident wrong one. This pass has no web \
+access, so "the library had nothing on this" is a normal and correct outcome.
 - Update an existing article by reusing its exact slug. Create a new one only \
 when the topic is genuinely different from everything in the list.
 - `summary` is one or two sentences and is what future retrieval sees, so make \

@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from backend.delegate import chat as delegate_chat
+from backend.delegate import research_tools
 
 
 def _call(name='delegate', args=None, call_id='c1'):
@@ -81,7 +82,7 @@ def _delegates(monkeypatch, result, task='do the thing'):
         'task': task, 'reason': 'current',
     })])
     monkeypatch.setattr(
-        delegate_chat.agent, 'run', lambda t, **kw: result,
+        research_tools.agent, 'run', lambda t, **kw: result,
     )
 
 
@@ -202,8 +203,8 @@ def test_local_search_and_read_stay_on_the_main_agents_transcript(
                          'excerpt': 'First published in 1964.'},
         })
 
-    monkeypatch.setattr(delegate_chat.knowledge_tools, 'run_tool', local)
-    monkeypatch.setattr(delegate_chat.agent, 'run',
+    monkeypatch.setattr(research_tools.knowledge_tools, 'run_tool', local)
+    monkeypatch.setattr(research_tools.agent, 'run',
                         lambda *_a, **_k: pytest.fail('web delegate was not needed'))
 
     payload = _drain()[-1][1]
@@ -226,7 +227,7 @@ def test_web_delegate_requires_local_attempt_unless_question_is_current(
         )]),
         SimpleNamespace(content='', tool_calls=None),
     ])
-    monkeypatch.setattr(delegate_chat.agent, 'run',
+    monkeypatch.setattr(research_tools.agent, 'run',
                         lambda *_a, **_k: pytest.fail('delegate should be gated'))
 
     payload = _drain()[-1][1]
@@ -244,10 +245,10 @@ def test_web_delegate_requires_reading_a_local_hit(monkeypatch, answered):
         )]),
         SimpleNamespace(content='', tool_calls=None),
     ])
-    monkeypatch.setattr(delegate_chat.knowledge_tools, 'run_tool', lambda name, args: (
+    monkeypatch.setattr(research_tools.knowledge_tools, 'run_tool', lambda name, args: (
         'one result', {'tool': name, 'ok': True, 'count': 1},
     ))
-    monkeypatch.setattr(delegate_chat.agent, 'run',
+    monkeypatch.setattr(research_tools.agent, 'run',
                         lambda *_a, **_k: pytest.fail('local hit was not read'))
 
     payload = _drain()[-1][1]
@@ -263,7 +264,7 @@ def test_an_inherently_current_question_can_go_directly_to_web(
         )]),
         SimpleNamespace(content='', tool_calls=None),
     ])
-    monkeypatch.setattr(delegate_chat.agent, 'run', lambda *_a, **_k: {
+    monkeypatch.setattr(research_tools.agent, 'run', lambda *_a, **_k: {
         'summary': 'Rain today.',
         'sources': [{'url': 'https://weather.example', 'title': 'Weather'}],
         'steps': [{'tool': 'web_search', 'ok': True}],
@@ -353,6 +354,41 @@ def test_the_decision_turn_is_capped_and_offers_the_whole_toolbox(monkeypatch, a
                        'wiki_read', 'wiki_search'}
 
 
+def test_the_research_toolset_is_research_and_nothing_else(monkeypatch, answered):
+    """The Writing discussion gets the library and the delegate. It has no
+    confirm cards to stage a proposal onto, and the life wiki is about the user
+    rather than the piece they are writing."""
+    seen = {}
+
+    def fake_turn(messages, tools, max_tokens=None):
+        seen['tools'] = tools
+        seen['note'] = messages[-1]['content']
+        return SimpleNamespace(content='', tool_calls=None), 'stop'
+
+    monkeypatch.setattr(delegate_chat.tool_loop, 'chat_tool_turn', fake_turn)
+    list(delegate_chat.stream_reply(
+        [{'role': 'user', 'content': 'hi'}], 'YOU HELP ME WRITE',
+        toolset='research',
+    ))
+
+    offered = {t['function']['name'] for t in seen['tools']}
+    assert offered == {'local_knowledge_search', 'local_knowledge_read', 'delegate'}
+    assert seen['note'] == delegate_chat.RESEARCH_TURN_NOTE
+
+
+def test_the_research_turn_carries_the_same_offline_first_rule():
+    """One copy of the wording, or the three surfaces drift apart again — which
+    is how the Ideas discussion ended up with no offline-first rule at all."""
+    from backend.delegate import research_tools
+
+    assert research_tools.RESEARCH_NOTE in delegate_chat.RESEARCH_TURN_NOTE
+    assert research_tools.RESEARCH_NOTE in delegate_chat.DECISION_NOTE
+    # And the Chat tab's own paragraphs are still only on the Chat tab's turn.
+    assert 'propose_' in delegate_chat.DECISION_NOTE
+    assert 'propose_' not in delegate_chat.RESEARCH_TURN_NOTE
+    assert 'remember' not in delegate_chat.RESEARCH_TURN_NOTE
+
+
 def test_a_tool_call_the_model_invented_is_ignored(monkeypatch, answered):
     """Dispatching an unknown name would answer "Unknown tool" into the
     transcript, which reads to the model as a broken tool rather than one that
@@ -406,7 +442,7 @@ def test_tools_disabled_skips_the_decision_turn(monkeypatch, answered):
 
     monkeypatch.setattr(delegate_chat.tool_loop, 'chat_tool_turn', boom)
     events = list(delegate_chat.stream_reply(
-        [{'role': 'user', 'content': 'hi'}], 'CUSTOM PROMPT', tools_enabled=False
+        [{'role': 'user', 'content': 'hi'}], 'CUSTOM PROMPT', toolset='none'
     ))
     assert [k for k, _ in events] == ['content', 'done']
 
@@ -429,7 +465,7 @@ def test_the_route_frames_every_event_kind(client, monkeypatch):
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([
+        lambda messages, system_prompt, toolset='chat', **_kw: iter([
             ('step', {'tool': 'web_search', 'ok': True, 'count': 3}),
             ('thinking', 'weighing it up'),
             ('content', 'Here you go.'),
@@ -451,7 +487,7 @@ def test_the_route_frames_every_event_kind(client, monkeypatch):
 def test_a_mid_stream_failure_reaches_the_browser(client, monkeypatch):
     """The bug this whole change came from was a request that produced no
     reply, no error and no log line."""
-    def exploding(messages, system_prompt, tools_enabled=True, **_kw):
+    def exploding(messages, system_prompt, toolset='chat', **_kw):
         yield ('content', 'partial')
         raise RuntimeError('llama-server died')
 
@@ -471,7 +507,7 @@ def test_the_lane_slot_is_released_after_the_turn(client, monkeypatch):
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([('content', 'hi')]),
+        lambda messages, system_prompt, toolset='chat', **_kw: iter([('content', 'hi')]),
     )
     _post(client, {'messages': []})
     assert service.interactive_active() is False
@@ -501,7 +537,7 @@ def test_a_conversation_id_persists_the_reply_via_a_background_run(client, monke
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([
+        lambda messages, system_prompt, toolset='chat', **_kw: iter([
             ('content', 'Here you go.'),
             ('done', {'steps': [{'tool': 'web_search', 'ok': True}],
                       'sources': [{'url': 'https://ex.com'}], 'proposals': []}),
@@ -538,7 +574,7 @@ def test_a_conversation_id_run_that_fails_leaves_an_error_row(client, monkeypatc
     conv_id = _new_conversation(db)
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
 
-    def exploding(messages, system_prompt, tools_enabled=True, **_kw):
+    def exploding(messages, system_prompt, toolset='chat', **_kw):
         yield ('content', 'partial')
         raise RuntimeError('llama-server died')
 
@@ -568,7 +604,7 @@ def test_no_conversation_id_keeps_the_inline_legacy_path(client, monkeypatch):
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([('content', 'hi')]),
+        lambda messages, system_prompt, toolset='chat', **_kw: iter([('content', 'hi')]),
     )
 
     _post(client, {'messages': [], 'systemPrompt': 'You are a nudge.'})
@@ -582,18 +618,55 @@ def test_a_caller_supplied_prompt_turns_the_tools_off(client, monkeypatch):
     clarifying question, so the whole decision turn is pure added latency."""
     seen = {}
 
-    def fake(messages, system_prompt, tools_enabled=True):
-        seen['tools_enabled'] = tools_enabled
+    def fake(messages, system_prompt, toolset='chat'):
+        seen['toolset'] = toolset
         yield ('content', 'ok')
 
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr('backend.routes.chat.delegate_chat.stream_reply', fake)
 
     _post(client, {'messages': [], 'systemPrompt': 'You are a nudge.'})
-    assert seen['tools_enabled'] is False
+    assert seen['toolset'] == 'none'
 
     _post(client, {'messages': []})
-    assert seen['tools_enabled'] is True
+    assert seen['toolset'] == 'chat'
+
+
+def test_a_screen_can_ask_for_the_research_tools_by_name(client, monkeypatch):
+    """The Writing discussion posts its own prompt like the voice listener does,
+    but it *is* a screen: it can show a step and read a clarifying question, so
+    it opts back in to the research half — and only that half."""
+    seen = {}
+
+    def fake(messages, system_prompt, toolset='chat'):
+        seen['toolset'] = toolset
+        yield ('content', 'ok')
+
+    monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
+    monkeypatch.setattr('backend.routes.chat.delegate_chat.stream_reply', fake)
+
+    _post(client, {'messages': [], 'systemPrompt': 'You help me write.',
+                   'toolset': 'research'})
+    assert seen['toolset'] == 'research'
+
+
+def test_an_unrecognised_toolset_falls_back_instead_of_failing(client, monkeypatch):
+    """The error path here is a `data:` frame after a 200 has already gone out,
+    so a typo in a client should cost the tools, not the reply."""
+    seen = {}
+
+    def fake(messages, system_prompt, toolset='chat'):
+        seen['toolset'] = toolset
+        yield ('content', 'ok')
+
+    monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
+    monkeypatch.setattr('backend.routes.chat.delegate_chat.stream_reply', fake)
+
+    _post(client, {'messages': [], 'toolset': 'wat'})
+    assert seen['toolset'] == 'chat'
+
+    _post(client, {'messages': [], 'systemPrompt': 'nudge', 'toolset': 'wat'})
+    assert seen['toolset'] == 'none'
 
 
 def test_an_attached_photos_reading_reaches_the_answering_prompt(client, monkeypatch, answered):
@@ -668,7 +741,7 @@ def test_the_delegate_is_handed_the_replys_deadline(client, monkeypatch):
         seen['deadline'] = kwargs.get('deadline')
         return {'steps': [], 'sources': [], 'summary': 'found it'}
 
-    monkeypatch.setattr(delegate_chat.agent, 'run', fake_run)
+    monkeypatch.setattr(research_tools.agent, 'run', fake_run)
     monkeypatch.setattr(delegate_chat, 'chat_stream_events',
                         lambda messages: iter([('content', 'ok')]))
     deadline = time.monotonic() + 60
@@ -712,7 +785,7 @@ def test_the_persisted_path_announces_the_row_before_anything_else(client, monke
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
     monkeypatch.setattr(
         'backend.routes.chat.runs.delegate_chat.stream_reply',
-        lambda messages, system_prompt, tools_enabled=True, **_kw: iter([
+        lambda messages, system_prompt, toolset='chat', **_kw: iter([
             ('content', 'Here you go.'),
             ('done', {'steps': [], 'sources': [], 'proposals': []}),
         ]),
@@ -743,7 +816,7 @@ def test_a_client_that_stops_reading_does_not_stop_the_run(client, monkeypatch, 
     release = threading.Event()
     monkeypatch.setattr('backend.routes.chat.is_ai_configured', lambda: True)
 
-    def slow_stream_reply(messages, system_prompt, tools_enabled=True, **_kwargs):
+    def slow_stream_reply(messages, system_prompt, toolset='chat', **_kwargs):
         yield ('content', 'half a ')
         release.wait(timeout=5)
         yield ('content', 'sentence.')

@@ -1144,6 +1144,29 @@ def _format_event(kind: str, payload) -> str:
     return f'data: {json.dumps({kind: payload})}\n\n'
 
 
+_TOOLSETS = ('chat', 'research', 'none')
+
+
+def _toolset_for(body: dict, system_prompt: str) -> str:
+    """Which tools this request's reply gets — explicit opt-in, else the old rule.
+
+    The old rule was `tools_enabled = not system_prompt`, and it has to stay
+    the default: the voice listener, task nudges and the morning check-in all
+    post their own prompt, all speak their replies aloud, and for them a
+    gathering turn is latency before the first spoken word with nowhere to show
+    a step or read a clarifying question. The Writing discussion also posts a
+    prompt but *is* a screen, so it asks for 'research' by name.
+
+    An unrecognised value falls back rather than 400-ing: this is a streaming
+    endpoint whose error path is a `data:` frame after a 200 has already gone
+    out, and a typo in a client should cost the tools, not the reply.
+    """
+    asked = (body.get('toolset') or '').strip().lower()
+    if asked in _TOOLSETS:
+        return asked
+    return 'chat' if not system_prompt else 'none'
+
+
 @bp.post('/stream')
 def stream():
     """The Chat tab's one streaming endpoint.
@@ -1170,6 +1193,7 @@ def stream():
     messages = body.get('messages', [])
     system_prompt = body.get('systemPrompt', '')
     conversation_id = body.get('conversationId')
+    toolset = _toolset_for(body, system_prompt)
 
     if conversation_id:
         message_id = str(ULID())
@@ -1182,7 +1206,7 @@ def stream():
         )
         db.commit()
         q = runs.start(message_id, messages, system_prompt,
-                       tools_enabled=not system_prompt,
+                       toolset=toolset,
                        conversation_id=conversation_id)
 
         def generate():
@@ -1233,7 +1257,7 @@ def stream():
             # it's the voice listener, a task nudge or the morning check-in,
             # none of which have a card to confirm anything on.
             for kind, payload in delegate_chat.stream_reply(
-                messages, system_prompt, tools_enabled=not system_prompt
+                messages, system_prompt, toolset=toolset
             ):
                 yield _format_event(kind, payload)
             yield 'data: [DONE]\n\n'

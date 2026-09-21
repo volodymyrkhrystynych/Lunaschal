@@ -36,10 +36,9 @@ from backend.ai.chat import (
 from backend.ai.llm import chat_stream_events
 from backend.chat import compaction
 from backend.chat.context import expand_attachments
-from backend.delegate import agent, limits, tools as proposal_tools
+from backend.delegate import limits, research_tools, tools as proposal_tools
 from backend.lifewiki import tools as life_tools
 from backend.lifewiki.tools import LifeTools
-from backend.offline_knowledge import tools as knowledge_tools
 from backend.research import agent as tool_loop
 from backend.research import wiki as wiki_tools
 
@@ -49,38 +48,11 @@ logger = logging.getLogger(__name__)
 def _out_of_time(deadline: float | None) -> bool:
     return deadline is not None and time.monotonic() >= deadline
 
-DELEGATE_TOOL = {
-    'type': 'function',
-    'function': {
-        'name': 'delegate',
-        'description': (
-            'Hand a lookup to the web research delegate — quickly for one '
-            'fact, or with real depth for a broad question. Use it after local '
-            'knowledge is insufficient, or immediately when the question is '
-            'inherently current. Do not use it for ordinary conversation or '
-            'for recording something.'
-        ),
-        'parameters': {
-            'type': 'object',
-            'properties': {
-                'task': {
-                    'type': 'string',
-                    'description': (
-                        'What needs looking up, written out in full. The '
-                        'delegate cannot see the conversation, so include every '
-                        'detail it needs.'
-                    ),
-                },
-                'reason': {
-                    'type': 'string',
-                    'enum': ['local_insufficient', 'current'],
-                    'description': 'Why the internet is needed.',
-                },
-            },
-            'required': ['task', 'reason'],
-        },
-    },
-}
+# The research toolbox moved to backend/delegate/research_tools.py so the
+# Ideas and Writing discussions could mount the same three tools with the
+# same gate. Aliased rather than re-imported at every reference: the name
+# is what the tests and the docs call it.
+DELEGATE_TOOL = research_tools.DELEGATE_TOOL
 
 # `wiki_list` is deliberately left out: the index is already in the system
 # prompt, so offering a tool that re-fetches it is a round trip for something
@@ -89,7 +61,7 @@ _LIFE_WIKI_TOOLS = [t for t in wiki_tools.TOOLS
                     if t['function']['name'] in ('wiki_read', 'wiki_search')]
 _LIFE_WIKI_NAMES = {t['function']['name'] for t in _LIFE_WIKI_TOOLS}
 
-TOOLS = (knowledge_tools.TOOLS + [DELEGATE_TOOL] + proposal_tools.TOOLS + life_tools.TOOLS
+TOOLS = (research_tools.TOOLS + proposal_tools.TOOLS + life_tools.TOOLS
          + _LIFE_WIKI_TOOLS)
 
 DECISION_NOTE = """Right now your only job is to decide which of your tools this \
@@ -104,19 +76,7 @@ Where they clearly meant a detail but were too vague for you to act on it — \
 ask_user instead of guessing at it. Where they implied nothing, do not ask: \
 stage what they said and leave the rest empty.
 
-For a factual or reference question, call local_knowledge_search with two to \
-four complementary queries in one call: the clean entity or title, the user's \
-full question, and any plausible interpretations such as book versus movie. \
-Do not put a guessed answer into a query. Choose from the merged candidates, \
-then read the strongest one to three articles with local_knowledge_read. Search \
-results and titles are leads, not evidence. When the wording is ambiguous, read \
-the plausible meanings and either answer each explicitly or ask the user which \
-they meant. You see the local results yourself, so decide whether they actually \
-answer the user's question.
-
-Use delegate only when local evidence is absent, contradictory, stale for the \
-question, or too unspecific to support an answer. An inherently current question \
-may go directly to delegate with reason=current.
+{research_note}
 
 Use search_conversations, search_journal or read_day when the answer is \
 something the user already told you or wrote down and you cannot see it in \
@@ -127,6 +87,23 @@ answer turns on what is actually in it, rather than on its title.
 
 Use remember for a fact about them that will still be true next month. Not for \
 anything that happens once, and never for something already in your notes.
+
+If the message needs none of this, write nothing at all: anything you type in \
+this turn is discarded."""
+
+# One copy of the offline-first rule, shared with the Ideas and Writing
+# discussions: this turn's wording is the only thing that decides whether the
+# library gets searched before the web, and three hand-kept copies drift.
+DECISION_NOTE = DECISION_NOTE.format(research_note=research_tools.RESEARCH_NOTE)
+
+# The Writing discussion's decision turn. Same research rule, none of the Chat
+# tab's paragraphs about staging, asking or remembering — it has no confirm
+# cards to stage onto and no standing record of the user to write into.
+RESEARCH_TURN_NOTE = f"""Right now your only job is to decide whether this \
+message needs you to look something up — your reply comes afterwards, in a \
+separate turn.
+
+{research_tools.RESEARCH_NOTE}
 
 If the message needs none of this, write nothing at all: anything you type in \
 this turn is discarded."""
@@ -168,48 +145,12 @@ def _system_prompt(messages: list[dict], system_prompt: str = '') -> str:
 
 def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
     """Bind conversation-scoped tools and the nested web delegate for one run."""
-    local_state = {'searched': False, 'hits': 0, 'read': False}
     action_calls: set[tuple[str, str]] = set()
-
-    def run_local(name, args):
-        text, event = knowledge_tools.run_tool(name, args)
-        if name == 'local_knowledge_search':
-            local_state['searched'] = True
-            local_state['hits'] = event.get('count', 0) if event.get('ok') else 0
-        elif name == 'local_knowledge_read' and event.get('ok'):
-            local_state['read'] = True
-        return text, event
-
-    def run_delegate(_name, args):
-        if args.get('reason') != 'current' and not local_state['searched']:
-            return (
-                'Search the offline library first, or mark this as an inherently current question.',
-                {'tool': 'delegate', 'arg': args.get('task'), 'ok': False,
-                 'error': 'offline library has not been searched'},
-            )
-        if (args.get('reason') != 'current' and local_state['hits']
-                and not local_state['read']):
-            return (
-                'Read the strongest local result before deciding it is insufficient.',
-                {'tool': 'delegate', 'arg': args.get('task'), 'ok': False,
-                 'error': 'offline search result has not been read'},
-            )
-        result = agent.run((args.get('task') or '').strip(), checkpoint=checkpoint,
-                           deadline=deadline)
-        delegate_steps = result.get('steps', [])
-        successful = [step for step in delegate_steps if step.get('ok')]
-        last_error = next((step.get('error') for step in reversed(delegate_steps)
-                           if step.get('error')), None)
-        return result.get('summary', ''), {
-            'tool': 'delegate',
-            'arg': args.get('task'),
-            'ok': bool(result.get('summary')) and bool(successful),
-            'error': None if successful else last_error,
-            'sources': result.get('sources', []),
-            'count': len(result.get('sources', [])),
-            'delegateSteps': delegate_steps,
-            'timedOut': bool(result.get('timedOut')),
-        }
+    # The research half is the shared one (backend/delegate/research_tools.py):
+    # same three tools, same offline-first gate, same per-run state object the
+    # Ideas and Writing discussions get.
+    _tools, dispatch, _research = research_tools.build(
+        checkpoint=checkpoint, deadline=deadline)
 
     def run_proposal(name, args):
         # A multi-turn gather can reconsider after seeing a search result. It
@@ -224,11 +165,6 @@ def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
         action_calls.add(key)
         return proposal_tools.run_tool(name, args)
 
-    dispatch = {
-        'local_knowledge_search': SimpleNamespace(run_tool=run_local),
-        'local_knowledge_read': SimpleNamespace(run_tool=run_local),
-        'delegate': SimpleNamespace(run_tool=run_delegate),
-    }
     dispatch.update({name: life_wiki for name in _LIFE_WIKI_NAMES})
     dispatch.update({name: life for name in life_tools.TOOL_NAMES})
     proposal_dispatch = SimpleNamespace(run_tool=run_proposal)
@@ -238,8 +174,46 @@ def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
     return dispatch
 
 
+def _toolbox(toolset: str, *, conversation_id, checkpoint, deadline):
+    """(tools, dispatch, decision_note) for one run, or None for no tool turn.
+
+    Three named toolsets rather than a boolean, because there are three
+    genuinely different answers and only one of them is "all of it". A boolean
+    could not express the middle one without the *caller* passing the tool
+    list — and that caller is backend/routes/chat.py, which has no business
+    knowing what is in the delegate's toolboxes.
+
+    - 'chat'     — the Chat tab: research, proposals, recall, the life wiki.
+    - 'research' — the Writing discussion: research and nothing else. No
+                   confirm cards exist on that screen to accept a proposal on,
+                   and the life wiki is about the user rather than the piece
+                   they are writing.
+    - 'none'     — the voice listener, task nudges, the morning check-in: they
+                   speak their replies aloud, so a gathering turn is latency
+                   before the first word with no UI to show a step in.
+
+    LifeTools is constructed inside the 'chat' branch on purpose: built
+    unconditionally, a Writing run would be one dispatch-map typo away from
+    reading the user's journal.
+    """
+    if toolset == 'research':
+        tools, dispatch, _state = research_tools.build(
+            checkpoint=checkpoint, deadline=deadline)
+        return tools, dispatch, RESEARCH_TURN_NOTE
+    if toolset == 'chat':
+        life = LifeTools(conversation_id)
+        # Scoped to the life wiki, so a chat can never surface a note about a
+        # codebase — and, in the other direction, the Ideas agent's default
+        # WikiTools scope keeps the user's life out of a research turn.
+        life_wiki = wiki_tools.WikiTools(kind=wiki_tools.LIFE_KIND)
+        return TOOLS, _main_dispatch(
+            life=life, life_wiki=life_wiki, checkpoint=checkpoint,
+            deadline=deadline), DECISION_NOTE
+    return None
+
+
 def stream_reply(messages: list[dict], system_prompt: str = '', *,
-                 tools_enabled: bool = True, checkpoint=None,
+                 toolset: str = 'chat', checkpoint=None,
                  conversation_id: str | None = None):
     """Yields ('step', event) as each tool call finishes, then ('thinking',
     delta) and ('content', delta) as the reply streams, then one
@@ -249,11 +223,13 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     the browser persists them onto the assistant message's metadata — a reload
     has to redraw the same trace, and the live events are gone by then.
 
-    `tools_enabled=False` skips the decision turn entirely, for the callers with
-    no UI to confirm anything in: the voice listener, task nudges and the
+    `toolset` names which tools this run gets: 'chat' (everything), 'research'
+    (the offline-first research chain alone, for the Writing discussion) or
+    'none', which skips the decision turn entirely. 'none' is for the callers
+    with no UI to confirm anything in: the voice listener, task nudges and the
     morning check-in all speak their replies aloud, where a staged card is
     invisible and the decision turn is pure added latency before the user hears
-    a word.
+    a word. See `_toolbox`.
 
     `conversation_id` is only used to keep the recall tools from returning this
     conversation's own messages back to it — they are already in the transcript
@@ -290,24 +266,18 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     steps: list[dict] = []
     sources: list[dict] = []
     proposals: list[dict] = []
-    life = LifeTools(conversation_id)
-    # Scoped to the life wiki, so a chat can never surface a note about a
-    # codebase — and, in the other direction, the Ideas agent's default
-    # WikiTools scope keeps the user's life out of a research turn.
-    life_wiki = wiki_tools.WikiTools(kind=wiki_tools.LIFE_KIND)
 
     evidence: list[dict] = []
-    if tools_enabled:
+    box = _toolbox(toolset, conversation_id=conversation_id,
+                   checkpoint=checkpoint, deadline=deadline)
+    if box:
+        tools, dispatch, decision_note = box
         gathered: dict = {}
-        dispatch = _main_dispatch(
-            life=life, life_wiki=life_wiki, checkpoint=checkpoint,
-            deadline=deadline,
-        )
         for kind, payload in tool_loop.gather_events(
                 initial_messages=conversation + [
-                    {'role': 'user', 'content': DECISION_NOTE},
+                    {'role': 'user', 'content': decision_note},
                 ],
-                tools=TOOLS, dispatch=dispatch, checkpoint=checkpoint,
+                tools=tools, dispatch=dispatch, checkpoint=checkpoint,
                 max_turns=6, max_fetches=0, deadline=deadline,
                 ignore_unknown_tools=True):
             if kind == 'step':

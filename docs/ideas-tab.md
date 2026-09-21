@@ -274,16 +274,18 @@ testable without threads:
 - **Assessment always before research** — cheap, no web, and its output is what tells the research
   pass what to look for.
 - **Nothing without a repo snapshot**; there'd be nothing to judge against.
-- **Nothing without a search provider**, or every pass would just record that the web was
-  unavailable.
+- **Nothing without an offline library** (`configured_root()`), or every pass would just record
+  that it had nothing to read. This used to be a search-provider check, back when the pass searched
+  the web; unattended work is offline-only now, so the provider no longer gates it at all.
 - **A 24 h per-idea cooldown**, so a fully-assessed backlog doesn't re-research its newest idea
   every two minutes forever.
 
 A failed pass resets `research_state` to `idle` and leaves `researched_at` unset: the idea stays
 retryable and is never stranded in `running`, where the planner would skip it permanently.
 
-**`research_enabled` defaults off** — the loop makes outbound web requests, which is not something
-to start doing unasked.
+**`research_enabled` defaults off** — it used to be because the loop made outbound web requests;
+it no longer does, but it still spends the GPU unasked for as long as the backlog lasts, which is
+reason enough to keep it opt-in.
 
 ## Data model
 

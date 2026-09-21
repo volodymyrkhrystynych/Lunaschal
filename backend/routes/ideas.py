@@ -15,6 +15,7 @@ from ulid import ULID
 from backend.ai import jobs
 from backend.ai.service import InferencePaused, PAUSED_MESSAGE
 from backend.ai.provider import is_ai_configured
+from backend.delegate import limits
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.routes.paper import page_image_url
 from backend.tags import tags_json
@@ -650,7 +651,12 @@ def discuss(idea_id):
     # prompt is built from the same answer: promising tools the model does not
     # have is the same mistake as offering one that always fails.
     repo = ctx.idea_repo(idea_id)
-    tools, dispatch, code_tools = ctx.build_toolbox(repo)
+    # One budget for the whole discussion, clamped down onto the nested
+    # delegate run rather than left to its own 120s: `agent.deadline_from`'s
+    # rule is that an inner budget cannot outlive the outer one, and this was
+    # the call site that had no outer one to pass.
+    deadline = limits.chat_deadline()
+    tools, dispatch, code_tools = ctx.build_toolbox(repo, deadline=deadline)
     system = ctx.system_prompt(
         has_repo=code_tools is not None,
         has_map=any(t['function']['name'] == 'code_map' for t in tools),
@@ -667,7 +673,7 @@ def discuss(idea_id):
             # moment that call finishes rather than after all gathering ends.
             for kind, payload in agent.gather_events(
                 system, gather_request, tools=tools, dispatch=dispatch,
-                max_turns=ctx.CODE_MAX_TURNS,
+                max_turns=ctx.CODE_MAX_TURNS, deadline=deadline,
             ):
                 if kind == 'step':
                     yield f'data: {json.dumps(payload)}\n\n'
