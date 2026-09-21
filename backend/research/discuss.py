@@ -66,6 +66,14 @@ from an index rather than from the code."""
 # web_search/web_fetch with no library tools at all and consequently had no
 # offline-first rule to follow. The framing above the shared note is the only
 # part specific to a code discussion.
+_IDEA_RULES = """
+Other ideas for this codebase are captured alongside this one, and you cannot \
+see them. Check idea_list before recommending anything: an idea here is often \
+a variation of one already thought through, sometimes one already shipped, and \
+occasionally one the owner already decided against. When it is, say so and \
+name the other idea rather than answering as though this one stood alone."""
+
+
 def _research_rules() -> str:
     from backend.delegate.research_tools import RESEARCH_NOTE
     return (
@@ -84,7 +92,8 @@ ANSWER_INSTRUCTION = (
 )
 
 
-def system_prompt(has_repo: bool, has_map: bool = False, repo_name: str = '') -> str:
+def system_prompt(has_repo: bool, has_map: bool = False, repo_name: str = '',
+                  has_ideas: bool = False) -> str:
     """The prompt for one discussion, shaped by what tools it actually has.
 
     Built rather than constant because promising tools that are not in the
@@ -105,6 +114,8 @@ def system_prompt(has_repo: bool, has_map: bool = False, repo_name: str = '') ->
     # Unconditional: a discussion with no checkout still has the library and
     # the delegate, and a prompt that only mentions them in the repo branch is
     # how a no-repo discussion ends up believing it has nothing to work with.
+    if has_ideas:
+        parts.append(_IDEA_RULES)
     parts.append(_research_rules())
     return '\n'.join(parts)
 
@@ -243,7 +254,7 @@ def build_gather_request(context: str, history: list[dict], question: str) -> st
     return '\n\n'.join(parts)
 
 
-def build_toolbox(repo: dict | None, *, checkpoint=None, deadline=None):
+def build_toolbox(repo: dict | None, *, idea_id=None, checkpoint=None, deadline=None):
     """(tools, dispatch, code_tools) for one discussion.
 
     Three toolboxes compose rather than replace each other: code for this repo,
@@ -257,9 +268,16 @@ def build_toolbox(repo: dict | None, *, checkpoint=None, deadline=None):
     it is per-run state and must not be shared between runs. So is the research
     state, which is why it is built here per call rather than imported — but
     nothing in the Ideas path needs to interrogate it, so it is not returned.
+
+    `repo` and `idea_id` travel separately on purpose, and the two must not be
+    collapsed into one: `repo` comes from `idea_repo()` and is a *capability*
+    (which checkout can this discussion read?), which is why it falls back to
+    the registered default when a clone is not ready. `idea_id` is an
+    *identity*, and the backlog it recalls is scoped by the idea's own
+    `repo_id` column, strictly — see backend/research/idea_recall.py.
     """
     from backend.delegate import research_tools
-    from backend.research import code, wiki as wiki_mod
+    from backend.research import code, idea_recall, wiki as wiki_mod
 
     repo_id = (repo or {}).get('id')
     # Wiki tools are bound to the repo so a discussion sees this codebase's
@@ -275,6 +293,14 @@ def build_toolbox(repo: dict | None, *, checkpoint=None, deadline=None):
     tools = research_tools.TOOLS + wiki_mod.TOOLS
     dispatch = research_tools.dispatch_for(research)
     dispatch.update({t['function']['name']: wiki_tools for t in wiki_mod.TOOLS})
+    # The rest of this repository's backlog. Unconditional where the idea
+    # resolves — unlike the code tools, this needs no checkout on disk.
+    if idea_id:
+        idea_tools = idea_recall.IdeaTools.for_idea(idea_id)
+        if idea_tools is not None:
+            tools = tools + idea_recall.TOOLS
+            dispatch.update({n: idea_tools for n in idea_recall.TOOL_NAMES})
+
     code_tools = None
 
     root = repo_root_for(repo)

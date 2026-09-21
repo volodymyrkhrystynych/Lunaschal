@@ -158,6 +158,11 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
           // delegate. A systemPrompt otherwise means no tools at all, which is
           // right for the voice listener and the nudges but not for a screen.
           toolset: 'research',
+          // The project's own chapters and notes â€” everything not ticked in
+          // the context panel. Named explicitly because this request takes the
+          // inline path (no conversationId), so the server never reads
+          // conversations.writing_project_id.
+          writingProjectId: project.id,
         }),
       });
 

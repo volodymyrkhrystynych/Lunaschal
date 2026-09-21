@@ -51,7 +51,8 @@ _lock = threading.Lock()
 
 
 def start(message_id: str, messages: list[dict], system_prompt: str, *,
-          toolset: str, conversation_id: str | None = None) -> "queue.Queue":
+          toolset: str, conversation_id: str | None = None,
+          writing_project_id: str | None = None) -> "queue.Queue":
     """Spawns the run; returns the queue the caller's SSE view should relay
     from. Puts (kind, payload) tuples, same shape as stream_reply, plus a
     terminal ('_end', None) once the thread is done (whether by 'done' or by
@@ -63,7 +64,7 @@ def start(message_id: str, messages: list[dict], system_prompt: str, *,
     threading.Thread(
         target=_run,
         args=(message_id, messages, system_prompt, toolset, q, done,
-              conversation_id),
+              conversation_id, writing_project_id),
         daemon=True,
     ).start()
     return q
@@ -96,7 +97,8 @@ def _append_thinking(current: str, delta: str) -> str:
 
 def _run(message_id: str, messages: list[dict], system_prompt: str, toolset: str,
           q: "queue.Queue", done: "threading.Event | None" = None,
-          conversation_id: str | None = None) -> None:
+          conversation_id: str | None = None,
+          writing_project_id: str | None = None) -> None:
     db = get_db()
     content = ''
     thinking = ''
@@ -105,7 +107,8 @@ def _run(message_id: str, messages: list[dict], system_prompt: str, toolset: str
     try:
         for kind, payload in delegate_chat.stream_reply(
                 messages, system_prompt, toolset=toolset,
-                conversation_id=conversation_id):
+                conversation_id=conversation_id,
+                writing_project_id=writing_project_id):
             q.put((kind, payload))
             if kind == 'content':
                 content += payload

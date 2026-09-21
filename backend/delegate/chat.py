@@ -41,6 +41,7 @@ from backend.lifewiki import tools as life_tools
 from backend.lifewiki.tools import LifeTools
 from backend.research import agent as tool_loop
 from backend.research import wiki as wiki_tools
+from backend.writing import tools as writing_tools
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,18 @@ separate turn.
 If the message needs none of this, write nothing at all: anything you type in \
 this turn is discarded."""
 
+# Appended to the research turn only when a project scope came with the
+# request. The second paragraph is the one that changes behaviour: the context
+# panel means the model's working assumption is "what I was given is what
+# exists", and the tools are worthless until that is explicitly broken.
+WRITING_RECALL_NOTE = """This project has other chapters and notes that are \
+not in front of you. writing_list shows what exists, writing_read opens one in \
+full, and writing_search finds a name or a phrase across all of them.
+
+Anything the author attached to this conversation is already above. Use these \
+for what they did not attach — before asking them to paste something in, and \
+before inventing a detail the story has already settled."""
+
 ANSWER_INSTRUCTION = (
     'Reply to the user now, in your own voice. If the knowledge tools or web delegate found '
     'information, use it to actually answer the question — state the facts it '
@@ -174,7 +187,8 @@ def _main_dispatch(*, life: LifeTools, life_wiki, checkpoint, deadline):
     return dispatch
 
 
-def _toolbox(toolset: str, *, conversation_id, checkpoint, deadline):
+def _toolbox(toolset: str, *, conversation_id, checkpoint, deadline,
+             writing_project_id=None):
     """(tools, dispatch, decision_note) for one run, or None for no tool turn.
 
     Three named toolsets rather than a boolean, because there are three
@@ -192,13 +206,20 @@ def _toolbox(toolset: str, *, conversation_id, checkpoint, deadline):
                    speak their replies aloud, so a gathering turn is latency
                    before the first word with no UI to show a step in.
 
-    LifeTools is constructed inside the 'chat' branch on purpose: built
-    unconditionally, a Writing run would be one dispatch-map typo away from
-    reading the user's journal.
+    A 'research' run also gets its project's chapters and notes when the
+    request named a project — everything the author did not tick into the
+    prompt. Each toolbox is constructed inside the branch that uses it:
+    LifeTools built unconditionally would leave a Writing run one dispatch-map
+    typo away from the user's journal, and the same holds in reverse.
     """
     if toolset == 'research':
         tools, dispatch, _state = research_tools.build(
             checkpoint=checkpoint, deadline=deadline)
+        if writing_project_id:
+            writing = writing_tools.WritingTools(writing_project_id)
+            tools = tools + writing_tools.TOOLS
+            dispatch.update({n: writing for n in writing_tools.TOOL_NAMES})
+            return tools, dispatch, f'{RESEARCH_TURN_NOTE}\n\n{WRITING_RECALL_NOTE}'
         return tools, dispatch, RESEARCH_TURN_NOTE
     if toolset == 'chat':
         life = LifeTools(conversation_id)
@@ -214,7 +235,8 @@ def _toolbox(toolset: str, *, conversation_id, checkpoint, deadline):
 
 def stream_reply(messages: list[dict], system_prompt: str = '', *,
                  toolset: str = 'chat', checkpoint=None,
-                 conversation_id: str | None = None):
+                 conversation_id: str | None = None,
+                 writing_project_id: str | None = None):
     """Yields ('step', event) as each tool call finishes, then ('thinking',
     delta) and ('content', delta) as the reply streams, then one
     ('done', {steps, sources, proposals, truncated}).
@@ -230,6 +252,11 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
     morning check-in all speak their replies aloud, where a staged card is
     invisible and the decision turn is pure added latency before the user hears
     a word. See `_toolbox`.
+
+    `writing_project_id` scopes the Writing discussion's recall to one project.
+    It has to be named by the caller: a request carrying a `systemPrompt` takes
+    the inline path, so there is no `conversationId` and the server never reads
+    `conversations.writing_project_id`.
 
     `conversation_id` is only used to keep the recall tools from returning this
     conversation's own messages back to it — they are already in the transcript
@@ -269,7 +296,8 @@ def stream_reply(messages: list[dict], system_prompt: str = '', *,
 
     evidence: list[dict] = []
     box = _toolbox(toolset, conversation_id=conversation_id,
-                   checkpoint=checkpoint, deadline=deadline)
+                   checkpoint=checkpoint, deadline=deadline,
+                   writing_project_id=writing_project_id)
     if box:
         tools, dispatch, decision_note = box
         gathered: dict = {}

@@ -656,11 +656,13 @@ def discuss(idea_id):
     # rule is that an inner budget cannot outlive the outer one, and this was
     # the call site that had no outer one to pass.
     deadline = limits.chat_deadline()
-    tools, dispatch, code_tools = ctx.build_toolbox(repo, deadline=deadline)
+    tools, dispatch, code_tools = ctx.build_toolbox(
+        repo, idea_id=idea_id, deadline=deadline)
     system = ctx.system_prompt(
         has_repo=code_tools is not None,
         has_map=any(t['function']['name'] == 'code_map' for t in tools),
         repo_name=(repo or {}).get('name', ''),
+        has_ideas=any(t['function']['name'] == 'idea_list' for t in tools),
     )
 
     def generate():
