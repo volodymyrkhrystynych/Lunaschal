@@ -424,6 +424,34 @@ describe('research tools', () => {
     vi.unstubAllGlobals();
   });
 
+  it('shows a step before any content arrives', async () => {
+    // The regression this pins: live steps used to render only alongside
+    // streamed content, so during the 30-90s of gathering — the entire window
+    // they exist to explain, and all of it before the first token — the panel
+    // showed nothing. Deliberately asserts with no content pushed at all.
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
+    const input = await screen.findByPlaceholderText(
+      'Discuss your story… (Enter to send)'
+    );
+    fireEvent.change(input, { target: { value: 'what did the Romans eat' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalledTimes(1));
+
+    stream.push({ tool: 'local_knowledge_search', ok: true, count: 3 });
+
+    expect(
+      await screen.findByText(/Searched the offline library/i)
+    ).not.toBeNull();
+    expect(await screen.findByText(/1 step so far/i)).not.toBeNull();
+
+    stream.close({});
+    vi.unstubAllGlobals();
+  });
+
   it('renders the trace saved on an earlier reply', async () => {
     vi.mocked(api.chat.getConversation).mockResolvedValueOnce({
       id: 'd5',

@@ -2378,17 +2378,29 @@ def _clear_retired_search_provider(db: sqlite3.Connection) -> None:
     matching <option> and renders blank — which reads as "None", i.e. as a
     setting the user chose. Blanking it makes the panel tell the truth.
 
+    **The key goes with it.** A key stored against a retired provider is a key
+    for that provider — there is no path that makes it valid again, since the
+    retired name is not an <option> and cannot be re-selected. Left behind, it
+    keeps `hasResearchSearchKey` true, so picking Brave shows "•••••• (saved)"
+    over a Tavily key and every search fails on a credential the panel claims
+    is fine. That is the same silent disagreement between Settings and the app
+    that this migration exists to end.
+
     Idempotent by construction: after the UPDATE nothing matches the WHERE, so
     no version flag is needed.
     """
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     placeholders = ','.join('?' * len(_KNOWN_SEARCH_PROVIDERS))
     changed = False
-    for column in ('research_search_provider', 'websearch_search_provider'):
+    for column, key_column in (
+        ('research_search_provider', 'research_search_key'),
+        ('websearch_search_provider', 'websearch_search_key'),
+    ):
         if column not in cols:
             continue
+        also_key = f', {key_column}=NULL' if key_column in cols else ''
         cur = db.execute(
-            f"UPDATE settings SET {column}=''"
+            f"UPDATE settings SET {column}=''{also_key}"
             f" WHERE COALESCE({column},'') NOT IN ({placeholders})",
             _KNOWN_SEARCH_PROVIDERS,
         )

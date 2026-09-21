@@ -268,7 +268,11 @@ def update_ai():
                 # 400 rather than the `continue` the numeric fields use: a
                 # provider silently not stored is how the app spent months
                 # unable to search while Settings showed the value as "None".
-                value = (value or '').strip().lower()
+                # `str(...)` before `.strip()`: a non-string body value (a
+                # number, a list, an object) has no `.strip`, and the
+                # AttributeError became a 500 where this branch's whole point
+                # is to answer 400 with the reason.
+                value = '' if value is None else str(value).strip().lower()
                 if value not in SEARCH_PROVIDERS:
                     return jsonify({'error': f'Unknown search provider: {value!r}'}), 400
             elif camel in ('weatherDefaultLat', 'weatherDefaultLon'):

@@ -396,10 +396,24 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
             </div>
           </div>
         )}
-        {isStreaming && !streamingContent && thinkingConfigured && (
+        {/* Nothing to show yet. The steps go here too, not only in the branch
+            above: gathering happens entirely before the first content token,
+            so a trace rendered only alongside content is invisible for exactly
+            the 30-90s of silence it exists to explain. Same shape as the Chat
+            tab's placeholder. */}
+        {isStreaming && !streamingContent && (
           <div className="flex justify-start">
-            <div className="max-w-[70%] rounded-lg px-3 py-2 text-sm leading-relaxed bg-white/5 text-[var(--color-text-muted)]">
-              <ThinkingLabel />
+            <div className="max-w-[70%]">
+              {thinkingConfigured && (
+                <div className="rounded-lg px-3 py-2 text-sm leading-relaxed bg-white/5 text-[var(--color-text-muted)]">
+                  <ThinkingLabel />
+                </div>
+              )}
+              <AgentSteps
+                steps={liveSteps}
+                thinking={streamingReasoning}
+                live
+              />
             </div>
           </div>
         )}

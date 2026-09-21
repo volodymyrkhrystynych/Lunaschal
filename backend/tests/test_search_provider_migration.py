@@ -29,11 +29,13 @@ def test_a_retired_provider_is_blanked(client):
     _clear_retired_search_provider(db)
 
     assert _provider(db) == ''
-    # The key is left alone: blanking the provider is enough to make the panel
-    # honest, and a key the user re-selects should still be there.
+    # The key goes with it. It is a *Tavily* key, and there is no path that
+    # makes it valid again — the retired name is not an <option>. Kept, it
+    # leaves hasResearchSearchKey true, so choosing Brave shows "(saved)" over
+    # a credential every search then fails on.
     assert db.execute(
         'SELECT research_search_key FROM settings LIMIT 1'
-    ).fetchone()['research_search_key'] == 'sk-old'
+    ).fetchone()['research_search_key'] is None
 
 
 def test_running_it_twice_changes_nothing(client):
@@ -67,11 +69,33 @@ def test_a_null_provider_is_left_null(client):
 def test_the_old_tabs_column_is_cleaned_too(client):
     """Otherwise the fold below would carry the dead name forward."""
     db = get_db()
-    _set(db, websearch_search_provider='tavily')
+    _set(db, websearch_search_provider='tavily', websearch_search_key='sk-old')
 
     _clear_retired_search_provider(db)
 
-    assert _provider(db, 'websearch_search_provider') == ''
+    row = db.execute(
+        'SELECT websearch_search_provider, websearch_search_key'
+        ' FROM settings LIMIT 1'
+    ).fetchone()
+    assert row['websearch_search_provider'] == ''
+    # And its key with it, so the fold can't carry a dead credential forward
+    # either.
+    assert row['websearch_search_key'] is None
+
+
+def test_a_live_providers_key_is_untouched(client):
+    """Only the *retired* provider's key is dropped — a working Brave key on a
+    working Brave row is the thing this must never take away."""
+    db = get_db()
+    _set(db, research_search_provider='brave', research_search_key='sk-live')
+
+    _clear_retired_search_provider(db)
+
+    row = db.execute(
+        'SELECT research_search_provider, research_search_key FROM settings LIMIT 1'
+    ).fetchone()
+    assert row['research_search_provider'] == 'brave'
+    assert row['research_search_key'] == 'sk-live'
 
 
 def test_blanking_first_lets_the_websearch_fold_rescue_a_working_key(client):
