@@ -227,6 +227,62 @@ describe('Library infinite scroll', () => {
   });
 });
 
+describe('Library scroll position', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    Element.prototype.scrollIntoView = vi.fn();
+    Element.prototype.scrollTo = vi.fn();
+  });
+
+  afterEach(async () => {
+    // The api mock is module-level and shared; put the one-fic list back.
+    const { api } = await import('../../hooks/api');
+    vi.mocked(api.fanfic.list).mockResolvedValue([FIC]);
+  });
+
+  it('does not scroll the selected card into view on an unrelated re-render', async () => {
+    // The selection starts on row 0, so a `scrollIntoView` that re-fires on
+    // every render throws the whole library back to the top — which it did
+    // every 1.5s while a fic was downloading, and on every keystroke.
+    renderFanfic();
+    await screen.findByText('Test Fic');
+
+    // nav.in, out of the sidebar and into the list's scope, so a row really
+    // is selected — an unselected list has nothing to scroll to either way.
+    fireEvent.keyDown(window, { code: 'KeyD' });
+    const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView);
+    scrollIntoView.mockClear();
+
+    // A parent state change that leaves the list itself untouched.
+    fireEvent.click(screen.getByRole('button', { name: '+ Import' }));
+    await screen.findByRole('button', { name: 'Cancel' });
+
+    expect(scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it('still scrolls a newly selected card into view', async () => {
+    const { api } = await import('../../hooks/api');
+    vi.mocked(api.fanfic.list).mockResolvedValue(
+      Array.from({ length: 3 }, (_, i) => ({
+        ...FIC,
+        id: `fic${i}`,
+        title: `Fic ${i}`,
+      }))
+    );
+    renderFanfic();
+    await screen.findByText('Fic 0');
+
+    // nav.in, out of the sidebar and into the list's scope.
+    fireEvent.keyDown(window, { code: 'KeyD' });
+    const scrollIntoView = vi.mocked(Element.prototype.scrollIntoView);
+    scrollIntoView.mockClear();
+
+    // nav.down — moving the selection is the one thing that should scroll.
+    fireEvent.keyDown(window, { code: 'KeyS' });
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+  });
+});
+
 describe('FF.net rate-limit panel', () => {
   beforeEach(() => {
     localStorage.clear();

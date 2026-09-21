@@ -203,10 +203,8 @@ export function Library({ onOpen }: LibraryProps) {
     onError: (e: Error) => setImportError(e.message),
   });
 
-  const { selIndex, next, prev, isSelected } = useListSelection(
-    fics?.length,
-    1
-  );
+  const { selIndex, next, prev, isSelected, scrollSelectedIntoView } =
+    useListSelection(fics?.length, 1);
 
   useShortcutScope(1, {
     next,
@@ -515,6 +513,7 @@ export function Library({ onOpen }: LibraryProps) {
             key={fic.id}
             fic={fic}
             selected={isSelected(idx)}
+            cardRef={scrollSelectedIntoView(idx)}
             showDelete={showDelete}
             onOpen={() => onOpen(fic.id)}
             onCheckUpdates={deep =>
@@ -569,6 +568,7 @@ export function Library({ onOpen }: LibraryProps) {
 function FicCard({
   fic,
   selected,
+  cardRef,
   showDelete,
   onOpen,
   onCheckUpdates,
@@ -577,6 +577,15 @@ function FicCard({
 }: {
   fic: Fic;
   selected: boolean;
+  /**
+   * From `useListSelection`'s `scrollSelectedIntoView`, which caches one
+   * closure per row. It must not be an inline arrow: React compares callback
+   * refs by identity, so a fresh one each render detaches and re-attaches the
+   * ref, and the selected card re-runs `scrollIntoView` on *every* render —
+   * which, with the selection sitting on row 0 and the list polling every
+   * 1.5s while a fic downloads, threw the library back to the top.
+   */
+  cardRef: (el: HTMLElement | null) => void;
   showDelete: boolean;
   onOpen: () => void;
   onCheckUpdates: (deep?: boolean) => void;
@@ -612,9 +621,7 @@ function FicCard({
         selected ? 'border-[var(--color-primary)]' : 'border-white/10'
       }
       onClick={toggleDetailsFromCard}
-      cardRef={el => {
-        if (el && selected) el.scrollIntoView({ block: 'nearest' });
-      }}
+      cardRef={cardRef}
       thumbnail={
         fic.coverPath ? (
           <img
