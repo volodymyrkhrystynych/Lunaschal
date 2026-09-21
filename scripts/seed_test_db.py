@@ -1253,13 +1253,16 @@ def seed_lifestyle(db):
     db.execute(
         'INSERT INTO workout_sessions (id, date, location_type, duration_minutes, intensity_rating, '
         'raw_text, parse_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (session_id, today, 'gym', 50, 4, 'Squats 3x5 @ 185, bench 3x8 @ 135', 'done', ts(0), ts(0)),
+        (session_id, today, 'building', 50, 4, 'Squats 185,5\nSquats 185,5\nSquats 185,5', 'done', ts(0), ts(0)),
     )
+    db.execute("UPDATE workout_sessions SET capture_kind='strength', started_at=?, ended_at=? WHERE id=?",
+               (ts(0) - 3000, ts(0), session_id))
     exercise_id = new_id()
     db.execute(
         'INSERT INTO workout_exercises (id, session_id, name_raw, name_canonical, position) VALUES (?, ?, ?, ?, 0)',
         (exercise_id, session_id, 'squats', 'squat'),
     )
+    db.execute('UPDATE workout_exercises SET logged_at=?, logged_order=1 WHERE id=?', (ts(0), exercise_id))
     for i, (weight, reps) in enumerate([(185, 5), (185, 5), (185, 5)]):
         db.execute(
             'INSERT INTO workout_sets (id, exercise_id, weight, reps, set_order) VALUES (?, ?, ?, ?, ?)',

@@ -11,6 +11,22 @@ calorie tracking.
 
 ## What the build settled
 
+- **Workout capture now logs one set at a time.** The horizontally scrolling row
+  shows the ten most recently used exercises, including existing parsed history,
+  with Walking and Cycling available even before first use. The newest exercise
+  is selected; typing a name overrides it. `bicep curls 20, 10` saves 20 lb × 10
+  reps immediately; the next set can be just `20, 10`. `squats 10` records ten
+  bodyweight reps. These forms use deterministic validation, without a model call.
+  Walking/cycling take a single minute count and create separate outdoor sessions
+  ending at capture time. Strength sets join the latest quick workout until a
+  full hour passes without a set; grouping uses persisted capture timestamps,
+  so restart and later metadata edits cannot change the cutoff. Workout duration
+  is first-to-last capture, without adding the idle cutoff hour. Location and
+  1–5 intensity are edited afterward on the recent card. Unassigned location has
+  a neutral dashed heatmap mark. Existing sessions are preserved, and only legacy
+  freeform sessions retain AI retry. This supersedes the original whole-session
+  entry design below.
+
 - **Chores reuse the existing list.** They were already todos with `list='chores'`
   (`backend/todo_recurrence.py`), so the Lifestyle section renders those same rows via
   `/api/tasks/todos` instead of the parallel `chores` / `chore_completions` tables sketched

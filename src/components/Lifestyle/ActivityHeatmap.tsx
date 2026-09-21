@@ -233,6 +233,10 @@ export function ActivityHeatmap() {
                             : ''
                         }`}
                         style={{
+                          border:
+                            day?.activityType === 'unassigned'
+                              ? '1px dashed var(--color-text)'
+                              : undefined,
                           width: CELL,
                           height: CELL,
                           background: day
@@ -269,6 +273,14 @@ export function ActivityHeatmap() {
             {ACTIVITY_LABELS[type]}
           </span>
         ))}
+        <span className="flex items-center gap-1.5">
+          <span
+            aria-hidden="true"
+            className="inline-block w-3 h-3 rounded-[3px] border border-dashed"
+            style={{ background: ACTIVITY_COLORS.unassigned }}
+          />
+          {ACTIVITY_LABELS.unassigned}
+        </span>
         <span className="flex items-center gap-1.5">
           <span className="relative inline-block w-3 h-3 rounded-[3px] bg-white/20">
             <span

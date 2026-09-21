@@ -13,9 +13,10 @@ export const ACTIVITY_TYPES = [
   'outside',
 ] as const;
 
-export type ActivityType = (typeof ACTIVITY_TYPES)[number];
+export type ActivityType = (typeof ACTIVITY_TYPES)[number] | 'unassigned';
 
 export const ACTIVITY_LABELS: Record<ActivityType, string> = {
+  unassigned: 'Location not set',
   goodlife_brother: 'Goodlife with brother',
   goodlife_alone: 'Goodlife alone',
   building: 'Building workout room',
@@ -37,6 +38,7 @@ export const ACTIVITY_LABELS: Record<ActivityType, string> = {
 // closest. A sixth type will not find a hue that passes — it needs a second
 // channel (texture, or a shape on the cell), not another colour picked by eye.
 export const ACTIVITY_COLORS: Record<ActivityType, string> = {
+  unassigned: '#a6adc8',
   goodlife_brother: '#c17501',
   goodlife_alone: '#27a164',
   building: '#2f8fd8',
@@ -45,7 +47,7 @@ export const ACTIVITY_COLORS: Record<ActivityType, string> = {
 };
 
 export function isActivityType(value: unknown): value is ActivityType {
-  return ACTIVITY_TYPES.includes(value as ActivityType);
+  return ACTIVITY_TYPES.some(type => type === value);
 }
 
 // --- Dates -------------------------------------------------------------------

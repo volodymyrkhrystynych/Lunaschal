@@ -1062,6 +1062,9 @@ CREATE INDEX IF NOT EXISTS idx_paper_page_images_page
 -- timestamp, so it stays out of TIMESTAMP_COLS.
 CREATE TABLE IF NOT EXISTS workout_sessions (
     id TEXT PRIMARY KEY,
+    capture_kind TEXT,
+    started_at INTEGER,
+    ended_at INTEGER,
     date TEXT NOT NULL,
     location_type TEXT NOT NULL,          -- see backend/lifestyle/activity.py
     duration_minutes INTEGER,
@@ -1083,6 +1086,8 @@ CREATE INDEX IF NOT EXISTS idx_workout_sessions_date ON workout_sessions(date DE
 -- folded onto ("bicep curl") so the progression chart can group across spellings.
 CREATE TABLE IF NOT EXISTS workout_exercises (
     id TEXT PRIMARY KEY,
+    logged_at INTEGER,
+    logged_order INTEGER,
     session_id TEXT NOT NULL REFERENCES workout_sessions(id) ON DELETE CASCADE,
     name_raw TEXT NOT NULL,
     name_canonical TEXT NOT NULL,

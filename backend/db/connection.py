@@ -89,11 +89,24 @@ def _ensure_fanfic_request_interval(db):
         db.commit()
 
 
+def _ensure_workout_quick_entry(db):
+    for table, columns in {
+        'workout_sessions': {'capture_kind': 'TEXT', 'started_at': 'INTEGER', 'ended_at': 'INTEGER'},
+        'workout_exercises': {'logged_at': 'INTEGER', 'logged_order': 'INTEGER'},
+    }.items():
+        existing = {r[1] for r in db.execute(f'PRAGMA table_info({table})')}
+        for name, sql_type in columns.items():
+            if name not in existing:
+                db.execute(f'ALTER TABLE {table} ADD COLUMN {name} {sql_type}')
+    db.commit()
+
+
 def init_db() -> None:
     db = get_db()
     schema = (Path(__file__).parent / 'schema.sql').read_text()
     db.executescript(schema)
     db.commit()
+    _ensure_workout_quick_entry(db)
     # Drop password_hash if it exists from an older schema
     cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
     if 'password_hash' in cols:

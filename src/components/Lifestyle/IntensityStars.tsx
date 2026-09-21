@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import {
   INTENSITY_MAX,
   intensityLabel,
@@ -24,18 +25,16 @@ interface IntensityPickerProps {
 }
 
 export function IntensityPicker({ value, onChange }: IntensityPickerProps) {
+  const labelId = useId();
   const current = Number(value) || 0;
   return (
     <div>
-      <span
-        id="intensity-label"
-        className="text-xs text-[var(--color-text-muted)]"
-      >
+      <span id={labelId} className="text-xs text-[var(--color-text-muted)]">
         Intensity
       </span>
       <div
         role="radiogroup"
-        aria-labelledby="intensity-label"
+        aria-labelledby={labelId}
         className="mt-1 flex items-center gap-1"
       >
         {STARS.map(star => {
