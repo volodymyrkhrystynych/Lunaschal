@@ -7,7 +7,7 @@ import { readSSE } from '../../lib/sse';
 import { DOC_TYPE_LABELS, type DocType } from './WritingNav';
 import { AgentSteps } from '@/components/Chat/AgentSteps';
 import { ThinkingLabel } from '@/components/Chat/ThinkingLabel';
-import { parseAgentMeta } from '@/lib/agentSteps';
+import { parseAgentMeta, type AgentStep } from '@/lib/agentSteps';
 
 interface Props {
   project: WritingProject;
@@ -23,6 +23,7 @@ export function DiscussionView({
   const [input, setInput] = useState('');
   const [streamingContent, setStreamingContent] = useState('');
   const [streamingReasoning, setStreamingReasoning] = useState('');
+  const [liveSteps, setLiveSteps] = useState<AgentStep[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [selectedNoteIds, setSelectedNoteIds] = useState<Set<string>>(
     new Set()
@@ -139,6 +140,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
     setIsStreaming(true);
     setStreamingContent('');
     setStreamingReasoning('');
+    setLiveSteps([]);
 
     try {
       const checkedNotes = await Promise.all(
@@ -152,6 +154,10 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
         body: JSON.stringify({
           messages,
           systemPrompt: buildSystemPrompt(checkedNotes),
+          // Research tools only: the library first, the web behind the
+          // delegate. A systemPrompt otherwise means no tools at all, which is
+          // right for the voice listener and the nudges but not for a screen.
+          toolset: 'research',
         }),
       });
 
@@ -167,7 +173,13 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
       let fullReasoning = '';
       let truncated = false;
       let timedOut = false;
+      let steps: AgentStep[] = [];
+      let sources: unknown[] = [];
       for await (const parsed of readSSE(reader)) {
+        if (parsed.tool) {
+          const step = parsed as AgentStep;
+          setLiveSteps(prev => [...prev, step]);
+        }
         if (parsed.thinking) {
           fullReasoning += parsed.thinking;
           setStreamingReasoning(fullReasoning);
@@ -179,6 +191,10 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
         if (parsed.done) {
           truncated = parsed.truncated === true;
           timedOut = parsed.timedOut === true;
+          // The `done` frame is authoritative for the trace: the live events
+          // are only what arrived on this connection.
+          if (Array.isArray(parsed.steps)) steps = parsed.steps as AgentStep[];
+          if (Array.isArray(parsed.sources)) sources = parsed.sources;
         }
         if (parsed.error) throw new Error(parsed.error);
       }
@@ -187,8 +203,14 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
       // (parseAgentMeta) so reopening this discussion shows the same
       // reasoning trace instead of losing it the moment the stream ends.
       const metadata =
-        fullReasoning || truncated || timedOut
-          ? JSON.stringify({ thinking: fullReasoning, truncated, timedOut })
+        fullReasoning || truncated || timedOut || steps.length
+          ? JSON.stringify({
+              thinking: fullReasoning,
+              truncated,
+              timedOut,
+              steps,
+              sources,
+            })
           : undefined;
 
       await addMessage.mutateAsync({
@@ -203,6 +225,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
     } finally {
       setIsStreaming(false);
       setStreamingContent('');
+      setLiveSteps([]);
       setStreamingReasoning('');
     }
   };
@@ -329,7 +352,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
           // Also covers the "No reasoning saved" case: parseAgentMeta fails
           // open, so a message written before this shipped just renders no
           // trace below it rather than throwing.
-          const { thinking } = parseAgentMeta(msg.metadata);
+          const { thinking, steps } = parseAgentMeta(msg.metadata);
           return (
             <div
               key={msg.id}
@@ -353,7 +376,7 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
                     shows the same collapsed trace a tab that never left
                     would, same as the Chat tab. */}
                 {msg.role === 'assistant' && (
-                  <AgentSteps steps={[]} thinking={thinking} />
+                  <AgentSteps steps={steps} thinking={thinking} />
                 )}
               </div>
             </div>
@@ -365,7 +388,11 @@ This is a brainstorming discussion. Help the author generate and refine ideas â€
               <div className="rounded-lg px-3 py-2 text-sm leading-relaxed bg-white/5 text-[var(--color-text)]">
                 <MessageMarkdown content={streamingContent} />
               </div>
-              <AgentSteps steps={[]} thinking={streamingReasoning} live />
+              <AgentSteps
+                steps={liveSteps}
+                thinking={streamingReasoning}
+                live
+              />
             </div>
           </div>
         )}

@@ -138,6 +138,11 @@ def init_db() -> None:
     _ensure_timeout_settings(db)
     _ensure_message_finished_at(db)
     _ensure_chat_compactions(db)
+    # Order matters in both directions: after the _ensure_* above so both
+    # provider columns exist, and before the fold below so a blanked research
+    # provider lets the fold rescue a key configured under the old tab — and so
+    # the fold cannot copy a retired provider name forward.
+    _clear_retired_search_provider(db)
     # After both column sets exist: it reads one and writes the other.
     _migrate_websearch_search_to_research(db)
     _ensure_idea_assessment_columns(db)
@@ -2355,6 +2360,41 @@ def _ensure_websearch_settings(db: sqlite3.Connection) -> None:
     if 'websearch_searxng_url' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN websearch_searxng_url TEXT')
     db.commit()
+
+
+# '' | 'brave' | 'searxng'. Duplicated from backend/research/web.py rather than
+# imported: connection.py is imported by everything, and reaching into the
+# research package from a migration is a cycle waiting to happen. web.py's
+# SEARCH_PROVIDERS is the one the app reads; keep the two in step.
+_KNOWN_SEARCH_PROVIDERS = ('', 'brave', 'searxng')
+
+
+def _clear_retired_search_provider(db: sqlite3.Connection) -> None:
+    """Blank a provider name nothing implements any more.
+
+    'tavily' was removed with no migration, so a row still naming it falls off
+    `web.web_search`'s if-chain: `is_search_configured()` answers False and
+    every web search in the app is dead, while Settings' <select> has no
+    matching <option> and renders blank — which reads as "None", i.e. as a
+    setting the user chose. Blanking it makes the panel tell the truth.
+
+    Idempotent by construction: after the UPDATE nothing matches the WHERE, so
+    no version flag is needed.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(settings)')}
+    placeholders = ','.join('?' * len(_KNOWN_SEARCH_PROVIDERS))
+    changed = False
+    for column in ('research_search_provider', 'websearch_search_provider'):
+        if column not in cols:
+            continue
+        cur = db.execute(
+            f"UPDATE settings SET {column}=''"
+            f" WHERE COALESCE({column},'') NOT IN ({placeholders})",
+            _KNOWN_SEARCH_PROVIDERS,
+        )
+        changed = changed or bool(cur.rowcount)
+    if changed:
+        db.commit()
 
 
 def _migrate_websearch_search_to_research(db: sqlite3.Connection) -> None:

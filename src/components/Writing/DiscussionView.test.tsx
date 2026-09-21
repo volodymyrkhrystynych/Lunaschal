@@ -348,10 +348,114 @@ describe('reasoning', () => {
           thinking: 'A clean exit keeps the mystery alive.',
           truncated: false,
           timedOut: false,
+          steps: [],
+          sources: [],
         }),
       })
     );
 
     vi.unstubAllGlobals();
+  });
+});
+
+describe('research tools', () => {
+  it('asks for the research toolset by name', async () => {
+    // A systemPrompt otherwise means no tools at all — right for the voice
+    // listener, wrong for a screen that can show a step.
+    const stream = openStream();
+    const fetchMock = vi.fn().mockResolvedValue(stream.response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
+    const input = await screen.findByPlaceholderText(
+      'Discuss your story… (Enter to send)'
+    );
+    fireEvent.change(input, { target: { value: 'how did Tolkien do this' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.toolset).toBe('research');
+    expect(typeof body.systemPrompt).toBe('string');
+
+    stream.close({});
+    vi.unstubAllGlobals();
+  });
+
+  it('shows a step as it happens and saves the trace with the reply', async () => {
+    // Without this the turn is 30-90s of silence: the gathering happens before
+    // a single token of the answer streams.
+    const stream = openStream();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(stream.response));
+
+    renderWithProviders(<DiscussionView project={project} discussionId="d1" />);
+    const input = await screen.findByPlaceholderText(
+      'Discuss your story… (Enter to send)'
+    );
+    fireEvent.change(input, { target: { value: 'what did the Romans eat' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(api.chat.addMessage).toHaveBeenCalledTimes(1));
+
+    const step = { tool: 'local_knowledge_search', ok: true, count: 3 };
+    stream.push(step);
+    stream.push({ content: 'Mostly grain.' });
+    await screen.findByText('Mostly grain.');
+    expect(
+      await screen.findByText(/Searched the offline library/i)
+    ).not.toBeNull();
+
+    stream.close({ steps: [step], sources: [] });
+
+    await waitFor(() =>
+      expect(api.chat.addMessage).toHaveBeenCalledWith('d1', {
+        role: 'assistant',
+        content: 'Mostly grain.',
+        metadata: JSON.stringify({
+          thinking: '',
+          truncated: false,
+          timedOut: false,
+          steps: [step],
+          sources: [],
+        }),
+      })
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it('renders the trace saved on an earlier reply', async () => {
+    vi.mocked(api.chat.getConversation).mockResolvedValueOnce({
+      id: 'd5',
+      title: 'Research talk',
+      messages: [
+        {
+          id: 'm1',
+          conversationId: 'd5',
+          role: 'user',
+          content: 'what did the Romans eat',
+          metadata: null,
+          createdAt: '',
+        },
+        {
+          id: 'm2',
+          conversationId: 'd5',
+          role: 'assistant',
+          content: 'Mostly grain.',
+          metadata: JSON.stringify({
+            steps: [{ tool: 'local_knowledge_search', ok: true, count: 3 }],
+          }),
+          createdAt: '',
+        },
+      ],
+      createdAt: '',
+      updatedAt: '',
+    });
+    renderWithProviders(<DiscussionView project={project} discussionId="d5" />);
+
+    await screen.findByText('Mostly grain.');
+    expect(
+      await screen.findByText(/Searched the offline library/i)
+    ).not.toBeNull();
   });
 });

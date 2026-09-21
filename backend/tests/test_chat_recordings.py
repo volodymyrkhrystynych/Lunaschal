@@ -41,13 +41,13 @@ def started_runs(monkeypatch):
     """Capture `runs.start` instead of spawning a real generation thread."""
     started = []
 
-    def fake_start(message_id, messages, system_prompt, *, tools_enabled,
+    def fake_start(message_id, messages, system_prompt, *, toolset,
                    conversation_id=None):
         started.append({
             'messageId': message_id,
             'messages': messages,
             'systemPrompt': system_prompt,
-            'toolsEnabled': tools_enabled,
+            'toolset': toolset,
             'conversationId': conversation_id,
         })
 
@@ -274,7 +274,7 @@ def test_the_reply_starts_on_its_own(client, transcribes, started_runs):
     assert len(started_runs) == 1
     run = started_runs[0]
     assert run['conversationId'] == conv
-    assert run['toolsEnabled'] is True
+    assert run['toolset'] == 'chat'
     # Empty, because `stream_reply` builds the real system prompt itself — a
     # caller-supplied one would turn the whole toolbox off.
     assert run['systemPrompt'] == ''

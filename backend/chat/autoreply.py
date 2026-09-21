@@ -134,7 +134,7 @@ def start_reply(conversation_id: str, user_message_id: str) -> str | None:
     # No queue to relay: nobody asked for this over a connection. The run
     # checkpoints the row as it goes and the Chat tab's poll is what picks it up
     # — the same path a browser takes after its stream drops.
-    runs.start(message_id, messages, '', tools_enabled=True,
+    runs.start(message_id, messages, '', toolset='chat',
                conversation_id=conversation_id)
     logger.info('Auto-replying to %s as %s', user_message_id, message_id)
     return message_id

@@ -71,13 +71,14 @@ def test_with_no_repos_at_all_there_is_none(client, repos_root):
 
 # --- The toolbox ---
 
-def test_a_repo_discussion_gets_code_tools_alongside_web_and_wiki(client, ready_repo):
+def test_a_repo_discussion_gets_code_tools_alongside_research_and_wiki(client, ready_repo):
     tools, dispatch, code_tools = discuss.build_toolbox(ready_repo)
     names = [t['function']['name'] for t in tools]
 
     assert 'code_search' in names and 'read_file' in names and 'list_dir' in names
     # The three toolboxes compose; the code tools do not replace the others.
-    assert 'web_search' in names and 'wiki_read' in names
+    assert 'local_knowledge_search' in names and 'delegate' in names
+    assert 'wiki_read' in names
     assert code_tools is not None
 
     # Every tool the model can see must be runnable — an unrunnable one comes
@@ -91,8 +92,39 @@ def test_without_a_repo_there_are_no_code_tools_at_all(client, repos_root):
 
     assert code_tools is None
     assert not any(n.startswith('code_') or n in ('read_file', 'list_dir') for n in names)
-    assert 'web_search' in names
+    assert 'local_knowledge_search' in names and 'delegate' in names
     assert set(names) == set(dispatch)
+
+
+def test_a_discussion_has_no_raw_web_tool_at_all(client, ready_repo, repos_root):
+    """Web access goes through the delegate, behind an offline-first gate. This
+    discussion used to be handed web_search/web_fetch directly — no library
+    first, and a fetched page dumped straight into the transcript."""
+    for repo in (ready_repo, None):
+        names = [t['function']['name'] for t in discuss.build_toolbox(repo)[0]]
+        assert not any(n.startswith('web_') for n in names)
+
+
+def test_the_research_state_is_fresh_per_discussion(client, repos_root, monkeypatch):
+    """The local-first gate is per-run state, like the code tools' read budget.
+    A shared instance would let one discussion's library search unlock the
+    web for the next one."""
+    from backend.delegate import research_tools
+
+    monkeypatch.setattr(research_tools.knowledge_tools, 'run_tool',
+                        lambda name, args: ('hits', {'tool': name, 'ok': True, 'count': 2}))
+    monkeypatch.setattr(research_tools.agent, 'run',
+                        lambda *_a, **_k: {'summary': 'web', 'steps': [{'ok': True}],
+                                           'sources': []})
+
+    first = discuss.build_toolbox(None)[1]['local_knowledge_search']
+    first.run_tool('local_knowledge_search', {'queries': ['a', 'b']})
+    first.run_tool('local_knowledge_read', {'archiveId': 'x', 'path': 'y'})
+
+    second = discuss.build_toolbox(None)[1]['delegate']
+    _text, event = second.run_tool('delegate', {'task': 't', 'reason': 'local_insufficient'})
+    assert event['ok'] is False
+    assert event['error'] == 'offline library has not been searched'
 
 
 def test_code_map_is_offered_only_when_the_repo_has_a_graph(

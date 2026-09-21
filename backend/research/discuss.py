@@ -56,20 +56,31 @@ existing thing first.
 - The inventory below is an index, not the truth. It is generated, it can be \
 stale, and it does not describe behaviour. The source does."""
 
-_WEB_RULES = """
-You can also search and read the web. Use it for how other people solved \
-something, or for a fact about a library you are not certain of — not for \
-questions about this repository, which you answer by reading it."""
-
 _NO_REPO_RULES = """
 You have no checkout of this codebase to read, so you cannot verify anything \
 about it. Work from the inventory below, and be explicit that you are reasoning \
-from an index rather than from the code. You can still search and read the web."""
+from an index rather than from the code."""
+
+# The research half, offline-first and identical to the Chat tab's — same three
+# tools, same gate, same wording, because this discussion used to be handed raw
+# web_search/web_fetch with no library tools at all and consequently had no
+# offline-first rule to follow. The framing above the shared note is the only
+# part specific to a code discussion.
+def _research_rules() -> str:
+    from backend.delegate.research_tools import RESEARCH_NOTE
+    return (
+        '\nFor anything outside this repository — how other people solved a '
+        'problem, a fact about a library you are not certain of — you have '
+        'research tools rather than a browser. Never use them for questions '
+        'about this repository, which you answer by reading it.\n\n'
+        + RESEARCH_NOTE
+    )
 
 ANSWER_INSTRUCTION = (
     'Now answer the owner using what you gathered. Cite each file you read as '
-    'path:line, and each web source by name. If you could not confirm something, '
-    'say which part and why, rather than filling the gap with a guess.'
+    'path:line, each local article by its title, and each web source the '
+    'delegate returned by name. If you could not confirm something, say which '
+    'part and why, rather than filling the gap with a guess.'
 )
 
 
@@ -89,9 +100,12 @@ def system_prompt(has_repo: bool, has_map: bool = False, repo_name: str = '') ->
         parts.append(_CODE_RULES.format(map_note=map_note))
         if repo_name:
             parts.append(f'The repository you are reading is **{repo_name}**.')
-        parts.append(_WEB_RULES)
     else:
         parts.append(_NO_REPO_RULES)
+    # Unconditional: a discussion with no checkout still has the library and
+    # the delegate, and a prompt that only mentions them in the repo branch is
+    # how a no-repo discussion ends up believing it has nothing to work with.
+    parts.append(_research_rules())
     return '\n'.join(parts)
 
 
@@ -229,19 +243,23 @@ def build_gather_request(context: str, history: list[dict], question: str) -> st
     return '\n\n'.join(parts)
 
 
-def build_toolbox(repo: dict | None):
+def build_toolbox(repo: dict | None, *, checkpoint=None, deadline=None):
     """(tools, dispatch, code_tools) for one discussion.
 
-    The three toolboxes compose rather than replace each other: code for this
-    repo, the web for prior art, the wiki for what has already been written
-    down. `tools` and `dispatch` travel together — a tool the model can see but
-    the dispatch cannot run comes back as "Unknown tool", which reads to the
-    model as a broken tool rather than as one it should not have called.
+    Three toolboxes compose rather than replace each other: code for this repo,
+    the shared offline-first research chain for anything outside it, and the
+    wiki for what has already been written down. `tools` and `dispatch` travel
+    together — a tool the model can see but the dispatch cannot run comes back
+    as "Unknown tool", which reads to the model as a broken tool rather than as
+    one it should not have called.
 
     `code_tools` is handed back so the caller can ask what was actually read;
-    it is per-run state and must not be shared between runs.
+    it is per-run state and must not be shared between runs. So is the research
+    state, which is why it is built here per call rather than imported — but
+    nothing in the Ideas path needs to interrogate it, so it is not returned.
     """
-    from backend.research import agent, code, web, wiki as wiki_mod
+    from backend.delegate import research_tools
+    from backend.research import code, wiki as wiki_mod
 
     repo_id = (repo or {}).get('id')
     # Wiki tools are bound to the repo so a discussion sees this codebase's
@@ -249,8 +267,13 @@ def build_toolbox(repo: dict | None):
     # a module that happens to share a name.
     wiki_tools = wiki_mod.WikiTools(repo_id)
 
-    tools = web.TOOLS + wiki_mod.TOOLS
-    dispatch = dict(agent._DISPATCH)
+    # Deliberately *not* seeded from `agent._DISPATCH` any more: that map is
+    # what carried raw web_search/web_fetch into this discussion, ahead of the
+    # local library and outside the delegate boundary that keeps a page dump
+    # out of the transcript.
+    research = research_tools.ResearchTools(checkpoint=checkpoint, deadline=deadline)
+    tools = research_tools.TOOLS + wiki_mod.TOOLS
+    dispatch = research_tools.dispatch_for(research)
     dispatch.update({t['function']['name']: wiki_tools for t in wiki_mod.TOOLS})
     code_tools = None
 

@@ -31,10 +31,14 @@ def snapshot(client, monkeypatch):
 
 
 @pytest.fixture
-def searchable(monkeypatch):
+def searchable(monkeypatch, tmp_path):
+    """The pass reads the offline library, so a library is what makes it due."""
     monkeypatch.setattr(sched, 'research_enabled', lambda: True)
     import backend.research.research_job as rj
-    monkeypatch.setattr('backend.research.web.is_search_configured', lambda: True)
+    root = tmp_path / 'zim'
+    root.mkdir()
+    monkeypatch.setattr('backend.offline_knowledge.archive.configured_root',
+                        lambda: root)
     return rj
 
 
@@ -128,12 +132,27 @@ def test_research_is_due_once_everything_is_assessed(client, snapshot, monkeypat
     assert plan_next() == ('research', idea_id)
 
 
-def test_research_needs_a_search_provider(client, snapshot, monkeypatch):
-    """Otherwise every pass would just record that the web was unavailable."""
-    monkeypatch.setattr('backend.research.web.is_search_configured', lambda: False)
+def test_research_needs_a_local_library(client, snapshot, monkeypatch):
+    """Otherwise every pass would just record that it had nothing to read."""
+    monkeypatch.setattr('backend.offline_knowledge.archive.configured_root',
+                        lambda: None)
     idea_id = _idea(client)
     _assess(client, idea_id, monkeypatch)
     assert plan_next() is None
+
+
+def test_research_never_asks_whether_the_web_is_configured(
+    client, snapshot, monkeypatch, searchable
+):
+    """The pass is unattended and offline; a web-search provider has nothing to
+    do with whether it is due."""
+    def boom():
+        raise AssertionError('plan_next must not consult the search provider')
+
+    monkeypatch.setattr('backend.research.web.is_search_configured', boom)
+    idea_id = _idea(client)
+    _assess(client, idea_id, monkeypatch)
+    assert plan_next() == ('research', idea_id)
 
 
 def test_a_recently_researched_idea_is_on_cooldown(client, snapshot, monkeypatch, searchable):
@@ -156,7 +175,8 @@ def test_tick_does_nothing_while_disabled(client, snapshot, monkeypatch):
 
 
 def test_research_is_off_by_default(client):
-    """It makes outbound web requests; that is not something to start unasked."""
+    """An unattended pass that spends the model on its own is not something to
+    start unasked — even now that it no longer reaches the web."""
     assert sched.research_enabled() is False
     get_db().execute('UPDATE settings SET research_enabled=1')
     get_db().commit()
@@ -266,11 +286,36 @@ def _stub_research(monkeypatch, articles, sources=None):
     import backend.ai.idea_research as ir
     monkeypatch.setattr(agent, 'gather', lambda system, user, **kw: {
         'messages': [{'role': 'tool', 'content': 'FSRS models memory as three variables.'}],
-        'steps': [{'tool': 'web_search', 'ok': True}],
+        'steps': [{'tool': 'local_knowledge_search', 'ok': True}],
         'sources': sources if sources is not None else [{'url': 'https://ex.com/a', 'title': 'A'}],
         'turns': 2, 'truncated': False,
     })
     monkeypatch.setattr(ir, 'decide_articles', lambda idea, transcript, existing: articles)
+
+
+def test_the_research_pass_is_handed_an_offline_toolbox(client, snapshot, monkeypatch):
+    """Named explicitly, never inherited. `agent.gather`'s default toolbox
+    carries web_search/web_fetch, and inheriting it is how this scheduled,
+    unattended pass came to make outbound web requests nobody had decided to
+    give it."""
+    from backend.research import agent
+    import backend.ai.idea_research as ir
+    seen = {}
+
+    def fake_gather(system, user, **kw):
+        seen['tools'] = kw.get('tools')
+        seen['dispatch'] = kw.get('dispatch')
+        return {'messages': [], 'steps': [], 'sources': [], 'turns': 0, 'truncated': False}
+
+    monkeypatch.setattr(agent, 'gather', fake_gather)
+    monkeypatch.setattr(ir, 'decide_articles', lambda *a, **k: [])
+    run_research_task(_idea(client))
+
+    names = [t['function']['name'] for t in seen['tools']]
+    assert not any(n.startswith('web_') or n == 'delegate' for n in names)
+    assert 'local_knowledge_search' in names and 'wiki_search' in names
+    # Every offered tool must be runnable, here as everywhere else.
+    assert set(names) == set(seen['dispatch'])
 
 
 def test_research_writes_and_links_articles(client, snapshot, monkeypatch):
