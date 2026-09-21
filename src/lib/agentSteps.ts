@@ -18,6 +18,9 @@ export interface AgentStep {
   // deep_research step this rides alongside `ok: true` — a pass that was cut
   // short still writes up what it found, and that answer is a result.
   timedOut?: boolean;
+  // Present only on a `writing_read` step: whether the thing opened was a
+  // chapter or a note. The label is materially better for saying which.
+  kind?: string;
   // Present only on a `remember` step that found the fact already noted. The
   // write was a no-op, so the label must not claim something new was recorded.
   duplicate?: boolean;
@@ -162,6 +165,37 @@ export function stepLabel(step: AgentStep): string {
       return step.ok
         ? `Looked up ${target}`
         : `Couldn't look up that day${step.error ? ` — ${step.error}` : ''}`;
+    // Read-only recall scoped to one writing project — its own chapters and
+    // notes, never another project's. Nothing is written here either.
+    case 'writing_list':
+      return step.ok
+        ? `Checked the project's chapters and notes (${step.count ?? 0})`
+        : `Couldn't read the project${step.error ? ` — ${step.error}` : ''}`;
+    case 'writing_search':
+      if (!step.ok)
+        return `Couldn't search the project${step.error ? ` — ${step.error}` : ''}`;
+      return step.count
+        ? `Searched the project for "${target}" — ${step.count} found`
+        : `Searched the project for "${target}" — nothing found`;
+    case 'writing_read':
+      return step.ok
+        ? `Read ${step.kind === 'chapter' ? 'chapter' : 'note'}: ${target}`
+        : `Couldn't open "${target}"${step.error ? ` — ${step.error}` : ''}`;
+    // The rest of one repository's idea backlog, on the Ideas discussion.
+    case 'idea_list':
+      return step.ok
+        ? `Checked the other ideas for this repo (${step.count ?? 0})`
+        : `Couldn't read the backlog${step.error ? ` — ${step.error}` : ''}`;
+    case 'idea_search':
+      if (!step.ok)
+        return `Couldn't search the other ideas${step.error ? ` — ${step.error}` : ''}`;
+      return step.count
+        ? `Searched other ideas for "${target}" — ${step.count} found`
+        : `Searched other ideas for "${target}" — nothing found`;
+    case 'idea_read':
+      return step.ok
+        ? `Read idea: ${target}`
+        : `Couldn't open that idea${step.error ? ` — ${step.error}` : ''}`;
     // Only the Ideas agent has these; the delegate's toolbox carries no wiki
     // tools. Labelling them here rather than in a second copy is the point.
     case 'wiki_list':

@@ -377,6 +377,10 @@ describe('research tools', () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect(body.toolset).toBe('research');
     expect(typeof body.systemPrompt).toBe('string');
+    // The scope for the project's own chapters and notes. The server cannot
+    // derive it: this request takes the inline path, so it carries no
+    // conversationId and conversations.writing_project_id is never read.
+    expect(body.writingProjectId).toBe(project.id);
 
     stream.close({});
     vi.unstubAllGlobals();

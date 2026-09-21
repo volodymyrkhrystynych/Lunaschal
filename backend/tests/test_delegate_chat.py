@@ -618,7 +618,7 @@ def test_a_caller_supplied_prompt_turns_the_tools_off(client, monkeypatch):
     clarifying question, so the whole decision turn is pure added latency."""
     seen = {}
 
-    def fake(messages, system_prompt, toolset='chat'):
+    def fake(messages, system_prompt, toolset='chat', **_kw):
         seen['toolset'] = toolset
         yield ('content', 'ok')
 
@@ -638,7 +638,7 @@ def test_a_screen_can_ask_for_the_research_tools_by_name(client, monkeypatch):
     it opts back in to the research half — and only that half."""
     seen = {}
 
-    def fake(messages, system_prompt, toolset='chat'):
+    def fake(messages, system_prompt, toolset='chat', **_kw):
         seen['toolset'] = toolset
         yield ('content', 'ok')
 
@@ -655,7 +655,7 @@ def test_an_unrecognised_toolset_falls_back_instead_of_failing(client, monkeypat
     so a typo in a client should cost the tools, not the reply."""
     seen = {}
 
-    def fake(messages, system_prompt, toolset='chat'):
+    def fake(messages, system_prompt, toolset='chat', **_kw):
         seen['toolset'] = toolset
         yield ('content', 'ok')
 

@@ -19,6 +19,10 @@ Three rules shape what these return:
   transcript verbatim; returning it again would spend the budget re-reading what
   the model can already see.
 
+The caps and the clipping that enforce all three now live in
+`backend/recall.py`, shared with the other two recall surfaces; the rules stay
+written down here, where they were worked out.
+
 Same duck type as `backend/research/code.py`'s CodeTools and
 `backend/research/wiki.py`'s WikiTools — `run_tool(name, args) -> (text, event)`
 — so the shared loop in `backend/research/agent.py` can dispatch to it unchanged
@@ -29,19 +33,23 @@ from datetime import datetime
 
 from backend.db.connection import fts_match_query, get_db, search_journal_fts
 from backend.day_boundary import day_bounds, day_key_for
+# The caps and the clipping live in backend/recall.py: two more surfaces (a
+# writing project's chapters and notes, a repository's other ideas) recall
+# things now, and they answer to the same budget. Imported under the private
+# names this module already used, so every call site below is unchanged — and
+# so `tools.MAX_RESULT_CHARS` still resolves for the tests that read it.
+from backend.recall import (
+    DEFAULT_LIMIT,
+    MAX_HIT_CHARS,
+    MAX_LIMIT,
+    MAX_RESULT_CHARS,
+    clip as _clip,
+    join as _join,
+    limit_of as _limit_of,
+    when as _when,
+)
 
 logger = logging.getLogger(__name__)
-
-# Total characters one tool call may return. Sized so that two searches in one
-# turn still leave the conversation itself the larger part of the prompt.
-MAX_RESULT_CHARS = 2400
-
-# Per-hit ceiling, applied before the total. A single rambling journal entry
-# should not be able to spend the whole budget.
-MAX_HIT_CHARS = 400
-
-DEFAULT_LIMIT = 5
-MAX_LIMIT = 10
 
 TOOLS = [
     {
@@ -106,41 +114,6 @@ TOOLS = [
 ]
 
 TOOL_NAMES = {t['function']['name'] for t in TOOLS}
-
-
-def _clip(text: str, limit: int = MAX_HIT_CHARS) -> str:
-    text = ' '.join((text or '').split())
-    return text if len(text) <= limit else text[:limit].rstrip() + '…'
-
-
-def _join(blocks: list[str]) -> str:
-    """Concatenate hits until the budget runs out, whole hits only.
-
-    A half-hit is worse than one fewer hit: the model reads a truncated journal
-    entry as the whole of what was written that day.
-    """
-    out: list[str] = []
-    used = 0
-    for block in blocks:
-        if used + len(block) > MAX_RESULT_CHARS and out:
-            out.append(f'({len(blocks) - len(out)} more not shown)')
-            break
-        out.append(block)
-        used += len(block)
-    return '\n\n'.join(out)
-
-
-def _when(ts: int) -> str:
-    """A date the model can act on, with the weekday it will be asked about."""
-    return datetime.fromtimestamp(ts).strftime('%a %d %b %Y, %H:%M')
-
-
-def _limit_of(args: dict) -> int:
-    try:
-        limit = int(args.get('limit') or DEFAULT_LIMIT)
-    except (TypeError, ValueError):
-        return DEFAULT_LIMIT
-    return max(1, min(limit, MAX_LIMIT))
 
 
 class LifeTools:

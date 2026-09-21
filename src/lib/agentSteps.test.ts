@@ -246,6 +246,68 @@ describe('stepLabel', () => {
     );
   });
 
+  it('labels the writing project tools by what was opened', () => {
+    expect(stepLabel({ tool: 'writing_list', ok: true, count: 12 })).toBe(
+      "Checked the project's chapters and notes (12)"
+    );
+    // `kind` is why the event carries it: "Read note: Mirena" and "Read
+    // chapter: The Ferry" are different enough to be worth the field.
+    expect(
+      stepLabel({
+        tool: 'writing_read',
+        arg: 'ferry',
+        title: 'The Ferry',
+        kind: 'chapter',
+        ok: true,
+      })
+    ).toBe('Read chapter: The Ferry');
+    expect(
+      stepLabel({
+        tool: 'writing_read',
+        title: 'Mirena',
+        kind: 'note',
+        ok: true,
+      })
+    ).toBe('Read note: Mirena');
+    expect(
+      stepLabel({
+        tool: 'writing_search',
+        arg: 'salt roads',
+        ok: true,
+        count: 2,
+      })
+    ).toBe('Searched the project for "salt roads" — 2 found');
+    expect(
+      stepLabel({ tool: 'writing_search', arg: 'harbour', ok: true, count: 0 })
+    ).toBe('Searched the project for "harbour" — nothing found');
+    expect(
+      stepLabel({
+        tool: 'writing_read',
+        arg: 'Untitled',
+        ok: false,
+        error: 'ambiguous title',
+      })
+    ).toBe('Couldn\'t open "Untitled" — ambiguous title');
+  });
+
+  it('labels the idea backlog tools as reading the rest of the backlog', () => {
+    expect(stepLabel({ tool: 'idea_list', ok: true, count: 17 })).toBe(
+      'Checked the other ideas for this repo (17)'
+    );
+    expect(
+      stepLabel({ tool: 'idea_search', arg: 'newspaper', ok: true, count: 1 })
+    ).toBe('Searched other ideas for "newspaper" — 1 found');
+    expect(
+      stepLabel({ tool: 'idea_search', arg: 'newspaper', ok: true, count: 0 })
+    ).toBe('Searched other ideas for "newspaper" — nothing found');
+    expect(
+      stepLabel({ tool: 'idea_read', title: 'Nightly repo pass', ok: true })
+    ).toBe('Read idea: Nightly repo pass');
+    expect(
+      stepLabel({ tool: 'idea_read', arg: 'x', ok: false, error: 'not found' })
+    ).toBe("Couldn't open that idea — not found");
+  });
+
   it('says when a recall tool could not run', () => {
     expect(
       stepLabel({ tool: 'read_day', ok: false, error: 'not a date' })

@@ -1167,6 +1167,34 @@ def _toolset_for(body: dict, system_prompt: str) -> str:
     return 'chat' if not system_prompt else 'none'
 
 
+def _writing_scope_for(body: dict, toolset: str) -> str | None:
+    """The writing project this reply may recall from, or None.
+
+    Gated on the toolset, so the Chat tab cannot acquire a project's chapters
+    by adding a field, and the voice listener's 'none' stays 'none'.
+
+    The existence check is not a safety boundary — the id is only ever bound
+    into `project_id = ?`, so a made-up one returns no rows — it is there so
+    the *prompt* stays honest. Telling the model it can read the project's
+    other chapters and then answering every call with "nothing found" is the
+    failure `discuss.system_prompt` warns about: a tool that always fails is
+    worse than one that was never offered. Falls back rather than 400-ing,
+    for `_toolset_for`'s reason.
+    """
+    if toolset != 'research':
+        return None
+    project_id = (body.get('writingProjectId') or '').strip()
+    if not project_id:
+        return None
+    row = get_db().execute(
+        'SELECT 1 FROM writing_projects WHERE id=?', (project_id,)
+    ).fetchone()
+    if row is None:
+        logger.warning('chat/stream: unknown writingProjectId %s', project_id)
+        return None
+    return project_id
+
+
 @bp.post('/stream')
 def stream():
     """The Chat tab's one streaming endpoint.
@@ -1194,6 +1222,7 @@ def stream():
     system_prompt = body.get('systemPrompt', '')
     conversation_id = body.get('conversationId')
     toolset = _toolset_for(body, system_prompt)
+    writing_project_id = _writing_scope_for(body, toolset)
 
     if conversation_id:
         message_id = str(ULID())
@@ -1207,7 +1236,8 @@ def stream():
         db.commit()
         q = runs.start(message_id, messages, system_prompt,
                        toolset=toolset,
-                       conversation_id=conversation_id)
+                       conversation_id=conversation_id,
+                       writing_project_id=writing_project_id)
 
         def generate():
             relayed = 0
@@ -1257,7 +1287,8 @@ def stream():
             # it's the voice listener, a task nudge or the morning check-in,
             # none of which have a card to confirm anything on.
             for kind, payload in delegate_chat.stream_reply(
-                messages, system_prompt, toolset=toolset
+                messages, system_prompt, toolset=toolset,
+                writing_project_id=writing_project_id,
             ):
                 yield _format_event(kind, payload)
             yield 'data: [DONE]\n\n'
