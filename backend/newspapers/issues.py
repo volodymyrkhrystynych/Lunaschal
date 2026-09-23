@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ulid import ULID
 
+from backend.day_boundary import day_bounds
 from backend.db.connection import get_db
 from backend.newspapers.storage import newspapers_root
 
@@ -230,6 +231,31 @@ def store_issue(value, stream):
 def public_issue(row):
     return {'date': row['date'], 'byteSize': row['byte_size'], 'pageCount': row['page_count'],
             'pdfUrl': f"/api/newspapers/issues/{row['date']}/pdf"}
+
+
+def journal_filed_at(issue_date, created_at):
+    """The moment a Journal card for this issue should be filed under.
+
+    Newspapers are the one exception to the 4am day (day_boundary's own
+    docstring says so): an edition's date comes from the source site, not from
+    the user's day. Filing by `created_at` alone broke on exactly the issues
+    that matter most -- the downloader runs in the small hours, so the paper
+    dated the 22nd was archived at 01:35 on the 22nd, which is still the 21st's
+    4am day, and the card for today's paper landed in yesterday. Reading it
+    that evening could not rescue it either, since journal_moment clamps the
+    read back into the filed day by design.
+
+    So the edition's own day wins -- but never earlier than the archive, which
+    is what keeps a hand-uploaded back issue reachable. Uploading a 1998
+    edition today would otherwise file its card in 1998, where nobody will ever
+    scroll to it; the later of the two puts it under today, the day it actually
+    entered the record. The two agree for every normally downloaded issue whose
+    edition day has already begun, and only the overnight case moves.
+
+    Returns a timestamp, not a day key, because journal_moment takes one and
+    derives the day itself -- there is no second notion of the day here.
+    """
+    return max(created_at, day_bounds(validate_date(issue_date))[0])
 
 
 def marked_pages(markup):

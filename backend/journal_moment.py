@@ -5,9 +5,10 @@ Journal feed, and all three need the same two answers: *which* day, and *where
 in that day*. The first is settled before this module is called -- a paper and
 a study source carry a flag the user set (and move on the next 4am boundary,
 see backend/day_boundary and the `_cutoff_4am` helpers in the route modules),
-an issue carries the moment it was downloaded. This module answers only the
-second, which is not the same question, and used to be answered with the
-filing timestamp for want of anything better.
+a newspaper issue carries its own edition day floored at its download (see
+newspapers.issues.journal_filed_at -- the one exception to the 4am day).
+This module answers only the second, which is not the same question, and used
+to be answered with the filing timestamp for want of anything better.
 """
 from backend.day_boundary import day_bounds, day_key_for
 
@@ -36,12 +37,13 @@ def journal_moment(edited_at: int | None, filed_at: int, *,
 
     - For a paper or a study source it does -- somebody chose that instant --
       so it is the only honest answer, and the default.
-    - For a newspaper it does not: an issue nobody opened was stamped by the
-      overnight downloader, and sorting it into the small hours buries the
-      day's paper under the whole day. `unworked_at_day_end` puts it at the
-      last second of its day instead, above that day's last entry, where an
-      unread paper is a thing still waiting rather than a thing that happened
-      at 6am.
+    - For a newspaper it does not: nobody chose it. An issue nobody opened is
+      stamped by the downloader, or by the edition day's own 4am when the
+      download beat it -- either way the top of the day, which buries the
+      day's paper under everything that happened in it. `unworked_at_day_end`
+      puts it at the last second of its day instead, above that day's last
+      entry, where an unread paper is a thing still waiting rather than a
+      thing that happened at dawn.
     """
     start, end = day_bounds(day_key_for(filed_at))
     if edited_at is None:

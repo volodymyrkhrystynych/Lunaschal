@@ -57,11 +57,11 @@ def journal_issues():
     """Archived issues for the Journal feed, newest first, each with how much of
     it has been written on.
 
-    Filed under the day the issue was archived rather than under its own date,
-    because that is the day it entered the record the feed is a record of — the
-    same choice the archived-papers feed makes. The two agree on any normally
-    downloaded issue and differ only when an old edition is uploaded by hand,
-    where the upload day is the honest one.
+    Filed under the issue's own edition day, floored at the day it was
+    archived — see issues.journal_filed_at. Newspapers are the exception to the
+    4am day that backend/day_boundary.py already names: an edition's date comes
+    from the source site, not from the user's day, and filing by the archive
+    moment alone put every overnight download in the previous day's feed.
 
     Inside that day the card sits at the last time the issue was *read* — the
     newer of opening it and marking it up — and not at created_at, which is
@@ -76,7 +76,9 @@ def journal_issues():
     report marked pages and carry no pictures at all.
     """
     rows = get_db().execute('SELECT * FROM newspaper_issues ORDER BY created_at DESC, date DESC').fetchall()
-    dated = [(journal_moment(row['last_read_at'], row['created_at'], unworked_at_day_end=True), row)
+    dated = [(journal_moment(row['last_read_at'],
+                             issues.journal_filed_at(row['date'], row['created_at']),
+                             unworked_at_day_end=True), row)
              for row in rows]
     # Sorted here rather than in SQL: the key is computed, and buildFeed's n-way
     # merge (src/lib/journalFeed.ts) documents that every source it is handed is

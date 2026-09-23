@@ -441,3 +441,70 @@ def test_a_refused_markup_save_prunes_nothing(client):
     assert client.put('/api/newspapers/issues/2026-09-01/markup',
                       json={'revision': 7, 'strokes': []}).status_code == 409
     assert [page for page, _ in issues.snapshot_pages('2026-09-01')] == [1, 3, 5]
+
+
+def test_an_overnight_download_files_under_the_edition_day_not_the_day_before(client):
+    """The bug this rule exists for. The downloader runs in the small hours, so
+    the paper dated the 22nd is archived at 01:35 on the 22nd — still the 21st's
+    4am day — and its card used to land in yesterday's feed, where nobody looks
+    for today's paper. Newspapers are the exception backend/day_boundary.py
+    already names: the edition's own day wins."""
+    from backend.day_boundary import day_bounds, day_key_for
+
+    today = day_key_for(int(time.time()))
+    overnight = day_bounds(today)[0] - 2 * 3600          # 02:00, before the 4am roll
+    edition = datetime.fromtimestamp(overnight).date().isoformat()
+    assert day_key_for(overnight) != edition             # the whole point
+
+    upload(client, edition)
+    _backdate(edition, created=overnight)
+    at = _archived_at(client, edition)
+    assert day_key_for(at) == edition
+    assert at == _day_end(day_bounds(edition)[0])
+
+
+def test_reading_an_overnight_issue_that_evening_keeps_it_in_the_edition_day(client):
+    """Marking up at 11pm is inside the edition's own 4am day, so the card sits
+    at the reading rather than being clamped to the day's edge."""
+    from backend.day_boundary import day_bounds, day_key_for
+
+    today = day_key_for(int(time.time()))
+    overnight = day_bounds(today)[0] - 2 * 3600
+    edition = datetime.fromtimestamp(overnight).date().isoformat()
+    upload(client, edition)
+    read = day_bounds(edition)[0] + 19 * 3600            # 11pm that evening
+    _backdate(edition, created=overnight, read=read)
+    assert _archived_at(client, edition) == read
+    assert day_key_for(_archived_at(client, edition)) == edition
+
+
+def test_a_back_issue_uploaded_by_hand_files_under_today(client):
+    """The floor. An edition date that always won would file a 1998 paper in
+    1998, where the feed will never be scrolled to — so the later of the two
+    wins and the card lands on the day it entered the record."""
+    from backend.day_boundary import day_key_for
+
+    upload(client, '1998-07-12')
+    at = _archived_at(client, '1998-07-12')
+    assert day_key_for(at) == day_key_for(int(time.time()))
+
+
+def test_journal_filed_at_is_the_later_of_the_edition_day_and_the_archive():
+    """Pure: the rule itself, without a request around it."""
+    from backend.day_boundary import day_bounds
+
+    edition_start = day_bounds('2026-09-22')[0]
+    # Archived before the edition's day began (the overnight download): the
+    # edition day wins, so day_key_for() reads the 22nd rather than the 21st.
+    assert issues.journal_filed_at('2026-09-22', edition_start - 2 * 3600) == edition_start
+    # Archived during its own day: nothing moves.
+    midday = edition_start + 9 * 3600
+    assert issues.journal_filed_at('2026-09-22', midday) == midday
+    # A back issue uploaded years later keeps the upload moment.
+    later = day_bounds('2026-09-22')[0] + 400 * 86400
+    assert issues.journal_filed_at('1998-07-12', later) == later
+
+
+def test_journal_filed_at_rejects_a_date_that_is_not_one():
+    with pytest.raises(ValueError):
+        issues.journal_filed_at('not-a-date', int(time.time()))
