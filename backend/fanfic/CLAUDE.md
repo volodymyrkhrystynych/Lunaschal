@@ -6,8 +6,9 @@ Personal fanfiction library + reader ("Library" in the UI). Imports from XenForo
 `collections.py`. Library → Import → From website accepts a single story/work/post;
 My collections imports FFN favorite/followed stories, AO3 bookmarked works and work
 subscriptions (requires the account username), or accessible text posts from the
-Patreon feed. All collection scans require a saved browser session in Settings →
-Fanfic site cookies. No passwords or cookies are returned by the status APIs.
+Patreon feed. Direct HTTP collection scans require a saved browser session in
+Settings → Fanfic site cookies. FF.net browser mode uses the Chrome extension's
+signed-in session instead. No passwords or cookies are returned by the status APIs.
 AO3 author/series subscriptions and external bookmarks are not expanded; Patreon
 media and attachments are not downloaded. Locked posts are skipped and counted;
 unreadable stories/posts fail visibly instead of saving a login page or teaser.
@@ -70,8 +71,42 @@ until the Library banner's Resume button is used. Resume cannot shorten a server
 cooldown. Deferred work retains its queue flag, deep-update intent and saved
 chapters; collection scans retain their current page. Other sites remain eligible.
 A five-second recovery loop restarts eligible queues after cooldown or application
-restart, and is disabled by `LUNASCHAL_NO_SCHEDULERS`. Browser-based retrieval is
-not implemented; a new challenge after manual resume pauses the site again.
+restart, and is disabled by `LUNASCHAL_NO_SCHEDULERS`.
+
+**FF.net can use the user's browser** (`browser.py`, `extension/ffn.*`,
+`extension/lib/ffn.js`). It is opt-in: choose Browser session in the Library,
+or Connect in the extension's FF.net downloads control tab. Direct HTTP stays
+available for existing setups; browser mode **never silently falls back to it**.
+The ordinary Chrome/Chromium profile owns the session and the user solves any
+challenge or login in a dedicated site tab. Both that tab and the extension
+control tab must stay open. Backend traffic uses the extension's existing
+service-worker API client and authentication; no cookie export is involved.
+
+`fanfic_browser_requests` is the durable handoff, scoped to a fic or collection
+scan with cascading deletion. A cache miss defers the existing worker instead
+of holding a thread/HTTP connection while a browser is absent. The two queues
+exclude FF.net while a page is outstanding or the browser heartbeat is stale;
+other sites still run. Each allowed top-level navigation reserves the existing
+pacing deadline. Browser-managed redirects, subresources, and manual challenge
+interactions are not individually paced. HTTP 429 reported by the extension's
+main-document header observer preserves Retry-After through the same cooldown.
+
+Only one live controller may claim pages. Claims carry an attempt id, so a late
+reply from before a retry cannot satisfy the next attempt. Polling an assigned
+request does not navigate again. A challenge/login/unreadable page remains
+blocked until the user chooses Continue (capture the current page) or Retry
+(a new paced navigation); even takeover by a new controller does not reload a
+blocked page automatically. Closing a tab, losing the server, or restarting
+keeps durable pages and the original queue flags. Deep intent stays on an
+active fic until completion. Responses are checked against the requested
+story/chapter or collection page, size-limited, validated by the existing
+parsers, and consumed by the existing sanitizer/storage path. Cached pages are
+cleared after each collection checkpoint or atomically with fic completion.
+
+The extension controller lives in a normal extension tab: an MV3 worker going
+idle cannot kill its timer. Background-tab throttling can lengthen the interval.
+Browser status expires after three minutes without polling. See
+[`extension/README.md`](../../extension/README.md#ffnet-browser-downloads) for setup.
 
 FF.net collection scans preserve `fics.source_favorited_at` and
 `source_followed_at` separately. Account-list addition dates are stored at UTC

@@ -537,12 +537,13 @@ def seed_food(db, recipe_id):
 
 
 def seed_fanfic(db, journal_ids):
-    db.execute("INSERT INTO fanfic_site_limits(domain,request_interval) VALUES ('fanfiction.net',600)")
+    db.execute("INSERT INTO fanfic_site_limits(domain,request_interval,retrieval_mode) VALUES ('fanfiction.net',600,'http')")
+    browser_fic_id = new_id()
     db.execute(
         'INSERT INTO fics(id,title,source_type,site,thread_id,download_status,'
         'source_favorited_at,source_followed_at,created_at,updated_at) '
         'VALUES (?,?,?,?,?,?,?,?,?,?)',
-        (new_id(), 'An old favorite (demo)', 'fanfiction', 'fanfiction.net',
+        (browser_fic_id, 'An old favorite (demo)', 'fanfiction', 'fanfiction.net',
          'demo-story', 'complete', ts(365 * 7), ts(365 * 6), ts(15), ts(15)),
     )
     from backend.fanfic.storage import fic_dir
@@ -556,6 +557,10 @@ def seed_fanfic(db, journal_ids):
          820, 2, 'complete', ts(15), ts(15)),
     )
     fic_dir(fic_id).mkdir(parents=True, exist_ok=True)
+    db.execute('INSERT INTO fanfic_browser_requests(id,fic_id,url,status,html,final_url,created_at)'
+               ' VALUES (?,?,?,?,?,?,?)',
+               (new_id(), browser_fic_id, 'https://www.fanfiction.net/s/123/1/', 'ready',
+                '<p>Demo rendered page</p>', 'https://www.fanfiction.net/s/123/1/', ts(15)))
     chapters = [
         (1, 'Chapter 1: The Storm', 'Lyra Ashworth had weathered forty winters at the lighthouse, but never one like this.'),
         (2, 'Chapter 2: What the Light Found', 'By morning, Lyra Ashworth understood the lighthouse had been keeping its own watch all along.'),

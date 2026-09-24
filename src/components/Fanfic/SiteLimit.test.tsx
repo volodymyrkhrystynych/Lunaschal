@@ -13,6 +13,7 @@ vi.mock('@/hooks/api', () => ({
         resume: vi.fn(),
         pause: vi.fn(),
         setInterval: vi.fn(),
+        setBrowserMode: vi.fn(),
       },
     },
   },
@@ -22,13 +23,23 @@ beforeEach(() => {
   vi.mocked(api.fanfic.collections.resume).mockResolvedValue({ success: true });
   vi.mocked(api.fanfic.collections.pause).mockResolvedValue({ success: true });
 });
-function setup(paused: boolean, cooldownUntil: number) {
+function setup(
+  paused: boolean,
+  cooldownUntil: number,
+  browser?: {
+    mode: 'http' | 'browser';
+    connected: boolean;
+    needsAttention: boolean;
+    message: string | null;
+  }
+) {
   vi.mocked(api.fanfic.collections.limit).mockResolvedValue({
     paused,
     cooldownUntil,
     nextRequest: cooldownUntil,
     reason: null,
     interval: 600,
+    browser,
   });
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -50,6 +61,37 @@ it('shows an automatic cooldown without a bypass button', async () => {
   expect(
     screen.getByRole('button', { name: 'Pause FF.net downloads' })
   ).toBeTruthy();
+});
+
+it('shows browser connection and manual challenge instructions', async () => {
+  setup(false, 0, {
+    mode: 'browser',
+    connected: false,
+    needsAttention: true,
+    message: 'Complete the challenge in the download tab.',
+  });
+  expect(
+    await screen.findByText('Waiting for the browser extension to connect.')
+  ).toBeTruthy();
+  expect(
+    screen.getByText('Complete the challenge in the download tab.')
+  ).toBeTruthy();
+  expect(
+    screen.getByText(/Keep its control and download tabs open/)
+  ).toBeTruthy();
+});
+
+it('lets the user explicitly select browser retrieval', async () => {
+  setup(false, 0);
+  vi.mocked(api.fanfic.collections.setBrowserMode).mockResolvedValue({});
+  fireEvent.change(await screen.findByLabelText('FF.net download method'), {
+    target: { value: 'browser' },
+  });
+  await waitFor(() =>
+    expect(
+      vi.mocked(api.fanfic.collections.setBrowserMode).mock.calls[0]?.[0]
+    ).toBe('browser')
+  );
 });
 it('lets the user explicitly resume after a browser challenge', async () => {
   setup(true, 0);

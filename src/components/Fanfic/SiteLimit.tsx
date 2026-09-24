@@ -26,6 +26,10 @@ export function SiteLimit() {
     },
   });
   const s = status.data;
+  const browserMode = useMutation({
+    mutationFn: api.fanfic.collections.setBrowserMode,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['fanfic'] }),
+  });
   if (!s) return null;
   const cooling = s.cooldownUntil * 1000 > Date.now();
   return (
@@ -33,6 +37,45 @@ export function SiteLimit() {
       role="status"
       className="mb-3 rounded border border-amber-500/30 p-3 text-sm"
     >
+      <label>
+        FF.net download method{' '}
+        <select
+          className="rounded border border-white/20 bg-[var(--color-bg)] p-1"
+          value={s.browser?.mode ?? 'http'}
+          disabled={browserMode.isPending}
+          onChange={event =>
+            browserMode.mutate(event.target.value as 'http' | 'browser')
+          }
+        >
+          <option value="http">Direct HTTP (saved cookies)</option>
+          <option value="browser">Browser session (Chrome extension)</option>
+        </select>
+      </label>
+      {s.browser?.mode === 'browser' && (
+        <div className="my-2">
+          <p>
+            {s.browser.connected
+              ? 'Browser connected.'
+              : 'Waiting for the browser extension to connect.'}
+          </p>
+          {s.browser.needsAttention && <p>{s.browser.message}</p>}
+          <p>
+            In the Lunaschal extension, open FF.net downloads and connect. Keep
+            its control and download tabs open. Complete any challenge or
+            sign-in in the FF.net tab, then choose Continue there.
+          </p>
+          <details>
+            <summary>Browser setup</summary>
+            <p>
+              In Chrome / Chromium, open chrome://extensions, enable Developer
+              mode, and load the extension folder from your Lunaschal checkout.
+              If already installed, reload it. Set the Lunaschal server address
+              in extension Settings. Connect grants access to FF.net; your
+              cookies stay in the browser.
+            </p>
+          </details>
+        </div>
+      )}
       <p>
         {s.paused
           ? s.reason || 'FF.net downloads paused.'
@@ -92,6 +135,7 @@ export function SiteLimit() {
       {resume.error && <p role="alert">{resume.error.message}</p>}
       {pause.error && <p role="alert">{pause.error.message}</p>}
       {interval.error && <p role="alert">{interval.error.message}</p>}
+      {browserMode.error && <p role="alert">{browserMode.error.message}</p>}
     </div>
   );
 }
