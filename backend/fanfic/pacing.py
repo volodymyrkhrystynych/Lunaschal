@@ -23,7 +23,8 @@ def state():
     row = get_db().execute('SELECT * FROM fanfic_site_limits WHERE domain=?', (DOMAIN,)).fetchone()
     return dict(row) if row else {'domain': DOMAIN, 'next_request': 0, 'cooldown_until': 0,
                                 'strikes': 0, 'paused': 0, 'reason': None,
-                                'request_interval': INTERVAL}
+                                'request_interval': INTERVAL, 'retrieval_mode': 'http',
+                                'browser_client': None, 'browser_seen': 0}
 
 
 def set_interval(seconds):
@@ -47,7 +48,7 @@ def ready():
     return not s['paused'] and s['cooldown_until'] <= time.time()
 
 
-def before_request(url, *, wait_for=None):
+def before_request(url, *, wait_for=None, wait=True):
     if not applies(url):
         return
     # Called under download's fetch lock, including redirects and retries.
@@ -57,16 +58,18 @@ def before_request(url, *, wait_for=None):
             now = time.time()
             if s['paused'] or s['cooldown_until'] > now:
                 raise DeferredDownload(s['reason'] or 'FF.net downloads are paused')
-            wait = s['next_request'] - now
-            if wait <= 0:
+            remaining = s['next_request'] - now
+            if remaining <= 0:
                 db = get_db()
                 db.execute('INSERT INTO fanfic_site_limits(domain,next_request) VALUES (?,?)'
                            ' ON CONFLICT(domain) DO UPDATE SET next_request=excluded.next_request',
                            (DOMAIN, now + s['request_interval']))
                 db.commit()
                 return
+            if not wait:
+                raise DeferredDownload('Waiting for the next FF.net request time')
         # Recheck pauses promptly, including ones requested during the wait.
-        (wait_for or time.sleep)(min(wait, 1))
+        (wait_for or time.sleep)(min(remaining, 1))
 
 
 def pause():

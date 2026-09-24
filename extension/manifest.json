@@ -1,9 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Lunaschal Apply",
-  "version": "0.1.0",
-  "description": "Fill job application forms from your Lunaschal profile, and keep what you answered.",
-  "permissions": ["activeTab", "contextMenus", "scripting", "storage"],
+  "version": "0.2.0",
+  "description": "Fill job applications from Lunaschal and download FF.net stories through your browser session.",
+  "permissions": [
+    "activeTab",
+    "contextMenus",
+    "scripting",
+    "storage",
+    "webRequest"
+  ],
   "host_permissions": ["http://localhost:5000/*", "http://127.0.0.1:5000/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": {

@@ -11,6 +11,14 @@
  */
 const $ = id => document.getElementById(id);
 
+$('ffn').addEventListener('click', async () => {
+  const url = chrome.runtime.getURL('ffn.html');
+  const tabs = await chrome.tabs.query({ url });
+  if (tabs.length) await chrome.tabs.update(tabs[0].id, { active: true });
+  else await chrome.tabs.create({ url });
+  window.close();
+});
+
 function send(type, payload = {}) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type, ...payload }, response => {

@@ -7,7 +7,7 @@ import time
 from ulid import ULID
 
 from backend.db.connection import get_db
-from backend.fanfic import download, personal_tags, sites, pacing
+from backend.fanfic import download, personal_tags, sites, pacing, browser
 from backend.fanfic.sanitize import sanitize_chapter_html, html_to_text
 from backend.fanfic.xenforo import ReaderPost
 
@@ -29,6 +29,12 @@ RETRY_SCHEDULE = (60, 300, 900)
 
 def _fetch(url):
     return download._fetch(url, same_host=True)
+
+
+def _fetch_for(url, **owner):
+    if pacing.applies(url) and browser.enabled():
+        return browser.fetch(url, **owner)
+    return _fetch(url)
 
 
 def queue_work(ref: sites.WorkRef) -> tuple[str, bool]:
@@ -67,7 +73,7 @@ def run_work(fic_id: str, url: str, deep: bool = False) -> None:
         if ref.source_type == 'ao3':
             book = sites.parse_ao3(_fetch(ref.url + '?view_full_work=true&view_adult=true').text, ref)
         elif ref.source_type == 'fanfiction':
-            book = sites.parse_ffn(_fetch(ref.url).text, ref)
+            book = sites.parse_ffn(_fetch_for(ref.url, fic_id=fic_id).text, ref)
         else:
             book = sites.parse_patreon(_fetch(sites.patreon_api('posts/' + ref.id)).json())
         db.execute('UPDATE fics SET title=?,author=?,description=? WHERE id=?',
@@ -92,7 +98,7 @@ def run_work(fic_id: str, url: str, deep: bool = False) -> None:
                     download._bump_progress(fic_id, 1)
                     continue
                 page = book if position == 1 else sites.parse_ffn(
-                    _fetch(f'https://www.fanfiction.net/s/{ref.id}/{position}/').text, ref, position)
+                    _fetch_for(f'https://www.fanfiction.net/s/{ref.id}/{position}/', fic_id=fic_id).text, ref, position)
                 chapter = page['chapters'][0]
                 chapter_url = f'https://www.fanfiction.net/s/{ref.id}/{position}/'
             else:
@@ -130,6 +136,7 @@ def run_work(fic_id: str, url: str, deep: bool = False) -> None:
         db.commit()
         download._update_progress(fic_id, phase='paused', error=str(exc), done=True)
     except Exception as exc:
+        browser.clear(fic_id=fic_id)
         download._fail_fic(fic_id, str(exc))
 
 
@@ -174,7 +181,7 @@ def run_scan(scan_id: str) -> None:
             if url in visited:
                 raise ValueError('The site repeated a collection page; scan stopped to avoid a loop')
             visited.add(url)
-            response = _fetch(url)
+            response = _fetch_for(url, scan_id=scan_id)
             if any(part in str(response.url) for part in ('/login', '/users/login')):
                 raise ValueError('Session expired; update your site cookies in Settings')
             if row['site'] == 'patreon.com':
@@ -195,6 +202,7 @@ def run_scan(scan_id: str) -> None:
                        'pages=?,attempts=0,retry_after=0,updated_at=? WHERE id=?',
                        (json.dumps(urls), found, imported, skipped, pages, int(time.time()), scan_id))
             db.commit()
+            browser.clear(scan_id=scan_id)
         db.execute("UPDATE fanfic_collection_scans SET status='complete',error=NULL WHERE id=?", (scan_id,))
         db.commit()
     except pacing.DeferredDownload as exc:
@@ -224,7 +232,8 @@ _RUNNABLE_SQL = ("SELECT id FROM fanfic_collection_scans WHERE status='pending'"
                  ' AND retry_after<=unixepoch()'
                  ' AND NOT EXISTS (SELECT 1 FROM fanfic_site_limits l'
                  ' WHERE l.domain=fanfic_collection_scans.site'
-                 ' AND (l.paused=1 OR l.cooldown_until>unixepoch()))')
+                 ' AND (l.paused=1 OR l.cooldown_until>unixepoch()))'
+                 + browser.runnable_sql('fanfic_collection_scans.site'))
 
 
 def _next_retry_wait() -> float | None:
