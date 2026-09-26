@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Lunaschal — FF.net downloads</title>
+    <link rel="stylesheet" href="ffn.css" />
+  </head>
+  <body>
+    <main>
+      <h1>FF.net downloads</h1>
+      <p>
+        Keep this control tab and the FF.net download tab open. Pages load using
+        this browser’s signed-in session. You can use other tabs while the
+        import runs.
+      </p>
+      <p>
+        Configure the Lunaschal address in extension Settings first. Connect
+        enables browser retrieval; your interval and pause settings still apply.
+      </p>
+      <button id="settings">Settings</button>
+      <button id="connect">Connect browser</button>
+      <button id="disconnect" disabled>Disconnect</button>
+      <p id="status" role="status">Not connected.</p>
+      <p id="error" role="alert"></p>
+      <button id="open" disabled>Open FF.net tab</button>
+      <button id="continue" disabled>
+        Continue after verification / sign-in
+      </button>
+      <button id="retry" disabled>Retry page after interval</button>
+      <button id="resume" hidden>Resume paused downloads</button>
+      <p>
+        If a challenge appears, complete it yourself in the FF.net tab, then
+        choose Continue. If you land on a different page after signing in,
+        choose Retry. Disconnect leaves your import queued; it does not switch
+        back to HTTP downloads.
+      </p>
+    </main>
+    <script type="module" src="ffn.js"></script>
+  </body>
+</html>

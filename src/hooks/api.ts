@@ -3634,6 +3634,12 @@ export const api = {
           paused: boolean;
           cooldownUntil: number;
           nextRequest: number;
+          browser?: {
+            mode: 'http' | 'browser';
+            connected: boolean;
+            needsAttention: boolean;
+            message: string | null;
+          };
           reason: string | null;
           interval: number;
         }>('/api/fanfic/site-limit'),
@@ -3641,6 +3647,8 @@ export const api = {
       pause: () => post<{ success: boolean }>('/api/fanfic/site-limit/pause'),
       setInterval: (interval: number) =>
         put('/api/fanfic/site-limit', { interval }),
+      setBrowserMode: (mode: 'http' | 'browser') =>
+        put('/api/fanfic/browser', { mode }),
       list: () => get<CollectionScan[]>('/api/fanfic/collections'),
       start: (site: string, collection: string, username: string) =>
         post<{ id: string }>('/api/fanfic/collections', {

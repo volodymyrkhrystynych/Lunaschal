@@ -719,10 +719,11 @@ def _finalize_fic(db, fic_id: str, cover: str | None) -> None:
     now = int(time.time())
     db.execute(
         'UPDATE fics SET chapter_count=?, word_count=?, download_status=?,'
-        ' download_error=NULL, last_checked_at=?, updated_at=?,'
+        ' download_error=NULL, deep_pending=0, last_checked_at=?, updated_at=?,'
         ' cover_path=COALESCE(cover_path, ?) WHERE id=?',
         (agg['n'], agg['words'], 'complete', now, now, cover, fic_id),
     )
+    db.execute('DELETE FROM fanfic_browser_requests WHERE fic_id=?', (fic_id,))
     db.commit()
 
 
@@ -1171,6 +1172,7 @@ def start_drain() -> None:
 
 
 def run_drain_pending() -> None:
+    from backend.fanfic import browser
     db = get_db()
     while True:
         row = db.execute(
@@ -1178,13 +1180,14 @@ def run_drain_pending() -> None:
             " AND download_status != 'downloading'"
             " AND NOT EXISTS (SELECT 1 FROM fanfic_site_limits l WHERE l.domain=fics.site"
             " AND (l.paused=1 OR l.cooldown_until>unixepoch()))"
+            + browser.runnable_sql('fics.site') +
             ' ORDER BY updated_at LIMIT 1').fetchone()
         if not row:
             return
         fic_id = row['id']
         deep = bool(row['deep_pending'])
         db.execute(
-            'UPDATE fics SET update_pending=0, deep_pending=0,'
+            'UPDATE fics SET update_pending=0,'
             " download_status='downloading' WHERE id=?",
             (fic_id,))
         db.commit()

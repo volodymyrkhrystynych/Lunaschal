@@ -7,7 +7,7 @@ from ulid import ULID
 
 from backend.db.connection import get_db, row_to_dict
 from backend.fanfic import download, storage, xenforo
-from backend.fanfic import collections, sites
+from backend.fanfic import collections, sites, browser
 from backend.fanfic.download import FetchBlockedError
 from backend.fanfic.xenforo import KNOWN_SITES, UnsupportedUrlError
 
@@ -613,6 +613,7 @@ def check_updates(fic_id):
     if row['update_pending'] and not (deep and not row['deep_pending']):
         db.execute('UPDATE fics SET update_pending=0, deep_pending=0 WHERE id=?', (fic_id,))
         db.commit()
+        browser.clear(fic_id=fic_id)
         return jsonify({'id': fic_id, 'queued': False})
     db.execute('UPDATE fics SET update_pending=1, deep_pending=? WHERE id=?',
                (1 if deep else 0, fic_id))
@@ -634,7 +635,94 @@ def site_limit():
     s = pacing.state()
     return jsonify({'paused': bool(s['paused']), 'cooldownUntil': s['cooldown_until'],
                     'reason': s['reason'], 'interval': s['request_interval'],
+                    'browser': browser.status(),
                     'nextRequest': max(s['next_request'], s['cooldown_until'])})
+
+
+def _browser_body():
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        raise ValueError('Expected a JSON object')
+    return body
+
+
+@bp.put('/browser')
+def browser_mode():
+    try:
+        browser.set_mode(_browser_body().get('mode'))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    collections.start_scans()
+    download.start_drain()
+    return jsonify(browser.status())
+
+
+@bp.post('/browser/connect')
+def browser_connect():
+    try:
+        result = browser.connect(_browser_body().get('clientId'))
+    except browser.BrowserConflict as exc:
+        return jsonify({'error': str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    collections.start_scans()
+    download.start_drain()
+    return jsonify(result)
+
+
+@bp.post('/browser/poll')
+def browser_poll():
+    try:
+        result = browser.poll(_browser_body().get('clientId'))
+    except browser.BrowserConflict as exc:
+        return jsonify({'error': str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    # No long-lived HTTP request or model worker is held while Firefox/Chrome
+    # waits for a page. The existing durable queues consume the reply.
+    collections.start_scans()
+    download.start_drain()
+    return jsonify(result)
+
+
+@bp.post('/browser/disconnect')
+def browser_disconnect():
+    try:
+        body = _browser_body()
+        client_id = body.get('clientId')
+        if not isinstance(client_id, str):
+            raise ValueError('Invalid browser connection identifier')
+        browser.disconnect(client_id)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({'success': True})
+
+
+@bp.post('/browser/<request_id>/result')
+def browser_result(request_id):
+    if request.content_length is None or request.content_length > browser.MAX_HTML * 2:
+        return jsonify({'error': 'Browser response is too large'}), 413
+    try:
+        body = _browser_body()
+        browser.submit(request_id, body.get('clientId'), body)
+    except browser.BrowserConflict as exc:
+        return jsonify({'error': str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    collections.start_scans()
+    download.start_drain()
+    return jsonify({'success': True})
+
+
+@bp.post('/browser/<request_id>/retry')
+def browser_retry(request_id):
+    try:
+        browser.retry(request_id, _browser_body().get('clientId'))
+    except browser.BrowserConflict as exc:
+        return jsonify({'error': str(exc)}), 409
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify({'success': True})
 
 
 @bp.put('/site-limit')
@@ -673,7 +761,7 @@ def start_collection_scan():
     site = body.get('site', '')
     if site not in sites.DOMAINS:
         return jsonify({'error': 'Unsupported collection site'}), 400
-    if not download._cookie_for(site):
+    if not (site == 'fanfiction.net' and browser.enabled()) and not download._cookie_for(site):
         return jsonify({'error': 'Save your session in Settings → Fanfic site cookies first'}), 400
     try:
         scan_id = collections.create_scan(site, body.get('collection', 'all'), body.get('username', '').strip())

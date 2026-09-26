@@ -37,7 +37,8 @@ export function CollectionImport() {
   return (
     <div className="space-y-3">
       <p className="text-sm text-[var(--color-text-muted)]">
-        Save your logged-in session in Settings → Fanfic site cookies first.
+        For FF.net browser downloads, connect the extension to your signed-in
+        browser. Direct HTTP and other sites use Settings → Fanfic site cookies.
         Scans queue full stories for download and skip duplicates. You can
         resume a stopped scan. AO3 imports bookmarked works and individual work
         subscriptions. Patreon imports text posts you can access; locked posts

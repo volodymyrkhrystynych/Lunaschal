@@ -780,6 +780,9 @@ CREATE TABLE IF NOT EXISTS fanfic_bookmark_scans (
 CREATE TABLE IF NOT EXISTS fanfic_site_limits (
     domain TEXT PRIMARY KEY,
     request_interval INTEGER NOT NULL DEFAULT 600,
+    retrieval_mode TEXT NOT NULL DEFAULT 'http' CHECK(retrieval_mode IN ('http','browser')),
+    browser_client TEXT,
+    browser_seen REAL NOT NULL DEFAULT 0,
     next_request REAL NOT NULL DEFAULT 0,
     cooldown_until REAL NOT NULL DEFAULT 0,
     strikes INTEGER NOT NULL DEFAULT 0,
@@ -803,6 +806,26 @@ CREATE TABLE IF NOT EXISTS fanfic_collection_scans (
     attempts INTEGER NOT NULL DEFAULT 0,
     updated_at INTEGER NOT NULL,
     UNIQUE(site, collection, username)
+);
+
+-- Rendered pages awaiting the existing import worker. Kept until its owner
+-- checkpoints/completes, so restarts never depend on an in-memory browser reply.
+CREATE TABLE IF NOT EXISTS fanfic_browser_requests (
+    id TEXT PRIMARY KEY,
+    fic_id TEXT REFERENCES fics(id) ON DELETE CASCADE,
+    scan_id TEXT REFERENCES fanfic_collection_scans(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','leased','blocked','ready')),
+    attempt_id TEXT,
+    client_id TEXT,
+    lease_until REAL NOT NULL DEFAULT 0,
+    html TEXT,
+    final_url TEXT,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    CHECK ((fic_id IS NOT NULL) != (scan_id IS NOT NULL)),
+    UNIQUE(fic_id, url),
+    UNIQUE(scan_id, url)
 );
 
 CREATE TABLE IF NOT EXISTS fic_folders (

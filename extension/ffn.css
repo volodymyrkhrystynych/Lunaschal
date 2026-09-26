@@ -1,0 +1,29 @@
+:root {
+  color-scheme: dark;
+  font:
+    16px/1.5 system-ui,
+    sans-serif;
+  background: #18181b;
+  color: #f4f4f5;
+}
+main {
+  max-width: 48rem;
+  margin: 3rem auto;
+  padding: 0 1rem;
+}
+button {
+  padding: 0.6rem 0.9rem;
+  margin: 0.25rem;
+  border: 1px solid #71717a;
+  border-radius: 0.5rem;
+  background: #27272a;
+  color: inherit;
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+#error {
+  color: #fca5a5;
+}

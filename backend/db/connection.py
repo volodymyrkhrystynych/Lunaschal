@@ -87,6 +87,14 @@ def _ensure_fanfic_request_interval(db):
     if 'request_interval' not in cols:
         db.execute('ALTER TABLE fanfic_site_limits ADD COLUMN request_interval INTEGER NOT NULL DEFAULT 600')
         db.commit()
+    for name, definition in (
+        ('retrieval_mode', "TEXT NOT NULL DEFAULT 'http'"),
+        ('browser_client', 'TEXT'),
+        ('browser_seen', 'REAL NOT NULL DEFAULT 0'),
+    ):
+        if name not in cols:
+            db.execute(f'ALTER TABLE fanfic_site_limits ADD COLUMN {name} {definition}')
+    db.commit()
 
 
 def _ensure_workout_quick_entry(db):

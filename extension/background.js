@@ -53,7 +53,11 @@ async function api(path, { method = 'GET', body } = {}) {
     parsed = null;
   }
   if (!response.ok) {
-    throw new Error(parsed?.error || `Lunaschal returned ${response.status}.`);
+    const error = new Error(
+      parsed?.error || `Lunaschal returned ${response.status}.`
+    );
+    error.status = response.status;
+    throw error;
   }
   return parsed;
 }
@@ -216,6 +220,39 @@ async function resumeFile(applicationId, ext = 'pdf') {
 // --------------------------------------------------------------------------
 
 const handlers = {
+  async ffnConnect({ clientId }) {
+    return api('/api/fanfic/browser/connect', {
+      method: 'POST',
+      body: { clientId },
+    });
+  },
+  async ffnPoll({ clientId }) {
+    return api('/api/fanfic/browser/poll', {
+      method: 'POST',
+      body: { clientId },
+    });
+  },
+  async ffnDisconnect({ clientId }) {
+    return api('/api/fanfic/browser/disconnect', {
+      method: 'POST',
+      body: { clientId },
+    });
+  },
+  async ffnResult({ requestId, clientId, result }) {
+    return api(`/api/fanfic/browser/${encodeURIComponent(requestId)}/result`, {
+      method: 'POST',
+      body: { ...result, clientId },
+    });
+  },
+  async ffnRetry({ requestId, clientId }) {
+    return api(`/api/fanfic/browser/${encodeURIComponent(requestId)}/retry`, {
+      method: 'POST',
+      body: { clientId },
+    });
+  },
+  async ffnResume() {
+    return api('/api/fanfic/site-limit/resume', { method: 'POST' });
+  },
   async ping() {
     return { ok: true };
   },
@@ -335,6 +372,15 @@ const handlers = {
 };
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Only our control page can claim pages or submit HTML. A content script
+  // injected into a job site must not be able to drive the FF.net queue.
+  if (
+    message?.type?.startsWith('ffn') &&
+    sender.url !== chrome.runtime.getURL('ffn.html')
+  ) {
+    sendResponse({ ok: false, error: 'Open the FF.net download control tab.' });
+    return false;
+  }
   const handler = handlers[message?.type];
   if (!handler) return false;
 
@@ -347,9 +393,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handler({ ...message, tabId, windowId, url })
     .then(result => sendResponse({ ok: true, ...result }))
     .catch(error =>
-      sendResponse({ ok: false, error: String(error.message || error) })
+      sendResponse({
+        ok: false,
+        error: String(error.message || error),
+        status: error.status,
+      })
     );
 
   // Keeps the message channel open for the async reply above.
   return true;
 });
+
+// Only the explicitly assigned download tab's main document is observed.
+// Cookies and other browsing traffic are never read or sent to Lunaschal.
+chrome.webRequest.onHeadersReceived.addListener(
+  details => {
+    chrome.storage.session
+      .get('ffnTabId')
+      .then(({ ffnTabId }) => {
+        if (details.tabId !== ffnTabId) return;
+        const header = name =>
+          details.responseHeaders?.find(h => h.name.toLowerCase() === name)
+            ?.value;
+        return chrome.storage.session.set({
+          ffnResponse: {
+            tabId: details.tabId,
+            url: details.url,
+            status: details.statusCode,
+            retryAfter: header('retry-after'),
+            challenge: header('cf-mitigated') === 'challenge',
+          },
+        });
+      })
+      .catch(error => console.error('FF.net response:', error));
+  },
+  { urls: ['https://www.fanfiction.net/*'], types: ['main_frame'] },
+  ['responseHeaders']
+);
