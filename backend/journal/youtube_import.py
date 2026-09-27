@@ -109,6 +109,46 @@ def _set(attachment_id: str, **columns) -> None:
     db.commit()
 
 
+def _fetch_extras(directory: Path, target: str, meta: dict) -> None:
+    """Captions and poster, best-effort: a failure here is logged, not raised.
+
+    Everything this fetches is optional — `_queue_words` transcribes the audio
+    when there is no caption file, and the card draws without a poster — so a
+    rate-limited or missing track must not reach the caller, whose video is
+    already on disk.
+    """
+    lang = youtube.preferred_sub_lang(meta)
+    args = ['--no-playlist', '--no-warnings', '--skip-download']
+    if lang:
+        # `--write-auto-subs` only when the chosen track *is* an automatic one:
+        # with both flags set and a manual track picked, yt-dlp fetches the
+        # auto version of the same language too — a second request for a
+        # transcript we already have, on the API that rate-limited us.
+        manual = meta.get('subtitles')
+        auto = not (isinstance(manual, dict) and lang in manual)
+        args += [
+            '--write-subs',
+            *(['--write-auto-subs'] if auto else []),
+            '--sub-langs', lang,
+            '--sub-format', 'vtt/best',
+            '--convert-subs', 'vtt',
+        ]
+    args += [
+        '--write-thumbnail', '--convert-thumbnails', 'jpg',
+        '-o', str(directory / 'video.%(ext)s'),
+        target,
+    ]
+    try:
+        proc = run_ytdlp(args, YTDLP_METADATA_TIMEOUT)
+    except Exception as e:  # noqa: BLE001 — the video is already downloaded
+        logger.warning('could not fetch captions/poster for %s: %s', target, e)
+        return
+    if proc.returncode != 0:
+        logger.warning(
+            'could not fetch captions/poster for %s: %s', target, ytdlp_error(proc)
+        )
+
+
 def _pick_subtitle(directory: Path) -> Path | None:
     """The caption file to read, if yt-dlp wrote one.
 
@@ -201,14 +241,6 @@ def import_youtube(attachment_id: str, entry_id: str, url: str) -> None:
                 '--no-playlist', '--no-warnings', '--no-part',
                 '-f', YTDLP_FORMAT,
                 '--merge-output-format', 'mp4',
-                # Captions in the same invocation: a second yt-dlp run would
-                # re-resolve the video and can disagree with the first about
-                # which tracks exist.
-                '--write-subs', '--write-auto-subs',
-                '--sub-langs', 'en.*',
-                '--sub-format', 'vtt/best',
-                '--convert-subs', 'vtt',
-                '--write-thumbnail', '--convert-thumbnails', 'jpg',
                 '-o', str(directory / 'video.%(ext)s'),
                 target,
             ],
@@ -217,6 +249,20 @@ def import_youtube(attachment_id: str, entry_id: str, url: str) -> None:
         if dl_proc.returncode != 0:
             _fail(attachment_id, entry_id, ytdlp_error(dl_proc))
             return
+
+        # Captions and poster in a *second*, best-effort invocation.
+        #
+        # They used to ride along with the video, which cost a whole import
+        # whenever they failed: yt-dlp writes subtitles and thumbnails
+        # **before** it fetches the media, so a single `HTTP Error 429` on one
+        # caption track aborted the run before a byte of video was downloaded.
+        # That contradicted the rule the rest of this file already follows —
+        # words are the bonus half, and their absence is not a failed import.
+        # The cost of a separate run is that it re-resolves the video and can
+        # disagree with the first about which tracks exist; the worst that
+        # produces is a missing caption file, which `_queue_words` handles by
+        # transcribing the audio instead.
+        _fetch_extras(directory, target, meta)
 
         # yt-dlp picks the container, so find what it actually wrote rather than
         # assuming --merge-output-format applied (it only does when a merge was

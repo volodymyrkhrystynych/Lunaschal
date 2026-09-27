@@ -62,3 +62,32 @@ def watch_url(video_id: str) -> str:
     import into a playlist download behind `--no-playlist`'s back.
     """
     return f'https://www.youtube.com/watch?v={video_id}'
+
+
+def preferred_sub_lang(meta: dict) -> str | None:
+    """The one caption track to ask yt-dlp for, from its `-J` metadata.
+
+    Asking for a *family* (`--sub-langs 'en.*'`) is what earned a
+    `HTTP Error 429: Too Many Requests` on 'en-en-GB': YouTube lists the
+    auto-translated variants (`en-en-GB`, `en-en-US`, …) beside the real `en`,
+    and yt-dlp then fetches every one of them — a dozen caption requests for a
+    transcript that only needs one. The metadata pass has already told us which
+    tracks exist, so name a single exact language instead.
+
+    Manual captions beat automatic ones (they are punctuated and correct), and
+    within each the shortest matching tag wins, so a plain `en` beats `en-orig`
+    and `en-GB`. Returns None when the upload has no English track at all, and
+    then nothing is requested rather than something that cannot be there.
+    """
+    for key in ('subtitles', 'automatic_captions'):
+        tracks = meta.get(key)
+        if not isinstance(tracks, dict):
+            continue
+        english = [
+            lang for lang in tracks
+            if isinstance(lang, str)
+            and (lang == 'en' or lang.lower().startswith(('en-', 'en_')))
+        ]
+        if english:
+            return sorted(english, key=lambda lang: (len(lang), lang))[0]
+    return None
