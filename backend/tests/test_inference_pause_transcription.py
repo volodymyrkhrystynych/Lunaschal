@@ -55,7 +55,24 @@ def _transcribes(monkeypatch, *backends):
     )
 
 
-def _post_draft(client, draft_id='01ARZ3NDEKTSV4RRFFQ69G5FAV'):
+DEFAULT_DRAFT_ID = '01ARZ3NDEKTSV4RRFFQ69G5FAV'
+
+
+def _settled(draft_id=DEFAULT_DRAFT_ID):
+    """The draft once its job has run, in API shape.
+
+    Not the POST's 201 body, which describes the draft as created —
+    `processing`, no entry — because `create_draft` reads that row *before*
+    handing the clip to the worker, so the two never share one sqlite3
+    connection at the same instant (see the race tests in
+    test_journal_voice_drafts.py). The `_inline_draft_worker` fixture runs the
+    job inside that POST, so the work is finished by the time the test holds
+    the response — but the response was taken before it started.
+    """
+    return voice_drafts._draft_dict(voice_drafts._load_draft(draft_id))
+
+
+def _post_draft(client, draft_id=DEFAULT_DRAFT_ID):
     return client.post(
         '/api/journal/voice-drafts',
         data={'id': draft_id, 'audio': (io.BytesIO(b'\x00' * 2048),
@@ -67,8 +84,9 @@ def _post_draft(client, draft_id='01ARZ3NDEKTSV4RRFFQ69G5FAV'):
 def test_a_clip_recorded_while_paused_still_becomes_an_entry(paused, monkeypatch):
     _transcribes(monkeypatch, 'parakeet', 'local')
 
-    body = _post_draft(paused).get_json()
+    assert _post_draft(paused).status_code == 201
 
+    body = _settled()
     assert body['status'] == 'done'
     assert body['entryId'] is not None
     entry = paused.get(f"/api/journal/{body['entryId']}").get_json()
@@ -81,7 +99,8 @@ def test_a_clip_recorded_while_paused_still_becomes_an_entry(paused, monkeypatch
 def test_the_missed_polish_is_queued_rather_than_dropped(paused, monkeypatch):
     _transcribes(monkeypatch, 'parakeet')
 
-    entry_id = _post_draft(paused).get_json()['entryId']
+    _post_draft(paused)
+    entry_id = _settled()['entryId']
 
     row = get_db().execute(
         "SELECT * FROM llm_jobs WHERE kind='journal.polish' AND target_id=?",
@@ -96,7 +115,8 @@ def test_nothing_is_queued_when_the_merge_actually_ran(client, monkeypatch):
     monkeypatch.setattr('backend.journal.voice_drafts.merge_voice_draft',
                         lambda c, context=None: 'Merged entry text.')
 
-    entry_id = _post_draft(client).get_json()['entryId']
+    _post_draft(client)
+    entry_id = _settled()['entryId']
 
     entry = client.get(f'/api/journal/{entry_id}').get_json()
     assert entry['content'] == 'Merged entry text.'
@@ -107,7 +127,8 @@ def test_nothing_is_queued_when_the_merge_actually_ran(client, monkeypatch):
 
 def test_the_queued_polish_runs_on_resume(paused, monkeypatch):
     _transcribes(monkeypatch, 'parakeet')
-    entry_id = _post_draft(paused).get_json()['entryId']
+    _post_draft(paused)
+    entry_id = _settled()['entryId']
 
     from backend.routes import settings as settings_routes
     monkeypatch.setattr(settings_routes, '_router_post', lambda *a, **k: (True, None))

@@ -85,6 +85,33 @@ def _load_draft(draft_id: str):
     ).fetchone()
 
 
+def _load_draft_for_work(draft_id: str):
+    """`_load_draft`, but a None is confirmed before it is believed.
+
+    A missing row is a legitimate state — `delete_draft` can discard a draft
+    while its job still sits in the executor's queue — so the worker has to be
+    able to give up quietly. It must not give up on a *spurious* None, though,
+    and that is exactly what the shared sqlite3 connection produced: a
+    concurrent `execute` on the same connection resets the statement under this
+    cursor, and `fetchone()` then answers None for a row that is sitting right
+    there. Believing it is what left two drafts sitting in `processing` with
+    nothing running behind them and nothing in the log.
+
+    Deletion is permanent, so a second read can only ever *add* information: if
+    the row comes back, the first answer was the race and this says so out loud.
+    """
+    row = _load_draft(draft_id)
+    if row is not None:
+        return row
+    row = _load_draft(draft_id)
+    if row is not None:
+        logger.warning(
+            'Draft %s read back as missing and then present — a concurrent DB '
+            'read clobbered the first query; processing it anyway', draft_id,
+        )
+    return row
+
+
 def _draft_dict(row) -> dict:
     d = row_to_dict(row)
     d['candidates'] = json.loads(d['candidates']) if d.get('candidates') else []
@@ -163,8 +190,22 @@ def create_draft(draft_id: str, file) -> tuple[dict | None, tuple[str, int] | No
         # Lost a race against another replay of the same id.
         return _draft_dict(_load_draft(draft_id)), None
 
+    # Read the row back *before* handing the draft to the worker, not after.
+    # backend/db/connection.py keeps one sqlite3 connection for the whole
+    # process (`check_same_thread=False`, no lock), and `_process_draft_inner`'s
+    # first act is the same `_load_draft` this line makes — so submitting first
+    # put two threads inside one connection microseconds apart. That collision
+    # is not theoretical: it raised `sqlite3.InterfaceError: bad parameter or
+    # other API misuse` here (a 500 on a POST whose row was already committed)
+    # while clobbering the worker's cursor, so *its* fetchone() came back None
+    # and `_process_draft_inner` took its "row is gone" early return — silently,
+    # leaving the draft `processing` with no thread behind it until a restart
+    # reset it to `error`. The route thread usually won that race by a
+    # millisecond, which is why a draft normally finishes in seconds and then
+    # every so often never finishes at all.
+    draft = _draft_dict(_load_draft(draft_id))
     _run_bg(lambda: _process_draft(draft_id))
-    return _draft_dict(_load_draft(draft_id)), None
+    return draft, None
 
 
 def list_drafts() -> list[dict]:
@@ -312,8 +353,13 @@ def _process_draft(draft_id: str) -> None:
 
 
 def _process_draft_inner(draft_id: str) -> None:
-    row = _load_draft(draft_id)
+    row = _load_draft_for_work(draft_id)
     if row is None:
+        # Deleted while it sat in the queue — the only innocent reason for a
+        # missing row, and `_load_draft_for_work` has already ruled out the
+        # guilty one. Logged rather than dropped: this used to be the silent
+        # exit that left a draft `processing` for ever.
+        logger.info('Voice draft %s is gone — nothing to process', draft_id)
         return
     if row['entry_id']:
         # Already promoted — e.g. a crash between creating the entry and
