@@ -419,6 +419,24 @@ def test_parse_video_id(url, expected):
     assert youtube.parse_video_id(url) == expected
 
 
+@pytest.mark.parametrize('meta,expected', [
+    # A manual track beats the automatic ones even when it is not English-plain.
+    ({'subtitles': {'en-GB': [], 'fr': []},
+      'automatic_captions': {'en': []}}, 'en-GB'),
+    # Within one set the shortest English tag wins: `en` over `en-orig` and
+    # over the auto-translated `en-en-GB` that returned 429.
+    ({'automatic_captions': {'en-en-GB': [], 'en-orig': [], 'en': []}}, 'en'),
+    ({'automatic_captions': {'en-orig': [], 'en-en-GB': []}}, 'en-orig'),
+    # Nothing English: ask for no captions rather than something absent.
+    ({'subtitles': {}, 'automatic_captions': {'de': [], 'fr': []}}, None),
+    ({}, None),
+    # `endonym`-style keys must not count as English.
+    ({'automatic_captions': {'eng': []}}, None),
+])
+def test_preferred_sub_lang(meta, expected):
+    assert youtube.preferred_sub_lang(meta) == expected
+
+
 # --- notes, deletion, guards ---
 
 def test_binding_a_note_and_touching_the_open_time(client):

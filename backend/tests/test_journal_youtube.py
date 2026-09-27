@@ -104,25 +104,37 @@ def entry_id(client):
 
 
 def _fake_ytdlp(monkeypatch, *, captions=CAPTIONS, thumbnail=True, video='video.mp4',
-                meta_rc=0, dl_rc=0, stderr='', title='But what is a neural network?',
-                duration=1140):
+                meta_rc=0, dl_rc=0, extras_rc=0, stderr='',
+                title='But what is a neural network?', duration=1140,
+                sub_langs=('en', 'en-orig', 'en-en-GB')):
+    """Three invocations, in the order the importer makes them: `-J` metadata,
+    the video download, then the best-effort captions/poster pass.
+
+    The auto-caption list carries the translated `en-en-GB` variant on purpose
+    — it is the one that returned 429 when the importer asked for the whole
+    `en.*` family.
+    """
     calls = []
 
     def run(args, timeout):
         calls.append(args)
         if '-J' in args:
+            meta = {'title': title, 'duration': duration}
+            if sub_langs:
+                meta['automatic_captions'] = {lang: [] for lang in sub_langs}
             return subprocess.CompletedProcess(
-                args, meta_rc,
-                json.dumps({'title': title, 'duration': duration}), stderr,
+                args, meta_rc, json.dumps(meta), stderr,
             )
+        directory = Path(args[args.index('-o') + 1]).parent
+        if '--skip-download' in args:
+            if extras_rc == 0:
+                if captions is not None:
+                    (directory / 'video.en.vtt').write_text(captions, encoding='utf-8')
+                if thumbnail:
+                    (directory / 'video.jpg').write_bytes(b'\xff\xd8\xff\xe0jpeg')
+            return subprocess.CompletedProcess(args, extras_rc, '', stderr)
         if dl_rc == 0:
-            out = Path(args[args.index('-o') + 1])
-            directory = out.parent
             (directory / video).write_bytes(b'\x00\x00\x00 ftypmp42')
-            if captions is not None:
-                (directory / 'video.en.vtt').write_text(captions, encoding='utf-8')
-            if thumbnail:
-                (directory / 'video.jpg').write_bytes(b'\xff\xd8\xff\xe0jpeg')
         return subprocess.CompletedProcess(args, dl_rc, '', stderr)
 
     monkeypatch.setattr(youtube_import, 'run_ytdlp', run)
@@ -300,13 +312,18 @@ def test_the_download_asks_for_captions_a_poster_and_720p(
     calls = _fake_ytdlp(monkeypatch)
     _attach(client, entry_id)
 
-    dl = calls[1]
-    assert '--write-auto-subs' in dl and '--write-subs' in dl
-    assert '--write-thumbnail' in dl
+    dl, extras = calls[1], calls[2]
     assert '--no-playlist' in dl
     fmt = dl[dl.index('-f') + 1]
     assert fmt == ytdlp.YTDLP_FORMAT
     assert f'height<={ytdlp.YTDLP_MAX_HEIGHT}' in fmt
+
+    # Captions and poster ride in their own pass, so a rate-limited caption
+    # track cannot abort the video — see the two tests below.
+    assert '--skip-download' in extras
+    assert '--write-auto-subs' in extras and '--write-subs' in extras
+    assert '--write-thumbnail' in extras
+    assert '--write-subs' not in dl and '--write-thumbnail' not in dl
 
 
 def test_the_video_is_served_with_range_support(
@@ -569,6 +586,99 @@ def test_a_broken_caption_file_does_not_undo_a_finished_download(
     assert row['import_status'] == 'ready'
     assert row['import_error'] is None
     assert Path(row['path']).is_file()
+
+
+def test_a_rate_limited_caption_pass_still_leaves_a_playable_video(
+    client, entry_id, archive_root, monkeypatch, sync_import
+):
+    """The reported failure: `HTTP Error 429` on one caption track.
+
+    yt-dlp writes subtitles before it fetches the media, so while captions rode
+    along with the video a 429 aborted the run before a byte was downloaded and
+    the whole import landed on the row as an error. Captions are the bonus
+    half; the video is what was asked for.
+    """
+    jobs = _jobs(monkeypatch)
+    _fake_ytdlp(
+        monkeypatch, extras_rc=1,
+        stderr="ERROR: Unable to download video subtitles for 'en-en-GB': "
+               'HTTP Error 429: Too Many Requests',
+    )
+    monkeypatch.setattr(
+        journal_routes, '_do_attachment_audio', lambda _p: 'Spoken words.'
+    )
+
+    a = _attach(client, entry_id).get_json()
+    row = _row(a['id'])
+
+    assert row['import_status'] == 'ready'
+    assert row['import_error'] is None
+    assert Path(row['path']).is_file()
+    # No caption file, so the words come from the audio instead.
+    assert [k for k, _ in jobs] == ['journal.transcribe_attachment']
+
+
+def test_the_caption_pass_names_one_language_rather_than_the_en_family(
+    client, entry_id, archive_root, monkeypatch, sync_import
+):
+    """`--sub-langs en.*` matches every auto-translated `en-…` track, so one
+    import fired a caption request per variant — which is what earned the 429.
+    The metadata pass already lists the tracks, so ask for exactly one."""
+    _jobs(monkeypatch)
+    calls = _fake_ytdlp(monkeypatch, sub_langs=('en-en-GB', 'en-orig', 'en', 'fr'))
+
+    _attach(client, entry_id)
+
+    extras = calls[2]
+    assert extras[extras.index('--sub-langs') + 1] == 'en'
+
+
+def test_a_manual_track_is_not_also_fetched_automatically(
+    client, entry_id, archive_root, monkeypatch, sync_import
+):
+    """Both flags with a manual track chosen fetches the auto version of the
+    same language too — a second request for a transcript we already have, on
+    the endpoint that rate-limited us."""
+    _jobs(monkeypatch)
+    calls = []
+    real_meta = {'title': 'T', 'duration': 10,
+                 'subtitles': {'en': []}, 'automatic_captions': {'en': []}}
+
+    def run(args, timeout):
+        calls.append(args)
+        if '-J' in args:
+            return subprocess.CompletedProcess(args, 0, json.dumps(real_meta), '')
+        d = Path(args[args.index('-o') + 1]).parent
+        if '--skip-download' in args:
+            (d / 'video.en.vtt').write_text(CAPTIONS, encoding='utf-8')
+        else:
+            (d / 'video.mp4').write_bytes(b'\x00\x00\x00 ftypmp42')
+        return subprocess.CompletedProcess(args, 0, '', '')
+
+    monkeypatch.setattr(youtube_import, 'run_ytdlp', run)
+    _attach(client, entry_id)
+
+    extras = calls[2]
+    assert '--write-subs' in extras
+    assert '--write-auto-subs' not in extras
+
+
+def test_an_upload_with_no_english_track_asks_for_no_captions_at_all(
+    client, entry_id, archive_root, monkeypatch, sync_import
+):
+    _jobs(monkeypatch)
+    calls = _fake_ytdlp(monkeypatch, captions=None, sub_langs=('de', 'fr'))
+    monkeypatch.setattr(
+        journal_routes, '_do_attachment_audio', lambda _p: 'Spoken words.'
+    )
+
+    a = _attach(client, entry_id).get_json()
+
+    extras = calls[2]
+    assert '--sub-langs' not in extras
+    # The poster is still worth a pass of its own.
+    assert '--write-thumbnail' in extras
+    assert _row(a['id'])['import_status'] == 'ready'
 
 
 # --- deletion ---------------------------------------------------------------
