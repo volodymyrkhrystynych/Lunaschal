@@ -67,6 +67,46 @@ def test_accepting_a_calendar_proposal_inserts_the_event(client):
     assert _metadata(client, msg_id)['proposals'][0]['status'] == 'accepted'
 
 
+def test_accepting_a_calendar_proposal_stores_ticked_category_tags(client):
+    """The six colour categories are ticked on the card, and ticking any stamps
+    classified_at so the background classifier can't overwrite the choice."""
+    msg_id, p_id = _seed_message([
+        _proposal('p1', 'calendar', {
+            'title': 'Park with the kids', 'date': '2026-08-05',
+            'categoryTags': ['family', 'outside'],
+        }),
+    ])
+    resp = _resolve(client, msg_id, p_id, 'accept')
+    assert resp.status_code == 200
+    event_id = resp.get_json()['proposal']['result']['id']
+
+    row = get_db().execute('SELECT * FROM calendar_events WHERE id=?', (event_id,)).fetchone()
+    assert json.loads(row['category_tags']) == ['family', 'outside']
+    assert row['classified_at'] is not None
+
+
+def test_a_calendar_proposal_with_no_categories_is_left_for_the_classifier(client):
+    msg_id, p_id = _seed_message([
+        _proposal('p1', 'calendar', {'title': 'Dentist', 'date': '2026-08-05'}),
+    ])
+    event_id = _resolve(client, msg_id, p_id, 'accept').get_json()['proposal']['result']['id']
+
+    row = get_db().execute('SELECT * FROM calendar_events WHERE id=?', (event_id,)).fetchone()
+    assert row['category_tags'] is None
+    assert row['classified_at'] is None
+
+
+def test_accepting_a_calendar_proposal_rejects_categories_outside_the_vocabulary(client):
+    msg_id, p_id = _seed_message([
+        _proposal('p1', 'calendar', {
+            'title': 'Dentist', 'date': '2026-08-05', 'categoryTags': ['made-up'],
+        }),
+    ])
+    resp = _resolve(client, msg_id, p_id, 'accept')
+    assert resp.status_code == 400
+    assert _metadata(client, msg_id)['proposals'][0]['status'] == 'pending'
+
+
 def test_accepting_a_calorie_proposal_inserts_the_log(client):
     msg_id, p_id = _seed_message([
         _proposal('p1', 'calorie', {'description': 'burger', 'calories': 650}),
