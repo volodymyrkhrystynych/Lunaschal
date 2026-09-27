@@ -745,6 +745,15 @@ def _accept_calendar(db, data: dict, ctx: dict) -> dict:
     start = None if all_day else ((data.get('time') or '').strip() or None)
     end = None if all_day else ((data.get('endTime') or '').strip() or None)
 
+    # The six colour categories, ticked by hand on the card. Validated through
+    # the same helper the calendar routes use, so a card can't put the column in
+    # a state a manual edit there never could -- and, like that path, ticking any
+    # stamps classified_at so the background classifier leaves the choice alone.
+    from backend.routes.calendar import _category_tags_field
+    category_cols, cat_err = _category_tags_field(data)
+    if cat_err:
+        raise _AcceptRejected(cat_err)
+
     now = int(time.time())
     id = str(ULID())
     description = data.get('description', '')
@@ -752,9 +761,11 @@ def _accept_calendar(db, data: dict, ctx: dict) -> dict:
         description = f"{description}\n\nLocation: {data['location']}".strip()
     db.execute(
         'INSERT INTO calendar_events(id, title, description, date, time, end_time,'
-        ' all_day, tags, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        ' all_day, tags, category_tags, classified_at, created_at)'
+        ' VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         (id, title, description, when, start, end,
-         1 if all_day else 0, json.dumps(data.get('tags', [])), now),
+         1 if all_day else 0, json.dumps(data.get('tags', [])),
+         category_cols.get('category_tags'), category_cols.get('classified_at'), now),
     )
     return {'id': id}
 

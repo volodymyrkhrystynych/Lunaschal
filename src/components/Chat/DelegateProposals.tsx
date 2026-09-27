@@ -1,6 +1,11 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, type DelegateProposalRecord } from '../../hooks/api';
+import { CategoryTagPicker } from '../Calendar/EventFormFields';
+import {
+  isEventCategory,
+  type EventCategory,
+} from '../../lib/calendarCategories';
 
 interface Props {
   messageId: string;
@@ -66,6 +71,12 @@ const fieldClass =
 function str(data: Record<string, unknown>, key: string): string {
   const v = data[key];
   return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
+}
+
+function categoriesOf(data: Record<string, unknown>): EventCategory[] {
+  return Array.isArray(data.categoryTags)
+    ? data.categoryTags.filter(isEventCategory)
+    : [];
 }
 
 function Field({
@@ -200,6 +211,16 @@ function ProposalForm({
               className={`${fieldClass} flex-1 text-xs`}
             />
           </Field>
+          {/* The six colour categories, the same picker (and so the same
+              vocabulary and colours) the calendar's own forms use. Ticked by
+              hand here because a suggested event has no transcribed
+              description for the classifier to read, so without this the card
+              could only be labelled after saving it and reopening it in the
+              Calendar. */}
+          <CategoryTagPicker
+            value={categoriesOf(data)}
+            onChange={categoryTags => set({ categoryTags })}
+          />
         </div>
       );
     }

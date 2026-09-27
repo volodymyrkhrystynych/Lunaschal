@@ -105,6 +105,52 @@ describe('pending cards', () => {
     expect(screen.getByDisplayValue('health')).toBeTruthy();
   });
 
+  it('ticks category tags on a suggested event and sends them on accept', async () => {
+    resolveProposal().mockResolvedValue({
+      proposal: { id: 'y1', kind: 'calendar', status: 'accepted', data: {} },
+    });
+    renderProposals([
+      {
+        id: 'y1',
+        kind: 'calendar',
+        status: 'pending',
+        reconstructionDay: '2026-08-04',
+        data: { title: 'Park with the kids', date: '2026-08-04' },
+      },
+    ]);
+
+    fireEvent.click(screen.getByLabelText('Family'));
+    fireEvent.click(screen.getByLabelText('Outside'));
+    fireEvent.click(screen.getByText('Approve event'));
+
+    await waitFor(() =>
+      expect(resolveProposal()).toHaveBeenCalledWith(
+        'm1',
+        'y1',
+        'accept',
+        expect.objectContaining({ categoryTags: ['family', 'outside'] })
+      )
+    );
+  });
+
+  it('unticking a category takes it back off the card', () => {
+    renderProposals([
+      {
+        id: 'p1',
+        kind: 'calendar',
+        status: 'pending',
+        data: { title: 'Gym', date: '2026-08-05', categoryTags: ['exercise'] },
+      },
+    ]);
+
+    const exercise = screen.getByLabelText('Exercise') as HTMLInputElement;
+    expect(exercise.checked).toBe(true);
+    fireEvent.click(exercise);
+    expect(
+      (screen.getByLabelText('Exercise') as HTMLInputElement).checked
+    ).toBe(false);
+  });
+
   it('renders a calorie proposal', () => {
     renderProposals([
       {
