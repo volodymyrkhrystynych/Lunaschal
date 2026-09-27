@@ -29,6 +29,28 @@ class SignInRequired(DownloadError):
     pass
 
 
+class BrowserMissing(DownloadError):
+    pass
+
+
+# Worker exit codes; anything else nonzero is a generic failure.
+EXIT_SIGN_IN = 2
+EXIT_BROWSER_MISSING = 3
+
+# '0' keeps the browsers inside the playwright package in the venv rather than
+# ~/.cache/ms-playwright, which gets purged -- twice, silently breaking every
+# download. It also ties the browser's lifetime to the package it must match.
+INSTALL_COMMAND = 'PLAYWRIGHT_BROWSERS_PATH=0 .venv/bin/python -m playwright install chromium'
+
+
+def _playwright_env():
+    return {**os.environ, 'PLAYWRIGHT_BROWSERS_PATH': os.environ.get('PLAYWRIGHT_BROWSERS_PATH') or '0'}
+
+
+def _use_durable_browsers():
+    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = _playwright_env()['PLAYWRIGHT_BROWSERS_PATH']
+
+
 def session_path():
     return Path(os.environ.get('PRESSREADER_SESSION_PATH', './data/pressreader/session.json')).expanduser().resolve()
 
@@ -98,7 +120,12 @@ def fetch_to_file(date, destination):
     from pypdf import PdfReader
     try:
         with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(downloads_path=str(destination.parent))
+            try:
+                browser = playwright.chromium.launch(downloads_path=str(destination.parent))
+            except BrowserError as exc:
+                if "Executable doesn't exist" in str(exc):
+                    raise BrowserMissing('The PressReader browser is not installed.') from None
+                raise
             try:
                 session_version = session_path().stat().st_mtime_ns
                 context = browser.new_context(storage_state=str(session_path()), accept_downloads=True, locale='en-US')
@@ -123,6 +150,39 @@ def fetch_to_file(date, destination):
         raise DownloadError('PressReader download did not finish. Check the browser installation, reconnect your subscription, or retry later.') from None
 
 
+def _run(argv, timeout, env):
+    """Run a child in its own process group; None on timeout (group killed)."""
+    process = subprocess.Popen(
+        argv, cwd=Path(__file__).resolve().parents[2], env=env,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+    try:
+        return process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        return None
+
+
+def _run_fetch(date, destination):
+    env = {**_playwright_env(), 'PRESSREADER_SESSION_PATH': str(session_path())}
+    code = _run([sys.executable, '-m', 'backend.newspapers.pressreader', 'fetch', date, str(destination)], 240, env)
+    if code is None:
+        raise DownloadError('Issue download timed out after four minutes. Please retry later.')
+    return code
+
+
+def install_browser():
+    """Headless shell only: that is all the worker launches. login() needs full
+    chromium, which a graphical setup installs by hand (INSTALL_COMMAND)."""
+    code = _run([sys.executable, '-m', 'playwright', 'install', 'chromium-headless-shell'], 600, _playwright_env())
+    if code != 0:
+        raise DownloadError('Could not install the browser PressReader downloads need. Check the network and retry later.')
+
+
 def download_issue(date):
     """Bound the entire browser/download lifetime, including transfer completion."""
     if not session_path().is_file():
@@ -135,22 +195,14 @@ def download_issue(date):
     root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.pressreader-', dir=root) as temp:
         destination = Path(temp) / 'issue.pdf'
-        process = subprocess.Popen(
-            [sys.executable, '-m', 'backend.newspapers.pressreader', 'fetch', date, str(destination)],
-            cwd=Path(__file__).resolve().parents[2],
-            env={**os.environ, 'PRESSREADER_SESSION_PATH': str(session_path())},
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
-        )
-        try:
-            code = process.wait(timeout=240)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-            raise DownloadError('Issue download timed out after four minutes. Please retry later.') from None
-        if code == 2:
+        code = _run_fetch(date, destination)
+        if code == EXIT_BROWSER_MISSING:
+            # A purged cache or a playwright upgrade; reinstall once, retry once.
+            install_browser()
+            code = _run_fetch(date, destination)
+            if code == EXIT_BROWSER_MISSING:
+                raise DownloadError('The PressReader browser is still missing after reinstalling it. Please retry later.')
+        if code == EXIT_SIGN_IN:
             raise SignInRequired('Sign in to PressReader again and confirm your subscription allows PDF downloads.')
         if code != 0 or not destination.is_file():
             raise DownloadError('PressReader could not download the complete issue. Check the browser installation, reconnect, or retry later.')
@@ -159,10 +211,16 @@ def download_issue(date):
 
 
 def login():
-    from playwright.sync_api import sync_playwright
+    _use_durable_browsers()
+    from playwright.sync_api import sync_playwright, Error as BrowserError
     date = datetime.now(ZoneInfo('America/Toronto')).date().isoformat()
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        try:
+            browser = playwright.chromium.launch(headless=False)
+        except BrowserError as exc:
+            if "Executable doesn't exist" not in str(exc):
+                raise
+            sys.exit(f'Chromium is not installed. From the repository root run:\n  {INSTALL_COMMAND}')
         try:
             context = browser.new_context(locale='en-US', storage_state=str(session_path()) if session_path().is_file() else None)
             page = context.new_page()
@@ -182,6 +240,7 @@ if __name__ == '__main__':
     parser.add_argument('date', nargs='?')
     parser.add_argument('destination', nargs='?')
     args = parser.parse_args()
+    _use_durable_browsers()
     if args.command == 'login':
         login()
     else:
@@ -190,6 +249,8 @@ if __name__ == '__main__':
         try:
             fetch_to_file(args.date, Path(args.destination))
         except SignInRequired:
-            sys.exit(2)
+            sys.exit(EXIT_SIGN_IN)
+        except BrowserMissing:
+            sys.exit(EXIT_BROWSER_MISSING)
         except Exception:
             sys.exit(1)

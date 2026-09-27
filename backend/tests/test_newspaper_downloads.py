@@ -181,6 +181,108 @@ def test_child_signin_error_is_not_retried_as_a_network_failure(monkeypatch):
         pressreader.download_issue('2026-09-06')
 
 
+def _fake_children(monkeypatch, fetch_codes, install_code=0):
+    """Popen stand-in: the fetch worker exits with fetch_codes in turn (writing a
+    PDF on 0); the browser installer exits with install_code."""
+    calls = []
+    codes = iter(fetch_codes)
+    class Process:
+        pid = 4242
+        def __init__(self, argv, env, **kwargs):
+            self.argv = argv
+            calls.append((argv, env))
+        def wait(self, timeout=None):
+            if 'playwright' in self.argv:
+                return install_code
+            code = next(codes)
+            if code == 0:
+                Path(self.argv[-1]).write_bytes(pdf_bytes())
+            return code
+    monkeypatch.setattr(pressreader.subprocess, 'Popen', Process)
+    return calls
+
+
+def test_missing_browser_is_reinstalled_into_the_venv_and_the_fetch_retried(monkeypatch):
+    pytest.importorskip('playwright')
+    monkeypatch.delenv('PLAYWRIGHT_BROWSERS_PATH', raising=False)
+    pressreader.session_path().write_text('{}')
+    calls = _fake_children(monkeypatch, [pressreader.EXIT_BROWSER_MISSING, 0])
+    pressreader.download_issue('2026-09-06')
+    argvs = [argv for argv, env in calls]
+    assert argvs[1][1:] == ['-m', 'playwright', 'install', 'chromium-headless-shell']
+    assert [a[3] for a in (argvs[0], argvs[2])] == ['fetch', 'fetch']
+    # Worker and installer must agree on where the browser lives, or the
+    # install lands somewhere the worker never looks.
+    assert {env['PLAYWRIGHT_BROWSERS_PATH'] for argv, env in calls} == {'0'}
+    assert issues.get_issue('2026-09-06')
+
+
+def test_explicit_browsers_path_is_respected(monkeypatch):
+    pytest.importorskip('playwright')
+    monkeypatch.setenv('PLAYWRIGHT_BROWSERS_PATH', '/opt/browsers')
+    pressreader.session_path().write_text('{}')
+    calls = _fake_children(monkeypatch, [0])
+    pressreader.download_issue('2026-09-06')
+    assert calls[0][1]['PLAYWRIGHT_BROWSERS_PATH'] == '/opt/browsers'
+
+
+def test_failed_browser_install_is_reported_as_such(monkeypatch):
+    pytest.importorskip('playwright')
+    pressreader.session_path().write_text('{}')
+    calls = _fake_children(monkeypatch, [pressreader.EXIT_BROWSER_MISSING], install_code=1)
+    with pytest.raises(pressreader.DownloadError, match='Could not install the browser'):
+        pressreader.download_issue('2026-09-06')
+    assert len(calls) == 2
+
+
+def test_browser_still_missing_after_install_is_not_retried_again(monkeypatch):
+    pytest.importorskip('playwright')
+    pressreader.session_path().write_text('{}')
+    missing = pressreader.EXIT_BROWSER_MISSING
+    calls = _fake_children(monkeypatch, [missing, missing])
+    with pytest.raises(pressreader.DownloadError, match='still missing'):
+        pressreader.download_issue('2026-09-06')
+    assert sum(argv[3:4] == ['fetch'] for argv, env in calls) == 2
+
+
+def test_browser_install_deadline_kills_its_group(monkeypatch):
+    pytest.importorskip('playwright')
+    import subprocess
+    import signal
+    pressreader.session_path().write_text('{}')
+    killed = []
+    class Process:
+        pid = 777
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+        def wait(self, timeout=None):
+            if 'playwright' in self.argv and timeout:
+                assert timeout == 600
+                raise subprocess.TimeoutExpired('install', timeout)
+            return pressreader.EXIT_BROWSER_MISSING if timeout else -9
+    monkeypatch.setattr(pressreader.subprocess, 'Popen', Process)
+    monkeypatch.setattr(pressreader.os, 'killpg', lambda *args: killed.append(args))
+    with pytest.raises(pressreader.DownloadError, match='Could not install'):
+        pressreader.download_issue('2026-09-06')
+    assert killed == [(777, signal.SIGKILL)]
+
+
+def test_worker_maps_a_missing_executable_to_its_own_exit_code(monkeypatch, tmp_path):
+    sync_api = pytest.importorskip('playwright.sync_api')
+    class Chromium:
+        def launch(self, **kwargs):
+            raise sync_api.Error("BrowserType.launch: Executable doesn't exist at /nowhere/chrome")
+    class Playwright:
+        chromium = Chromium()
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            return False
+    monkeypatch.setattr(sync_api, 'sync_playwright', lambda: Playwright())
+    with pytest.raises(pressreader.BrowserMissing):
+        pressreader.fetch_to_file('2026-09-06', tmp_path / 'issue.pdf')
+
+
 @pytest.mark.parametrize('confirmation', [
     '<button onclick="location.href=\'/issue.pdf\'">Download issue as PDF</button>',
     '<h2>Download Issue as PDF</h2><a href="/issue.pdf"><span>Download</span></a>',

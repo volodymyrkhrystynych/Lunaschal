@@ -61,9 +61,19 @@ One-time setup, from the checkout running Lunaschal, under the same OS user:
 
 ```bash
 .venv/bin/pip install -r requirements-pressreader.txt
-.venv/bin/python -m playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH=0 .venv/bin/python -m playwright install chromium
 .venv/bin/python -m backend.newspapers.pressreader login
 ```
+
+`PLAYWRIGHT_BROWSERS_PATH=0` installs the browser inside the venv's
+`playwright` package instead of `~/.cache/ms-playwright`, and the downloader
+always runs with that setting (an explicit `PLAYWRIGHT_BROWSERS_PATH` still
+wins). The cache location was purged twice, and each time every download failed
+with a generic error. If the browser is missing anyway (a fresh venv, a
+`playwright` upgrade that wants a newer build), the download worker exits with
+code 3, installs `chromium-headless-shell` itself (up to 10 minutes, separate
+from the four-minute download limit), and retries once. Only the interactive
+login needs full `chromium`, and it prints the command above when it is missing.
 
 The last command requires a graphical desktop. Sign in to the Toronto Star in
 the opened browser, then return to the terminal and press Enter. The helper
