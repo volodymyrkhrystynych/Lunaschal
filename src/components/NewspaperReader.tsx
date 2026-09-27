@@ -45,6 +45,11 @@ import {
 } from '@/lib/newspaperSnapshots';
 import { paintStrokes } from '@/lib/inkRaster';
 import {
+  ISSUE_LOAD_STALL_MS,
+  issueLoadStatus,
+  type IssueLoadProgress,
+} from '@/lib/newspapers';
+import {
   InkToolPanel,
   READ_TOOL,
   DEFAULT_TOOLS,
@@ -470,8 +475,57 @@ export function NewspaperReader({
   useEffect(() => {
     const loading = pdfjs.getDocument({ url: issue.pdfUrl });
     let active = true;
-    void Promise.all([loading.promise, api.newspapers.markup(issue.date)])
+    // Until both halves land the status line reports where each one is, and
+    // says so when nothing has moved for a while — see issueLoadStatus.
+    const progress: IssueLoadProgress = {
+      loaded: 0,
+      total: 0,
+      pdfDone: false,
+      markupDone: false,
+      stalled: false,
+    };
+    let lastMoved = Date.now();
+    let settled = false;
+    const report = () => {
+      if (active && !settled) setStatus(issueLoadStatus(progress));
+    };
+    const moved = () => {
+      lastMoved = Date.now();
+      progress.stalled = false;
+      report();
+    };
+    loading.onProgress = ({
+      loaded,
+      total,
+    }: {
+      loaded: number;
+      total: number;
+    }) => {
+      progress.loaded = loaded;
+      progress.total = total || 0;
+      moved();
+    };
+    const watchdog = window.setInterval(() => {
+      const stalled = Date.now() - lastMoved >= ISSUE_LOAD_STALL_MS;
+      if (stalled !== progress.stalled) {
+        progress.stalled = stalled;
+        report();
+      }
+    }, 1000);
+    const pdfLoaded = loading.promise.then(document => {
+      progress.pdfDone = true;
+      moved();
+      return document;
+    });
+    const markupLoaded = api.newspapers.markup(issue.date).then(saved => {
+      progress.markupDone = true;
+      moved();
+      return saved;
+    });
+    void Promise.all([pdfLoaded, markupLoaded])
       .then(([document, saved]) => {
+        settled = true;
+        window.clearInterval(watchdog);
         if (!active) return;
         let recovered: NewspaperMarkup | null = null;
         try {
@@ -499,10 +553,13 @@ export function NewspaperReader({
         setReady(true);
       })
       .catch(e => {
-        if (active) setStatus(e.message);
+        settled = true;
+        window.clearInterval(watchdog);
+        if (active) setStatus(`Could not open the issue: ${e.message}`);
       });
     return () => {
       active = false;
+      window.clearInterval(watchdog);
       void loading.destroy();
     };
   }, [issue.date, issue.pdfUrl, key]);

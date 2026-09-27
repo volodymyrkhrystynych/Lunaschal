@@ -1,28 +1,40 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, api } from '../hooks/api';
 import { NewspaperReader } from './NewspaperReader';
 
+// A test that needs to hold the load open, or feed it progress, sets `next`.
+const pdfTask = vi.hoisted(() => ({
+  next: null as null | (() => unknown),
+}));
+
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {},
-  getDocument: () => ({
-    promise: Promise.resolve({
-      numPages: 1,
-      // Enough of a page for the thumbnail worker: an aspect ratio and a
-      // render that resolves. What the JPEG would look like is untestable
-      // here — jsdom rasterizes nothing — so what these tests pin is which
-      // pages are rendered and when.
-      getPage: vi.fn(async () => ({
-        getViewport: ({ scale }: { scale: number }) => ({
-          width: 612 * scale,
-          height: 792 * scale,
-        }),
-        render: () => ({ promise: Promise.resolve() }),
-      })),
-    }),
-    destroy: vi.fn(),
-  }),
+  getDocument: () =>
+    pdfTask.next?.() ?? {
+      promise: Promise.resolve({
+        numPages: 1,
+        // Enough of a page for the thumbnail worker: an aspect ratio and a
+        // render that resolves. What the JPEG would look like is untestable
+        // here — jsdom rasterizes nothing — so what these tests pin is which
+        // pages are rendered and when.
+        getPage: vi.fn(async () => ({
+          getViewport: ({ scale }: { scale: number }) => ({
+            width: 612 * scale,
+            height: 792 * scale,
+          }),
+          render: () => ({ promise: Promise.resolve() }),
+        })),
+      }),
+      destroy: vi.fn(),
+    },
 }));
 vi.mock('../hooks/api', () => ({
   // Carries a status, like the real one: the reader has to tell a 409 (another
@@ -87,6 +99,7 @@ let ctx: ReturnType<typeof stubContext>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  pdfTask.next = null;
   localStorage.clear();
   ctx = stubContext();
   HTMLCanvasElement.prototype.getContext = vi.fn(
@@ -194,6 +207,65 @@ describe('opening an issue', () => {
     );
     render(<NewspaperReader issue={issue} onClose={vi.fn()} />);
     expect(await screen.findByText('Save now')).toBeTruthy();
+  });
+});
+
+describe('while an issue is loading', () => {
+  type Task = {
+    promise: Promise<unknown>;
+    destroy: () => void;
+    onProgress?: (p: { loaded: number; total: number }) => void;
+  };
+  /** A load that never finishes unless the test says so. */
+  function holdLoad(promise: Promise<unknown> = new Promise(() => {})) {
+    const task: Task = { promise, destroy: vi.fn() };
+    pdfTask.next = () => task;
+    return task;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reports how much of the PDF has arrived', async () => {
+    const task = holdLoad();
+    render(<NewspaperReader issue={issue} onClose={vi.fn()} />);
+    act(() => task.onProgress!({ loaded: 3_200_000, total: 13_481_011 }));
+    expect(
+      await screen.findByText('Loading issue… 3.2 of 13.5 MB')
+    ).toBeTruthy();
+  });
+
+  it('says so when the transfer stops moving', () => {
+    vi.useFakeTimers();
+    const task = holdLoad();
+    render(<NewspaperReader issue={issue} onClose={vi.fn()} />);
+    act(() => task.onProgress!({ loaded: 2_000_000, total: 10_000_000 }));
+    act(() => vi.advanceTimersByTime(21_000));
+    expect(
+      screen.getByText(
+        'Loading stalled at 2.0 of 10.0 MB. Check the connection.'
+      )
+    ).toBeTruthy();
+    // Bytes arriving again clear the warning.
+    act(() => task.onProgress!({ loaded: 3_000_000, total: 10_000_000 }));
+    expect(screen.getByText('Loading issue… 3.0 of 10.0 MB')).toBeTruthy();
+  });
+
+  it('names the markup fetch when that is what is still waiting', async () => {
+    vi.mocked(api.newspapers.markup).mockReturnValue(new Promise(() => {}));
+    render(<NewspaperReader issue={issue} onClose={vi.fn()} />);
+    expect(await screen.findByText('Loading markup…')).toBeTruthy();
+  });
+
+  it('shows why the issue could not be opened', async () => {
+    holdLoad(Promise.reject(new Error('Unexpected server response (403)')));
+    render(<NewspaperReader issue={issue} onClose={vi.fn()} />);
+    expect(
+      await screen.findByText(
+        'Could not open the issue: Unexpected server response (403)'
+      )
+    ).toBeTruthy();
   });
 });
 
