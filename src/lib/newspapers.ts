@@ -32,3 +32,46 @@ export function hasMissingEditions(
 ): boolean {
   return pages.some(page => page.imageUrl == null);
 }
+
+/** How long an issue load may go without a byte before the reader says so. */
+export const ISSUE_LOAD_STALL_MS = 20_000;
+
+export interface IssueLoadProgress {
+  loaded: number;
+  /** 0 when the server sent no length. */
+  total: number;
+  pdfDone: boolean;
+  markupDone: boolean;
+  stalled: boolean;
+}
+
+function mb(bytes: number): string {
+  return (bytes / 1_000_000).toFixed(1);
+}
+
+/**
+ * The reader's status line while an issue opens. A bare "Loading…" made a
+ * slow transfer, a request that never answered and a stuck markup fetch look
+ * identical — on the iPad, forever — so each half says where it is.
+ */
+export function issueLoadStatus(p: IssueLoadProgress): string {
+  if (!p.pdfDone) {
+    if (p.loaded === 0) {
+      return p.stalled
+        ? 'No data from the server yet. Check the connection.'
+        : 'Loading issue…';
+    }
+    const amount = p.total
+      ? `${mb(Math.min(p.loaded, p.total))} of ${mb(p.total)} MB`
+      : `${mb(p.loaded)} MB`;
+    return p.stalled
+      ? `Loading stalled at ${amount}. Check the connection.`
+      : `Loading issue… ${amount}`;
+  }
+  if (!p.markupDone) {
+    return p.stalled
+      ? 'Issue loaded; still waiting for saved markup from the server.'
+      : 'Loading markup…';
+  }
+  return 'Saved';
+}

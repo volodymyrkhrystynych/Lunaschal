@@ -4,6 +4,7 @@ import {
   isFutureDate,
   todayISO,
   hasMissingEditions,
+  issueLoadStatus,
 } from './newspapers';
 
 describe('todayISO', () => {
@@ -70,5 +71,49 @@ describe('hasMissingEditions', () => {
 
   it('is false for an empty list', () => {
     expect(hasMissingEditions([])).toBe(false);
+  });
+});
+
+describe('issueLoadStatus', () => {
+  const base = {
+    loaded: 0,
+    total: 0,
+    pdfDone: false,
+    markupDone: false,
+    stalled: false,
+  };
+
+  it('reports bytes against the total while the PDF arrives', () => {
+    expect(
+      issueLoadStatus({ ...base, loaded: 3_200_000, total: 13_481_011 })
+    ).toBe('Loading issue… 3.2 of 13.5 MB');
+  });
+
+  it('reports bytes alone when the server sent no length', () => {
+    expect(issueLoadStatus({ ...base, loaded: 1_500_000 })).toBe(
+      'Loading issue… 1.5 MB'
+    );
+  });
+
+  it('never shows more loaded than the total', () => {
+    expect(issueLoadStatus({ ...base, loaded: 14e6, total: 13e6 })).toBe(
+      'Loading issue… 13.0 of 13.0 MB'
+    );
+  });
+
+  it('tells a server that never answered from a transfer that stopped', () => {
+    expect(issueLoadStatus({ ...base, stalled: true })).toMatch(
+      /No data from the server/
+    );
+    expect(
+      issueLoadStatus({ ...base, loaded: 2e6, total: 10e6, stalled: true })
+    ).toBe('Loading stalled at 2.0 of 10.0 MB. Check the connection.');
+  });
+
+  it('names the markup fetch when that is the half still waiting', () => {
+    expect(issueLoadStatus({ ...base, pdfDone: true })).toBe('Loading markup…');
+    expect(issueLoadStatus({ ...base, pdfDone: true, stalled: true })).toMatch(
+      /waiting for saved markup/
+    );
   });
 });
