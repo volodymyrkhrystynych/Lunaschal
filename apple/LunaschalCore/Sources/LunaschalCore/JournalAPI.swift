@@ -78,7 +78,8 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONEncoder().encode([
                 "id": capture.id, "content": capture.text,
-                "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt)
+                "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
+                "pendingAttachments": capture.youtubeURL == nil ? "0" : "1"
             ])
             (data, response) = try await session.data(for: req)
         } else {
@@ -91,6 +92,23 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         }
         try check(data, response)
         try Self.validateAcknowledgement(data, for: capture)
+        if let link = capture.youtubeURL, let attachmentID = capture.linkAttachmentID {
+            var req = request("api/journal/\(capture.id)/attachments/link", method: "POST")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONEncoder().encode([
+                "url": link, "attachmentId": attachmentID,
+                "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
+            ])
+            let (attachmentData, attachmentResponse) = try await session.data(for: req)
+            try check(attachmentData, attachmentResponse)
+            try Self.validateLinkAcknowledgement(attachmentData, for: capture)
+        }
+    }
+
+    public static func validateLinkAcknowledgement(_ data: Data, for capture: Capture) throws {
+        struct Ack: Decodable { let id: String; let entryId: String }
+        let ack = try JSONDecoder().decode(Ack.self, from: data)
+        guard ack.id == capture.linkAttachmentID, ack.entryId == capture.id else { throw CaptureError.invalidResponse }
     }
 
     public static func validateAcknowledgement(_ data: Data, for capture: Capture) throws {

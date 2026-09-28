@@ -12,6 +12,10 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
 - Offline typed journal entries, plus separate **Transcribe** and **Record**
   captures. Stopping records a journal entry; both modes retain the original
   mono AAC file, and only Transcribe requests server transcription.
+- Offline YouTube links and commentary, with preserved drafts and stable entry
+  and link-attachment IDs. Entry creation precedes link import; retry validates
+  both acknowledgements. The server keeps the original capture timestamp and
+  reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Library / Settings navigation for iPhone and iPad.
 - Durable per-capture manifests in Application Support, replaced atomically;
   audio lives beside them. A separate SQLite replica stores server records,
@@ -113,7 +117,7 @@ publicly to make CI work: simulator capture tests never contact it.
   “Remove downloaded media” explicitly clears media copies and partials, while
   retaining capture originals and server records. Old content versions remain
   until that cleanup; per-item pinning/eviction is not implemented yet.
-- Fic PDFs, inline chapter images, full newspaper PDFs, YouTube URL capture,
+- Fic PDFs, inline chapter images, full newspaper PDFs,
   share extensions, and PencilKit remain outstanding. Bulk requests prohibit
   cellular and expensive connections; actual Tailscale/hotspot policy needs
   device validation. The budget currently covers media, not SQLite text.

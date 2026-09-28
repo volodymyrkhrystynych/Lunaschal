@@ -21,6 +21,35 @@ final class CaptureTests: XCTestCase {
         XCTAssertTrue(ULID.isValid(capture.id))
     }
 
+    func testYouTubeLinkRetainsCommentaryAndAttachmentIdentityAcrossRestart() throws {
+        let url = try YouTubeLink.canonical("https://youtu.be/aircAruvnKk?list=ignored")
+        XCTAssertEqual(url, "https://www.youtube.com/watch?v=aircAruvnKk")
+        let capture = Capture(text: "My thoughts", youtubeURL: url)
+        try store.save(capture)
+        let restored = try CaptureStore(root: root).load(capture.id)
+        XCTAssertEqual(restored, capture)
+        XCTAssertNil(restored.attachmentID)
+        XCTAssertNotNil(restored.linkAttachmentID)
+        let ack = try JSONEncoder().encode(["id": restored.linkAttachmentID!, "entryId": restored.id])
+        XCTAssertNoThrow(try JournalAPI.validateLinkAcknowledgement(ack, for: restored))
+        let wrong = try JSONEncoder().encode(["id": restored.linkAttachmentID!, "entryId": ULID.make()])
+        XCTAssertThrowsError(try JournalAPI.validateLinkAcknowledgement(wrong, for: restored))
+    }
+
+    func testYouTubeURLValidationAndOldManifestCompatibility() throws {
+        for url in ["https://youtube.com/shorts/aircAruvnKk", "https://m.youtube.com/watch?v=aircAruvnKk", "https://youtube.com/live/aircAruvnKk"] {
+            XCTAssertEqual(try YouTubeLink.canonical(url), "https://www.youtube.com/watch?v=aircAruvnKk")
+        }
+        for url in ["https://youtube.com.evil/watch?v=aircAruvnKk", "https://youtube.com/playlist?list=123", "file:///aircAruvnKk", "https://user@youtube.com/watch?v=aircAruvnKk"] {
+            XCTAssertThrowsError(try YouTubeLink.canonical(url))
+        }
+        let capture = Capture(text: "Before link support")
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(capture)) as? [String: Any])
+        old.removeValue(forKey: "youtubeURL"); old.removeValue(forKey: "linkAttachmentID")
+        let restored = try JSONDecoder().decode(Capture.self, from: JSONSerialization.data(withJSONObject: old))
+        XCTAssertEqual(restored, capture)
+    }
+
     func testInterruptedRecordingIsKeptButNotAutomaticallyUploaded() throws {
         let capture = Capture(mode: .transcribe)
         try store.save(capture)

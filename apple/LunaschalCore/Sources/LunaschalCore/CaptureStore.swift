@@ -23,6 +23,10 @@ public final class CaptureStore {
         guard ULID.isValid(capture.id), capture.attachmentID.map(ULID.isValid) ?? true else {
             throw CaptureError.invalidID
         }
+        if let link = capture.youtubeURL {
+            guard capture.mode == .text, capture.linkAttachmentID.map(ULID.isValid) == true,
+                  try YouTubeLink.canonical(link) == link else { throw LinkError.invalidURL }
+        }
         if capture.mode == .text && capture.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw CaptureError.emptyText
         }

@@ -81,6 +81,15 @@ final class CaptureModel: ObservableObject {
         } catch { message = error.localizedDescription; return false }
     }
 
+    func saveLink(_ link: String, commentary: String) -> Bool {
+        do {
+            let url = try YouTubeLink.canonical(link)
+            let text = commentary.trimmingCharacters(in: .whitespacesAndNewlines)
+            try store.save(Capture(text: text.isEmpty ? url : text, youtubeURL: url))
+            reload(); requestSync(); return true
+        } catch { message = error.localizedDescription; return false }
+    }
+
     func login(address: String, password: String, code: String) async -> Bool {
         guard !signingIn else { return false }
         signingIn = true

@@ -273,7 +273,7 @@ on Linux. Do not assume Pencil Pro-only hardware features are available.
       tab from the Paper/drawing features the iPad still needs.
 - [ ] Finalize phone tabs and iPad sidebar/split-view navigation as features arrive.
 - [ ] Add historical Journal browsing, editing, attachments, and conflict resolution.
-- [ ] Save YouTube URLs and commentary offline; queue server metadata/import work.
+- [x] Save YouTube URLs and commentary offline; queue server metadata/import work.
 - [ ] Show archive playback availability without preventing URL/commentary capture.
 - [ ] Add a share extension for links, audio, photos, and supported documents.
 - [ ] Use a shared app container/outbox with safe handoff from the share extension.
@@ -407,6 +407,12 @@ Swift tests, including temporary-file removal, duplicate receipt, corruption,
 and isolation of a failed inbox item. Native phone/Watch views passed syntax
 parsing only; Apple SDK type checking and the CryptoKit fixture await the hosted
 build. No paired-device transfer has run.
+
+Offline YouTube verification (2026-09-28): 100 backend tests across offline
+capture, YouTube imports, sync, media, and seeding; 29 portable Swift tests.
+Links preserve commentary, original capture time, and attachment identity on
+retry. Old capture manifests remain readable. The URL is retained independently
+of archive playback availability; share-extension capture is still outstanding.
 
 - [Native app and build notes](../apple/README.md)
 - [Native screens and app state](../apple/App/)

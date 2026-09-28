@@ -8,7 +8,7 @@ import json
 
 COLLECTIONS = {
     'journal_entries': 'id content raw_content title tags latitude longitude created_at updated_at',
-    'journal_attachments': 'id entry_id kind name mime size position transcript transcript_status description description_status created_at',
+    'journal_attachments': 'id entry_id kind name mime size position source_url import_status transcript transcript_status description description_status created_at',
     'fics': 'id title author source_type source_url description word_count chapter_count download_status last_read_chapter_id rating review last_opened_at created_at updated_at',
     'fic_chapters': 'id fic_id position title category content_html content_text source_url word_count posted_at edited_at created_at updated_at',
     'fic_folders': 'id name created_at',

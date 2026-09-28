@@ -27,18 +27,50 @@ public struct Capture: Codable, Identifiable, Equatable {
     public let createdAt: Date
     public let mode: CaptureMode
     public let text: String
+    public let youtubeURL: String?
+    public let linkAttachmentID: String?
     public var state: CaptureState
     public var lastError: String?
     public var snapshot: JournalSnapshot?
 
-    public init(text: String = "", mode: CaptureMode = .text, now: Date = Date()) {
+    public init(text: String = "", mode: CaptureMode = .text, now: Date = Date(), youtubeURL: String? = nil) {
         id = ULID.make(now: now)
         attachmentID = mode == .text ? nil : ULID.make(now: now)
         createdAt = now
         self.mode = mode
         self.text = text
+        self.youtubeURL = youtubeURL
+        linkAttachmentID = youtubeURL == nil ? nil : ULID.make(now: now)
         state = mode == .text ? .pending : .recording
     }
+}
+
+public enum YouTubeLink {
+    public static func canonical(_ value: String) throws -> String {
+        guard let parts = URLComponents(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+              ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
+              parts.user == nil, parts.password == nil,
+              let host = parts.host?.lowercased(),
+              ["youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be", "www.youtu.be"].contains(host) else {
+            throw LinkError.invalidURL
+        }
+        let segments = parts.path.split(separator: "/").map(String.init)
+        let candidate: String?
+        if host.hasSuffix("youtu.be") { candidate = segments.first }
+        else if segments.first == "watch" { candidate = parts.queryItems?.first(where: { $0.name == "v" })?.value }
+        else if segments.count >= 2, ["shorts", "embed", "live", "v"].contains(segments[0]) { candidate = segments[1] }
+        else { candidate = nil }
+        guard let candidate, candidate.count == 11,
+              candidate.allSatisfy({ "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-".contains($0) }) else {
+            throw LinkError.invalidURL
+        }
+        return "https://www.youtube.com/watch?v=\(candidate)"
+    }
+}
+
+public enum LinkError: LocalizedError {
+    case invalidURL
+    public var errorDescription: String? { "Enter a YouTube video link, such as a watch, Shorts, or youtu.be URL." }
 }
 
 public enum ULID {

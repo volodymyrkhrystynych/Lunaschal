@@ -1447,6 +1447,7 @@ def attach_link(entry_id):
         return jsonify({'error': 'Missing url'}), 400
     try:
         attachment_id = _client_id(body.get('attachmentId'))
+        captured_at = _optional_capture_time(body)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
 
@@ -1495,7 +1496,8 @@ def attach_link(entry_id):
         '(id, entry_id, kind, name, path, position, source_url,'
         " import_status, created_at)"
         " VALUES (?,?,'youtube',?,'',?,?,'importing',?)",
-        (attachment_id, entry_id, url, position, url, int(time.time())),
+        (attachment_id, entry_id, url, position, url,
+         captured_at if captured_at is not None else int(time.time())),
     )
     db.commit()
 

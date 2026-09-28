@@ -35,6 +35,8 @@ private struct CaptureComposer: View {
     @ObservedObject var recorder: Recorder
     // Preserve an unfinished typed draft across app termination as well.
     @AppStorage("journalDraft") private var text = ""
+    @AppStorage("youtubeDraftURL") private var youtubeURL = ""
+    @AppStorage("youtubeDraftCommentary") private var commentary = ""
     @State private var saved = false
 
     var body: some View {
@@ -66,6 +68,16 @@ private struct CaptureComposer: View {
                 Text(model.signedIn ? "Captures sync automatically while the app is open." : "Capture works offline. Sign in under Settings to sync.")
                     .foregroundStyle(.secondary)
                 if let message = model.syncMessage { Text(message).font(.footnote).foregroundStyle(.secondary) }
+            }
+            Section {
+                TextField("YouTube video URL", text: $youtubeURL)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                TextField("Your thoughts (optional)", text: $commentary, axis: .vertical)
+                Button("Save link and thoughts") {
+                    if model.saveLink(youtubeURL, commentary: commentary) { youtubeURL = ""; commentary = ""; saved = true }
+                }.disabled(youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } header: { Text("YouTube") } footer: {
+                Text("The link and your thoughts are saved offline. The server imports the video when connected; archive playback stays on the server.")
             }
         }
         .navigationTitle("Capture")
@@ -153,6 +165,9 @@ private struct CaptureDetail: View {
                 }
                 if !capture.text.isEmpty {
                     Section("Original text") { Text(capture.text).textSelection(.enabled) }
+                }
+                if let link = capture.youtubeURL, let url = URL(string: link) {
+                    Section("Saved YouTube link") { Link(link, destination: url) }
                 }
                 if capture.attachmentID != nil, capture.state != .recording,
                    let url = try? model.store.audioURL(capture) {

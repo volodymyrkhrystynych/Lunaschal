@@ -20,6 +20,34 @@ CAPTURED = '2026-09-20T01:30:00-04:00'
 STAMP = int(datetime.fromisoformat(CAPTURED).timestamp())
 
 
+def test_offline_youtube_link_retains_capture_time_and_replay_starts_import_once(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(journal.youtube_import, 'start_import_bg', lambda *args: calls.append(args))
+    entry_id = client.post('/api/journal', json={'content': 'My thoughts', 'capturedAt': CAPTURED}).json['id']
+    attachment_id = str(ULID())
+    body = {'url': 'https://www.youtube.com/watch?v=aircAruvnKk',
+            'attachmentId': attachment_id, 'capturedAt': CAPTURED}
+    url = f'/api/journal/{entry_id}/attachments/link'
+    assert client.post(url, json=body).status_code == 201
+    replay = client.post(url, json={**body, 'capturedAt': '2026-09-25T12:00:00Z'})
+    assert replay.status_code == 201
+    assert replay.json['entryId'] == entry_id
+    assert len(calls) == 1
+    assert get_db().execute('SELECT created_at FROM journal_attachments WHERE id=?', (attachment_id,)).fetchone()[0] == STAMP
+
+
+def test_offline_youtube_invalid_time_does_not_create_attachment(client, monkeypatch):
+    calls = []
+    monkeypatch.setattr(journal.youtube_import, 'start_import_bg', lambda *args: calls.append(args))
+    entry_id = client.post('/api/journal', json={'content': 'My thoughts'}).json['id']
+    response = client.post(f'/api/journal/{entry_id}/attachments/link', json={
+        'url': 'https://youtu.be/aircAruvnKk', 'capturedAt': 'not a timestamp',
+    })
+    assert response.status_code == 400
+    assert not calls
+    assert get_db().execute('SELECT COUNT(*) FROM journal_attachments').fetchone()[0] == 0
+
+
 def upload(client, entry_id, attachment_id, captured=CAPTURED, transcribe=False):
     return client.post('/api/journal/recordings', data={
         'id': entry_id, 'attachmentId': attachment_id,
