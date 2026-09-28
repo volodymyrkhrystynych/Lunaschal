@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.lunaschal
   deploymentTarget:
     iOS: '26.0'
+    watchOS: '26.0'
 packages:
   LunaschalCore:
     path: LunaschalCore
@@ -17,6 +18,8 @@ targets:
     sources: [App]
     dependencies:
       - package: LunaschalCore
+      - target: LunaschalWatch
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile
@@ -41,6 +44,29 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
+  LunaschalWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - Watch
+      - App/Recorder.swift
+    dependencies:
+      - package: LunaschalCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile.watchkitapp
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: '0.1.0'
+        TARGETED_DEVICE_FAMILY: '4'
+    info:
+      path: Generated/Watch-Info.plist
+      properties:
+        CFBundleDisplayName: Lunaschal
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: com.lunaschal.mobile
+        WKRunsIndependentlyOfCompanionApp: false
+        NSMicrophoneUsageDescription: Record thoughts for your journal, even while your phone is unavailable.
+        UIBackgroundModes: [audio]
   LunaschalUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -51,6 +77,10 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
 schemes:
+  LunaschalWatch:
+    build:
+      targets:
+        LunaschalWatch: all
   Lunaschal:
     build:
       targets:

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "LunaschalCore",
-    platforms: [.iOS(.v17), .macOS(.v13)],
+    platforms: [.iOS(.v17), .macOS(.v13), .watchOS(.v10)],
     products: [.library(name: "LunaschalCore", targets: ["LunaschalCore"])],
     targets: [
         .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),

@@ -15,18 +15,18 @@ sync exist locally. This is not yet an installable, signed, or device-validated
 release.** Capture foundation: `e018be9`; replica/journal sync: `e695b5e`. Further work is being committed
 in stages; no branch push or hosted build has run.
 
-| Milestone                                      | Status                               | Completion evidence still needed                                  |
-| ---------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------- |
-| M0 — Build and distribution                    | In progress                          | Hosted Mac build/UI tests, signing, TestFlight installation       |
-| M1 — Offline journal capture                   | Implemented locally; partly verified | Native compilation, device recording and connection checks        |
-| M2 — Durable background transfers              | Planned                              | Recovery, network-policy, and suspended-app tests                 |
-| M3 — Multi-device data synchronization         | Implemented in part                  | Capture outbox migration, broader mutations, native validation    |
-| M4 — Downloadable library                      | Text downloads implemented           | Media files, collection selection, storage controls               |
-| M5 — Native drawing and annotation             | Planned; prototype early             | PencilKit compatibility and actual iPad validation                |
-| M6 — Mobile navigation and capture integration | Partly started                       | Broader feature inventory, share extension, YouTube capture       |
-| M7 — Watch recording companion                 | Planned                              | Watch persistence, phone handoff, end-to-end deduplication        |
-| M8 — Optional on-device speech and AI          | Evaluation pending                   | Availability, language support, quality and resource measurements |
-| M9 — Release and recovery readiness            | Planned                              | Upgrade/restore tests, documentation, stable signed distribution  |
+| Milestone                                      | Status                                    | Completion evidence still needed                                  |
+| ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
+| M0 — Build and distribution                    | In progress                               | Hosted Mac build/UI tests, signing, TestFlight installation       |
+| M1 — Offline journal capture                   | Implemented locally; partly verified      | Native compilation, device recording and connection checks        |
+| M2 — Durable background transfers              | Planned                                   | Recovery, network-policy, and suspended-app tests                 |
+| M3 — Multi-device data synchronization         | Implemented in part                       | Capture outbox migration, broader mutations, native validation    |
+| M4 — Downloadable library                      | Text and active media implemented in part | Remaining file types, background scheduling, storage refinement   |
+| M5 — Native drawing and annotation             | Planned; prototype early                  | PencilKit compatibility and actual iPad validation                |
+| M6 — Mobile navigation and capture integration | Partly started                            | Broader feature inventory, share extension, YouTube capture       |
+| M7 — Watch recording companion                 | Implemented locally; core tested          | Apple SDK compilation, signing, paired-device validation          |
+| M8 — Optional on-device speech and AI          | Evaluation pending                        | Availability, language support, quality and resource measurements |
+| M9 — Release and recovery readiness            | Planned                                   | Upgrade/restore tests, documentation, stable signed distribution  |
 
 ### Evidence from the initial implementation
 
@@ -289,15 +289,15 @@ and every exposed feature communicates its offline capabilities accurately.
 ### M7 — Watch recording companion
 
 - [ ] Add the watchOS target and companion pairing/signing configuration.
-- [ ] Implement Record / Transcribe / Stop with clear recording and saved states.
-- [ ] Persist audio and capture metadata on the watch before attempting transfer.
-- [ ] Preserve IDs, capture time, and transcription intent through watch → phone → server.
-- [ ] Queue WatchConnectivity file transfers when the phone becomes available.
+- [x] Implement Record / Transcribe / Stop with clear recording and saved states.
+- [x] Persist audio and capture metadata on the watch before attempting transfer.
+- [x] Preserve IDs, capture time, and transcription intent through watch → phone → server.
+- [x] Queue WatchConnectivity file transfers when the phone becomes available.
 - [ ] Acknowledge durable phone storage separately from server receipt; specify
       when a watch copy may be removed and what the status indicator means.
 - [ ] Handle duplicate deliveries, interrupted transfers, watch/app restart, and
       a phone that has not yet configured or authenticated its server.
-- [ ] Respect the phone's cellular-upload preference after watch handoff.
+- [x] Respect the phone's cellular-upload preference after watch handoff.
 - [ ] Handle microphone denial, interruptions, low storage, and long recordings.
 - [ ] Test on the user's Series 7 with the phone absent and the server unavailable.
 - [ ] Confirm both modes eventually create exactly one journal entry and retain audio.
@@ -305,6 +305,14 @@ and every exposed feature communicates its offline capabilities accurately.
 **Done when:** a thought can be recorded away from the phone and server, then
 arrive in the journal with its original time and intended transcription mode.
 Direct watch-to-server connectivity is not required for this milestone.
+
+**Implemented, not device-validated:** watchOS target, shared recorder, durable
+phone inbox, hash/identity validation, replay-safe import, and separate phone
+receipts. Originals remain on the watch after receipt; removal controls and
+server-status receipts are outstanding. Microphone denial, initial low-space
+checks, interruptions, and explicit playable-file recovery have code paths;
+long-recording/storage-pressure and background behavior still need hardware
+validation. Hosted CI now includes an unsigned Watch simulator build.
 
 ### M8 — Optional on-device speech and AI
 
@@ -393,9 +401,12 @@ These are staged decisions, not reasons to pause unrelated implementation.
 
 ### Implementation entry points
 
-Media verification (2026-09-28): 47 backend media/sync tests and 25 portable
-Swift tests passed. Native views passed syntax parsing only; Apple SDK type
-checking and the CryptoKit fixture await the hosted build.
+Media verification (2026-09-28, `a2be70d`): 47 backend media/sync tests and 25
+portable Swift tests passed. The subsequent Watch handoff changes pass all 27
+Swift tests, including temporary-file removal, duplicate receipt, corruption,
+and isolation of a failed inbox item. Native phone/Watch views passed syntax
+parsing only; Apple SDK type checking and the CryptoKit fixture await the hosted
+build. No paired-device transfer has run.
 
 - [Native app and build notes](../apple/README.md)
 - [Native screens and app state](../apple/App/)

@@ -30,6 +30,11 @@ jobs:
         run: brew install xcodegen
       - name: Generate Xcode project
         run: xcodegen generate --spec apple/project.yml
+      - name: Build Watch companion
+        run: |
+          xcodebuild -project apple/Lunaschal.xcodeproj -scheme LunaschalWatch \
+            -sdk watchsimulator -destination 'generic/platform=watchOS Simulator' \
+            -derivedDataPath apple/WatchDerivedData CODE_SIGNING_ALLOWED=NO build
       - name: Build app and test offline capture on iPhone simulator
         shell: bash
         run: |

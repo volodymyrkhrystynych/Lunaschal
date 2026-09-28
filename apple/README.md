@@ -117,9 +117,15 @@ publicly to make CI work: simulator capture tests never contact it.
   share extensions, and PencilKit remain outstanding. Bulk requests prohibit
   cellular and expensive connections; actual Tailscale/hotspot policy needs
   device validation. The budget currently covers media, not SQLite text.
-- Apple Watch Series 7 companion is a later target: preserve audio on the watch,
-  transfer to the iPhone, then reuse this outbox and server protocol. Watch
-  capture must not depend on the server or phone being reachable immediately.
+- The Watch target now has Record / Transcribe / Stop, persistent recordings,
+  interrupted-file recovery, and queued WatchConnectivity handoff. The phone
+  copies incoming temporary files synchronously, verifies their hashes, and
+  imports them without changing their IDs, times, modes, or prior upload state.
+  “Saved on phone” is a separate durable receipt, not a server-upload claim.
+  Watch originals are retained; automatic cleanup is not implemented yet.
+  Watch compilation, recording lifecycle, and paired-device transfers remain
+  unverified. WatchConnectivity transfer validation requires paired devices
+  ([Apple's transferFile documentation](<https://developer.apple.com/documentation/watchconnectivity/wcsession/transferfile(_:metadata:)>)).
 - Local speech recognition and Foundation Models are optional later layers.
   Server transcription is the only transcription path in this first slice.
 - Practice and Notebook are intentionally absent from this app's navigation.

@@ -3,6 +3,7 @@
 *.xcodeproj/
 Generated/
 DerivedData/
+WatchDerivedData/
 *.xcarchive/
 *.ipa
 *.p12

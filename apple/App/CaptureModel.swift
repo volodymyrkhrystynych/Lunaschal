@@ -22,6 +22,7 @@ final class CaptureModel: ObservableObject {
     let replica: ReplicaStore
     let media: MediaStore
     let recorder: Recorder
+    private let watchReceiver: WatchReceiver
     private let syncer: CaptureSync
     private let replicaSyncer: ReplicaSync
     private let librarySyncer: ReplicaSync
@@ -35,6 +36,7 @@ final class CaptureModel: ObservableObject {
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         recorder = Recorder(store: store)
+        watchReceiver = try WatchReceiver(store: store)
         syncer = CaptureSync(store: store)
         replicaSyncer = ReplicaSync(store: replica)
         librarySyncer = ReplicaSync(store: replica)
@@ -51,6 +53,9 @@ final class CaptureModel: ObservableObject {
             self?.requestSync()
         }
         recorder.onError = { [weak self] in self?.message = $0.localizedDescription }
+        watchReceiver.onChange = { [weak self] in self?.reload(); self?.requestSync() }
+        watchReceiver.onError = { [weak self] in self?.message = $0.localizedDescription }
+        watchReceiver.activate()
     }
 
     var allowCellular: Bool {

@@ -26,11 +26,26 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         defer { isStarting = false }
         var capture: Capture?
         do {
-            guard await AVAudioApplication.requestRecordPermission() else {
+            let available = (try FileManager.default.attributesOfFileSystem(forPath: store.root.path)[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
+            guard available > 32 * 1024 * 1024 else {
+                throw RecorderError.message("Free some device storage before starting a recording. Saved audio has been kept.")
+            }
+            #if os(watchOS)
+            let permission = await withCheckedContinuation { continuation in
+                AVAudioSession.sharedInstance().requestRecordPermission { continuation.resume(returning: $0) }
+            }
+            #else
+            let permission = await AVAudioApplication.requestRecordPermission()
+            #endif
+            guard permission else {
                 throw RecorderError.message("Allow microphone access in Settings to record.")
             }
             let session = AVAudioSession.sharedInstance()
+            #if os(watchOS)
+            try session.setCategory(.record, mode: .default)
+            #else
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+            #endif
             try session.setActive(true)
             let item = Capture(mode: mode)
             // Commit the identity before opening the audio file. After a crash,
