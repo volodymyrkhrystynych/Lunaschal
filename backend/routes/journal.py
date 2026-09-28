@@ -288,6 +288,10 @@ def create_journal_entry(
 @bp.post('')
 def create_entry():
     body = request.json or {}
+    try:
+        captured_at = _optional_capture_time(body)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     raw_content = body.get('raw_content', '').strip()
     content = body.get('content', '').strip()
 
@@ -330,7 +334,7 @@ def create_entry():
     # a no-op, and a None return means we've already saved this entry.
     id = body.get('id') or str(ULID())
     create_journal_entry(
-        content, raw_content, now,
+        content, raw_content, captured_at if captured_at is not None else now,
         title=title, tags=tags, entry_id=id, polish=True,
         pending_attachments=pending,
         # Absent unless the composer's location button was pressed and the
@@ -929,7 +933,9 @@ def upload_attachment(id):
 
 
 def _parse_capture_time(value: str | None) -> datetime:
-    """Parse an ISO timestamp carrying the screenshot machine's local offset."""
+    """Parse an ISO timestamp carrying the capture device's UTC offset."""
+    if not isinstance(value, str):
+        raise ValueError('capturedAt must be an ISO timestamp')
     try:
         captured = datetime.fromisoformat((value or '').strip())
     except ValueError as exc:
@@ -937,6 +943,20 @@ def _parse_capture_time(value: str | None) -> datetime:
     if captured.tzinfo is None or captured.utcoffset() is None:
         raise ValueError('capturedAt must include a UTC offset')
     return captured
+
+
+def _optional_capture_time(values) -> int | None:
+    """Offline capture keeps its original journal day, including on replay.
+
+    Omission preserves the existing browser contract. An explicit malformed
+    value must not silently file a capture under the day it was uploaded.
+    """
+    if 'capturedAt' not in values:
+        return None
+    try:
+        return int(_parse_capture_time(values['capturedAt']).timestamp())
+    except (OverflowError, OSError) as exc:
+        raise ValueError('capturedAt is outside the supported range') from exc
 
 
 def _capture_local_parts(attachment) -> tuple[str, str]:
@@ -1221,6 +1241,7 @@ def create_recording_entry():
     replay loop along with the audio. See `_link_recording_fic`.
     """
     try:
+        captured_at = _optional_capture_time(request.form)
         entry_id = _client_id(request.form.get('id'))
         attachment_id = _client_id(request.form.get('attachmentId'))
         idea_id = _client_id(request.form.get('ideaId'))
@@ -1269,7 +1290,7 @@ def create_recording_entry():
         'INSERT OR IGNORE INTO journal_entries(id, content, raw_content, title,'
         ' tags, created_at, updated_at) VALUES (?,?,?,?,?,?,?)',
         (entry_id, '', None, (request.form.get('title') or '').strip() or None,
-         None, now, now),
+         None, captured_at if captured_at is not None else now, now),
     )
     db.commit()
     # Only an entry this request created may be cleaned up below: a replay whose
@@ -1286,6 +1307,7 @@ def create_recording_entry():
         attachment, failure = _store_attachment(
             entry_id, file, request.form.get('name') or 'Recording', attachment_id,
             media_only=True,
+            created_at=captured_at,
         )
     except Exception:
         _rollback_entry()

@@ -1,0 +1,59 @@
+name: Lunaschal
+options:
+  bundleIdPrefix: com.lunaschal
+  deploymentTarget:
+    iOS: '26.0'
+packages:
+  LunaschalCore:
+    path: LunaschalCore
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    TARGETED_DEVICE_FAMILY: '1,2'
+targets:
+  Lunaschal:
+    type: application
+    platform: iOS
+    sources: [App]
+    dependencies:
+      - package: LunaschalCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: '0.1.0'
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: Lunaschal
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        NSMicrophoneUsageDescription: Record thoughts and save the original audio in your journal.
+        NSLocalNetworkUsageDescription: Connect to your personal Lunaschal server.
+        UIBackgroundModes: [audio]
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+  LunaschalUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: Lunaschal
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  Lunaschal:
+    build:
+      targets:
+        Lunaschal: all
+    test:
+      targets: [LunaschalUITests]

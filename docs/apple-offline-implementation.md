@@ -1,0 +1,387 @@
+# Apple apps and offline experience — implementation tracker
+
+Last updated: 2026-09-27. Working branch: `feat/apple-offline-foundation`.
+
+This is the implementation plan and progress tracker for Lunaschal on iPhone,
+iPad, and Apple Watch. It records the agreed product direction, the first
+implementation, and the work needed to reach the complete offline experience.
+Use [apple/README.md](../apple/README.md) for current build instructions and
+implementation limits. Keep this document current as work lands.
+
+## Current position
+
+**The initial native capture implementation exists locally. It is not yet an
+installable, signed, or device-validated release.** No implementation commits
+or pushes have been made in this session.
+
+| Milestone                                      | Status                               | Completion evidence still needed                                        |
+| ---------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
+| M0 — Build and distribution                    | In progress                          | Hosted Mac build/UI tests, signing, TestFlight installation             |
+| M1 — Offline journal capture                   | Implemented locally; partly verified | Native compilation, device recording and connection checks              |
+| M2 — Durable background transfers              | Planned                              | Recovery, network-policy, and suspended-app tests                       |
+| M3 — Multi-device data synchronization         | Planned                              | Bootstrap, incremental changes, conflicts, deletion, migrations         |
+| M4 — Downloadable library                      | Planned                              | Complete selected collections, offline reading/search, storage controls |
+| M5 — Native drawing and annotation             | Planned; prototype early             | PencilKit compatibility and actual iPad validation                      |
+| M6 — Mobile navigation and capture integration | Partly started                       | Broader feature inventory, share extension, YouTube capture             |
+| M7 — Watch recording companion                 | Planned                              | Watch persistence, phone handoff, end-to-end deduplication              |
+| M8 — Optional on-device speech and AI          | Evaluation pending                   | Availability, language support, quality and resource measurements       |
+| M9 — Release and recovery readiness            | Planned                              | Upgrade/restore tests, documentation, stable signed distribution        |
+
+### Evidence from the initial implementation
+
+- [x] 145 relevant backend tests passed across journal capture, attachments,
+      multi-clip recording, journal routes, and screenshot journal tests.
+- [x] 13 Swift core tests passed in a Swift 6.2 Linux container.
+- [x] Native Swift source passed syntax parsing; this does **not** establish
+      successful Apple SDK type checking or linking.
+- [x] Project/workflow YAML parsed; new Markdown/YAML passed Prettier formatting.
+- [ ] Hosted Mac workflow has run successfully.
+- [ ] Offline capture/relaunch XCUITest has run successfully.
+- [ ] A signed app has been installed on the user's devices.
+
+Record subsequent verification below with the commit/build, command, result,
+and any remaining limits. Do not promote “source written” to “device verified.”
+
+## Agreed requirements and constraints
+
+| Area              | Decision                                                                                                                                       |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| iPhone            | iPhone 16, user-reported iOS 26.6.2                                                                                                            |
+| iPad              | 2021 12.9-inch M1 iPad Pro, Pencil 2, user-reported iPadOS 26.6.2                                                                              |
+| Watch             | Apple Watch Series 7, user-reported watchOS 26.6                                                                                               |
+| Existing computer | Early-2015 Intel MacBook on Monterey 12.7.6; do not require buying a new Mac                                                                   |
+| Development       | Linux workspace; hosted macOS builds and tests; real devices for hardware behavior                                                             |
+| Developer account | User has an Apple developer membership; team/signing setup remains outstanding                                                                 |
+| Server            | Retain Linux Flask/SQLite server and existing local AI services                                                                                |
+| Connectivity      | Keep Tailscale; use HTTPS within the tailnet; public exposure is not required                                                                  |
+| Cellular          | Text/audio sync enabled over cellular by default, with a per-device option                                                                     |
+| Bulk downloads    | Wi-Fi only; also account for a Wi-Fi hotspot being an expensive connection                                                                     |
+| Device storage    | Both iPhone and iPad have 256 GB, typically more than 50 GB free; use measured free space and budgets, not an assumed entitlement to all of it |
+| Offline scope     | Aim for the full active library and personal data needed by the mobile app, with archive media excluded by default                             |
+| Knowledge         | Optional on each device; Wikipedia is a candidate collection, not a mandatory download                                                         |
+| Mobile exclusions | Practice and Notebook do not need native mobile tabs                                                                                           |
+| Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                            |
+| Chat              | Server-backed initially; local chat is optional and requires evaluation                                                                        |
+| Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                             |
+
+“Transcribe” means record and retain audio, create a journal entry, and request
+transcription into its text. “Record” means create the entry with its recording
+without requesting speech transcription. Neither action should require a live
+server connection. Server enrichment remains separate from saving a capture.
+
+Saving a YouTube link offline means preserving the URL and the user's thoughts
+for later processing. It does not promise that a video which was never
+downloaded will play offline.
+
+## Architecture and invariants
+
+These are implementation constraints for the work ahead. The precise sync API,
+database schema, and drawing interchange format remain design work under their
+milestones.
+
+- Keep the Apple client alongside the React/Linux app. Native storage,
+  recording, and drawing are the priority. Reuse suitable existing web screens
+  where helpful; a complete SwiftUI rewrite of every feature is not required.
+- Native UI and any embedded web UI must use the same device records and
+  outbox. Do not create independent stores that disagree about what was saved.
+- A local save succeeds before upload starts. Recording is independent of
+  authentication, server reachability, transcription, and AI availability.
+- Keep stable ULIDs and operation identities across restarts and retries.
+  Treat a lost acknowledgement as a normal retry case.
+- Preserve capture timestamps and the existing 4am journal-day semantics.
+  Synchronization progress must use server-issued revisions/cursors rather
+  than device wall clocks.
+- Build a device database and separate media store for library replication.
+  Do not synchronize the live server SQLite file or copy server credentials,
+  provider configuration, and daemon job state into the mobile app.
+- Keep unsynced originals distinct from downloadable copies. Storage cleanup
+  must never evict an unsynced capture. A device copy is not a substitute for
+  server backups.
+- Acknowledge durable receipt at each transfer boundary. Preserve original
+  recordings through server transcription and any local AI processing.
+- Preserve competing edits until resolved. A refresh must not overwrite local
+  unsynced text, strokes, or picture placement.
+- Keep Tailscale/HTTPS and application authentication. Store credentials in
+  Keychain/CI secrets, not source files or the downloadable data replica.
+- Reuse existing server storage, journal, transcription, and AI job helpers.
+  Preserve `LUNASCHAL_NO_SCHEDULERS` in tests and seed every new schema table.
+- Work on approved feature branches. Commit, push, publish, or alter production
+  only when authorized; adding a workflow does not authorize running a release.
+
+## Milestones
+
+### M0 — Hosted builds and first install
+
+- [x] Create the approved `feat/apple-offline-foundation` branch in the Codex worktree.
+- [x] Add the iPhone/iPad XcodeGen project and portable Swift package.
+- [x] Add unsigned hosted Mac compilation/UI-test and Linux Swift-test jobs.
+- [ ] Run the workflow and resolve all Apple SDK compilation or simulator failures.
+- [ ] Select/register the final bundle identifier and supply the Apple team ID.
+- [ ] Add app icons and required distribution metadata.
+- [ ] Configure signing certificates/profiles and App Store Connect access as secrets.
+- [ ] Add an explicitly triggered signed archive/TestFlight release workflow.
+- [ ] Install a build on the iPhone and iPad and record the build identifier.
+- [ ] Establish reproducible toolchain versions and a signing-renewal procedure.
+
+**Done when:** Linux development can produce a tested, signed build on a hosted
+Mac and install it on both devices without the old MacBook building the app.
+
+### M1 — Offline capture foundation
+
+- [x] Native Capture / Journal / Settings screens.
+- [x] Save typed entries offline and retain an unfinished typed draft locally.
+- [x] Separate Record and Transcribe actions with original audio retention.
+- [x] Durable per-capture manifests and separate audio files in Application Support.
+- [x] Stable entry/attachment IDs and matching server acknowledgement checks.
+- [x] Existing password/display-code login with session token in Keychain.
+- [x] Bind the local capture store to its authenticated HTTPS server.
+- [x] Foreground automatic upload/retry with configurable cellular access.
+- [x] Read back server titles/transcripts for the most recent 30 synced captures.
+- [x] Local audio playback/export and explicit interrupted-recording review.
+- [x] Add optional `capturedAt` support to existing text/recording routes.
+- [x] Test restart, lost-response retry, rejected uploads, auth expiry, and retained audio.
+- [ ] Run native offline capture/relaunch UI tests on the hosted Mac.
+- [ ] Validate recording, playback, permissions, calls, screen lock, and Bluetooth on devices.
+- [ ] Validate cellular-off and Tailscale-disconnected behavior on devices.
+- [ ] Verify server transcripts and capture-day placement end to end.
+- [ ] Deploy the matching backend change through the normal authorized workflow.
+
+**Current limits:** captures made on this device only; uploads run while the app
+is active; no general entry editing/deletion, historical download, or photo
+import. Audio kept after a process kill may have an unfinalized AAC container
+and be unplayable. Interrupted-file retention is not a crash-proof recorder.
+
+**Done when:** a signed build can capture offline, reopen safely, and eventually
+produce exactly one correctly dated server entry per capture on both devices.
+
+### M2 — Transfer and recording durability
+
+- [ ] Design background URLSession transfers with durable task-to-operation mapping.
+- [ ] Recover outstanding transfers after suspension, process termination, and restart.
+- [ ] Define bounded retry/backoff, auth-required, rejected, and user-paused states.
+- [ ] Reconcile completed uploads whose acknowledgement or local state write was lost.
+- [ ] Support cancellation and changes to cellular policy during a transfer.
+- [ ] Test underlying network policy through Tailscale, including cellular/hotspot changes.
+- [ ] Expose transfer status and retry controls without repeated offline alerts.
+- [ ] Evaluate a recoverable audio format or finalized segments to limit audio loss
+      when recording is killed; do not upload incomplete containers silently.
+- [ ] Handle low storage, microphone interruptions, and long recordings explicitly.
+- [ ] Define resumable upload behavior for large captures if whole-file retries
+      prove too costly; preserve the existing idempotency contract.
+
+**Done when:** completed captures survive interrupted transfers and resume
+without duplicates or data loss, while respecting the user's network settings.
+Document OS scheduling limits instead of promising immediate background delivery.
+
+### M3 — Device database and multi-device sync
+
+- [ ] Inventory the records needed by each mobile feature and classify them as
+      synced data, local preferences, derived indexes, or server-only state.
+- [ ] Specify and version the sync API and minimum compatible server/client versions.
+- [ ] Introduce the indexed local database; migrate the current capture outbox
+      transactionally without losing manifests, IDs, files, or pending uploads.
+- [ ] Build a consistent paginated bootstrap plus server-issued change cursor.
+- [ ] Capture changes from every writer, including browser edits, imports, AI jobs,
+      and schedulers—not only native-client writes.
+- [ ] Include deletion tombstones and a retention/rebootstrap policy for devices
+      that have been offline longer than the server's change-history window.
+- [ ] Apply record batches and advance cursors atomically; resume interrupted bootstraps.
+- [ ] Add revision-checked mutations, stable operation IDs, and durable acknowledgements.
+- [ ] Define text, drawing, media, and reading-progress conflict behavior separately.
+- [ ] Handle edit-versus-delete without resurrecting deleted rows or discarding edits.
+- [ ] Keep original text, server transcripts, and polished text distinct.
+- [ ] Add offline search indexes and predictable schema migrations.
+- [ ] Define safe server-address changes, server restore detection, and account/device reset.
+- [ ] Extend server schema/seeding/tests together for any new tables.
+
+**Done when:** phone, iPad, and Linux edits converge after offline operation;
+conflicts are visible/recoverable; retries and bootstrap restarts are safe;
+server credentials and operational state never enter the device replica.
+
+### M4 — Library and storage management
+
+- [ ] Inventory the active library, media roots, and archive collections with sizes.
+- [ ] Define a per-device collection selection screen and storage budget.
+- [ ] Include complete selected books/fics, archived web articles, PDFs, newspapers,
+      and journal media—not only items previously opened in the UI.
+- [ ] Download collection manifests and files with stable identities, sizes, and hashes.
+- [ ] Resume partial downloads and verify integrity before marking files available.
+- [ ] Default archive video/audio bytes to excluded while retaining useful metadata,
+      thumbnails, commentary, and already-available transcripts.
+- [ ] Allow explicit pinning of supported archived items without silently enabling
+      bulk archive replication.
+- [ ] Add Wi-Fi-only bulk scheduling, pause/resume, progress, and download-size estimates.
+- [ ] Distinguish “downloaded,” “metadata only,” “pending download,” and “unavailable.”
+- [ ] Support offline browsing, reading, media playback, and search for downloaded content.
+- [ ] Add safe removal of device copies, pinned-content rules, and low-space handling.
+- [ ] Keep unsynced capture cleanup separate from downloaded-library cleanup.
+- [ ] Add optional Knowledge/ZIM downloads per device, including a local reading/search
+      strategy and licensing/attribution for any bundled reader dependencies.
+- [ ] Evaluate Wikipedia package choices against actual free space; keep them optional.
+
+**Done when:** the selected active library opens after a cold offline launch,
+without depending on browser caches or access to the server/archive drive.
+Deleting a downloaded device copy must not delete the server original.
+
+### M5 — PencilKit drawing and annotations
+
+Prototype this early, alongside M0–M2, because drawing quality is a primary
+motivation. Final integration depends on the M3 conflict/storage contract.
+
+- [ ] Prototype PencilKit on the actual M1 iPad/Pencil 2: latency, palm rejection,
+      finger scrolling, zoom, eraser, selection, and Pencil 2 double-tap behavior.
+- [ ] Inventory Paper, Study, newspaper/PDF annotations, and their coordinate systems.
+- [ ] Decide the canonical editable format and compatibility strategy for existing ink.
+- [ ] Preserve originals during conversion; document any lossy import/export.
+- [ ] Keep native editable drawings plus portable previews for Linux/web readers.
+- [ ] Decide whether cross-platform editing can be lossless; clearly label any
+      read-only or conversion-required paths rather than silently flattening ink.
+- [ ] Preserve A4/page coordinates, page ordering, pasted images, and image transforms.
+- [ ] Implement local drawing checkpoints and crash/reopen recovery.
+- [ ] Preserve the existing distinction between local saving and the explicit Paper
+      Save action until deliberately changing that interaction.
+- [ ] Synchronize page revisions with recoverable conflict copies.
+- [ ] Integrate PDF/newspaper annotation and the Study split reading/drawing layout.
+- [ ] Validate old pages, long documents, thumbnails, and Journal filing behavior.
+
+**Done when:** drawing feels reliable on the target iPad, works offline, and
+survives reopening/sync without losing existing ink or silently changing pages
+on Linux. Do not assume Pencil Pro-only hardware features are available.
+
+### M6 — Mobile navigation and capture integration
+
+- [x] Start with a compact native Capture / Journal / Settings tab layout.
+- [ ] Map existing features to phone, iPad, web-only, or omitted mobile experiences.
+- [ ] Keep Practice and Notebook out of mobile navigation; distinguish the Notebook
+      tab from the Paper/drawing features the iPad still needs.
+- [ ] Finalize phone tabs and iPad sidebar/split-view navigation as features arrive.
+- [ ] Add historical Journal browsing, editing, attachments, and conflict resolution.
+- [ ] Save YouTube URLs and commentary offline; queue server metadata/import work.
+- [ ] Show archive playback availability without preventing URL/commentary capture.
+- [ ] Add a share extension for links, audio, photos, and supported documents.
+- [ ] Use a shared app container/outbox with safe handoff from the share extension.
+- [ ] Reuse web readers/screens where appropriate with local content access and one
+      shared data source; avoid embedding a server-dependent page as “offline.”
+- [ ] Preserve useful keyboard access, accessibility labels, Dynamic Type, and rotation.
+- [ ] Review Calendar, Lifestyle, Food, Learning, and other existing views before
+      claiming mobile feature parity; full desktop parity is not a requirement.
+
+**Done when:** routine phone capture and iPad reading/drawing are easy to reach,
+and every exposed feature communicates its offline capabilities accurately.
+
+### M7 — Watch recording companion
+
+- [ ] Add the watchOS target and companion pairing/signing configuration.
+- [ ] Implement Record / Transcribe / Stop with clear recording and saved states.
+- [ ] Persist audio and capture metadata on the watch before attempting transfer.
+- [ ] Preserve IDs, capture time, and transcription intent through watch → phone → server.
+- [ ] Queue WatchConnectivity file transfers when the phone becomes available.
+- [ ] Acknowledge durable phone storage separately from server receipt; specify
+      when a watch copy may be removed and what the status indicator means.
+- [ ] Handle duplicate deliveries, interrupted transfers, watch/app restart, and
+      a phone that has not yet configured or authenticated its server.
+- [ ] Respect the phone's cellular-upload preference after watch handoff.
+- [ ] Handle microphone denial, interruptions, low storage, and long recordings.
+- [ ] Test on the user's Series 7 with the phone absent and the server unavailable.
+- [ ] Confirm both modes eventually create exactly one journal entry and retain audio.
+
+**Done when:** a thought can be recorded away from the phone and server, then
+arrive in the journal with its original time and intended transcription mode.
+Direct watch-to-server connectivity is not required for this milestone.
+
+### M8 — Optional on-device speech and AI
+
+- [ ] Check runtime availability by OS, hardware, locale, and downloaded model assets.
+- [ ] Evaluate Apple's speech APIs for offline transcription on the iPhone and iPad.
+- [ ] Compare representative recordings, names, languages, accuracy, latency,
+      storage, battery use, and long-recording behavior against the server path.
+- [ ] Define user choice between server transcription, local transcription, and fallback.
+- [ ] Preserve original audio and transcript provenance; prevent duplicate text when
+      local and server results arrive for the same recording.
+- [ ] Evaluate Foundation Models for titles, summaries, and journal cleanup separately
+      from speech recognition. AI availability must not gate capture or reading.
+- [ ] Keep original text visible and protect user edits from delayed enrichment.
+- [ ] Evaluate local chat with downloaded context and explicit capability limits.
+- [ ] Keep server chat/tool behavior through the existing shared AI layer; do not
+      assume the local model can perform unavailable server actions offline.
+
+**Done when:** supported local features are useful, optional, and degrade cleanly.
+Local chat is an optional extension, not a blocker for the core offline release.
+
+### M9 — Release, upgrades, and recovery
+
+- [ ] Test upgrades with pending uploads, interrupted recordings, downloaded files,
+      old drawing formats, and database migrations.
+- [ ] Test disk-full behavior at every local-save and transfer boundary.
+- [ ] Test expired login, unavailable Tailscale, missing archive drive, and server downtime.
+- [ ] Test server restore/reset and expired sync cursors without losing local edits.
+- [ ] Define backup/export/restore behavior for device-only captures and drawings.
+- [ ] Add actionable diagnostics without logging credentials or journal/audio content.
+- [ ] Validate storage settings, accessibility, and large-library performance.
+- [ ] Maintain repeatable TestFlight updates and a rollback/recovery procedure.
+- [ ] Publish a supported-feature/device matrix and known limitations for each build.
+- [ ] Decide the long-term personal distribution method separately from beta testing.
+
+**Done when:** routine upgrades and common failure modes preserve the user's
+work, and the documented supported experience matches device-tested behavior.
+
+## Dependency order and next actions
+
+1. **Now:** run the unsigned hosted Mac build/UI test after an authorized
+   commit/push; resolve compilation or test issues before signing.
+2. **First install:** complete M0 signing and validate M1 on iPhone/iPad.
+3. **Early risk checks:** prototype PencilKit and recording recovery before
+   committing to drawing formats or a full library schema.
+4. **Foundation:** implement M2 and M3; library downloads depend on both.
+5. **Daily use:** build M4, M5, and M6 incrementally with device-tested releases.
+6. **Watch:** M7 can start once capture identities and durable phone handoff are
+   stable; it does not need to wait for the full library.
+7. **Optional AI:** M8 follows reliable capture and retrieval; M9 checks apply
+   throughout, not only at the final release.
+
+The proposed order is adjustable. Preserve the agreed behavior and record any
+change in scope or architecture here before downstream implementation relies on it.
+
+## Decisions still to make
+
+| Decision                                                          | Needed for | Current position                                                  |
+| ----------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
+| Final bundle ID, Apple team ID, signing approach                  | M0         | Project currently uses `com.lunaschal.mobile` as a starting value |
+| First library collection priorities and size budget per device    | M4         | Full active library is the goal; actual sizes not measured        |
+| Broader mobile feature list                                       | M6         | Practice/Notebook omitted; other views need an inventory          |
+| Drawing interchange and cross-platform editability                | M5         | PencilKit prototype must inform this                              |
+| Sync conflict UX and deletion retention                           | M3         | Preserve competing work; exact resolution flow unspecified        |
+| Local transcription languages and preferred server/local behavior | M8         | Server transcription first                                        |
+| Long-term distribution                                            | M9         | Hosted builds/TestFlight are the initial route                    |
+
+These are staged decisions, not reasons to pause unrelated implementation.
+
+## Tracking conventions
+
+- Check a task only when that exact deliverable is complete. Keep implementation,
+  automated verification, device verification, and deployment separate.
+- Update the milestone table, relevant checkboxes, and verification log together.
+- Add commit/PR/build references when they exist; do not invent them for local work.
+- Keep technical setup instructions in `apple/README.md`; keep agreed scope and
+  progress here. Link this tracker from the general roadmap.
+- For a regression, reopen the affected checkbox and record the observed failure.
+
+### Verification log
+
+| Date       | Scope                                               | Evidence                                                                         | Limits                                                                     |
+| ---------- | --------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 2026-09-27 | Initial capture/backend implementation, uncommitted | 145 backend tests; 13 Swift core tests; Swift syntax parsing; YAML/format checks | No hosted Mac run, native UI test execution, signing, or device validation |
+
+### Implementation entry points
+
+- [Native app and build notes](../apple/README.md)
+- [Native screens and app state](../apple/App/)
+- [Portable capture/sync package](../apple/LunaschalCore/)
+- [Offline relaunch UI test](../apple/UITests/OfflineCaptureTests.swift)
+- [Xcode project specification](../apple/project.yml)
+- [Hosted build workflow](../.github/workflows/apple.yml)
+- [Journal API](../backend/routes/journal.py) and [journal feature instructions](../backend/journal/CLAUDE.md)
+- [Offline timestamp API tests](../backend/tests/test_journal_offline_capture.py)
+- [Existing browser offline storage/queues](../src/offline/)
+- [Paper feature instructions](../backend/paper/CLAUDE.md)
+- [Knowledge architecture](knowledge-tab.md)

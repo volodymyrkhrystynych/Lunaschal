@@ -1,0 +1,46 @@
+name: Apple app
+on:
+  pull_request:
+    paths: ['apple/**', '.github/workflows/apple.yml']
+  push:
+    branches: ['main', 'feat/apple-offline-foundation']
+    paths: ['apple/**', '.github/workflows/apple.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: apple-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    container: swift:6.2-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test --package-path apple/LunaschalCore
+  ios:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Apple toolchain
+        run: xcodebuild -version
+      - name: Test capture persistence and synchronization
+        run: swift test --package-path apple/LunaschalCore
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: xcodegen generate --spec apple/project.yml
+      - name: Build app and test offline capture on iPhone simulator
+        shell: bash
+        run: |
+          simulator_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for runtime,devices in data["devices"].items() if "iOS" in runtime for d in devices if "iPhone" in d["name"]))')
+          xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -derivedDataPath apple/DerivedData -resultBundlePath apple/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apple-test-results
+          path: apple/TestResults.xcresult
+          if-no-files-found: ignore

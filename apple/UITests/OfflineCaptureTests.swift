@@ -1,0 +1,22 @@
+import XCTest
+
+final class OfflineCaptureTests: XCTestCase {
+    func testCaptureSurvivesTerminationWithoutAServer() {
+        let app = XCUIApplication()
+        app.launch()
+        let text = "Offline capture \(UUID().uuidString.prefix(8))"
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 10))
+        editor.tap()
+        editor.typeText(text)
+        app.buttons["Save entry"].tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+        app.tabBars.buttons["Journal"].tap()
+        XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 10))
+        app.staticTexts[text].tap()
+        XCTAssertTrue(app.staticTexts["Saved on device · Waiting to sync"].exists)
+        XCTAssertTrue(app.staticTexts["Original text"].exists)
+    }
+}

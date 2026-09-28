@@ -2,6 +2,14 @@
 
 Future features and larger work items for Lunaschal. Roughly ordered within each section; nothing here is scheduled.
 
+## Apple apps and offline experience
+
+The active plan for native iPhone/iPad capture, multi-device synchronization,
+downloadable libraries, PencilKit drawing, and the Watch recording companion is
+tracked in [Apple/offline implementation](apple-offline-implementation.md).
+That document separates implemented work from automated/device verification and
+tracks the hosted Mac/TestFlight build path and optional on-device AI.
+
 ## Backups (mandatory)
 
 Basically mandatory — as email, journals, handwritten pages, and the book library accumulate, `data/lunaschal.db` becomes irreplaceable.
