@@ -1,6 +1,6 @@
 # Apple apps and offline experience — implementation tracker
 
-Last updated: 2026-09-27. Working branch: `feat/apple-offline-foundation`.
+Last updated: 2026-09-28. Working branch: `feat/apple-offline-foundation`.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first
@@ -10,22 +10,23 @@ implementation limits. Keep this document current as work lands.
 
 ## Current position
 
-**The initial native capture implementation exists locally. It is not yet an
-installable, signed, or device-validated release.** No implementation commits
-or pushes have been made in this session.
+**Native capture, a SQLite replica, journal editing/conflicts, and library-text
+sync exist locally. This is not yet an installable, signed, or device-validated
+release.** Capture foundation: `e018be9`. Further sync work is being committed
+in stages; no branch push or hosted build has run.
 
-| Milestone                                      | Status                               | Completion evidence still needed                                        |
-| ---------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
-| M0 — Build and distribution                    | In progress                          | Hosted Mac build/UI tests, signing, TestFlight installation             |
-| M1 — Offline journal capture                   | Implemented locally; partly verified | Native compilation, device recording and connection checks              |
-| M2 — Durable background transfers              | Planned                              | Recovery, network-policy, and suspended-app tests                       |
-| M3 — Multi-device data synchronization         | Planned                              | Bootstrap, incremental changes, conflicts, deletion, migrations         |
-| M4 — Downloadable library                      | Planned                              | Complete selected collections, offline reading/search, storage controls |
-| M5 — Native drawing and annotation             | Planned; prototype early             | PencilKit compatibility and actual iPad validation                      |
-| M6 — Mobile navigation and capture integration | Partly started                       | Broader feature inventory, share extension, YouTube capture             |
-| M7 — Watch recording companion                 | Planned                              | Watch persistence, phone handoff, end-to-end deduplication              |
-| M8 — Optional on-device speech and AI          | Evaluation pending                   | Availability, language support, quality and resource measurements       |
-| M9 — Release and recovery readiness            | Planned                              | Upgrade/restore tests, documentation, stable signed distribution        |
+| Milestone                                      | Status                               | Completion evidence still needed                                  |
+| ---------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------- |
+| M0 — Build and distribution                    | In progress                          | Hosted Mac build/UI tests, signing, TestFlight installation       |
+| M1 — Offline journal capture                   | Implemented locally; partly verified | Native compilation, device recording and connection checks        |
+| M2 — Durable background transfers              | Planned                              | Recovery, network-policy, and suspended-app tests                 |
+| M3 — Multi-device data synchronization         | Implemented in part                  | Capture outbox migration, broader mutations, native validation    |
+| M4 — Downloadable library                      | Text downloads implemented           | Media files, collection selection, storage controls               |
+| M5 — Native drawing and annotation             | Planned; prototype early             | PencilKit compatibility and actual iPad validation                |
+| M6 — Mobile navigation and capture integration | Partly started                       | Broader feature inventory, share extension, YouTube capture       |
+| M7 — Watch recording companion                 | Planned                              | Watch persistence, phone handoff, end-to-end deduplication        |
+| M8 — Optional on-device speech and AI          | Evaluation pending                   | Availability, language support, quality and resource measurements |
+| M9 — Release and recovery readiness            | Planned                              | Upgrade/restore tests, documentation, stable signed distribution  |
 
 ### Evidence from the initial implementation
 
@@ -146,9 +147,9 @@ Mac and install it on both devices without the old MacBook building the app.
 - [ ] Verify server transcripts and capture-day placement end to end.
 - [ ] Deploy the matching backend change through the normal authorized workflow.
 
-**Current limits:** captures made on this device only; uploads run while the app
-is active; no general entry editing/deletion, historical download, or photo
-import. Audio kept after a process kill may have an unfinalized AAC container
+**Current limits:** uploads run while the app is active; photo import remains
+outstanding. Historical journal download and text editing now use M3's replica.
+Audio kept after a process kill may have an unfinalized AAC container
 and be unplayable. Interrupted-file retention is not a crash-proof recorder.
 
 **Done when:** a signed build can capture offline, reopen safely, and eventually
@@ -177,22 +178,29 @@ Document OS scheduling limits instead of promising immediate background delivery
 
 - [ ] Inventory the records needed by each mobile feature and classify them as
       synced data, local preferences, derived indexes, or server-only state.
-- [ ] Specify and version the sync API and minimum compatible server/client versions.
+- [x] Specify and version the sync API and minimum compatible server/client versions.
 - [ ] Introduce the indexed local database; migrate the current capture outbox
       transactionally without losing manifests, IDs, files, or pending uploads.
-- [ ] Build a consistent paginated bootstrap plus server-issued change cursor.
-- [ ] Capture changes from every writer, including browser edits, imports, AI jobs,
+- [x] Build a consistent paginated bootstrap plus server-issued change cursor.
+- [x] Capture changes from every writer, including browser edits, imports, AI jobs,
       and schedulers—not only native-client writes.
-- [ ] Include deletion tombstones and a retention/rebootstrap policy for devices
+- [x] Include deletion tombstones and a retention/rebootstrap policy for devices
       that have been offline longer than the server's change-history window.
-- [ ] Apply record batches and advance cursors atomically; resume interrupted bootstraps.
-- [ ] Add revision-checked mutations, stable operation IDs, and durable acknowledgements.
+- [x] Apply record batches and advance cursors atomically; resume interrupted bootstraps.
+- [x] Add revision-checked mutations, stable operation IDs, and durable acknowledgements.
 - [ ] Define text, drawing, media, and reading-progress conflict behavior separately.
-- [ ] Handle edit-versus-delete without resurrecting deleted rows or discarding edits.
+- [x] Handle edit-versus-delete without resurrecting deleted rows or discarding edits.
 - [ ] Keep original text, server transcripts, and polished text distinct.
 - [ ] Add offline search indexes and predictable schema migrations.
 - [ ] Define safe server-address changes, server restore detection, and account/device reset.
-- [ ] Extend server schema/seeding/tests together for any new tables.
+- [x] Extend server schema/seeding/tests together for any new tables.
+
+**Implemented scope:** 16 allowlisted collections, SQLite FTS5 search, journal
+text/title/tag update and deletion operations, explicit conflict preservation,
+and manual sync-log compaction/restore epoch rotation. See the
+[protocol notes](../backend/mobile_sync/README.md). Capture manifests remain
+separate from the replica; broad feature inventory, media/drawing mutations,
+automatic maintenance, device reset, and capture-outbox migration remain open.
 
 **Done when:** phone, iPad, and Linux edits converge after offline operation;
 conflicts are visible/recoverable; retries and bootstrap restarts are safe;
@@ -350,7 +358,7 @@ change in scope or architecture here before downstream implementation relies on 
 | First library collection priorities and size budget per device    | M4         | Full active library is the goal; actual sizes not measured        |
 | Broader mobile feature list                                       | M6         | Practice/Notebook omitted; other views need an inventory          |
 | Drawing interchange and cross-platform editability                | M5         | PencilKit prototype must inform this                              |
-| Sync conflict UX and deletion retention                           | M3         | Preserve competing work; exact resolution flow unspecified        |
+| Sync conflict UX and deletion retention                           | M3         | Journal resolution implemented; other record types pending        |
 | Local transcription languages and preferred server/local behavior | M8         | Server transcription first                                        |
 | Long-term distribution                                            | M9         | Hosted builds/TestFlight are the initial route                    |
 
@@ -368,9 +376,11 @@ These are staged decisions, not reasons to pause unrelated implementation.
 
 ### Verification log
 
-| Date       | Scope                                               | Evidence                                                                         | Limits                                                                     |
-| ---------- | --------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 2026-09-27 | Initial capture/backend implementation, uncommitted | 145 backend tests; 13 Swift core tests; Swift syntax parsing; YAML/format checks | No hosted Mac run, native UI test execution, signing, or device validation |
+| Date       | Scope                                                   | Evidence                                                                         | Limits                                                                     |
+| ---------- | ------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 2026-09-27 | Capture foundation, `e018be9`                           | 145 backend tests; 13 Swift core tests; Swift syntax parsing; YAML/format checks | No hosted Mac run, native UI test execution, signing, or device validation |
+| 2026-09-28 | Replica, conflicts, historical journal and library text | 173 backend regression tests; 21 Swift core tests; native Swift syntax parsing   | Apple SDK type checking and simulator/device execution still pending       |
+| 2026-09-28 | Sync-log compaction and restore epochs                  | 41 sync/seeder tests passed                                                      | Maintenance commands tested on isolated databases only                     |
 
 ### Implementation entry points
 

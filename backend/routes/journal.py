@@ -449,6 +449,13 @@ def update_entry(id):
 @bp.delete('/<id>')
 def delete_entry(id):
     db = get_db()
+    delete_journal_entry(db, id)
+    db.commit()
+    return jsonify({'success': True})
+
+
+def delete_journal_entry(db, id):
+    """Shared deletion side effects; caller owns the transaction."""
     session = db.execute(
         'SELECT calendar_event_id FROM journal_screenshot_sessions WHERE entry_id=?',
         (id,),
@@ -463,8 +470,6 @@ def delete_entry(id):
     # would let a late upload replay recreate work the user just removed.
     db.execute('UPDATE journal_voice_drafts SET entry_id=NULL WHERE entry_id=?', (id,))
     db.execute('DELETE FROM journal_entries WHERE id=?', (id,))
-    db.commit()
-    return jsonify({'success': True})
 
 
 # --- Merging voice-only entries -----------------------------------------------

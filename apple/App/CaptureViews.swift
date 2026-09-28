@@ -12,6 +12,8 @@ struct CaptureRoot: View {
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }
             NavigationStack { CaptureList(model: model) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }
+            NavigationStack { LibraryView(model: model) }
+                .tabItem { Label("Library", systemImage: "books.vertical") }
             NavigationStack { ConnectionSettings(model: model) }
                 .tabItem { Label("Settings", systemImage: "gear") }
         }
@@ -76,6 +78,19 @@ private struct CaptureList: View {
 
     var body: some View {
         List {
+            if !model.pendingEdits.isEmpty {
+                Section("Pending edits") {
+                    ForEach(model.pendingEdits) { edit in
+                        NavigationLink { PendingEditView(model: model, edit: edit) } label: {
+                            VStack(alignment: .leading) {
+                                Text(edit.original.title).lineLimit(1)
+                                Text(edit.state == "pending" ? "Saved on device · Waiting to sync" : "Needs resolution")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
             Section {
                 ForEach(model.captures) { capture in
                     NavigationLink {
@@ -90,9 +105,19 @@ private struct CaptureList: View {
                         }
                     }
                 }
-            } footer: { Text("Captures made on this device. Full journal history downloads are coming later.") }
+            } header: { Text("Captured on this device") }
+            Section("Server journal · Available offline") {
+                ForEach(model.journalRecords) { record in
+                    NavigationLink { JournalRecordView(model: model, record: record) } label: {
+                        VStack(alignment: .leading) {
+                            Text(record.title).lineLimit(2)
+                            Text(record.data?["createdAt"]?.string ?? "").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
         }
-        .overlay { if model.captures.isEmpty { ContentUnavailableView("No captures yet", systemImage: "book.closed") } }
+        .overlay { if model.captures.isEmpty && model.journalRecords.isEmpty { ContentUnavailableView("No captures yet", systemImage: "book.closed") } }
         .navigationTitle("Journal")
         .toolbar {
             if model.syncing { ProgressView() }

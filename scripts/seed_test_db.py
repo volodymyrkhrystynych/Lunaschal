@@ -1869,6 +1869,14 @@ def seed_infra(db):
     a public repo, and a demo database is exactly the sort of file someone
     copies without reading.
     """
+    # init_db seeds the sync epoch. Feature seed inserts fire the capture
+    # triggers, so this also exercises the device feed on a realistic demo.
+    assert db.execute('SELECT COUNT(*) FROM mobile_sync_state').fetchone()[0] == 1
+    assert db.execute('SELECT COUNT(*) FROM mobile_sync_changes').fetchone()[0] > 0
+    db.execute(
+        'INSERT INTO mobile_sync_operations(id,request_hash,response,status,created_at) VALUES (?,?,?,?,?)',
+        (new_id(), 'demo-operation-not-a-credential', '{"demo":true}', 200, ts(1)),
+    )
     db.execute(
         'UPDATE settings SET ai_provider = ?, llama_url = ?, llama_model = ?, '
         'stt_backend = ?, tts_backend = ?, whisper_model = ?, stt_device = ?, '

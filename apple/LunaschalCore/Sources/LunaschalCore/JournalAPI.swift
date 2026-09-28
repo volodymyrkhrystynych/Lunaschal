@@ -30,7 +30,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
 }
 
-public final class JournalAPI: JournalTransport {
+public final class JournalAPI: JournalTransport, ReplicaTransport {
     public let server: URL
     private let token: String?
     private let session: URLSession
@@ -113,6 +113,27 @@ public final class JournalAPI: JournalTransport {
         let snapshot = try JSONDecoder().decode(JournalSnapshot.self, from: data)
         guard snapshot.id == id else { throw CaptureError.invalidResponse }
         return snapshot
+    }
+
+    public func syncPage(cursor: String?, collections: [String]) async throws -> SyncPage {
+        var req = request("api/mobile/sync")
+        var parts = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
+        parts.queryItems = cursor.map { [URLQueryItem(name: "cursor", value: $0)] }
+            ?? [URLQueryItem(name: "collections", value: collections.joined(separator: ","))]
+        req.url = parts.url
+        let (data, response) = try await session.data(for: req)
+        try check(data, response)
+        return try JSONDecoder().decode(SyncPage.self, from: data)
+    }
+
+    public func applyOperation(_ operation: ReplicaOperation) async throws -> OperationReply {
+        var req = request("api/mobile/operations", method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(operation)
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw CaptureError.invalidResponse }
+        if ![400, 409, 410, 413, 422].contains(http.statusCode) { try check(data, response) }
+        return try JSONDecoder().decode(OperationReply.self, from: data)
     }
 
     private func request(_ path: String, method: String = "GET") -> URLRequest {

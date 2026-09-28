@@ -13,22 +13,37 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var signingIn = false
     @Published var message: String?
     @Published private(set) var syncMessage: String?
+    @Published private(set) var journalRecords: [SyncChange] = []
+    @Published private(set) var pendingEdits: [PendingEdit] = []
+    @Published private(set) var libraryRecords: [SyncChange] = []
+    @Published private(set) var downloadingLibrary = false
+    @Published private(set) var libraryMessage: String?
     let store: CaptureStore
+    let replica: ReplicaStore
     let recorder: Recorder
     private let syncer: CaptureSync
+    private let replicaSyncer: ReplicaSync
+    private let librarySyncer: ReplicaSync
     private var activeAPI: JournalAPI?
+    private var libraryAPI: JournalAPI?
     private var token: String?
     private var syncingTask: Task<Void, Never>?
 
     init(store: CaptureStore) throws {
         self.store = store
+        replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         recorder = Recorder(store: store)
         syncer = CaptureSync(store: store)
+        replicaSyncer = ReplicaSync(store: replica)
+        librarySyncer = ReplicaSync(store: replica)
         try store.recoverInterruptedRecordings()
         server = try store.server
         if let server { token = try SessionToken.read(server: server) }
         signedIn = token != nil
         captures = try store.list()
+        journalRecords = try replica.records(collection: "journal_entries")
+        pendingEdits = try replica.edits()
+        libraryRecords = try replica.records(collection: "fics")
         recorder.onChange = { [weak self] in
             self?.reload()
             self?.requestSync()
@@ -42,7 +57,12 @@ final class CaptureModel: ObservableObject {
     }
 
     func reload() {
-        do { captures = try store.list() } catch { message = error.localizedDescription }
+        do {
+            captures = try store.list()
+            journalRecords = try replica.records(collection: "journal_entries")
+            pendingEdits = try replica.edits()
+            libraryRecords = try replica.records(collection: "fics")
+        } catch { message = error.localizedDescription }
     }
 
     func saveText(_ text: String) -> Bool {
@@ -93,6 +113,10 @@ final class CaptureModel: ObservableObject {
                 let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular)
                 activeAPI = api
                 try await syncer.run(using: api)
+                try await replicaSyncer.run(using: api, collections: [
+                    "journal_entries", "journal_attachments", "fics", "study_sources",
+                    "papers", "conversations", "knowledge_archives",
+                ])
                 syncMessage = nil
             } catch {
                 if Task.isCancelled { return }
@@ -108,6 +132,42 @@ final class CaptureModel: ObservableObject {
     func cancelSync() {
         syncingTask?.cancel()
         activeAPI?.cancel()
+        libraryAPI?.cancel()
+    }
+
+    func downloadLibrary() async {
+        guard !downloadingLibrary, signedIn, let server, let token else { return }
+        downloadingLibrary = true
+        libraryMessage = "Downloading reading content over Wi-Fi…"
+        defer { downloadingLibrary = false; libraryAPI = nil; reload() }
+        do {
+            let api = try JournalAPI(server: server, token: token, allowCellular: false)
+            libraryAPI = api
+            try await librarySyncer.run(using: api, collections: [
+                "fic_chapters", "fic_folders", "fic_bookmarks", "wiki_articles", "messages",
+                "paper_pages", "paper_page_images", "newspaper_issues", "newspaper_frontpages",
+            ], sendEdits: false)
+            libraryMessage = "Reading text downloaded. Media downloads are not yet included."
+        } catch { libraryMessage = error.localizedDescription }
+    }
+
+    func edit(_ record: SyncChange, content: String, title: String) -> Bool {
+        do {
+            _ = try replica.queue(record: record, data: ["content": .string(content), "title": .string(title)])
+            reload(); requestSync(); return true
+        } catch { message = error.localizedDescription; return false }
+    }
+
+    func delete(_ record: SyncChange) {
+        do {
+            _ = try replica.queue(record: record, data: [:], delete: true)
+            reload(); requestSync()
+        } catch { message = error.localizedDescription }
+    }
+
+    func resolve(_ edit: PendingEdit, keepLocal: Bool) {
+        do { try replica.resolve(edit, keepLocal: keepLocal); reload(); requestSync() }
+        catch { message = error.localizedDescription }
     }
 
     func retry(_ capture: Capture) {

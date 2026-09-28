@@ -93,6 +93,8 @@ def create_app():
     # for it instead of assuming the whole card is free.
     measure_base_gpu_vram()
     from backend.routes import auth as auth_routes
+    from backend.routes import mobile_sync
+    app.register_blueprint(mobile_sync.bp)
     for bp in (auth_routes.bp, journal.bp, calendar.bp, learning.bp, settings.bp, chat.bp, files.bp, writing.bp, stt.bp, tasks.bp, curated_tags.bp, shortcuts.bp, transcriptions.bp, cookbook.bp, food.bp, fanfic.bp, newspapers.bp, meetings.bp, notebook.files_bp, notebook.bp, paper.bp, lifestyle.bp, ideas.bp, practice.bp, memory.bp, email.bp, notes.bp, weather.bp, jobs.bp, backup.bp, logs.bp, repos.bp, life_wiki.bp, piano.bp, torrent.bp, knowledge.bp, study.bp):
         app.register_blueprint(bp)
 

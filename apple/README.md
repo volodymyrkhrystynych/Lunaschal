@@ -1,4 +1,4 @@
-# Apple capture foundation
+# Apple offline client
 
 First native iPhone/iPad slice, targeting iOS/iPadOS 26. The Linux app and
 Flask server remain in place. This is source for an initial capture app, not
@@ -12,10 +12,10 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
 - Offline typed journal entries, plus separate **Transcribe** and **Record**
   captures. Stopping records a journal entry; both modes retain the original
   mono AAC file, and only Transcribe requests server transcription.
-- Native Capture / Journal / Settings navigation for iPhone and iPad.
+- Native Capture / Journal / Library / Settings navigation for iPhone and iPad.
 - Durable per-capture manifests in Application Support, replaced atomically;
-  audio lives beside them. This small capture outbox is not the future library
-  database. A library replica will need indexed storage and a server change feed.
+  audio lives beside them. A separate SQLite replica stores server records,
+  full-text search, sync cursors, and revision-checked journal edits.
 - Stable client ULIDs, original capture timestamps, sequential retry-safe
   uploads, server acknowledgement validation, and read-back of titles and
   transcripts for the 30 most recent synced captures on this device.
@@ -34,6 +34,12 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
 - Local audio playback and export. No automatic deletion of original captures,
   even after successful upload. A 404 on a previously synced entry preserves
   the local original and never recreates the server entry.
+- Historical journal download, offline text editing/deletion, and explicit
+  conflict resolution. Pending text survives server changes and rebootstrap;
+  deleted entries can be saved as a separate new capture.
+- Library metadata and an explicit Wi-Fi-only chapter/text download. Downloaded
+  fics can be searched and read without a server connection. Media files, PDFs,
+  download budgets, and per-collection selection are still being implemented.
 
 The backend accepts optional offset-bearing ISO `capturedAt` on both
 `POST /api/journal` and `POST /api/journal/recordings`. On recording uploads it
@@ -94,11 +100,12 @@ publicly to make CI work: simulator capture tests never contact it.
   termination, the manifest is marked interrupted; the audio is retained for
   playback/export and explicit recovery. An AAC container killed before
   finalization may not be playable. We do not claim crash-proof in-flight audio.
-- Journal currently shows captures made on this device, not historical entries
-  from other devices. It has no editing/deletion or attachment imports yet.
-- Library downloads, incremental multi-device replication, conflicts/deletion
-  propagation, YouTube URL capture, share extensions, and PencilKit are next
-  stages. Bulk downloads will be Wi-Fi only; there is no bulk downloader yet.
+- The journal list displays the first 200 server entries plus local captures;
+  historical pagination and attachment imports remain outstanding. Library
+  search queries the downloaded SQLite records, with up to 200 displayed hits.
+- Binary media downloads, YouTube URL capture, share extensions, and PencilKit
+  are next stages. Current bulk text downloads prohibit cellular and expensive
+  connections; actual Tailscale/hotspot policy needs device validation.
 - Apple Watch Series 7 companion is a later target: preserve audio on the watch,
   transfer to the iPhone, then reuse this outbox and server protocol. Watch
   capture must not depend on the server or phone being reachable immediately.

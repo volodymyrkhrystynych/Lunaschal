@@ -79,6 +79,8 @@ def get_db() -> sqlite3.Connection:
         _conn.row_factory = sqlite3.Row
         _conn.execute('PRAGMA journal_mode=WAL')
         _conn.execute('PRAGMA foreign_keys=ON')
+        # REPLACE's implicit deletes must emit device-sync tombstones too.
+        _conn.execute('PRAGMA recursive_triggers=ON')
     return _conn
 
 
@@ -247,6 +249,7 @@ def init_db() -> None:
     _ensure_study_archive_requested(db)
     _ensure_torrent_settings(db)
     _ensure_inference_pause_settings(db)
+    _ensure_mobile_sync(db)
     # No _reset_stale_torrents() belongs below: the torrent client runs in its
     # own container and outlives this process, so Lunaschal never holds an
     # in-flight torrent state that a restart could orphan. See the comment on
@@ -262,6 +265,11 @@ def init_db() -> None:
     _reset_stale_voice_drafts(db)
     _reset_stale_llm_jobs(db)
     _requeue_jobs_lost_to_a_pause(db)
+
+
+def _ensure_mobile_sync(db: sqlite3.Connection) -> None:
+    from backend.mobile_sync.schema import ensure
+    ensure(db)
 
 
 def _ensure_inference_pause_settings(db: sqlite3.Connection) -> None:

@@ -6,7 +6,8 @@ let package = Package(
     platforms: [.iOS(.v17), .macOS(.v13)],
     products: [.library(name: "LunaschalCore", targets: ["LunaschalCore"])],
     targets: [
-        .target(name: "LunaschalCore"),
+        .systemLibrary(name: "CSQLite", pkgConfig: "sqlite3"),
+        .target(name: "LunaschalCore", dependencies: ["CSQLite"]),
         .testTarget(name: "LunaschalCoreTests", dependencies: ["LunaschalCore"])
     ]
 )
