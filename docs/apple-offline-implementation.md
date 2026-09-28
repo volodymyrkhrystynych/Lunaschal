@@ -12,7 +12,7 @@ implementation limits. Keep this document current as work lands.
 
 **Native capture, a SQLite replica, journal editing/conflicts, and library-text
 sync exist locally. This is not yet an installable, signed, or device-validated
-release.** Capture foundation: `e018be9`. Further sync work is being committed
+release.** Capture foundation: `e018be9`; replica/journal sync: `e695b5e`. Further work is being committed
 in stages; no branch push or hosted build has run.
 
 | Milestone                                      | Status                               | Completion evidence still needed                                  |
@@ -212,8 +212,8 @@ server credentials and operational state never enter the device replica.
 - [ ] Define a per-device collection selection screen and storage budget.
 - [ ] Include complete selected books/fics, archived web articles, PDFs, newspapers,
       and journal media—not only items previously opened in the UI.
-- [ ] Download collection manifests and files with stable identities, sizes, and hashes.
-- [ ] Resume partial downloads and verify integrity before marking files available.
+- [x] Download collection manifests and files with stable identities, sizes, and hashes.
+- [x] Resume partial downloads and verify integrity before marking files available.
 - [ ] Default archive video/audio bytes to excluded while retaining useful metadata,
       thumbnails, commentary, and already-available transcripts.
 - [ ] Allow explicit pinning of supported archived items without silently enabling
@@ -230,6 +230,15 @@ server credentials and operational state never enter the device replica.
 **Done when:** the selected active library opens after a cold offline launch,
 without depending on browser caches or access to the server/archive drive.
 Deleting a downloaded device copy must not delete the server original.
+
+**Implemented scope:** selectable active Journal/Study/Paper/newspaper-cover
+media; a configurable media budget (20 GB default); resumable foreground range
+downloads; verified content-addressed storage; whole-device media-copy cleanup;
+local PDF/image/audio/video/article views. Archive video is excluded and
+Knowledge article text is opt-in. Fic PDFs/inline images, full newspaper PDFs,
+ZIM, archive pins, per-item eviction, whole-library sizing, and background
+scheduling remain outstanding. Linux tests inject the file verifier; real
+CryptoKit verification and native readers still need the hosted Mac/device runs.
 
 ### M5 — PencilKit drawing and annotations
 
@@ -383,6 +392,10 @@ These are staged decisions, not reasons to pause unrelated implementation.
 | 2026-09-28 | Sync-log compaction and restore epochs                  | 41 sync/seeder tests passed                                                      | Maintenance commands tested on isolated databases only                     |
 
 ### Implementation entry points
+
+Media verification (2026-09-28): 47 backend media/sync tests and 25 portable
+Swift tests passed. Native views passed syntax parsing only; Apple SDK type
+checking and the CryptoKit fixture await the hosted build.
 
 - [Native app and build notes](../apple/README.md)
 - [Native screens and app state](../apple/App/)

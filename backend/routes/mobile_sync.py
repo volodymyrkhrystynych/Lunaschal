@@ -1,8 +1,9 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 
 from backend.mobile_sync.feed import PROTOCOL_VERSION, ResetRequired, page
 from backend.mobile_sync.registry import COLLECTIONS
 from backend.mobile_sync.operations import apply
+from backend.mobile_sync import media
 
 bp = Blueprint('mobile_sync', __name__, url_prefix='/api/mobile')
 
@@ -11,7 +12,40 @@ bp = Blueprint('mobile_sync', __name__, url_prefix='/api/mobile')
 def capabilities():
     return jsonify({'protocolVersion': PROTOCOL_VERSION, 'collections': list(COLLECTIONS),
                     'captureTimestamp': True, 'maxPageSize': 200,
-                    'editableCollections': ['journal_entries']})
+                    'editableCollections': ['journal_entries'],
+                    'mediaCollections': list(media.MEDIA)})
+
+
+@bp.get('/media')
+def media_manifest():
+    try:
+        return jsonify(media.manifest(request.args.get('collection'),
+                                      after=request.args.get('after', ''),
+                                      limit=int(request.args.get('limit', '50'))))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except (OSError, FileExistsError):
+        return jsonify(error='Media changed or became unavailable; retry'), 409
+
+
+@bp.get('/media/<collection>/<record_id>/file')
+def media_file(collection, record_id):
+    try:
+        item, path = media.lookup(collection, record_id)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except OSError:
+        return jsonify(error='Media changed or became unavailable; refresh its manifest'), 409
+    if path is None:
+        return jsonify(error='Active media file unavailable'), 404
+    if request.args.get('sha256') != item['sha256']:
+        return jsonify(error='Media version changed; refresh its manifest'), 412
+    response = send_file(path, mimetype=item['mime'], conditional=True, etag=item['sha256'])
+    response.headers['Cache-Control'] = 'private, no-cache'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    # Archived HTML remains untrusted even when downloaded through this route.
+    response.headers['Content-Security-Policy'] = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'"
+    return response
 
 
 @bp.post('/operations')

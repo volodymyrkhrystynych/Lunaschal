@@ -136,6 +136,37 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try JSONDecoder().decode(OperationReply.self, from: data)
     }
 
+    public func mediaPage(collection: String, after: String) async throws -> MediaPage {
+        guard MediaDescriptor.collections.contains(collection) else { throw MediaError.invalidManifest }
+        var req = request("api/mobile/media")
+        var parts = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
+        parts.queryItems = [URLQueryItem(name: "collection", value: collection), URLQueryItem(name: "after", value: after)]
+        req.url = parts.url
+        let (data, response) = try await session.data(for: req)
+        try check(data, response)
+        return try JSONDecoder().decode(MediaPage.self, from: data)
+    }
+
+    public func mediaChunk(_ item: MediaDescriptor, offset: Int64, count: Int64) async throws -> Data {
+        try item.validate()
+        guard let size = item.size, let digest = item.sha256, offset >= 0,
+              count > 0, count <= 1024 * 1024, offset + count <= size else { throw MediaError.invalidRange }
+        var req = request("api/mobile/media/\(item.collection)/\(item.id)/file")
+        var parts = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
+        parts.queryItems = [URLQueryItem(name: "sha256", value: digest)]
+        req.url = parts.url
+        req.setValue("bytes=\(offset)-\(offset + count - 1)", forHTTPHeaderField: "Range")
+        req.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        let (file, response) = try await session.download(for: req)
+        defer { try? FileManager.default.removeItem(at: file) }
+        try check(Data(), response)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 206,
+              http.value(forHTTPHeaderField: "Content-Range") == "bytes \(offset)-\(offset + count - 1)/\(size)",
+              http.value(forHTTPHeaderField: "ETag") == "\"\(digest)\"",
+              try file.resourceValues(forKeys: [.fileSizeKey]).fileSize == Int(count) else { throw MediaError.invalidRange }
+        return try Data(contentsOf: file)
+    }
+
     private func request(_ path: String, method: String = "GET") -> URLRequest {
         var req = URLRequest(url: server.appendingPathComponent(path))
         req.httpMethod = method

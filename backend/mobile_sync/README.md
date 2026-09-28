@@ -43,3 +43,23 @@ scheduler yet. Neither command deletes domain records or media.
 Run `backend/tests/test_mobile_sync.py` and `test_seed_test_db.py` after changing
 the protocol/schema. Native transaction and conflict tests live in
 `apple/LunaschalCore/Tests/LunaschalCoreTests/ReplicaTests.swift`.
+
+## Media downloads
+
+`GET /api/mobile/media?collection=...&after=...` enumerates active local media
+with record IDs, byte sizes, SHA-256 hashes, and versioned file URLs.
+The allowlist is independent of the text projections. No stored path is exposed;
+canonicalized paths pass existing storage-root guards. Archive videos remain
+excluded even if a legacy row points to a local file. Missing files remain in
+the manifest as unavailable records.
+
+File requests require the manifest's hash. A changed file returns 412; clients
+refresh the manifest and start a new partial file. HTTP byte ranges and strong
+ETags support resume, and clients verify the final hash before publishing a
+downloaded copy. Enumeration is a rescan, not the immutable record-change feed:
+files can change independently of projected columns. Repeat it for each bulk
+download pass. The hash cache is bounded and keyed by file stat metadata.
+
+`backend/tests/test_mobile_media.py` covers ranges, replacement, missing files,
+archive exclusion, path confinement, and manifest validation. Full newspaper
+PDFs, fic PDF/image packages, optional archive pins, and ZIM are not included yet.

@@ -37,9 +37,14 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
 - Historical journal download, offline text editing/deletion, and explicit
   conflict resolution. Pending text survives server changes and rebootstrap;
   deleted entries can be saved as a separate new capture.
-- Library metadata and an explicit Wi-Fi-only chapter/text download. Downloaded
-  fics can be searched and read without a server connection. Media files, PDFs,
-  download budgets, and per-collection selection are still being implemented.
+- Library metadata and explicit Wi-Fi-only text/media downloads. Downloaded
+  fics can be searched and read without a server connection. Journal attachments,
+  Study documents, Paper previews/pictures, and newspaper covers have selectable
+  media downloads, a 20 GB default media budget, and resumable 1 MB range reads.
+  SHA-256 verification precedes availability; original captures live separately.
+- Local PDF, image, audio/video, and archived-article views. Articles use a
+  script-disabled WebKit view with remote resources blocked. Knowledge article
+  text is opt-in. Archive videos and ZIM packages are not bulk-downloaded.
 
 The backend accepts optional offset-bearing ISO `capturedAt` on both
 `POST /api/journal` and `POST /api/journal/recordings`. On recording uploads it
@@ -103,9 +108,15 @@ publicly to make CI work: simulator capture tests never contact it.
 - The journal list displays the first 200 server entries plus local captures;
   historical pagination and attachment imports remain outstanding. Library
   search queries the downloaded SQLite records, with up to 200 displayed hits.
-- Binary media downloads, YouTube URL capture, share extensions, and PencilKit
-  are next stages. Current bulk text downloads prohibit cellular and expensive
-  connections; actual Tailscale/hotspot policy needs device validation.
+- Downloads currently require the app to remain active. Partial files resume
+  on the next download request. Selection changes retain existing copies;
+  “Remove downloaded media” explicitly clears media copies and partials, while
+  retaining capture originals and server records. Old content versions remain
+  until that cleanup; per-item pinning/eviction is not implemented yet.
+- Fic PDFs, inline chapter images, full newspaper PDFs, YouTube URL capture,
+  share extensions, and PencilKit remain outstanding. Bulk requests prohibit
+  cellular and expensive connections; actual Tailscale/hotspot policy needs
+  device validation. The budget currently covers media, not SQLite text.
 - Apple Watch Series 7 companion is a later target: preserve audio on the watch,
   transfer to the iPhone, then reuse this outbox and server protocol. Watch
   capture must not depend on the server or phone being reachable immediately.
@@ -117,3 +128,7 @@ Device baseline supplied by the user: iPhone 16 and 2021 12.9-inch M1 iPad Pro
 with Pencil 2, both on 26.6.2; Watch Series 7 on 26.6. The app uses APIs available
 from iOS 26 and can be built by the hosted toolchain without needing the exact
 same patch-level SDK as those devices.
+
+Media-store Linux tests inject a verifier to exercise publication/recovery;
+production hashing uses Apple CryptoKit. A known SHA-256 fixture runs on the
+hosted Mac. Linux verification does not establish Apple framework correctness.

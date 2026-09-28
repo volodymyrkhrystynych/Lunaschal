@@ -20,6 +20,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var libraryMessage: String?
     let store: CaptureStore
     let replica: ReplicaStore
+    let media: MediaStore
     let recorder: Recorder
     private let syncer: CaptureSync
     private let replicaSyncer: ReplicaSync
@@ -32,6 +33,7 @@ final class CaptureModel: ObservableObject {
     init(store: CaptureStore) throws {
         self.store = store
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
+        media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         recorder = Recorder(store: store)
         syncer = CaptureSync(store: store)
         replicaSyncer = ReplicaSync(store: replica)
@@ -143,12 +145,49 @@ final class CaptureModel: ObservableObject {
         do {
             let api = try JournalAPI(server: server, token: token, allowCellular: false)
             libraryAPI = api
-            try await librarySyncer.run(using: api, collections: [
-                "fic_chapters", "fic_folders", "fic_bookmarks", "wiki_articles", "messages",
-                "paper_pages", "paper_page_images", "newspaper_issues", "newspaper_frontpages",
-            ], sendEdits: false)
-            libraryMessage = "Reading text downloaded. Media downloads are not yet included."
+            var collections = ["fic_chapters", "fic_folders", "fic_bookmarks", "messages",
+                               "paper_pages", "paper_page_images", "newspaper_issues", "newspaper_frontpages"]
+            if UserDefaults.standard.bool(forKey: "downloadKnowledge") { collections.append("wiki_articles") }
+            try await librarySyncer.run(using: api, collections: collections, sendEdits: false)
+            let gigabytes = max(1, UserDefaults.standard.integer(forKey: "libraryBudgetGB") == 0
+                ? 20 : UserDefaults.standard.integer(forKey: "libraryBudgetGB"))
+            for collection in MediaDescriptor.collections {
+                if UserDefaults.standard.object(forKey: "download-\(collection)") as? Bool == false { continue }
+                var after = ""
+                while true {
+                    let page = try await api.mediaPage(collection: collection, after: after)
+                    for item in page.items where item.available {
+                        try Task.checkCancellation()
+                        if try media.reuse(item) { continue }
+                        var offset = try media.offset(for: item, budget: Int64(gigabytes) * 1024 * 1024 * 1024)
+                        guard let size = item.size else { throw MediaError.invalidManifest }
+                        if size == 0 { try media.append(Data(), to: item, offset: 0) }
+                        while offset < size {
+                            libraryMessage = "Downloading \(collection.replacingOccurrences(of: "_", with: " ")): \(offset / 1024) / \(size / 1024) KB"
+                            let chunk = try await api.mediaChunk(item, offset: offset, count: min(1024 * 1024, size - offset))
+                            try media.append(chunk, to: item, offset: offset)
+                            offset += Int64(chunk.count)
+                        }
+                        try await media.finish(item)
+                    }
+                    if !page.hasMore { break }
+                    guard page.after > after else { throw MediaError.invalidManifest }
+                    after = page.after
+                }
+            }
+            libraryMessage = "Reading text and available active media downloaded. Archive videos are excluded."
         } catch { libraryMessage = error.localizedDescription }
+    }
+
+    func pauseLibrary() { libraryAPI?.cancel() }
+
+    func removeLibraryMedia() {
+        guard !downloadingLibrary else { return }
+        do {
+            try media.removeDownloadedCopies()
+            libraryMessage = "Downloaded media removed. Captures and server originals are retained."
+            reload()
+        } catch { message = error.localizedDescription }
     }
 
     func edit(_ record: SyncChange, content: String, title: String) -> Bool {
