@@ -1,6 +1,6 @@
 # Apple apps and offline experience — implementation tracker
 
-Last updated: 2026-09-28. Working branch: `feat/apple-offline-foundation`.
+Last updated: 2026-09-29. Working branch: `feat/apple-offline-foundation`.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first
@@ -17,19 +17,20 @@ in stages. The branch was pushed on 2026-09-28; the first
 [hosted Apple build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36502751471)
 passed against `33a694d`: Xcode 26.6 (17F113), Watch simulator build, iPhone
 simulator build and offline capture/relaunch test, 33 Linux core tests, and 34
-Mac core tests including CryptoKit. Subsequent drawing recovery and drawing
-relaunch-test changes are being verified separately.
+Mac core tests including CryptoKit. The [follow-up build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36503732880)
+passed against `e71830d`: 35 Linux and 36 Mac core tests, Watch compilation,
+and both journal and drawing offline relaunch UI tests.
 
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
-| M0 — Build and distribution                    | In progress                               | Hosted Mac build/UI tests, signing, TestFlight installation       |
-| M1 — Offline journal capture                   | Implemented locally; partly verified      | Native compilation, device recording and connection checks        |
+| M0 — Build and distribution                    | Unsigned builds and UI tests passed       | Signing, TestFlight installation                                  |
+| M1 — Offline journal capture                   | Simulator capture/relaunch verified       | Device recording and connection checks                            |
 | M2 — Durable background transfers              | Planned                                   | Recovery, network-policy, and suspended-app tests                 |
 | M3 — Multi-device data synchronization         | Implemented in part                       | Capture outbox migration, broader mutations, native validation    |
 | M4 — Downloadable library                      | Text and active media implemented in part | Remaining file types, background scheduling, storage refinement   |
 | M5 — Native drawing and annotation             | Local PencilKit workspace implemented     | Paper integration, compatibility, and actual iPad validation      |
 | M6 — Mobile navigation and capture integration | Partly implemented                        | Broader feature inventory, share extension, navigation refinement |
-| M7 — Watch recording companion                 | Implemented locally; core tested          | Apple SDK compilation, signing, paired-device validation          |
+| M7 — Watch recording companion                 | Compiles; core tested                     | Signing and paired-device validation                              |
 | M8 — Optional on-device speech and AI          | Evaluation pending                        | Availability, language support, quality and resource measurements |
 | M9 — Release and recovery readiness            | Planned                                   | Upgrade/restore tests, documentation, stable signed distribution  |
 
@@ -243,7 +244,8 @@ local PDF/image/audio/video/article views. Archive video is excluded and
 Knowledge article text is opt-in. Fic PDFs/inline images, full newspaper PDFs,
 ZIM, archive pins, per-item eviction, whole-library sizing, and background
 scheduling remain outstanding. Linux tests inject the file verifier; real
-CryptoKit verification and native readers still need the hosted Mac/device runs.
+CryptoKit verification and native compilation passed on the hosted Mac; reader
+interaction and Tailscale/cellular policy still need device validation.
 
 ### M5 — PencilKit drawing and annotations
 
@@ -274,9 +276,10 @@ on Linux. Do not assume Pencil Pro-only hardware features are available.
 atomic native-ink/PNG checkpoints, undo, zoom, and export. Current and previous
 checkpoint generations are retained. It does not modify server Paper documents
 or convert existing web strokes yet; the UI states that drawing sync is not
-available. Four portable persistence tests cover reopening, failed writes,
-retention, and renaming. The complete Swift suite now passes 33 tests. PencilKit
-SDK compilation and actual Pencil 2 behavior still need validation.
+available. Six portable persistence tests cover reopening, failed writes,
+retention, renaming, previous-version recovery, and manifest identity checks.
+The complete Linux Swift suite now passes 35 tests. PencilKit SDK compilation
+passed; actual Pencil 2 behavior still needs device validation.
 
 ### M6 — Mobile navigation and capture integration
 
@@ -365,8 +368,9 @@ work, and the documented supported experience matches device-tested behavior.
 
 ## Dependency order and next actions
 
-1. **Now:** run the unsigned hosted Mac build/UI test after an authorized
-   commit/push; resolve compilation or test issues before signing.
+1. **Now:** implement drawing backup restoration and continue transfer durability;
+   prepare signing using the user's Apple team and registered bundle identifiers
+   following the [signing setup notes](../apple/SIGNING.md).
 2. **First install:** complete M0 signing and validate M1 on iPhone/iPad.
 3. **Early risk checks:** prototype PencilKit and recording recovery before
    committing to drawing formats or a full library schema.
@@ -406,11 +410,12 @@ These are staged decisions, not reasons to pause unrelated implementation.
 
 ### Verification log
 
-| Date       | Scope                                                   | Evidence                                                                         | Limits                                                                     |
-| ---------- | ------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 2026-09-27 | Capture foundation, `e018be9`                           | 145 backend tests; 13 Swift core tests; Swift syntax parsing; YAML/format checks | No hosted Mac run, native UI test execution, signing, or device validation |
-| 2026-09-28 | Replica, conflicts, historical journal and library text | 173 backend regression tests; 21 Swift core tests; native Swift syntax parsing   | Apple SDK type checking and simulator/device execution still pending       |
-| 2026-09-28 | Sync-log compaction and restore epochs                  | 41 sync/seeder tests passed                                                      | Maintenance commands tested on isolated databases only                     |
+| Date       | Scope                                                   | Evidence                                                                                                                                                      | Limits                                                                     |
+| ---------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| 2026-09-27 | Capture foundation, `e018be9`                           | 145 backend tests; 13 Swift core tests; Swift syntax parsing; YAML/format checks                                                                              | No hosted Mac run, native UI test execution, signing, or device validation |
+| 2026-09-28 | Replica, conflicts, historical journal and library text | 173 backend regression tests; 21 Swift core tests; native Swift syntax parsing                                                                                | Apple SDK type checking and simulator/device execution still pending       |
+| 2026-09-28 | Sync-log compaction and restore epochs                  | 41 sync/seeder tests passed                                                                                                                                   | Maintenance commands tested on isolated databases only                     |
+| 2026-09-29 | Native drawing recovery and Apple builds, `e71830d`     | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36503732880): 35 Linux / 36 Mac core tests, Watch build, two iPhone relaunch tests | Unsigned simulator validation; Pencil and paired Watch hardware unverified |
 
 ### Implementation entry points
 
@@ -428,6 +433,7 @@ retry. Old capture manifests remain readable. The URL is retained independently
 of archive playback availability; share-extension capture is still outstanding.
 
 - [Native app and build notes](../apple/README.md)
+- [Signing and first installation](../apple/SIGNING.md)
 - [Native screens and app state](../apple/App/)
 - [Portable capture/sync package](../apple/LunaschalCore/)
 - [Offline relaunch UI test](../apple/UITests/OfflineCaptureTests.swift)

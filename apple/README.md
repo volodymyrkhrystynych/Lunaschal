@@ -13,7 +13,8 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
   local checkpoints, undo, zoom, and editable-ink/PNG export. Drawings currently
   stay on the device and are separate from existing server Paper documents.
   Each checkpoint publishes only after its ink and preview are written; the
-  current and preceding versions are retained. Library cleanup cannot remove
+  current and preceding versions are retained, with explicit recovery of a
+  validated previous checkpoint after a load/save error. Library cleanup cannot remove
   drawings. Cross-platform ink conversion and drawing sync remain outstanding.
 
 - Offline typed journal entries, plus separate **Transcribe** and **Record**
@@ -23,7 +24,7 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
   and link-attachment IDs. Entry creation precedes link import; retry validates
   both acknowledgements. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Library / Settings navigation for iPhone and iPad.
+- Native Capture / Journal / Library / Draw / Settings navigation for iPhone and iPad.
 - Durable per-capture manifests in Application Support, replaced atomically;
   audio lives beside them. A separate SQLite replica stores server records,
   full-text search, sync cursors, and revision-checked journal edits.
@@ -82,9 +83,9 @@ xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
   CODE_SIGNING_ALLOWED=NO build
 ```
 
-The `Lunaschal` scheme also includes an XCUITest that saves a journal entry
-without signing in, terminates the app, and verifies that the capture survives
-relaunch. Run the scheme's tests on an available iPhone simulator.
+The `Lunaschal` scheme includes XCUITests for journal capture and drawing-page
+creation without signing in, terminating the app, and reopening the saved work.
+Both passed in hosted Xcode 26.6. Run the scheme's tests on an iPhone simulator.
 
 `.github/workflows/apple.yml` runs the core tests on Linux and a hosted Mac,
 then generates the Xcode project and runs the iPhone simulator test. It requires
@@ -96,7 +97,7 @@ The bundle ID `com.lunaschal.mobile` is a starting value. Before a signed build,
 choose/register the actual bundle ID in the user's Apple team, supply the team
 ID, add app icons, and configure distribution signing and App Store Connect
 credentials in CI secrets. Then add an explicitly triggered TestFlight release
-workflow. No signing credentials belong in project files. The 2015 Monterey
+workflow; see [signing and first installation](SIGNING.md). No signing credentials belong in project files. The 2015 Monterey
 MacBook is not required by this build route.
 
 For development login, the server must run with network-mode authentication
@@ -125,7 +126,7 @@ publicly to make CI work: simulator capture tests never contact it.
   retaining capture originals and server records. Old content versions remain
   until that cleanup; per-item pinning/eviction is not implemented yet.
 - Fic PDFs, inline chapter images, full newspaper PDFs,
-  share extensions, and PencilKit remain outstanding. Bulk requests prohibit
+  share extensions, and Paper drawing sync remain outstanding. Bulk requests prohibit
   cellular and expensive connections; actual Tailscale/hotspot policy needs
   device validation. The budget currently covers media, not SQLite text.
 - The Watch target now has Record / Transcribe / Stop, persistent recordings,
@@ -134,8 +135,9 @@ publicly to make CI work: simulator capture tests never contact it.
   imports them without changing their IDs, times, modes, or prior upload state.
   “Saved on phone” is a separate durable receipt, not a server-upload claim.
   Watch originals are retained; automatic cleanup is not implemented yet.
-  Watch compilation, recording lifecycle, and paired-device transfers remain
-  unverified. WatchConnectivity transfer validation requires paired devices
+  Watch and iPhone simulator compilation passed in the hosted Xcode 26.6 run.
+  Recording lifecycle and paired-device transfers remain unverified.
+  WatchConnectivity transfer validation requires paired devices
   ([Apple's transferFile documentation](<https://developer.apple.com/documentation/watchconnectivity/wcsession/transferfile(_:metadata:)>)).
 - Local speech recognition and Foundation Models are optional later layers.
   Server transcription is the only transcription path in this first slice.
