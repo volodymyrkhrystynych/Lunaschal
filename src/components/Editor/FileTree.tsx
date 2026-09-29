@@ -119,7 +119,13 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
             {...{ webkitdirectory: '', directory: '' }}
             className="hidden"
             onChange={e => {
-              const files = Array.from(e.target.files ?? []);
+              // QtWebEngine (the desktop window) lists the picked directory
+              // itself as a file named "." ("project/."). It can't be read as
+              // upload data, and one unreadable part fails the whole request
+              // with ERR_ACCESS_DENIED, so nothing from the folder arrives.
+              const files = Array.from(e.target.files ?? []).filter(
+                f => f.name !== '.' && f.name !== '..'
+              );
               uploadFiles('', files);
               e.target.value = '';
             }}

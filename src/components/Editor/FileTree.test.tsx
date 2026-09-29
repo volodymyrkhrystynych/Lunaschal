@@ -167,6 +167,28 @@ describe('FileTree', () => {
     );
   });
 
+  it("skips the '.' entry QtWebEngine adds for the picked folder", async () => {
+    renderTree();
+    await screen.findByText('todo.md');
+
+    const file = new File(['one'], 'one.txt', { type: 'text/plain' });
+    const dirEntry = new File([''], '.');
+    Object.defineProperty(file, 'webkitRelativePath', {
+      value: 'project/one.txt',
+    });
+    Object.defineProperty(dirEntry, 'webkitRelativePath', {
+      value: 'project/.',
+    });
+    const folderInput = document.querySelector(
+      'input[webkitdirectory]'
+    ) as HTMLInputElement;
+    fireEvent.change(folderInput, {
+      target: { files: fileList([file, dirEntry]) },
+    });
+
+    await waitFor(() => expect(mocks.upload).toHaveBeenCalledWith('', [file]));
+  });
+
   it('uploads files dropped onto the tree root', async () => {
     renderTree();
     const list = await screen.findByText('todo.md');
