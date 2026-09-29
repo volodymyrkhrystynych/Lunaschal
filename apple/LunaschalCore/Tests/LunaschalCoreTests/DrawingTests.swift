@@ -76,4 +76,32 @@ final class DrawingTests: XCTestCase {
         XCTAssertThrowsError(try store.rename(first.id, title: "Wrong target"))
         XCTAssertEqual(try store.page(second.id).title, "Second")
     }
+
+    func testImportedInkReopensAsIndependentPagesAndPreservesExactBytes() throws {
+        let root = try directory(), store = try DrawingStore(root: root)
+        let native = Data([0, 1, 2, 255])
+        let first = try store.importDrawing(title: "  Sketch  ", native: native) { _ in Data([3]) }
+        let second = try store.importDrawing(title: "Sketch", native: native) { _ in Data([4]) }
+        XCTAssertNotEqual(first.id, second.id)
+        let reopened = try DrawingStore(root: root)
+        XCTAssertEqual(try reopened.pages().count, 2)
+        XCTAssertEqual(try reopened.page(first.id).title, "Sketch")
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(reopened.nativeURL(first))), native)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(reopened.previewURL(second))), Data([4]))
+    }
+
+    func testRejectedImportDoesNotPublishPageOrChangeExistingInk() throws {
+        let store = try DrawingStore(root: directory())
+        let original = try store.importDrawing(title: "Original", native: Data([1])) { _ in Data([2]) }
+        XCTAssertThrowsError(try store.importDrawing(title: "Invalid", native: Data([3])) { _ in
+            throw DrawingError.incompleteCheckpoint
+        })
+        XCTAssertThrowsError(try store.importDrawing(title: "Missing preview", native: Data([3])) { _ in Data() })
+        XCTAssertThrowsError(try store.importDrawing(title: "Empty", native: Data()) { _ in
+            XCTFail("Empty imports must not reach native decoding")
+            return Data([2])
+        })
+        XCTAssertEqual(try store.pages(), [original])
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.nativeURL(original))), Data([1]))
+    }
 }

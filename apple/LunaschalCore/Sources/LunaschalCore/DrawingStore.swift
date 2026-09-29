@@ -56,8 +56,22 @@ public final class DrawingStore {
 
     @discardableResult
     public func checkpoint(_ id: String, native: Data, preview: Data) throws -> DrawingPage {
+        try publish(try page(id), native: native, preview: preview)
+    }
+
+    /// Import as a new page, publishing no manifest until validation, preview
+    /// generation and both payload writes succeed. Preserve the original bytes.
+    public func importDrawing(title: String, native: Data, makePreview: (Data) throws -> Data) throws -> DrawingPage {
+        guard !native.isEmpty else { throw DrawingError.incompleteCheckpoint }
+        let preview = try makePreview(native)
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try publish(DrawingPage(title: trimmed.isEmpty ? "Imported drawing" : trimmed), native: native, preview: preview)
+    }
+
+    private func publish(_ original: DrawingPage, native: Data, preview: Data) throws -> DrawingPage {
         guard !native.isEmpty, !preview.isEmpty else { throw DrawingError.incompleteCheckpoint }
-        var page = try page(id)
+        var page = original
+        let id = page.id
         let previous = page.checkpoint
         let revision = ULID.make()
         let directory = try checkpointDirectory(id, revision)

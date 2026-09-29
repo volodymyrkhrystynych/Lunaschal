@@ -281,6 +281,13 @@ retention, renaming, previous-version recovery, and manifest identity checks.
 The complete Linux Swift suite now passes 35 tests. PencilKit SDK compilation
 passed; actual Pencil 2 behavior still needs device validation.
 
+Drawing backup restoration now imports exported `.drawing` files as independent
+editable pages. Native decoding and preview generation precede publication;
+source bytes and existing pages are preserved. PNG/PDF imports are not converted
+to editable strokes. Imports have a 64 MB limit. Two additional portable tests
+pass (37 total on Linux); three new iOS tests cover native stroke preservation,
+invalid input, and the size limit, pending hosted execution.
+
 ### M6 — Mobile navigation and capture integration
 
 - [x] Start with a compact native Capture / Journal / Settings tab layout.
@@ -368,7 +375,7 @@ work, and the documented supported experience matches device-tested behavior.
 
 ## Dependency order and next actions
 
-1. **Now:** implement drawing backup restoration and continue transfer durability;
+1. **Now:** verify native drawing import and continue transfer durability;
    prepare signing using the user's Apple team and registered bundle identifiers
    following the [signing setup notes](../apple/SIGNING.md).
 2. **First install:** complete M0 signing and validate M1 on iPhone/iPad.

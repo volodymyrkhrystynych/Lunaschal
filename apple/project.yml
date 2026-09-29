@@ -67,6 +67,16 @@ targets:
         WKRunsIndependentlyOfCompanionApp: false
         NSMicrophoneUsageDescription: Record thoughts for your journal, even while your phone is unavailable.
         UIBackgroundModes: [audio]
+  LunaschalAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [AppTests]
+    dependencies:
+      - target: Lunaschal
+      - package: LunaschalCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
   LunaschalUITests:
     type: bundle.ui-testing
     platform: iOS
@@ -86,4 +96,4 @@ schemes:
       targets:
         Lunaschal: all
     test:
-      targets: [LunaschalUITests]
+      targets: [LunaschalAppTests, LunaschalUITests]

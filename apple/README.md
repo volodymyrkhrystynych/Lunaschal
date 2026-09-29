@@ -10,7 +10,10 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
 ## Included
 
 - A PencilKit drawing workspace with fixed A4 coordinates, native tool picker,
-  local checkpoints, undo, zoom, and editable-ink/PNG export. Drawings currently
+  local checkpoints, undo, zoom, and editable-ink/PNG export. Import editable ink
+  restores an exported `.drawing` file as a new page, preserving its original
+  bytes and all existing pages. Invalid files and imports above 64 MB are rejected.
+  Drawings currently
   stay on the device and are separate from existing server Paper documents.
   Each checkpoint publishes only after its ink and preview are written; the
   current and preceding versions are retained, with explicit recovery of a
@@ -85,7 +88,9 @@ xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
 
 The `Lunaschal` scheme includes XCUITests for journal capture and drawing-page
 creation without signing in, terminating the app, and reopening the saved work.
-Both passed in hosted Xcode 26.6. Run the scheme's tests on an iPhone simulator.
+Both passed in hosted Xcode 26.6. The scheme also includes native drawing import
+tests with an editable stroke, invalid data, and an oversized file. Run the
+scheme's tests on an iPhone simulator.
 
 `.github/workflows/apple.yml` runs the core tests on Linux and a hosted Mac,
 then generates the Xcode project and runs the iPhone simulator test. It requires

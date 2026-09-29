@@ -1,12 +1,14 @@
 import SwiftUI
 import PencilKit
 import LunaschalCore
+import UniformTypeIdentifiers
 
 struct DrawingLibraryView: View {
     @ObservedObject var model: CaptureModel
     @State private var pages: [DrawingPage] = []
     @State private var naming: DrawingPage?
     @State private var title = ""
+    @State private var importing = false
 
     var body: some View {
         List {
@@ -17,6 +19,9 @@ struct DrawingLibraryView: View {
                     do { _ = try model.drawings.create(); reload() }
                     catch { model.message = error.localizedDescription }
                 }
+                Button("Import editable ink", systemImage: "square.and.arrow.down") { importing = true }
+                Text("Choose an exported .drawing file. It opens as a new editable page; existing pages are kept.")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             ForEach(pages) { page in
                 NavigationLink { DrawingEditor(store: model.drawings, page: page) } label: {
@@ -32,6 +37,15 @@ struct DrawingLibraryView: View {
         }
         .navigationTitle("Drawings")
         .onAppear { reload() }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
+            do {
+                let url = try result.get()
+                let accessing = url.startAccessingSecurityScopedResource()
+                defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                _ = try DrawingImport.importFile(url, into: model.drawings)
+                reload()
+            } catch { model.message = "Could not import drawing. \(error.localizedDescription)" }
+        }
         .alert("Drawing title", isPresented: Binding(get: { naming != nil }, set: { if !$0 { naming = nil } })) {
             TextField("Title", text: $title)
             Button("Save") {
@@ -46,6 +60,35 @@ struct DrawingLibraryView: View {
     private func reload() {
         do { pages = try model.drawings.pages() }
         catch { model.message = error.localizedDescription }
+    }
+}
+
+/// The importer uses the same native format as Export editable ink. PNG/PDF
+/// previews are not editable ink. Decode first, then publish a new local page.
+enum DrawingImport {
+    static let maximumBytes = 64 * 1024 * 1024
+
+    static func importFile(_ url: URL, into store: DrawingStore) throws -> DrawingPage {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let native = try handle.read(upToCount: maximumBytes + 1) ?? Data()
+        guard native.count <= maximumBytes else { throw ImportError.tooLarge }
+        return try store.importDrawing(title: url.deletingPathExtension().lastPathComponent, native: native) {
+            try preview(PKDrawing(data: $0))
+        }
+    }
+
+    static func preview(_ drawing: PKDrawing) throws -> Data {
+        let bounds = CGRect(x: 0, y: 0, width: 2100, height: 2970)
+        guard let data = drawing.image(from: bounds, scale: 1240.0 / 2100.0).pngData() else {
+            throw DrawingError.incompleteCheckpoint
+        }
+        return data
+    }
+
+    enum ImportError: LocalizedError {
+        case tooLarge
+        var errorDescription: String? { "This drawing exceeds the 64 MB import limit. The original file has been kept." }
     }
 }
 
@@ -88,10 +131,7 @@ private final class DrawingEditorModel: ObservableObject {
         checkpointTask?.cancel()
         guard loaded, dirty else { return }
         do {
-            let bounds = CGRect(x: 0, y: 0, width: 2100, height: 2970)
-            guard let preview = canvas.drawing.image(from: bounds, scale: 1240.0 / 2100.0).pngData() else {
-                throw DrawingError.incompleteCheckpoint
-            }
+            let preview = try DrawingImport.preview(canvas.drawing)
             page = try store.checkpoint(page.id, native: canvas.drawing.dataRepresentation(), preview: preview)
             dirty = false
             error = nil
