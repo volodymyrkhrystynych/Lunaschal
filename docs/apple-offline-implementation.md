@@ -20,6 +20,10 @@ simulator build and offline capture/relaunch test, 33 Linux core tests, and 34
 Mac core tests including CryptoKit. The [follow-up build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36503732880)
 passed against `e71830d`: 35 Linux and 36 Mac core tests, Watch compilation,
 and both journal and drawing offline relaunch UI tests.
+Drawing restoration is also verified at `1e8b624` in the
+[latest hosted build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616):
+37 Linux / 38 Mac core tests, four native drawing-import tests, both relaunch
+tests, and the Watch simulator build passed.
 
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
@@ -306,9 +310,9 @@ to editable strokes. Imports have a 64 MB limit and require at least one editabl
 stroke; blank drawings are rejected because PencilKit can also decode invalid
 bytes as empty ink without throwing. Two additional portable tests pass (37 total
 on Linux, 38 on Mac). The first hosted import run caught this silent-empty decode;
-the native stroke and size-limit tests passed. Four native tests now cover stroke
-preservation, invalid input, blank ink, and the size limit; the fix awaits hosted
-verification.
+the corrected run passed all four native tests covering stroke preservation,
+invalid input, blank ink, and the size limit. Files-provider interaction and
+physical Pencil behavior remain device checks.
 
 ### M6 — Mobile navigation and capture integration
 
@@ -397,7 +401,7 @@ work, and the documented supported experience matches device-tested behavior.
 
 ## Dependency order and next actions
 
-1. **Now:** verify native drawing import and continue transfer durability;
+1. **Now:** implement persistent upload staging and transfer recovery;
    prepare signing using the user's Apple team and registered bundle identifiers
    following the [signing setup notes](../apple/SIGNING.md).
 2. **First install:** complete M0 signing and validate M1 on iPhone/iPad.
@@ -439,12 +443,13 @@ These are staged decisions, not reasons to pause unrelated implementation.
 
 ### Verification log
 
-| Date       | Scope                                                   | Evidence                                                                                                                                                      | Limits                                                                     |
-| ---------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 2026-09-27 | Capture foundation, `e018be9`                           | 145 backend tests; 13 Swift core tests; Swift syntax parsing; YAML/format checks                                                                              | No hosted Mac run, native UI test execution, signing, or device validation |
-| 2026-09-28 | Replica, conflicts, historical journal and library text | 173 backend regression tests; 21 Swift core tests; native Swift syntax parsing                                                                                | Apple SDK type checking and simulator/device execution still pending       |
-| 2026-09-28 | Sync-log compaction and restore epochs                  | 41 sync/seeder tests passed                                                                                                                                   | Maintenance commands tested on isolated databases only                     |
-| 2026-09-29 | Native drawing recovery and Apple builds, `e71830d`     | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36503732880): 35 Linux / 36 Mac core tests, Watch build, two iPhone relaunch tests | Unsigned simulator validation; Pencil and paired Watch hardware unverified |
+| Date       | Scope                                                   | Evidence                                                                                                                                                                         | Limits                                                                                            |
+| ---------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| 2026-09-27 | Capture foundation, `e018be9`                           | 145 backend tests; 13 Swift core tests; Swift syntax parsing; YAML/format checks                                                                                                 | No hosted Mac run, native UI test execution, signing, or device validation                        |
+| 2026-09-28 | Replica, conflicts, historical journal and library text | 173 backend regression tests; 21 Swift core tests; native Swift syntax parsing                                                                                                   | Apple SDK type checking and simulator/device execution still pending                              |
+| 2026-09-28 | Sync-log compaction and restore epochs                  | 41 sync/seeder tests passed                                                                                                                                                      | Maintenance commands tested on isolated databases only                                            |
+| 2026-09-29 | Native drawing recovery and Apple builds, `e71830d`     | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36503732880): 35 Linux / 36 Mac core tests, Watch build, two iPhone relaunch tests                    | Unsigned simulator validation; Pencil and paired Watch hardware unverified                        |
+| 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending |
 
 ### Implementation entry points
 

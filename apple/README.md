@@ -90,8 +90,11 @@ xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
 The `Lunaschal` scheme includes XCUITests for journal capture and drawing-page
 creation without signing in, terminating the app, and reopening the saved work.
 Both passed in hosted Xcode 26.6. The scheme also includes native drawing import
-tests with an editable stroke, invalid data, blank ink, and an oversized file. Run the
-scheme's tests on an iPhone simulator.
+tests with an editable stroke, invalid data, blank ink, and an oversized file.
+All four passed in the [drawing import build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616),
+alongside both relaunch tests, 37 Linux / 38 Mac core tests, and Watch compilation.
+Run the scheme's tests on an iPhone simulator. Files-provider interaction and
+Pencil hardware behavior still need device verification.
 
 `.github/workflows/apple.yml` runs the core tests on Linux and a hosted Mac,
 then generates the Xcode project and runs the iPhone simulator test. It requires
