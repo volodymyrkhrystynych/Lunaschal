@@ -29,7 +29,7 @@ tests, and the Watch simulator build passed.
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
 | M0 — Build and distribution                    | Unsigned builds and UI tests passed       | Signing, TestFlight installation                                  |
 | M1 — Offline journal capture                   | Simulator capture/relaunch verified       | Device recording and connection checks                            |
-| M2 — Durable background transfers              | Planned                                   | Recovery, network-policy, and suspended-app tests                 |
+| M2 — Durable background transfers              | Recording staging implemented             | System task mapping, retries, and suspended-app tests             |
 | M3 — Multi-device data synchronization         | Implemented in part                       | Capture outbox migration, broader mutations, native validation    |
 | M4 — Downloadable library                      | Text and active media implemented in part | Remaining file types, background scheduling, storage refinement   |
 | M5 — Native drawing and annotation             | Local PencilKit workspace implemented     | Paper integration, compatibility, and actual iPad validation      |
@@ -167,6 +167,7 @@ produce exactly one correctly dated server entry per capture on both devices.
 
 ### M2 — Transfer and recording durability
 
+- [x] Persist recording upload bodies and recover cleanup after a durable acknowledgement.
 - [ ] Design background URLSession transfers with durable task-to-operation mapping.
 - [ ] Recover outstanding transfers after suspension, process termination, and restart.
 - [ ] Define bounded retry/backoff, auth-required, rejected, and user-paused states.
@@ -184,11 +185,22 @@ produce exactly one correctly dated server entry per capture on both devices.
 without duplicates or data loss, while respecting the user's network settings.
 Document OS scheduling limits instead of promising immediate background delivery.
 
-**Next implementation sequence (not implemented):**
+**Implemented foundation:** recording requests are staged in their own device
+directory with capture identity, destination, boundary, size, and SHA-256 digest.
+Preparation publishes its manifest after the body exists. Retry reuses verified
+bytes; missing/corrupt bodies rebuild from original audio. Credentials stay out
+of manifests. Cleanup follows durable `.synced` state and recovers at the next
+sync if termination interrupted it. Six portable regression tests cover reopen,
+lost responses, destination mismatch, corruption/missing files, preparation
+failure, and cleanup ordering. This still uses foreground URLSession; no system
+background task is created. Staging consumes space separately from media downloads.
 
-1. Replace disposable multipart staging with immutable, app-owned request files.
-   Persist capture ID, attachment ID, destination, stage, and body identity before
-   starting the system task; never put session tokens in the task manifest.
+**Remaining implementation sequence:**
+
+1. Extend recording staging to text and ordered YouTube stages. Persist the
+   system-task mapping before starting background requests; never put session
+   tokens in the task manifest. Rebuilding staging must first reconcile or cancel
+   any active system task that still owns its file.
 2. Persist the task mapping and reconcile it with system tasks at relaunch.
    A missing task or lost reply must retry the same operation identities.
 3. Validate server acknowledgements using the existing entry/attachment checks,
@@ -401,7 +413,7 @@ work, and the documented supported experience matches device-tested behavior.
 
 ## Dependency order and next actions
 
-1. **Now:** implement persistent upload staging and transfer recovery;
+1. **Now:** extend staging to background task mapping and transfer recovery;
    prepare signing using the user's Apple team and registered bundle identifiers
    following the [signing setup notes](../apple/SIGNING.md).
 2. **First install:** complete M0 signing and validate M1 on iPhone/iPad.

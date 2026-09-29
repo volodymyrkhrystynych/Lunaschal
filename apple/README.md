@@ -35,6 +35,11 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
 - Stable client ULIDs, original capture timestamps, sequential retry-safe
   uploads, server acknowledgement validation, and read-back of titles and
   transcripts for the 30 most recent synced captures on this device.
+- Persistent recording upload bodies with destination/identity checks and
+  SHA-256 verification. Retries reuse the same multipart file and boundary;
+  missing or damaged staging is rebuilt from retained audio before sending.
+  Staging is removed only after the synced capture state is saved, including
+  cleanup recovery after relaunch. Original audio is never removed by this path.
 - Authentication through the existing password + display-code login. Only the
   resulting session token is saved, in this device's Keychain. Expired sessions
   pause uploads; offline capture remains usable. The password is not persisted.
@@ -119,7 +124,10 @@ publicly to make CI work: simulator capture tests never contact it.
 
 - Uploads use foreground URLSession tasks. They stop when the app leaves the
   foreground and resume from the durable outbox when it returns. This is not
-  yet background URLSession transfer or background refresh.
+  yet background URLSession transfer or background refresh. Persistent request
+  staging currently covers recordings; text and YouTube request bodies are
+  rebuilt from capture manifests. Staged recordings use additional device space
+  outside the downloaded-library media budget.
 - Audio background mode is declared for an active recording, but lock-screen,
   calls, Bluetooth, interruptions, and Tailscale/cellular transitions still
   require device validation. Normal stops finalize the AAC file. After process

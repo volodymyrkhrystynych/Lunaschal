@@ -4,13 +4,21 @@ import Foundation
 public final class CaptureSync {
     public private(set) var isRunning = false
     private let store: CaptureStore
+    private let uploads: RecordingUploadStore?
 
-    public init(store: CaptureStore) { self.store = store }
+    public init(store: CaptureStore, uploads: RecordingUploadStore? = nil) {
+        self.store = store
+        self.uploads = uploads
+    }
 
     public func run(using transport: JournalTransport) async throws {
         guard !isRunning else { return }
         isRunning = true
         defer { isRunning = false }
+        // Recover cleanup interrupted after a durable acknowledgement.
+        for capture in try store.list() where capture.state == .synced {
+            try uploads?.discardAfterSync(capture)
+        }
         for var capture in try store.list().reversed() where capture.state == .pending {
             try Task.checkCancellation()
             do {
@@ -28,6 +36,7 @@ public final class CaptureSync {
                 // A rejected individual capture does not block the next one.
                 if capture.state != .failed { throw error }
             }
+            try uploads?.discardAfterSync(try store.load(capture.id))
         }
         // Read back server titles and transcripts for this device's recent
         // captures. This is deliberately not historical library replication.

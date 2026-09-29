@@ -21,6 +21,7 @@ final class CaptureModel: ObservableObject {
     let store: CaptureStore
     let replica: ReplicaStore
     let drawings: DrawingStore
+    let uploads: RecordingUploadStore
     let media: MediaStore
     let recorder: Recorder
     private let watchReceiver: WatchReceiver
@@ -34,12 +35,13 @@ final class CaptureModel: ObservableObject {
 
     init(store: CaptureStore) throws {
         self.store = store
+        uploads = try RecordingUploadStore(root: store.root.appendingPathComponent("recording-uploads", isDirectory: true))
         drawings = try DrawingStore(root: store.root.appendingPathComponent("drawings", isDirectory: true))
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store)
-        syncer = CaptureSync(store: store)
+        syncer = CaptureSync(store: store, uploads: uploads)
         replicaSyncer = ReplicaSync(store: replica)
         librarySyncer = ReplicaSync(store: replica)
         try store.recoverInterruptedRecordings()
@@ -128,7 +130,7 @@ final class CaptureModel: ObservableObject {
         syncingTask = Task {
             defer { syncing = false; activeAPI = nil; reload() }
             do {
-                let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular)
+                let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular, uploads: uploads)
                 activeAPI = api
                 try await syncer.run(using: api)
                 try await replicaSyncer.run(using: api, collections: [

@@ -34,10 +34,12 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     public let server: URL
     private let token: String?
     private let session: URLSession
+    private let uploads: RecordingUploadStore?
 
-    public init(server: URL, token: String?, allowCellular: Bool) throws {
+    public init(server: URL, token: String?, allowCellular: Bool, uploads: RecordingUploadStore? = nil) throws {
         self.server = try ServerAddress.parse(server.absoluteString)
         self.token = token
+        self.uploads = uploads
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
@@ -84,11 +86,17 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             (data, response) = try await session.data(for: req)
         } else {
             guard let audioURL else { throw CaptureError.missingAudio }
-            let body = try RecordingMultipart(capture: capture, audioURL: audioURL)
-            defer { try? FileManager.default.removeItem(at: body.url) }
             var req = request("api/journal/recordings", method: "POST")
-            req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
-            (data, response) = try await session.upload(for: req, fromFile: body.url)
+            if let uploads {
+                let body = try uploads.prepare(capture, audioURL: audioURL, server: server)
+                req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+                (data, response) = try await session.upload(for: req, fromFile: uploads.bodyURL(body))
+            } else {
+                let body = try RecordingMultipart(capture: capture, audioURL: audioURL)
+                defer { try? FileManager.default.removeItem(at: body.url) }
+                req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+                (data, response) = try await session.upload(for: req, fromFile: body.url)
+            }
         }
         try check(data, response)
         try Self.validateAcknowledgement(data, for: capture)
