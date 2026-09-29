@@ -180,6 +180,24 @@ produce exactly one correctly dated server entry per capture on both devices.
 without duplicates or data loss, while respecting the user's network settings.
 Document OS scheduling limits instead of promising immediate background delivery.
 
+**Next implementation sequence (not implemented):**
+
+1. Replace disposable multipart staging with immutable, app-owned request files.
+   Persist capture ID, attachment ID, destination, stage, and body identity before
+   starting the system task; never put session tokens in the task manifest.
+2. Persist the task mapping and reconcile it with system tasks at relaunch.
+   A missing task or lost reply must retry the same operation identities.
+3. Validate server acknowledgements using the existing entry/attachment checks,
+   save the resulting capture state, then remove disposable request bytes.
+   Capture originals remain separate and retained.
+4. Keep YouTube entry creation and link attachment as ordered durable stages;
+   the capture is complete only after both acknowledgements.
+5. Apply bounded retry/backoff and explicit authentication, rejection, cancellation,
+   and network-policy states. Replacing a task after a cellular setting change
+   must not lose its persisted operation or permit parallel duplicate scheduling.
+6. Test each interruption boundary with fake transport first, then hosted native
+   lifecycle tests and device suspension/Tailscale checks.
+
 ### M3 — Device database and multi-device sync
 
 - [ ] Inventory the records needed by each mobile feature and classify them as
@@ -284,9 +302,13 @@ passed; actual Pencil 2 behavior still needs device validation.
 Drawing backup restoration now imports exported `.drawing` files as independent
 editable pages. Native decoding and preview generation precede publication;
 source bytes and existing pages are preserved. PNG/PDF imports are not converted
-to editable strokes. Imports have a 64 MB limit. Two additional portable tests
-pass (37 total on Linux); three new iOS tests cover native stroke preservation,
-invalid input, and the size limit, pending hosted execution.
+to editable strokes. Imports have a 64 MB limit and require at least one editable
+stroke; blank drawings are rejected because PencilKit can also decode invalid
+bytes as empty ink without throwing. Two additional portable tests pass (37 total
+on Linux, 38 on Mac). The first hosted import run caught this silent-empty decode;
+the native stroke and size-limit tests passed. Four native tests now cover stroke
+preservation, invalid input, blank ink, and the size limit; the fix awaits hosted
+verification.
 
 ### M6 — Mobile navigation and capture integration
 

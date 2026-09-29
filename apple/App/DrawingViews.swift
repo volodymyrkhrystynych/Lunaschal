@@ -74,7 +74,11 @@ enum DrawingImport {
         let native = try handle.read(upToCount: maximumBytes + 1) ?? Data()
         guard native.count <= maximumBytes else { throw ImportError.tooLarge }
         return try store.importDrawing(title: url.deletingPathExtension().lastPathComponent, native: native) {
-            try preview(PKDrawing(data: $0))
+            let drawing = try PKDrawing(data: $0)
+            // PencilKit can decode arbitrary bytes as an empty drawing without
+            // throwing. Do not publish that as a successfully restored page.
+            guard !drawing.strokes.isEmpty else { throw ImportError.noEditableInk }
+            return try preview(drawing)
         }
     }
 
@@ -87,8 +91,13 @@ enum DrawingImport {
     }
 
     enum ImportError: LocalizedError {
-        case tooLarge
-        var errorDescription: String? { "This drawing exceeds the 64 MB import limit. The original file has been kept." }
+        case tooLarge, noEditableInk
+        var errorDescription: String? {
+            switch self {
+            case .tooLarge: return "This drawing exceeds the 64 MB import limit. The original file has been kept."
+            case .noEditableInk: return "No editable ink was found. Choose an exported drawing with strokes; blank drawings and previews cannot be imported."
+            }
+        }
     }
 }
 

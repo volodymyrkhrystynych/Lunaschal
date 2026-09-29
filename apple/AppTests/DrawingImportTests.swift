@@ -63,4 +63,17 @@ final class DrawingImportTests: XCTestCase {
         XCTAssertTrue(try store.pages().isEmpty)
         XCTAssertTrue(FileManager.default.fileExists(atPath: source.path))
     }
+
+    func testEmptyNativeDrawingIsNotPublishedAsRestoredInk() throws {
+        let root = try directory()
+        let source = root.appendingPathComponent("blank.drawing")
+        let original = PKDrawing().dataRepresentation()
+        try original.write(to: source)
+        let store = try DrawingStore(root: root.appendingPathComponent("drawings"))
+        XCTAssertThrowsError(try DrawingImport.importFile(source, into: store)) { error in
+            XCTAssertTrue(error is DrawingImport.ImportError)
+        }
+        XCTAssertTrue(try store.pages().isEmpty)
+        XCTAssertEqual(try Data(contentsOf: source), original)
+    }
 }
