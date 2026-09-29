@@ -68,6 +68,7 @@ private final class DrawingEditorModel: ObservableObject {
             loaded = true
         } catch {
             self.error = "Could not open the original drawing. Existing files were kept. \(error.localizedDescription)"
+            status = "Could not open drawing"
         }
         canvas.isUserInteractionEnabled = loaded
     }
@@ -93,8 +94,22 @@ private final class DrawingEditorModel: ObservableObject {
             }
             page = try store.checkpoint(page.id, native: canvas.drawing.dataRepresentation(), preview: preview)
             dirty = false
+            error = nil
             status = "Saved on this device"
         } catch { self.error = error.localizedDescription; status = "Save failed · keep this drawing open" }
+    }
+
+    func restorePrevious() {
+        do {
+            var recovered = PKDrawing()
+            page = try store.restorePrevious(page.id) { recovered = try PKDrawing(data: $0) }
+            canvas.drawing = recovered
+            loaded = true
+            canvas.isUserInteractionEnabled = true
+            dirty = false
+            error = nil
+            status = "Previous saved version restored"
+        } catch { self.error = error.localizedDescription }
     }
 }
 
@@ -109,7 +124,10 @@ private struct DrawingEditor: View {
     var body: some View {
         VStack(spacing: 0) {
             Text(model.status).font(.caption).frame(maxWidth: .infinity).padding(6)
-            if let error = model.error { Text(error).foregroundStyle(.red).padding() }
+            if let error = model.error {
+                Text(error).foregroundStyle(.red).padding()
+                Button("Restore previous saved version") { model.restorePrevious() }
+            }
             PencilSurface(model: model)
         }
         .navigationTitle(model.page.title).navigationBarTitleDisplayMode(.inline)

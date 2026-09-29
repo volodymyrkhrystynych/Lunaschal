@@ -41,7 +41,9 @@ public final class DrawingStore {
     }
 
     public func page(_ id: String) throws -> DrawingPage {
-        try JSONDecoder().decode(DrawingPage.self, from: Data(contentsOf: manifest(id)))
+        let value = try JSONDecoder().decode(DrawingPage.self, from: Data(contentsOf: manifest(id)))
+        guard value.id == id else { throw CaptureError.invalidID }
+        return value
     }
 
     public func rename(_ id: String, title: String) throws {
@@ -88,6 +90,23 @@ public final class DrawingStore {
         return try checkpointDirectory(page.id, checkpoint).appendingPathComponent("preview.png")
     }
 
+    public func restorePrevious(_ id: String, validate: (Data) throws -> Void) throws -> DrawingPage {
+        var page = try page(id)
+        let parent = root.appendingPathComponent(id, isDirectory: true)
+        let candidates = try fm.contentsOfDirectory(at: parent, includingPropertiesForKeys: nil)
+            .filter { ULID.isValid($0.lastPathComponent) && $0.lastPathComponent != page.checkpoint }
+            .sorted { $0.lastPathComponent > $1.lastPathComponent }
+        guard let previous = candidates.first(where: {
+            fm.fileExists(atPath: $0.appendingPathComponent("original.drawing").path)
+                && fm.fileExists(atPath: $0.appendingPathComponent("preview.png").path)
+        }) else { throw DrawingError.noPreviousCheckpoint }
+        try validate(Data(contentsOf: previous.appendingPathComponent("original.drawing")))
+        page.checkpoint = previous.lastPathComponent
+        page.updatedAt = Date()
+        try write(page)
+        return page
+    }
+
     private func write(_ page: DrawingPage) throws {
         try JSONEncoder().encode(page).write(to: manifest(page.id), options: .atomic)
     }
@@ -102,6 +121,11 @@ public final class DrawingStore {
 }
 
 public enum DrawingError: LocalizedError {
-    case incompleteCheckpoint
-    public var errorDescription: String? { "The drawing checkpoint is incomplete. Your previous saved version has been kept." }
+    case incompleteCheckpoint, noPreviousCheckpoint
+    public var errorDescription: String? {
+        switch self {
+        case .incompleteCheckpoint: return "The drawing checkpoint is incomplete. Your previous saved version has been kept."
+        case .noPreviousCheckpoint: return "No previous complete drawing checkpoint is available. Existing files have been kept."
+        }
+    }
 }

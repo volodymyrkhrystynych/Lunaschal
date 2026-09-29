@@ -1,6 +1,23 @@
 import XCTest
 
 final class OfflineCaptureTests: XCTestCase {
+    func testDrawingWorkspaceReopensWithoutAServer() {
+        let app = XCUIApplication()
+        app.launch()
+        app.tabBars.buttons["Draw"].tap()
+        let newDrawing = app.buttons["New drawing"]
+        XCTAssertTrue(newDrawing.waitForExistence(timeout: 10))
+        newDrawing.tap()
+        let page = app.staticTexts["Untitled drawing"].firstMatch
+        XCTAssertTrue(page.waitForExistence(timeout: 5))
+        page.tap()
+        XCTAssertTrue(app.buttons["Save locally"].waitForExistence(timeout: 5))
+        app.terminate()
+        app.launch()
+        app.tabBars.buttons["Draw"].tap()
+        XCTAssertTrue(app.staticTexts["Untitled drawing"].firstMatch.waitForExistence(timeout: 5))
+    }
+
     func testCaptureSurvivesTerminationWithoutAServer() {
         let app = XCUIApplication()
         app.launch()

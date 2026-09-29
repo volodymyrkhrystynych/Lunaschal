@@ -30,13 +30,7 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
             guard available > 32 * 1024 * 1024 else {
                 throw RecorderError.message("Free some device storage before starting a recording. Saved audio has been kept.")
             }
-            #if os(watchOS)
-            let permission = await withCheckedContinuation { continuation in
-                AVAudioSession.sharedInstance().requestRecordPermission { continuation.resume(returning: $0) }
-            }
-            #else
             let permission = await AVAudioApplication.requestRecordPermission()
-            #endif
             guard permission else {
                 throw RecorderError.message("Allow microphone access in Settings to record.")
             }

@@ -13,7 +13,12 @@ implementation limits. Keep this document current as work lands.
 **Native capture, a SQLite replica, journal editing/conflicts, and library-text
 sync exist locally. This is not yet an installable, signed, or device-validated
 release.** Capture foundation: `e018be9`; replica/journal sync: `e695b5e`. Further work is being committed
-in stages; no branch push or hosted build has run.
+in stages. The branch was pushed on 2026-09-28; the first
+[hosted Apple build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36502751471)
+passed against `33a694d`: Xcode 26.6 (17F113), Watch simulator build, iPhone
+simulator build and offline capture/relaunch test, 33 Linux core tests, and 34
+Mac core tests including CryptoKit. Subsequent drawing recovery and drawing
+relaunch-test changes are being verified separately.
 
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
@@ -22,8 +27,8 @@ in stages; no branch push or hosted build has run.
 | M2 — Durable background transfers              | Planned                                   | Recovery, network-policy, and suspended-app tests                 |
 | M3 — Multi-device data synchronization         | Implemented in part                       | Capture outbox migration, broader mutations, native validation    |
 | M4 — Downloadable library                      | Text and active media implemented in part | Remaining file types, background scheduling, storage refinement   |
-| M5 — Native drawing and annotation             | Planned; prototype early                  | PencilKit compatibility and actual iPad validation                |
-| M6 — Mobile navigation and capture integration | Partly started                            | Broader feature inventory, share extension, YouTube capture       |
+| M5 — Native drawing and annotation             | Local PencilKit workspace implemented     | Paper integration, compatibility, and actual iPad validation      |
+| M6 — Mobile navigation and capture integration | Partly implemented                        | Broader feature inventory, share extension, navigation refinement |
 | M7 — Watch recording companion                 | Implemented locally; core tested          | Apple SDK compilation, signing, paired-device validation          |
 | M8 — Optional on-device speech and AI          | Evaluation pending                        | Availability, language support, quality and resource measurements |
 | M9 — Release and recovery readiness            | Planned                                   | Upgrade/restore tests, documentation, stable signed distribution  |
@@ -36,8 +41,8 @@ in stages; no branch push or hosted build has run.
 - [x] Native Swift source passed syntax parsing; this does **not** establish
       successful Apple SDK type checking or linking.
 - [x] Project/workflow YAML parsed; new Markdown/YAML passed Prettier formatting.
-- [ ] Hosted Mac workflow has run successfully.
-- [ ] Offline capture/relaunch XCUITest has run successfully.
+- [x] Hosted Mac workflow has run successfully.
+- [x] Offline capture/relaunch XCUITest has run successfully.
 - [ ] A signed app has been installed on the user's devices.
 
 Record subsequent verification below with the commit/build, command, result,
@@ -116,7 +121,7 @@ milestones.
 - [x] Create the approved `feat/apple-offline-foundation` branch in the Codex worktree.
 - [x] Add the iPhone/iPad XcodeGen project and portable Swift package.
 - [x] Add unsigned hosted Mac compilation/UI-test and Linux Swift-test jobs.
-- [ ] Run the workflow and resolve all Apple SDK compilation or simulator failures.
+- [x] Run the workflow and resolve all Apple SDK compilation or simulator failures.
 - [ ] Select/register the final bundle identifier and supply the Apple team ID.
 - [ ] Add app icons and required distribution metadata.
 - [ ] Configure signing certificates/profiles and App Store Connect access as secrets.
@@ -141,7 +146,7 @@ Mac and install it on both devices without the old MacBook building the app.
 - [x] Local audio playback/export and explicit interrupted-recording review.
 - [x] Add optional `capturedAt` support to existing text/recording routes.
 - [x] Test restart, lost-response retry, rejected uploads, auth expiry, and retained audio.
-- [ ] Run native offline capture/relaunch UI tests on the hosted Mac.
+- [x] Run native offline capture/relaunch UI tests on the hosted Mac.
 - [ ] Validate recording, playback, permissions, calls, screen lock, and Bluetooth on devices.
 - [ ] Validate cellular-off and Tailscale-disconnected behavior on devices.
 - [ ] Verify server transcripts and capture-day placement end to end.

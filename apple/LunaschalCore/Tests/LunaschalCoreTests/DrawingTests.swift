@@ -55,4 +55,25 @@ final class DrawingTests: XCTestCase {
         XCTAssertEqual(versions.count, 2)
         XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.nativeURL(latest))), Data([10]))
     }
+
+    func testRecoveryValidatesPreviousInkBeforePublishingIt() throws {
+        let store = try DrawingStore(root: directory())
+        let page = try store.create()
+        let first = try store.checkpoint(page.id, native: Data([1]), preview: Data([2]))
+        let second = try store.checkpoint(page.id, native: Data([3]), preview: Data([4]))
+        XCTAssertThrowsError(try store.restorePrevious(page.id, validate: { _ in throw DrawingError.incompleteCheckpoint }))
+        XCTAssertEqual(try store.page(page.id), second)
+        let restored = try store.restorePrevious(page.id) { XCTAssertEqual($0, Data([1])) }
+        XCTAssertEqual(restored.checkpoint, first.checkpoint)
+        XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.nativeURL(second))), Data([3]))
+    }
+
+    func testMismatchedManifestCannotRedirectAWritingOperation() throws {
+        let root = try directory(), store = try DrawingStore(root: root)
+        let first = try store.create(title: "First")
+        let second = try store.create(title: "Second")
+        try JSONEncoder().encode(second).write(to: root.appendingPathComponent(first.id).appendingPathExtension("json"))
+        XCTAssertThrowsError(try store.rename(first.id, title: "Wrong target"))
+        XCTAssertEqual(try store.page(second.id).title, "Second")
+    }
 }
