@@ -9,6 +9,13 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
 
 ## Included
 
+- A PencilKit drawing workspace with fixed A4 coordinates, native tool picker,
+  local checkpoints, undo, zoom, and editable-ink/PNG export. Drawings currently
+  stay on the device and are separate from existing server Paper documents.
+  Each checkpoint publishes only after its ink and preview are written; the
+  current and preceding versions are retained. Library cleanup cannot remove
+  drawings. Cross-platform ink conversion and drawing sync remain outstanding.
+
 - Offline typed journal entries, plus separate **Transcribe** and **Record**
   captures. Stopping records a journal entry; both modes retain the original
   mono AAC file, and only Transcribe requests server transcription.

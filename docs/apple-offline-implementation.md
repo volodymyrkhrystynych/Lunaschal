@@ -254,7 +254,7 @@ motivation. Final integration depends on the M3 conflict/storage contract.
 - [ ] Decide whether cross-platform editing can be lossless; clearly label any
       read-only or conversion-required paths rather than silently flattening ink.
 - [ ] Preserve A4/page coordinates, page ordering, pasted images, and image transforms.
-- [ ] Implement local drawing checkpoints and crash/reopen recovery.
+- [x] Implement local drawing checkpoints and crash/reopen recovery.
 - [ ] Preserve the existing distinction between local saving and the explicit Paper
       Save action until deliberately changing that interaction.
 - [ ] Synchronize page revisions with recoverable conflict copies.
@@ -264,6 +264,14 @@ motivation. Final integration depends on the M3 conflict/storage contract.
 **Done when:** drawing feels reliable on the target iPad, works offline, and
 survives reopening/sync without losing existing ink or silently changing pages
 on Linux. Do not assume Pencil Pro-only hardware features are available.
+
+**Local prototype:** the Draw tab creates independent A4 PencilKit pages with
+atomic native-ink/PNG checkpoints, undo, zoom, and export. Current and previous
+checkpoint generations are retained. It does not modify server Paper documents
+or convert existing web strokes yet; the UI states that drawing sync is not
+available. Four portable persistence tests cover reopening, failed writes,
+retention, and renaming. The complete Swift suite now passes 33 tests. PencilKit
+SDK compilation and actual Pencil 2 behavior still need validation.
 
 ### M6 — Mobile navigation and capture integration
 

@@ -20,6 +20,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var libraryMessage: String?
     let store: CaptureStore
     let replica: ReplicaStore
+    let drawings: DrawingStore
     let media: MediaStore
     let recorder: Recorder
     private let watchReceiver: WatchReceiver
@@ -33,6 +34,7 @@ final class CaptureModel: ObservableObject {
 
     init(store: CaptureStore) throws {
         self.store = store
+        drawings = try DrawingStore(root: store.root.appendingPathComponent("drawings", isDirectory: true))
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         recorder = Recorder(store: store)

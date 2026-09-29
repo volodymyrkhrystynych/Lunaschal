@@ -14,6 +14,8 @@ struct CaptureRoot: View {
                 .tabItem { Label("Journal", systemImage: "book.closed") }
             NavigationStack { LibraryView(model: model) }
                 .tabItem { Label("Library", systemImage: "books.vertical") }
+            NavigationStack { DrawingLibraryView(model: model) }
+                .tabItem { Label("Draw", systemImage: "pencil.tip") }
             NavigationStack { ConnectionSettings(model: model) }
                 .tabItem { Label("Settings", systemImage: "gear") }
         }
