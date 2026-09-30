@@ -172,6 +172,8 @@ produce exactly one correctly dated server entry per capture on both devices.
 ### M2 — Transfer and recording durability
 
 - [x] Persist recording upload bodies and recover cleanup after a durable acknowledgement.
+- [x] Persist foreground attempt identities, bounded retry timing, authentication
+      pauses, rejection state, and cancellation recovery.
 - [ ] Design background URLSession transfers with durable task-to-operation mapping.
 - [ ] Validate destination protection for background redirects; the existing
       foreground redirect delegate is not invoked for background sessions.
@@ -200,6 +202,17 @@ sync if termination interrupted it. Six portable regression tests cover reopen,
 lost responses, destination mismatch, corruption/missing files, preparation
 failure, and cleanup ordering. This still uses foreground URLSession; no system
 background task is created. Staging consumes space separately from media downloads.
+
+The foreground uploader now also keeps a per-capture attempt ledger. It persists
+an attempt ID before sending, rejects obsolete completions, and recovers
+interrupted attempts before replay. Retry delays grow from 30 seconds to 30
+minutes across relaunches. Login resumes authentication-paused work; explicit
+Retry upload resumes rejected captures; Sync overrides waiting delays.
+Cancellation retains captures without increasing retry backoff. Nine deterministic
+tests cover these transitions without sleeping or contacting a server. This
+ledger does not yet contain URLSession task identifiers; background recovery must
+reconcile live system tasks before resetting any sending state. User pause controls
+and server Retry-After handling remain outstanding.
 
 **Remaining implementation sequence:**
 

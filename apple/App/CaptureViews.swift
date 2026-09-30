@@ -135,7 +135,7 @@ private struct CaptureList: View {
         .navigationTitle("Journal")
         .toolbar {
             if model.syncing { ProgressView() }
-            else { Button("Sync") { model.requestSync() }.disabled(!model.signedIn) }
+            else { Button("Sync") { model.requestSync(manual: true) }.disabled(!model.signedIn) }
         }
     }
 }

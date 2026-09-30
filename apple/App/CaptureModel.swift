@@ -22,6 +22,7 @@ final class CaptureModel: ObservableObject {
     let replica: ReplicaStore
     let drawings: DrawingStore
     let uploads: RecordingUploadStore
+    let transfers: TransferStore
     let media: MediaStore
     let recorder: Recorder
     private let watchReceiver: WatchReceiver
@@ -36,12 +37,13 @@ final class CaptureModel: ObservableObject {
     init(store: CaptureStore) throws {
         self.store = store
         uploads = try RecordingUploadStore(root: store.root.appendingPathComponent("recording-uploads", isDirectory: true))
+        transfers = try TransferStore(root: store.root.appendingPathComponent("transfer-state", isDirectory: true))
         drawings = try DrawingStore(root: store.root.appendingPathComponent("drawings", isDirectory: true))
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store)
-        syncer = CaptureSync(store: store, uploads: uploads)
+        syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
         replicaSyncer = ReplicaSync(store: replica)
         librarySyncer = ReplicaSync(store: replica)
         try store.recoverInterruptedRecordings()
@@ -106,6 +108,7 @@ final class CaptureModel: ObservableObject {
             try store.bind(to: url)
             server = url
             try SessionToken.save(value, server: url)
+            try transfers.resumeAuthentication(now: Date())
             token = value
             signedIn = true
             message = nil
@@ -123,9 +126,13 @@ final class CaptureModel: ObservableObject {
         } catch { message = error.localizedDescription }
     }
 
-    func requestSync() {
+    func requestSync(manual: Bool = false) {
         guard UIApplication.shared.applicationState == .active,
               !syncing, signedIn, let server, let token else { return }
+        if manual {
+            do { try transfers.retryWaiting(now: Date()) }
+            catch { message = error.localizedDescription; return }
+        }
         syncing = true
         syncingTask = Task {
             defer { syncing = false; activeAPI = nil; reload() }
@@ -137,7 +144,8 @@ final class CaptureModel: ObservableObject {
                     "journal_entries", "journal_attachments", "fics", "study_sources",
                     "papers", "conversations", "knowledge_archives",
                 ])
-                syncMessage = nil
+                let retry = try transfers.all().compactMap(\.retryAt).min()
+                syncMessage = retry.map { "Uploads will retry after \($0.formatted(date: .omitted, time: .shortened))." }
             } catch {
                 if Task.isCancelled { return }
                 // Being offline is normal; don't show an alert every retry.
@@ -237,6 +245,7 @@ final class CaptureModel: ObservableObject {
             } else {
                 var item = try store.load(capture.id)
                 guard item.state == .failed else { return }
+                try transfers.retryNow(item.id, now: Date())
                 item.state = .pending
                 item.lastError = nil
                 try store.save(item)

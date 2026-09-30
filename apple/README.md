@@ -49,9 +49,13 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
   local session token and retains captures and that binding.
 - Cellular text/audio sync enabled by default with a per-device switch. Turning
   it off cancels an in-flight sync; subsequent requests prohibit cellular and
-  expensive-network access. Reconnection is retried every 30 seconds while the
-  app is active. A capture-specific 4xx rejection requires manual retry;
-  network errors, 408, 429 and 5xx remain pending.
+  expensive-network access. The app checks for work every 30 seconds while
+  active. Capture upload failures use persisted exponential backoff from 30
+  seconds to 30 minutes; Sync retries waiting uploads immediately. Authentication
+  failures pause uploads until login, and a capture-specific 4xx rejection
+  requires Retry upload. Interrupted foreground attempts recover at the next
+  sync with new attempt identities; obsolete completions cannot acknowledge them.
+  Cancellation keeps captures pending without increasing failure backoff.
 - Local audio playback and export. No automatic deletion of original captures,
   even after successful upload. A 404 on a previously synced entry preserves
   the local original and never recreates the server entry.
