@@ -17,7 +17,9 @@ Current project values are:
 
 The Watch target's `WKCompanionAppBundleIdentifier` must continue to match the
 iPhone target. If the identifiers change, update both target settings and that
-Info.plist property in `project.yml` together. The same iPhone/iPad app serves
+Info.plist property in `project.yml` together. If changing the background task
+identifier, keep `BGTaskSchedulerPermittedIdentifiers` in `project.yml` and
+`AppDelegate.syncIdentifier` identical. The same iPhone/iPad app serves
 both devices; the Watch is its embedded companion.
 
 Register the final identifiers in the user's team, then create the main app

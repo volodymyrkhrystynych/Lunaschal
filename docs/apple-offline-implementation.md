@@ -30,13 +30,16 @@ Persistent recording upload staging is verified at `96765d8` in
 Watch compilation passed. Retry/recovery commit `87568c0` also passed
 [hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36649976298):
 53 Linux and 54 macOS core tests, six native tests, and Watch compilation.
-Opportunistic background processing is now implemented; native verification is pending.
+Opportunistic background processing (`4d9abc3`) passed
+[hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36707854242):
+60 Linux / 61 macOS core tests, four native drawing tests, two iPhone relaunch
+tests, and Watch compilation. Physical-device background delivery remains unverified.
 
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
 | M0 — Build and distribution                    | Unsigned builds and UI tests passed       | Signing, TestFlight installation                                  |
 | M1 — Offline journal capture                   | Simulator capture/relaunch verified       | Device recording and connection checks                            |
-| M2 — Durable background transfers              | Recording staging implemented             | System task mapping, retries, and suspended-app tests             |
+| M2 — Durable background transfers              | Staging, retries, processing implemented  | Device expiration/recovery; autonomous system transfer design     |
 | M3 — Multi-device data synchronization         | Implemented in part                       | Capture outbox migration, broader mutations, native validation    |
 | M4 — Downloadable library                      | Text and active media implemented in part | Remaining file types, background scheduling, storage refinement   |
 | M5 — Native drawing and annotation             | Local PencilKit workspace implemented     | Paper integration, compatibility, and actual iPad validation      |
@@ -235,7 +238,8 @@ Scheduling respects authentication, pending work, retry deadlines, and the user
 toggle. It does not repeatedly postpone an already requested window or schedule
 bulk library downloads. Seven portable tests cover scheduling, failure recovery,
 duplicate leases, expiration races, and retained capture/attempt state. All 60
-Linux core tests pass; native SDK and physical-device checks remain separate.
+Linux core tests pass; the native SDK build and existing simulator tests also
+pass. Physical-device background scheduling and expiration remain unverified.
 iOS controls delivery timing, and this does not keep uploads alive after process
 termination. Before enabling autonomous background URLSession uploads, select
 and test a destination-protection strategy, including
@@ -459,7 +463,8 @@ work, and the documented supported experience matches device-tested behavior.
 
 ## Dependency order and next actions
 
-1. **Now:** verify opportunistic background processing on Apple builds and devices;
+1. **Now:** validate opportunistic background processing on devices and continue
+   the remaining library and Paper integration;
    prepare signing using the user's Apple team and registered bundle identifiers
    following the [signing setup notes](../apple/SIGNING.md).
 2. **First install:** complete M0 signing and validate M1 on iPhone/iPad.
@@ -510,6 +515,15 @@ These are staged decisions, not reasons to pause unrelated implementation.
 | 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending |
 
 ### Implementation entry points
+
+Background processing verification (2026-09-30, `4d9abc3`):
+[hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36707854242)
+passed 60 Linux / 61 macOS core tests, four native drawing-import tests, two
+iPhone offline relaunch tests, and the Watch build. Seven new portable tests
+exercise injected execution leases and scheduling, including cancellation of
+an actual capture-sync operation with its durable attempt store. Simulator
+tests verify launch registration does not break offline startup; they do not
+simulate OS-granted processing time or establish real-device delivery timing.
 
 Recording staging verification (2026-09-29, `96765d8`): local Swift 6.2 container
 and hosted Linux `swift test` passed 43 tests; hosted Mac passed 44 including the
