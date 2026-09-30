@@ -23,7 +23,7 @@ struct CaptureRoot: View {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
         .task(id: scenePhase) {
-            guard scenePhase == .active else { model.cancelSync(); return }
+            guard scenePhase == .active else { model.leaveForeground(); return }
             while !Task.isCancelled {
                 model.requestSync()
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
@@ -67,7 +67,9 @@ private struct CaptureComposer: View {
                 Text("Stopping saves a separate journal entry with the original audio. Transcribe also asks the server to add the words when connected.")
             }
             Section {
-                Text(model.signedIn ? "Captures sync automatically while the app is open." : "Capture works offline. Sign in under Settings to sync.")
+                Text(model.signedIn
+                     ? (model.backgroundSyncEnabled ? "Captures sync while open and when iOS grants background time." : "Captures sync while the app is open.")
+                     : "Capture works offline. Sign in under Settings to sync.")
                     .foregroundStyle(.secondary)
                 if let message = model.syncMessage { Text(message).font(.footnote).foregroundStyle(.secondary) }
             }
@@ -220,6 +222,7 @@ private struct AudioPreview: View {
 private struct ConnectionSettings: View {
     @ObservedObject var model: CaptureModel
     @AppStorage("allowCellularSync") private var allowCellular = true
+    @AppStorage("backgroundSyncEnabled") private var backgroundSyncEnabled = true
     @State private var address = ""
     @State private var password = ""
     @State private var code = ""
@@ -250,6 +253,11 @@ private struct ConnectionSettings: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("Transfers") {
+                Toggle("Background sync", isOn: $backgroundSyncEnabled)
+                    .onChange(of: backgroundSyncEnabled) { _, _ in model.backgroundPreferenceChanged() }
+                Text(model.backgroundStatus).font(.footnote).foregroundStyle(.secondary)
+                Text("iOS decides when background sync runs. Opening the app syncs sooner.")
+                    .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Allow cellular sync", isOn: $allowCellular)
                     .onChange(of: allowCellular) { _, _ in model.cancelSync() }
                 Text("Applies to journal text and audio. Bulk library downloads will use Wi-Fi only.")

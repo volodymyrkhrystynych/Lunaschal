@@ -126,9 +126,13 @@ publicly to make CI work: simulator capture tests never contact it.
 
 ## Current limits and next stages
 
-- Uploads use foreground URLSession tasks. They stop when the app leaves the
-  foreground and resume from the durable outbox when it returns. This is not
-  yet background URLSession transfer or background refresh. Persistent request
+- Uploads use an ephemeral URLSession while active or during an iOS-granted
+  `BGProcessingTask` window. Background sync can be disabled in Settings;
+  iOS chooses when to run it. Expiration cancels work and preserves pending
+  captures for retry. Ordinary foreground work stops when leaving the app.
+  This is not autonomous background URLSession transfer: bytes do not continue
+  after process termination. The existing redirect and cellular checks apply;
+  bulk media downloads remain a separate Wi-Fi-only action. Persistent request
   staging currently covers recordings; text and YouTube request bodies are
   rebuilt from capture manifests. Staged recordings use additional device space
   outside the downloaded-library media budget.

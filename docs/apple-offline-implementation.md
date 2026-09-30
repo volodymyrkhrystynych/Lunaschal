@@ -1,6 +1,6 @@
 # Apple apps and offline experience — implementation tracker
 
-Last updated: 2026-09-29. Working branch: `feat/apple-offline-foundation`.
+Last updated: 2026-09-30. Working branch: `feat/apple-offline-foundation`.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first
@@ -27,7 +27,10 @@ tests, and the Watch simulator build passed.
 Persistent recording upload staging is verified at `96765d8` in
 [hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36647550695):
 43 Linux / 44 Mac core tests, four native drawing tests, two relaunch tests, and
-Watch compilation passed. Transfers still require foreground execution.
+Watch compilation passed. Retry/recovery commit `87568c0` also passed
+[hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36649976298):
+53 Linux and 54 macOS core tests, six native tests, and Watch compilation.
+Opportunistic background processing is now implemented; native verification is pending.
 
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
@@ -174,6 +177,9 @@ produce exactly one correctly dated server entry per capture on both devices.
 - [x] Persist recording upload bodies and recover cleanup after a durable acknowledgement.
 - [x] Persist foreground attempt identities, bounded retry timing, authentication
       pauses, rejection state, and cancellation recovery.
+- [x] Register and request background processing windows, with expiration
+      cancellation, exactly-once completion, and a user enable/disable control.
+- [ ] Verify processing delivery and expiration on physical devices over Tailscale.
 - [ ] Design background URLSession transfers with durable task-to-operation mapping.
 - [ ] Validate destination protection for background redirects; the existing
       foreground redirect delegate is not invoked for background sessions.
@@ -200,8 +206,9 @@ bytes; missing/corrupt bodies rebuild from original audio. Credentials stay out
 of manifests. Cleanup follows durable `.synced` state and recovers at the next
 sync if termination interrupted it. Six portable regression tests cover reopen,
 lost responses, destination mismatch, corruption/missing files, preparation
-failure, and cleanup ordering. This still uses foreground URLSession; no system
-background task is created. Staging consumes space separately from media downloads.
+failure, and cleanup ordering. The ephemeral URLSession runs in the foreground
+or during granted background processing time. Staging consumes space separately
+from media downloads.
 
 The foreground uploader now also keeps a per-capture attempt ledger. It persists
 an attempt ID before sending, rejects obsolete completions, and recovers
@@ -210,8 +217,9 @@ minutes across relaunches. Login resumes authentication-paused work; explicit
 Retry upload resumes rejected captures; Sync overrides waiting delays.
 Cancellation retains captures without increasing retry backoff. Ten deterministic
 tests cover these transitions without sleeping or contacting a server. This
-ledger does not yet contain URLSession task identifiers; background recovery must
-reconcile live system tasks before resetting any sending state. User pause controls
+ledger does not yet contain URLSession task identifiers; future autonomous
+background URLSession recovery must reconcile live system tasks before resetting
+any sending state. Global upload pause controls
 and server Retry-After handling remain outstanding.
 
 **Remaining implementation sequence:**
@@ -219,8 +227,18 @@ and server Retry-After handling remain outstanding.
 Apple's [background-transfer documentation](https://developer.apple.com/documentation/Foundation/downloading-files-in-the-background)
 states that background sessions follow redirects automatically and do not call
 the redirect delegate. The current foreground client's `NoRedirects` guard
-therefore cannot simply be copied into a background session. Before enabling
-background uploads, select and test a destination-protection strategy, including
+therefore cannot simply be copied into a background session. We now use
+`BGProcessingTask` execution windows with the existing ephemeral session to keep
+its redirect guard. Registration happens during application launch. Expiration
+cancels the worker and transport; the durable outbox remains available for retry.
+Scheduling respects authentication, pending work, retry deadlines, and the user
+toggle. It does not repeatedly postpone an already requested window or schedule
+bulk library downloads. Seven portable tests cover scheduling, failure recovery,
+duplicate leases, expiration races, and retained capture/attempt state. All 60
+Linux core tests pass; native SDK and physical-device checks remain separate.
+iOS controls delivery timing, and this does not keep uploads alive after process
+termination. Before enabling autonomous background URLSession uploads, select
+and test a destination-protection strategy, including
 an HTTPS redirect to a different host, so neither credentials nor capture bytes
 are silently forwarded. This is an outstanding design/test requirement, not a
 claim that the current foreground uploader follows redirects.
@@ -441,7 +459,7 @@ work, and the documented supported experience matches device-tested behavior.
 
 ## Dependency order and next actions
 
-1. **Now:** extend staging to background task mapping and transfer recovery;
+1. **Now:** verify opportunistic background processing on Apple builds and devices;
    prepare signing using the user's Apple team and registered bundle identifiers
    following the [signing setup notes](../apple/SIGNING.md).
 2. **First install:** complete M0 signing and validate M1 on iPhone/iPad.

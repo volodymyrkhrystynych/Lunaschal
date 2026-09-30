@@ -13,6 +13,9 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var signingIn = false
     @Published var message: String?
     @Published private(set) var syncMessage: String?
+    @Published var backgroundStatus = "Background sync is idle."
+    var onBackgroundSyncNeeded: (() -> Void)?
+    private var backgroundSyncing = false
     @Published private(set) var journalRecords: [SyncChange] = []
     @Published private(set) var pendingEdits: [PendingEdit] = []
     @Published private(set) var libraryRecords: [SyncChange] = []
@@ -69,6 +72,10 @@ final class CaptureModel: ObservableObject {
         UserDefaults.standard.object(forKey: "allowCellularSync") as? Bool ?? true
     }
 
+    var backgroundSyncEnabled: Bool {
+        UserDefaults.standard.object(forKey: "backgroundSyncEnabled") as? Bool ?? true
+    }
+
     func reload() {
         do {
             captures = try store.list()
@@ -123,37 +130,68 @@ final class CaptureModel: ObservableObject {
             if let server { try SessionToken.remove(server: server) }
             token = nil
             signedIn = false
+            onBackgroundSyncNeeded?()
         } catch { message = error.localizedDescription }
     }
 
     func requestSync(manual: Bool = false) {
+        onBackgroundSyncNeeded?()
         guard UIApplication.shared.applicationState == .active,
-              !syncing, signedIn, let server, let token else { return }
+              !syncing, !backgroundSyncing, signedIn, let server, let token else { return }
         if manual {
             do { try transfers.retryWaiting(now: Date()) }
             catch { message = error.localizedDescription; return }
         }
         syncing = true
-        syncingTask = Task {
-            defer { syncing = false; activeAPI = nil; reload() }
-            do {
-                let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular, uploads: uploads)
-                activeAPI = api
-                try await syncer.run(using: api)
-                try await replicaSyncer.run(using: api, collections: [
-                    "journal_entries", "journal_attachments", "fics", "study_sources",
-                    "papers", "conversations", "knowledge_archives",
-                ])
-                let retry = try transfers.all().compactMap(\.retryAt).min()
-                syncMessage = retry.map { "Uploads will retry after \($0.formatted(date: .omitted, time: .shortened))." }
-            } catch {
-                if Task.isCancelled { return }
-                // Being offline is normal; don't show an alert every retry.
-                syncMessage = error.localizedDescription
-                if let failure = error as? HTTPFailure, [401, 403].contains(failure.status) {
-                    signedIn = false
-                }
+        syncingTask = Task { _ = await performSync(server: server, token: token) }
+    }
+
+    func nextBackgroundSync() throws -> Date? {
+        try BackgroundSyncPlan.next(captures: store.list(), attempts: transfers.all(),
+            hasEdits: replica.edits().contains { $0.state == "pending" }, signedIn: signedIn,
+            enabled: backgroundSyncEnabled, now: Date())
+    }
+
+    func syncInBackground() async -> Bool {
+        guard !syncing, !Task.isCancelled, signedIn, let server, let token,
+              backgroundSyncEnabled else { return false }
+        syncing = true; backgroundSyncing = true
+        defer { backgroundSyncing = false }
+        return await performSync(server: server, token: token)
+    }
+
+    func leaveForeground() {
+        if !backgroundSyncing { cancelSync() }
+        onBackgroundSyncNeeded?()
+    }
+
+    func backgroundPreferenceChanged() {
+        if backgroundSyncing { cancelSync() }
+        onBackgroundSyncNeeded?()
+    }
+
+    private func performSync(server: URL, token: String) async -> Bool {
+        defer { syncing = false; activeAPI = nil; reload(); onBackgroundSyncNeeded?() }
+        do {
+            try Task.checkCancellation()
+            let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular, uploads: uploads)
+            activeAPI = api
+            try await syncer.run(using: api)
+            try await replicaSyncer.run(using: api, collections: [
+                "journal_entries", "journal_attachments", "fics", "study_sources",
+                "papers", "conversations", "knowledge_archives",
+            ])
+            let retry = try transfers.all().compactMap(\.retryAt).min()
+            syncMessage = retry.map { "Uploads will retry after \($0.formatted(date: .omitted, time: .shortened))." }
+            return true
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return false }
+            // Being offline is normal; don't show an alert every retry.
+            syncMessage = error.localizedDescription
+            if let failure = error as? HTTPFailure, [401, 403].contains(failure.status) {
+                signedIn = false
             }
+            return false
         }
     }
 
