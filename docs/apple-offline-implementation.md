@@ -24,6 +24,10 @@ Drawing restoration is also verified at `1e8b624` in the
 [latest hosted build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616):
 37 Linux / 38 Mac core tests, four native drawing-import tests, both relaunch
 tests, and the Watch simulator build passed.
+Persistent recording upload staging is verified at `96765d8` in
+[hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36647550695):
+43 Linux / 44 Mac core tests, four native drawing tests, two relaunch tests, and
+Watch compilation passed. Transfers still require foreground execution.
 
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
@@ -169,6 +173,8 @@ produce exactly one correctly dated server entry per capture on both devices.
 
 - [x] Persist recording upload bodies and recover cleanup after a durable acknowledgement.
 - [ ] Design background URLSession transfers with durable task-to-operation mapping.
+- [ ] Validate destination protection for background redirects; the existing
+      foreground redirect delegate is not invoked for background sessions.
 - [ ] Recover outstanding transfers after suspension, process termination, and restart.
 - [ ] Define bounded retry/backoff, auth-required, rejected, and user-paused states.
 - [ ] Reconcile completed uploads whose acknowledgement or local state write was lost.
@@ -196,6 +202,15 @@ failure, and cleanup ordering. This still uses foreground URLSession; no system
 background task is created. Staging consumes space separately from media downloads.
 
 **Remaining implementation sequence:**
+
+Apple's [background-transfer documentation](https://developer.apple.com/documentation/Foundation/downloading-files-in-the-background)
+states that background sessions follow redirects automatically and do not call
+the redirect delegate. The current foreground client's `NoRedirects` guard
+therefore cannot simply be copied into a background session. Before enabling
+background uploads, select and test a destination-protection strategy, including
+an HTTPS redirect to a different host, so neither credentials nor capture bytes
+are silently forwarded. This is an outstanding design/test requirement, not a
+claim that the current foreground uploader follows redirects.
 
 1. Extend recording staging to text and ordered YouTube stages. Persist the
    system-task mapping before starting background requests; never put session
@@ -464,6 +479,14 @@ These are staged decisions, not reasons to pause unrelated implementation.
 | 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending |
 
 ### Implementation entry points
+
+Recording staging verification (2026-09-29, `96765d8`): local Swift 6.2 container
+and hosted Linux `swift test` passed 43 tests; hosted Mac passed 44 including the
+CryptoKit fixture. Hosted `xcodebuild test` passed four drawing-import tests and
+two offline relaunch tests, and the Watch target compiled. Six new portable
+staging tests cover retry/restart durability and cleanup ordering. They use an
+injected verifier on Linux; production reuses the tested CryptoKit file hasher.
+No background URLSession task or suspended-device transfer was exercised.
 
 Media verification (2026-09-28, `a2be70d`): 47 backend media/sync tests and 25
 portable Swift tests passed. The subsequent Watch handoff changes pass all 27
