@@ -35,6 +35,11 @@ Opportunistic background processing (`4d9abc3`) passed
 60 Linux / 61 macOS core tests, four native drawing tests, two iPhone relaunch
 tests, and Watch compilation. Physical-device background delivery remains unverified.
 
+PDF-book downloads (`de29953`) passed
+[hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36786909030):
+62 Linux / 63 macOS core tests, five native drawing/PDF tests, two iPhone relaunch
+tests, and Watch compilation. Local backend media/sync regression: 53 passed.
+
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
 | M0 — Build and distribution                    | Unsigned builds and UI tests passed       | Signing, TestFlight installation                                  |
@@ -338,7 +343,8 @@ collections an older server does not support and explains how to enable PDF-book
 downloads. Local validation passes 53 backend media/sync tests and 62 portable
 Swift tests. A native PDFKit test additionally exercises a generated PDF through
 partial download, store reopening, hash verification, and reader loading;
-hosted execution is pending.
+that test passed in the hosted iPhone simulator. Physical-device reading and
+network-policy validation remain outstanding.
 
 ### M5 — PencilKit drawing and annotations
 
@@ -524,6 +530,16 @@ These are staged decisions, not reasons to pause unrelated implementation.
 | 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending |
 
 ### Implementation entry points
+
+PDF-book verification (2026-09-30, `de29953`): 53 backend tests passed with
+`.venv/bin/pytest backend/tests/test_mobile_media.py backend/tests/test_mobile_sync.py`.
+Local and hosted Linux `swift test` passed 62 tests; hosted macOS passed 63.
+[Hosted native verification](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36786909030)
+passed five drawing/PDF tests and two offline relaunch tests, plus the Watch
+build. The PDF test generates a real document, resumes a partial download,
+verifies it with CryptoKit, removes the source, reopens the download store, and
+checks page count and text through the app's PDFKit reader. No signing,
+production deployment, or physical-device validation was performed.
 
 Background processing verification (2026-09-30, `4d9abc3`):
 [hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36707854242)
