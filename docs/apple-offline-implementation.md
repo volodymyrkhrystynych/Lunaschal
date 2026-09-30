@@ -321,15 +321,24 @@ server credentials and operational state never enter the device replica.
 without depending on browser caches or access to the server/archive drive.
 Deleting a downloaded device copy must not delete the server original.
 
-**Implemented scope:** selectable active Journal/Study/Paper/newspaper-cover
+**Implemented scope:** selectable PDF-book and active Journal/Study/Paper/newspaper-cover
 media; a configurable media budget (20 GB default); resumable foreground range
 downloads; verified content-addressed storage; whole-device media-copy cleanup;
 local PDF/image/audio/video/article views. Archive video is excluded and
-Knowledge article text is opt-in. Fic PDFs/inline images, full newspaper PDFs,
+Knowledge article text is opt-in. Inline chapter images, full newspaper PDFs,
 ZIM, archive pins, per-item eviction, whole-library sizing, and background
 scheduling remain outstanding. Linux tests inject the file verifier; real
 CryptoKit verification and native compilation passed on the hosted Mac; reader
 interaction and Tailscale/cellular policy still need device validation.
+
+PDF books now reuse the range-download and hash-verification path and open in
+the native PDF reader. The server derives a book's path from its ID and rejects
+symlinks outside that exact book location. Client capability negotiation skips
+collections an older server does not support and explains how to enable PDF-book
+downloads. Local validation passes 53 backend media/sync tests and 62 portable
+Swift tests. A native PDFKit test additionally exercises a generated PDF through
+partial download, store reopening, hash verification, and reader loading;
+hosted execution is pending.
 
 ### M5 — PencilKit drawing and annotations
 

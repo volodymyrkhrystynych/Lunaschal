@@ -21,7 +21,14 @@ public struct MediaDescriptor: Codable, Identifiable, Sendable {
         }
     }
 
-    public static let collections = ["journal_attachments", "study_sources", "paper_pages", "paper_page_images", "newspaper_frontpages"]
+    public static let collections = ["journal_attachments", "study_sources", "paper_pages", "paper_page_images", "newspaper_frontpages", "fics"]
+}
+
+public struct MediaCapabilities: Decodable {
+    public let mediaCollections: [String]
+    public var supportedCollections: [String] {
+        MediaDescriptor.collections.filter { mediaCollections.contains($0) }
+    }
 }
 
 public struct MediaPage: Decodable {

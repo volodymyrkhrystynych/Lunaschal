@@ -59,6 +59,39 @@ final class MediaTests: XCTestCase {
         XCTAssertEqual(try store.usedBytes(), 0)
     }
 
+    func testPDFBookResumesAndReopensByBookIdentity() async throws {
+        let root = try directory()
+        let bytes = Data("%PDF-1.4\nbook".utf8)
+        let digest = String(repeating: "b", count: 64)
+        let item = MediaDescriptor(collection: "fics", id: ULID.make(), available: true,
+            size: Int64(bytes.count), sha256: digest, mime: "application/pdf", url: nil, reason: nil)
+        let verifier: @Sendable (URL) throws -> String = { url in
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+            return digest
+        }
+        let store = try MediaStore(root: root, hash: verifier)
+        try store.append(bytes.prefix(5), to: item, offset: 0)
+        XCTAssertNil(try store.downloaded(collection: "fics", id: item.id))
+        let reopened = try MediaStore(root: root, hash: verifier)
+        XCTAssertEqual(try reopened.offset(for: item, budget: 1000), 5)
+        try reopened.append(bytes.dropFirst(5), to: item, offset: 5)
+        try await reopened.finish(item)
+        let afterDownload = try MediaStore(root: root, hash: verifier)
+        let file = try XCTUnwrap(afterDownload.downloaded(collection: "fics", id: item.id))
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+        XCTAssertNil(try afterDownload.downloaded(collection: "fics", id: ULID.make()))
+        XCTAssertTrue(try afterDownload.reuse(item))
+    }
+
+    func testMediaCapabilitiesRespectOlderServersAndIgnoreUnknownCollections() throws {
+        let old = try JSONDecoder().decode(MediaCapabilities.self,
+            from: Data(#"{"mediaCollections":["study_sources","journal_attachments"]}"#.utf8))
+        XCTAssertEqual(old.supportedCollections, ["journal_attachments", "study_sources"])
+        let newer = try JSONDecoder().decode(MediaCapabilities.self,
+            from: Data(#"{"mediaCollections":["fics","unknown","fics"]}"#.utf8))
+        XCTAssertEqual(newer.supportedCollections, ["fics"])
+    }
+
     #if canImport(CryptoKit)
     func testCryptoKitKnownDigest() async throws {
         let file = try directory().appendingPathComponent("input")

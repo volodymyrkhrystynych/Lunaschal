@@ -215,7 +215,8 @@ final class CaptureModel: ObservableObject {
             try await librarySyncer.run(using: api, collections: collections, sendEdits: false)
             let gigabytes = max(1, UserDefaults.standard.integer(forKey: "libraryBudgetGB") == 0
                 ? 20 : UserDefaults.standard.integer(forKey: "libraryBudgetGB"))
-            for collection in MediaDescriptor.collections {
+            let supportedMedia = try await api.mediaCollections()
+            for collection in supportedMedia {
                 if UserDefaults.standard.object(forKey: "download-\(collection)") as? Bool == false { continue }
                 var after = ""
                 while true {
@@ -240,6 +241,9 @@ final class CaptureModel: ObservableObject {
                 }
             }
             libraryMessage = "Reading text and available active media downloaded. Archive videos are excluded."
+            if !supportedMedia.contains("fics"), UserDefaults.standard.object(forKey: "download-fics") as? Bool != false {
+                libraryMessage = "Downloads complete. Update the server to include PDF books."
+            }
         } catch { libraryMessage = error.localizedDescription }
     }
 

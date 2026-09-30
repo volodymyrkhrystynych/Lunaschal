@@ -8,7 +8,18 @@ from backend.journal import storage as journal
 from backend.paper import storage as paper
 from backend.study import storage as study
 from backend.newspapers import storage as newspapers
+from backend.fanfic import storage as fanfic
 from .feed import database
+
+
+def _fic_pdf_path(fic_id):
+    path = fanfic.pdf_path(fic_id)
+    if path is None:
+        return None
+    # Reject symlinked books/directories, including links into another fic.
+    canonical = path.resolve()
+    return canonical if canonical == path else None
+
 
 # table -> (path column, resolver). Resolvers only accept existing feature roots.
 MEDIA = {
@@ -17,6 +28,7 @@ MEDIA = {
     'paper_page_images': ('file_path', paper.resolve_stored_path),
     'study_sources': ('file_path', study.resolve_stored_path),
     'newspaper_frontpages': ('image_path', newspapers.resolve_stored_path),
+    'fics': ('id', _fic_pdf_path),
 }
 
 
@@ -26,6 +38,8 @@ def validate_collection(collection):
 
 
 def active_path(collection, row):
+    if collection == 'fics' and row['source_type'] != 'pdf':
+        return None
     if collection == 'journal_attachments' and row['kind'] == 'youtube':
         return None
     if collection == 'study_sources' and row['kind'] in study.ARCHIVED_KINDS:
@@ -36,7 +50,7 @@ def active_path(collection, row):
         return None
     # Pass the canonical path through the existing root guard too; this also
     # refuses symlinks which escape the allowed storage root.
-    path = resolver(str(Path(raw).resolve()))
+    path = resolver(raw if collection == 'fics' else str(Path(raw).resolve()))
     if collection == 'study_sources' and path is not None:
         # Study's resolver accepts archive roots as well. Bulk defaults must not.
         if path.parent.parent != study.study_root():

@@ -63,10 +63,13 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
   conflict resolution. Pending text survives server changes and rebootstrap;
   deleted entries can be saved as a separate new capture.
 - Library metadata and explicit Wi-Fi-only text/media downloads. Downloaded
-  fics can be searched and read without a server connection. Journal attachments,
+  fics can be searched and read without a server connection. PDF books, journal attachments,
   Study documents, Paper previews/pictures, and newspaper covers have selectable
   media downloads, a 20 GB default media budget, and resumable 1 MB range reads.
   SHA-256 verification precedes availability; original captures live separately.
+  PDF books open in PDFKit. The client checks server media capabilities before
+  downloading; older servers continue serving their supported collections and
+  display an update notice for PDF-book support.
 - Local PDF, image, audio/video, and archived-article views. Articles use a
   script-disabled WebKit view with remote resources blocked. Knowledge article
   text is opt-in. Archive videos and ZIM packages are not bulk-downloaded.
@@ -150,7 +153,7 @@ publicly to make CI work: simulator capture tests never contact it.
   “Remove downloaded media” explicitly clears media copies and partials, while
   retaining capture originals and server records. Old content versions remain
   until that cleanup; per-item pinning/eviction is not implemented yet.
-- Fic PDFs, inline chapter images, full newspaper PDFs,
+- Inline chapter images, full newspaper PDFs,
   share extensions, and Paper drawing sync remain outstanding. Bulk requests prohibit
   cellular and expensive connections; actual Tailscale/hotspot policy needs
   device validation. The budget currently covers media, not SQLite text.

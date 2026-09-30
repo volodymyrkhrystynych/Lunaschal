@@ -84,3 +84,70 @@ def test_page_key_resumes_listing(client, attachment):
     first = listing(client, limit=1).json
     assert first['hasMore'] is False
     assert listing(client, after=first['after']).json['items'] == []
+
+
+@pytest.fixture
+def pdf_book(client, tmp_path, monkeypatch):
+    root = tmp_path / 'fanfic'
+    monkeypatch.setenv('FANFIC_ROOT', str(root))
+    id = str(ULID())
+    path = root / id / 'book.pdf'
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'%PDF-1.4\nexample book')
+    db = get_db()
+    db.execute("INSERT INTO fics(id,title,source_type,created_at,updated_at) VALUES(?,'Book','pdf',1,1)", (id,))
+    db.commit()
+    return id, path
+
+
+def test_pdf_book_manifest_ranges_and_capability(client, pdf_book):
+    id, path = pdf_book
+    assert 'fics' in client.get('/api/mobile/capabilities').json['mediaCollections']
+    item = client.get('/api/mobile/media?collection=fics').json['items'][0]
+    assert item['id'] == id
+    assert item['mime'] == 'application/pdf'
+    assert item['size'] == path.stat().st_size
+    assert item['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+    assert str(path) not in str(item)
+    response = client.get(item['url'], headers={'Range': 'bytes=0-7'})
+    assert response.status_code == 206
+    assert response.data == b'%PDF-1.4'
+    path.write_bytes(b'%PDF-1.4\nupdated book')
+    assert client.get(item['url']).status_code == 412
+    assert client.get('/api/mobile/media?collection=fics&after=' + id).json['items'] == []
+
+
+def test_missing_pdf_keeps_metadata_without_serving_file(client, pdf_book):
+    _, path = pdf_book
+    item = client.get('/api/mobile/media?collection=fics').json['items'][0]
+    path.unlink()
+    assert client.get('/api/mobile/media?collection=fics').json['items'][0]['available'] is False
+    assert client.get(item['url']).status_code == 404
+
+
+def test_non_pdf_book_does_not_expose_leftover_pdf(client, pdf_book):
+    id, _ = pdf_book
+    db = get_db()
+    db.execute("UPDATE fics SET source_type='epub' WHERE id=?", (id,))
+    db.commit()
+    assert client.get('/api/mobile/media?collection=fics').json['items'][0]['available'] is False
+
+
+@pytest.mark.parametrize('target_kind', ['outside', 'other_book', 'directory'])
+def test_pdf_symlinks_cannot_cross_book_identity(client, pdf_book, tmp_path, target_kind):
+    _, path = pdf_book
+    original = client.get('/api/mobile/media?collection=fics').json['items'][0]
+    path.unlink()
+    if target_kind == 'directory':
+        target = tmp_path / 'external'
+        target.mkdir()
+        (target / 'book.pdf').write_bytes(b'private')
+        path.parent.rmdir()
+        path.parent.symlink_to(target, target_is_directory=True)
+    else:
+        target = tmp_path / 'private.pdf' if target_kind == 'outside' else path.parent.parent / str(ULID()) / 'book.pdf'
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b'private')
+        path.symlink_to(target)
+    assert client.get('/api/mobile/media?collection=fics').json['items'][0]['available'] is False
+    assert client.get(original['url']).status_code == 404

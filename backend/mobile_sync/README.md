@@ -61,5 +61,9 @@ files can change independently of projected columns. Repeat it for each bulk
 download pass. The hash cache is bounded and keyed by file stat metadata.
 
 `backend/tests/test_mobile_media.py` covers ranges, replacement, missing files,
-archive exclusion, path confinement, and manifest validation. Full newspaper
-PDFs, fic PDF/image packages, optional archive pins, and ZIM are not included yet.
+archive exclusion, path confinement, and manifest validation. The `fics` media
+collection serves imported PDF books from their canonical ID-scoped `book.pdf`;
+non-PDF entries remain unavailable, and symlinks cannot cross book identities or
+storage roots. Clients negotiate `mediaCollections` from `/capabilities` before
+requesting new collection types. Full newspaper PDFs, inline chapter images,
+optional archive pins, and ZIM are not included yet.

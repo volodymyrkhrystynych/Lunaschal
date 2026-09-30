@@ -162,6 +162,12 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try JSONDecoder().decode(OperationReply.self, from: data)
     }
 
+    public func mediaCollections() async throws -> [String] {
+        let (data, response) = try await session.data(for: request("api/mobile/capabilities"))
+        try check(data, response)
+        return try JSONDecoder().decode(MediaCapabilities.self, from: data).supportedCollections
+    }
+
     public func mediaPage(collection: String, after: String) async throws -> MediaPage {
         guard MediaDescriptor.collections.contains(collection) else { throw MediaError.invalidManifest }
         var req = request("api/mobile/media")

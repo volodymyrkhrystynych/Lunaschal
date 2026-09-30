@@ -17,6 +17,7 @@ struct LibraryView: View {
     @AppStorage("download-paper_pages") private var paperPreviews = true
     @AppStorage("download-paper_page_images") private var paperImages = true
     @AppStorage("download-newspaper_frontpages") private var frontpages = true
+    @AppStorage("download-fics") private var pdfBooks = true
 
     var body: some View {
         List {
@@ -34,6 +35,7 @@ struct LibraryView: View {
                 if let message = model.libraryMessage { Text(message).font(.footnote).foregroundStyle(.secondary) }
             }
             Section("Include in future downloads") {
+                Toggle("PDF books", isOn: $pdfBooks)
                 Toggle("Journal attachments", isOn: $journalMedia)
                 Toggle("Study documents", isOn: $studyMedia)
                 Toggle("Paper previews", isOn: $paperPreviews)
@@ -88,7 +90,12 @@ private struct BookView: View {
             if let description = book.data?["description"]?.string, !description.isEmpty {
                 Text(description)
             }
-            if chapters.isEmpty {
+            if book.data?["sourceType"]?.string == "pdf" {
+                NavigationLink("Open PDF") {
+                    DownloadedMediaView(model: model, collection: "fics", id: book.id,
+                                        mime: "application/pdf", title: book.title)
+                }
+            } else if chapters.isEmpty {
                 Text("No chapter text downloaded. Use the Library download button on Wi-Fi.")
             }
             ForEach(chapters) { chapter in
@@ -200,9 +207,10 @@ struct DownloadedMediaView: View {
     }
 }
 
-private struct LocalPDFView: UIViewRepresentable {
+struct LocalPDFView: UIViewRepresentable {
     let url: URL
-    func makeUIView(context: Context) -> PDFView {
+    func makeUIView(context: Context) -> PDFView { makePDFView() }
+    func makePDFView() -> PDFView {
         let view = PDFView()
         view.autoScales = true
         view.document = PDFDocument(url: url)
