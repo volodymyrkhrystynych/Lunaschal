@@ -142,6 +142,28 @@ final class TransferTests: XCTestCase {
     }
 
     @MainActor
+    func testObsoleteRejectionCannotFailANewerAttempt() async throws {
+        let directory = try root(), captures = try CaptureStore(root: directory)
+        let transfers = try TransferStore(root: directory.appendingPathComponent("transfers"))
+        let capture = Capture(text: "Keep newer attempt pending")
+        try captures.save(capture)
+        let transport = RetryTransport()
+        var newer: TransferAttempt?
+        transport.onSend = { id in
+            try transfers.recoverInterrupted(now: self.time)
+            newer = try transfers.begin(id, now: self.time)
+        }
+        transport.error = HTTPFailure(status: 400)
+        do {
+            try await CaptureSync(store: captures, transfers: transfers, now: { self.time }).run(using: transport)
+            XCTFail("Obsolete rejection should be ignored")
+        } catch is CancellationError {}
+        XCTAssertEqual(try captures.load(capture.id), capture)
+        XCTAssertEqual(try transfers.load(capture.id), newer)
+        XCTAssertEqual(newer?.state, .sending)
+    }
+
+    @MainActor
     func testCancellationKeepsCaptureAndDoesNotIncreaseFailureBackoff() async throws {
         let directory = try root(), captures = try CaptureStore(root: directory)
         let transfers = try TransferStore(root: directory.appendingPathComponent("transfers"))

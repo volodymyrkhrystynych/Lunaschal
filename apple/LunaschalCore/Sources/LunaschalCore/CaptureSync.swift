@@ -40,6 +40,7 @@ public final class CaptureSync {
                 capture.lastError = nil
                 try store.save(capture)
             } catch {
+                if let attempt, try transfers?.isCurrent(attempt) != true { throw CancellationError() }
                 if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
                     if let attempt { try transfers?.finish(attempt, outcome: .cancelled, now: now()) }
                     throw error

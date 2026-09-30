@@ -208,7 +208,7 @@ an attempt ID before sending, rejects obsolete completions, and recovers
 interrupted attempts before replay. Retry delays grow from 30 seconds to 30
 minutes across relaunches. Login resumes authentication-paused work; explicit
 Retry upload resumes rejected captures; Sync overrides waiting delays.
-Cancellation retains captures without increasing retry backoff. Nine deterministic
+Cancellation retains captures without increasing retry backoff. Ten deterministic
 tests cover these transitions without sleeping or contacting a server. This
 ledger does not yet contain URLSession task identifiers; background recovery must
 reconcile live system tasks before resetting any sending state. User pause controls
