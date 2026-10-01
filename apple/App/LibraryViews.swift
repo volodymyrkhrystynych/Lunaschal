@@ -30,6 +30,8 @@ struct LibraryView: View {
                 }
                 Stepper("Media budget: \(budget) GB", value: $budget, in: 1...150, step: 5)
                     .disabled(model.downloadingLibrary)
+                Text("Downloaded media: \(ByteCountFormatter.string(fromByteCount: model.libraryBytes, countStyle: .file))")
+                    .font(.footnote).foregroundStyle(.secondary)
                 Button("Remove downloaded media", role: .destructive) { confirmingRemoval = true }
                     .disabled(model.downloadingLibrary)
                 if let message = model.libraryMessage { Text(message).font(.footnote).foregroundStyle(.secondary) }
@@ -176,6 +178,7 @@ struct DownloadedMediaView: View {
     let title: String
     @State private var file: URL?
     @State private var player: AVPlayer?
+    @State private var confirmingRemoval = false
 
     var body: some View {
         Group {
@@ -197,6 +200,23 @@ struct DownloadedMediaView: View {
             }
         }
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if file != nil {
+                Button("Remove device copy", systemImage: "trash") { confirmingRemoval = true }
+                    .disabled(model.downloadingLibrary)
+            }
+        }
+        .confirmationDialog("Remove this downloaded copy?", isPresented: $confirmingRemoval) {
+            Button("Remove device copy", role: .destructive) {
+                player?.pause()
+                if model.removeLibraryMedia(collection: collection, id: id) {
+                    player = nil
+                    file = nil
+                }
+            }
+        } message: {
+            Text("The server original and your captures are kept. A future library download can download this item again.")
+        }
         .task {
             do {
                 file = try model.media.downloaded(collection: collection, id: id)

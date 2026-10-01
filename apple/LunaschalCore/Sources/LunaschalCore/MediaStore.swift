@@ -81,6 +81,7 @@ public final class MediaStore {
         guard fm.fileExists(atPath: manifest.path) else { return nil }
         let item = try JSONDecoder().decode(MediaDescriptor.self, from: Data(contentsOf: manifest))
         try item.validate()
+        guard item.collection == collection, item.id == id else { throw MediaError.invalidManifest }
         guard item.available, let digest = item.sha256 else { return nil }
         let file = root.appendingPathComponent(digest)
         return fm.fileExists(atPath: file.path) && fileSize(file) == item.size ? file : nil
@@ -150,6 +151,36 @@ public final class MediaStore {
         for file in try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
             try fm.removeItem(at: file)
         }
+    }
+
+    /// Remove one completed download. Other records may share its verified
+    /// bytes. Read every reference before mutating anything; an unreadable
+    /// manifest must never cause another record's file to be deleted.
+    @discardableResult
+    public func removeDownloadedCopy(collection: String, id: String) throws -> Int64 {
+        guard MediaDescriptor.collections.contains(collection), ULID.isValid(id) else { throw MediaError.invalidManifest }
+        let manifest = root.appendingPathComponent("\(collection)-\(id).json")
+        guard fm.fileExists(atPath: manifest.path) else { return 0 }
+        let files = try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+        var target: MediaDescriptor?
+        var references = Set<String>()
+        for file in files where file.pathExtension == "json" {
+            let item = try JSONDecoder().decode(MediaDescriptor.self, from: Data(contentsOf: file))
+            try item.validate()
+            guard file.lastPathComponent == "\(item.collection)-\(item.id).json" else { throw MediaError.invalidManifest }
+            if file.lastPathComponent == manifest.lastPathComponent { target = item }
+            else if item.available, let digest = item.sha256 { references.insert(digest) }
+        }
+        guard let target else { throw MediaError.invalidManifest }
+        try fm.removeItem(at: manifest)
+        guard target.available, let digest = target.sha256, !references.contains(digest) else { return 0 }
+        let file = try path(target, partial: false)
+        guard fm.fileExists(atPath: file.path) else { return 0 }
+        let bytes = fileSize(file)
+        try fm.removeItem(at: file)
+        // Partial downloads have independent lifetimes and are deliberately
+        // retained. A stopped download may still be needed by another record.
+        return bytes
     }
 
     private func remember(_ item: MediaDescriptor) throws {

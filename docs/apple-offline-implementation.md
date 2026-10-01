@@ -329,9 +329,10 @@ Deleting a downloaded device copy must not delete the server original.
 **Implemented scope:** selectable PDF-book and active Journal/Study/Paper/newspaper-cover
 media; a configurable media budget (20 GB default); resumable foreground range
 downloads; verified content-addressed storage; whole-device media-copy cleanup;
-local PDF/image/audio/video/article views. Archive video is excluded and
+local PDF/image/audio/video/article views; per-item device-copy removal with
+shared-file protection and a media-storage usage display. Archive video is excluded and
 Knowledge article text is opt-in. Inline chapter images, full newspaper PDFs,
-ZIM, archive pins, per-item eviction, whole-library sizing, and background
+ZIM, archive pins, automatic eviction, whole-library sizing, and background
 scheduling remain outstanding. Linux tests inject the file verifier; real
 CryptoKit verification and native compilation passed on the hosted Mac; reader
 interaction and Tailscale/cellular policy still need device validation.
@@ -345,6 +346,16 @@ Swift tests. A native PDFKit test additionally exercises a generated PDF through
 partial download, store reopening, hash verification, and reader loading;
 that test passed in the hosted iPhone simulator. Physical-device reading and
 network-policy validation remain outstanding.
+
+Individual completed downloads can be removed from the reader after confirmation.
+The operation validates every saved media reference before removing anything;
+shared content bytes stay while another record references them. Corrupt or
+misidentified manifests fail without deletion. Captures, server records, partial
+downloads, and unrelated files remain intact. Removal is disabled during a bulk
+download; a future bulk download may restore the copy. Six portable regressions
+cover sharing across reopen, partial/capture retention, corrupt references,
+identity mismatch, repeated removal, and missing completed bytes. Native
+verification is pending. Pinning and automatic eviction remain separate work.
 
 ### M5 — PencilKit drawing and annotations
 

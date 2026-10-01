@@ -151,8 +151,12 @@ publicly to make CI work: simulator capture tests never contact it.
 - Downloads currently require the app to remain active. Partial files resume
   on the next download request. Selection changes retain existing copies;
   “Remove downloaded media” explicitly clears media copies and partials, while
-  retaining capture originals and server records. Old content versions remain
-  until that cleanup; per-item pinning/eviction is not implemented yet.
+  retaining capture originals and server records. Individual downloaded files
+  can also be removed from their reader. Shared bytes remain until no other
+  downloaded record references them; unreadable manifests block removal safely.
+  Partial downloads and old content versions remain until whole-media cleanup.
+  Future bulk downloads can restore a removed item. Pinning is not implemented.
+  The Library shows current media-directory usage, including partial downloads.
 - Inline chapter images, full newspaper PDFs,
   share extensions, and Paper drawing sync remain outstanding. Bulk requests prohibit
   cellular and expensive connections; actual Tailscale/hotspot policy needs

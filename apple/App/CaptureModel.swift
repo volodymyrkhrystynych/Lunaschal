@@ -21,6 +21,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var libraryRecords: [SyncChange] = []
     @Published private(set) var downloadingLibrary = false
     @Published private(set) var libraryMessage: String?
+    @Published private(set) var libraryBytes: Int64 = 0
     let store: CaptureStore
     let replica: ReplicaStore
     let drawings: DrawingStore
@@ -57,6 +58,7 @@ final class CaptureModel: ObservableObject {
         journalRecords = try replica.records(collection: "journal_entries")
         pendingEdits = try replica.edits()
         libraryRecords = try replica.records(collection: "fics")
+        libraryBytes = try media.usedBytes()
         recorder.onChange = { [weak self] in
             self?.reload()
             self?.requestSync()
@@ -82,6 +84,7 @@ final class CaptureModel: ObservableObject {
             journalRecords = try replica.records(collection: "journal_entries")
             pendingEdits = try replica.edits()
             libraryRecords = try replica.records(collection: "fics")
+            libraryBytes = try media.usedBytes()
         } catch { message = error.localizedDescription }
     }
 
@@ -256,6 +259,16 @@ final class CaptureModel: ObservableObject {
             libraryMessage = "Downloaded media removed. Captures and server originals are retained."
             reload()
         } catch { message = error.localizedDescription }
+    }
+
+    func removeLibraryMedia(collection: String, id: String) -> Bool {
+        guard !downloadingLibrary else { return false }
+        do {
+            let freed = try media.removeDownloadedCopy(collection: collection, id: id)
+            libraryMessage = "Device copy removed. \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) freed. Shared files may remain for other items."
+            reload()
+            return true
+        } catch { message = error.localizedDescription; return false }
     }
 
     func edit(_ record: SyncChange, content: String, title: String) -> Bool {
