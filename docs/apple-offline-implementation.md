@@ -40,6 +40,10 @@ PDF-book downloads (`de29953`) passed
 62 Linux / 63 macOS core tests, five native drawing/PDF tests, two iPhone relaunch
 tests, and Watch compilation. Local backend media/sync regression: 53 passed.
 
+Individual media-copy removal (`d4d8ee2`) passed
+[hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36797973089):
+68 Linux / 69 macOS core tests, seven native regression tests, and Watch compilation.
+
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
 | M0 — Build and distribution                    | Unsigned builds and UI tests passed       | Signing, TestFlight installation                                  |
@@ -317,7 +321,7 @@ server credentials and operational state never enter the device replica.
 - [ ] Distinguish “downloaded,” “metadata only,” “pending download,” and “unavailable.”
 - [ ] Support offline browsing, reading, media playback, and search for downloaded content.
 - [ ] Add safe removal of device copies, pinned-content rules, and low-space handling.
-- [ ] Keep unsynced capture cleanup separate from downloaded-library cleanup.
+- [x] Keep unsynced capture cleanup separate from downloaded-library cleanup.
 - [ ] Add optional Knowledge/ZIM downloads per device, including a local reading/search
       strategy and licensing/attribution for any bundled reader dependencies.
 - [ ] Evaluate Wikipedia package choices against actual free space; keep them optional.
@@ -354,8 +358,10 @@ misidentified manifests fail without deletion. Captures, server records, partial
 downloads, and unrelated files remain intact. Removal is disabled during a bulk
 download; a future bulk download may restore the copy. Six portable regressions
 cover sharing across reopen, partial/capture retention, corrupt references,
-identity mismatch, repeated removal, and missing completed bytes. Native
-verification is pending. Pinning and automatic eviction remain separate work.
+identity mismatch, repeated removal, and missing completed bytes. The native
+build and existing simulator regressions pass. The new confirmation control
+has not had an automated UI interaction test or physical-device validation.
+Pinning and automatic eviction remain separate work.
 
 ### M5 — PencilKit drawing and annotations
 
@@ -541,6 +547,13 @@ These are staged decisions, not reasons to pause unrelated implementation.
 | 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending |
 
 ### Implementation entry points
+
+Individual media removal verification (2026-09-30 Toronto / 2026-10-01 UTC,
+`d4d8ee2`): local Swift tests passed 68 cases; hosted Linux passed 68 and macOS
+69, including six new removal regressions. Hosted `xcodebuild test` passed five
+drawing/PDF tests and two offline relaunch tests; the Watch build passed.
+[CI result](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36797973089).
+No backend changes, signing, or production deployment were included.
 
 PDF-book verification (2026-09-30, `de29953`): 53 backend tests passed with
 `.venv/bin/pytest backend/tests/test_mobile_media.py backend/tests/test_mobile_sync.py`.
