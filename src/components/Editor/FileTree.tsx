@@ -21,8 +21,9 @@ export function FileTree({ selectedPath, onSelectFile }: Props) {
   const upload = useMutation({
     mutationFn: ({ dir, files }: { dir: string; files: File[] }) =>
       api.files.upload(dir, files),
+    // A failed upload may still have saved its earlier batches.
+    onSettled: () => qc.invalidateQueries({ queryKey: ['files', 'list'] }),
     onSuccess: result => {
-      qc.invalidateQueries({ queryKey: ['files', 'list'] });
       setUploadError(
         result.errors.length
           ? `Could not upload: ${result.errors.map(e => e.name).join(', ')}`
