@@ -139,13 +139,16 @@ public final class MediaStore {
         try item.validate()
         guard item.available, let size = item.size else { throw MediaError.invalidManifest }
         let part = try path(item, partial: true)
-        let present = fileSize(part)
+        var present = fileSize(part)
+        if present > size {
+            try fm.removeItem(at: part)
+            present = 0
+        }
         let remaining = max(0, size - present)
         let free = (try fm.attributesOfFileSystem(forPath: root.path)[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
         guard remaining <= max(0, budget - (try usedBytes())), remaining <= max(0, free - 256 * 1024 * 1024) else {
             throw MediaError.budget
         }
-        if present > size { try fm.removeItem(at: part); return 0 }
         return present
     }
 

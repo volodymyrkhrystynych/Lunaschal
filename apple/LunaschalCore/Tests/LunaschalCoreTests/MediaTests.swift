@@ -46,6 +46,11 @@ final class MediaTests: XCTestCase {
         try store.append(Data("abc".utf8), to: item, offset: 0)
         XCTAssertThrowsError(try store.append(Data("abc".utf8), to: item, offset: 0))
         XCTAssertThrowsError(try store.append(Data("abcd".utf8), to: item, offset: 3))
+        // A corrupt oversized partial must not make the remaining-byte check
+        // zero and bypass the budget when the file is restarted from scratch.
+        try Data("oversized".utf8).write(to: store.root.appendingPathComponent(item.sha256! + ".part"))
+        XCTAssertThrowsError(try store.offset(for: item, budget: 5))
+        XCTAssertEqual(try store.offset(for: item, budget: 1000), 0)
     }
 
     func testRemovingDownloadsDoesNotTouchCaptureSiblings() async throws {
