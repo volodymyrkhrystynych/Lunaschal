@@ -37,6 +37,40 @@ final class ReplicaTests: XCTestCase {
         XCTAssertEqual(try reopened.epoch, epoch)
     }
 
+    func testExpandedOfflineListsAndSearchReachBeyondTwoHundredRecords() throws {
+        let changes = (1...210).map { index in
+            record(Int64(index), content: index <= 205 ? "River walk" : "Mountain hike", id: ULID.make())
+        }
+        try store.apply(page(changes), startingBootstrap: true)
+        let first = try store.records(collection: "journal_entries")
+        XCTAssertEqual(first.count, 200)
+        let expanded = try store.records(collection: "journal_entries", limit: 400)
+        XCTAssertEqual(expanded.map(\.id), changes.reversed().map(\.id))
+        XCTAssertEqual(Array(expanded.prefix(200)), first)
+        let reopened = try ReplicaStore(url: url)
+        XCTAssertEqual(try reopened.count(collection: "journal_entries", query: "riv"), 205)
+        XCTAssertEqual(try reopened.records(collection: "journal_entries", query: "riv").count, 200)
+        XCTAssertEqual(try reopened.records(collection: "journal_entries", query: "riv", limit: 400).count, 205)
+        XCTAssertEqual(try reopened.count(collection: "fics", query: "riv"), 0)
+    }
+
+    func testListAndSearchOrderingAgreeAndDeletionUpdatesFilteredCount() throws {
+        let first = record(1, content: "River walk", id: ULID.make())
+        let second = record(1, content: "River walk", id: ULID.make())
+        try store.apply(page([second, first]), startingBootstrap: true)
+        let expected = [first.id, second.id].sorted()
+        XCTAssertEqual(try store.records(collection: "journal_entries").map(\.id), expected)
+        XCTAssertEqual(try store.records(collection: "journal_entries", query: "river").map(\.id), expected)
+        try store.apply(page([record(2, id: first.id, deleted: true)], mode: "delta"), startingBootstrap: false)
+        XCTAssertEqual(try store.count(collection: "journal_entries", query: "river"), 1)
+        XCTAssertEqual(try store.records(collection: "journal_entries", query: "river").map(\.id), [second.id])
+        XCTAssertEqual(try store.count(collection: "journal_entries", query: "  "), 1)
+        XCTAssertEqual(try store.count(collection: "journal_entries", query: "river OR mountain"), 0)
+        XCTAssertEqual(try store.count(collection: "journal_entries", query: "\"river\""), 1)
+        XCTAssertThrowsError(try store.records(collection: "journal_entries", limit: -1))
+        XCTAssertThrowsError(try store.records(collection: "journal_entries", limit: 0))
+    }
+
     func testOldReplayCannotOverwriteNewerRevision() throws {
         try store.apply(page([record(3, content: "Latest")]), startingBootstrap: true)
         try store.apply(page([record(1)], cursor: "cursor-two", mode: "delta"), startingBootstrap: false)

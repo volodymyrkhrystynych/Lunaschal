@@ -131,6 +131,9 @@ private struct CaptureList: View {
                         }
                     }
                 }
+                if model.journalRecords.count < model.journalCount {
+                    Button("Load more entries (\(model.journalRecords.count) of \(model.journalCount))") { model.loadMoreJournal() }
+                }
             }
         }
         .overlay { if model.captures.isEmpty && model.journalRecords.isEmpty { ContentUnavailableView("No captures yet", systemImage: "book.closed") } }

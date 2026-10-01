@@ -9,6 +9,10 @@ struct LibraryView: View {
     @State private var query = ""
     @State private var results: [SyncChange] = []
     @State private var sources: [SyncChange] = []
+    @State private var bookLimit = 200
+    @State private var sourceLimit = 200
+    @State private var bookCount = 0
+    @State private var sourceCount = 0
     @State private var confirmingRemoval = false
     @AppStorage("libraryBudgetGB") private var budget = 20
     @AppStorage("downloadKnowledge") private var knowledge = false
@@ -54,9 +58,12 @@ struct LibraryView: View {
                                             mime: source.data?["contentType"]?.string ?? "", title: source.title)
                     }
                 }
+                if sources.count < sourceCount {
+                    Button("Load more documents (\(sources.count) of \(sourceCount))") { sourceLimit += 200; refreshRecords() }
+                }
             }
             Section("Books and stories") {
-                ForEach(query.isEmpty ? model.libraryRecords : results) { book in
+                ForEach(results) { book in
                     NavigationLink { BookView(model: model, book: book) } label: {
                         VStack(alignment: .leading) {
                             Text(book.title)
@@ -64,21 +71,31 @@ struct LibraryView: View {
                         }
                     }
                 }
+                if results.count < bookCount {
+                    Button("Load more books (\(results.count) of \(bookCount))") { bookLimit += 200; refreshRecords() }
+                }
             }
         }
         .navigationTitle("Library")
-        .task { sources = (try? model.replica.records(collection: "study_sources")) ?? [] }
-        .onChange(of: model.downloadingLibrary) { _, _ in
-            sources = (try? model.replica.records(collection: "study_sources")) ?? []
-        }
+        .task(id: model.downloadingLibrary) { refreshRecords() }
+        .onChange(of: model.syncing) { _, syncing in if !syncing { refreshRecords() } }
         .confirmationDialog("Remove all downloaded media copies from this device?", isPresented: $confirmingRemoval) {
             Button("Remove downloaded media", role: .destructive) { model.removeLibraryMedia() }
         }
-        .searchable(text: $query, prompt: "Search downloaded titles")
-        .onChange(of: query) { _, value in
-            do { results = try model.replica.records(collection: "fics", query: value) }
-            catch { model.message = error.localizedDescription }
+        .searchable(text: $query, prompt: "Search downloaded library")
+        .onChange(of: query) { _, _ in
+            bookLimit = 200; sourceLimit = 200
+            refreshRecords()
         }
+    }
+
+    private func refreshRecords() {
+        do {
+            results = try model.replica.records(collection: "fics", query: query, limit: bookLimit)
+            bookCount = try model.replica.count(collection: "fics", query: query)
+            sources = try model.replica.records(collection: "study_sources", query: query, limit: sourceLimit)
+            sourceCount = try model.replica.count(collection: "study_sources", query: query)
+        } catch { model.message = error.localizedDescription }
     }
 }
 

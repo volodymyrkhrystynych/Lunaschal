@@ -79,16 +79,22 @@ public final class ReplicaStore {
     }
 
     public func records(collection: String, query: String = "", limit: Int = 200) throws -> [SyncChange] {
-        if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            return try recordsQuery("WHERE collection=? AND deleted=0 ORDER BY revision DESC LIMIT ?", [collection, String(limit)])
-        }
-        let terms = query.split(whereSeparator: { $0.isWhitespace }).map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }.joined(separator: " AND ")
-        let ids = try rows("SELECT id FROM replica_search WHERE replica_search MATCH ? AND collection=? LIMIT ?", [terms, collection, String(limit)])
-        return try ids.compactMap { try record(collection: collection, id: $0[0]) }
+        guard limit > 0 else { throw ReplicaError.invalidPage }
+        let (filter, parameters) = recordFilter(collection: collection, query: query)
+        return try recordsQuery(filter + " ORDER BY revision DESC,id ASC LIMIT ?", parameters + [String(limit)])
     }
 
-    public func count(collection: String) throws -> Int {
-        Int(try rows("SELECT COUNT(*) FROM replica_records WHERE collection=? AND deleted=0", [collection]).first?[0] ?? "0") ?? 0
+    public func count(collection: String, query: String = "") throws -> Int {
+        let (filter, parameters) = recordFilter(collection: collection, query: query)
+        return Int(try rows("SELECT COUNT(*) FROM replica_records " + filter, parameters).first?[0] ?? "0") ?? 0
+    }
+
+    private func recordFilter(collection: String, query: String) -> (String, [String]) {
+        let filter = "WHERE collection=? AND deleted=0"
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return (filter, [collection]) }
+        let terms = query.split(whereSeparator: { $0.isWhitespace }).map { "\"" + $0.replacingOccurrences(of: "\"", with: "\"\"") + "\"*" }.joined(separator: " AND ")
+        return (filter + " AND id IN (SELECT id FROM replica_search WHERE replica_search MATCH ? AND collection=?)",
+                [collection, terms, collection])
     }
 
     public func relatedRecords(collection: String, field: String, value: String) throws -> [SyncChange] {

@@ -381,6 +381,16 @@ The budget regression suite also covers oversized corrupt partials: discarding
 one resets its offset before checking the full space needed to restart, so
 corruption cannot bypass the configured media budget.
 
+Offline journal, book, and document lists now expand beyond their initial 200
+records using Load more controls. Library search applies to books and documents;
+counts use the same FTS filter as results, and revision/ID ordering is stable.
+Expansion reads the local database and preserves the expanded window during
+refreshes; changing the search resets library windows to 200. Two new portable
+tests cover larger libraries across reopen, filtered counts, deterministic order,
+deletion, literal query handling, and invalid limits. All 75 local Swift tests
+pass; native verification is pending. This expands the visible local results,
+not the scope of collections downloaded from the server.
+
 ### M5 — PencilKit drawing and annotations
 
 Prototype this early, alongside M0–M2, because drawing quality is a primary

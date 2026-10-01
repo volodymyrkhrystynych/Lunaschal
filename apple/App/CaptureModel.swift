@@ -17,8 +17,9 @@ final class CaptureModel: ObservableObject {
     var onBackgroundSyncNeeded: (() -> Void)?
     private var backgroundSyncing = false
     @Published private(set) var journalRecords: [SyncChange] = []
+    @Published private(set) var journalCount = 0
+    private var journalLimit = 200
     @Published private(set) var pendingEdits: [PendingEdit] = []
-    @Published private(set) var libraryRecords: [SyncChange] = []
     @Published private(set) var downloadingLibrary = false
     @Published private(set) var libraryMessage: String?
     @Published private(set) var libraryBytes: Int64 = 0
@@ -56,8 +57,8 @@ final class CaptureModel: ObservableObject {
         signedIn = token != nil
         captures = try store.list()
         journalRecords = try replica.records(collection: "journal_entries")
+        journalCount = try replica.count(collection: "journal_entries")
         pendingEdits = try replica.edits()
-        libraryRecords = try replica.records(collection: "fics")
         libraryBytes = try media.usedBytes()
         recorder.onChange = { [weak self] in
             self?.reload()
@@ -81,9 +82,9 @@ final class CaptureModel: ObservableObject {
     func reload() {
         do {
             captures = try store.list()
-            journalRecords = try replica.records(collection: "journal_entries")
+            journalRecords = try replica.records(collection: "journal_entries", limit: journalLimit)
+            journalCount = try replica.count(collection: "journal_entries")
             pendingEdits = try replica.edits()
-            libraryRecords = try replica.records(collection: "fics")
             libraryBytes = try media.usedBytes()
         } catch { message = error.localizedDescription }
     }
@@ -95,6 +96,11 @@ final class CaptureModel: ObservableObject {
             requestSync()
             return true
         } catch { message = error.localizedDescription; return false }
+    }
+
+    func loadMoreJournal() {
+        journalLimit += 200
+        reload()
     }
 
     func saveLink(_ link: String, commentary: String) -> Bool {
