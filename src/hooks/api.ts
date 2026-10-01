@@ -5,6 +5,7 @@ import {
   recordingFilename,
   uploadFilenameFor,
 } from '../lib/journalAttachments';
+import { uploadBatches } from '../lib/uploadBatches';
 // The shape is defined next to the geometry that consumes it, so the payload
 // and the band math can't drift apart.
 import type { SleepDay } from '../lib/sleep';
@@ -4201,17 +4202,26 @@ export const api = {
       del<{ success: boolean }>(`/api/files?path=${encodeURIComponent(path)}`),
     mkdir: (path: string) =>
       post<{ success: boolean }>('/api/files/mkdir', { path }),
-    upload: (path: string, files: File[]) => {
-      const form = new FormData();
-      form.append('path', path);
-      for (const file of files) {
-        form.append('file', file);
-        // Folder pickers expose the path relative to the selected directory.
-        // Keep it separate from the multipart filename: browsers and servers
-        // commonly sanitize slashes in that field.
-        form.append('relative_path', file.webkitRelativePath || '');
+    /** Sent in batches, one after another: a folder of 500+ files in one
+     * request exceeds the backend's multipart part limit (see uploadBatches).
+     * A batch that fails stops the rest; earlier batches are already saved. */
+    upload: async (path: string, files: File[]) => {
+      const result: FileUploadResult = { uploaded: [], errors: [] };
+      for (const batch of uploadBatches(files)) {
+        const form = new FormData();
+        form.append('path', path);
+        for (const file of batch) {
+          form.append('file', file);
+          // Folder pickers expose the path relative to the selected directory.
+          // Keep it separate from the multipart filename: browsers and servers
+          // commonly sanitize slashes in that field.
+          form.append('relative_path', file.webkitRelativePath || '');
+        }
+        const r = await upload<FileUploadResult>('/api/files/upload', form);
+        result.uploaded.push(...r.uploaded);
+        result.errors.push(...r.errors);
       }
-      return upload<FileUploadResult>('/api/files/upload', form);
+      return result;
     },
     /** Not fetched — pointed at directly as an <img>/<video>/<a> src or href. */
     contentUrl: (path: string, download = false) =>
