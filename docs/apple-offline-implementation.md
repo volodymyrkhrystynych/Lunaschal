@@ -318,7 +318,7 @@ server credentials and operational state never enter the device replica.
 - [ ] Allow explicit pinning of supported archived items without silently enabling
       bulk archive replication.
 - [ ] Add Wi-Fi-only bulk scheduling, pause/resume, progress, and download-size estimates.
-- [ ] Distinguish “downloaded,” “metadata only,” “pending download,” and “unavailable.”
+- [x] Distinguish “downloaded,” “metadata only,” “pending download,” and “unavailable” in file readers.
 - [ ] Support offline browsing, reading, media playback, and search for downloaded content.
 - [ ] Add safe removal of device copies, pinned-content rules, and low-space handling.
 - [x] Keep unsynced capture cleanup separate from downloaded-library cleanup.
@@ -362,6 +362,15 @@ identity mismatch, repeated removal, and missing completed bytes. The native
 build and existing simulator regressions pass. The new confirmation control
 has not had an automated UI interaction test or physical-device validation.
 Pinning and automatic eviction remain separate work.
+
+File readers now persist and display last-known availability independently from
+completed downloads: metadata only, pending, partially downloaded, downloaded,
+or unavailable at the last server check. A missing or changed server file cannot
+hide an existing verified copy. Partial progress belongs to the current hash;
+complete but unverified bytes are not labelled downloaded. Per-item removal
+retains the last server observation; whole-media cleanup clears it. Five portable
+regressions cover these transitions across reopen, changed versions, unavailable
+sources, removal, and mismatched identities. Native verification is pending.
 
 ### M5 — PencilKit drawing and annotations
 

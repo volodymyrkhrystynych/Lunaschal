@@ -179,6 +179,7 @@ struct DownloadedMediaView: View {
     @State private var file: URL?
     @State private var player: AVPlayer?
     @State private var confirmingRemoval = false
+    @State private var availability: MediaAvailability = .metadataOnly
 
     var body: some View {
         Group {
@@ -195,8 +196,8 @@ struct DownloadedMediaView: View {
                     ContentUnavailableView("File downloaded", systemImage: "doc", description: Text("This file type does not yet have a native reader."))
                 }
             } else {
-                ContentUnavailableView("Not downloaded", systemImage: "arrow.down.circle",
-                                       description: Text("Download the library on Wi-Fi. Archive videos remain on the server."))
+                ContentUnavailableView(availability.title, systemImage: "arrow.down.circle",
+                                       description: Text(availability.detail))
             }
         }
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
@@ -212,18 +213,27 @@ struct DownloadedMediaView: View {
                 if model.removeLibraryMedia(collection: collection, id: id) {
                     player = nil
                     file = nil
+                    refresh()
                 }
             }
         } message: {
             Text("The server original and your captures are kept. A future library download can download this item again.")
         }
-        .task {
-            do {
-                file = try model.media.downloaded(collection: collection, id: id)
-                if let file, mime.hasPrefix("audio/") || mime.hasPrefix("video/") { player = AVPlayer(url: file) }
-            } catch { model.message = error.localizedDescription }
-        }
+        .task(id: model.downloadingLibrary) { refresh() }
         .onDisappear { player?.pause() }
+    }
+
+    private func refresh() {
+        do {
+            availability = try model.media.availability(collection: collection, id: id)
+            let downloaded = try model.media.downloaded(collection: collection, id: id)
+            if downloaded != file {
+                player?.pause()
+                player = nil
+                file = downloaded
+                if let file, mime.hasPrefix("audio/") || mime.hasPrefix("video/") { player = AVPlayer(url: file) }
+            }
+        } catch { model.message = error.localizedDescription }
     }
 }
 

@@ -224,6 +224,7 @@ final class CaptureModel: ObservableObject {
                 var after = ""
                 while true {
                     let page = try await api.mediaPage(collection: collection, after: after)
+                    for item in page.items { try media.observe(item) }
                     for item in page.items where item.available {
                         try Task.checkCancellation()
                         if try media.reuse(item) { continue }

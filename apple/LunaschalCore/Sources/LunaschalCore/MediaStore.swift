@@ -50,6 +50,34 @@ public enum MediaError: LocalizedError {
     }
 }
 
+public enum MediaAvailability: Equatable {
+    case metadataOnly, pending, downloaded
+    case partial(received: Int64, total: Int64)
+    case unavailable(String)
+
+    public var title: String {
+        switch self {
+        case .metadataOnly: return "Metadata only"
+        case .pending: return "Pending download"
+        case .downloaded: return "Downloaded"
+        case .partial(let received, let total): return received == total ? "Awaiting verification" : "Partially downloaded"
+        case .unavailable: return "Unavailable from server"
+        }
+    }
+
+    public var detail: String {
+        switch self {
+        case .metadataOnly: return "This device has not checked the file yet. Download the library on Wi-Fi."
+        case .pending: return "The file was available at the last server check. Download the library on Wi-Fi to save a copy."
+        case .downloaded: return "Ready to open offline."
+        case .partial(let received, let total):
+            if received == total { return "All bytes are saved, but the file has not passed verification. Resume the library download to verify it before opening." }
+            return "\(ByteCountFormatter.string(fromByteCount: received, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file)) saved. Resume the library download on Wi-Fi."
+        case .unavailable(let reason): return "At the last server check: \(reason)"
+        }
+    }
+}
+
 /// Downloaded copies only. This directory never contains capture originals.
 @MainActor
 public final class MediaStore {
@@ -85,6 +113,26 @@ public final class MediaStore {
         guard item.available, let digest = item.sha256 else { return nil }
         let file = root.appendingPathComponent(digest)
         return fm.fileExists(atPath: file.path) && fileSize(file) == item.size ? file : nil
+    }
+
+    /// Last-seen server availability is separate from the manifest publishing a
+    /// verified device copy. A changed or missing server file cannot hide that copy.
+    public func observe(_ item: MediaDescriptor) throws {
+        try item.validate()
+        try JSONEncoder().encode(item).write(to: root.appendingPathComponent("\(item.collection)-\(item.id).observed"), options: .atomic)
+    }
+
+    public func availability(collection: String, id: String) throws -> MediaAvailability {
+        if try downloaded(collection: collection, id: id) != nil { return .downloaded }
+        let observed = root.appendingPathComponent("\(collection)-\(id).observed")
+        guard fm.fileExists(atPath: observed.path) else { return .metadataOnly }
+        let item = try JSONDecoder().decode(MediaDescriptor.self, from: Data(contentsOf: observed))
+        try item.validate()
+        guard item.collection == collection, item.id == id else { throw MediaError.invalidManifest }
+        guard item.available else { return .unavailable(item.reason ?? "The file is missing or excluded from downloads.") }
+        let received = fileSize(try path(item, partial: true))
+        if let size = item.size, received > 0, received <= size { return .partial(received: received, total: size) }
+        return .pending
     }
 
     public func offset(for item: MediaDescriptor, budget: Int64) throws -> Int64 {

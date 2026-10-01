@@ -157,6 +157,11 @@ publicly to make CI work: simulator capture tests never contact it.
   Partial downloads and old content versions remain until whole-media cleanup.
   Future bulk downloads can restore a removed item. Pinning is not implemented.
   The Library shows current media-directory usage, including partial downloads.
+  File readers distinguish metadata-only, pending, partial, downloaded, and
+  server-unavailable states. Server observations persist across relaunch and are
+  labelled as the last check; they never hide an existing verified local copy.
+  Complete but unverified partial files remain pending verification. These states
+  refresh when a library download starts or finishes, including pause/failure.
 - Inline chapter images, full newspaper PDFs,
   share extensions, and Paper drawing sync remain outstanding. Bulk requests prohibit
   cellular and expensive connections; actual Tailscale/hotspot policy needs
