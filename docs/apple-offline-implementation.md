@@ -1,6 +1,6 @@
 # Apple apps and offline experience — implementation tracker
 
-Last updated: 2026-09-30. Working branch: `feat/apple-offline-foundation`.
+Last updated: 2026-10-01. Working branch: `feat/apple-offline-foundation`.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first
@@ -43,6 +43,10 @@ tests, and Watch compilation. Local backend media/sync regression: 53 passed.
 Individual media-copy removal (`d4d8ee2`) passed
 [hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36797973089):
 68 Linux / 69 macOS core tests, seven native regression tests, and Watch compilation.
+
+Persistent file availability and corrupt-partial budget recovery (`80ea01c`) passed
+[hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36800042127):
+73 Linux / 74 macOS core tests, seven native regression tests, and Watch compilation.
 
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
@@ -370,7 +374,12 @@ hide an existing verified copy. Partial progress belongs to the current hash;
 complete but unverified bytes are not labelled downloaded. Per-item removal
 retains the last server observation; whole-media cleanup clears it. Five portable
 regressions cover these transitions across reopen, changed versions, unavailable
-sources, removal, and mismatched identities. Native verification is pending.
+sources, removal, and mismatched identities. Native compilation and existing
+simulator regressions passed; the new status labels have not had an automated
+UI interaction test or physical-device validation.
+The budget regression suite also covers oversized corrupt partials: discarding
+one resets its offset before checking the full space needed to restart, so
+corruption cannot bypass the configured media budget.
 
 ### M5 — PencilKit drawing and annotations
 
@@ -556,6 +565,14 @@ These are staged decisions, not reasons to pause unrelated implementation.
 | 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending |
 
 ### Implementation entry points
+
+Media availability verification (2026-10-01, `9d72cc5` and `80ea01c`):
+local Swift tests passed 73 cases; hosted Linux passed 73 and macOS 74.
+[Final native CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36800042127)
+passed five drawing/PDF tests, two offline relaunch tests, and Watch compilation.
+Five new availability tests cover durable status and preservation of downloaded
+copies; the existing budget regression now also checks oversized corrupt partials.
+No backend changes, database migration, signing, or deployment were required.
 
 Individual media removal verification (2026-09-30 Toronto / 2026-10-01 UTC,
 `d4d8ee2`): local Swift tests passed 68 cases; hosted Linux passed 68 and macOS
