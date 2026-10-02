@@ -1005,6 +1005,55 @@ def save_reading_progress(fic_id):
     return jsonify({'success': True})
 
 
+# Must match GAP_CAP_SECONDS in src/lib/readingSpans.ts: the most one pause
+# between scrolls can add to a span's active time.
+_SPAN_GAP_CAP = 180
+# Longer than any honest span -- the client ends one after five idle minutes --
+# but bounded, so a bad clock cannot claim a week of reading.
+_SPAN_MAX_SECONDS = 24 * 3600
+
+
+@bp.put('/<fic_id>/reading-spans/<span_id>')
+def save_reading_span(fic_id, span_id):
+    """Upsert one stretch of scrolling. Heartbeats only move a span forward,
+    so a replayed or out-of-order flush from the offline queue is harmless."""
+    body = request.json or {}
+    chapter_id = body.get('chapterId')
+    values = {k: body.get(k) for k in ('startedAt', 'endedAt', 'activeSeconds')}
+    fractions = {k: body.get(k, 0) for k in ('startFraction', 'endFraction')}
+    if len(span_id) > 64 or not isinstance(chapter_id, str) or not chapter_id:
+        return jsonify({'error': 'chapterId required'}), 400
+    if any(isinstance(v, bool) or not isinstance(v, int) for v in values.values()):
+        return jsonify({'error': 'startedAt, endedAt and activeSeconds must be integers'}), 400
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in fractions.values()):
+        return jsonify({'error': 'fractions must be numbers'}), 400
+    started, ended, active = values['startedAt'], values['endedAt'], values['activeSeconds']
+    if not 0 < started <= ended or ended - started > _SPAN_MAX_SECONDS or ended > time.time() + 300:
+        return jsonify({'error': 'Invalid span times'}), 400
+    if not 0 <= active <= ended - started + _SPAN_GAP_CAP:
+        return jsonify({'error': 'Invalid activeSeconds'}), 400
+    start_fraction, end_fraction = (max(0.0, min(1.0, float(fractions[k])))
+                                    for k in ('startFraction', 'endFraction'))
+    db = get_db()
+    if not db.execute('SELECT 1 FROM fic_chapters WHERE id=? AND fic_id=?',
+                      (chapter_id, fic_id)).fetchone():
+        return jsonify({'error': 'Chapter not found in this fic'}), 404
+    existing = db.execute('SELECT chapter_id FROM fic_reading_spans WHERE id=?', (span_id,)).fetchone()
+    if existing and existing['chapter_id'] != chapter_id:
+        return jsonify({'error': 'Span belongs to another chapter'}), 409
+    db.execute(
+        'INSERT INTO fic_reading_spans(id, fic_id, chapter_id, started_at, ended_at,'
+        ' active_seconds, start_fraction, end_fraction) VALUES (?,?,?,?,?,?,?,?)'
+        ' ON CONFLICT(id) DO UPDATE SET'
+        ' end_fraction=CASE WHEN excluded.ended_at>=ended_at THEN excluded.end_fraction ELSE end_fraction END,'
+        ' started_at=MIN(started_at, excluded.started_at),'
+        ' ended_at=MAX(ended_at, excluded.ended_at),'
+        ' active_seconds=MAX(active_seconds, excluded.active_seconds)',
+        (span_id, fic_id, chapter_id, started, ended, active, start_fraction, end_fraction))
+    db.commit()
+    return jsonify({'success': True})
+
+
 @bp.post('/<fic_id>/read')
 def set_chapters_read(fic_id):
     body = request.json or {}

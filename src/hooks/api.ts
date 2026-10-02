@@ -9,6 +9,7 @@ import { uploadBatches } from '../lib/uploadBatches';
 // The shape is defined next to the geometry that consumes it, so the payload
 // and the band math can't drift apart.
 import type { SleepDay } from '../lib/sleep';
+import type { ReadingSpan } from '../lib/readingSpans';
 // Same reasoning: the log-entry shape lives next to the filtering logic that
 // consumes it, and the API client just re-exports it.
 import type {
@@ -3597,6 +3598,18 @@ export const api = {
       post<{ success: boolean }>(`/api/fanfic/${ficId}/progress`, {
         chapterId,
       }),
+    saveReadingSpan: (span: ReadingSpan) =>
+      put<{ success: boolean }>(
+        `/api/fanfic/${span.ficId}/reading-spans/${span.id}`,
+        {
+          chapterId: span.chapterId,
+          startedAt: span.startedAt,
+          endedAt: span.endedAt,
+          activeSeconds: span.activeSeconds,
+          startFraction: span.startFraction,
+          endFraction: span.endFraction,
+        }
+      ),
     bookmarks: {
       list: (ficId: string) =>
         get<FicBookmark[]>(`/api/fanfic/${ficId}/bookmarks`),

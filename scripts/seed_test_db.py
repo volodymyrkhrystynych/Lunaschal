@@ -608,6 +608,18 @@ def seed_fanfic(db, journal_ids):
         'INSERT INTO fic_chapter_reads (chapter_id, fic_id, created_at) VALUES (?, ?, ?)',
         (first_chapter['id'], fic_id, ts(1)),
     )
+    # An evening of scrolling in yesterday's 4am day, with no commentary, so the
+    # demo briefing's day reconstruction has a reading block to propose.
+    reading_start, _ = day_bounds(today_key(1))
+    reading_start += 17 * 3600  # 21:00
+    for offset, (chapter_id,) in enumerate(db.execute(
+            'SELECT id FROM fic_chapters WHERE fic_id = ? ORDER BY position LIMIT 2', (fic_id,)).fetchall()):
+        began = reading_start + offset * 1800
+        db.execute(
+            'INSERT INTO fic_reading_spans (id, fic_id, chapter_id, started_at, ended_at,'
+            ' active_seconds, start_fraction, end_fraction) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (new_id(), fic_id, chapter_id, began, began + 1620, 1500, 0.0, 1.0),
+        )
     for name in ('slow burn', 'found family', 'lighthouse'):
         db.execute(
             'INSERT INTO fic_site_tags (fic_id, name, created_at) VALUES (?, ?, ?)',

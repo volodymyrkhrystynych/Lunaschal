@@ -38,6 +38,7 @@ import {
   markAttempt as markPhotoAttempt,
 } from './photoStore';
 import { clearPageSave, getPageSave } from './pageStore';
+import type { ReadingSpan } from '../lib/readingSpans';
 
 /**
  * Offline write queue.
@@ -71,6 +72,7 @@ export const MUTATION_KEYS = {
   dailyToggle: ['tasks', 'toggle'] as const,
   fanficProgress: ['fanfic', 'progress'] as const,
   fanficSetRead: ['fanfic', 'setRead'] as const,
+  fanficReadingSpan: ['fanfic', 'readingSpan'] as const,
   writingChapterUpdate: ['writing', 'chapter', 'update'] as const,
   writingNoteUpdate: ['writing', 'note', 'update'] as const,
   learningAttempt: ['learning', 'attempt'] as const,
@@ -836,6 +838,13 @@ const fanficProgressCfg = (
   },
 });
 
+// Heartbeats only move a span forward server-side, so replaying them in any
+// order is harmless; nothing on screen reads spans, so nothing to invalidate.
+const fanficReadingSpanCfg = (): Cfg<{ success: boolean }, ReadingSpan> => ({
+  ...ONLINE,
+  mutationFn: span => api.fanfic.saveReadingSpan(span),
+});
+
 const fanficSetReadCfg = (
   qc: QueryClient
 ): Cfg<{ success: boolean }, FanficSetReadVars> => ({
@@ -1096,6 +1105,10 @@ export function registerOfflineMutationDefaults(qc: QueryClient): void {
       fanficProgressCfg(qc) as Cfg<unknown, never>,
     ],
     [MUTATION_KEYS.fanficSetRead, fanficSetReadCfg(qc) as Cfg<unknown, never>],
+    [
+      MUTATION_KEYS.fanficReadingSpan,
+      fanficReadingSpanCfg() as Cfg<unknown, never>,
+    ],
     [
       MUTATION_KEYS.writingChapterUpdate,
       writingChapterUpdateCfg(qc) as Cfg<unknown, never>,
@@ -1685,6 +1698,11 @@ export const useJobDecide = (o?: CallerOptions<void, JobDecideVars>) =>
 export const useFanficProgress = (
   o?: CallerOptions<{ success: boolean }, FanficProgressVars>
 ) => useOfflineMutation(MUTATION_KEYS.fanficProgress, fanficProgressCfg, o);
+
+export const useFanficReadingSpan = (
+  o?: CallerOptions<{ success: boolean }, ReadingSpan>
+) =>
+  useOfflineMutation(MUTATION_KEYS.fanficReadingSpan, fanficReadingSpanCfg, o);
 
 export const useFanficSetRead = (
   o?: CallerOptions<{ success: boolean }, FanficSetReadVars>
