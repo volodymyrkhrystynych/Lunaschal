@@ -16,6 +16,8 @@ from backend.journal_moment import journal_moment
 from backend.places import list_places, nearby_places
 from backend.tags import normalize_tags
 
+MIN_READING_SECONDS = 60
+
 
 def previous_proposals(db, day: str) -> list[dict]:
     rows = db.execute("SELECT metadata FROM messages WHERE role='assistant' AND metadata LIKE '%reconstructionDay%'")
@@ -118,6 +120,22 @@ def gather_day(db, today: str) -> dict:
         item['note'], item['noteTruncated'] = _read_note(row['note_path'])
     for row in db.execute('SELECT id,date,last_read_at,created_at FROM newspaper_issues WHERE created_at>=? AND created_at<?', (start, end)):
         add('newspaper', row, journal_moment(row['last_read_at'], row['created_at'], unworked_at_day_end=True))
+    # A chapter open and being scrolled is reading, commentary or not. Under a
+    # minute of scrolling is an accidental open or a skim, not evidence.
+    for row in db.execute(
+        'SELECT s.id,s.started_at,s.ended_at,s.active_seconds,s.start_fraction,s.end_fraction,'
+        ' f.title AS story,c.title AS chapter FROM fic_reading_spans s JOIN fics f ON f.id=s.fic_id'
+        ' JOIN fic_chapters c ON c.id=s.chapter_id'
+        ' WHERE s.started_at<? AND s.ended_at>=? AND s.active_seconds>=? ORDER BY s.started_at',
+            (end, start, MIN_READING_SECONDS)):
+        add('reading', {
+            'id': row['id'], 'title': f"{row['story']} — {row['chapter']}",
+            'story': row['story'], 'chapter': row['chapter'],
+            'startedAt': datetime.fromtimestamp(row['started_at']).isoformat(),
+            'endedAt': datetime.fromtimestamp(row['ended_at']).isoformat(),
+            'activeMinutes': round(row['active_seconds'] / 60),
+            'scrolledFrom': round(row['start_fraction'], 2), 'scrolledTo': round(row['end_fraction'], 2),
+        }, row['started_at'])
     # Weather records are additional location observations, not activity proof.
     locations = [dict(r) for r in db.execute(
         'SELECT latitude,longitude,source,created_at FROM lifestyle_weather_locations WHERE day_key=? ORDER BY created_at', (day,))]
@@ -159,7 +177,14 @@ activity time. Several chapter-commentary entries between two appointments can
 support one leisure/reading block, NOT events from the fictional story. Likewise,
 video transcripts, quoted material and study notes describe content consumed,
 not things that happened to the user. A newspaper merely archived but unopened
-does not prove reading. Group related evidence into meaningful activities.
+does not prove reading. "reading" sources are different: each is a stretch in
+which a story chapter was open AND being scrolled, so startedAt..endedAt is
+direct evidence the user was reading then, even with no commentary. Merge
+consecutive or closely spaced spans (several chapters, even several stories)
+into one leisure-reading block from the first startedAt to the last endedAt,
+splitting only at a long gap or another activity. activeMinutes below the wall
+span means pauses. Name the story in the title; never make events from what
+happens in the story. Group related evidence into meaningful activities.
 For example, chores before two known events, chapter commentary between them,
 and a later account of talking with a brother can yield three suggestions:
 morning chores, leisure reading, and family time. Never duplicate the two events.

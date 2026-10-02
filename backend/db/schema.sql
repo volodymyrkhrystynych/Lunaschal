@@ -881,6 +881,23 @@ CREATE INDEX IF NOT EXISTS idx_fic_bookmarks_fic ON fic_bookmarks(fic_id, create
 CREATE UNIQUE INDEX IF NOT EXISTS idx_fic_bookmarks_continue
     ON fic_bookmarks(fic_id) WHERE type = 'continue';
 
+-- One continuous stretch of scrolling in one chapter: the reader's evidence
+-- that the user was reading, and when. Client-minted ids, upserted forward by
+-- heartbeats, so an offline replay or an out-of-order flush only ever extends a
+-- span. Read by the briefing's day reconstruction (backend/briefing_events.py).
+CREATE TABLE IF NOT EXISTS fic_reading_spans (
+    id TEXT PRIMARY KEY,
+    fic_id TEXT NOT NULL REFERENCES fics(id) ON DELETE CASCADE,
+    chapter_id TEXT NOT NULL REFERENCES fic_chapters(id) ON DELETE CASCADE,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER NOT NULL,
+    active_seconds INTEGER NOT NULL DEFAULT 0,
+    start_fraction REAL NOT NULL DEFAULT 0,
+    end_fraction REAL NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_fic_reading_spans_started ON fic_reading_spans(started_at);
+
 CREATE TABLE IF NOT EXISTS newspaper_downloads (
     id TEXT PRIMARY KEY,
     date TEXT NOT NULL UNIQUE,
