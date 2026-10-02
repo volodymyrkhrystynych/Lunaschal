@@ -834,6 +834,43 @@ def seed_jobs(db, email_ids):
          'Platform Engineer', 'Toronto, ON', 'Kubernetes, Terraform, and an internal PaaS.',
          'pending', ts(2), ts(1), ts(1), ts(1)),
     )
+    # The Archive tab's three kinds (backend/jobs/archive.py): a posting that
+    # sat a week untouched, one dismissed from the feed, and an application
+    # that never got a reply.
+    for title, company, dismissed, days_ago in [
+        ('Data Engineer', 'Hooli', 0, 12), ('Frontend Developer', 'Vandelay', 1, 20),
+    ]:
+        archived_job_id = new_id()
+        db.execute(
+            'INSERT INTO jobs (id, source, source_id, url, company, title, location, remote, '
+            'description, triage_state, dismissed, archived_at, posted_at, fetched_at, '
+            'created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (archived_job_id, 'lever', f'lv-{archived_job_id}', 'https://example.com/jobs/3',
+             company, title, 'Toronto, ON', 'Batch pipelines and a warehouse migration.',
+             'kept', dismissed, ts(days_ago - 7), ts(days_ago + 2), ts(days_ago),
+             ts(days_ago), ts(days_ago)),
+        )
+    ghosted_job_id = new_id()
+    db.execute(
+        'INSERT INTO jobs (id, source, source_id, url, company, title, location, remote, '
+        'description, triage_state, posted_at, created_at, updated_at) '
+        'VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)',
+        (ghosted_job_id, 'manual', ghosted_job_id, 'https://example.com/jobs/4', 'Umbrella',
+         'Site Reliability Engineer', 'Toronto, ON', 'On-call for a large Kubernetes estate.',
+         'kept', ts(80), ts(78), ts(78)),
+    )
+    ghosted_application_id = new_id()
+    db.execute(
+        'INSERT INTO applications (id, job_id, status, applied_at, closed_at, created_at, updated_at) '
+        "VALUES (?, ?, 'ghosted', ?, ?, ?, ?)",
+        (ghosted_application_id, ghosted_job_id, ts(75), ts(15), ts(77), ts(15)),
+    )
+    for status, source, days_ago in [('submitted', 'manual', 75), ('ghosted', 'automatic', 15)]:
+        db.execute(
+            'INSERT INTO application_status_events (id, application_id, status, source, source_id, occurred_at) '
+            'VALUES (?, ?, ?, ?, ?, ?)',
+            (new_id(), ghosted_application_id, status, source, None, ts(days_ago)),
+        )
 
     application_id = new_id()
     db.execute(

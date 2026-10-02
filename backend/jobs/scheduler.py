@@ -44,7 +44,7 @@ import threading
 import time
 from datetime import datetime
 
-from backend.jobs import career_watch, linker, outcomes, queue, retention, sync, triager, workday_watch
+from backend.jobs import archive, career_watch, linker, outcomes, queue, retention, sync, triager, workday_watch
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def tick(now: datetime | None = None, last_purge_date=None):
     `run_title_sweep` is.
     """
     now = now or datetime.now()
-    results = {'linkage': None, 'ghosted': None, 'sync': None, 'careerWatch': None, 'workday': None, 'gated': None, 'triaged': None,
+    results = {'linkage': None, 'ghosted': None, 'archived': None, 'sync': None, 'careerWatch': None, 'workday': None, 'gated': None, 'triaged': None,
                'queued': None, 'purge': None, 'paused': False}
 
     # What a pause covers, and what it deliberately does not. Everything that
@@ -102,6 +102,13 @@ def tick(now: datetime | None = None, last_purge_date=None):
         results['ghosted'] = outcomes.mark_ghosted_applications(get_db())
     except Exception as e:
         logger.warning('Automatic job ghosting sweep failed: %s', e)
+    # Bookkeeping like ghosting, so it keeps running through a pause: a week
+    # untouched is a week untouched whether or not fetching was paused.
+    try:
+        from backend.db.connection import get_db
+        results['archived'] = archive.expire_stale(get_db())
+    except Exception as e:
+        logger.warning('Job archive sweep failed: %s', e)
 
     # Each sweep is wrapped separately: a board that is down must not cost the
     # linkage result already computed above, nor stop the purge below.

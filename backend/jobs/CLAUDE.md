@@ -507,6 +507,36 @@ not run the migration yet behaves exactly as it did before the switch existed.
 The `Paused` badge shows on the _collapsed_ panel header. A pause nobody can
 see is a pause that gets forgotten, and then looks like a feed that broke.
 
+## The Archive
+
+`archive.py` is where everything goes once it no longer needs attention, and
+the Archive tab is its UI. Three ways in, only one of them a column:
+
+- **expired** — a feed posting untouched for `EXPIRE_AFTER_DAYS` (7) after it
+  arrived, or a `ready` resume unsent for 7 days after it became ready.
+  `expire_stale` stamps `jobs.archived_at` on the scheduler tick, and keeps
+  running through a pause for ghosting's reason.
+- **dismissed** — `set_dismissed` stamps the same column, because
+  `updated_at` is bumped by every nightly re-sync and cannot date anything.
+- **closed** — `rejected`/`withdrawn`/`ghosted`, **derived from the status and
+  never stamped.** That is what makes the reply case free: when linkage moves a
+  ghosted application on (including an `other_update` reply, which
+  `advance_status` now treats as `acknowledged` after ghosting only), it simply
+  stops matching. An expired application likewise counts only while it is
+  still `draft`/`ready`, so marking it sent brings it back with nothing to
+  clear.
+
+`ARCHIVED_SQL` is the one predicate, used by both `GET /archive` and the
+`archived` flag on `GET /applications`, so the Pipeline hides exactly what the
+Archive shows. **Restore** stamps `archive_restored_at`, which the sweep
+measures from — without it a restored posting, still old by `created_at`,
+would be swept straight back on the next tick. The listing is newest first and
+never reaches back past `SEARCH_WINDOW_DAYS` (182), search or no search;
+nothing is deleted, so the rows stay available for "what was plentiful"
+questions later. Triage-rejected rows are deliberately not part of it — they
+were never shown and have `GET /filtered`. Archived rows are excluded from
+`_TRIAGEABLE`, so no model time is spent judging them.
+
 ## Retention
 
 Two clocks, whichever comes first: `applied_at + job_retention_days` (180), and
@@ -528,6 +558,7 @@ touches only `resume_versions` and `applications`, and a test pins that.
 | `keywords.py`      | pure JD↔profile keyword gap — also the feed's match score                |
 | `distance.py`      | pure: km from the commute anchor. Declines rather than guesses           |
 | `retention.py`     | pure date policy + the purge executor                                    |
+| `archive.py`       | week-old expiry, dismissal stamps, the Archive listing and its search    |
 | `profile.py`       | DB reads in the shapes tailoring and rendering want                      |
 | `resume_import.py` | an existing `.docx`/text → the profile, bullets index-bound              |
 | `tailor.py`        | the bounded-schema resume call                                           |

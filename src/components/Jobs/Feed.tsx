@@ -26,6 +26,7 @@ import {
   matchPercent,
   pendingDecisionLabel,
   SOURCE_LABELS,
+  postingWhen,
   splitFeed,
   topGaps,
 } from '@/lib/jobs';
@@ -407,6 +408,9 @@ function FeedCard({
           {job.company}
           {job.location && ` · ${job.location}`}
           {salary && ` · ${salary}`}
+        </p>
+        <p className="text-xs text-[var(--color-text-muted)]">
+          {postingWhen(job)}
         </p>
       </div>
 

@@ -25,7 +25,7 @@ TIMESTAMP_COLS = frozenset({
     # it ever does, so this is a widening rather than a special case.
     'applied_at', 'closed_at', 'purge_after', 'purged_at', 'fetched_at',
     'scanned_at', 'queued_at', 'last_run_at', 'triage_at', 'occurred_at',
-    'added_at',
+    'added_at', 'archived_at', 'archive_restored_at', 'ready_at',
 })
 
 CAMEL_CACHE: dict[str, str] = {}
@@ -178,6 +178,7 @@ def init_db() -> None:
     _ensure_job_settings(db)
     _ensure_job_triage_columns(db)
     _ensure_job_distance_columns(db)
+    _ensure_job_archive_columns(db)
     _ensure_workday_board_facets(db)
     _ensure_backup_settings(db)
     _ensure_files_settings(db)
@@ -1578,6 +1579,37 @@ def _ensure_job_distance_columns(db: sqlite3.Connection) -> None:
     db.execute(
         'CREATE INDEX IF NOT EXISTS idx_jobs_distance '
         'ON jobs(distance_km) WHERE dismissed = 0'
+    )
+    db.commit()
+
+
+def _ensure_job_archive_columns(db: sqlite3.Connection) -> None:
+    """When a posting left the user's attention, and when it last came back.
+
+    `archived_at` is set by `backend/jobs/archive.py`'s week-old sweep and by a
+    dismissal. It is a timestamp rather than a flag because the Archive tab is
+    chronological and its search window is measured from it — `updated_at`
+    cannot serve, since a board re-listing the posting bumps it every night.
+
+    `archive_restored_at` is what the sweep measures a restored posting from.
+    Without it a restore would be undone on the next tick: the posting is
+    still more than a week old by `created_at`.
+
+    Dismissed rows predating the column are backfilled from `created_at`, the
+    nearest honest bound — the dismissal itself was never recorded, and
+    stamping them with the migration's own time would put every one of them at
+    the top of the Archive as if dismissed today.
+    """
+    cols = {r[1] for r in db.execute('PRAGMA table_info(jobs)')}
+    if 'archived_at' not in cols:
+        db.execute('ALTER TABLE jobs ADD COLUMN archived_at INTEGER')
+        db.execute('UPDATE jobs SET archived_at=created_at WHERE dismissed=1')
+    if 'archive_restored_at' not in cols:
+        db.execute('ALTER TABLE jobs ADD COLUMN archive_restored_at INTEGER')
+    db.commit()
+    db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_jobs_archived '
+        'ON jobs(archived_at) WHERE archived_at IS NOT NULL'
     )
     db.commit()
 

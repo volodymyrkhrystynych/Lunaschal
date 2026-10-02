@@ -17,7 +17,7 @@ from ulid import ULID
 from backend.ai import job_match
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.jobs import (
-    analytics, build, career_watch, company_research, cover_letter, distance, ingest, interview, linker, outcomes, profile as profile_mod, queue as queue_mod, render, report, resume_review,
+    analytics, archive, build, career_watch, company_research, cover_letter, distance, ingest, interview, linker, outcomes, profile as profile_mod, queue as queue_mod, render, report, resume_review,
     resolve, resume_import, retention, sources, storage, sync, tailor,
     triager, upskill, urlmatch, workday_watch, status as application_status,
     scheduler as jobs_scheduler,
@@ -472,15 +472,17 @@ def update_job(job_id):
     for camel, snake in field_map.items():
         if camel in body:
             updates[snake] = body[camel]
-    for flag in ('remote', 'dismissed'):
-        if flag in body:
-            updates[flag] = 1 if body[flag] else 0
+    if 'remote' in body:
+        updates['remote'] = 1 if body['remote'] else 0
 
     db = get_db()
     cursor = build_update(db, 'jobs', updates, 'id=?', (job_id,))
     db.commit()
     if cursor.rowcount == 0:
         return jsonify({'error': 'Not found'}), 404
+    # Through the one writer that keeps `archived_at` in step with the flag.
+    if 'dismissed' in body:
+        archive.set_dismissed(db, job_id, bool(body['dismissed']))
     return jsonify({'success': True})
 
 
@@ -517,8 +519,13 @@ def _application_row(db, application_id):
 def list_applications():
     db = get_db()
     status = request.args.get('status')
-    sql = """
-        SELECT a.*, j.company, j.title, j.url AS job_url, j.location
+    # `archived` is the Archive tab's own predicate, so the pipeline hides
+    # exactly what the Archive shows; `ready_at` is what the card's date and
+    # the week-long expiry are both measured from.
+    sql = f"""
+        SELECT a.*, j.company, j.title, j.url AS job_url, j.location,
+               {archive.READY_AT_SQL} AS ready_at,
+               {archive.ARCHIVED_SQL} AS archived
         FROM applications a JOIN jobs j ON j.id = a.job_id
     """
     params: tuple = ()
@@ -526,7 +533,10 @@ def list_applications():
         sql += ' WHERE a.status=?'
         params = (status,)
     sql += ' ORDER BY a.applied_at IS NULL DESC, a.applied_at DESC, a.created_at DESC'
-    return jsonify([row_to_dict(r) for r in db.execute(sql, params).fetchall()])
+    rows = [row_to_dict(r) for r in db.execute(sql, params).fetchall()]
+    for row in rows:
+        row['archived'] = bool(row['archived'])
+    return jsonify(rows)
 
 
 @bp.post('/applications')
@@ -744,7 +754,7 @@ def _pause_payload(db) -> dict:
 
     backlog = db.execute(
         "SELECT COUNT(*) c FROM jobs j WHERE j.triage_state='pending'"
-        " AND j.dismissed=0 AND j.description<>''"
+        " AND j.dismissed=0 AND j.description<>'' AND j.archived_at IS NULL"
         ' AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id=j.id)'
     ).fetchone()['c']
 
@@ -1673,6 +1683,7 @@ def job_feed():
         SELECT j.* FROM jobs j
         LEFT JOIN applications a ON a.job_id = j.id
         WHERE j.dismissed = 0 AND a.id IS NULL AND j.triage_state != 'rejected'
+          AND j.archived_at IS NULL
         ORDER BY CASE j.triage_fit
                      WHEN 'strong' THEN 0 WHEN 'possible' THEN 1
                      WHEN 'stretch' THEN 2 ELSE 3 END,
@@ -1785,14 +1796,42 @@ def run_triage_gate():
 def dismiss_job(job_id):
     db = get_db()
     body = _body()
-    dismissed = 0 if body.get('dismissed') is False else 1
-    db.execute('UPDATE jobs SET dismissed=?, updated_at=? WHERE id=?',
-               (dismissed, _now(), job_id))
-    db.commit()
-    row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
-    if row is None:
+    if not archive.set_dismissed(db, job_id, body.get('dismissed') is not False):
         return jsonify({'error': 'Not found'}), 404
+    row = db.execute('SELECT * FROM jobs WHERE id=?', (job_id,)).fetchone()
     return jsonify(row_to_dict(row))
+
+
+@bp.get('/archive')
+def archived_jobs():
+    """The Archive tab: expired, dismissed and closed, newest first.
+
+    Never reaches further back than `archive.SEARCH_WINDOW_DAYS`, search or
+    no search — see backend/jobs/archive.py.
+    """
+    reason = request.args.get('reason') or None
+    if reason is not None and reason not in archive.REASONS:
+        return jsonify({'error': 'Unknown reason'}), 400
+    try:
+        limit = max(1, min(int(request.args.get('limit') or archive.DEFAULT_LIMIT), 1000))
+    except ValueError:
+        return jsonify({'error': 'limit must be a number'}), 400
+    return jsonify(archive.list_archived(
+        get_db(), query=request.args.get('q') or '', reason=reason, limit=limit,
+    ))
+
+
+@bp.post('/<job_id>/archive/restore')
+def restore_archived_job(job_id):
+    """Put an expired or dismissed posting back where it was, for another week."""
+    result = archive.restore(get_db(), job_id)
+    if result == 'not_found':
+        return jsonify({'error': 'Not found'}), 404
+    if result == 'closed':
+        return jsonify({'error': 'Closed applications come back by changing their status.'}), 409
+    if result == 'not_archived':
+        return jsonify({'error': 'Not archived'}), 409
+    return jsonify({'ok': True})
 
 
 @bp.post('/<job_id>/queue')
