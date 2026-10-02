@@ -315,6 +315,14 @@ def advance_status(current: str, job_status: str | None) -> str | None:
     Monotonic along PROGRESS_RANK so a confirmation email that syncs late can
     never walk an application back from 'interview' to 'acknowledged'.
     """
+    # A reply of any kind to an application already written off as ghosted is
+    # the one thing ghosting was a guess about. 'other_update' maps to nothing
+    # for a live application — "we're still reviewing" moves no stage — but
+    # after silence it is evidence they answered, and it is what brings the
+    # application back out of the Archive (backend/jobs/archive.py).
+    if current == 'ghosted' and job_status == 'other_update':
+        return 'acknowledged'
+
     target = EMAIL_STATUS_MAP.get(job_status or '')
     if not target or current == target:
         return None

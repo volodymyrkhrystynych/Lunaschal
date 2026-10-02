@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  ArchivedJob,
   FeedJob,
   FilledAnswer,
   JobApplication,
@@ -10,6 +11,10 @@ import type {
 } from '@/hooks/api';
 import {
   answerSummary,
+  archiveReasonLabel,
+  pipelineView,
+  postingWhen,
+  relativeDay,
   coveragePercent,
   decidedIds,
   decisionErrors,
@@ -45,6 +50,7 @@ function application(
     status,
     steer: '',
     coverLetter: '',
+    coverLetterRequired: false,
     notes: '',
     appliedEmail: '',
     appliedAt: null,
@@ -57,6 +63,9 @@ function application(
     title: 'Backend Engineer',
     jobUrl: '',
     location: '',
+    createdAt: '2026-08-01T00:00:00Z',
+    readyAt: null,
+    archived: false,
   };
 }
 
@@ -617,5 +626,103 @@ describe('feed decisions', () => {
     expect(pendingDecisionLabel(0)).toBeNull();
     expect(pendingDecisionLabel(1)).toBe('Saving 1 decision…');
     expect(pendingDecisionLabel(3)).toBe('Saving 3 decisions…');
+  });
+});
+
+describe('relativeDay', () => {
+  const now = new Date('2026-10-01T12:00:00').getTime();
+
+  it('counts days while that is still meaningful', () => {
+    expect(relativeDay('2026-10-01T08:00:00', now)).toBe('today');
+    expect(relativeDay('2026-09-30T08:00:00', now)).toBe('yesterday');
+    expect(relativeDay('2026-09-24T12:00:00', now)).toBe('7d ago');
+  });
+
+  it('switches to a date after a fortnight, with the year only when it differs', () => {
+    expect(relativeDay('2026-09-03T12:00:00', now)).toBe('Sep 3');
+    expect(relativeDay('2025-12-20T12:00:00', now)).toBe('Dec 20, 2025');
+  });
+
+  it('is empty for a missing date', () => {
+    expect(relativeDay(null, now)).toBe('');
+  });
+});
+
+describe('postingWhen', () => {
+  const now = new Date('2026-10-01T12:00:00').getTime();
+
+  it('says when it was posted and when it reached the feed', () => {
+    expect(
+      postingWhen(
+        { postedAt: '2026-09-26T12:00:00', createdAt: '2026-09-28T12:00:00' },
+        now
+      )
+    ).toBe('posted 5d ago · seen 3d ago');
+  });
+
+  it('still has a when for a posting with no posted date', () => {
+    expect(
+      postingWhen({ postedAt: null, createdAt: '2026-10-01T09:00:00' }, now)
+    ).toBe('seen today');
+  });
+});
+
+describe('pipelineView', () => {
+  it('does not repeat the ready queue as a "Ready to send" group', () => {
+    const ready = application('a', 'ready');
+    const submitted = application('b', 'submitted');
+    const { queue, groups } = pipelineView([ready, submitted]);
+    expect(queue.ready.map(a => a.id)).toEqual(['a']);
+    expect(groups.map(g => g.status)).toEqual(['submitted']);
+  });
+
+  it('leaves building and failed drafts to the panel too', () => {
+    const building = {
+      ...application('a', 'draft'),
+      queuedAt: '2026-08-15T00:00:00Z',
+    };
+    const failed = { ...building, id: 'b', queueError: 'model unavailable' };
+    const manual = application('c', 'draft');
+    const { groups } = pipelineView([building, failed, manual]);
+    expect(groups.flatMap(g => g.items.map(a => a.id))).toEqual(['c']);
+  });
+
+  it('drops archived applications entirely', () => {
+    const ghosted = { ...application('a', 'ghosted'), archived: true };
+    const stale = { ...application('b', 'ready'), archived: true };
+    const live = application('c', 'interview');
+    const { queue, groups } = pipelineView([ghosted, stale, live]);
+    expect(queue.ready).toEqual([]);
+    expect(groups.map(g => g.status)).toEqual(['interview']);
+  });
+});
+
+describe('archiveReasonLabel', () => {
+  const row = (over: Partial<ArchivedJob>): ArchivedJob => ({
+    jobId: 'j',
+    applicationId: null,
+    title: '',
+    company: '',
+    location: '',
+    url: '',
+    summary: '',
+    reason: 'expired',
+    status: null,
+    archivedAt: '2026-09-01T00:00:00Z',
+    postedAt: null,
+    seenAt: '2026-08-20T00:00:00Z',
+    appliedAt: null,
+    ...over,
+  });
+
+  it('names each way into the archive', () => {
+    expect(archiveReasonLabel(row({}))).toBe('Expired');
+    expect(archiveReasonLabel(row({ applicationId: 'a' }))).toBe('Never sent');
+    expect(archiveReasonLabel(row({ reason: 'dismissed' }))).toBe('Dismissed');
+    expect(
+      archiveReasonLabel(
+        row({ reason: 'closed', applicationId: 'a', status: 'ghosted' })
+      )
+    ).toBe('No reply');
   });
 });

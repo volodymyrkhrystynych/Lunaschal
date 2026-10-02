@@ -2028,6 +2028,29 @@ export interface JobApplication {
   title: string;
   jobUrl: string;
   location: string;
+  createdAt: string;
+  /** When the resume became ready — what the week-long archive clock reads. */
+  readyAt: string | null;
+  /** In the Archive tab rather than the Pipeline: a closed outcome, or an
+   * unsent resume left for a week. See backend/jobs/archive.py. */
+  archived: boolean;
+}
+
+/** A row of the Jobs Archive tab — see backend/jobs/archive.py. */
+export interface ArchivedJob {
+  jobId: string;
+  applicationId: string | null;
+  title: string;
+  company: string;
+  location: string;
+  url: string;
+  summary: string;
+  reason: 'expired' | 'dismissed' | 'closed';
+  status: ApplicationStatus | null;
+  archivedAt: string;
+  postedAt: string | null;
+  seenAt: string;
+  appliedAt: string | null;
 }
 
 export interface KeywordReport {
@@ -5333,6 +5356,14 @@ export const api = {
       post<{ ok: boolean; state: TriageState; job: FeedJob | null }>(
         `/api/jobs/${jobId}/triage`
       ),
+    /** The Archive: newest first, never older than half a year. */
+    archive: (q = '', reason: ArchivedJob['reason'] | '' = '') =>
+      get<ArchivedJob[]>(
+        `/api/jobs/archive?q=${encodeURIComponent(q)}${reason ? `&reason=${reason}` : ''}`
+      ),
+    /** Back to the feed (or the ready queue) for another week. */
+    restoreArchived: (jobId: string) =>
+      post<{ ok: boolean }>(`/api/jobs/${jobId}/archive/restore`),
     restoreTriage: (jobId: string) =>
       post<FeedJob>(`/api/jobs/${jobId}/triage/restore`),
     resetTriage: (jobId: string) =>

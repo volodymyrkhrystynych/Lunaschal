@@ -2,6 +2,7 @@
 // environment without jsdom (the reason src/lib/ exists).
 import type {
   ApplicationStatus,
+  ArchivedJob,
   FeedJob,
   FilledAnswer,
   JobApplication,
@@ -489,4 +490,81 @@ export function decisionErrors(
 export function pendingDecisionLabel(count: number): string | null {
   if (count <= 0) return null;
   return count === 1 ? 'Saving 1 decision…' : `Saving ${count} decisions…`;
+}
+
+// --------------------------------------------------------------------------
+// Dates and the Archive
+// --------------------------------------------------------------------------
+
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+const DAY_MS = 86_400_000;
+
+/** "today", "yesterday", "3d ago" — and a plain date once it is over a
+ * fortnight, where a count of days stops meaning anything at a glance. Spelled
+ * out rather than `toLocaleDateString` so it reads the same on every device. */
+export function relativeDay(iso: string | null, now = Date.now()): string {
+  if (!iso) return '';
+  const then = new Date(iso);
+  const days = Math.floor((now - then.getTime()) / DAY_MS);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 14) return `${days}d ago`;
+  const date = `${MONTHS[then.getMonth()]} ${then.getDate()}`;
+  return then.getFullYear() === new Date(now).getFullYear()
+    ? date
+    : `${date}, ${then.getFullYear()}`;
+}
+
+/** A feed card's when-line: when the employer posted it, and when it reached
+ * the feed — the second is what the week-long archive clock reads. */
+export function postingWhen(
+  job: { postedAt: string | null; createdAt: string },
+  now = Date.now()
+): string {
+  const parts = [];
+  if (job.postedAt) parts.push(`posted ${relativeDay(job.postedAt, now)}`);
+  parts.push(`seen ${relativeDay(job.createdAt, now)}`);
+  return parts.join(' · ');
+}
+
+/**
+ * What the Pipeline tab shows: archived applications removed (closed outcomes
+ * and unsent resumes left for a week both live in the Archive tab), and the
+ * status groups below the queue panel no longer repeating what the panel
+ * already lists — the panel's "Ready to submit" used to appear a second time
+ * as a "Ready to send" group under it.
+ */
+export function pipelineView(applications: JobApplication[]): {
+  queue: ReturnType<typeof queueBreakdown>;
+  groups: ReturnType<typeof groupByStatus>;
+} {
+  const live = applications.filter(a => !a.archived);
+  const queue = queueBreakdown(live);
+  const shown = new Set(
+    [...queue.ready, ...queue.building, ...queue.failed].map(a => a.id)
+  );
+  return {
+    queue,
+    groups: groupByStatus(live.filter(a => !shown.has(a.id))),
+  };
+}
+
+/** Why a row is in the Archive, in the words the tab shows. */
+export function archiveReasonLabel(row: ArchivedJob): string {
+  if (row.reason === 'closed' && row.status) return STATUS_LABELS[row.status];
+  if (row.reason === 'dismissed') return 'Dismissed';
+  return row.applicationId ? 'Never sent' : 'Expired';
 }

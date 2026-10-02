@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/hooks/api';
-import { groupByStatus, queueBreakdown } from '@/lib/jobs';
+import { pipelineView, relativeDay } from '@/lib/jobs';
 import { useMasterDetail } from '@/hooks/useMasterDetail';
 import { ApplicationDetail } from './ApplicationDetail';
+import { Archive } from './Archive';
 import { Feed } from './Feed';
 import { ProfileEditor } from './ProfileEditor';
 
-type Tab = 'feed' | 'pipeline' | 'upskill' | 'profile' | 'inbox';
+type Tab = 'feed' | 'pipeline' | 'archive' | 'upskill' | 'profile' | 'inbox';
 
 function Upskill() {
   const local = useMutation({ mutationFn: () => api.jobs.upskill(false) });
@@ -109,8 +110,10 @@ function Pipeline({ onOpen }: { onOpen: (applicationId: string) => void }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['jobs'] }),
   });
 
-  const groups = groupByStatus(applications ?? []);
-  const { ready, building, failed } = queueBreakdown(applications ?? []);
+  const {
+    queue: { ready, building, failed },
+    groups,
+  } = pipelineView(applications ?? []);
 
   return (
     <div className="flex-1 overflow-y-auto min-w-0 space-y-4">
@@ -134,7 +137,8 @@ function Pipeline({ onOpen }: { onOpen: (applicationId: string) => void }) {
                   {application.title}
                 </p>
                 <p className="text-xs text-[var(--color-text-muted)] truncate">
-                  {application.company} · resume ready
+                  {application.company} · resume ready{' '}
+                  {relativeDay(application.readyAt)}
                 </p>
               </button>
               {/* Opening the posting is a plain link — the extension picks the
@@ -294,37 +298,39 @@ function Pipeline({ onOpen }: { onOpen: (applicationId: string) => void }) {
         Download offline HTML report
       </a>
 
-      {groups.length === 0 ? (
-        <p className="text-sm text-[var(--color-text-muted)]">
-          No applications yet. Add a posting, then tailor a resume for it.
-        </p>
-      ) : (
-        groups.map(group => (
-          <div key={group.status}>
-            <h3 className="text-xs uppercase tracking-wide text-[var(--color-text-muted)] mb-1">
-              {group.label} ({group.items.length})
-            </h3>
-            <div className="space-y-1">
-              {group.items.map(application => (
-                <button
-                  key={application.id}
-                  onClick={() => onOpen(application.id)}
-                  className="w-full text-left p-3 min-h-[44px] rounded-lg border border-white/10 bg-[var(--color-surface)] hover:border-white/20"
-                >
-                  <p className="text-sm font-medium text-[var(--color-text)] truncate">
-                    {application.title}
-                  </p>
-                  <p className="text-xs text-[var(--color-text-muted)] truncate">
-                    {application.company}
-                    {application.appliedAt &&
-                      ` · sent ${new Date(application.appliedAt).toLocaleDateString()}`}
-                  </p>
-                </button>
-              ))}
+      {groups.length === 0
+        ? ready.length + building.length + failed.length === 0 && (
+            <p className="text-sm text-[var(--color-text-muted)]">
+              Nothing in progress. Queue a posting from the feed; closed and
+              expired applications are in the Archive.
+            </p>
+          )
+        : groups.map(group => (
+            <div key={group.status}>
+              <h3 className="text-xs uppercase tracking-wide text-[var(--color-text-muted)] mb-1">
+                {group.label} ({group.items.length})
+              </h3>
+              <div className="space-y-1">
+                {group.items.map(application => (
+                  <button
+                    key={application.id}
+                    onClick={() => onOpen(application.id)}
+                    className="w-full text-left p-3 min-h-[44px] rounded-lg border border-white/10 bg-[var(--color-surface)] hover:border-white/20"
+                  >
+                    <p className="text-sm font-medium text-[var(--color-text)] truncate">
+                      {application.title}
+                    </p>
+                    <p className="text-xs text-[var(--color-text-muted)] truncate">
+                      {application.company} ·{' '}
+                      {application.appliedAt
+                        ? `sent ${relativeDay(application.appliedAt)}`
+                        : `added ${relativeDay(application.createdAt)}`}
+                    </p>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-        ))
-      )}
+          ))}
     </div>
   );
 }
@@ -492,6 +498,7 @@ export function Jobs() {
   const tabs: [Tab, string][] = [
     ['feed', 'Feed'],
     ['pipeline', 'Pipeline'],
+    ['archive', 'Archive'],
     ['upskill', 'Upskill'],
     ['profile', 'Profile'],
     [
@@ -531,6 +538,7 @@ export function Jobs() {
           <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
             {tab === 'feed' && <Feed />}
             {tab === 'pipeline' && <Pipeline onOpen={open} />}
+            {tab === 'archive' && <Archive onOpen={open} />}
             {tab === 'upskill' && <Upskill />}
             {tab === 'profile' && <ProfileEditor />}
             {tab === 'inbox' && <Inbox />}
