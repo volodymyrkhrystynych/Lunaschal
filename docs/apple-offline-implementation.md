@@ -1,6 +1,6 @@
 # Apple apps and offline experience — implementation tracker
 
-Last updated: 2026-10-01. Working branch: `feat/apple-offline-foundation`.
+Last updated: 2026-10-02. Working branch: `feat/apple-offline-foundation`.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first
@@ -388,8 +388,21 @@ Expansion reads the local database and preserves the expanded window during
 refreshes; changing the search resets library windows to 200. Two new portable
 tests cover larger libraries across reopen, filtered counts, deterministic order,
 deletion, literal query handling, and invalid limits. All 75 local Swift tests
-pass; native verification is pending. This expands the visible local results,
+pass; hosted CI also passed 75 Linux / 76 macOS core tests, seven native
+regression tests, and Watch compilation at `0fe5f32`
+([run](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36852919670)).
+The Load more controls have not yet been driven by dedicated UI tests.
+This expands the visible local results,
 not the scope of collections downloaded from the server.
+
+Downloaded Knowledge articles now have their own Library section, shared search,
+Load more control, and selectable plain-text reader with title and summary.
+Their existing download toggle stays opt-in; disabling future downloads retains
+previously saved articles. The reader renders stored text without fetching
+embedded images or pages. Markdown formatting, ZIM browsing, and article editing
+remain outside this reader. A replica regression covers cold reopen, article-body
+search, preservation when another collection is refreshed, and scoped deletion.
+Native verification for the new reader is pending.
 
 ### M5 — PencilKit drawing and annotations
 

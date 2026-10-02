@@ -73,6 +73,11 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
 - Local PDF, image, audio/video, and archived-article views. Articles use a
   script-disabled WebKit view with remote resources blocked. Knowledge article
   text is opt-in. Archive videos and ZIM packages are not bulk-downloaded.
+- Downloaded Knowledge articles are browsable and searchable in Library, with
+  Load more support and a selectable plain-text reader. Turning off future
+  Knowledge downloads keeps existing articles readable. Markdown source is
+  shown as text; remote images and embedded pages are not loaded. This reads
+  replicated Knowledge articles, not Wikipedia ZIM packages.
 
 The backend accepts optional offset-bearing ISO `capturedAt` on both
 `POST /api/journal` and `POST /api/journal/recordings`. On recording uploads it

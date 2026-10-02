@@ -9,10 +9,13 @@ struct LibraryView: View {
     @State private var query = ""
     @State private var results: [SyncChange] = []
     @State private var sources: [SyncChange] = []
+    @State private var articles: [SyncChange] = []
     @State private var bookLimit = 200
     @State private var sourceLimit = 200
     @State private var bookCount = 0
     @State private var sourceCount = 0
+    @State private var articleLimit = 200
+    @State private var articleCount = 0
     @State private var confirmingRemoval = false
     @AppStorage("libraryBudgetGB") private var budget = 20
     @AppStorage("downloadKnowledge") private var knowledge = false
@@ -75,6 +78,24 @@ struct LibraryView: View {
                     Button("Load more books (\(results.count) of \(bookCount))") { bookLimit += 200; refreshRecords() }
                 }
             }
+            Section("Knowledge articles") {
+                ForEach(articles) { article in
+                    NavigationLink { KnowledgeArticleView(article: article) } label: {
+                        VStack(alignment: .leading) {
+                            Text(article.title)
+                            if let summary = article.data?["summary"]?.string, !summary.isEmpty {
+                                Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                            }
+                        }
+                    }
+                }
+                if articles.count < articleCount {
+                    Button("Load more articles (\(articles.count) of \(articleCount))") { articleLimit += 200; refreshRecords() }
+                } else if articles.isEmpty {
+                    Text(query.isEmpty ? "Enable Knowledge articles and download the library on Wi-Fi to read them here." : "No downloaded knowledge articles match this search.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
         }
         .navigationTitle("Library")
         .task(id: model.downloadingLibrary) { refreshRecords() }
@@ -84,7 +105,7 @@ struct LibraryView: View {
         }
         .searchable(text: $query, prompt: "Search downloaded library")
         .onChange(of: query) { _, _ in
-            bookLimit = 200; sourceLimit = 200
+            bookLimit = 200; sourceLimit = 200; articleLimit = 200
             refreshRecords()
         }
     }
@@ -95,7 +116,31 @@ struct LibraryView: View {
             bookCount = try model.replica.count(collection: "fics", query: query)
             sources = try model.replica.records(collection: "study_sources", query: query, limit: sourceLimit)
             sourceCount = try model.replica.count(collection: "study_sources", query: query)
+            articles = try model.replica.records(collection: "wiki_articles", query: query, limit: articleLimit)
+            articleCount = try model.replica.count(collection: "wiki_articles", query: query)
         } catch { model.message = error.localizedDescription }
+    }
+}
+
+private struct KnowledgeArticleView: View {
+    let article: SyncChange
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(article.title).font(.title).accessibilityAddTraits(.isHeader)
+                Text("Downloaded article · Available offline").font(.caption).foregroundStyle(.secondary)
+                if let summary = article.data?["summary"]?.string, !summary.isEmpty {
+                    Text(summary).font(.headline)
+                }
+                // Render stored text directly: article HTML, external images,
+                // scripts, and embedded links cannot trigger network requests.
+                Text(article.data?["content"]?.string ?? "No article text was downloaded.")
+                    .font(.system(.body, design: .serif)).textSelection(.enabled)
+            }.frame(maxWidth: 760, alignment: .leading).padding()
+                .frame(maxWidth: .infinity)
+        }
+        .navigationTitle(article.title).navigationBarTitleDisplayMode(.inline)
     }
 }
 

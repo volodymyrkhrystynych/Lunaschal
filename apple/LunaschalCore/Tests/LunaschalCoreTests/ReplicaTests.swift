@@ -37,6 +37,27 @@ final class ReplicaTests: XCTestCase {
         XCTAssertEqual(try reopened.epoch, epoch)
     }
 
+    func testOptionalKnowledgeRemainsReadableAfterOtherCollectionsRefresh() throws {
+        let article = SyncChange(revision: 1, collection: "wiki_articles", id: id, deleted: false,
+            data: ["id": .string(id), "title": .string("Offline knowledge"),
+                   "summary": .string("A saved reference"), "content": .string("# Astronomy\n\nA reference to constellations.")])
+        let knowledgePage = SyncPage(protocolVersion: 1, epoch: epoch, mode: "bootstrap", changes: [article],
+            hasMore: false, cursor: "knowledge", collections: ["wiki_articles"])
+        try store.apply(knowledgePage, startingBootstrap: true)
+        // A later download without optional knowledge replaces only its own
+        // collections. Existing optional content stays available offline.
+        try store.apply(page([record(content: "Journal only")]), startingBootstrap: true)
+        let reopened = try ReplicaStore(url: url)
+        XCTAssertEqual(try reopened.records(collection: "wiki_articles", query: "constell").first, article)
+        XCTAssertEqual(try reopened.count(collection: "wiki_articles", query: "constell"), 1)
+        XCTAssertEqual(try reopened.count(collection: "journal_entries", query: "constell"), 0)
+        let deletion = SyncChange(revision: 2, collection: "wiki_articles", id: id, deleted: true, data: nil)
+        try reopened.apply(SyncPage(protocolVersion: 1, epoch: epoch, mode: "delta", changes: [deletion],
+            hasMore: false, cursor: "knowledge-deleted", collections: ["wiki_articles"]), startingBootstrap: false)
+        XCTAssertEqual(try reopened.count(collection: "wiki_articles"), 0)
+        XCTAssertEqual(try reopened.count(collection: "journal_entries"), 1)
+    }
+
     func testExpandedOfflineListsAndSearchReachBeyondTwoHundredRecords() throws {
         let changes = (1...210).map { index in
             record(Int64(index), content: index <= 205 ? "River walk" : "Mountain hike", id: ULID.make())
