@@ -98,6 +98,44 @@ final class ReplicaTests: XCTestCase {
         XCTAssertEqual(try store.record(collection: "journal_entries", id: id)?.data?["content"]?.string, "Latest")
     }
 
+    func testNewspaperSearchMigratesPreviouslyDownloadedCoversWithoutRedownload() throws {
+        let cover = SyncChange(revision: 1, collection: "newspaper_frontpages", id: id, deleted: false,
+                               data: ["id": .string(id), "paper": .string("Daily Planet"), "date": .string("2026-10-02")])
+        try store.apply(SyncPage(protocolVersion: 1, epoch: epoch, mode: "bootstrap", changes: [cover],
+                                hasMore: false, cursor: "covers", collections: ["newspaper_frontpages"]), startingBootstrap: true)
+        store = nil
+        var connection: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &connection), SQLITE_OK)
+        // Recreate the old index representation, preserving records and cursors.
+        XCTAssertEqual(sqlite3_exec(connection, "UPDATE replica_search SET title='newspaper_frontpages'; PRAGMA user_version=1", nil, nil, nil), SQLITE_OK)
+        sqlite3_close(connection)
+        let reopened = try ReplicaStore(url: url)
+        XCTAssertEqual(try reopened.records(collection: "newspaper_frontpages", query: "Planet").map(\.id), [id])
+        XCTAssertEqual(try reopened.count(collection: "newspaper_frontpages", query: "2026-10-02"), 1)
+        XCTAssertEqual(try reopened.cursor(collections: ["newspaper_frontpages"]), "covers")
+        XCTAssertEqual(try reopened.record(collection: "newspaper_frontpages", id: id), cover)
+    }
+
+    func testPaperPageOrderSurvivesReopenAndExcludesOtherDocumentsAndDeletedPages() throws {
+        let paperID = ULID.make()
+        let ids = (0..<205).map { _ in ULID.make() }
+        var changes = ids.enumerated().map { index, id in
+            SyncChange(revision: Int64(300 - index), collection: "paper_pages", id: id, deleted: false,
+                       data: ["id": .string(id), "paperId": .string(paperID), "position": .number(Double(index))])
+        }
+        let otherID = ULID.make()
+        changes.append(SyncChange(revision: 400, collection: "paper_pages", id: otherID, deleted: false,
+                                  data: ["id": .string(otherID), "paperId": .string("another-paper"), "position": .number(0)]))
+        try store.apply(SyncPage(protocolVersion: 1, epoch: epoch, mode: "bootstrap", changes: changes,
+                                hasMore: false, cursor: "papers", collections: ["paper_pages"]), startingBootstrap: true)
+        let reopened = try ReplicaStore(url: url)
+        XCTAssertEqual(try reopened.paperPages(paperID: paperID).map(\.id), ids)
+        let deleted = SyncChange(revision: 500, collection: "paper_pages", id: ids[0], deleted: true, data: nil)
+        try reopened.apply(SyncPage(protocolVersion: 1, epoch: epoch, mode: "delta", changes: [deleted],
+                                   hasMore: false, cursor: "papers-deleted", collections: ["paper_pages"]), startingBootstrap: false)
+        XCTAssertEqual(try reopened.paperPages(paperID: paperID).map(\.id), Array(ids.dropFirst()))
+    }
+
     func testTombstoneRemovesSearchResultWithoutLosingRevision() throws {
         try store.apply(page([record(content: "river")]), startingBootstrap: true)
         try store.apply(page([record(2, deleted: true)], mode: "delta"), startingBootstrap: false)

@@ -37,7 +37,11 @@ public struct SyncChange: Codable, Equatable, Identifiable {
     public let data: [String: JSONValue]?
 
     public var title: String {
-        data?["title"]?.string ?? data?["name"]?.string ?? data?["content"]?.string ?? collection
+        if collection == "newspaper_frontpages" {
+            let label = [data?["paper"]?.string, data?["date"]?.string].compactMap { $0 }.joined(separator: " · ")
+            return label.isEmpty ? "Front page" : label
+        }
+        return data?["title"]?.string ?? data?["name"]?.string ?? data?["content"]?.string ?? collection
     }
 }
 

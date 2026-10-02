@@ -21,13 +21,19 @@ public final class ReplicaStore {
             try execute("PRAGMA journal_mode=WAL")
             try execute("PRAGMA synchronous=FULL")
             let version = Int(try rows("PRAGMA user_version").first?.first ?? "0") ?? 0
-            guard version <= 1 else { throw ReplicaError.database("This database needs a newer app.") }
+            guard version <= 2 else { throw ReplicaError.database("This database needs a newer app.") }
             try transaction {
                 try execute("CREATE TABLE IF NOT EXISTS replica_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
                 try execute("CREATE TABLE IF NOT EXISTS replica_records(collection TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL,payload TEXT,PRIMARY KEY(collection,id))")
                 try execute("CREATE TABLE IF NOT EXISTS replica_outbox(id TEXT PRIMARY KEY,operation TEXT NOT NULL,original TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',error TEXT,conflict TEXT)")
                 try execute("CREATE VIRTUAL TABLE IF NOT EXISTS replica_search USING fts5(collection UNINDEXED,id UNINDEXED,title,body)")
-                try execute("PRAGMA user_version=1")
+                if version < 2 {
+                    for record in try recordsQuery("WHERE collection='newspaper_frontpages' AND deleted=0", []) {
+                        try execute("UPDATE replica_search SET title=? WHERE collection=? AND id=?",
+                                    [record.title, record.collection, record.id])
+                    }
+                }
+                try execute("PRAGMA user_version=2")
             }
         } catch { sqlite3_close(db); db = nil; throw error }
     }
@@ -101,6 +107,14 @@ public final class ReplicaStore {
         guard ["ficId", "paperId", "pageId", "entryId", "conversationId"].contains(field) else { throw ReplicaError.invalidPage }
         return try recordsQuery("WHERE collection=? AND deleted=0 AND json_extract(payload,?)=? ORDER BY revision",
                                 [collection, "$." + field, value])
+    }
+
+    public func paperPages(paperID: String) throws -> [SyncChange] {
+        try relatedRecords(collection: "paper_pages", field: "paperId", value: paperID).sorted {
+            let left = $0.data?["position"]?.number ?? 0
+            let right = $1.data?["position"]?.number ?? 0
+            return left == right ? $0.id < $1.id : left < right
+        }
     }
 
     public func queue(record: SyncChange, data: [String: JSONValue], delete: Bool = false) throws -> ReplicaOperation {

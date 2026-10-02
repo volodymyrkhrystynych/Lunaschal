@@ -417,6 +417,14 @@ Native compilation and existing simulator regressions passed. The Knowledge
 reader itself has not yet been driven by a dedicated UI test or checked on a
 physical device.
 
+Paper documents and newspaper front pages now have searchable Library sections
+with Load more controls. Paper documents open read-only saved previews in page
+order, including documents longer than 200 pages; this does not convert or
+overwrite server ink. Newspaper search indexes migrate existing downloaded
+records without a server request. Two portable regressions cover ordering,
+document isolation, tombstones, and search migration with preserved cursors.
+Local Swift validation passes 78 tests. Native verification is pending.
+
 ### M5 — PencilKit drawing and annotations
 
 Prototype this early, alongside M0–M2, because drawing quality is a primary

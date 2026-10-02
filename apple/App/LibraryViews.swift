@@ -78,6 +78,7 @@ struct LibraryView: View {
                     Button("Load more books (\(results.count) of \(bookCount))") { bookLimit += 200; refreshRecords() }
                 }
             }
+            PaperLibrarySections(model: model, query: query)
             Section("Knowledge articles") {
                 ForEach(articles) { article in
                     NavigationLink { KnowledgeArticleView(article: article) } label: {
