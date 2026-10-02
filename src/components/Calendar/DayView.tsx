@@ -8,6 +8,7 @@ import {
   MIN_DURATION_MINUTES,
   MINUTES_PER_DAY,
   computeOverlapDepth,
+  eventDurationMinutes,
   minutesToTime,
   offsetFromWallMinutes,
   offsetIsAfterMidnight,
@@ -120,7 +121,7 @@ export function DayView({
       // ending at 00:30 has an end offset smaller than its start, and only the
       // duration survives the wrap intact.
       const duration = event.endTime
-        ? timeToMinutes(event.endTime) - wallStart
+        ? eventDurationMinutes(event.time!, event.endTime)
         : DEFAULT_EVENT_DURATION_MINUTES;
       return {
         event,

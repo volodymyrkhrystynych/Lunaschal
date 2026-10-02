@@ -80,6 +80,15 @@ export function minutesToTime(minutes: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+/** Length of an event from its 'HH:MM' start and end. An end clock at or
+ * before the start means the event ran past midnight — 21:20 to 00:30 is
+ * 190 minutes, not -1250 — which is how the API stores any event that
+ * crosses midnight (validate_event wraps it the same way). */
+export function eventDurationMinutes(time: string, endTime: string): number {
+  const duration = timeToMinutes(endTime) - timeToMinutes(time);
+  return duration > 0 ? duration : duration + MINUTES_PER_DAY;
+}
+
 export function snapMinutes(
   minutes: number,
   step: number = SNAP_MINUTES

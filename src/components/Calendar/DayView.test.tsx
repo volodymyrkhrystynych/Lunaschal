@@ -267,6 +267,48 @@ describe('the 4am-to-4am timeline', () => {
     });
   });
 
+  it('draws an event that runs past midnight at its full length', async () => {
+    // A 21:20 start stretched to 00:30: the end clock is smaller than the
+    // start, and the line used to collapse to its minimum length.
+    renderDay(sleepDay(), {
+      [DATE]: [
+        {
+          id: 'h',
+          title: 'Late evening',
+          date: DATE,
+          time: '21:20',
+          endTime: '00:30',
+        },
+      ],
+    });
+    await screen.findByText('Late evening');
+    expect(blockFor('Late evening')!.style.top).toBe('1040px');
+    expect(blockFor('Late evening')!.style.height).toBe('190px');
+  });
+
+  it('keeps the past-midnight length when such an event is moved', async () => {
+    vi.mocked(api.calendar.update).mockResolvedValue({ success: true });
+    renderDay(sleepDay(), {
+      [DATE]: [
+        {
+          id: 'i',
+          title: 'Late evening',
+          date: DATE,
+          time: '21:20',
+          endTime: '00:30',
+        },
+      ],
+    });
+    await screen.findByText('Late evening');
+    dragBy('Late evening', 30);
+
+    await waitFor(() => expect(api.calendar.update).toHaveBeenCalled());
+    expect(api.calendar.update).toHaveBeenCalledWith('i', {
+      time: '21:50',
+      endTime: '01:00',
+    });
+  });
+
   it('labels midnight in the middle of the grid rather than the top', async () => {
     renderDay();
     await waitFor(() => expect(api.calendar.sleep.get).toHaveBeenCalled());
