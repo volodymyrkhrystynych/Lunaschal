@@ -3,6 +3,7 @@ import {
   DAY_START_MINUTES,
   DISPLAY_HOURS,
   computeOverlapDepth,
+  eventDurationMinutes,
   offsetFromWallMinutes,
   offsetIsAfterMidnight,
   wallMinutesFromOffset,
@@ -42,6 +43,23 @@ describe('timeToMinutes / minutesToTime', () => {
   it('clamps minutesToTime to the day', () => {
     expect(minutesToTime(-10)).toBe('00:00');
     expect(minutesToTime(MINUTES_PER_DAY + 100)).toBe('23:59');
+  });
+});
+
+describe('eventDurationMinutes', () => {
+  it('is the plain difference within one calendar date', () => {
+    expect(eventDurationMinutes('09:20', '09:40')).toBe(20);
+  });
+
+  it('wraps an end clock past midnight onto the next date', () => {
+    // 21:20 to 00:30 is the shape a late evening stretched past midnight
+    // takes; read as a plain difference it was -1250 and drew as a stub.
+    expect(eventDurationMinutes('21:20', '00:30')).toBe(190);
+    expect(eventDurationMinutes('23:00', '00:00')).toBe(60);
+  });
+
+  it('reads an end equal to the start as a whole day, not zero', () => {
+    expect(eventDurationMinutes('04:00', '04:00')).toBe(MINUTES_PER_DAY);
   });
 });
 

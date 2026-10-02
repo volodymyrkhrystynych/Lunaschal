@@ -22,6 +22,7 @@ import {
   scrollFraction,
   scrollTopForFraction,
 } from '../../lib/fanficBookmarks';
+import { useReadingSpans } from './useReadingSpans';
 import {
   useShortcuts,
   useShortcutScope,
@@ -164,6 +165,7 @@ export function Reader({ ficId, initialChapterId, onBack }: ReaderProps) {
   // the registered mutation defaults (keyed off ficId in the variables).
   const saveProgress = useFanficProgress();
   const setRead = useFanficSetRead();
+  useReadingSpans(ficId, isPdf ? null : (chapterId ?? null), contentRef);
 
   useEffect(() => {
     if (chapterId) {

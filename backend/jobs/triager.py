@@ -192,6 +192,9 @@ _TRIAGEABLE = (
     " triage_state='pending' AND dismissed=0 AND triage_error IS NULL"
     " AND length(description) > 0"
     ' AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id = jobs.id)'
+    # An archived posting has left the feed (see backend/jobs/archive.py);
+    # judging it would spend the model on something nobody will look at.
+    ' AND archived_at IS NULL'
 )
 
 

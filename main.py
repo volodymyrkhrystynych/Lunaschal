@@ -180,11 +180,14 @@ else:
 
 def _run_flask():
     from backend.app import create_app
+    from backend.serving import serve
     host = '0.0.0.0' if _NETWORK_MODE else '127.0.0.1'
     app = create_app()
     cert, key = os.environ.get('VITE_HTTPS_CERT'), os.environ.get('VITE_HTTPS_KEY')
     ssl_context = (cert, key) if _NETWORK_MODE and cert and key else None
-    app.run(host=host, port=FLASK_PORT, use_reloader=False, ssl_context=ssl_context)
+    # Not app.run(): its server handshakes TLS on the accept thread, so one
+    # stalled client hangs every connection after it (see backend/serving.py).
+    serve(app, host, FLASK_PORT, ssl_context=ssl_context)
 
 
 def _wait_for_flask(url: str = _HEALTH_URL, timeout: float = 10.0) -> bool:
