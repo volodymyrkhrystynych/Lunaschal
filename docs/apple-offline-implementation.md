@@ -48,6 +48,13 @@ Persistent file availability and corrupt-partial budget recovery (`80ea01c`) pas
 [hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36800042127):
 73 Linux / 74 macOS core tests, seven native regression tests, and Watch compilation.
 
+Offline browsing beyond 200 records (`0fe5f32`) passed
+[hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36852919670):
+75 Linux / 76 macOS core tests, seven native regression tests, and Watch compilation.
+The Knowledge reader (`e4b5ffd`) then passed
+[hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37075943078):
+76 Linux / 77 macOS core tests, seven native regression tests, and Watch compilation.
+
 | Milestone                                      | Status                                    | Completion evidence still needed                                  |
 | ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
 | M0 — Build and distribution                    | Unsigned builds and UI tests passed       | Signing, TestFlight installation                                  |
@@ -402,7 +409,9 @@ previously saved articles. The reader renders stored text without fetching
 embedded images or pages. Markdown formatting, ZIM browsing, and article editing
 remain outside this reader. A replica regression covers cold reopen, article-body
 search, preservation when another collection is refreshed, and scoped deletion.
-Native verification for the new reader is pending.
+Native compilation and existing simulator regressions passed. The Knowledge
+reader itself has not yet been driven by a dedicated UI test or checked on a
+physical device.
 
 ### M5 — PencilKit drawing and annotations
 
@@ -588,6 +597,14 @@ These are staged decisions, not reasons to pause unrelated implementation.
 | 2026-09-29 | Drawing import, `1e8b624`                               | [Hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616): 37 Linux / 38 Mac core tests, four native import tests, two relaunch tests, Watch build | Source bytes preserved; blank imports rejected; Files-provider and Pencil hardware checks pending |
 
 ### Implementation entry points
+
+Knowledge reader verification (2026-10-02, `e4b5ffd`): local and hosted Linux Swift
+tests passed 76 cases; hosted macOS passed 77. The new regression proves that
+article content remains searchable and readable after reopening and refreshing
+another collection, and that deletion is scoped to Knowledge. Hosted native
+checks passed five drawing/PDF tests, two offline relaunch tests, and the Watch
+build ([CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37075943078)).
+No backend changes, signing, or production deployment were included.
 
 Media availability verification (2026-10-01, `9d72cc5` and `80ea01c`):
 local Swift tests passed 73 cases; hosted Linux passed 73 and macOS 74.

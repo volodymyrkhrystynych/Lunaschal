@@ -150,9 +150,9 @@ publicly to make CI work: simulator capture tests never contact it.
   termination, the manifest is marked interrupted; the audio is retained for
   playback/export and explicit recovery. An AAC container killed before
   finalization may not be playable. We do not claim crash-proof in-flight audio.
-- Journal, book, and document lists initially show 200 records, with Load more
+- Journal, book, document, and Knowledge lists initially show 200 records, with Load more
   controls to reveal further records already stored on the device. Library search
-  filters both books and documents and can expand beyond 200 matches. Counts and
+  filters books, documents, and Knowledge articles and can expand beyond 200 matches. Counts and
   results share the same filter and stable revision/ID ordering. Loading more
   does not contact the server. Attachment imports remain outstanding.
 - Downloads currently require the app to remain active. Partial files resume
