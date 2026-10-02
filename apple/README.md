@@ -98,6 +98,7 @@ swift test --package-path apple/LunaschalCore
 On a Mac with Xcode 26 or newer and XcodeGen:
 
 ```sh
+swift apple/tools/make_icons.swift
 xcodegen generate --spec apple/project.yml
 xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
   -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
@@ -121,9 +122,10 @@ the file locally does not run CI.
 
 The bundle ID `com.lunaschal.mobile` is a starting value. Before a signed build,
 choose/register the actual bundle ID in the user's Apple team, supply the team
-ID, add app icons, and configure distribution signing and App Store Connect
-credentials in CI secrets. Then add an explicitly triggered TestFlight release
-workflow; see [signing and first installation](SIGNING.md). No signing credentials belong in project files. The 2015 Monterey
+ID, review the generated app icons, and configure distribution signing and App
+Store Connect credentials in the release environment. The manual release
+workflow exports by default and uploads only when explicitly selected; see
+[signing and first installation](SIGNING.md). No signing credentials belong in project files. The 2015 Monterey
 MacBook is not required by this build route.
 
 For development login, the server must run with network-mode authentication

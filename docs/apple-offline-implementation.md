@@ -160,7 +160,11 @@ milestones.
 - [ ] Select/register the final bundle identifier and supply the Apple team ID.
 - [ ] Add app icons and required distribution metadata.
 - [ ] Configure signing certificates/profiles and App Store Connect access as secrets.
-- [ ] Add an explicitly triggered signed archive/TestFlight release workflow.
+- [x] Add an explicitly triggered signed archive/TestFlight release workflow.
+      It gates on successful Apple CI for the exact SHA, validates both distribution
+      profiles, uses a temporary keychain, exports by default, and uploads only when
+      explicitly selected. Signing credentials and a real signed run remain pending;
+      this does not establish device installation or App Store acceptance.
 - [ ] Install a build on the iPhone and iPad and record the build identifier.
 - [ ] Establish reproducible toolchain versions and a signing-renewal procedure.
 

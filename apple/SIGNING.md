@@ -29,10 +29,41 @@ and [Watch companion identifier](https://developer.apple.com/documentation/bundl
 
 ## Hosted signing setup
 
-The release workflow is still outstanding. Its intended contract is a manual
-dispatch for a specific tested commit, separate from the unsigned pull-request
-checks. An archive/export run should be possible without publishing; TestFlight
-upload should be an explicit release choice.
+The [release workflow](../.github/workflows/apple-release.yml) accepts a full
+commit SHA and unique build number. That exact commit must have passed the
+Apple app workflow on a trusted push or manual run. Upload defaults to false:
+an archive/export run produces a signed IPA artifact retained for seven days.
+Choosing `upload_to_testflight` separately uploads it for App Store Connect
+processing; it does not select testers or publish an App Store release.
+
+The workflow must be present on the default branch before GitHub exposes its
+manual dispatch. Merging it and running a release remain separate authorized
+actions. No signed run has been performed yet.
+
+Configure a GitHub environment named `apple-release`, restrict its deployment
+branches to trusted release branches, and require your review before it receives
+credentials. Set environment variable `APPLE_TEAM_ID` and these environment
+secrets (base64 values must be a single unwrapped line):
+
+- `APPLE_DISTRIBUTION_P12_BASE64` and `APPLE_DISTRIBUTION_P12_PASSWORD`.
+- `APPLE_IOS_PROFILE_BASE64` and `APPLE_WATCH_PROFILE_BASE64`: App Store
+  distribution profiles using the same certificate.
+- For upload only: `APPSTORECONNECT_API_KEY_P8_BASE64`,
+  `APPSTORECONNECT_KEY_ID`, and `APPSTORECONNECT_ISSUER_ID`.
+
+The runner validates profile expiry, exact identifiers, distribution type, and
+the common installed signing identity before archiving. Each target selects its
+own profile. Credentials live in a temporary keychain and temporary files;
+an always-run cleanup removes them and installed profiles. Use GitHub-hosted
+ephemeral runners for this workflow. Do not change it to a persistent runner
+without reviewing keychain restoration and cleanup after cancellation.
+
+`apple/tools/release.py` validates the provisional bundle IDs below; update its
+`BUNDLES` constant alongside `project.yml` if final IDs differ. The build number
+uses Apple's numeric major/minor/patch shape (up to 4/2/2 digits); choose a new
+number for each uploaded build. Simulator CI also builds an unsigned Release
+archive, but that cannot verify your certificates, profile entitlements, export,
+or App Store Connect acceptance.
 
 Signing needs an Apple Distribution identity and App Store Connect provisioning
 profiles matching the app and Watch identifiers, or an authenticated Xcode
@@ -55,8 +86,8 @@ configuration; it is not a private signing key.
 ## First device build checklist
 
 - Register final app identifiers and supply the Team ID.
-- Supply app icons and required app/distribution metadata.
-- Implement and verify the manually triggered signing/archive workflow.
+- Review the generated app icons and supply required app/distribution metadata.
+- Verify the manually triggered signing/archive workflow with real credentials.
 - Configure its signing and upload credentials.
 - Export a signed archive from the same code that passed native CI.
 - Explicitly upload the chosen build to TestFlight and wait for processing.

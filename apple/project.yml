@@ -23,8 +23,15 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: '0.1.0'
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          DEVELOPMENT_TEAM: $(APPLE_TEAM_ID)
+          CODE_SIGN_IDENTITY: $(APPLE_SIGNING_IDENTITY)
+          PROVISIONING_PROFILE_SPECIFIER: $(LUNASCHAL_IOS_PROFILE_UUID)
     info:
       path: Generated/Info.plist
       properties:
@@ -56,9 +63,16 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lunaschal.mobile.watchkitapp
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CURRENT_PROJECT_VERSION: 1
         MARKETING_VERSION: '0.1.0'
         TARGETED_DEVICE_FAMILY: '4'
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          DEVELOPMENT_TEAM: $(APPLE_TEAM_ID)
+          CODE_SIGN_IDENTITY: $(APPLE_SIGNING_IDENTITY)
+          PROVISIONING_PROFILE_SPECIFIER: $(LUNASCHAL_WATCH_PROFILE_UUID)
     info:
       path: Generated/Watch-Info.plist
       properties:
