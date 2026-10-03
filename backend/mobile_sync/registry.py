@@ -15,6 +15,7 @@ COLLECTIONS = {
     'fic_bookmarks': 'id fic_id chapter_id type scroll_position created_at',
     'papers': 'id title archive_requested_at content_updated_at created_at updated_at',
     'paper_pages': 'id paper_id position strokes width height created_at updated_at',
+    'paper_native_ink': 'id format sha256 preview_sha256 created_at updated_at',
     'paper_page_images': 'id page_id x y width height rotation flipped locked position created_at updated_at',
     'study_sources': 'id title kind source_url content_type size_bytes duration_seconds import_status last_opened_at position paper_id note_mode archive_requested_at created_at updated_at',
     'newspaper_issues': 'id date byte_size page_count markup revision last_read_at created_at',

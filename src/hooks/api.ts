@@ -2401,6 +2401,8 @@ export interface PaperPageImage {
 }
 
 export interface PaperPageContent {
+  nativeInk?: boolean;
+  imageUrl?: string | null;
   strokes: string;
   width: number | null;
   height: number | null;

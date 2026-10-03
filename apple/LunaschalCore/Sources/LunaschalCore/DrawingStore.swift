@@ -1,6 +1,6 @@
 import Foundation
 
-public struct DrawingPage: Codable, Identifiable, Equatable {
+public struct DrawingPage: Codable, Identifiable, Hashable {
     public let id: String
     public var title: String
     public let createdAt: Date
@@ -8,7 +8,11 @@ public struct DrawingPage: Codable, Identifiable, Equatable {
     public var checkpoint: String?
 
     public init(title: String, now: Date = Date()) {
-        id = ULID.make(now: now)
+        self.init(id: ULID.make(now: now), title: title, now: now)
+    }
+
+    init(id: String, title: String, now: Date = Date()) {
+        self.id = id
         self.title = title
         createdAt = now
         updatedAt = now
@@ -66,6 +70,13 @@ public final class DrawingStore {
         let preview = try makePreview(native)
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         return try publish(DrawingPage(title: trimmed.isEmpty ? "Imported drawing" : trimmed), native: native, preview: preview)
+    }
+
+    /// Import once under its server identity. Never replace a local draft.
+    public func importServerDrawing(id: String, title: String, native: Data, preview: Data) throws -> DrawingPage {
+        let file = try manifest(id)
+        guard !fm.fileExists(atPath: file.path) else { throw ReplicaError.editAlreadyPending }
+        return try publish(DrawingPage(id: id, title: title), native: native, preview: preview)
     }
 
     private func publish(_ original: DrawingPage, native: Data, preview: Data) throws -> DrawingPage {

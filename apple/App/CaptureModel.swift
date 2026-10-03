@@ -27,6 +27,7 @@ final class CaptureModel: ObservableObject {
     let store: CaptureStore
     let replica: ReplicaStore
     let drawings: DrawingStore
+    let drawingPublications: DrawingPublicationStore
     let uploads: RecordingUploadStore
     let transfers: TransferStore
     let media: MediaStore
@@ -45,6 +46,7 @@ final class CaptureModel: ObservableObject {
         uploads = try RecordingUploadStore(root: store.root.appendingPathComponent("recording-uploads", isDirectory: true))
         transfers = try TransferStore(root: store.root.appendingPathComponent("transfer-state", isDirectory: true))
         drawings = try DrawingStore(root: store.root.appendingPathComponent("drawings", isDirectory: true))
+        drawingPublications = try DrawingPublicationStore(root: store.root.appendingPathComponent("drawing-publications", isDirectory: true))
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         recorder = Recorder(store: store)
@@ -164,7 +166,8 @@ final class CaptureModel: ObservableObject {
 
     func nextBackgroundSync() throws -> Date? {
         try BackgroundSyncPlan.next(captures: store.list(), attempts: transfers.all(),
-            hasEdits: replica.edits().contains { $0.state == "pending" }, signedIn: signedIn,
+            hasEdits: replica.edits().contains { $0.state == "pending" }
+                || drawingPublications.all().contains { $0.state == "pending" }, signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
 
@@ -201,6 +204,11 @@ final class CaptureModel: ObservableObject {
                 "journal_entries", "journal_attachments", "fics", "study_sources",
                 "papers", "conversations", "knowledge_archives",
             ])
+            for publication in try drawingPublications.all() where publication.state == "pending" {
+                try Task.checkCancellation()
+                let reply = try await api.publishDrawing(publication, store: drawingPublications)
+                try drawingPublications.receive(reply, for: publication)
+            }
             let retry = try transfers.all().compactMap(\.retryAt).min()
             syncMessage = retry.map { "Uploads will retry after \($0.formatted(date: .omitted, time: .shortened))." }
             return true
@@ -230,7 +238,7 @@ final class CaptureModel: ObservableObject {
             let api = try JournalAPI(server: server, token: token, allowCellular: false)
             libraryAPI = api
             var collections = ["fic_chapters", "fic_folders", "fic_bookmarks", "messages",
-                               "paper_pages", "paper_page_images", "newspaper_issues", "newspaper_frontpages"]
+                               "paper_pages", "paper_native_ink", "paper_page_images", "newspaper_issues", "newspaper_frontpages"]
             if UserDefaults.standard.bool(forKey: "downloadKnowledge") { collections.append("wiki_articles") }
             try await librarySyncer.run(using: api, collections: collections, sendEdits: false)
             let gigabytes = max(1, UserDefaults.standard.integer(forKey: "libraryBudgetGB") == 0

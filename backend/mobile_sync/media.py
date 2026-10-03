@@ -25,6 +25,7 @@ def _fic_pdf_path(fic_id):
 MEDIA = {
     'journal_attachments': ('path', journal.resolve_stored_path),
     'paper_pages': ('image_path', paper.resolve_stored_path),
+    'paper_native_ink': ('file_path', paper.resolve_stored_path),
     'paper_page_images': ('file_path', paper.resolve_stored_path),
     'study_sources': ('file_path', study.resolve_stored_path),
     'newspaper_frontpages': ('image_path', newspapers.resolve_stored_path),
@@ -48,6 +49,10 @@ def active_path(collection, row):
     raw = row[column]
     if not raw:
         return None
+    if collection == 'paper_native_ink':
+        original = Path(raw)
+        if original.resolve() != original or original.name != f"native-{row['id']}-{row['sha256']}.drawing":
+            return None
     # Pass the canonical path through the existing root guard too; this also
     # refuses symlinks which escape the allowed storage root.
     path = resolver(raw if collection == 'fics' else str(Path(raw).resolve()))

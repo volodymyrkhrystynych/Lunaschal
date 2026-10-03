@@ -156,6 +156,25 @@ function renderEditor() {
   return { ...view, queryClient };
 }
 
+it('shows native ink as a preview without mounting a writable canvas', async () => {
+  vi.mocked(api.paper.getPage).mockResolvedValue({
+    strokes: '[]',
+    width: 2100,
+    height: 2970,
+    images: [],
+    nativeInk: true,
+    imageUrl: '/saved-native.png',
+  });
+  const { container } = renderEditor();
+  expect(
+    (await screen.findByAltText('Saved native drawing')).getAttribute('src')
+  ).toBe('/saved-native.png');
+  expect(container.querySelector('svg[aria-label="Page"]')).toBeNull();
+  expect(screen.queryByText('💾 Save')).toBeNull();
+  fireEvent.keyDown(window, { key: 's', ctrlKey: true });
+  expect(api.paper.savePage).not.toHaveBeenCalled();
+});
+
 describe('page content cache after a save', () => {
   it("replaces the page's cached content with what was just uploaded", async () => {
     // The bug this pins: the cache entry kept the pre-save copy (empty, for a

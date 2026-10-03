@@ -168,6 +168,19 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try JSONDecoder().decode(MediaCapabilities.self, from: data).supportedCollections
     }
 
+    public func publishDrawing(_ value: DrawingPublication, store: DrawingPublicationStore) async throws -> DrawingReply {
+        guard server == value.server else { throw CaptureError.differentServer }
+        let files = try store.payloads(value)
+        let body = try DrawingMultipart(operation: value.operation, ink: files.ink, preview: files.preview)
+        defer { try? FileManager.default.removeItem(at: body.url) }
+        var req = request("api/mobile/drawings", method: "POST")
+        req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.upload(for: req, fromFile: body.url)
+        guard let http = response as? HTTPURLResponse else { throw CaptureError.invalidResponse }
+        if ![400, 409, 410, 422].contains(http.statusCode) { try check(data, response) }
+        return try JSONDecoder().decode(DrawingReply.self, from: data)
+    }
+
     public func mediaPage(collection: String, after: String) async throws -> MediaPage {
         guard MediaDescriptor.collections.contains(collection) else { throw MediaError.invalidManifest }
         var req = request("api/mobile/media")

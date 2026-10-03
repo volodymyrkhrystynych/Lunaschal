@@ -74,18 +74,18 @@ The merged backend
 baseline passed 57 media, sync, and seeder tests. No production deployment or
 signed release has run.
 
-| Milestone                                      | Status                                    | Completion evidence still needed                                |
-| ---------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------- |
-| M0 — Build and distribution                    | Unsigned builds and UI tests passed       | Signing, TestFlight installation                                |
-| M1 — Offline journal capture                   | Simulator capture/relaunch verified       | Device recording and connection checks                          |
-| M2 — Durable background transfers              | Staging, retries, processing implemented  | Device expiration/recovery; autonomous system transfer design   |
-| M3 — Multi-device data synchronization         | Implemented in part                       | Capture outbox migration, broader mutations, native validation  |
-| M4 — Downloadable library                      | Text and active media implemented in part | Remaining file types, background scheduling, storage refinement |
-| M5 — Native drawing and annotation             | Local PencilKit workspace implemented     | Paper integration, compatibility, and actual iPad validation    |
-| M6 — Mobile navigation and capture integration | Partly implemented                        | Share extension and iPad navigation refinement                  |
-| M7 — Watch recording companion                 | Compiles; core tested                     | Signing and paired-device validation                            |
-| M8 — Optional on-device speech and AI          | Runtime text-model check implemented      | Device readiness, speech, quality and resource measurements     |
-| M9 — Release and recovery readiness            | Guide and replica migrations implemented  | Signed upgrade/restore tests and stable distribution            |
+| Milestone                                      | Status                                            | Completion evidence still needed                                |
+| ---------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------- |
+| M0 — Build and distribution                    | Unsigned builds and UI tests passed               | Signing, TestFlight installation                                |
+| M1 — Offline journal capture                   | Simulator capture/relaunch verified               | Device recording and connection checks                          |
+| M2 — Durable background transfers              | Staging, retries, processing implemented          | Device expiration/recovery; autonomous system transfer design   |
+| M3 — Multi-device data synchronization         | Implemented in part                               | Capture outbox migration, broader mutations, native validation  |
+| M4 — Downloadable library                      | Text and active media implemented in part         | Remaining file types, background scheduling, storage refinement |
+| M5 — Native drawing and annotation             | Native Paper saves and Linux previews implemented | Hosted verification, PDF integration, actual iPad validation    |
+| M6 — Mobile navigation and capture integration | Partly implemented                                | Share extension and iPad navigation refinement                  |
+| M7 — Watch recording companion                 | Compiles; core tested                             | Signing and paired-device validation                            |
+| M8 — Optional on-device speech and AI          | Runtime text-model check implemented              | Device readiness, speech, quality and resource measurements     |
+| M9 — Release and recovery readiness            | Guide and replica migrations implemented          | Signed upgrade/restore tests and stable distribution            |
 
 ### Evidence from the initial implementation
 
@@ -355,7 +355,7 @@ claim that the current foreground uploader follows redirects.
 - [ ] Define safe server-address changes, server restore detection, and account/device reset.
 - [x] Extend server schema/seeding/tests together for any new tables.
 
-**Implemented scope:** 16 allowlisted collections, SQLite FTS5 search, journal
+**Implemented scope:** 17 allowlisted collections, SQLite FTS5 search, journal
 text/title/tag update and deletion operations, explicit conflict preservation,
 and manual sync-log compaction/restore epoch rotation. See the
 [protocol notes](../backend/mobile_sync/README.md). Capture manifests remain
@@ -499,12 +499,12 @@ motivation. Final integration depends on the M3 conflict/storage contract.
 - [ ] Inventory Paper, Study, newspaper/PDF annotations, and their coordinate systems.
 - [ ] Decide the canonical editable format and compatibility strategy for existing ink.
 - [ ] Preserve originals during conversion; document any lossy import/export.
-- [ ] Keep native editable drawings plus portable previews for Linux/web readers.
+- [x] Keep native editable drawings plus portable previews for Linux/web readers.
 - [ ] Decide whether cross-platform editing can be lossless; clearly label any
       read-only or conversion-required paths rather than silently flattening ink.
 - [ ] Preserve A4/page coordinates, page ordering, pasted images, and image transforms.
 - [x] Implement local drawing checkpoints and crash/reopen recovery.
-- [ ] Preserve the existing distinction between local saving and the explicit Paper
+- [x] Preserve the existing distinction between local saving and the explicit Paper
       Save action until deliberately changing that interaction.
 - [ ] Synchronize page revisions with recoverable conflict copies.
 - [ ] Integrate PDF/newspaper annotation and the Study split reading/drawing layout.
@@ -514,11 +514,10 @@ motivation. Final integration depends on the M3 conflict/storage contract.
 survives reopening/sync without losing existing ink or silently changing pages
 on Linux. Do not assume Pencil Pro-only hardware features are available.
 
-**Local prototype:** the Draw tab creates independent A4 PencilKit pages with
+**Local workspace:** the Draw tab creates A4 PencilKit pages with
 atomic native-ink/PNG checkpoints, undo, zoom, and export. Current and previous
-checkpoint generations are retained. It does not modify server Paper documents
-or convert existing web strokes yet; the UI states that drawing sync is not
-available. Six portable persistence tests cover reopening, failed writes,
+checkpoint generations are retained. Explicit Save to Paper now publishes native
+pages; existing web strokes are never converted. Six original portable persistence tests cover reopening, failed writes,
 retention, renaming, previous-version recovery, and manifest identity checks.
 The complete Linux Swift suite now passes 35 tests. PencilKit SDK compilation
 passed; actual Pencil 2 behavior still needs device validation.
@@ -533,6 +532,32 @@ on Linux, 38 on Mac). The first hosted import run caught this silent-empty decod
 the corrected run passed all four native tests covering stroke preservation,
 invalid input, blank ink, and the size limit. Files-provider interaction and
 physical Pencil behavior remain device checks.
+
+**Native Paper synchronization (2026-10-03):** explicit Save freezes a copy of
+both files outside rolling checkpoints. Stable operation IDs, destination binding,
+hash-checked acknowledgements and native-ink revision comparisons protect retries,
+lost replies, same-second edits, deletions and server restore epochs. Conflicts
+retain originals and offer a separate-copy workflow. A new save creates one
+Paper/page; later ink updates preserve the server title and filing flag. Native
+originals are a separate allowlisted `paper_native_ink` collection, with paths
+excluded from replication. Its new table is included in the demo seeder. Changing
+the collection projection deliberately rotates the sync epoch on server startup.
+
+Library downloads include an optional native-ink media collection. Opening a
+native page verifies both hashes before copying it into durable editable storage;
+clean acknowledged copies may refresh, while local drafts and queued saves stay
+untouched. Linux displays a read-only PNG, and server guards reject web stroke or
+picture writes against native pages. Existing web pages stay editable on Linux.
+The server retains current/previous native files, and both files are durable
+before committing the row and replay receipt. A failed transaction can leave an
+unreferenced file, never replace an older referenced original.
+
+Local verification: 93 Swift core tests, 27 Paper editor tests and 105 backend
+Paper/sync/media/seeder tests passed before the final retention/refresh refinements.
+Final checks and hosted Apple SDK validation are pending. Repository-wide
+`tsc --noEmit` reports errors outside the changed feature (including missing
+drizzle-kit/Node/Verovio declarations and existing Chat/Fanfic test fixtures).
+Physical Pencil, multi-device delivery and signed upgrade checks remain open.
 
 ### M6 — Mobile navigation and capture integration
 

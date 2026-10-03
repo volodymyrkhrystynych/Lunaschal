@@ -274,7 +274,8 @@ export function PaperEditor({
     queryKey: ['paper', 'page', currentPage?.id],
     queryFn: () => api.paper.getPage(currentPage!.id),
     enabled: !!currentPage?.id,
-    staleTime: Infinity,
+    // Native pages have no web draft to replace; their preview can refresh.
+    staleTime: query => (query.state.data?.nativeInk ? 0 : Infinity),
   });
 
   // Page saves and picture writes go through the offline queue: paused while the
@@ -308,7 +309,7 @@ export function PaperEditor({
    * staged picture work stays in `staged`, so a failure here loses nothing.
    */
   const commitLocal = async (): Promise<void> => {
-    if (!currentPage) return;
+    if (!currentPage || content?.nativeInk) return;
     try {
       const data = await canvasRef.current?.getSaveData();
       if (data) {
@@ -366,6 +367,7 @@ export function PaperEditor({
    * one lane, so a page's save cannot outrun the page's own creation.
    */
   const saveAll = async (): Promise<boolean> => {
+    if (content?.nativeInk) return false;
     if (savingRef.current) return true;
     savingRef.current = true;
     setSaving(true);
@@ -1047,6 +1049,7 @@ export function PaperEditor({
     });
 
   const addImage = async (file: Blob, filename?: string) => {
+    if (content?.nativeInk) return;
     if (!currentPage) return;
     const name = filename ?? pastedFilename(file.type);
     if (!name) {
@@ -1231,6 +1234,53 @@ export function PaperEditor({
     active
       ? 'px-3 py-1.5 rounded-md text-sm font-medium transition-colors bg-[var(--color-primary)] text-[var(--color-bg)]'
       : btn;
+
+  if (content?.nativeInk) {
+    return (
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex gap-2 items-center p-3">
+          {!embedded && (
+            <button className={btn} onClick={handleBack}>
+              ‹ Back
+            </button>
+          )}
+          <button
+            className={btn}
+            disabled={currentIndex === 0}
+            onClick={() => navigate('prev')}
+          >
+            Previous page
+          </button>
+          <span>
+            {currentIndex + 1} / {pages.length}
+          </span>
+          <button
+            className={btn}
+            disabled={currentIndex >= pages.length - 1}
+            onClick={() => navigate('next')}
+          >
+            Next page
+          </button>
+        </div>
+        <p className="px-3 pb-3 text-sm">
+          Native drawing — saved preview. Edit the original in the Apple app.
+        </p>
+        <div className="flex-1 overflow-auto bg-neutral-200 p-3">
+          {content.imageUrl ? (
+            <img
+              src={content.imageUrl}
+              alt="Saved native drawing"
+              className="mx-auto max-w-full bg-white"
+            />
+          ) : (
+            <p>
+              Preview unavailable. The original drawing is kept on the server.
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">

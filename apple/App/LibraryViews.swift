@@ -22,6 +22,7 @@ struct LibraryView: View {
     @AppStorage("download-journal_attachments") private var journalMedia = true
     @AppStorage("download-study_sources") private var studyMedia = true
     @AppStorage("download-paper_pages") private var paperPreviews = true
+    @AppStorage("download-paper_native_ink") private var nativeInk = true
     @AppStorage("download-paper_page_images") private var paperImages = true
     @AppStorage("download-newspaper_frontpages") private var frontpages = true
     @AppStorage("download-fics") private var pdfBooks = true
@@ -48,6 +49,7 @@ struct LibraryView: View {
                 Toggle("Journal attachments", isOn: $journalMedia)
                 Toggle("Study documents", isOn: $studyMedia)
                 Toggle("Paper previews", isOn: $paperPreviews)
+                Toggle("Editable native drawings", isOn: $nativeInk)
                 Toggle("Pictures on paper pages", isOn: $paperImages)
                 Toggle("Newspaper front pages", isOn: $frontpages)
                 Toggle("Knowledge articles", isOn: $knowledge)

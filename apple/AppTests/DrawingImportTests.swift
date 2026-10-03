@@ -35,6 +35,7 @@ final class DrawingImportTests: XCTestCase {
         XCTAssertEqual(restored.strokes[0].path[0].location, points[0].location)
         let preview = try Data(contentsOf: XCTUnwrap(store.previewURL(page)))
         XCTAssertNotNil(UIImage(data: preview))
+        XCTAssertEqual(UIImage(data: preview)?.size, CGSize(width: 1240, height: 1754))
     }
 
     func testInvalidInkLeavesSourceAndLibraryUntouched() throws {

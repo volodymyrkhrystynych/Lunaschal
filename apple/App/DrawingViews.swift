@@ -13,7 +13,7 @@ struct DrawingLibraryView: View {
     var body: some View {
         List {
             Section {
-                Text("Drawings are saved on this device. Export originals for backup; drawing sync is not available yet.")
+                Text("Drawing autosave stays on this device. Save to Paper queues a copy for your server; Linux shows its preview. Export originals for an extra backup.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Button("New drawing", systemImage: "plus") {
                     do { _ = try model.drawings.create(); reload() }
@@ -24,10 +24,11 @@ struct DrawingLibraryView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             ForEach(pages) { page in
-                NavigationLink { DrawingEditor(store: model.drawings, page: page) } label: {
+                NavigationLink { DrawingEditor(owner: model, page: page) } label: {
                     VStack(alignment: .leading) {
                         Text(page.title)
                         Text(page.updatedAt, format: .dateTime.month().day().hour().minute()).font(.caption)
+                        Text(publicationStatus(page)).font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 .contextMenu {
@@ -37,6 +38,7 @@ struct DrawingLibraryView: View {
         }
         .navigationTitle("Drawings")
         .onAppear { reload() }
+        .onChange(of: model.syncing) { _, _ in reload() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.data]) { result in
             do {
                 let url = try result.get()
@@ -60,6 +62,13 @@ struct DrawingLibraryView: View {
     private func reload() {
         do { pages = try model.drawings.pages() }
         catch { model.message = error.localizedDescription }
+    }
+
+    private func publicationStatus(_ page: DrawingPage) -> String {
+        guard let publication = try? model.drawingPublications.publication(page.id) else { return "On this device" }
+        if publication.state == "conflict" { return publication.error ?? "Save conflict · original kept" }
+        if publication.state == "pending" { return "Queued for Paper" }
+        return publication.checkpoint == page.checkpoint ? "Saved to Paper" : "Local changes · Save to publish"
     }
 }
 
@@ -162,17 +171,32 @@ private final class DrawingEditorModel: ObservableObject {
     }
 }
 
-private struct DrawingEditor: View {
+struct DrawingEditor: View {
+    @ObservedObject var owner: CaptureModel
     @StateObject private var model: DrawingEditorModel
     @Environment(\.scenePhase) private var phase
+    @State private var publicationError: String?
 
-    init(store: DrawingStore, page: DrawingPage) {
-        _model = StateObject(wrappedValue: DrawingEditorModel(store: store, page: page))
+    init(owner: CaptureModel, page: DrawingPage) {
+        self.owner = owner
+        _model = StateObject(wrappedValue: DrawingEditorModel(store: owner.drawings, page: page))
     }
 
     var body: some View {
         VStack(spacing: 0) {
             Text(model.status).font(.caption).frame(maxWidth: .infinity).padding(6)
+            if let publicationError {
+                Text(publicationError).font(.footnote).foregroundStyle(.red).padding()
+                Button("Keep my drawing as a new copy") {
+                    model.checkpoint()
+                    guard model.error == nil else { return }
+                    do {
+                        _ = try owner.drawings.importDrawing(title: model.page.title + " (copy)",
+                            native: model.canvas.drawing.dataRepresentation()) { _ in try DrawingImport.preview(model.canvas.drawing) }
+                        self.publicationError = "A separate copy is in Drawings. Open it and Save to Paper when ready. The conflicting copy is kept."
+                    } catch { self.publicationError = error.localizedDescription }
+                }
+            }
             if let error = model.error {
                 Text(error).foregroundStyle(.red).padding()
                 Button("Restore previous saved version") { model.restorePrevious() }
@@ -184,12 +208,29 @@ private struct DrawingEditor: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button("Undo", systemImage: "arrow.uturn.backward") { model.canvas.undoManager?.undo() }
                 Button("Save locally") { model.checkpoint() }
+                Button("Save to Paper") {
+                    model.checkpoint()
+                    guard model.error == nil else { return }
+                    do {
+                        guard let server = owner.server, let epoch = try owner.replica.epoch else { throw ReplicaError.needsBootstrap }
+                        let publication = try owner.drawingPublications.queue(model.page, drawings: owner.drawings, server: server, epoch: epoch)
+                        model.status = publication.state == "synced" ? "Saved to Paper" : "Queued for Paper · local ink kept"
+                        owner.requestSync()
+                        publicationError = nil
+                    } catch { publicationError = error.localizedDescription }
+                }
                 if let url = try? model.store.nativeURL(model.page) { ShareLink("Export editable ink", item: url) }
                 if let url = try? model.store.previewURL(model.page) { ShareLink("Export PNG", item: url) }
             }
         }
         .onDisappear { model.checkpoint() }
         .onChange(of: phase) { _, value in if value != .active { model.checkpoint() } }
+        .onChange(of: owner.syncing) { _, syncing in
+            if !syncing, let publication = try? owner.drawingPublications.publication(model.page.id) {
+                if publication.state == "conflict" { publicationError = publication.error }
+                else if publication.state == "synced", publication.checkpoint == model.page.checkpoint { model.status = "Saved to Paper" }
+            }
+        }
     }
 }
 

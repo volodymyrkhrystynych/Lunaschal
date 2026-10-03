@@ -1084,6 +1084,18 @@ CREATE TABLE IF NOT EXISTS paper_pages (
 
 CREATE INDEX IF NOT EXISTS idx_paper_pages_paper ON paper_pages(paper_id, position);
 
+-- Opaque PencilKit originals are separate from web strokes. Native pages are
+-- preview-only in the web editor; neither representation overwrites the other.
+CREATE TABLE IF NOT EXISTS paper_native_ink (
+    id TEXT PRIMARY KEY REFERENCES paper_pages(id) ON DELETE CASCADE,
+    format TEXT NOT NULL CHECK (format = 'pencilkit-v1'),
+    file_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    preview_sha256 TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
 -- A picture pasted onto a page. The file lives on disk beside the page's
 -- snapshot (never as a blob); this row is only its placement. Geometry is in
 -- the page's A4 coordinate space, the same one strokes use — see src/lib/paper.ts.

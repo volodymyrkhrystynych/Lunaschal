@@ -1,9 +1,12 @@
+import json
+
 from flask import Blueprint, jsonify, request, send_file
 
 from backend.mobile_sync.feed import PROTOCOL_VERSION, ResetRequired, page
 from backend.mobile_sync.registry import COLLECTIONS
 from backend.mobile_sync.operations import apply
 from backend.mobile_sync import media
+from backend.mobile_sync import drawings
 
 bp = Blueprint('mobile_sync', __name__, url_prefix='/api/mobile')
 
@@ -13,7 +16,18 @@ def capabilities():
     return jsonify({'protocolVersion': PROTOCOL_VERSION, 'collections': list(COLLECTIONS),
                     'captureTimestamp': True, 'maxPageSize': 200,
                     'editableCollections': ['journal_entries'],
-                    'mediaCollections': list(media.MEDIA)})
+                    'mediaCollections': list(media.MEDIA), 'nativeDrawingFormat': 'pencilkit-v1'})
+
+
+@bp.post('/drawings')
+def save_drawing():
+    request.max_content_length = drawings.MAX_REQUEST
+    try:
+        body = json.loads(request.form.get('metadata', 'null'))
+        result, status = drawings.apply(body, request.files.get('ink'), request.files.get('preview'))
+        return jsonify(result), status
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
 
 @bp.get('/media')

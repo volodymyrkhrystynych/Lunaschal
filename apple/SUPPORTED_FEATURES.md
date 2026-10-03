@@ -6,24 +6,24 @@ structure, and selected simulator behaviors; none of the user's physical devices
 has been validated. Exact commits and CI results are recorded in the
 [implementation tracker](../docs/apple-offline-implementation.md).
 
-| Feature                                   | iPhone and iPad                                                                     | Watch Series 7                                    | Connection needed                                        |
-| ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------- |
-| Typed journal capture                     | Saved locally with unfinished draft                                                 | Not exposed                                       | Upload later                                             |
-| Record / Transcribe                       | Original audio retained; server supplies transcription                              | Durable recording and queued phone handoff        | Phone for handoff; server for upload/transcription       |
-| YouTube link and commentary               | Offline capture; metadata/import queued                                             | Not exposed                                       | Server for import; archived video is not downloaded      |
-| Historical Journal                        | Download, search, text edits/deletion, explicit conflicts, attachment readers       | Not exposed                                       | Sync; downloaded entries read offline                    |
-| Books and Study documents                 | Text chapters, PDFs, stored articles, image/audio/video readers                     | Not exposed                                       | Explicit Wi-Fi download before offline reading           |
-| Reading position                          | Device-local paragraph/PDF page, Continue chapter                                   | Not exposed                                       | None after download; no cross-device position sync       |
-| Paper documents                           | Searchable, ordered, read-only saved previews                                       | Not exposed                                       | Wi-Fi download; no native editing of server Paper yet    |
-| Native drawing                            | Independent A4 PencilKit pages, checkpoints, editable-ink/PNG export and ink import | Not exposed                                       | None; drawings do not sync to server Paper               |
-| Newspapers                                | Searchable downloaded front-page images                                             | Not exposed                                       | Wi-Fi download; full PDFs/annotations remain outstanding |
-| Knowledge                                 | Optional downloaded article text and search                                         | Not exposed                                       | Wi-Fi download; no ZIM reader                            |
-| Background uploads                        | Opportunistic processing windows with durable retry state                           | WatchConnectivity transfer queue                  | OS scheduling, reachable phone/server                    |
-| Storage cleanup                           | Confirmed removal of downloaded copies; originals retained                          | Confirmed Watch-copy removal after server receipt | Receipt must arrive before Watch removal                 |
-| Apple Intelligence                        | Runtime text-model/locale availability check                                        | Not exposed                                       | No generation or local transcription implemented         |
-| Share extension                           | Not implemented                                                                     | Not applicable                                    | —                                                        |
-| Chat, Calendar, Food, Lifestyle, Learning | Use the existing web app                                                            | Not exposed                                       | Existing web app requirements apply                      |
-| Practice and Notebook                     | Intentionally omitted from native navigation                                        | Not exposed                                       | Existing Linux/web app remains available                 |
+| Feature                                   | iPhone and iPad                                                                             | Watch Series 7                                    | Connection needed                                        |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------- |
+| Typed journal capture                     | Saved locally with unfinished draft                                                         | Not exposed                                       | Upload later                                             |
+| Record / Transcribe                       | Original audio retained; server supplies transcription                                      | Durable recording and queued phone handoff        | Phone for handoff; server for upload/transcription       |
+| YouTube link and commentary               | Offline capture; metadata/import queued                                                     | Not exposed                                       | Server for import; archived video is not downloaded      |
+| Historical Journal                        | Download, search, text edits/deletion, explicit conflicts, attachment readers               | Not exposed                                       | Sync; downloaded entries read offline                    |
+| Books and Study documents                 | Text chapters, PDFs, stored articles, image/audio/video readers                             | Not exposed                                       | Explicit Wi-Fi download before offline reading           |
+| Reading position                          | Device-local paragraph/PDF page, Continue chapter                                           | Not exposed                                       | None after download; no cross-device position sync       |
+| Paper documents                           | Searchable ordered previews; downloaded native pages reopen for editing                     | Not exposed                                       | Wi-Fi download of original and preview                   |
+| Native drawing                            | A4 PencilKit, local checkpoints, explicit Save to Paper, conflict copies, ink import/export | Not exposed                                       | Local work offline; queued saves need server             |
+| Newspapers                                | Searchable downloaded front-page images                                                     | Not exposed                                       | Wi-Fi download; full PDFs/annotations remain outstanding |
+| Knowledge                                 | Optional downloaded article text and search                                                 | Not exposed                                       | Wi-Fi download; no ZIM reader                            |
+| Background uploads                        | Opportunistic processing windows with durable retry state                                   | WatchConnectivity transfer queue                  | OS scheduling, reachable phone/server                    |
+| Storage cleanup                           | Confirmed removal of downloaded copies; originals retained                                  | Confirmed Watch-copy removal after server receipt | Receipt must arrive before Watch removal                 |
+| Apple Intelligence                        | Runtime text-model/locale availability check                                                | Not exposed                                       | No generation or local transcription implemented         |
+| Share extension                           | Not implemented                                                                             | Not applicable                                    | —                                                        |
+| Chat, Calendar, Food, Lifestyle, Learning | Use the existing web app                                                                    | Not exposed                                       | Existing web app requirements apply                      |
+| Practice and Notebook                     | Intentionally omitted from native navigation                                                | Not exposed                                       | Existing Linux/web app remains available                 |
 
 The current five tabs are Capture, Journal, Library, Draw, and Settings. There is
 no dedicated iPad split-view navigation yet. The same app serves phone and iPad;
@@ -57,6 +57,7 @@ The Watch only depends on the paired phone for handoff, not direct Tailscale acc
 | Drawing checkpoint fails            | Keep current/previous generations; restore previous saved version                   | Checkpoints are local and are not a server backup                           |
 | Download fails or storage fills     | Pause/retry; verified range downloads resume; remove downloaded copies              | No automatic eviction; text and staged uploads are outside the media budget |
 | Concurrent Journal edits            | Review conflict; apply against latest revision or save text separately              | Do not discard a pending change unless it is no longer needed               |
+| Concurrent drawing edits            | Keep the queued original; create a new local copy and explicitly Save it to Paper   | Native ink never merges automatically; web ink is preview-only on Apple     |
 | Watch receipt replay                | Durable receipt and matching identities prevent duplicate capture/removal           | Physical pairing/background delivery still needs validation                 |
 | Server restored from backup         | Authorized operator rotates sync epoch, then devices bootstrap and review conflicts | No automatic server-restore detector                                        |
 | Older app cannot open replica       | Install a compatible fixed build that understands its schema                        | Do not delete the replica: it contains pending edits and reading positions  |
@@ -66,6 +67,14 @@ search titles and journal original-text indexes without redownloading records or
 losing cursors/pending edits. Rolling back to a
 binary that accepts only version 1 or 2 fails closed; a compatible replacement build
 is the recovery path. Capture manifests remain separate from the SQLite replica.
+
+Drawing Save requires a configured server and one successful initial sync. New
+drawings create one-page Paper documents; later saves update ink and preview,
+preserving the server's title and Journal filing flag. Local rename currently
+does not rename an already published Paper. Downloads never replace a local
+draft or queued save. Opening a newer downloaded version refreshes only a clean,
+acknowledged native copy. Drawing conflicts and old server epochs require keeping
+a separate copy; there is no automatic merge or force-overwrite action.
 
 ## Release boundary
 

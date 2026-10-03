@@ -16,12 +16,15 @@ what each device can currently do and which work remains device-only.
   restores an exported `.drawing` file as a new page, preserving its original
   bytes and all existing pages. Files without editable strokes (including blank
   drawings) and imports above 64 MB are rejected.
-  Drawings currently
-  stay on the device and are separate from existing server Paper documents.
+  **Save to Paper** explicitly queues an immutable original and PNG for the server;
+  ordinary autosave remains local. Downloaded native pages can be opened for
+  editing on another Apple device. Linux shows native pages as saved previews;
+  existing web strokes remain in their original format.
   Each checkpoint publishes only after its ink and preview are written; the
   current and preceding versions are retained, with explicit recovery of a
   validated previous checkpoint after a load/save error. Library cleanup cannot remove
-  drawings. Cross-platform ink conversion and drawing sync remain outstanding.
+  drawings. Stale saves retain a conflict copy; they never overwrite newer ink.
+  Cross-platform ink conversion and PDF annotation remain outstanding.
 
 - Offline typed journal entries, plus separate **Transcribe** and **Record**
   captures. Stopping records a journal entry; both modes retain the original
