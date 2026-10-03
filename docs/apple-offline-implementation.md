@@ -10,9 +10,12 @@ implementation limits. Keep this document current as work lands.
 
 ## Current position
 
-**Native capture, a SQLite replica, journal editing/conflicts, and library-text
-sync exist locally. This is not yet an installable, signed, or device-validated
-release.** Capture foundation: `e018be9`; replica/journal sync: `e695b5e`. Further work is being committed
+**Native offline capture, journal editing/search/conflicts, selected library
+downloads/readers, local PencilKit drawings, and Watch handoff/server receipts
+are implemented. This is not yet an installable, signed, or device-validated
+release.** A manual signing/export workflow, generated icons, privacy manifests,
+device archive checks, and a [feature/recovery guide](../apple/SUPPORTED_FEATURES.md)
+are now included. Capture foundation: `e018be9`; replica/journal sync: `e695b5e`. Further work is being committed
 in stages. The branch was pushed on 2026-09-28; the first
 [hosted Apple build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36502751471)
 passed against `33a694d`: Xcode 26.6 (17F113), Watch simulator build, iPhone
@@ -21,7 +24,7 @@ Mac core tests including CryptoKit. The [follow-up build](https://github.com/vol
 passed against `e71830d`: 35 Linux and 36 Mac core tests, Watch compilation,
 and both journal and drawing offline relaunch UI tests.
 Drawing restoration is also verified at `1e8b624` in the
-[latest hosted build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616):
+[drawing restoration build](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/36558448616):
 37 Linux / 38 Mac core tests, four native drawing-import tests, both relaunch
 tests, and the Watch simulator build passed.
 Persistent recording upload staging is verified at `96765d8` in
@@ -55,18 +58,34 @@ The Knowledge reader (`e4b5ffd`) then passed
 [hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37075943078):
 76 Linux / 77 macOS core tests, seven native regression tests, and Watch compilation.
 
-| Milestone                                      | Status                                    | Completion evidence still needed                                  |
-| ---------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------------- |
-| M0 — Build and distribution                    | Unsigned builds and UI tests passed       | Signing, TestFlight installation                                  |
-| M1 — Offline journal capture                   | Simulator capture/relaunch verified       | Device recording and connection checks                            |
-| M2 — Durable background transfers              | Staging, retries, processing implemented  | Device expiration/recovery; autonomous system transfer design     |
-| M3 — Multi-device data synchronization         | Implemented in part                       | Capture outbox migration, broader mutations, native validation    |
-| M4 — Downloadable library                      | Text and active media implemented in part | Remaining file types, background scheduling, storage refinement   |
-| M5 — Native drawing and annotation             | Local PencilKit workspace implemented     | Paper integration, compatibility, and actual iPad validation      |
-| M6 — Mobile navigation and capture integration | Partly implemented                        | Broader feature inventory, share extension, navigation refinement |
-| M7 — Watch recording companion                 | Compiles; core tested                     | Signing and paired-device validation                              |
-| M8 — Optional on-device speech and AI          | Evaluation pending                        | Availability, language support, quality and resource measurements |
-| M9 — Release and recovery readiness            | Planned                                   | Upgrade/restore tests, documentation, stable signed distribution  |
+The October 3 continuation added Paper/newspaper browsing, separate transcript
+provenance, local chapter/PDF positions, Watch server receipts and confirmed local
+removal, and a runtime Apple Intelligence availability check. Verification at
+`228dec4` passed 86 Linux / 87 macOS core tests, six drawing/PDF tests, two offline
+relaunch tests, Watch compilation, four release-validation tests, and device
+archive inspection
+([run](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37096771031)).
+The subsequent original-text Journal search/migration at `ef78e21` passed
+[hosted verification](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37097464982):
+88 Linux / 89 macOS core tests, six native drawing/PDF tests, two offline
+relaunch tests (including matching and non-matching Journal searches), four
+release-validation tests, Watch compilation, and inspected device archive.
+The merged backend
+baseline passed 57 media, sync, and seeder tests. No production deployment or
+signed release has run.
+
+| Milestone                                      | Status                                    | Completion evidence still needed                                |
+| ---------------------------------------------- | ----------------------------------------- | --------------------------------------------------------------- |
+| M0 — Build and distribution                    | Unsigned builds and UI tests passed       | Signing, TestFlight installation                                |
+| M1 — Offline journal capture                   | Simulator capture/relaunch verified       | Device recording and connection checks                          |
+| M2 — Durable background transfers              | Staging, retries, processing implemented  | Device expiration/recovery; autonomous system transfer design   |
+| M3 — Multi-device data synchronization         | Implemented in part                       | Capture outbox migration, broader mutations, native validation  |
+| M4 — Downloadable library                      | Text and active media implemented in part | Remaining file types, background scheduling, storage refinement |
+| M5 — Native drawing and annotation             | Local PencilKit workspace implemented     | Paper integration, compatibility, and actual iPad validation    |
+| M6 — Mobile navigation and capture integration | Partly implemented                        | Share extension and iPad navigation refinement                  |
+| M7 — Watch recording companion                 | Compiles; core tested                     | Signing and paired-device validation                            |
+| M8 — Optional on-device speech and AI          | Runtime text-model check implemented      | Device readiness, speech, quality and resource measurements     |
+| M9 — Release and recovery readiness            | Guide and replica migrations implemented  | Signed upgrade/restore tests and stable distribution            |
 
 ### Evidence from the initial implementation
 
@@ -330,7 +349,9 @@ claim that the current foreground uploader follows redirects.
       while retaining pending edits and cursors. Journal now searches device
       captures and downloaded entries; changing the search resets pagination,
       returning from a detail view preserves it. Pending edits remain visible
-      during search. Native UI verification is pending.
+      during search. The capture/relaunch UI test verifies matching and
+      non-matching searches at `ef78e21`; original-dictation index migration is
+      covered by portable database tests, not a seeded historical-entry UI test.
 - [ ] Define safe server-address changes, server restore detection, and account/device reset.
 - [x] Extend server schema/seeding/tests together for any new tables.
 
