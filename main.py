@@ -278,6 +278,22 @@ def main():
     _start_window(url)
 
 
+def _pin_pywebview_qt_storage_path(path: str):
+    """pywebview's Qt backend reads ``storage_path`` exactly once, into a
+    module global, when ``webview.platforms.qt`` is first imported — and the
+    permission patch above imports it before ``webview.start()`` has set
+    anything. So the ``storage_path=`` passed to ``start()`` was silently
+    ignored and the profile (login cookie, offline cache, *unsent recordings*
+    in IndexedDB) lived in pywebview's default ``~/.pywebview`` instead.
+    Set the global the profile is actually built from.
+    """
+    import webview
+    from webview.platforms import qt
+
+    webview._state['storage_path'] = path
+    qt._profile_storage_path = path
+
+
 def _patch_pywebview_qt_permission_policy():
     """pywebview's Qt backend calls setFeaturePermission(url, feature, 2) with
     a raw int rather than the QWebEnginePage.PermissionPolicy enum member —
@@ -323,6 +339,7 @@ def _start_window(url: str):
         '--disable-background-networking --disable-sync',
     )
     _patch_pywebview_qt_permission_policy()
+    _pin_pywebview_qt_storage_path(_webview_storage_path())
 
     # Give the Qt app a stable identity so the window manager can match the
     # .desktop entry (and set the window icon from the PNG generated from SVG).
