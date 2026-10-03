@@ -11,6 +11,7 @@ public enum CaptureState: String, Codable {
 public struct JournalSnapshot: Codable, Equatable {
     public let id: String
     public let content: String
+    public let rawContent: String?
     public let title: String?
     public let attachments: [Attachment]?
 
@@ -32,6 +33,11 @@ public struct Capture: Codable, Identifiable, Equatable {
     public var state: CaptureState
     public var lastError: String?
     public var snapshot: JournalSnapshot?
+
+    public var recordingTranscript: JournalSnapshot.Attachment? {
+        guard let attachmentID else { return nil }
+        return snapshot?.attachments?.first { $0.id == attachmentID }
+    }
 
     public init(text: String = "", mode: CaptureMode = .text, now: Date = Date(), youtubeURL: String? = nil) {
         id = ULID.make(now: now)

@@ -1,6 +1,6 @@
 # Apple apps and offline experience — implementation tracker
 
-Last updated: 2026-10-02. Working branch: `feat/apple-offline-foundation`.
+Last updated: 2026-10-03. Working branch: `feat/apple-offline-foundation`.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first
@@ -158,7 +158,8 @@ milestones.
 - [x] Add unsigned hosted Mac compilation/UI-test and Linux Swift-test jobs.
 - [x] Run the workflow and resolve all Apple SDK compilation or simulator failures.
 - [ ] Select/register the final bundle identifier and supply the Apple team ID.
-- [ ] Add app icons and required distribution metadata.
+- [x] Generate opaque iOS/Watch app icons from the existing vector logo.
+- [ ] Supply remaining required distribution metadata and validate App Store acceptance.
 - [ ] Configure signing certificates/profiles and App Store Connect access as secrets.
 - [x] Add an explicitly triggered signed archive/TestFlight release workflow.
       It gates on successful Apple CI for the exact SHA, validates both distribution
@@ -304,7 +305,13 @@ claim that the current foreground uploader follows redirects.
 - [x] Add revision-checked mutations, stable operation IDs, and durable acknowledgements.
 - [ ] Define text, drawing, media, and reading-progress conflict behavior separately.
 - [x] Handle edit-versus-delete without resurrecting deleted rows or discarding edits.
-- [ ] Keep original text, server transcripts, and polished text distinct.
+- [x] Keep original text, server transcripts, and polished text distinct.
+      Capture details retain typed originals and server raw text, show the matching
+      recording's transcript, and keep the current journal body separate. Historical
+      entries expose original text/dictation and each attachment's transcript.
+      Matching uses attachment identity, never list position. Two portable tests
+      cover persistence, legacy snapshots, and unrelated attachments; local Swift
+      validation passes 80 tests. New native controls await hosted verification.
 - [ ] Add offline search indexes and predictable schema migrations.
 - [ ] Define safe server-address changes, server restore detection, and account/device reset.
 - [x] Extend server schema/seeding/tests together for any new tables.

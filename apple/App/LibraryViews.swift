@@ -205,7 +205,7 @@ struct JournalRecordView: View {
             } else {
                 Text(record.data?["content"]?.string ?? "").textSelection(.enabled)
                 if let original = record.data?["rawContent"]?.string, !original.isEmpty {
-                    DisclosureGroup("Original transcript") { Text(original).textSelection(.enabled) }
+                    DisclosureGroup("Original text and dictation") { Text(original).textSelection(.enabled) }
                 }
                 Button("Edit") {
                     content = record.data?["content"]?.string ?? ""
@@ -218,6 +218,11 @@ struct JournalRecordView: View {
                         NavigationLink(attachment.data?["name"]?.string ?? "Attachment") {
                             DownloadedMediaView(model: model, collection: "journal_attachments", id: attachment.id,
                                                 mime: attachment.data?["mime"]?.string ?? "", title: attachment.data?["name"]?.string ?? "Attachment")
+                        }
+                        if let transcript = attachment.data?["transcript"]?.string, !transcript.isEmpty {
+                            DisclosureGroup("Transcript: \(attachment.data?["name"]?.string ?? "Attachment")") {
+                                Text(transcript).textSelection(.enabled)
+                            }
                         }
                     }
                 }

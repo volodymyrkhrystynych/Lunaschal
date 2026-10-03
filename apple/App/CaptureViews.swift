@@ -173,6 +173,12 @@ private struct CaptureDetail: View {
                 if !capture.text.isEmpty {
                     Section("Original text") { Text(capture.text).textSelection(.enabled) }
                 }
+                if let raw = capture.snapshot?.rawContent, !raw.isEmpty, raw != capture.text {
+                    Section("Server original text") { Text(raw).textSelection(.enabled) }
+                }
+                if let transcript = capture.recordingTranscript?.transcript, !transcript.isEmpty {
+                    Section("Recording transcript") { Text(transcript).textSelection(.enabled) }
+                }
                 if let link = capture.youtubeURL, let url = URL(string: link) {
                     Section("Saved YouTube link") { Link(link, destination: url) }
                 }
@@ -182,7 +188,7 @@ private struct CaptureDetail: View {
                         AudioPreview(url: url, recordingActive: model.recorder.activeID != nil)
                         ShareLink("Export audio", item: url)
                         if capture.mode == .transcribe {
-                            Text("Transcription: \(capture.snapshot?.attachments?.first?.transcriptStatus ?? "waiting for server")")
+                            Text("Transcription: \(capture.recordingTranscript?.transcriptStatus ?? "waiting for server")")
                                 .foregroundStyle(.secondary)
                         }
                     }
