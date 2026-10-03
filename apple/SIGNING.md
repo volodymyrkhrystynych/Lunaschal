@@ -59,7 +59,8 @@ ephemeral runners for this workflow. Do not change it to a persistent runner
 without reviewing keychain restoration and cleanup after cancellation.
 
 `apple/tools/release.py` validates the provisional bundle IDs below; update its
-`BUNDLES` constant alongside `project.yml` if final IDs differ. The build number
+`BUNDLES` constant and the expected IDs in `apple/tools/check_archive.py` alongside
+`project.yml` if final IDs differ. The build number
 uses Apple's numeric major/minor/patch shape (up to 4/2/2 digits); choose a new
 number for each uploaded build. Simulator CI also builds an unsigned Release
 archive, but that cannot verify your certificates, profile entitlements, export,
@@ -84,6 +85,20 @@ created by the implementation so far. The Team ID can be shared as ordinary
 configuration; it is not a private signing key.
 
 ## First device build checklist
+
+Both targets include `PrivacyInfo.xcprivacy`. The current reasons cover app-only
+preferences (`CA92.1`, phone/iPad), checking free space before recording/downloading
+(`E174.1`), and metadata for files in the app container (`C617.1`). The mapping
+follows Apple's [required API reason definitions](https://developer.apple.com/documentation/bundleresources/app-privacy-configuration/nsprivacyaccessedapitypes/nsprivacyaccessedapitype).
+No device storage statistics are uploaded. These manifests do not complete the
+App Store privacy questionnaire or encryption/export-compliance answers.
+Review those against the final distribution and server configuration before
+uploading; the app sends journal text and recordings to the user's configured
+server and transfers Watch audio to the paired phone.
+
+CI verifies that the device archive embeds the Watch app with matching versions,
+compiled assets, microphone descriptions, and privacy manifests. This is a build
+check, not an App Store validation response.
 
 - Register final app identifiers and supply the Team ID.
 - Review the generated app icons and supply required app/distribution metadata.

@@ -123,6 +123,7 @@ jobs:
             -configuration Release -destination 'generic/platform=iOS' \
             -xcconfig "$SIGNING_DIR/Signing.xcconfig" \
             -archivePath "$RUNNER_TEMP/Lunaschal.xcarchive" archive
+          python3 apple/tools/check_archive.py "$RUNNER_TEMP/Lunaschal.xcarchive"
           xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Lunaschal.xcarchive" \
             -exportOptionsPlist "$SIGNING_DIR/ExportOptions.plist" \
             -exportPath "$RUNNER_TEMP/Lunaschal-export"

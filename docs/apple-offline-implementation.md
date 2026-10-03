@@ -169,6 +169,16 @@ milestones.
 - [ ] Install a build on the iPhone and iPad and record the build identifier.
 - [ ] Establish reproducible toolchain versions and a signing-renewal procedure.
 
+Release preparation at `ff793ac` passed the unsigned generic iOS device archive,
+Watch simulator build, seven native tests, 76 Linux / 77 macOS core tests, and
+four signing-configuration tests
+([run](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37079353350)).
+Privacy manifests now declare the API reasons used by each target. CI additionally
+checks the embedded Watch identity/version, compiled assets, microphone descriptions,
+and bundled privacy manifests; that archive inspection awaits its first hosted run.
+Signed export, TestFlight processing, privacy questionnaire, and device installation
+remain unverified and require the account setup in `apple/SIGNING.md`.
+
 **Done when:** Linux development can produce a tested, signed build on a hosted
 Mac and install it on both devices without the old MacBook building the app.
 
@@ -311,7 +321,9 @@ claim that the current foreground uploader follows redirects.
       entries expose original text/dictation and each attachment's transcript.
       Matching uses attachment identity, never list position. Two portable tests
       cover persistence, legacy snapshots, and unrelated attachments; local Swift
-      validation passes 80 tests. New native controls await hosted verification.
+      validation passes 80 tests. Native compilation and existing simulator
+      regressions passed at `c3ee3f8`; dedicated transcript UI interaction remains
+      untested.
 - [ ] Add offline search indexes and predictable schema migrations.
 - [ ] Define safe server-address changes, server restore detection, and account/device reset.
 - [x] Extend server schema/seeding/tests together for any new tables.
@@ -430,18 +442,22 @@ order, including documents longer than 200 pages; this does not convert or
 overwrite server ink. Newspaper search indexes migrate existing downloaded
 records without a server request. Two portable regressions cover ordering,
 document isolation, tombstones, and search migration with preserved cursors.
-Local Swift validation passes 78 tests. Native verification is pending.
-
-### M5 — PencilKit drawing and annotations
+Local Swift validation passes 78 tests. Combined with the transcript changes,
+[hosted verification at `c3ee3f8`](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37095717125)
+passed 80 Linux / 81 macOS core tests, seven native tests, the Watch build, and
+the unsigned device archive. Dedicated Paper/newspaper UI interactions remain
+untested.
 
 Device-local reading positions now persist in the replica database: text chapters
-resume at a paragraph, books offer a Continue link, and PDF books/documents/audio
+resume at a paragraph, books offer a Continue link, and PDF books/documents/journal
 attachment PDFs reopen at their saved page. Positions belong to a content version
 (chapter epoch/revision or PDF hash), so replaced content starts at its beginning.
 Deleted chapters cannot become resume targets. These positions never create
 server edits; cross-device progress and conflict handling remain outstanding.
 Two portable regressions pass in the 82-test local suite. A new PDFKit test covers
 page restoration and navigation callbacks; hosted verification is pending.
+
+### M5 — PencilKit drawing and annotations
 
 Prototype this early, alongside M0–M2, because drawing quality is a primary
 motivation. Final integration depends on the M3 conflict/storage contract.
