@@ -65,6 +65,31 @@ def test_webview_launches_non_private_with_a_persistent_profile(tmp_path, monkey
     assert isinstance(window_options['js_api'], main._DesktopApi)
 
 
+def test_qt_profile_is_built_from_our_storage_path_not_pywebviews_default(
+    tmp_path, monkeypatch
+):
+    """Passing storage_path= to webview.start() is not enough: the Qt backend
+    snapshots it into a module global at import time, and _start_window imports
+    that module (for the permission patch) before start() runs. What the
+    QWebEngineProfile is actually given is that global, so assert on it.
+    """
+    import webview
+    from webview.platforms import qt
+
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path))
+    monkeypatch.setattr(main.sys, 'argv', ['main.py', '--server-url', 'https://x.ts.net:5000'])
+    monkeypatch.setattr(webview, 'create_window', lambda *a, **k: None)
+    monkeypatch.setattr(webview, 'start', lambda **kwargs: None)
+    monkeypatch.setattr(qt, '_profile_storage_path', os.path.expanduser('~/.pywebview'))
+    monkeypatch.setitem(webview._state, 'storage_path', None)
+
+    main.main()
+
+    expected = main._webview_storage_path()
+    assert expected.startswith(str(tmp_path))
+    assert qt._profile_storage_path == expected
+
+
 def test_desktop_api_copies_a_valid_image_to_the_qt_clipboard(monkeypatch):
     copied = []
     image = SimpleNamespace(isNull=lambda: False)

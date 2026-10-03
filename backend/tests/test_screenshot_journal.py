@@ -1,6 +1,7 @@
 """Capture failures, offline recovery, and real journal replay without a display."""
 import io
 import json
+import os
 import sqlite3
 from pathlib import Path
 from unittest.mock import Mock
@@ -23,6 +24,7 @@ def capture(monkeypatch, tmp_path):
     Image.new('RGB', (8, 8)).save(buf, 'PNG')
     monkeypatch.setattr(screenshots, 'notify', Mock())
     monkeypatch.setattr(screenshots.shutil, 'which', lambda _: '/usr/bin/grim')
+    monkeypatch.setattr(screenshots, 'hyprland_env', lambda: {'HYPR': 'test'})
     def run(args, **kwargs):
         if args[0] == 'grim':
             assert args[1:3] == ['-o', 'DP-2']
@@ -68,7 +70,7 @@ def test_failed_capture_creates_no_entry(capture, monkeypatch):
 
 
 def test_invalid_capture_cleans_partial_file(capture, monkeypatch):
-    monkeypatch.setattr(screenshots, 'focused_monitor', lambda: 'DP-2')
+    monkeypatch.setattr(screenshots, 'focused_monitor', lambda env=None: 'DP-2')
     monkeypatch.setattr(screenshots.subprocess, 'run', lambda *a, **kw: None)
     capture.capture()
     capture.session.post.assert_not_called()
@@ -100,6 +102,69 @@ def test_focus_is_queried_again_for_each_capture(capture, monkeypatch):
     capture.capture()
     capture.capture()
     assert [args[2] for args in grim_calls] == ['DP-1', 'DP-2']
+
+
+def test_capture_runs_hyprctl_and_grim_with_recovered_env(capture, monkeypatch):
+    envs = {}
+    def run(args, **kwargs):
+        envs[args[0]] = kwargs.get('env')
+        if args[0] == 'hyprctl':
+            return Mock(stdout=json.dumps([{'name': 'DP-2', 'focused': True}]))
+        Path(args[-1]).write_bytes(b'\x89PNG\r\n\x1a\n')
+    monkeypatch.setattr(screenshots.subprocess, 'run', run)
+    capture.capture()
+    assert envs == {'hyprctl': {'HYPR': 'test'}, 'grim': {'HYPR': 'test'}}
+
+
+def _hypr_instance(runtime, name, pid, wayland='wayland-1', socket=True):
+    instance = runtime / 'hypr' / name
+    instance.mkdir(parents=True)
+    (instance / 'hyprland.lock').write_text(f'{pid}\n{wayland}\n')
+    if socket:
+        (instance / '.socket.sock').touch()
+    return instance
+
+
+DEAD_PID = 999_999_999
+
+
+def test_env_missing_from_boot_is_recovered_from_live_instance(tmp_path):
+    # lunaschal.service starts before Hyprland exports its variables.
+    _hypr_instance(tmp_path, 'live', os.getpid(), 'wayland-1')
+    env = screenshots.hyprland_env({'XDG_RUNTIME_DIR': str(tmp_path), 'PATH': '/bin'})
+    assert env == {'XDG_RUNTIME_DIR': str(tmp_path), 'PATH': '/bin',
+                   'HYPRLAND_INSTANCE_SIGNATURE': 'live',
+                   'WAYLAND_DISPLAY': 'wayland-1'}
+
+
+def test_stale_signature_is_replaced_by_the_running_instance(tmp_path):
+    old = _hypr_instance(tmp_path, 'old', DEAD_PID, 'wayland-0')
+    _hypr_instance(tmp_path, 'new', os.getpid(), 'wayland-2')
+    os.utime(old, (2**31, 2**31))  # newest on disk, but its compositor is gone
+    env = screenshots.hyprland_env({
+        'XDG_RUNTIME_DIR': str(tmp_path),
+        'HYPRLAND_INSTANCE_SIGNATURE': 'gone',
+        'WAYLAND_DISPLAY': 'wayland-0',
+    })
+    assert env['HYPRLAND_INSTANCE_SIGNATURE'] == 'new'
+    assert env['WAYLAND_DISPLAY'] == 'wayland-2'
+
+
+def test_working_env_is_left_alone(tmp_path):
+    _hypr_instance(tmp_path, 'mine', os.getpid(), 'wayland-1')
+    _hypr_instance(tmp_path, 'other', os.getpid(), 'wayland-9')
+    given = {'XDG_RUNTIME_DIR': str(tmp_path),
+             'HYPRLAND_INSTANCE_SIGNATURE': 'mine', 'WAYLAND_DISPLAY': 'wayland-1'}
+    assert screenshots.hyprland_env(given) == given
+
+
+def test_no_live_hyprland_leaves_env_unchanged(tmp_path):
+    _hypr_instance(tmp_path, 'dead', DEAD_PID)
+    _hypr_instance(tmp_path, 'nosocket', os.getpid(), socket=False)
+    given = {'XDG_RUNTIME_DIR': str(tmp_path)}
+    assert screenshots.hyprland_env(given) == given
+    assert screenshots.hyprland_env({'XDG_RUNTIME_DIR': str(tmp_path / 'nope')}) == {
+        'XDG_RUNTIME_DIR': str(tmp_path / 'nope')}
 
 
 def test_lost_upload_response_replays_without_duplicate_entry_or_photo(

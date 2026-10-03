@@ -13,10 +13,58 @@ from ulid import ULID
 logger = logging.getLogger(__name__)
 
 
-def focused_monitor():
+def _live_instance(hypr_dir, prefer=None):
+    """Return (signature, wayland socket) of a running Hyprland, or None.
+
+    Each instance directory holds a `hyprland.lock` whose first line is the
+    compositor's pid and second its Wayland socket name. A directory left by a
+    crashed session has a dead pid, so it is skipped rather than trusted.
+    """
+    try:
+        dirs = sorted((d for d in hypr_dir.iterdir() if d.is_dir()),
+                      key=lambda d: d.stat().st_mtime, reverse=True)
+    except OSError:
+        return None
+    dirs.sort(key=lambda d: d.name != prefer)
+    for instance in dirs:
+        try:
+            lines = (instance / 'hyprland.lock').read_text().split()
+        except OSError:
+            continue
+        if (len(lines) >= 2 and lines[0].isdigit()
+                and Path(f'/proc/{lines[0]}').exists()
+                and (instance / '.socket.sock').exists()):
+            return instance.name, lines[1]
+    return None
+
+
+def hyprland_env(environ=None):
+    """The environment hyprctl and grim need, recovered if it was never inherited.
+
+    lunaschal.service starts at boot, seconds before Hyprland exports
+    HYPRLAND_INSTANCE_SIGNATURE and WAYLAND_DISPLAY to the systemd user
+    environment, so the listener it spawns has neither and every capture failed
+    until the service happened to be restarted after login. The same goes for a
+    Hyprland restarted under a running service, whose old signature is stale.
+    """
+    env = dict(os.environ if environ is None else environ)
+    runtime = Path(env.get('XDG_RUNTIME_DIR') or f'/run/user/{os.getuid()}')
+    hypr_dir = runtime / 'hypr'
+    current = env.get('HYPRLAND_INSTANCE_SIGNATURE')
+    if (current and env.get('WAYLAND_DISPLAY')
+            and (hypr_dir / current / '.socket.sock').exists()):
+        return env
+    found = _live_instance(hypr_dir, prefer=current)
+    if found:
+        env['HYPRLAND_INSTANCE_SIGNATURE'], env['WAYLAND_DISPLAY'] = found
+    return env
+
+
+def focused_monitor(env=None):
     """Resolve Hyprland's focused output; never fall back to all monitors."""
     result = subprocess.run(['hyprctl', '-j', 'monitors'], check=True,
-                            timeout=5, capture_output=True, text=True)
+                            timeout=5, capture_output=True, text=True,
+                            env=env)
     monitors = json.loads(result.stdout)
     names = [monitor.get('name') for monitor in monitors
              if monitor.get('focused') is True]
@@ -52,14 +100,15 @@ class ScreenshotJournal:
         try:
             if not shutil.which('grim'):
                 raise RuntimeError('Install grim to capture the Wayland desktop.')
-            output = focused_monitor()
+            env = hyprland_env()
+            output = focused_monitor(env)
             self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
             ident = str(ULID())
             temporary = self.root / f'{ident}.part'
             # Reserve a private file before invoking the capture tool.
             temporary.touch(mode=0o600)
             subprocess.run(['grim', '-o', output, '-t', 'png', str(temporary)],
-                           check=True, timeout=15, capture_output=True)
+                           check=True, timeout=15, capture_output=True, env=env)
             with temporary.open('rb') as file:
                 if file.read(8) != b'\x89PNG\r\n\x1a\n':
                     raise RuntimeError('Screen capture did not produce a PNG.')
