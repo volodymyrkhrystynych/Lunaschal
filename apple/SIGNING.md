@@ -5,10 +5,12 @@ app and Watch companion and tests the iPhone app in Simulator. Simulator success
 does not produce an installable device app. The existing 2015 MacBook is not
 part of this build path.
 
-## Account information needed
+## Account configuration
 
-The Apple Developer Team ID and final bundle identifiers are the next inputs.
-Current project values are:
+The user supplied Apple Developer Team ID **`4AG98Q33RQ`**. It is now the
+default in the Xcode project and hosted release workflow. Actual membership and
+profile ownership are verified when real distribution profiles are supplied.
+The current bundle identifiers still need registration in that team:
 
 | Target          | Bundle identifier                  |
 | --------------- | ---------------------------------- |
@@ -42,7 +44,8 @@ actions. No signed run has been performed yet.
 
 Configure a GitHub environment named `apple-release`, restrict its deployment
 branches to trusted release branches, and require your review before it receives
-credentials. Set environment variable `APPLE_TEAM_ID` and these environment
+credentials. The workflow defaults to `APPLE_TEAM_ID=4AG98Q33RQ`; an environment
+variable named `APPLE_TEAM_ID` can override it. Configure these environment
 secrets (base64 values must be a single unwrapped line):
 
 - `APPLE_DISTRIBUTION_P12_BASE64` and `APPLE_DISTRIBUTION_P12_PASSWORD`.
@@ -84,6 +87,12 @@ No signing identities, profiles, API keys, or App Store records have been
 created by the implementation so far. The Team ID can be shared as ordinary
 configuration; it is not a private signing key.
 
+Repository readiness check on 2026-10-03: no GitHub environments were configured,
+and no repository secrets named `APPLE_*` or `APPSTORECONNECT_*` were present.
+This checked setting names only, not secret values or the Apple account. The
+Team ID configuration passed the four signing-helper tests and YAML consistency
+checks; an actual signed archive still requires the credentials above.
+
 ## First device build checklist
 
 Both targets include `PrivacyInfo.xcprivacy`. The current reasons cover app-only
@@ -100,7 +109,7 @@ CI verifies that the device archive embeds the Watch app with matching versions,
 compiled assets, microphone descriptions, and privacy manifests. This is a build
 check, not an App Store validation response.
 
-- Register final app identifiers and supply the Team ID.
+- Register the final app identifiers under team `4AG98Q33RQ`.
 - Review the generated app icons and supply required app/distribution metadata.
 - Verify the manually triggered signing/archive workflow with real credentials.
 - Configure its signing and upload credentials.

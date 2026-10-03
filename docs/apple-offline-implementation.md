@@ -184,7 +184,8 @@ milestones.
 - [x] Add the iPhone/iPad XcodeGen project and portable Swift package.
 - [x] Add unsigned hosted Mac compilation/UI-test and Linux Swift-test jobs.
 - [x] Run the workflow and resolve all Apple SDK compilation or simulator failures.
-- [ ] Select/register the final bundle identifier and supply the Apple team ID.
+- [x] Supply the Apple team ID: `4AG98Q33RQ`, configured as the project/release default.
+- [ ] Register the final bundle identifiers in the Apple team.
 - [x] Generate opaque iOS/Watch app icons from the existing vector logo.
 - [ ] Supply remaining required distribution metadata and validate App Store acceptance.
 - [ ] Configure signing certificates/profiles and App Store Connect access as secrets.
@@ -707,15 +708,15 @@ change in scope or architecture here before downstream implementation relies on 
 
 ## Decisions still to make
 
-| Decision                                                          | Needed for | Current position                                                  |
-| ----------------------------------------------------------------- | ---------- | ----------------------------------------------------------------- |
-| Final bundle ID, Apple team ID, signing approach                  | M0         | Project currently uses `com.lunaschal.mobile` as a starting value |
-| First library collection priorities and size budget per device    | M4         | Full active library is the goal; actual sizes not measured        |
-| Broader mobile feature list                                       | M6         | Practice/Notebook omitted; other views need an inventory          |
-| Drawing interchange and cross-platform editability                | M5         | PencilKit prototype must inform this                              |
-| Sync conflict UX and deletion retention                           | M3         | Journal resolution implemented; other record types pending        |
-| Local transcription languages and preferred server/local behavior | M8         | Server transcription first                                        |
-| Long-term distribution                                            | M9         | Hosted builds/TestFlight are the initial route                    |
+| Decision                                                          | Needed for | Current position                                                                           |
+| ----------------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------ |
+| Final bundle ID registration and signing credentials              | M0         | Team `4AG98Q33RQ` supplied; project uses `com.lunaschal.mobile` and its Watch companion ID |
+| First library collection priorities and size budget per device    | M4         | Full active library is the goal; actual sizes not measured                                 |
+| Broader mobile feature list                                       | M6         | Practice/Notebook omitted; other views need an inventory                                   |
+| Drawing interchange and cross-platform editability                | M5         | PencilKit prototype must inform this                                                       |
+| Sync conflict UX and deletion retention                           | M3         | Journal resolution implemented; other record types pending                                 |
+| Local transcription languages and preferred server/local behavior | M8         | Server transcription first                                                                 |
+| Long-term distribution                                            | M9         | Hosted builds/TestFlight are the initial route                                             |
 
 These are staged decisions, not reasons to pause unrelated implementation.
 

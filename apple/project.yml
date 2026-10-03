@@ -9,6 +9,8 @@ packages:
     path: LunaschalCore
 settings:
   base:
+    APPLE_TEAM_ID: '4AG98Q33RQ'
+    DEVELOPMENT_TEAM: $(APPLE_TEAM_ID)
     SWIFT_VERSION: '5.0'
     TARGETED_DEVICE_FAMILY: '1,2'
 targets:

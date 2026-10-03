@@ -72,7 +72,7 @@ jobs:
           xcodegen generate --spec apple/project.yml
       - name: Import and validate distribution credentials
         env:
-          TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          TEAM_ID: ${{ vars.APPLE_TEAM_ID || '4AG98Q33RQ' }}
           BUILD_NUMBER: ${{ inputs.build_number }}
           CERTIFICATE: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
           CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
