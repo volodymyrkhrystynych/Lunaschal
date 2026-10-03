@@ -566,7 +566,12 @@ the phone retains its original. Older imports can request status without sending
 audio again. No automatic cleanup occurs, and Uploaded does not mean transcribed
 or backed up. Four new portable tests cover receipt progression, identity mismatch,
 active-recording protection, crash recovery during removal, and retained phone
-audio; all 86 local Swift tests pass. Native compilation is pending.
+audio; all 86 local Swift tests pass. Hosted verification at `228dec4` passed
+86 Linux / 87 macOS core tests, eight native tests, Watch compilation, and the
+inspected device archive
+([run](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37096771031)).
+Actual paired-device receipt delivery and the Watch removal controls still need
+hardware validation.
 Microphone denial, initial low-space
 checks, interruptions, and explicit playable-file recovery have code paths;
 long-recording/storage-pressure and background behavior still need hardware
@@ -580,7 +585,8 @@ when returning from device Settings. It follows Apple's
 [runtime availability](https://developer.apple.com/documentation/foundationmodels/systemlanguagemodel)
 and [locale checks](https://developer.apple.com/documentation/foundationmodels/supporting-languages-and-locales-with-foundation-models).
 This does not download models, invoke generation, or transcribe audio. Native
-SDK verification is pending; real-device model readiness, speech support, and
+SDK compilation and existing simulator regressions passed at `228dec4`;
+real-device model readiness, speech support, and
 quality evaluation remain open. Capture and server transcription do not depend
 on this optional check.
 
