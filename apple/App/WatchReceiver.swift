@@ -36,7 +36,40 @@ final class WatchReceiver: NSObject, WCSessionDelegate {
                 WCSession.default.transferUserInfo(["phoneStored": id])
             }
             onChange?()
+            sendServerReceipts()
         } catch { onError?(error) }
+    }
+
+    @MainActor func sendServerReceipts() {
+        let session = WCSession.default
+        guard session.activationState == .activated else { return }
+        do {
+            let pending = Set(session.outstandingUserInfoTransfers.compactMap { $0.userInfo["serverReceiptID"] as? String })
+            for receipt in try WatchReceipts(store: store).pendingServerReceipts() where !pending.contains(receipt.captureID) {
+                session.transferUserInfo(["serverReceiptID": receipt.captureID,
+                                          "serverStored": try JSONEncoder().encode(receipt)])
+            }
+        } catch { onError?(error) }
+    }
+
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        if let bytes = userInfo["serverReceiptRequest"] as? Data {
+            do {
+                let requested = try JSONDecoder().decode(WatchServerReceipt.self, from: bytes)
+                let capture = try store.load(requested.captureID)
+                guard requested.matches(capture) else { throw CaptureError.invalidResponse }
+                // Older versions imported audio without an origin marker. The
+                // paired Watch can identify its existing capture without reupload.
+                try WatchReceipts(store: store).markOrigin(capture)
+                Task { @MainActor in self.sendServerReceipts() }
+            } catch { Task { @MainActor in self.onError?(error) } }
+            return
+        }
+        guard let bytes = userInfo["serverReceiptStored"] as? Data else { return }
+        do {
+            let receipt = try JSONDecoder().decode(WatchServerReceipt.self, from: bytes)
+            try WatchReceipts(store: store).confirmDelivery(receipt)
+        } catch { Task { @MainActor in self.onError?(error) } }
     }
 
     nonisolated func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {

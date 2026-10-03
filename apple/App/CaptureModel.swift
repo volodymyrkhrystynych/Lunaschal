@@ -180,7 +180,11 @@ final class CaptureModel: ObservableObject {
     }
 
     private func performSync(server: URL, token: String) async -> Bool {
-        defer { syncing = false; activeAPI = nil; reload(); onBackgroundSyncNeeded?() }
+        defer {
+            syncing = false; activeAPI = nil; reload()
+            watchReceiver.sendServerReceipts()
+            onBackgroundSyncNeeded?()
+        }
         do {
             try Task.checkCancellation()
             let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular, uploads: uploads)

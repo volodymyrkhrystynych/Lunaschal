@@ -79,6 +79,7 @@ public final class WatchInbox {
                       existing.createdAt == envelope.capture.createdAt,
                       existing.mode == envelope.capture.mode else { throw CaptureError.invalidResponse }
             } else { try store.save(envelope.capture) }
+            try WatchReceipts(store: store).markOrigin(envelope.capture)
             received.append(envelope.capture.id)
             try fm.removeItem(at: directory)
             } catch {

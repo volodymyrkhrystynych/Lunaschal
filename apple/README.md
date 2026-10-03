@@ -180,7 +180,10 @@ publicly to make CI work: simulator capture tests never contact it.
   copies incoming temporary files synchronously, verifies their hashes, and
   imports them without changing their IDs, times, modes, or prior upload state.
   “Saved on phone” is a separate durable receipt, not a server-upload claim.
-  Watch originals are retained; automatic cleanup is not implemented yet.
+  A separate durable server-upload receipt enables confirmed removal of the Watch
+  copy. The phone's original is retained. Upload receipt does not mean transcription
+  finished or a backup exists. No automatic cleanup occurs. Both receipt stages
+  survive restarts, and older imports can request server status without resending audio.
   Watch and iPhone simulator compilation passed in the hosted Xcode 26.6 run.
   Recording lifecycle and paired-device transfers remain unverified.
   WatchConnectivity transfer validation requires paired devices

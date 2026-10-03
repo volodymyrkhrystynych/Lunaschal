@@ -530,7 +530,7 @@ and every exposed feature communicates its offline capabilities accurately.
 - [x] Persist audio and capture metadata on the watch before attempting transfer.
 - [x] Preserve IDs, capture time, and transcription intent through watch → phone → server.
 - [x] Queue WatchConnectivity file transfers when the phone becomes available.
-- [ ] Acknowledge durable phone storage separately from server receipt; specify
+- [x] Acknowledge durable phone storage separately from server receipt; specify
       when a watch copy may be removed and what the status indicator means.
 - [ ] Handle duplicate deliveries, interrupted transfers, watch/app restart, and
       a phone that has not yet configured or authenticated its server.
@@ -545,8 +545,16 @@ Direct watch-to-server connectivity is not required for this milestone.
 
 **Implemented, not device-validated:** watchOS target, shared recorder, durable
 phone inbox, hash/identity validation, replay-safe import, and separate phone
-receipts. Originals remain on the watch after receipt; removal controls and
-server-status receipts are outstanding. Microphone denial, initial low-space
+receipts. A durable server-upload receipt now enables a confirmed Remove Watch
+copy action. The phone sends only after its capture is durably marked synced;
+the Watch persists the receipt before acknowledging it. Both ends validate entry
+and attachment identities. Retries survive relaunch and replay after removal;
+the phone retains its original. Older imports can request status without sending
+audio again. No automatic cleanup occurs, and Uploaded does not mean transcribed
+or backed up. Four new portable tests cover receipt progression, identity mismatch,
+active-recording protection, crash recovery during removal, and retained phone
+audio; all 86 local Swift tests pass. Native compilation is pending.
+Microphone denial, initial low-space
 checks, interruptions, and explicit playable-file recovery have code paths;
 long-recording/storage-pressure and background behavior still need hardware
 validation. Hosted CI now includes an unsigned Watch simulator build.

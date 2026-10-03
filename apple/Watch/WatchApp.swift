@@ -29,6 +29,7 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     let recorder: Recorder
     @Published var captures: [Capture] = []
     @Published var received: Set<String> = []
+    @Published var uploaded: Set<String> = []
     @Published var message: String?
 
     private init(store: CaptureStore) throws {
@@ -50,6 +51,7 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
             received = Set(captures.filter {
                 FileManager.default.fileExists(atPath: store.root.appendingPathComponent("\($0.id).phone-receipt").path)
             }.map(\.id))
+            uploaded = Set(try captures.filter { try WatchReceipts(store: store).serverReceived($0) }.map(\.id))
         } catch { message = error.localizedDescription }
     }
 
@@ -57,7 +59,15 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         let session = WCSession.default
         guard session.activationState == .activated else { return }
         let pending = Set(session.outstandingFileTransfers.compactMap { $0.file.metadata?["captureID"] as? String })
-        for capture in captures where capture.state == .pending && !received.contains(capture.id) && !pending.contains(capture.id) {
+        let receiptRequests = Set(session.outstandingUserInfoTransfers.compactMap { $0.userInfo["serverReceiptRequestID"] as? String })
+        for capture in captures where received.contains(capture.id) && !uploaded.contains(capture.id) && !receiptRequests.contains(capture.id) {
+            do {
+                let receipt = try WatchServerReceipt(capture: capture)
+                session.transferUserInfo(["serverReceiptRequestID": capture.id,
+                                          "serverReceiptRequest": try JSONEncoder().encode(receipt)])
+            } catch { message = error.localizedDescription }
+        }
+        for capture in captures where capture.state == .pending && !received.contains(capture.id) && !uploaded.contains(capture.id) && !pending.contains(capture.id) {
             do {
                 let url = try store.audioURL(capture)
                 let bytes = Int64(try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0)
@@ -76,6 +86,14 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
         } catch { message = error.localizedDescription }
     }
 
+    func removeWatchCopy(_ capture: Capture) {
+        guard recorder.activeID == nil, !recorder.isStarting else { return }
+        do {
+            try WatchReceipts(store: store).removeWatchCopy(capture.id)
+            reload()
+        } catch { message = error.localizedDescription }
+    }
+
     nonisolated func session(_ session: WCSession, activationDidCompleteWith state: WCSessionActivationState, error: Error?) {
         Task { @MainActor in
             if let error { self.message = error.localizedDescription }
@@ -84,6 +102,16 @@ final class WatchModel: NSObject, ObservableObject, WCSessionDelegate {
     }
 
     nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        if let bytes = userInfo["serverStored"] as? Data {
+            do {
+                let receipt = try JSONDecoder().decode(WatchServerReceipt.self, from: bytes)
+                try WatchReceipts(store: CaptureStore(root: receiptRoot)).acceptServerReceipt(receipt)
+                // Persist before acknowledging, including during a background wake.
+                session.transferUserInfo(["serverReceiptStored": bytes])
+                Task { @MainActor in self.reload() }
+            } catch { Task { @MainActor in self.message = error.localizedDescription } }
+            return
+        }
         guard let id = userInfo["phoneStored"] as? String, ULID.isValid(id) else { return }
         do {
             // Persist before returning from the connectivity callback. A UI
@@ -104,6 +132,7 @@ private struct WatchCaptureView: View {
     @ObservedObject var model: WatchModel
     @ObservedObject var recorder: Recorder
     @Environment(\.scenePhase) private var phase
+    @State private var removing: Capture?
 
     var body: some View {
         List {
@@ -121,21 +150,33 @@ private struct WatchCaptureView: View {
             ForEach(model.captures) { capture in
                 VStack(alignment: .leading) {
                     Text(capture.createdAt, style: .time)
-                    Text(model.received.contains(capture.id) ? "Saved on phone" :
+                    Text(model.uploaded.contains(capture.id) ? "Uploaded to server" :
+                         model.received.contains(capture.id) ? "Saved on phone" :
                          capture.state == .interrupted ? "Interrupted · audio retained" :
                          capture.state == .recording ? "Recording" : "Saved here · waiting for phone")
                         .font(.caption)
                     if capture.state == .interrupted {
                         Button("Recover playable audio") { model.recover(capture) }
                     }
+                    if model.uploaded.contains(capture.id) {
+                        Button("Remove Watch copy", role: .destructive) { removing = capture }
+                            .disabled(recorder.activeID != nil || recorder.isStarting)
+                    }
                 }
             }
-            Text("Saved on phone does not mean uploaded to the server. Originals stay on this Watch.")
+            Text("Saved on phone does not mean uploaded. Watch copies stay until you remove them after server receipt; transcription may still be processing.")
                 .font(.footnote)
         }
         .onChange(of: phase) { _, value in
             if value == .active { model.reload(); model.sendPending() }
         }
+        .confirmationDialog("Remove this Watch recording?", isPresented: Binding(
+            get: { removing != nil }, set: { if !$0 { removing = nil } })) {
+            Button("Remove Watch copy", role: .destructive) {
+                if let capture = removing { model.removeWatchCopy(capture) }
+                removing = nil
+            }
+        } message: { Text("The phone and server copies are kept.") }
     }
 }
 
