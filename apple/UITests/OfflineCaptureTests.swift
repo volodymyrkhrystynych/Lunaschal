@@ -32,6 +32,11 @@ final class OfflineCaptureTests: XCTestCase {
         app.launch()
         app.tabBars.buttons["Journal"].tap()
         XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 10))
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        search.tap()
+        search.typeText(text)
+        XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 5))
         app.staticTexts[text].tap()
         XCTAssertTrue(app.staticTexts["Saved on device · Waiting to sync"].exists)
         XCTAssertTrue(app.staticTexts["Original text"].exists)

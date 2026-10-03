@@ -1,11 +1,13 @@
 # Apple offline client
 
-First native iPhone/iPad slice, targeting iOS/iPadOS 26. The Linux app and
-Flask server remain in place. This is source for an initial capture app, not
+Native iPhone/iPad offline client, targeting iOS/iPadOS 26. The Linux app and
+Flask server remain in place. This is a development implementation, not
 yet a signed or device-validated release.
 
 The full product scope, staged implementation checklist, and verification status
 live in the [Apple/offline implementation tracker](../docs/apple-offline-implementation.md).
+See the [supported-feature matrix and recovery notes](SUPPORTED_FEATURES.md) for
+what each device can currently do and which work remains device-only.
 
 ## Included
 
@@ -78,6 +80,12 @@ live in the [Apple/offline implementation tracker](../docs/apple-offline-impleme
   Knowledge downloads keeps existing articles readable. Markdown source is
   shown as text; remote images and embedded pages are not loaded. This reads
   replicated Knowledge articles, not Wikipedia ZIM packages.
+- Paper documents and newspaper covers have searchable Library sections. Paper
+  previews open in page order without modifying server ink. Text chapters and PDF
+  documents keep device-local reading positions tied to their content version.
+- Capture details keep typed originals, server raw text, the matching recording
+  transcript, and the current journal entry distinct. Historical entries expose
+  their original text and individual attachment transcripts.
 
 The backend accepts optional offset-bearing ISO `capturedAt` on both
 `POST /api/journal` and `POST /api/journal/recordings`. On recording uploads it
@@ -188,8 +196,10 @@ publicly to make CI work: simulator capture tests never contact it.
   Recording lifecycle and paired-device transfers remain unverified.
   WatchConnectivity transfer validation requires paired devices
   ([Apple's transferFile documentation](<https://developer.apple.com/documentation/watchconnectivity/wcsession/transferfile(_:metadata:)>)).
-- Local speech recognition and Foundation Models are optional later layers.
-  Server transcription is the only transcription path in this first slice.
+- Settings checks the actual Foundation Models text-model and locale availability,
+  including disabled/ineligible/not-ready states. Generation and local speech
+  recognition remain optional later layers. Server transcription is the only
+  implemented transcription path.
 - Practice and Notebook are intentionally absent from this app's navigation.
 
 Device baseline supplied by the user: iPhone 16 and 2021 12.9-inch M1 iPad Pro

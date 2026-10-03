@@ -21,7 +21,7 @@ public final class ReplicaStore {
             try execute("PRAGMA journal_mode=WAL")
             try execute("PRAGMA synchronous=FULL")
             let version = Int(try rows("PRAGMA user_version").first?.first ?? "0") ?? 0
-            guard version <= 2 else { throw ReplicaError.database("This database needs a newer app.") }
+            guard version <= 3 else { throw ReplicaError.database("This database needs a newer app.") }
             try transaction {
                 try execute("CREATE TABLE IF NOT EXISTS replica_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
                 try execute("CREATE TABLE IF NOT EXISTS replica_records(collection TEXT NOT NULL,id TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL,payload TEXT,PRIMARY KEY(collection,id))")
@@ -33,7 +33,13 @@ public final class ReplicaStore {
                                     [record.title, record.collection, record.id])
                     }
                 }
-                try execute("PRAGMA user_version=2")
+                if version < 3 {
+                    for record in try recordsQuery("WHERE collection='journal_entries' AND deleted=0", []) {
+                        try execute("UPDATE replica_search SET body=? WHERE collection=? AND id=?",
+                                    [searchBody(record.data ?? [:]), record.collection, record.id])
+                    }
+                }
+                try execute("PRAGMA user_version=3")
             }
         } catch { sqlite3_close(db); db = nil; throw error }
     }
@@ -215,9 +221,14 @@ public final class ReplicaStore {
                     [change.collection, change.id, String(change.revision), change.deleted ? "1" : "0", try change.data.map(json)])
         try execute("DELETE FROM replica_search WHERE collection=? AND id=?", [change.collection, change.id])
         if let data = change.data, !change.deleted {
-            let body = ["content", "contentText", "description", "summary", "transcript"].compactMap { data[$0]?.string }.joined(separator: "\n")
+            let body = searchBody(data)
             try execute("INSERT INTO replica_search(collection,id,title,body) VALUES (?,?,?,?)", [change.collection, change.id, change.title, body])
         }
+    }
+
+    private func searchBody(_ data: [String: JSONValue]) -> String {
+        ["content", "rawContent", "contentText", "description", "summary", "transcript"]
+            .compactMap { data[$0]?.string }.joined(separator: "\n")
     }
 
     private func recordsQuery(_ suffix: String, _ arguments: [String?]) throws -> [SyncChange] {

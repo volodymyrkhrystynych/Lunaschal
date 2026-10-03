@@ -19,6 +19,7 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var journalRecords: [SyncChange] = []
     @Published private(set) var journalCount = 0
     private var journalLimit = 200
+    private var journalQuery = ""
     @Published private(set) var pendingEdits: [PendingEdit] = []
     @Published private(set) var downloadingLibrary = false
     @Published private(set) var libraryMessage: String?
@@ -82,8 +83,8 @@ final class CaptureModel: ObservableObject {
     func reload() {
         do {
             captures = try store.list()
-            journalRecords = try replica.records(collection: "journal_entries", limit: journalLimit)
-            journalCount = try replica.count(collection: "journal_entries")
+            journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
+            journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
             pendingEdits = try replica.edits()
             libraryBytes = try media.usedBytes()
         } catch { message = error.localizedDescription }
@@ -96,6 +97,12 @@ final class CaptureModel: ObservableObject {
             requestSync()
             return true
         } catch { message = error.localizedDescription; return false }
+    }
+
+    func searchJournal(_ query: String) {
+        if journalQuery != query { journalLimit = 200 }
+        journalQuery = query
+        reload()
     }
 
     func loadMoreJournal() {

@@ -39,6 +39,17 @@ public struct Capture: Codable, Identifiable, Equatable {
         return snapshot?.attachments?.first { $0.id == attachmentID }
     }
 
+    public func matchesSearch(_ query: String) -> Bool {
+        let terms = query.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !terms.isEmpty else { return true }
+        let fields = ([self.text, youtubeURL, snapshot?.title, snapshot?.content, snapshot?.rawContent]
+            + (snapshot?.attachments?.map { $0.transcript } ?? []))
+            .compactMap { $0 }
+        return terms.allSatisfy { term in
+            fields.contains { $0.localizedCaseInsensitiveContains(term) }
+        }
+    }
+
     public init(text: String = "", mode: CaptureMode = .text, now: Date = Date(), youtubeURL: String? = nil) {
         id = ULID.make(now: now)
         attachmentID = mode == .text ? nil : ULID.make(now: now)

@@ -91,6 +91,9 @@ private struct CaptureComposer: View {
 
 private struct CaptureList: View {
     @ObservedObject var model: CaptureModel
+    @State private var query = ""
+
+    private var captures: [Capture] { model.captures.filter { $0.matchesSearch(query) } }
 
     var body: some View {
         List {
@@ -108,7 +111,7 @@ private struct CaptureList: View {
                 }
             }
             Section {
-                ForEach(model.captures) { capture in
+                ForEach(captures) { capture in
                     NavigationLink {
                         CaptureDetail(model: model, id: capture.id)
                     } label: {
@@ -136,8 +139,15 @@ private struct CaptureList: View {
                 }
             }
         }
-        .overlay { if model.captures.isEmpty && model.journalRecords.isEmpty { ContentUnavailableView("No captures yet", systemImage: "book.closed") } }
+        .overlay {
+            if captures.isEmpty && model.journalRecords.isEmpty && model.pendingEdits.isEmpty {
+                ContentUnavailableView(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "No captures yet" : "No matching entries", systemImage: "book.closed")
+            }
+        }
         .navigationTitle("Journal")
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search saved journal")
+        .onAppear { model.searchJournal(query) }
+        .onChange(of: query) { _, value in model.searchJournal(value) }
         .toolbar {
             if model.syncing { ProgressView() }
             else { Button("Sync") { model.requestSync(manual: true) }.disabled(!model.signedIn) }

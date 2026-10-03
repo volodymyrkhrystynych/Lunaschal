@@ -1,0 +1,77 @@
+# Supported experience and recovery
+
+This describes the current development branch. There is no signed
+device release yet. Hosted builds verify compilation, persistence, device archive
+structure, and selected simulator behaviors; none of the user's physical devices
+has been validated. Exact commits and CI results are recorded in the
+[implementation tracker](../docs/apple-offline-implementation.md).
+
+| Feature                                   | iPhone and iPad                                                                     | Watch Series 7                                    | Connection needed                                        |
+| ----------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------- |
+| Typed journal capture                     | Saved locally with unfinished draft                                                 | Not exposed                                       | Upload later                                             |
+| Record / Transcribe                       | Original audio retained; server supplies transcription                              | Durable recording and queued phone handoff        | Phone for handoff; server for upload/transcription       |
+| YouTube link and commentary               | Offline capture; metadata/import queued                                             | Not exposed                                       | Server for import; archived video is not downloaded      |
+| Historical Journal                        | Download, search, text edits/deletion, explicit conflicts, attachment readers       | Not exposed                                       | Sync; downloaded entries read offline                    |
+| Books and Study documents                 | Text chapters, PDFs, stored articles, image/audio/video readers                     | Not exposed                                       | Explicit Wi-Fi download before offline reading           |
+| Reading position                          | Device-local paragraph/PDF page, Continue chapter                                   | Not exposed                                       | None after download; no cross-device position sync       |
+| Paper documents                           | Searchable, ordered, read-only saved previews                                       | Not exposed                                       | Wi-Fi download; no native editing of server Paper yet    |
+| Native drawing                            | Independent A4 PencilKit pages, checkpoints, editable-ink/PNG export and ink import | Not exposed                                       | None; drawings do not sync to server Paper               |
+| Newspapers                                | Searchable downloaded front-page images                                             | Not exposed                                       | Wi-Fi download; full PDFs/annotations remain outstanding |
+| Knowledge                                 | Optional downloaded article text and search                                         | Not exposed                                       | Wi-Fi download; no ZIM reader                            |
+| Background uploads                        | Opportunistic processing windows with durable retry state                           | WatchConnectivity transfer queue                  | OS scheduling, reachable phone/server                    |
+| Storage cleanup                           | Confirmed removal of downloaded copies; originals retained                          | Confirmed Watch-copy removal after server receipt | Receipt must arrive before Watch removal                 |
+| Apple Intelligence                        | Runtime text-model/locale availability check                                        | Not exposed                                       | No generation or local transcription implemented         |
+| Share extension                           | Not implemented                                                                     | Not applicable                                    | —                                                        |
+| Chat, Calendar, Food, Lifestyle, Learning | Use the existing web app                                                            | Not exposed                                       | Existing web app requirements apply                      |
+| Practice and Notebook                     | Intentionally omitted from native navigation                                        | Not exposed                                       | Existing Linux/web app remains available                 |
+
+The current five tabs are Capture, Journal, Library, Draw, and Settings. There is
+no dedicated iPad split-view navigation yet. The same app serves phone and iPad;
+Pencil drawing is intended for the iPad and still needs Pencil 2 hardware testing.
+The Watch only depends on the paired phone for handoff, not direct Tailscale access.
+
+## Before replacing or removing the app
+
+- Keep the same bundle identifiers and Apple team for upgrades. Installation
+  and data preservation across real signed upgrades have not yet been tested.
+- Upload pending captures when possible and check the resulting server entries.
+  Watch “Saved on phone” is not a server receipt. “Uploaded to server” does not
+  mean transcription is finished or a server backup exists.
+- Export device-only recordings from their capture details. Export each native
+  drawing's editable ink as well as its PNG if a portable preview is useful.
+  Editable ink can be imported as a new page; PNG does not restore editable strokes.
+- Typed originals are selectable in capture details. Bulk capture backup and
+  restore are not implemented. Downloaded library copies can be fetched again,
+  but unsynced captures, local drawings, and pending edits cannot be reconstructed
+  from the server. Do not treat reinstalling the app as a troubleshooting step
+  while it holds the only copy of work.
+
+## Recovering common failures
+
+| Failure                             | Existing recovery path                                                              | Limit                                                                       |
+| ----------------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Server/Tailscale unavailable        | Capture locally; reconnect and retry sync                                           | Bulk download cannot finish without the server                              |
+| Expired login                       | Sign in again to the same server; pending captures remain                           | Changing server binding/reset is not implemented                            |
+| Upload interrupted or response lost | Durable retry identities and server idempotency                                     | Foreground transfer bytes do not continue after process termination         |
+| Recording interrupted               | Play/export retained audio; explicitly keep it if playable                          | An unfinalized AAC container may be unplayable                              |
+| Drawing checkpoint fails            | Keep current/previous generations; restore previous saved version                   | Checkpoints are local and are not a server backup                           |
+| Download fails or storage fills     | Pause/retry; verified range downloads resume; remove downloaded copies              | No automatic eviction; text and staged uploads are outside the media budget |
+| Concurrent Journal edits            | Review conflict; apply against latest revision or save text separately              | Do not discard a pending change unless it is no longer needed               |
+| Watch receipt replay                | Durable receipt and matching identities prevent duplicate capture/removal           | Physical pairing/background delivery still needs validation                 |
+| Server restored from backup         | Authorized operator rotates sync epoch, then devices bootstrap and review conflicts | No automatic server-restore detector                                        |
+| Older app cannot open replica       | Install a compatible fixed build that understands its schema                        | Do not delete the replica: it contains pending edits and reading positions  |
+
+Current replica schema is version 3. Its migrations update existing newspaper
+search titles and journal original-text indexes without redownloading records or
+losing cursors/pending edits. Rolling back to a
+binary that accepts only version 1 or 2 fails closed; a compatible replacement build
+is the recovery path. Capture manifests remain separate from the SQLite replica.
+
+## Release boundary
+
+Use [SIGNING.md](SIGNING.md) for Team ID, profiles, secrets, the exact-tested-commit
+release gate, and explicit upload selection. No release workflow has been run
+with real credentials. A hosted unsigned archive is not installable on a device.
+The outstanding release checks include microphone/Pencil behavior, paired Watch
+delivery, long recordings, disk pressure, cellular/Tailscale transitions,
+accessibility, App Store metadata, and actual signed upgrade/recovery behavior.

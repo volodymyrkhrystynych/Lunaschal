@@ -325,7 +325,12 @@ claim that the current foreground uploader follows redirects.
       validation passes 80 tests. Native compilation and existing simulator
       regressions passed at `c3ee3f8`; dedicated transcript UI interaction remains
       untested.
-- [ ] Add offline search indexes and predictable schema migrations.
+- [x] Add offline search indexes and predictable schema migrations.
+      Schema version 3 adds original journal dictation to existing FTS entries
+      while retaining pending edits and cursors. Journal now searches device
+      captures and downloaded entries; changing the search resets pagination,
+      returning from a detail view preserves it. Pending edits remain visible
+      during search. Native UI verification is pending.
 - [ ] Define safe server-address changes, server restore detection, and account/device reset.
 - [x] Extend server schema/seeding/tests together for any new tables.
 
@@ -343,7 +348,9 @@ server credentials and operational state never enter the device replica.
 ### M4 — Library and storage management
 
 - [ ] Inventory the active library, media roots, and archive collections with sizes.
-- [ ] Define a per-device collection selection screen and storage budget.
+- [x] Define a per-device collection selection screen and storage budget.
+      Library controls select future media downloads and optional Knowledge,
+      with a media budget. SQLite text and original captures are outside that budget.
 - [ ] Include complete selected books/fics, archived web articles, PDFs, newspapers,
       and journal media—not only items previously opened in the UI.
 - [x] Download collection manifests and files with stable identities, sizes, and hashes.
@@ -509,11 +516,13 @@ physical Pencil behavior remain device checks.
 ### M6 — Mobile navigation and capture integration
 
 - [x] Start with a compact native Capture / Journal / Settings tab layout.
-- [ ] Map existing features to phone, iPad, web-only, or omitted mobile experiences.
-- [ ] Keep Practice and Notebook out of mobile navigation; distinguish the Notebook
+- [x] Map existing features to phone, iPad, web-only, or omitted mobile experiences.
+      See the [development feature matrix](../apple/SUPPORTED_FEATURES.md).
+- [x] Keep Practice and Notebook out of mobile navigation; distinguish the Notebook
       tab from the Paper/drawing features the iPad still needs.
 - [ ] Finalize phone tabs and iPad sidebar/split-view navigation as features arrive.
-- [ ] Add historical Journal browsing, editing, attachments, and conflict resolution.
+- [x] Add historical Journal browsing, editing, attachment readers, and conflict resolution.
+      New photo/document attachment capture and share-extension imports remain open.
 - [x] Save YouTube URLs and commentary offline; queue server metadata/import work.
 - [ ] Show archive playback availability without preventing URL/commentary capture.
 - [ ] Add a share extension for links, audio, photos, and supported documents.
@@ -604,6 +613,10 @@ Local chat is an optional extension, not a blocker for the core offline release.
 - [ ] Validate storage settings, accessibility, and large-library performance.
 - [ ] Maintain repeatable TestFlight updates and a rollback/recovery procedure.
 - [ ] Publish a supported-feature/device matrix and known limitations for each build.
+      A [development feature matrix and recovery guide](../apple/SUPPORTED_FEATURES.md)
+      now distinguishes implemented phone/iPad/Watch behavior, server dependencies,
+      device-only originals, and unsupported paths. A device-validated signed
+      release matrix remains pending.
 - [ ] Decide the long-term personal distribution method separately from beta testing.
 
 **Done when:** routine upgrades and common failure modes preserve the user's
