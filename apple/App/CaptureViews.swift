@@ -272,6 +272,7 @@ private struct ConnectionSettings: View {
                 Text("Applies to journal text and audio. Bulk library downloads will use Wi-Fi only.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            IntelligenceAvailabilityView()
         }
         .navigationTitle("Settings")
         .onAppear { address = model.server?.absoluteString ?? address }

@@ -175,7 +175,8 @@ four signing-configuration tests
 ([run](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37079353350)).
 Privacy manifests now declare the API reasons used by each target. CI additionally
 checks the embedded Watch identity/version, compiled assets, microphone descriptions,
-and bundled privacy manifests; that archive inspection awaits its first hosted run.
+and bundled privacy manifests; archive inspection passed at `c9c3c53`
+([run](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37096205883)).
 Signed export, TestFlight processing, privacy questionnaire, and device installation
 remain unverified and require the account setup in `apple/SIGNING.md`.
 
@@ -455,7 +456,10 @@ attachment PDFs reopen at their saved page. Positions belong to a content versio
 Deleted chapters cannot become resume targets. These positions never create
 server edits; cross-device progress and conflict handling remain outstanding.
 Two portable regressions pass in the 82-test local suite. A new PDFKit test covers
-page restoration and navigation callbacks; hosted verification is pending.
+page restoration and navigation callbacks. Hosted verification at `c9c3c53`
+passed 82 Linux / 83 macOS core tests, six native drawing/PDF tests, two offline
+relaunch tests, Watch compilation, and the inspected unsigned device archive
+([run](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37096205883)).
 
 ### M5 — PencilKit drawing and annotations
 
@@ -560,6 +564,16 @@ long-recording/storage-pressure and background behavior still need hardware
 validation. Hosted CI now includes an unsigned Watch simulator build.
 
 ### M8 — Optional on-device speech and AI
+
+Settings now checks the actual Foundation Models text-model availability and
+current locale, distinguishes disabled/ineligible/not-ready states, and refreshes
+when returning from device Settings. It follows Apple's
+[runtime availability](https://developer.apple.com/documentation/foundationmodels/systemlanguagemodel)
+and [locale checks](https://developer.apple.com/documentation/foundationmodels/supporting-languages-and-locales-with-foundation-models).
+This does not download models, invoke generation, or transcribe audio. Native
+SDK verification is pending; real-device model readiness, speech support, and
+quality evaluation remain open. Capture and server transcription do not depend
+on this optional check.
 
 - [ ] Check runtime availability by OS, hardware, locale, and downloaded model assets.
 - [ ] Evaluate Apple's speech APIs for offline transcription on the iPhone and iPad.
