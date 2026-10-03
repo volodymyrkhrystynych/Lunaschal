@@ -11,7 +11,7 @@ implementation limits. Keep this document current as work lands.
 ## Current position
 
 **Native offline capture, journal editing/search/conflicts, selected library
-downloads/readers, local PencilKit drawings, and Watch handoff/server receipts
+downloads/readers, native PencilKit Paper sync, and Watch handoff/server receipts
 are implemented. This is not yet an installable, signed, or device-validated
 release.** A manual signing/export workflow, generated icons, privacy manifests,
 device archive checks, and a [feature/recovery guide](../apple/SUPPORTED_FEATURES.md)
@@ -74,18 +74,26 @@ The merged backend
 baseline passed 57 media, sync, and seeder tests. No production deployment or
 signed release has run.
 
-| Milestone                                      | Status                                            | Completion evidence still needed                                |
-| ---------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------- |
-| M0 — Build and distribution                    | Unsigned builds and UI tests passed               | Signing, TestFlight installation                                |
-| M1 — Offline journal capture                   | Simulator capture/relaunch verified               | Device recording and connection checks                          |
-| M2 — Durable background transfers              | Staging, retries, processing implemented          | Device expiration/recovery; autonomous system transfer design   |
-| M3 — Multi-device data synchronization         | Implemented in part                               | Capture outbox migration, broader mutations, native validation  |
-| M4 — Downloadable library                      | Text and active media implemented in part         | Remaining file types, background scheduling, storage refinement |
-| M5 — Native drawing and annotation             | Native Paper saves and Linux previews implemented | Hosted verification, PDF integration, actual iPad validation    |
-| M6 — Mobile navigation and capture integration | Partly implemented                                | Share extension and iPad navigation refinement                  |
-| M7 — Watch recording companion                 | Compiles; core tested                             | Signing and paired-device validation                            |
-| M8 — Optional on-device speech and AI          | Runtime text-model check implemented              | Device readiness, speech, quality and resource measurements     |
-| M9 — Release and recovery readiness            | Guide and replica migrations implemented          | Signed upgrade/restore tests and stable distribution            |
+Native Paper sync at `87c7924` passed
+[hosted verification](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37136162108):
+93 Linux / 94 macOS core tests, six native drawing/PDF tests, two offline
+relaunch tests, four release-validation tests, Watch compilation, and inspected
+unsigned device archive. Local validation passed 106 backend Paper/sync/media/seeder
+tests and 27 Paper editor tests. The broad TypeScript check remains blocked by
+errors outside the changed Paper files.
+
+| Milestone                                      | Status                                         | Completion evidence still needed                                |
+| ---------------------------------------------- | ---------------------------------------------- | --------------------------------------------------------------- |
+| M0 — Build and distribution                    | Unsigned builds and UI tests passed            | Signing, TestFlight installation                                |
+| M1 — Offline journal capture                   | Simulator capture/relaunch verified            | Device recording and connection checks                          |
+| M2 — Durable background transfers              | Staging, retries, processing implemented       | Device expiration/recovery; autonomous system transfer design   |
+| M3 — Multi-device data synchronization         | Implemented in part                            | Capture outbox migration, broader mutations, native validation  |
+| M4 — Downloadable library                      | Text and active media implemented in part      | Remaining file types, background scheduling, storage refinement |
+| M5 — Native drawing and annotation             | Native Paper saves and Linux previews verified | PDF integration, actual iPad and multi-device validation        |
+| M6 — Mobile navigation and capture integration | Partly implemented                             | Share extension and iPad navigation refinement                  |
+| M7 — Watch recording companion                 | Compiles; core tested                          | Signing and paired-device validation                            |
+| M8 — Optional on-device speech and AI          | Runtime text-model check implemented           | Device readiness, speech, quality and resource measurements     |
+| M9 — Release and recovery readiness            | Guide and replica migrations implemented       | Signed upgrade/restore tests and stable distribution            |
 
 ### Evidence from the initial implementation
 
@@ -497,16 +505,16 @@ motivation. Final integration depends on the M3 conflict/storage contract.
 - [ ] Prototype PencilKit on the actual M1 iPad/Pencil 2: latency, palm rejection,
       finger scrolling, zoom, eraser, selection, and Pencil 2 double-tap behavior.
 - [ ] Inventory Paper, Study, newspaper/PDF annotations, and their coordinate systems.
-- [ ] Decide the canonical editable format and compatibility strategy for existing ink.
+- [x] Decide the canonical editable format and compatibility strategy for existing ink.
 - [ ] Preserve originals during conversion; document any lossy import/export.
 - [x] Keep native editable drawings plus portable previews for Linux/web readers.
-- [ ] Decide whether cross-platform editing can be lossless; clearly label any
+- [x] Decide whether cross-platform editing can be lossless; clearly label any
       read-only or conversion-required paths rather than silently flattening ink.
 - [ ] Preserve A4/page coordinates, page ordering, pasted images, and image transforms.
 - [x] Implement local drawing checkpoints and crash/reopen recovery.
 - [x] Preserve the existing distinction between local saving and the explicit Paper
       Save action until deliberately changing that interaction.
-- [ ] Synchronize page revisions with recoverable conflict copies.
+- [x] Synchronize page revisions with recoverable conflict copies.
 - [ ] Integrate PDF/newspaper annotation and the Study split reading/drawing layout.
 - [ ] Validate old pages, long documents, thumbnails, and Journal filing behavior.
 
@@ -552,9 +560,13 @@ The server retains current/previous native files, and both files are durable
 before committing the row and replay receipt. A failed transaction can leave an
 unreferenced file, never replace an older referenced original.
 
-Local verification: 93 Swift core tests, 27 Paper editor tests and 105 backend
-Paper/sync/media/seeder tests passed before the final retention/refresh refinements.
-Final checks and hosted Apple SDK validation are pending. Repository-wide
+Final verification at `87c7924`: 93 Linux / 94 macOS Swift core tests, six native
+drawing/PDF tests, two offline relaunch tests, Watch compilation and inspected
+device archive passed in [hosted CI](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37136162108).
+Locally, 27 Paper editor tests and 106 backend Paper/sync/media/seeder tests passed.
+Commands: `npx vitest run src/components/Paper/PaperEditor.test.tsx` and
+`.venv/bin/pytest backend/tests/test_mobile_drawings.py backend/tests/test_mobile_sync.py backend/tests/test_mobile_media.py backend/tests/test_paper.py backend/tests/test_seed_test_db.py`.
+Repository-wide
 `tsc --noEmit` reports errors outside the changed feature (including missing
 drizzle-kit/Node/Verovio declarations and existing Chat/Fanfic test fixtures).
 Physical Pencil, multi-device delivery and signed upgrade checks remain open.

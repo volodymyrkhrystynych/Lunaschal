@@ -119,8 +119,8 @@ xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
 The `Lunaschal` scheme includes XCUITests for journal capture/search and drawing-page
 creation without signing in, terminating the app, and reopening the saved work.
 It also includes four native drawing-import tests and two PDF download/reading-position
-tests. [Verification at `ef78e21`](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37097464982)
-passed all eight native tests, 88 Linux / 89 macOS core tests, four signing-helper
+tests. [Verification at `87c7924`](https://github.com/volodymyrkhrystynych/Lunaschal/actions/runs/37136162108)
+passed all eight native tests, 93 Linux / 94 macOS core tests, four signing-helper
 tests, Watch compilation, and unsigned device archive inspection in Xcode 26.6.
 Run the scheme's tests on an iPhone simulator. Files-provider interaction and
 Pencil hardware behavior still need device verification.
