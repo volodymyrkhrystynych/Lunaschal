@@ -434,6 +434,15 @@ Local Swift validation passes 78 tests. Native verification is pending.
 
 ### M5 — PencilKit drawing and annotations
 
+Device-local reading positions now persist in the replica database: text chapters
+resume at a paragraph, books offer a Continue link, and PDF books/documents/audio
+attachment PDFs reopen at their saved page. Positions belong to a content version
+(chapter epoch/revision or PDF hash), so replaced content starts at its beginning.
+Deleted chapters cannot become resume targets. These positions never create
+server edits; cross-device progress and conflict handling remain outstanding.
+Two portable regressions pass in the 82-test local suite. A new PDFKit test covers
+page restoration and navigation callbacks; hosted verification is pending.
+
 Prototype this early, alongside M0–M2, because drawing quality is a primary
 motivation. Final integration depends on the M3 conflict/storage contract.
 

@@ -6,6 +6,31 @@ import LunaschalCore
 
 final class PDFLibraryTests: XCTestCase {
     @MainActor
+    func testNativePDFReaderRestoresPageAndReportsNavigation() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let bytes = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842)).pdfData { context in
+            for index in 0..<3 {
+                context.beginPage()
+                ("Page \(index)" as NSString).draw(at: CGPoint(x: 30, y: 30), withAttributes: [.font: UIFont.systemFont(ofSize: 18)])
+            }
+        }
+        let source = root.appendingPathComponent("book.pdf")
+        try bytes.write(to: source)
+        let reader = LocalPDFView(url: source, initialPage: 2).makePDFView()
+        let document = try XCTUnwrap(reader.document)
+        XCTAssertEqual(document.index(for: try XCTUnwrap(reader.currentPage)), 2)
+        let coordinator = LocalPDFView.Coordinator()
+        var observed: Int?
+        coordinator.observe(reader) { observed = $0 }
+        reader.go(to: try XCTUnwrap(document.page(at: 1)))
+        XCTAssertEqual(observed, 1)
+        let fallback = LocalPDFView(url: source, initialPage: 100).makePDFView()
+        XCTAssertEqual(fallback.document?.index(for: try XCTUnwrap(fallback.currentPage)), 0)
+    }
+
+    @MainActor
     func testResumedBookOpensInNativeReaderAfterStoreReopens() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

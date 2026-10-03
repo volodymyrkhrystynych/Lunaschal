@@ -149,6 +149,7 @@ private struct BookView: View {
     @ObservedObject var model: CaptureModel
     let book: SyncChange
     @State private var chapters: [SyncChange] = []
+    @State private var resume: SyncChange?
 
     var body: some View {
         List {
@@ -163,13 +164,14 @@ private struct BookView: View {
             } else if chapters.isEmpty {
                 Text("No chapter text downloaded. Use the Library download button on Wi-Fi.")
             }
+            if let resume {
+                NavigationLink("Continue: \(resume.title)") {
+                    TextChapterReader(store: model.replica, chapter: resume)
+                }
+            }
             ForEach(chapters) { chapter in
                 NavigationLink {
-                    ScrollView {
-                        Text(chapter.data?["contentText"]?.string ?? "")
-                            .font(.system(.body, design: .serif)).textSelection(.enabled)
-                            .frame(maxWidth: 760, alignment: .leading).padding()
-                    }.navigationTitle(chapter.title).navigationBarTitleDisplayMode(.inline)
+                    TextChapterReader(store: model.replica, chapter: chapter)
                 } label: { Text(chapter.title) }
             }
         }
@@ -178,6 +180,7 @@ private struct BookView: View {
             do {
                 chapters = try model.replica.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id)
                     .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
+                resume = try model.replica.lastReadChapter(bookID: book.id)
             } catch { model.message = error.localizedDescription }
         }
     }
@@ -246,6 +249,7 @@ struct DownloadedMediaView: View {
     let title: String
     @State private var file: URL?
     @State private var player: AVPlayer?
+    @State private var savedPDFPage = 0
     @State private var confirmingRemoval = false
     @State private var availability: MediaAvailability = .metadataOnly
 
@@ -253,7 +257,12 @@ struct DownloadedMediaView: View {
         Group {
             if let file {
                 if mime == "application/pdf" {
-                    LocalPDFView(url: file)
+                    LocalPDFView(url: file, initialPage: savedPDFPage) { page in
+                        do {
+                            try model.replica.saveReadingPosition(collection: collection, id: id,
+                                version: file.lastPathComponent, offset: page)
+                        } catch { model.message = error.localizedDescription }
+                    }
                 } else if mime.hasPrefix("text/html") {
                     LocalArticleView(url: file)
                 } else if mime.hasPrefix("image/"), let picture = UIImage(contentsOfFile: file.path) {
@@ -298,6 +307,10 @@ struct DownloadedMediaView: View {
             if downloaded != file {
                 player?.pause()
                 player = nil
+                if let downloaded, mime == "application/pdf" {
+                    savedPDFPage = try model.replica.readingPosition(collection: collection, id: id,
+                        version: downloaded.lastPathComponent) ?? 0
+                }
                 file = downloaded
                 if let file, mime.hasPrefix("audio/") || mime.hasPrefix("video/") { player = AVPlayer(url: file) }
             }
@@ -307,14 +320,47 @@ struct DownloadedMediaView: View {
 
 struct LocalPDFView: UIViewRepresentable {
     let url: URL
-    func makeUIView(context: Context) -> PDFView { makePDFView() }
+    var initialPage = 0
+    var onPageChanged: ((Int) -> Void)? = nil
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> PDFView {
+        let view = makePDFView()
+        context.coordinator.observe(view, callback: onPageChanged)
+        return view
+    }
     func makePDFView() -> PDFView {
         let view = PDFView()
         view.autoScales = true
         view.document = PDFDocument(url: url)
+        if let document = view.document, let page = document.page(at: initialPage >= 0 && initialPage < document.pageCount ? initialPage : 0) {
+            view.go(to: page)
+        }
         return view
     }
-    func updateUIView(_ view: PDFView, context: Context) {}
+    func updateUIView(_ view: PDFView, context: Context) {
+        context.coordinator.callback = onPageChanged
+        if view.document?.documentURL != url {
+            view.document = PDFDocument(url: url)
+            if let document = view.document,
+               let page = document.page(at: initialPage >= 0 && initialPage < document.pageCount ? initialPage : 0) {
+                view.go(to: page)
+            }
+        }
+    }
+    final class Coordinator {
+        private var observer: NSObjectProtocol?
+        var callback: ((Int) -> Void)?
+        func observe(_ view: PDFView, callback: ((Int) -> Void)?) {
+            self.callback = callback
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = NotificationCenter.default.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak view, weak self] _ in
+                guard let view, let page = view.currentPage, let document = view.document else { return }
+                let index = document.index(for: page)
+                if index != NSNotFound { self?.callback?(index) }
+            }
+        }
+        deinit { if let observer { NotificationCenter.default.removeObserver(observer) } }
+    }
 }
 
 private struct LocalArticleView: UIViewRepresentable {

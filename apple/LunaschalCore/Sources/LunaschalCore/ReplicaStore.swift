@@ -117,6 +117,43 @@ public final class ReplicaStore {
         }
     }
 
+    public func readingPosition(collection: String, id: String, version: String) throws -> Int? {
+        guard let saved = try value(readingKey(collection, id)) else { return nil }
+        let position = try decode(ReadingPosition.self, saved)
+        return position.version == version && position.offset >= 0 ? position.offset : nil
+    }
+
+    public func saveReadingPosition(collection: String, id: String, version: String, offset: Int, bookID: String? = nil) throws {
+        let key = try readingKey(collection, id)
+        guard !version.isEmpty, version.count <= 256, offset >= 0,
+              bookID == nil || (collection == "fic_chapters" && ULID.isValid(bookID!)) else {
+            throw ReplicaError.invalidEdit
+        }
+        if let bookID {
+            guard let chapter = try record(collection: collection, id: id), !chapter.deleted,
+                  chapter.data?["ficId"]?.string == bookID else { throw ReplicaError.invalidEdit }
+        }
+        try transaction {
+            try set(key, json(ReadingPosition(version: version, offset: offset)))
+            if let bookID { try set("reading-book:" + bookID, id) }
+        }
+    }
+
+    public func lastReadChapter(bookID: String) throws -> SyncChange? {
+        guard ULID.isValid(bookID) else { throw ReplicaError.invalidEdit }
+        guard let id = try value("reading-book:" + bookID),
+              let chapter = try record(collection: "fic_chapters", id: id), !chapter.deleted,
+              chapter.data?["ficId"]?.string == bookID else { return nil }
+        return chapter
+    }
+
+    private func readingKey(_ collection: String, _ id: String) throws -> String {
+        guard ["fic_chapters", "fics", "study_sources", "journal_attachments"].contains(collection), ULID.isValid(id) else {
+            throw ReplicaError.invalidEdit
+        }
+        return "reading-position:" + collection + ":" + id
+    }
+
     public func queue(record: SyncChange, data: [String: JSONValue], delete: Bool = false) throws -> ReplicaOperation {
         guard let epoch = try epoch else { throw ReplicaError.needsBootstrap }
         guard record.collection == "journal_entries", !record.deleted,
