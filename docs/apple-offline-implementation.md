@@ -18,7 +18,8 @@ Library navigation and exempt-encryption declarations passed hosted Apple CI at
   updates through ordinary sync, honoring the cellular preference. Cold,
   incomplete, or expired scopes require Wi-Fi; media stays bulk-only.
 - Added worker/cursor/cancellation tests and an iPad drawing simulator check.
-  Local Swift core verification passed (101 tests); hosted Apple checks are pending.
+  Local Swift core verification passed (102 tests), including rejection of stale
+  responses after cursor resets; hosted Apple checks are pending.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first

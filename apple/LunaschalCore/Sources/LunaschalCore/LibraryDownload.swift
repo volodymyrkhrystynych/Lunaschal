@@ -67,7 +67,7 @@ public actor LibraryDownload {
                     try store.resetCursor(collections: collections)
                     return false
                 }
-                try store.apply(page, startingBootstrap: false)
+                try store.apply(page, startingBootstrap: false, expectedCursor: cursor)
                 if !page.hasMore { return true }
             } catch let error as HTTPFailure where error.status == 410 {
                 try store.resetCursor(collections: collections)
@@ -102,7 +102,7 @@ public actor LibraryDownload {
                       cursor == (try store.cursor(collections: collections)) else {
                     throw ReplicaError.needsBootstrap
                 }
-                try store.apply(page, startingBootstrap: cursor == nil)
+                try store.apply(page, startingBootstrap: cursor == nil, expectedCursor: cursor)
                 records += page.changes.count
                 await progress("Updating reading content: \(records) records saved")
                 if !page.hasMore { break }

@@ -170,4 +170,15 @@ final class LibraryDownloadTests: XCTestCase {
                                       mediaCollections: [], budget: 1024) { _ in }
         XCTAssertEqual(try store.cursor(collections: collections), "resumed")
     }
+
+    func testPageCannotCommitAgainstAResetCursor() throws {
+        let (store, _) = try setup()
+        try store.apply(page("ready"), startingBootstrap: true)
+        try store.resetCursor(collections: collections)
+        XCTAssertThrowsError(try store.apply(
+            page("stale", mode: "delta", revision: 2, content: "Stale"),
+            startingBootstrap: false, expectedCursor: "ready"))
+        XCTAssertNil(try store.cursor(collections: collections))
+        XCTAssertEqual(try store.record(collection: "fic_chapters", id: chapter)?.data?["content"]?.string, "Original")
+    }
 }

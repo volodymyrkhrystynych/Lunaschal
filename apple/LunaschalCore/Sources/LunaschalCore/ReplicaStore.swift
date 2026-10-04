@@ -69,7 +69,7 @@ public final class ReplicaStore {
         try execute("DELETE FROM replica_meta WHERE key LIKE 'ready:%'")
     }
 
-    public func apply(_ page: SyncPage, startingBootstrap: Bool) throws {
+    public func apply(_ page: SyncPage, startingBootstrap: Bool, expectedCursor: String? = nil) throws {
         guard page.protocolVersion == 1, ULID.isValid(page.epoch),
               ["bootstrap", "delta"].contains(page.mode), !page.cursor.isEmpty,
               !page.collections.isEmpty, Set(page.collections).count == page.collections.count,
@@ -77,9 +77,14 @@ public final class ReplicaStore {
                   !$0.id.isEmpty && ($0.deleted ? $0.data == nil : $0.data?["id"]?.string == $0.id) }) else {
             throw ReplicaError.invalidPage
         }
-        let previousEpoch = try epoch
-        if previousEpoch != page.epoch && !startingBootstrap { throw ReplicaError.needsBootstrap }
         try transaction {
+            // Another connection can reset history while a request is in flight.
+            // Validate under the same write transaction as the page commit.
+            let previousEpoch = try epoch
+            if previousEpoch != page.epoch && !startingBootstrap { throw ReplicaError.needsBootstrap }
+            if let expectedCursor, try cursor(collections: page.collections) != expectedCursor {
+                throw ReplicaError.needsBootstrap
+            }
             if previousEpoch != page.epoch {
                 try execute("DELETE FROM replica_meta WHERE key LIKE 'cursor:%'")
                 try execute("DELETE FROM replica_meta WHERE key LIKE 'ready:%'")
