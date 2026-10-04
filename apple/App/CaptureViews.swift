@@ -14,8 +14,10 @@ struct CaptureRoot: View {
                 .tabItem { Label("Journal", systemImage: "book.closed") }
             NavigationStack { LibraryView(model: model) }
                 .tabItem { Label("Library", systemImage: "books.vertical") }
-            NavigationStack { DrawingLibraryView(model: model) }
-                .tabItem { Label("Draw", systemImage: "pencil.tip") }
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                NavigationStack { DrawingLibraryView(model: model) }
+                    .tabItem { Label("Draw", systemImage: "pencil.tip") }
+            }
             NavigationStack { ConnectionSettings(model: model) }
                 .tabItem { Label("Settings", systemImage: "gear") }
         }
@@ -282,7 +284,7 @@ private struct ConnectionSettings: View {
                     .font(.footnote).foregroundStyle(.secondary)
                 Toggle("Allow cellular sync", isOn: $allowCellular)
                     .onChange(of: allowCellular) { _, _ in model.cancelSync() }
-                Text("Applies to journal text and audio. Bulk library downloads will use Wi-Fi only.")
+                Text("Applies to journal text, audio, and chapter updates after your first library download. Bulk library downloads use Wi-Fi only.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             IntelligenceAvailabilityView()

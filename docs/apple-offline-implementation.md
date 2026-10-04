@@ -7,7 +7,18 @@ category destinations, each searchable with 50-item pages. Moved download
 selection, progress/pause, storage budget, and cleanup into Settings → Library
 downloads, retaining existing preferences. Added a simulator regression test
 for reaching every category and finding download controls under Settings.
-Hosted Apple build and simulator verification are pending for this follow-up.
+Library navigation and exempt-encryption declarations passed hosted Apple CI at
+`0562fda`. Additional device/download follow-up:
+
+- Draw and native-page editing are iPad-only; iPhone keeps Paper previews.
+- Bulk downloads remain Wi-Fi-only and run database/file work on a worker actor,
+  with an independent SQLite connection and a model-owned cancellable task.
+  Switching tabs keeps the task alive; leaving the app pauses it.
+- Completed text downloads receive bounded incremental chapter/reading-content
+  updates through ordinary sync, honoring the cellular preference. Cold,
+  incomplete, or expired scopes require Wi-Fi; media stays bulk-only.
+- Added worker/cursor/cancellation tests and an iPad drawing simulator check.
+  Local Swift core verification passed (101 tests); hosted Apple checks are pending.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first

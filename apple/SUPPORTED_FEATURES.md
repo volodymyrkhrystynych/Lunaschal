@@ -25,7 +25,12 @@ has been validated. Exact commits and CI results are recorded in the
 | Chat, Calendar, Food, Lifestyle, Learning | Use the existing web app                                                                    | Not exposed                                       | Existing web app requirements apply                      |
 | Practice and Notebook                     | Intentionally omitted from native navigation                                                | Not exposed                                       | Existing Linux/web app remains available                 |
 
-The current five tabs are Capture, Journal, Library, Draw, and Settings. There is
+The iPhone tabs are Capture, Journal, Library, and Settings. iPad also has Draw;
+native drawing creation/editing is iPad-only, while Paper previews work on both.
+Library download controls live under Settings → Library downloads. Bulk downloads
+stay on Wi-Fi and continue while switching tabs. Subsequent chapter/text updates
+follow the cellular preference; full resyncs and binary media remain Wi-Fi-only.
+There is
 no dedicated iPad split-view navigation yet. The same app serves phone and iPad;
 Pencil drawing is intended for the iPad and still needs Pencil 2 hardware testing.
 The Watch only depends on the paired phone for handoff, not direct Tailscale access.

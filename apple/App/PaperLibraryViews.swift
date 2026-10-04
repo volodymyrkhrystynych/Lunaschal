@@ -21,7 +21,8 @@ struct PaperPreviewView: View {
                     DownloadedMediaView(model: model, collection: "paper_pages", id: page.id,
                                         mime: "image/png", title: "\(paper.title) · Page \(index + 1)")
                 }
-                if let native = try? model.replica.record(collection: "paper_native_ink", id: page.id), !native.deleted {
+                if UIDevice.current.userInterfaceIdiom == .pad,
+                   let native = try? model.replica.record(collection: "paper_native_ink", id: page.id), !native.deleted {
                     Button("Edit native page \(index + 1)") { openDrawing(page, native: native) }
                 }
             }

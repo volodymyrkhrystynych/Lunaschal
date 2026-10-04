@@ -79,7 +79,8 @@ public enum MediaAvailability: Equatable {
 }
 
 /// Downloaded copies only. This directory never contains capture originals.
-@MainActor
+/// Confine each instance to its owner. The download worker uses its own instance;
+/// UI readers see only atomically published manifests and completed files.
 public final class MediaStore {
     public let root: URL
     private let hash: @Sendable (URL) throws -> String

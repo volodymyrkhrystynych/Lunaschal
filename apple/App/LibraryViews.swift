@@ -140,11 +140,13 @@ struct LibraryDownloadSettings: View {
     var body: some View {
         List {
             Section {
-                Button("Download library over Wi-Fi") { Task { await model.downloadLibrary() } }
+                Button("Download library over Wi-Fi") { model.startLibraryDownload() }
                     .disabled(model.downloadingLibrary || !model.signedIn)
                 if model.downloadingLibrary {
                     ProgressView()
                     Button("Pause downloads") { model.pauseLibrary() }
+                    Text("You can keep using the app or switch tabs while downloads continue. Leaving the app pauses downloads.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Stepper("Media budget: \(budget) GB", value: $budget, in: 1...150, step: 5)
                     .disabled(model.downloadingLibrary)
@@ -231,13 +233,16 @@ private struct BookView: View {
             }
         }
         .navigationTitle(book.title)
-        .task {
-            do {
-                chapters = try model.replica.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id)
-                    .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
-                resume = try model.replica.lastReadChapter(bookID: book.id)
-            } catch { model.message = error.localizedDescription }
-        }
+        .task(id: model.downloadingLibrary) { refreshChapters() }
+        .onChange(of: model.syncing) { _, syncing in if !syncing { refreshChapters() } }
+    }
+
+    private func refreshChapters() {
+        do {
+            chapters = try model.replica.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id)
+                .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
+            resume = try model.replica.lastReadChapter(bookID: book.id)
+        } catch { model.message = error.localizedDescription }
     }
 }
 

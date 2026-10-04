@@ -33,11 +33,12 @@ what each device can currently do and which work remains device-only.
   and link-attachment IDs. Entry creation precedes link import; retry validates
   both acknowledgements. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Library / Draw / Settings navigation for iPhone and iPad.
+- Native Capture / Journal / Library / Settings navigation on iPhone; iPad also has Draw.
   Library opens with five category links, each with its own search and list:
   Books and stories, Documents, Paper documents, Newspaper front pages, and
   Knowledge articles. Download selection, progress, storage budget, and cleanup
   live in Settings → Library downloads.
+  Paper previews remain readable on iPhone, while native drawing editing is iPad-only.
 - Durable per-capture manifests in Application Support, replaced atomically;
   audio lives beside them. A separate SQLite replica stores server records,
   full-text search, sync cursors, and revision-checked journal edits.
@@ -79,6 +80,13 @@ what each device can currently do and which work remains device-only.
   PDF books open in PDFKit. The client checks server media capabilities before
   downloading; older servers continue serving their supported collections and
   display an update notice for PDF-book support.
+  Bulk database and file work runs on a separate actor and SQLite connection;
+  you can browse and capture while downloads run, including after switching tabs.
+  After a completed Wi-Fi text download, ordinary sync also fetches incremental
+  chapter and reading-content changes using the cellular preference. These passes
+  are bounded to five pages and never fetch binary media or start a bootstrap.
+  Expired cursors and incomplete first downloads wait for the next Wi-Fi download.
+  Existing installations need one Wi-Fi download pass to establish this checkpoint.
 - Local PDF, image, audio/video, and archived-article views. Articles use a
   script-disabled WebKit view with remote resources blocked. Knowledge article
   text is opt-in. Archive videos and ZIM packages are not bulk-downloaded.
@@ -172,7 +180,8 @@ publicly to make CI work: simulator capture tests never contact it.
   filters the selected category and can expand beyond 50 matches. Counts and
   results share the same filter and stable revision/ID ordering. Loading more
   does not contact the server. Attachment imports remain outstanding.
-- Downloads currently require the app to remain active. Partial files resume
+- Downloads continue across tabs while the app is active; leaving the app pauses
+  them. Partial files resume
   on the next download request. Selection changes retain existing copies;
   “Remove downloaded media” explicitly clears media copies and partials, while
   retaining capture originals and server records. Individual downloaded files

@@ -1,9 +1,11 @@
 import XCTest
+import UIKit
 
 final class OfflineCaptureTests: XCTestCase {
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
         let app = XCUIApplication()
         app.launch()
+        XCTAssertEqual(app.tabBars.buttons["Draw"].exists, UIDevice.current.userInterfaceIdiom == .pad)
         app.tabBars.buttons["Library"].tap()
         let categories = [
             ("fics", "Books and stories"),
@@ -34,6 +36,10 @@ final class OfflineCaptureTests: XCTestCase {
     func testDrawingWorkspaceReopensWithoutAServer() {
         let app = XCUIApplication()
         app.launch()
+        guard UIDevice.current.userInterfaceIdiom == .pad else {
+            XCTAssertFalse(app.tabBars.buttons["Draw"].exists)
+            return
+        }
         app.tabBars.buttons["Draw"].tap()
         let newDrawing = app.buttons["New drawing"]
         XCTAssertTrue(newDrawing.waitForExistence(timeout: 10))

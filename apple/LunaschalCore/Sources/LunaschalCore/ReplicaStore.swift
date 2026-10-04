@@ -1,7 +1,8 @@
 import Foundation
 import CSQLite
 
-/// One main-actor owner in the app; a page and its cursor commit together.
+/// Confine each connection to its owner; a page and its cursor commit together.
+/// The library worker uses a separate WAL connection so UI reads remain available.
 /// The outbox is independent of the server projection, including during resets.
 public final class ReplicaStore {
     private var db: OpaquePointer?
@@ -50,10 +51,22 @@ public final class ReplicaStore {
 
     public func cursor(collections: [String]) throws -> String? { try value(scope(collections)) }
 
+    public func isBootstrapped(collections: [String]) throws -> Bool {
+        try value("ready:" + scope(collections)) == "1"
+    }
+
+    public func resetCursor(collections: [String]) throws {
+        try transaction {
+            try execute("DELETE FROM replica_meta WHERE key IN (?,?)",
+                        [scope(collections), "ready:" + scope(collections)])
+        }
+    }
+
     public func resetCursors() throws {
         // Existing records remain readable while a replacement bootstrap runs.
         // Pending edits keep their old epoch and are surfaced as conflicts.
         try execute("DELETE FROM replica_meta WHERE key LIKE 'cursor:%'")
+        try execute("DELETE FROM replica_meta WHERE key LIKE 'ready:%'")
     }
 
     public func apply(_ page: SyncPage, startingBootstrap: Bool) throws {
@@ -69,11 +82,13 @@ public final class ReplicaStore {
         try transaction {
             if previousEpoch != page.epoch {
                 try execute("DELETE FROM replica_meta WHERE key LIKE 'cursor:%'")
+                try execute("DELETE FROM replica_meta WHERE key LIKE 'ready:%'")
                 try execute("DELETE FROM replica_records")
                 try execute("DELETE FROM replica_search")
                 try execute("UPDATE replica_outbox SET state='conflict',error='Server history changed. Review this saved edit.' WHERE state='pending'")
                 try set("epoch", page.epoch)
             } else if startingBootstrap {
+                try execute("DELETE FROM replica_meta WHERE key=?", ["ready:" + scope(page.collections)])
                 // A complete bootstrap is a replacement for its chosen scope;
                 // no unselected records or pending edits are removed.
                 for collection in page.collections {
@@ -83,6 +98,7 @@ public final class ReplicaStore {
             }
             for change in page.changes { try put(change) }
             try set(scope(page.collections), page.cursor)
+            if !page.hasMore { try set("ready:" + scope(page.collections), "1") }
         }
     }
 
