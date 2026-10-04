@@ -285,6 +285,17 @@ def create_journal_entry(
     return id
 
 
+def _queue_todays_newspaper() -> None:
+    """The day's first entry is one of the two triggers for downloading that
+    day's newspaper (the other is a random evening time — see
+    `backend/newspapers/scheduler.py`). Never allowed to fail the save."""
+    try:
+        from backend.newspapers import scheduler as newspaper_scheduler
+        newspaper_scheduler.queue_for_journal_entry()
+    except Exception:
+        pass
+
+
 @bp.post('')
 def create_entry():
     body = request.json or {}
@@ -342,6 +353,7 @@ def create_entry():
         # storing a row that looks located and isn't.
         coords=coord_pair(body.get('latitude'), body.get('longitude')),
     )
+    _queue_todays_newspaper()
     return jsonify({'id': id}), 201
 
 
@@ -1342,6 +1354,8 @@ def create_recording_entry():
     _notify_subscribers(entry_id)
     if transcribe:
         _queue_attachment_transcription(_load_attachment(attachment['id']), into_entry=True)
+    if created_entry:
+        _queue_todays_newspaper()
     return jsonify({'id': entry_id, 'attachment': attachment, 'ideaId': idea_id,
                     'ficId': fic_id}), 201
 

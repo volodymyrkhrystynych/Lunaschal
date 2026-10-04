@@ -92,7 +92,8 @@ export function NewspapersSection() {
           }
           onChange={event => autoDownload.mutate(event.target.checked)}
         />
-        Also download daily after 6 am Toronto time, without opening Newspapers
+        Also download daily, without opening Newspapers — on your first journal
+        entry of the day, or at a random time between 6 and 10 pm Toronto time
       </label>
       {(subscriber.error || autoDownload.error) && (
         <p role="alert">{(subscriber.error || autoDownload.error)?.message}</p>

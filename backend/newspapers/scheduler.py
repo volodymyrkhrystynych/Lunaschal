@@ -1,6 +1,13 @@
-"""Persistent, single-download queue, with Toronto-time daily scheduling."""
+"""Persistent, single-download queue, with Toronto-time daily scheduling.
+
+With auto-download on, a day's issue is queued by whichever comes first: the
+day's first journal entry (`queue_for_journal_entry`), or a time picked at
+random between 18:00 and 22:00 Toronto. Either way it gets `MAX_ATTEMPTS`
+tries an hour apart, and a later trigger on the same day does not reset them.
+"""
 import logging
 import os
+import random
 import threading
 import time
 from datetime import datetime
@@ -15,6 +22,36 @@ logger = logging.getLogger(__name__)
 _lock = threading.Lock()
 _wake = threading.Event()
 _thread = None
+
+TORONTO = ZoneInfo('America/Toronto')
+MAX_ATTEMPTS = 2
+EVENING_START_HOUR = 18
+EVENING_END_HOUR = 22
+
+
+def evening_minute(date):
+    """Minutes past midnight at which `date`'s evening download fires.
+
+    Seeded by the date so the pick survives a restart rather than being re-rolled
+    on every boot (which would skew it towards whichever boot came first)."""
+    return random.Random(f'newspaper:{date}').randrange(
+        EVENING_START_HOUR * 60, EVENING_END_HOUR * 60)
+
+
+def _auto_download_enabled(db):
+    row = db.execute('SELECT newspapers_auto_download FROM settings WHERE id=1').fetchone()
+    return bool(row and row[0])
+
+
+def queue_for_journal_entry(now=None):
+    """A journal entry was made: queue today's issue if auto-download is on.
+
+    Idempotent per day — `queue_issue` neither duplicates nor resets the row, so
+    only the day's first entry has any effect."""
+    now = int(time.time()) if now is None else now
+    if not _auto_download_enabled(get_db()):
+        return None
+    return queue_issue(datetime.fromtimestamp(now, TORONTO).date().isoformat())
 
 
 def queue_issue(date, *, retry=False, wake=True):
@@ -37,11 +74,11 @@ def queue_issue(date, *, retry=False, wake=True):
 
 def tick(now=None):
     now = int(time.time()) if now is None else now
-    local = datetime.fromtimestamp(now, ZoneInfo('America/Toronto'))
+    local = datetime.fromtimestamp(now, TORONTO)
     db = get_db()
-    settings = db.execute('SELECT newspapers_auto_download FROM settings WHERE id=1').fetchone()
-    if settings and settings[0] and local.hour >= 6:
-        queue_issue(local.date().isoformat(), wake=False)
+    today = local.date().isoformat()
+    if _auto_download_enabled(db) and local.hour * 60 + local.minute >= evening_minute(today):
+        queue_issue(today, wake=False)
     with _lock:
         # A successful interactive reconnect wakes requests blocked by sign-in.
         try:
@@ -49,7 +86,7 @@ def tick(now=None):
         except OSError:
             session_updated = 0
         db.execute("UPDATE newspaper_downloads SET status='queued', attempts=0, next_attempt_at=0 WHERE status='sign-in-required' AND updated_at < ?", (session_updated,))
-        row = db.execute("SELECT * FROM newspaper_downloads WHERE status='queued' OR (status='failed' AND attempts < 4 AND next_attempt_at <= ?) ORDER BY created_at, date LIMIT 1", (now,)).fetchone()
+        row = db.execute("SELECT * FROM newspaper_downloads WHERE status='queued' OR (status='failed' AND attempts < ? AND next_attempt_at <= ?) ORDER BY created_at, date LIMIT 1", (MAX_ATTEMPTS, now)).fetchone()
         if row is None:
             db.commit()
             return
