@@ -5,6 +5,7 @@ import { LoadingState, ErrorBanner } from '../LoadStates';
 import { KIND_CHIPS, searchCoverage } from '../../lib/knowledge';
 import { ArchiveList } from './ArchiveList';
 import { CatalogPanel } from './CatalogPanel';
+import { DocPacksPanel } from './DocPacksPanel';
 import { DownloadStrip } from './DownloadStrip';
 
 export function Knowledge() {
@@ -110,6 +111,7 @@ export function Knowledge() {
               </div>
               {archives.isError && <ErrorBanner error={archives.error} />}
               {archives.data && <ArchiveList archives={archives.data} />}
+              <DocPacksPanel />
             </>
           )}
           {/* Outside the !query branch on purpose: a download running while

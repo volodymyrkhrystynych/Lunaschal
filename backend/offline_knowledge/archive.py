@@ -45,6 +45,7 @@ from typing import Any
 
 from backend.db.connection import get_db
 from backend.htmltext import strip_html_with_title
+from backend.offline_knowledge import docpacks
 
 # A guard on the rglob, not on the hot path: discovery now happens inside
 # registry.sync() behind a TTL, and search reads the table. The DevDocs
@@ -58,8 +59,12 @@ RESULTS_PER_QUERY = 8
 
 # How much of one answer each kind of source may occupy. Unused share is
 # redistributed in the final pass, so a library with no Q&A archives does not
-# waste 30% of every result list.
-CLASS_SHARE = {'encyclopedia': 0.40, 'qa': 0.30, 'docs': 0.20, 'other': 0.10}
+# waste 30% of every result list. `docpacks` is a quota class but not a kind:
+# library documentation packages (docpacks.py) display as `docs`, yet get a
+# share of their own -- they are installed one library at a time, deliberately,
+# and should not compete with several hundred DevDocs archives for 20%.
+CLASS_SHARE = {'encyclopedia': 0.40, 'qa': 0.30, 'docs': 0.20, 'other': 0.10,
+               'docpacks': 0.30}
 # Tiebreak only, after title match and normalized rank.
 CLASS_PRIOR = {'encyclopedia': 0, 'qa': 1, 'docs': 1, 'other': 2}
 # The most archives of one kind to open for a single search. Reached only by
@@ -360,42 +365,77 @@ def search_many(queries, *, per_query: int = RESULTS_PER_QUERY,
     from backend.offline_knowledge import kinds as kinds_mod
 
     queries = [q for q in (queries or []) if str(q).strip()]
-    # Registry history survives removing the folder setting, but must not
-    # keep that library active. configured_root also honors KNOWLEDGE_ROOT.
-    if not queries or configured_root() is None:
+    if not queries:
         return {'results': [], 'searched': [], 'skipped': 0, 'tookMs': 0}
     limit = max(1, min(MAX_RESULTS, int(limit)))
     started = time.monotonic()
     deadline = started + max(0.1, budget_ms / 1000.0)
 
-    registry = _registry()
-    registry.ensure_synced()
-    rows = registry.rows(enabled_only=True, healthy_only=True)
-    if archive_ids:
-        wanted = set(archive_ids)
-        rows = [r for r in rows if r['id'] in wanted]
-
     tokens: set[str] = set()
     for query in queries:
         tokens |= kinds_mod.query_tokens(query)
-    selected = _select(rows, tokens, kinds_wanted)
-    quotas = _class_quotas(selected, limit)
+
+    # Registry history survives removing the folder setting, but must not
+    # keep that library active. configured_root also honors KNOWLEDGE_ROOT.
+    # Docs packages live on the data disk and do not depend on it.
+    rows: list[dict] = []
+    if configured_root() is not None:
+        registry = _registry()
+        registry.ensure_synced()
+        rows = registry.rows(enabled_only=True, healthy_only=True)
+    wanted = set(archive_ids or ())
+    if wanted:
+        rows = [r for r in rows if r['id'] in wanted]
+    selected = _select(rows, tokens, kinds_wanted) if rows else {}
+
+    packs: list[dict] = []
+    if not kinds_wanted or 'docs' in kinds_wanted:
+        packs = [p for p in docpacks.rows(enabled_only=True)
+                 if not wanted or docpacks.public_id(p['id']) in wanted]
+        packs = docpacks.select(packs, tokens)
+    groups = {**selected, **({'docpacks': packs} if packs else {})}
+    quotas = _class_quotas(groups, limit)
 
     candidates: dict[tuple[str, str], dict] = {}
     searched: list[str] = []
     skipped = 0
     first_seen = 0
+    # How much is *fetched* is deliberately not the class quota. Fetching only
+    # as many as may be returned leaves nothing to redistribute when another
+    # class under-delivers, so a two-archive library answered 7 of a requested
+    # 10 while a 50-hit archive sat right there. The quota governs the output;
+    # the fetch is a flat per-archive depth, which also makes rank position
+    # comparable between a tiny index and a huge one. One archive may need to
+    # fill the entire output when it is the only source (or the other sources
+    # have no hits).
+    per_archive = max(per_query, limit)
+
+    def note(source: dict, query: str, rank: int,
+             article_path: str, title: str, snippet: str) -> None:
+        nonlocal first_seen
+        key = (source['archiveId'], article_path)
+        candidate = candidates.get(key)
+        if candidate is None:
+            candidate = {
+                **source,
+                'path': article_path,
+                'title': title,
+                'snippet': snippet,
+                '_rank': rank,
+                '_norm': rank / max(1, per_archive),
+                '_firstSeen': first_seen,
+                '_matches': [],
+            }
+            candidates[key] = candidate
+            first_seen += 1
+        if rank < candidate['_rank']:
+            candidate['_rank'] = rank
+            candidate['_norm'] = rank / max(1, per_archive)
+        if not candidate['snippet'] and snippet:
+            candidate['snippet'] = snippet
+        candidate['_matches'].append(query)
 
     for kind, items in selected.items():
-        # How much is *fetched* is deliberately not the class quota. Fetching
-        # only as many as may be returned leaves nothing to redistribute when
-        # another class under-delivers, so a two-archive library answered 7 of
-        # a requested 10 while a 50-hit archive sat right there. The quota
-        # governs the output; the fetch is a flat per-archive depth, which also
-        # makes rank position comparable between a tiny index and a huge one.
-        # One archive may need to fill the entire output when it is the only
-        # source (or the other sources have no hits).
-        per_archive = max(per_query, limit)
         for row in items:
             if time.monotonic() > deadline:
                 skipped += 1
@@ -404,42 +444,47 @@ def search_many(queries, *, per_query: int = RESULTS_PER_QUERY,
             try:
                 with _lock_for(path):
                     zim = _archive(path)
+                    source = {
+                        'archiveId': row['id'],
+                        'archiveTitle': row['title'],
+                        'archiveDate': row['zim_date'],
+                        'archiveKind': kind,
+                        'matchKind': ('fulltext' if row.get('has_fulltext_index', 1)
+                                      else 'title'),
+                        '_class': kind,
+                    }
                     for query in queries:
                         hits = _query_archive(zim, row, query, per_archive)
                         for rank, (article_path, title, snippet) in enumerate(hits):
-                            key = (row['id'], article_path)
-                            candidate = candidates.get(key)
-                            if candidate is None:
-                                candidate = {
-                                    'archiveId': row['id'],
-                                    'archiveTitle': row['title'],
-                                    'archiveDate': row['zim_date'],
-                                    'archiveKind': kind,
-                                    'path': article_path,
-                                    'title': title,
-                                    'snippet': snippet,
-                                    'matchKind': ('fulltext'
-                                                  if row.get('has_fulltext_index', 1)
-                                                  else 'title'),
-                                    '_rank': rank,
-                                    '_norm': rank / max(1, per_archive),
-                                    '_firstSeen': first_seen,
-                                    '_matches': [],
-                                }
-                                candidates[key] = candidate
-                                first_seen += 1
-                            if rank < candidate['_rank']:
-                                candidate['_rank'] = rank
-                                candidate['_norm'] = rank / max(1, per_archive)
-                            if not candidate['snippet'] and snippet:
-                                candidate['snippet'] = snippet
-                            candidate['_matches'].append(query)
+                            note(source, query, rank, article_path, title, snippet)
             except Exception:
                 # One unreadable archive must not fail a search the rest of the
                 # library could answer. The scan records health separately.
                 skipped += 1
                 continue
             searched.append(row['id'])
+
+    for pack in packs:
+        if time.monotonic() > deadline:
+            skipped += 1
+            continue
+        source = {
+            'archiveId': docpacks.public_id(pack['id']),
+            'archiveTitle': docpacks.label(pack),
+            'archiveDate': '',
+            'archiveKind': 'docs',
+            'matchKind': 'fulltext',
+            '_class': 'docpacks',
+        }
+        try:
+            for query in queries:
+                hits = docpacks.search_pack(pack, query, per_archive)
+                for rank, (article_path, title, snippet) in enumerate(hits):
+                    note(source, query, rank, article_path, title, snippet)
+        except Exception:
+            skipped += 1
+            continue
+        searched.append(source['archiveId'])
 
     def rank_key(hit: dict) -> tuple:
         tier, coverage = max(_title_match(hit['title'], q) for q in queries)
@@ -451,9 +496,9 @@ def search_many(queries, *, per_query: int = RESULTS_PER_QUERY,
     # Fill each class's share first, then top up from whatever is left -- which
     # is what redistributes the share of a class the library does not have.
     taken: list[dict] = []
-    used = {kind: 0 for kind in selected}
+    used = {kind: 0 for kind in groups}
     for hit in ordered:
-        kind = hit['archiveKind']
+        kind = hit['_class']
         if len(taken) >= limit:
             break
         if used.get(kind, 0) < quotas.get(kind, limit):
@@ -486,7 +531,34 @@ def search(query_text: str, *, limit: int = 10) -> list[dict]:
             for hit in found['results']]
 
 
+def _docpack_page(identifier: str, entry_path: str) -> tuple[bytes, str, dict]:
+    """A docs-package section as a standalone page for the reader's iframe.
+
+    The section is markdown, shown as preformatted text rather than rendered:
+    the reader is a sandboxed frame and the model reads the raw text anyway, so
+    a markdown renderer would be a dependency for cosmetics.
+    """
+    try:
+        article = docpacks.read(identifier, entry_path)
+    except LookupError as exc:
+        raise ArchiveNotFound(entry_path) from exc
+    page = (
+        '<!doctype html><html><head><meta charset="utf-8">'
+        f'<title>{html.escape(article["title"])}</title>'
+        '<style>body{font-family:system-ui,sans-serif;margin:1.5rem;max-width:60rem;'
+        'color:#1e293b}pre{white-space:pre-wrap;font:14px/1.5 ui-monospace,monospace}'
+        'p{color:#64748b;font-size:13px}</style></head><body>'
+        f'<h1>{html.escape(article["title"])}</h1>'
+        f'<p>{html.escape(article["archiveTitle"])} · {html.escape(article["docPath"])}</p>'
+        f'<pre>{html.escape(article["text"])}</pre></body></html>'
+    )
+    meta = {k: article[k] for k in ('archiveId', 'archiveTitle', 'archiveDate', 'path', 'title')}
+    return page.encode('utf-8'), 'text/html', meta
+
+
 def read_entry(identifier: str, entry_path: str) -> tuple[bytes, str, dict]:
+    if docpacks.is_docpack_id(identifier):
+        return _docpack_page(identifier, entry_path)
     path = _resolve(identifier)
     clean = entry_path.lstrip('/')
     with _lock_for(path):
@@ -509,6 +581,12 @@ def read_entry(identifier: str, entry_path: str) -> tuple[bytes, str, dict]:
 
 
 def read_article(identifier: str, entry_path: str) -> dict:
+    if docpacks.is_docpack_id(identifier):
+        try:
+            article = docpacks.read(identifier, entry_path)
+        except LookupError as exc:
+            raise ArchiveNotFound(entry_path) from exc
+        return {k: v for k, v in article.items() if k != 'docPath'}
     content, mime, meta = read_entry(identifier, entry_path)
     if mime not in ('text/html', 'application/xhtml+xml', 'text/plain'):
         raise ValueError(f'Entry is not readable text ({mime})')
@@ -604,7 +682,8 @@ def model_search(
         snippet = html.unescape(hit['snippet']).replace('\n', ' ').strip()
         matched = '; '.join(dict.fromkeys(hit['_matches']))
         lines.append(
-            f"- {hit['title']} [{hit['archiveTitle']} {hit['archiveDate']}"
+            f"- {hit['title']} [{hit['archiveTitle']}"
+            f"{' ' + hit['archiveDate'] if hit['archiveDate'] else ''}"
             f" · {hit['archiveKind']}]\n"
             f"  archiveId={hit['archiveId']} path={hit['path']}\n"
             f"  matched queries: {matched}\n  {snippet}"
@@ -633,7 +712,11 @@ def model_read(identifier: str, entry_path: str) -> tuple[str, dict]:
             'ok': False, 'error': str(exc),
         }
     url = f"/api/knowledge/archives/{identifier}/content/{entry_path.lstrip('/')}"
-    header = f"# {article['title']}\nSource: {article['archiveTitle']} ({article['archiveDate'] or 'date unknown'})\n"
+    # A docs package is dated by its version, which is already in its title.
+    date = article['archiveDate'] or ('' if docpacks.is_docpack_id(identifier)
+                                      else 'date unknown')
+    header = (f"# {article['title']}\nSource: {article['archiveTitle']}"
+              f"{f' ({date})' if date else ''}\n")
     return f"{header}\n{article['text']}", {
         'tool': 'local_knowledge_read', 'arg': article['title'], 'title': article['title'],
         'ok': True, 'url': url,

@@ -7,8 +7,12 @@ TOOLS = [
         'function': {
             'name': 'local_knowledge_search',
             'description': (
-                'Search the user\'s offline Kiwix/ZIM reference library. Use this '
-                'before web research for factual or reference lookups. Supply two to '
+                'Search the user\'s offline reference library: Kiwix/ZIM archives '
+                '(encyclopedias, Q&A, DevDocs) and installed library documentation '
+                'packages (versioned API docs for specific libraries, e.g. flask 3.1.3 '
+                'docs). Use this before web research for factual, reference or '
+                'library/API lookups; name the library in a query to reach its docs '
+                'package. Supply two to '
                 'four complementary queries in one call: the clean entity or title, '
                 'the full question, and relevant interpretations such as book versus '
                 'movie. Results are merged and title-ranked candidates; read the best '

@@ -7,7 +7,7 @@ from flask import Blueprint, Response, jsonify, request
 from bs4 import BeautifulSoup
 
 from backend.db.connection import get_db
-from backend.offline_knowledge import archive, catalog, download, kinds, registry
+from backend.offline_knowledge import archive, catalog, docpacks, download, kinds, registry
 
 bp = Blueprint('knowledge', __name__, url_prefix='/api/knowledge')
 
@@ -264,6 +264,66 @@ def resume_download(download_id: str):
 def delete_download(download_id: str):
     if not download.delete(download_id):
         return jsonify({'error': 'Download not found'}), 404
+    return jsonify({'deleted': True})
+
+
+@bp.get('/docpacks')
+def list_docpacks():
+    return jsonify([docpacks.public(p) for p in docpacks.rows()])
+
+
+@bp.get('/docpacks/registry')
+def docpack_registry():
+    """The published versions of one package in the community registry."""
+    try:
+        return jsonify(docpacks.registry_search(
+            request.args.get('registry') or '', request.args.get('name') or ''))
+    except docpacks.DocPackError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except docpacks.RegistryUnavailable as exc:
+        return jsonify({'error': str(exc)}), 502
+
+
+@bp.post('/docpacks/install')
+def install_docpack():
+    body = request.json or {}
+    try:
+        pack = docpacks.install(str(body.get('registry') or ''), str(body.get('name') or ''),
+                                str(body.get('version') or ''))
+    except docpacks.DocPackError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except docpacks.RegistryUnavailable as exc:
+        return jsonify({'error': str(exc)}), 502
+    return jsonify(docpacks.public(pack)), 201
+
+
+@bp.post('/docpacks/upload')
+def upload_docpack():
+    upload = request.files.get('file')
+    if upload is None:
+        return jsonify({'error': 'file is required'}), 400
+    try:
+        pack = docpacks.import_file(upload.stream)
+    except docpacks.DocPackError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(docpacks.public(pack)), 201
+
+
+@bp.patch('/docpacks/<pack_id>')
+def update_docpack(pack_id: str):
+    pack = docpacks.row(pack_id)
+    if not pack:
+        return jsonify({'error': 'Package not found'}), 404
+    body = request.json or {}
+    if 'enabled' in body:
+        pack = docpacks.set_enabled(pack_id, bool(body['enabled']))
+    return jsonify(docpacks.public(pack))
+
+
+@bp.delete('/docpacks/<pack_id>')
+def delete_docpack(pack_id: str):
+    if not docpacks.delete(pack_id):
+        return jsonify({'error': 'Package not found'}), 404
     return jsonify({'deleted': True})
 
 
