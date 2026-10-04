@@ -58,9 +58,11 @@ jobs:
     environment: apple-release
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      SIGNING_DIR: ${{ runner.temp }}/lunaschal-signing
-      KEYCHAIN: ${{ runner.temp }}/lunaschal-signing.keychain-db
     steps:
+      - name: Set temporary signing paths
+        run: |
+          echo "SIGNING_DIR=$RUNNER_TEMP/lunaschal-signing" >> "$GITHUB_ENV"
+          echo "KEYCHAIN=$RUNNER_TEMP/lunaschal-signing.keychain-db" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.verify.outputs.commit }}
