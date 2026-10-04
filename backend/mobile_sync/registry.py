@@ -9,9 +9,9 @@ import json
 COLLECTIONS = {
     'journal_entries': 'id content raw_content title tags latitude longitude created_at updated_at',
     'journal_attachments': 'id entry_id kind name mime size position source_url import_status transcript transcript_status description description_status created_at',
-    'fics': 'id title author source_type source_url description word_count chapter_count download_status last_read_chapter_id rating review last_opened_at created_at updated_at',
+    'fics': 'id title author source_type source_url site description word_count chapter_count download_status last_read_chapter_id rating review last_opened_at created_at updated_at',
     'fic_chapters': 'id fic_id position title category content_html content_text source_url word_count posted_at edited_at created_at updated_at',
-    'fic_folders': 'id name created_at',
+    'fic_folders': 'id name position created_at',
     'fic_bookmarks': 'id fic_id chapter_id type scroll_position created_at',
     'papers': 'id title archive_requested_at content_updated_at created_at updated_at',
     'paper_pages': 'id paper_id position strokes width height created_at updated_at',
@@ -26,7 +26,22 @@ COLLECTIONS = {
     'messages': 'id conversation_id role content status raw_content created_at',
 }
 COLLECTIONS = {name: tuple(columns.split()) for name, columns in COLLECTIONS.items()}
-SCHEMA_HASH = hashlib.sha256(json.dumps(COLLECTIONS, sort_keys=True).encode()).hexdigest()
+SCHEMA_HASH = hashlib.sha256(json.dumps([COLLECTIONS, 'book-metadata-v1'], sort_keys=True).encode()).hexdigest()
+
+
+def payload(table: str, prefix: str) -> str:
+    fields = ','.join(f"'{c}',{prefix}.\"{c}\"" for c in COLLECTIONS[table])
+    if table == 'fics':
+        fields += f""",
+            'folder_ids',json((SELECT json_group_array(folder_id) FROM
+                (SELECT folder_id FROM fic_folder_items WHERE fic_id={prefix}.id ORDER BY folder_id))),
+            'tags',json((SELECT json_group_array(name) FROM
+                (SELECT name FROM fic_site_tags WHERE fic_id={prefix}.id ORDER BY name))),
+            'latest_activity',COALESCE(
+                (SELECT MAX(posted_at) FROM fic_chapters WHERE fic_id={prefix}.id),
+                (SELECT MAX(created_at) FROM fic_chapters WHERE fic_id={prefix}.id),{prefix}.created_at)
+        """
+    return f'json_object({fields})'
 
 
 def included(table: str, prefix: str) -> str:

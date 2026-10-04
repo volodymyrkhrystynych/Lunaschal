@@ -4,18 +4,133 @@ import PDFKit
 import AVKit
 import WebKit
 
-struct LibraryView: View {
+enum LibraryCategory: String, CaseIterable, Identifiable {
+    case books = "Books and stories"
+    case documents = "Documents"
+    case papers = "Paper documents"
+    case newspapers = "Newspaper front pages"
+    case knowledge = "Knowledge articles"
+
+    var id: String { rawValue }
+    var collection: String {
+        switch self {
+        case .books: return "fics"
+        case .documents: return "study_sources"
+        case .papers: return "papers"
+        case .newspapers: return "newspaper_frontpages"
+        case .knowledge: return "wiki_articles"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .books: return "books.vertical"
+        case .documents: return "doc.text"
+        case .papers: return "pencil.and.outline"
+        case .newspapers: return "newspaper"
+        case .knowledge: return "globe"
+        }
+    }
+}
+
+struct StudyLibraryView: View {
     @ObservedObject var model: CaptureModel
+
+    private var categories: [LibraryCategory] {
+        LibraryCategory.allCases.filter { $0 != .books }
+    }
+
+    var body: some View {
+        List(categories) { category in
+            NavigationLink {
+                LibraryCategoryView(model: model, category: category)
+            } label: {
+                Label(category.rawValue, systemImage: category.icon)
+            }
+            .accessibilityIdentifier("library-\(category.collection)")
+        }
+        .navigationTitle("Study")
+    }
+}
+
+struct LibraryCategoryView: View {
+    @ObservedObject var model: CaptureModel
+    let category: LibraryCategory
+    var title: String? = nil
     @State private var query = ""
-    @State private var results: [SyncChange] = []
-    @State private var sources: [SyncChange] = []
-    @State private var articles: [SyncChange] = []
-    @State private var bookLimit = 200
-    @State private var sourceLimit = 200
-    @State private var bookCount = 0
-    @State private var sourceCount = 0
-    @State private var articleLimit = 200
-    @State private var articleCount = 0
+    @State private var records: [SyncChange] = []
+    @State private var limit = 50
+    @State private var count = 0
+
+    var body: some View {
+        List {
+            if records.isEmpty {
+                ContentUnavailableView(
+                    query.isEmpty ? "No saved items" : "No matching items",
+                    systemImage: category.icon,
+                    description: Text(query.isEmpty
+                        ? "Sync with your server or use Settings → Library downloads to save content for offline reading."
+                        : "Try a different search in \(category.rawValue.lowercased())."))
+            }
+            ForEach(records) { record in
+                NavigationLink {
+                    destination(record)
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(record.title).lineLimit(2)
+                        if category == .books, let author = record.data?["author"]?.string, !author.isEmpty {
+                            Text(author).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        if category == .knowledge, let summary = record.data?["summary"]?.string, !summary.isEmpty {
+                            Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        }
+                    }
+                }
+            }
+            if records.count < count {
+                Button("Load more (\(records.count) of \(count))") { limit += 50; refresh() }
+            }
+            if category == .newspapers {
+                Text("Front-page images only. Complete newspaper PDFs and annotations are not available here yet.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle(title ?? category.rawValue)
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "Search \(category.rawValue.lowercased())")
+        .task(id: model.downloadingLibrary) { refresh() }
+        .onChange(of: model.syncing) { _, syncing in if !syncing { refresh() } }
+        .onChange(of: query) { _, _ in limit = 50; refresh() }
+    }
+
+    @ViewBuilder
+    private func destination(_ record: SyncChange) -> some View {
+        switch category {
+        case .books:
+            BookView(model: model, book: record)
+        case .documents:
+            DownloadedMediaView(model: model, collection: category.collection, id: record.id,
+                                mime: record.data?["contentType"]?.string ?? "", title: record.title)
+        case .papers:
+            PaperPreviewView(model: model, paper: record)
+        case .newspapers:
+            DownloadedMediaView(model: model, collection: category.collection, id: record.id,
+                                mime: "image/jpeg", title: record.title)
+        case .knowledge:
+            KnowledgeArticleView(article: record)
+        }
+    }
+
+    private func refresh() {
+        do {
+            records = try model.replica.records(collection: category.collection, query: query, limit: limit)
+            count = try model.replica.count(collection: category.collection, query: query)
+        } catch { model.message = error.localizedDescription }
+    }
+}
+
+struct LibraryDownloadSettings: View {
+    @ObservedObject var model: CaptureModel
     @State private var confirmingRemoval = false
     @AppStorage("libraryBudgetGB") private var budget = 20
     @AppStorage("downloadKnowledge") private var knowledge = false
@@ -30,11 +145,13 @@ struct LibraryView: View {
     var body: some View {
         List {
             Section {
-                Button("Download library over Wi-Fi") { Task { await model.downloadLibrary() } }
+                Button("Download library over Wi-Fi") { model.startLibraryDownload() }
                     .disabled(model.downloadingLibrary || !model.signedIn)
                 if model.downloadingLibrary {
                     ProgressView()
                     Button("Pause downloads") { model.pauseLibrary() }
+                    Text("You can keep using the app or switch tabs while downloads continue. Leaving the app pauses downloads.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Stepper("Media budget: \(budget) GB", value: $budget, in: 1...150, step: 5)
                     .disabled(model.downloadingLibrary)
@@ -56,72 +173,15 @@ struct LibraryView: View {
                 Text("Changing selection keeps existing downloads. Wikipedia ZIM packages are not yet supported.")
                     .font(.footnote).foregroundStyle(.secondary)
             }.disabled(model.downloadingLibrary)
-            Section("Documents") {
-                ForEach(sources) { source in
-                    NavigationLink(source.title) {
-                        DownloadedMediaView(model: model, collection: "study_sources", id: source.id,
-                                            mime: source.data?["contentType"]?.string ?? "", title: source.title)
-                    }
-                }
-                if sources.count < sourceCount {
-                    Button("Load more documents (\(sources.count) of \(sourceCount))") { sourceLimit += 200; refreshRecords() }
-                }
-            }
-            Section("Books and stories") {
-                ForEach(results) { book in
-                    NavigationLink { BookView(model: model, book: book) } label: {
-                        VStack(alignment: .leading) {
-                            Text(book.title)
-                            Text(book.data?["author"]?.string ?? "").font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                if results.count < bookCount {
-                    Button("Load more books (\(results.count) of \(bookCount))") { bookLimit += 200; refreshRecords() }
-                }
-            }
-            PaperLibrarySections(model: model, query: query)
-            Section("Knowledge articles") {
-                ForEach(articles) { article in
-                    NavigationLink { KnowledgeArticleView(article: article) } label: {
-                        VStack(alignment: .leading) {
-                            Text(article.title)
-                            if let summary = article.data?["summary"]?.string, !summary.isEmpty {
-                                Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                            }
-                        }
-                    }
-                }
-                if articles.count < articleCount {
-                    Button("Load more articles (\(articles.count) of \(articleCount))") { articleLimit += 200; refreshRecords() }
-                } else if articles.isEmpty {
-                    Text(query.isEmpty ? "Enable Knowledge articles and download the library on Wi-Fi to read them here." : "No downloaded knowledge articles match this search.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-            }
+
         }
-        .navigationTitle("Library")
-        .task(id: model.downloadingLibrary) { refreshRecords() }
-        .onChange(of: model.syncing) { _, syncing in if !syncing { refreshRecords() } }
+        .navigationTitle("Library downloads")
+        .navigationBarTitleDisplayMode(.inline)
         .confirmationDialog("Remove all downloaded media copies from this device?", isPresented: $confirmingRemoval) {
             Button("Remove downloaded media", role: .destructive) { model.removeLibraryMedia() }
+        } message: {
+            Text("Your original captures, drawings, and server records are kept.")
         }
-        .searchable(text: $query, prompt: "Search downloaded library")
-        .onChange(of: query) { _, _ in
-            bookLimit = 200; sourceLimit = 200; articleLimit = 200
-            refreshRecords()
-        }
-    }
-
-    private func refreshRecords() {
-        do {
-            results = try model.replica.records(collection: "fics", query: query, limit: bookLimit)
-            bookCount = try model.replica.count(collection: "fics", query: query)
-            sources = try model.replica.records(collection: "study_sources", query: query, limit: sourceLimit)
-            sourceCount = try model.replica.count(collection: "study_sources", query: query)
-            articles = try model.replica.records(collection: "wiki_articles", query: query, limit: articleLimit)
-            articleCount = try model.replica.count(collection: "wiki_articles", query: query)
-        } catch { model.message = error.localizedDescription }
     }
 }
 
@@ -147,11 +207,13 @@ private struct KnowledgeArticleView: View {
     }
 }
 
-private struct BookView: View {
+struct BookView: View {
     @ObservedObject var model: CaptureModel
     let book: SyncChange
     @State private var chapters: [SyncChange] = []
     @State private var resume: SyncChange?
+    @State private var bookmarks: [SyncChange] = []
+    @State private var bookmarkEdits: [PendingEdit] = []
 
     var body: some View {
         List {
@@ -164,27 +226,77 @@ private struct BookView: View {
                                         mime: "application/pdf", title: book.title)
                 }
             } else if chapters.isEmpty {
-                Text("No chapter text downloaded. Use the Library download button on Wi-Fi.")
+                Text("No chapter text downloaded. Use Settings → Library downloads on Wi-Fi.")
             }
             if let resume {
                 NavigationLink("Continue: \(resume.title)") {
-                    TextChapterReader(store: model.replica, chapter: resume)
+                    TextChapterReader(owner: model, chapter: resume)
+                }
+            }
+            if !bookmarks.isEmpty {
+                Section("Bookmarks") {
+                    ForEach(bookmarks) { bookmark in
+                        if let chapter = chapters.first(where: { $0.id == bookmark.data?["chapterId"]?.string }) {
+                            NavigationLink {
+                                TextChapterReader(owner: model, chapter: chapter,
+                                    initialFraction: bookmark.data?["scrollPosition"]?.number)
+                            } label: {
+                                Label("\(bookmark.data?["type"]?.string == "continue" ? "Continue" : "Favorite"): \(chapter.title)",
+                                      systemImage: bookmark.data?["type"]?.string == "continue" ? "play.fill" : "star.fill")
+                            }
+                            .swipeActions {
+                                Button("Remove", role: .destructive) {
+                                    do { try model.replica.deleteBookmark(bookmark); refreshChapters(); model.requestSync() }
+                                    catch { model.message = error.localizedDescription }
+                                }.disabled(bookmarkEdits.contains {
+                                    $0.operation.recordId == bookmark.id ||
+                                    (bookmark.data?["type"]?.string == "continue" && $0.original.data?["type"]?.string == "continue")
+                                })
+                            }
+                        } else {
+                            Text("Bookmarked chapter not downloaded. Download the library over Wi-Fi.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            if !bookmarkEdits.isEmpty {
+                Section("Bookmark sync") {
+                    ForEach(bookmarkEdits) { edit in
+                        Text(edit.state == "pending" ? "Bookmark saved on device · Waiting to sync" : edit.error ?? "Bookmark needs review")
+                        if edit.state != "pending" {
+                            Button("Keep server version and discard this pending change", role: .destructive) {
+                                do { try model.replica.resolve(edit, keepLocal: false); refreshChapters() }
+                                catch { model.message = error.localizedDescription }
+                            }
+                        }
+                    }
                 }
             }
             ForEach(chapters) { chapter in
                 NavigationLink {
-                    TextChapterReader(store: model.replica, chapter: chapter)
+                    TextChapterReader(owner: model, chapter: chapter)
                 } label: { Text(chapter.title) }
             }
         }
         .navigationTitle(book.title)
-        .task {
-            do {
-                chapters = try model.replica.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id)
-                    .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
-                resume = try model.replica.lastReadChapter(bookID: book.id)
-            } catch { model.message = error.localizedDescription }
+        .task(id: model.downloadingLibrary) { refreshChapters() }
+        .onAppear {
+            do { try model.replica.markBookOpened(book.id) }
+            catch { model.message = error.localizedDescription }
+            refreshChapters()
         }
+        .onChange(of: model.syncing) { _, syncing in if !syncing { refreshChapters() } }
+    }
+
+    private func refreshChapters() {
+        do {
+            chapters = try model.replica.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id)
+                .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
+            resume = try model.replica.lastReadChapter(bookID: book.id)
+            bookmarks = try model.replica.bookmarks(bookID: book.id)
+            bookmarkEdits = try model.replica.bookmarkEdits(bookID: book.id)
+        } catch { model.message = error.localizedDescription }
     }
 }
 
@@ -254,11 +366,19 @@ struct DownloadedMediaView: View {
     @State private var savedPDFPage = 0
     @State private var confirmingRemoval = false
     @State private var availability: MediaAvailability = .metadataOnly
+    @State private var studyAnnotation: StudyAnnotationModel?
 
     var body: some View {
         Group {
             if let file {
-                if mime == "application/pdf" {
+                if let studyAnnotation {
+                    StudyAnnotationView(model: studyAnnotation) { page in
+                        do {
+                            try model.replica.saveReadingPosition(collection: collection, id: id,
+                                version: file.lastPathComponent, offset: page)
+                        } catch { model.message = error.localizedDescription }
+                    }.id(file.lastPathComponent)
+                } else if mime == "application/pdf" {
                     LocalPDFView(url: file, initialPage: savedPDFPage) { page in
                         do {
                             try model.replica.saveReadingPosition(collection: collection, id: id,
@@ -309,9 +429,17 @@ struct DownloadedMediaView: View {
             if downloaded != file {
                 player?.pause()
                 player = nil
+                studyAnnotation = nil
                 if let downloaded, mime == "application/pdf" {
                     savedPDFPage = try model.replica.readingPosition(collection: collection, id: id,
                         version: downloaded.lastPathComponent) ?? 0
+                }
+                if let downloaded, collection == "study_sources", UIDevice.current.userInterfaceIdiom == .pad,
+                   mime == "application/pdf" || mime.hasPrefix("image/") {
+                    let ink = try StudyAnnotationStore(root: model.store.root.appendingPathComponent("study-annotations"),
+                        sourceID: id, version: downloaded.lastPathComponent)
+                    studyAnnotation = try StudyAnnotationModel(file: downloaded, mime: mime, store: ink,
+                                                               initialPage: savedPDFPage)
                 }
                 file = downloaded
                 if let file, mime.hasPrefix("audio/") || mime.hasPrefix("video/") { player = AVPlayer(url: file) }

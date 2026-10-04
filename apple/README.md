@@ -33,7 +33,26 @@ what each device can currently do and which work remains device-only.
   and link-attachment IDs. Entry creation precedes link import; retry validates
   both acknowledgements. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Library / Draw / Settings navigation for iPhone and iPad.
+- Native Capture / Journal / Library / Study / Settings navigation on iPhone;
+  iPad also has Draw. Library opens directly to books, with title/tag search,
+  source/folder/tag filters, Unsorted, latest-chapter/recent/title sorting, and
+  Favorite/Continue-reading bookmark filters. Other saved material is grouped
+  under Study. Download controls remain in Settings → Library downloads.
+  Chapter readers create Favorite or Continue-reading bookmarks offline, and
+  saved bookmarks can be reopened or removed from a book. Bookmark changes sync
+  with the desktop, using replay receipts and conflict checks. One pending
+  Continue change per book is retained until it syncs or is resolved.
+  Paper previews remain readable on iPhone, while native drawing editing is iPad-only.
+- Study contains Documents, Paper previews, newspapers, and Knowledge.
+  On iPad, downloaded PDFs and images
+  open with Pencil-only annotation, finger pan/zoom, undo, page navigation, and
+  per-page ink autosave. There is no Notebook/text editor. Originals remain
+  unchanged; ink lives outside download cleanup and is isolated by source ID,
+  file version, and page. Export an annotated page as PNG or its editable ink.
+  Study annotations currently stay on the iPad and do not sync to the server.
+  Replacing a source file preserves the old ink on disk but does not apply it
+  to the new document; browsing old-version ink is not yet exposed. Archived
+  HTML and video sources retain their readers without annotation.
 - Durable per-capture manifests in Application Support, replaced atomically;
   audio lives beside them. A separate SQLite replica stores server records,
   full-text search, sync cursors, and revision-checked journal edits.
@@ -75,6 +94,13 @@ what each device can currently do and which work remains device-only.
   PDF books open in PDFKit. The client checks server media capabilities before
   downloading; older servers continue serving their supported collections and
   display an update notice for PDF-book support.
+  Bulk database and file work runs on a separate actor and SQLite connection;
+  you can browse and capture while downloads run, including after switching tabs.
+  After a completed Wi-Fi text download, ordinary sync also fetches incremental
+  chapter and reading-content changes using the cellular preference. These passes
+  are bounded to five pages and never fetch binary media or start a bootstrap.
+  Expired cursors and incomplete first downloads wait for the next Wi-Fi download.
+  Existing installations need one Wi-Fi download pass to establish this checkpoint.
 - Local PDF, image, audio/video, and archived-article views. Articles use a
   script-disabled WebKit view with remote resources blocked. Knowledge article
   text is opt-in. Archive videos and ZIM packages are not bulk-downloaded.
@@ -163,12 +189,13 @@ publicly to make CI work: simulator capture tests never contact it.
   termination, the manifest is marked interrupted; the audio is retained for
   playback/export and explicit recovery. An AAC container killed before
   finalization may not be playable. We do not claim crash-proof in-flight audio.
-- Journal, book, document, and Knowledge lists initially show 200 records, with Load more
+- Journal initially shows 200 records; each Library category starts with 50, with Load more
   controls to reveal further records already stored on the device. Library search
-  filters books, documents, and Knowledge articles and can expand beyond 200 matches. Counts and
+  filters the selected category and can expand beyond 50 matches. Counts and
   results share the same filter and stable revision/ID ordering. Loading more
   does not contact the server. Attachment imports remain outstanding.
-- Downloads currently require the app to remain active. Partial files resume
+- Downloads continue across tabs while the app is active; leaving the app pauses
+  them. Partial files resume
   on the next download request. Selection changes retain existing copies;
   “Remove downloaded media” explicitly clears media copies and partials, while
   retaining capture originals and server records. Individual downloaded files
@@ -176,7 +203,7 @@ publicly to make CI work: simulator capture tests never contact it.
   downloaded record references them; unreadable manifests block removal safely.
   Partial downloads and old content versions remain until whole-media cleanup.
   Future bulk downloads can restore a removed item. Pinning is not implemented.
-  The Library shows current media-directory usage, including partial downloads.
+  Settings → Library downloads shows current media-directory usage, including partial downloads.
   File readers distinguish metadata-only, pending, partial, downloaded, and
   server-unavailable states. Server observations persist across relaunch and are
   labelled as the last check; they never hide an existing verified local copy.

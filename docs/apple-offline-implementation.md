@@ -1,6 +1,56 @@
 # Apple apps and offline experience — implementation tracker
 
-Last updated: 2026-10-03. Working branch: `feat/apple-offline-foundation`.
+Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
+
+Books-library follow-up:
+
+- Library now opens directly to books. Title/tag search, source/folder/tag
+  filtering, Unsorted, recent/latest/title ordering, and Favorite/Continue
+  bookmark filters work over the offline replica with consistent pagination.
+- Safe book snapshots now include folders/tags/source/latest chapter activity;
+  related-row triggers keep changes and removals in the immutable sync feed.
+  This projection change requires a server update and fresh mobile bootstrap.
+- Chapter bookmarks queue offline and sync to the desktop table through durable
+  receipts and revision checks. Pending/conflicting changes are visible in the
+  book; a pending Continue change must finish before another replaces it.
+- Study now holds non-book material on both devices; annotation remains iPad-only.
+- Local verification: 110 Swift core tests and 54 backend bookmark/sync/seeding
+  tests passed. Hosted Apple validation is pending.
+  The earlier Study run passed native annotation/iPhone tests but failed iPad
+  tab selectors; selectors now support floating iPad tabs.
+
+iPad Study follow-up:
+
+- Added an iPad-only Study tab and moved its Documents list out of Library.
+  iPhone retains Documents under Library.
+- Downloaded PDF/image pages support Pencil annotation, finger pan/zoom, undo,
+  autosave, previous-checkpoint recovery, and annotated PNG/editable-ink export.
+  There is no Notebook editor. Web pages/videos retain existing readers.
+- Study ink is local-only, separate from download cleanup and keyed by source
+  ID, file hash, and page. Source originals are untouched; a replaced source
+  cannot inherit old marks. Server sync and old-version ink browsing remain open.
+- 105 portable Swift tests passed. Three native annotation tests cover reopen,
+  page transitions, erasure, original-file preservation, export, and load failure.
+  Hosted Apple verification is pending.
+
+Library usability follow-up: replaced the combined scrolling list with five
+category destinations, each searchable with 50-item pages. Moved download
+selection, progress/pause, storage budget, and cleanup into Settings → Library
+downloads, retaining existing preferences. Added a simulator regression test
+for reaching every category and finding download controls under Settings.
+Library navigation and exempt-encryption declarations passed hosted Apple CI at
+`0562fda`. Additional device/download follow-up:
+
+- Draw and native-page editing are iPad-only; iPhone keeps Paper previews.
+- Bulk downloads remain Wi-Fi-only and run database/file work on a worker actor,
+  with an independent SQLite connection and a model-owned cancellable task.
+  Switching tabs keeps the task alive; leaving the app pauses it.
+- Completed text downloads receive bounded incremental chapter/reading-content
+  updates through ordinary sync, honoring the cellular preference. Cold,
+  incomplete, or expired scopes require Wi-Fi; media stays bulk-only.
+- Added worker/cursor/cancellation tests and an iPad drawing simulator check.
+  Local Swift core verification passed (102 tests), including rejection of stale
+  responses after cursor resets; hosted Apple checks are pending.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first

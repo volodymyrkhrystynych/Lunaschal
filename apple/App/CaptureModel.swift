@@ -35,11 +35,12 @@ final class CaptureModel: ObservableObject {
     private let watchReceiver: WatchReceiver
     private let syncer: CaptureSync
     private let replicaSyncer: ReplicaSync
-    private let librarySyncer: ReplicaSync
+    private let libraryWorker: LibraryDownload
     private var activeAPI: JournalAPI?
     private var libraryAPI: JournalAPI?
     private var token: String?
     private var syncingTask: Task<Void, Never>?
+    private var libraryTask: Task<Void, Never>?
 
     init(store: CaptureStore) throws {
         self.store = store
@@ -53,7 +54,8 @@ final class CaptureModel: ObservableObject {
         watchReceiver = try WatchReceiver(store: store)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
         replicaSyncer = ReplicaSync(store: replica)
-        librarySyncer = ReplicaSync(store: replica)
+        libraryWorker = LibraryDownload(replicaURL: store.root.appendingPathComponent("replica.sqlite"),
+                                        mediaURL: media.root)
         try store.recoverInterruptedRecordings()
         server = try store.server
         if let server { token = try SessionToken.read(server: server) }
@@ -61,8 +63,8 @@ final class CaptureModel: ObservableObject {
         captures = try store.list()
         journalRecords = try replica.records(collection: "journal_entries")
         journalCount = try replica.count(collection: "journal_entries")
-        pendingEdits = try replica.edits()
-        libraryBytes = try media.usedBytes()
+        pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
+        refreshLibraryBytes()
         recorder.onChange = { [weak self] in
             self?.reload()
             self?.requestSync()
@@ -87,9 +89,15 @@ final class CaptureModel: ObservableObject {
             captures = try store.list()
             journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
             journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
-            pendingEdits = try replica.edits()
-            libraryBytes = try media.usedBytes()
+            pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
         } catch { message = error.localizedDescription }
+    }
+
+    private func refreshLibraryBytes() {
+        Task {
+            do { libraryBytes = try await libraryWorker.usedBytes() }
+            catch { message = error.localizedDescription }
+        }
     }
 
     func saveText(_ text: String) -> Bool {
@@ -144,6 +152,7 @@ final class CaptureModel: ObservableObject {
 
     func signOut() {
         cancelSync()
+        pauseLibrary()
         do {
             if let server { try SessionToken.remove(server: server) }
             token = nil
@@ -181,6 +190,7 @@ final class CaptureModel: ObservableObject {
 
     func leaveForeground() {
         if !backgroundSyncing { cancelSync() }
+        pauseLibrary()
         onBackgroundSyncNeeded?()
     }
 
@@ -202,12 +212,16 @@ final class CaptureModel: ObservableObject {
             try await syncer.run(using: api)
             try await replicaSyncer.run(using: api, collections: [
                 "journal_entries", "journal_attachments", "fics", "study_sources",
-                "papers", "conversations", "knowledge_archives",
+                "papers", "conversations", "knowledge_archives", "fic_folders", "fic_bookmarks",
             ])
             for publication in try drawingPublications.all() where publication.state == "pending" {
                 try Task.checkCancellation()
                 let reply = try await api.publishDrawing(publication, store: drawingPublications)
                 try drawingPublications.receive(reply, for: publication)
+            }
+            if !downloadingLibrary {
+                try await libraryWorker.updateText(using: api, collections: LibraryDownload.collections(
+                    knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge")))
             }
             let retry = try transfers.all().compactMap(\.retryAt).min()
             syncMessage = retry.map { "Uploads will retry after \($0.formatted(date: .omitted, time: .shortened))." }
@@ -226,64 +240,56 @@ final class CaptureModel: ObservableObject {
     func cancelSync() {
         syncingTask?.cancel()
         activeAPI?.cancel()
-        libraryAPI?.cancel()
     }
 
-    func downloadLibrary() async {
+    func startLibraryDownload() {
         guard !downloadingLibrary, signedIn, let server, let token else { return }
         downloadingLibrary = true
         libraryMessage = "Downloading reading content over Wi-Fi…"
-        defer { downloadingLibrary = false; libraryAPI = nil; reload() }
-        do {
-            let api = try JournalAPI(server: server, token: token, allowCellular: false)
-            libraryAPI = api
-            var collections = ["fic_chapters", "fic_folders", "fic_bookmarks", "messages",
-                               "paper_pages", "paper_native_ink", "paper_page_images", "newspaper_issues", "newspaper_frontpages"]
-            if UserDefaults.standard.bool(forKey: "downloadKnowledge") { collections.append("wiki_articles") }
-            try await librarySyncer.run(using: api, collections: collections, sendEdits: false)
-            let gigabytes = max(1, UserDefaults.standard.integer(forKey: "libraryBudgetGB") == 0
-                ? 20 : UserDefaults.standard.integer(forKey: "libraryBudgetGB"))
-            let supportedMedia = try await api.mediaCollections()
-            for collection in supportedMedia {
-                if UserDefaults.standard.object(forKey: "download-\(collection)") as? Bool == false { continue }
-                var after = ""
-                while true {
-                    let page = try await api.mediaPage(collection: collection, after: after)
-                    for item in page.items { try media.observe(item) }
-                    for item in page.items where item.available {
-                        try Task.checkCancellation()
-                        if try media.reuse(item) { continue }
-                        var offset = try media.offset(for: item, budget: Int64(gigabytes) * 1024 * 1024 * 1024)
-                        guard let size = item.size else { throw MediaError.invalidManifest }
-                        if size == 0 { try media.append(Data(), to: item, offset: 0) }
-                        while offset < size {
-                            libraryMessage = "Downloading \(collection.replacingOccurrences(of: "_", with: " ")): \(offset / 1024) / \(size / 1024) KB"
-                            let chunk = try await api.mediaChunk(item, offset: offset, count: min(1024 * 1024, size - offset))
-                            try media.append(chunk, to: item, offset: offset)
-                            offset += Int64(chunk.count)
-                        }
-                        try await media.finish(item)
+        let collections = LibraryDownload.collections(
+            knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge"))
+        let selected = MediaDescriptor.collections.filter {
+            UserDefaults.standard.object(forKey: "download-\($0)") as? Bool != false
+        }
+        let configured = UserDefaults.standard.integer(forKey: "libraryBudgetGB")
+        let gigabytes = max(1, configured == 0 ? 20 : configured)
+        libraryTask = Task {
+            defer {
+                downloadingLibrary = false; libraryAPI = nil; libraryTask = nil
+                reload(); refreshLibraryBytes()
+            }
+            do {
+                try Task.checkCancellation()
+                let api = try JournalAPI(server: server, token: token, allowCellular: false)
+                libraryAPI = api
+                let supported = try await libraryWorker.download(using: api, collections: collections,
+                    mediaCollections: selected, budget: Int64(gigabytes) * 1024 * 1024 * 1024) { [weak self] status in
+                        await self?.showLibraryProgress(status)
                     }
-                    if !page.hasMore { break }
-                    guard page.after > after else { throw MediaError.invalidManifest }
-                    after = page.after
-                }
+                libraryMessage = !supported.contains("fics") && selected.contains("fics")
+                    ? "Downloads complete. Update the server to include PDF books."
+                    : "Reading text and available active media downloaded. Archive videos are excluded."
+            } catch {
+                if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled {
+                    libraryMessage = "Downloads paused. Saved content is available; resume over Wi-Fi."
+                } else { libraryMessage = error.localizedDescription }
             }
-            libraryMessage = "Reading text and available active media downloaded. Archive videos are excluded."
-            if !supportedMedia.contains("fics"), UserDefaults.standard.object(forKey: "download-fics") as? Bool != false {
-                libraryMessage = "Downloads complete. Update the server to include PDF books."
-            }
-        } catch { libraryMessage = error.localizedDescription }
+        }
     }
 
-    func pauseLibrary() { libraryAPI?.cancel() }
+    private func showLibraryProgress(_ status: String) { libraryMessage = status }
+
+    func pauseLibrary() {
+        libraryTask?.cancel()
+        libraryAPI?.cancel()
+    }
 
     func removeLibraryMedia() {
         guard !downloadingLibrary else { return }
         do {
             try media.removeDownloadedCopies()
             libraryMessage = "Downloaded media removed. Captures and server originals are retained."
-            reload()
+            reload(); refreshLibraryBytes()
         } catch { message = error.localizedDescription }
     }
 
@@ -292,7 +298,7 @@ final class CaptureModel: ObservableObject {
         do {
             let freed = try media.removeDownloadedCopy(collection: collection, id: id)
             libraryMessage = "Device copy removed. \(ByteCountFormatter.string(fromByteCount: freed, countStyle: .file)) freed. Shared files may remain for other items."
-            reload()
+            reload(); refreshLibraryBytes()
             return true
         } catch { message = error.localizedDescription; return false }
     }

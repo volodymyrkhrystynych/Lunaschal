@@ -6,6 +6,7 @@ import time
 from backend.routes.journal import _client_id, _close_screenshot_session, delete_journal_entry
 from backend.tags import tags_json
 from .feed import change_dict, database
+from . import bookmarks
 
 
 def apply(body):
@@ -17,6 +18,9 @@ def apply(body):
         raise ValueError('Operation id must be a ULID')
     if not isinstance(body['recordId'], str) or not _client_id(body['recordId']):
         raise ValueError('Record id must be a ULID')
+    if body['collection'] == 'fic_bookmarks':
+        bookmarks.validate(body)
+        return transact(body, bookmarks.mutate)
     if body['collection'] != 'journal_entries' or body['action'] not in ('update', 'delete'):
         raise ValueError('This operation supports journal update/delete only')
     if not isinstance(body['epoch'], str) or type(body['baseRevision']) is not int or body['baseRevision'] < 1:
@@ -33,6 +37,34 @@ def apply(body):
             raise ValueError(f'{field} must be text')
     if 'tags' in data and (not isinstance(data['tags'], list) or not all(isinstance(t, str) for t in data['tags'])):
         raise ValueError('tags must be a list of strings')
+    return transact(body, journal_mutation)
+
+
+def journal_mutation(db, body):
+    data = body['data']
+    current = db.execute('SELECT * FROM mobile_sync_changes WHERE collection=? AND record_id=? ORDER BY sequence DESC LIMIT 1',
+                         (body['collection'], body['recordId'])).fetchone()
+    if current is None or current['payload'] is None or current['sequence'] != body['baseRevision']:
+        result, status = {'error': 'Record changed; keep your edit and resolve the conflict',
+                          'conflict': True, 'current': change_dict(current) if current else None}, 409
+    else:
+        if body['action'] == 'delete':
+            delete_journal_entry(db, body['recordId'])
+        else:
+            updates = {**data, 'updated_at': int(time.time())}
+            if 'tags' in updates:
+                updates['tags'] = tags_json(updates['tags'])
+            setters = ','.join(f'"{name}"=?' for name in updates)
+            db.execute(f'UPDATE journal_entries SET {setters} WHERE id=?',
+                       [*updates.values(), body['recordId']])
+            _close_screenshot_session(db, body['recordId'])
+        revision = db.execute('SELECT * FROM mobile_sync_changes WHERE collection=? AND record_id=? ORDER BY sequence DESC LIMIT 1',
+                              (body['collection'], body['recordId'])).fetchone()
+        result, status = {'operationId': body['id'], 'change': change_dict(revision)}, 200
+    return result, status
+
+
+def transact(body, mutate):
     fingerprint = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     with database(write=True) as db:
         previous = db.execute('SELECT * FROM mobile_sync_operations WHERE id=?', (body['id'],)).fetchone()
@@ -43,25 +75,7 @@ def apply(body):
         epoch = db.execute('SELECT id FROM mobile_sync_state').fetchone()[0]
         if epoch != body['epoch']:
             return {'error': 'Server history changed', 'resetRequired': True}, 410
-        current = db.execute('SELECT * FROM mobile_sync_changes WHERE collection=? AND record_id=? ORDER BY sequence DESC LIMIT 1',
-                             (body['collection'], body['recordId'])).fetchone()
-        if current is None or current['payload'] is None or current['sequence'] != body['baseRevision']:
-            result, status = {'error': 'Record changed; keep your edit and resolve the conflict',
-                              'conflict': True, 'current': change_dict(current) if current else None}, 409
-        else:
-            if body['action'] == 'delete':
-                delete_journal_entry(db, body['recordId'])
-            else:
-                updates = {**data, 'updated_at': int(time.time())}
-                if 'tags' in updates:
-                    updates['tags'] = tags_json(updates['tags'])
-                setters = ','.join(f'"{name}"=?' for name in updates)
-                db.execute(f'UPDATE journal_entries SET {setters} WHERE id=?',
-                           [*updates.values(), body['recordId']])
-                _close_screenshot_session(db, body['recordId'])
-            revision = db.execute('SELECT * FROM mobile_sync_changes WHERE collection=? AND record_id=? ORDER BY sequence DESC LIMIT 1',
-                                  (body['collection'], body['recordId'])).fetchone()
-            result, status = {'operationId': body['id'], 'change': change_dict(revision)}, 200
+        result, status = mutate(db, body)
         db.execute('INSERT INTO mobile_sync_operations(id,request_hash,response,status,created_at) VALUES (?,?,?,?,?)',
                    (body['id'], fingerprint, json.dumps(result), status, int(time.time())))
         return result, status

@@ -7,6 +7,15 @@ part of this build path.
 
 ## Account configuration
 
+Both app targets declare `ITSAppUsesNonExemptEncryption: false` in
+`project.yml`. The client uses Apple's HTTPS/Keychain services and SHA-256
+integrity checks, with no bundled encryption implementation. This declares
+exempt encryption and avoids the repeated TestFlight export-compliance
+questionnaire for new builds containing the setting. It does not alter builds
+already uploaded. Archive validation checks the declaration in both bundles.
+Reassess it if encryption implementations or dependencies change; see
+[Apple's declaration documentation](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption).
+
 The user supplied Apple Developer Team ID **`4AG98Q33RQ`**. It is now the
 default in the Xcode project and hosted release workflow. Actual membership and
 profile ownership are verified when real distribution profiles are supplied.

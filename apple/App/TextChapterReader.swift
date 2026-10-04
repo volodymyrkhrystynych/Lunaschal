@@ -2,8 +2,10 @@ import SwiftUI
 import LunaschalCore
 
 struct TextChapterReader: View {
-    let store: ReplicaStore
+    @ObservedObject var owner: CaptureModel
     let chapter: SyncChange
+    var initialFraction: Double? = nil
+    private var store: ReplicaStore { owner.replica }
     @State private var position: Int?
     @State private var version = ""
     @State private var status = "Reading position stays on this device."
@@ -30,11 +32,19 @@ struct TextChapterReader: View {
                 .frame(maxWidth: .infinity).background(.bar)
         }
         .navigationTitle(chapter.title).navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            Menu {
+                Button("Favorite chapter", systemImage: "star") { bookmark("favorite") }
+                Button("Continue reading here", systemImage: "bookmark") { bookmark("continue") }
+            } label: { Label("Bookmark", systemImage: "bookmark") }
+        }
         .task {
             do {
                 version = "\(try store.epoch ?? "unknown"):\(chapter.revision)"
                 let saved = try store.readingPosition(collection: "fic_chapters", id: chapter.id, version: version) ?? 0
-                position = paragraphs.indices.contains(saved) ? saved : 0
+                if let fraction = initialFraction, fraction.isFinite {
+                    position = Int((min(1, max(0, fraction)) * Double(max(0, paragraphs.count - 1))).rounded())
+                } else { position = paragraphs.indices.contains(saved) ? saved : 0 }
             } catch { status = "Could not restore reading position: \(error.localizedDescription)" }
         }
         .onChange(of: position) { _, value in
@@ -45,5 +55,14 @@ struct TextChapterReader: View {
                 status = "Reading position saved on this device."
             } catch { status = "Could not save reading position: \(error.localizedDescription)" }
         }
+    }
+
+    private func bookmark(_ type: String) {
+        do {
+            let fraction = Double(position ?? 0) / Double(max(1, paragraphs.count - 1))
+            try store.queueBookmark(chapter: chapter, type: type, fraction: fraction)
+            status = "Bookmark saved on this device · Syncs when connected"
+            owner.requestSync()
+        } catch { owner.message = error.localizedDescription }
     }
 }

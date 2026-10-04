@@ -1,7 +1,8 @@
 import Foundation
 import CSQLite
 
-/// One main-actor owner in the app; a page and its cursor commit together.
+/// Confine each connection to its owner; a page and its cursor commit together.
+/// The library worker uses a separate WAL connection so UI reads remain available.
 /// The outbox is independent of the server projection, including during resets.
 public final class ReplicaStore {
     private var db: OpaquePointer?
@@ -50,13 +51,25 @@ public final class ReplicaStore {
 
     public func cursor(collections: [String]) throws -> String? { try value(scope(collections)) }
 
+    public func isBootstrapped(collections: [String]) throws -> Bool {
+        try value("ready:" + scope(collections)) == "1"
+    }
+
+    public func resetCursor(collections: [String]) throws {
+        try transaction {
+            try execute("DELETE FROM replica_meta WHERE key IN (?,?)",
+                        [scope(collections), "ready:" + scope(collections)])
+        }
+    }
+
     public func resetCursors() throws {
         // Existing records remain readable while a replacement bootstrap runs.
         // Pending edits keep their old epoch and are surfaced as conflicts.
         try execute("DELETE FROM replica_meta WHERE key LIKE 'cursor:%'")
+        try execute("DELETE FROM replica_meta WHERE key LIKE 'ready:%'")
     }
 
-    public func apply(_ page: SyncPage, startingBootstrap: Bool) throws {
+    public func apply(_ page: SyncPage, startingBootstrap: Bool, expectedCursor: String? = nil) throws {
         guard page.protocolVersion == 1, ULID.isValid(page.epoch),
               ["bootstrap", "delta"].contains(page.mode), !page.cursor.isEmpty,
               !page.collections.isEmpty, Set(page.collections).count == page.collections.count,
@@ -64,16 +77,23 @@ public final class ReplicaStore {
                   !$0.id.isEmpty && ($0.deleted ? $0.data == nil : $0.data?["id"]?.string == $0.id) }) else {
             throw ReplicaError.invalidPage
         }
-        let previousEpoch = try epoch
-        if previousEpoch != page.epoch && !startingBootstrap { throw ReplicaError.needsBootstrap }
         try transaction {
+            // Another connection can reset history while a request is in flight.
+            // Validate under the same write transaction as the page commit.
+            let previousEpoch = try epoch
+            if previousEpoch != page.epoch && !startingBootstrap { throw ReplicaError.needsBootstrap }
+            if let expectedCursor, try cursor(collections: page.collections) != expectedCursor {
+                throw ReplicaError.needsBootstrap
+            }
             if previousEpoch != page.epoch {
                 try execute("DELETE FROM replica_meta WHERE key LIKE 'cursor:%'")
+                try execute("DELETE FROM replica_meta WHERE key LIKE 'ready:%'")
                 try execute("DELETE FROM replica_records")
                 try execute("DELETE FROM replica_search")
                 try execute("UPDATE replica_outbox SET state='conflict',error='Server history changed. Review this saved edit.' WHERE state='pending'")
                 try set("epoch", page.epoch)
             } else if startingBootstrap {
+                try execute("DELETE FROM replica_meta WHERE key=?", ["ready:" + scope(page.collections)])
                 // A complete bootstrap is a replacement for its chosen scope;
                 // no unselected records or pending edits are removed.
                 for collection in page.collections {
@@ -83,6 +103,7 @@ public final class ReplicaStore {
             }
             for change in page.changes { try put(change) }
             try set(scope(page.collections), page.cursor)
+            if !page.hasMore { try set("ready:" + scope(page.collections), "1") }
         }
     }
 
@@ -142,6 +163,7 @@ public final class ReplicaStore {
         try transaction {
             try set(key, json(ReadingPosition(version: version, offset: offset)))
             if let bookID { try set("reading-book:" + bookID, id) }
+            if let bookID { try set("reading-book-opened:" + bookID, String(Date().timeIntervalSince1970)) }
         }
     }
 
@@ -158,6 +180,124 @@ public final class ReplicaStore {
             throw ReplicaError.invalidEdit
         }
         return "reading-position:" + collection + ":" + id
+    }
+
+    public func markBookOpened(_ id: String) throws {
+        guard ULID.isValid(id), let book = try record(collection: "fics", id: id), !book.deleted else {
+            throw ReplicaError.invalidEdit
+        }
+        try set("reading-book-opened:" + id, String(Date().timeIntervalSince1970))
+    }
+
+    public func books(filter: BookFilter, limit: Int = 50) throws -> (records: [SyncChange], count: Int) {
+        guard limit > 0 else { throw ReplicaError.invalidPage }
+        var clauses = ["collection='fics'", "deleted=0"]
+        var args: [String?] = []
+        for word in filter.query.split(whereSeparator: { $0.isWhitespace }) {
+            let escaped = word.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")
+            clauses.append("(json_extract(payload,'$.title') LIKE ? ESCAPE '\\' OR EXISTS (SELECT 1 FROM json_each(payload,'$.tags') WHERE value LIKE ? ESCAPE '\\'))")
+            args += ["%\(escaped)%", "%\(escaped)%"]
+        }
+        if !filter.source.isEmpty {
+            clauses.append("(json_extract(payload,'$.sourceType')=? OR json_extract(payload,'$.site')=?)")
+            args += [filter.source, filter.source]
+        }
+        if filter.folder == "unsorted" {
+            clauses.append("NOT EXISTS (SELECT 1 FROM json_each(payload,'$.folderIds'))")
+        } else if !filter.folder.isEmpty {
+            clauses.append("EXISTS (SELECT 1 FROM json_each(payload,'$.folderIds') WHERE value=?)")
+            args.append(filter.folder)
+        }
+        if !filter.tag.isEmpty {
+            clauses.append("EXISTS (SELECT 1 FROM json_each(payload,'$.tags') WHERE value=?)")
+            args.append(filter.tag)
+        }
+        if !filter.bookmark.isEmpty {
+            clauses.append("""
+                (EXISTS (SELECT 1 FROM replica_records b WHERE b.collection='fic_bookmarks' AND b.deleted=0
+                    AND json_extract(b.payload,'$.ficId')=replica_records.id AND json_extract(b.payload,'$.type')=?
+                    AND NOT EXISTS (SELECT 1 FROM replica_outbox d WHERE d.state='pending'
+                        AND json_extract(d.operation,'$.collection')='fic_bookmarks'
+                        AND json_extract(d.operation,'$.action')='delete'
+                        AND json_extract(d.operation,'$.recordId')=b.id))
+                OR EXISTS (SELECT 1 FROM replica_outbox o WHERE json_extract(o.operation,'$.collection')='fic_bookmarks'
+                    AND json_extract(o.operation,'$.action')='create' AND o.state='pending'
+                    AND json_extract(o.operation,'$.data.ficId')=replica_records.id AND json_extract(o.operation,'$.data.type')=?))
+                """)
+            args += [filter.bookmark, filter.bookmark]
+        }
+        let whereSQL = "WHERE " + clauses.joined(separator: " AND ")
+        let order: String
+        switch filter.sort {
+        case "recent":
+            order = """
+                MAX(COALESCE((SELECT CAST(value AS REAL) FROM replica_meta WHERE key='reading-book-opened:' || replica_records.id),0),
+                    COALESCE(CAST(strftime('%s',json_extract(payload,'$.lastOpenedAt')) AS REAL),0)) DESC,
+                json_extract(payload,'$.updatedAt') DESC,id
+                """
+        case "title": order = "json_extract(payload,'$.title') COLLATE NOCASE,id"
+        default: order = "COALESCE(json_extract(payload,'$.latestActivity'),CAST(strftime('%s',json_extract(payload,'$.createdAt')) AS REAL),0) DESC,id"
+        }
+        let count = Int(try rows("SELECT COUNT(*) FROM replica_records \(whereSQL)", args).first?[0] ?? "0") ?? 0
+        let books = try recordsQuery("\(whereSQL) ORDER BY \(order) LIMIT ?", args + [String(limit)])
+        return (books, count)
+    }
+
+    public func bookTags() throws -> [String] {
+        try rows("SELECT DISTINCT j.value FROM replica_records r,json_each(r.payload,'$.tags') j WHERE r.collection='fics' AND r.deleted=0 ORDER BY j.value COLLATE NOCASE").map { $0[0] }
+    }
+
+    public func bookmarkEdits(bookID: String) throws -> [PendingEdit] {
+        try edits().filter { $0.operation.collection == "fic_bookmarks" && $0.original.data?["ficId"]?.string == bookID }
+    }
+
+    public func bookmarks(bookID: String) throws -> [SyncChange] {
+        var saved = try relatedRecords(collection: "fic_bookmarks", field: "ficId", value: bookID)
+        // A continue replacement and its tombstone can arrive on separate pages.
+        if let latest = saved.filter({ $0.data?["type"]?.string == "continue" }).max(by: { $0.revision < $1.revision }) {
+            saved.removeAll { $0.data?["type"]?.string == "continue" && $0.id != latest.id }
+        }
+        for edit in try bookmarkEdits(bookID: bookID) where edit.state == "pending" {
+            if edit.operation.action == "delete" { saved.removeAll { $0.id == edit.operation.recordId } }
+            else {
+                if edit.original.data?["type"]?.string == "continue" { saved.removeAll { $0.data?["type"]?.string == "continue" } }
+                saved.append(edit.original)
+            }
+        }
+        return saved
+    }
+
+    public func queueBookmark(chapter: SyncChange, type: String, fraction: Double) throws {
+        guard let epoch = try epoch, chapter.collection == "fic_chapters", !chapter.deleted,
+              let bookID = chapter.data?["ficId"]?.string, ["favorite", "continue"].contains(type),
+              fraction.isFinite, (0...1).contains(fraction) else { throw ReplicaError.invalidEdit }
+        guard !(try bookmarkEdits(bookID: bookID)).contains(where: {
+            $0.original.data?["type"]?.string == type && (type == "continue" || $0.original.data?["chapterId"]?.string == chapter.id)
+        }) else { throw ReplicaError.editAlreadyPending }
+        let previous = type == "continue" ? try bookmarks(bookID: bookID).first { $0.data?["type"]?.string == "continue" } : nil
+        let id = ULID.make()
+        let original = SyncChange(revision: previous?.revision ?? 0, collection: "fic_bookmarks", id: id, deleted: false,
+            data: ["id": .string(id), "ficId": .string(bookID), "chapterId": .string(chapter.id),
+                   "type": .string(type), "scrollPosition": .number(fraction)])
+        let data: [String: JSONValue] = ["ficId": .string(bookID), "chapterId": .string(chapter.id),
+            "type": .string(type), "scrollPosition": .number(fraction),
+            "previousContinueId": previous.map { .string($0.id) } ?? .null]
+        let operation = ReplicaOperation(epoch: epoch, record: original, action: "create", data: data)
+        try execute("INSERT INTO replica_outbox(id,operation,original) VALUES (?,?,?)",
+                    [operation.id, try json(operation), try json(original)])
+    }
+
+    public func deleteBookmark(_ bookmark: SyncChange) throws {
+        guard let epoch = try epoch, bookmark.collection == "fic_bookmarks", !bookmark.deleted,
+              bookmark.revision > 0, let bookID = bookmark.data?["ficId"]?.string else { throw ReplicaError.invalidEdit }
+        guard !(try bookmarkEdits(bookID: bookID)).contains(where: {
+            $0.operation.recordId == bookmark.id ||
+            (bookmark.data?["type"]?.string == "continue" && $0.original.data?["type"]?.string == "continue")
+        }) else { throw ReplicaError.editAlreadyPending }
+        let operation = ReplicaOperation(epoch: epoch, record: bookmark, action: "delete", data: [:])
+        try execute("INSERT INTO replica_outbox(id,operation,original) VALUES (?,?,?)",
+                    [operation.id, try json(operation), try json(bookmark)])
     }
 
     public func queue(record: SyncChange, data: [String: JSONValue], delete: Bool = false) throws -> ReplicaOperation {

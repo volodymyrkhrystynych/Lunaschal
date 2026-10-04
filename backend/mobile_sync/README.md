@@ -21,6 +21,18 @@ payload fails. A stale revision returns the current row without overwriting it.
 Resolution requires a new operation ID against the current revision. A deleted
 entry must be saved under a new entry ID if the user wants to retain that text.
 
+Book snapshots include safe folder IDs, site tags, source domain, and latest
+chapter activity. Relationship/chapter triggers publish immutable replacement
+book snapshots, including unfiling/tag deletion. Projection changes rotate the
+epoch, so existing clients must bootstrap again.
+
+Bookmark create/delete operations share the journal operation receipt transaction.
+Favorites and Continue-reading bookmarks use the existing desktop table and
+fractional chapter positions. A Continue replacement supplies its previous
+bookmark ID/revision; a stale offline choice conflicts instead of replacing a
+newer desktop choice. Delete also checks the bookmark revision. Replays return
+the original receipt without recreating a later-deleted bookmark.
+
 ## Maintenance
 
 These commands change sync metadata in the configured database. Run them only
