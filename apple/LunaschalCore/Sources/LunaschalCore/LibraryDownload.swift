@@ -23,7 +23,7 @@ public actor LibraryDownload {
     }
 
     public nonisolated static func collections(knowledge: Bool) -> [String] {
-        let base = ["fic_chapters", "fic_folders", "fic_bookmarks", "messages",
+        let base = ["fic_chapters", "messages",
                     "paper_pages", "paper_native_ink", "paper_page_images",
                     "newspaper_issues", "newspaper_frontpages"]
         return knowledge ? base + ["wiki_articles"] : base

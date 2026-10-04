@@ -2,42 +2,37 @@ import XCTest
 import UIKit
 
 final class OfflineCaptureTests: XCTestCase {
+    private func tab(_ app: XCUIApplication, _ name: String) -> XCUIElement {
+        // iPad's floating tabs are exposed as cells/other elements, not a TabBar.
+        app.descendants(matching: .any).matching(identifier: name).firstMatch
+    }
+
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertEqual(app.tabBars.buttons["Draw"].exists, UIDevice.current.userInterfaceIdiom == .pad)
-        app.tabBars.buttons["Library"].tap()
+        XCTAssertEqual(tab(app, "Draw").exists, UIDevice.current.userInterfaceIdiom == .pad)
+        tab(app, "Library").tap()
+        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Filter books"].exists)
+        XCTAssertFalse(app.buttons["library-study_sources"].exists)
+        XCTAssertFalse(app.buttons["library-papers"].exists)
+        XCTAssertFalse(app.buttons["Download library over Wi-Fi"].exists)
+        tab(app, "Study").tap()
         let categories = [
-            ("fics", "Books and stories"),
             ("study_sources", "Documents"),
             ("papers", "Paper documents"),
             ("newspaper_frontpages", "Newspaper front pages"),
             ("wiki_articles", "Knowledge articles"),
         ]
         for (collection, title) in categories {
-            if collection == "study_sources" && UIDevice.current.userInterfaceIdiom == .pad {
-                XCTAssertFalse(app.buttons["library-study_sources"].exists)
-                continue
-            }
             let link = app.buttons["library-\(collection)"]
             XCTAssertTrue(link.waitForExistence(timeout: 5))
-            XCTAssertTrue(link.isHittable)
             link.tap()
             XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
             XCTAssertTrue(app.searchFields.firstMatch.exists)
-            XCTAssertFalse(app.buttons["Download library over Wi-Fi"].exists)
-            app.navigationBars.buttons["Library"].tap()
+            app.navigationBars.buttons["Study"].tap()
         }
-        XCTAssertFalse(app.buttons["Remove downloaded media"].exists)
-        XCTAssertFalse(app.switches["PDF books"].exists)
-        if UIDevice.current.userInterfaceIdiom == .pad {
-            app.tabBars.buttons["Study"].tap()
-            XCTAssertTrue(app.navigationBars["Study"].waitForExistence(timeout: 5))
-            XCTAssertTrue(app.searchFields.firstMatch.exists)
-        } else {
-            XCTAssertFalse(app.tabBars.buttons["Study"].exists)
-        }
-        app.tabBars.buttons["Settings"].tap()
+        tab(app, "Settings").tap()
         app.buttons["Library downloads"].tap()
         XCTAssertTrue(app.buttons["Download library over Wi-Fi"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Remove downloaded media"].exists)
@@ -48,10 +43,10 @@ final class OfflineCaptureTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         guard UIDevice.current.userInterfaceIdiom == .pad else {
-            XCTAssertFalse(app.tabBars.buttons["Draw"].exists)
+            XCTAssertFalse(tab(app, "Draw").exists)
             return
         }
-        app.tabBars.buttons["Draw"].tap()
+        tab(app, "Draw").tap()
         let newDrawing = app.buttons["New drawing"]
         XCTAssertTrue(newDrawing.waitForExistence(timeout: 10))
         newDrawing.tap()
@@ -61,7 +56,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Save locally"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
-        app.tabBars.buttons["Draw"].tap()
+        tab(app, "Draw").tap()
         XCTAssertTrue(app.staticTexts["Untitled drawing"].firstMatch.waitForExistence(timeout: 5))
     }
 
@@ -77,7 +72,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         app.terminate()
         app.launch()
-        app.tabBars.buttons["Journal"].tap()
+        tab(app, "Journal").tap()
         XCTAssertTrue(app.staticTexts[text].waitForExistence(timeout: 10))
         let search = app.searchFields.firstMatch
         XCTAssertTrue(search.waitForExistence(timeout: 5))

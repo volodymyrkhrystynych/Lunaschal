@@ -15,7 +15,7 @@ bp = Blueprint('mobile_sync', __name__, url_prefix='/api/mobile')
 def capabilities():
     return jsonify({'protocolVersion': PROTOCOL_VERSION, 'collections': list(COLLECTIONS),
                     'captureTimestamp': True, 'maxPageSize': 200,
-                    'editableCollections': ['journal_entries'],
+                    'editableCollections': ['journal_entries', 'fic_bookmarks'],
                     'mediaCollections': list(media.MEDIA), 'nativeDrawingFormat': 'pencilkit-v1'})
 
 

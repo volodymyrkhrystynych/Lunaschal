@@ -63,7 +63,7 @@ final class CaptureModel: ObservableObject {
         captures = try store.list()
         journalRecords = try replica.records(collection: "journal_entries")
         journalCount = try replica.count(collection: "journal_entries")
-        pendingEdits = try replica.edits()
+        pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
         refreshLibraryBytes()
         recorder.onChange = { [weak self] in
             self?.reload()
@@ -89,7 +89,7 @@ final class CaptureModel: ObservableObject {
             captures = try store.list()
             journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
             journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
-            pendingEdits = try replica.edits()
+            pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
         } catch { message = error.localizedDescription }
     }
 
@@ -212,7 +212,7 @@ final class CaptureModel: ObservableObject {
             try await syncer.run(using: api)
             try await replicaSyncer.run(using: api, collections: [
                 "journal_entries", "journal_attachments", "fics", "study_sources",
-                "papers", "conversations", "knowledge_archives",
+                "papers", "conversations", "knowledge_archives", "fic_folders", "fic_bookmarks",
             ])
             for publication in try drawingPublications.all() where publication.state == "pending" {
                 try Task.checkCancellation()

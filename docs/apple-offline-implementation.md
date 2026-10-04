@@ -2,6 +2,23 @@
 
 Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
 
+Books-library follow-up:
+
+- Library now opens directly to books. Title/tag search, source/folder/tag
+  filtering, Unsorted, recent/latest/title ordering, and Favorite/Continue
+  bookmark filters work over the offline replica with consistent pagination.
+- Safe book snapshots now include folders/tags/source/latest chapter activity;
+  related-row triggers keep changes and removals in the immutable sync feed.
+  This projection change requires a server update and fresh mobile bootstrap.
+- Chapter bookmarks queue offline and sync to the desktop table through durable
+  receipts and revision checks. Pending/conflicting changes are visible in the
+  book; a pending Continue change must finish before another replaces it.
+- Study now holds non-book material on both devices; annotation remains iPad-only.
+- Local verification: 110 Swift core tests and 54 backend bookmark/sync/seeding
+  tests passed. Hosted Apple validation is pending.
+  The earlier Study run passed native annotation/iPhone tests but failed iPad
+  tab selectors; selectors now support floating iPad tabs.
+
 iPad Study follow-up:
 
 - Added an iPad-only Study tab and moved its Documents list out of Library.

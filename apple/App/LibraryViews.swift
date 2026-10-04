@@ -32,11 +32,11 @@ enum LibraryCategory: String, CaseIterable, Identifiable {
     }
 }
 
-struct LibraryView: View {
+struct StudyLibraryView: View {
     @ObservedObject var model: CaptureModel
 
     private var categories: [LibraryCategory] {
-        LibraryCategory.allCases.filter { UIDevice.current.userInterfaceIdiom != .pad || $0 != .documents }
+        LibraryCategory.allCases.filter { $0 != .books }
     }
 
     var body: some View {
@@ -48,7 +48,7 @@ struct LibraryView: View {
             }
             .accessibilityIdentifier("library-\(category.collection)")
         }
-        .navigationTitle("Library")
+        .navigationTitle("Study")
     }
 }
 
@@ -207,11 +207,13 @@ private struct KnowledgeArticleView: View {
     }
 }
 
-private struct BookView: View {
+struct BookView: View {
     @ObservedObject var model: CaptureModel
     let book: SyncChange
     @State private var chapters: [SyncChange] = []
     @State private var resume: SyncChange?
+    @State private var bookmarks: [SyncChange] = []
+    @State private var bookmarkEdits: [PendingEdit] = []
 
     var body: some View {
         List {
@@ -228,17 +230,62 @@ private struct BookView: View {
             }
             if let resume {
                 NavigationLink("Continue: \(resume.title)") {
-                    TextChapterReader(store: model.replica, chapter: resume)
+                    TextChapterReader(owner: model, chapter: resume)
+                }
+            }
+            if !bookmarks.isEmpty {
+                Section("Bookmarks") {
+                    ForEach(bookmarks) { bookmark in
+                        if let chapter = chapters.first(where: { $0.id == bookmark.data?["chapterId"]?.string }) {
+                            NavigationLink {
+                                TextChapterReader(owner: model, chapter: chapter,
+                                    initialFraction: bookmark.data?["scrollPosition"]?.number)
+                            } label: {
+                                Label("\(bookmark.data?["type"]?.string == "continue" ? "Continue" : "Favorite"): \(chapter.title)",
+                                      systemImage: bookmark.data?["type"]?.string == "continue" ? "play.fill" : "star.fill")
+                            }
+                            .swipeActions {
+                                Button("Remove", role: .destructive) {
+                                    do { try model.replica.deleteBookmark(bookmark); refreshChapters(); model.requestSync() }
+                                    catch { model.message = error.localizedDescription }
+                                }.disabled(bookmarkEdits.contains {
+                                    $0.operation.recordId == bookmark.id ||
+                                    (bookmark.data?["type"]?.string == "continue" && $0.original.data?["type"]?.string == "continue")
+                                })
+                            }
+                        } else {
+                            Text("Bookmarked chapter not downloaded. Download the library over Wi-Fi.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            if !bookmarkEdits.isEmpty {
+                Section("Bookmark sync") {
+                    ForEach(bookmarkEdits) { edit in
+                        Text(edit.state == "pending" ? "Bookmark saved on device · Waiting to sync" : edit.error ?? "Bookmark needs review")
+                        if edit.state != "pending" {
+                            Button("Keep server version and discard this pending change", role: .destructive) {
+                                do { try model.replica.resolve(edit, keepLocal: false); refreshChapters() }
+                                catch { model.message = error.localizedDescription }
+                            }
+                        }
+                    }
                 }
             }
             ForEach(chapters) { chapter in
                 NavigationLink {
-                    TextChapterReader(store: model.replica, chapter: chapter)
+                    TextChapterReader(owner: model, chapter: chapter)
                 } label: { Text(chapter.title) }
             }
         }
         .navigationTitle(book.title)
         .task(id: model.downloadingLibrary) { refreshChapters() }
+        .onAppear {
+            do { try model.replica.markBookOpened(book.id) }
+            catch { model.message = error.localizedDescription }
+            refreshChapters()
+        }
         .onChange(of: model.syncing) { _, syncing in if !syncing { refreshChapters() } }
     }
 
@@ -247,6 +294,8 @@ private struct BookView: View {
             chapters = try model.replica.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id)
                 .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
             resume = try model.replica.lastReadChapter(bookID: book.id)
+            bookmarks = try model.replica.bookmarks(bookID: book.id)
+            bookmarkEdits = try model.replica.bookmarkEdits(bookID: book.id)
         } catch { model.message = error.localizedDescription }
     }
 }
