@@ -15,6 +15,8 @@ struct CaptureRoot: View {
             NavigationStack { LibraryView(model: model) }
                 .tabItem { Label("Library", systemImage: "books.vertical") }
             if UIDevice.current.userInterfaceIdiom == .pad {
+                NavigationStack { LibraryCategoryView(model: model, category: .documents, title: "Study") }
+                    .tabItem { Label("Study", systemImage: "doc.text") }
                 NavigationStack { DrawingLibraryView(model: model) }
                     .tabItem { Label("Draw", systemImage: "pencil.tip") }
             }

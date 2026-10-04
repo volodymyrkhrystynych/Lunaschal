@@ -35,8 +35,12 @@ enum LibraryCategory: String, CaseIterable, Identifiable {
 struct LibraryView: View {
     @ObservedObject var model: CaptureModel
 
+    private var categories: [LibraryCategory] {
+        LibraryCategory.allCases.filter { UIDevice.current.userInterfaceIdiom != .pad || $0 != .documents }
+    }
+
     var body: some View {
-        List(LibraryCategory.allCases) { category in
+        List(categories) { category in
             NavigationLink {
                 LibraryCategoryView(model: model, category: category)
             } label: {
@@ -48,9 +52,10 @@ struct LibraryView: View {
     }
 }
 
-private struct LibraryCategoryView: View {
+struct LibraryCategoryView: View {
     @ObservedObject var model: CaptureModel
     let category: LibraryCategory
+    var title: String? = nil
     @State private var query = ""
     @State private var records: [SyncChange] = []
     @State private var limit = 50
@@ -89,7 +94,7 @@ private struct LibraryCategoryView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
-        .navigationTitle(category.rawValue)
+        .navigationTitle(title ?? category.rawValue)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always),
                     prompt: "Search \(category.rawValue.lowercased())")
@@ -312,11 +317,19 @@ struct DownloadedMediaView: View {
     @State private var savedPDFPage = 0
     @State private var confirmingRemoval = false
     @State private var availability: MediaAvailability = .metadataOnly
+    @State private var studyAnnotation: StudyAnnotationModel?
 
     var body: some View {
         Group {
             if let file {
-                if mime == "application/pdf" {
+                if let studyAnnotation {
+                    StudyAnnotationView(model: studyAnnotation) { page in
+                        do {
+                            try model.replica.saveReadingPosition(collection: collection, id: id,
+                                version: file.lastPathComponent, offset: page)
+                        } catch { model.message = error.localizedDescription }
+                    }.id(file.lastPathComponent)
+                } else if mime == "application/pdf" {
                     LocalPDFView(url: file, initialPage: savedPDFPage) { page in
                         do {
                             try model.replica.saveReadingPosition(collection: collection, id: id,
@@ -367,9 +380,17 @@ struct DownloadedMediaView: View {
             if downloaded != file {
                 player?.pause()
                 player = nil
+                studyAnnotation = nil
                 if let downloaded, mime == "application/pdf" {
                     savedPDFPage = try model.replica.readingPosition(collection: collection, id: id,
                         version: downloaded.lastPathComponent) ?? 0
+                }
+                if let downloaded, collection == "study_sources", UIDevice.current.userInterfaceIdiom == .pad,
+                   mime == "application/pdf" || mime.hasPrefix("image/") {
+                    let ink = try StudyAnnotationStore(root: model.store.root.appendingPathComponent("study-annotations"),
+                        sourceID: id, version: downloaded.lastPathComponent)
+                    studyAnnotation = try StudyAnnotationModel(file: downloaded, mime: mime, store: ink,
+                                                               initialPage: savedPDFPage)
                 }
                 file = downloaded
                 if let file, mime.hasPrefix("audio/") || mime.hasPrefix("video/") { player = AVPlayer(url: file) }

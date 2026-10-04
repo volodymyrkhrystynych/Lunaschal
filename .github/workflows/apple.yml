@@ -67,6 +67,7 @@ jobs:
             -parallel-testing-enabled NO -destination-timeout 120 \
             -derivedDataPath apple/DerivedData \
             -only-testing:LunaschalUITests/OfflineCaptureTests/testDrawingWorkspaceReopensWithoutAServer \
+            -only-testing:LunaschalUITests/OfflineCaptureTests/testLibraryCategoriesAndDownloadSettingsAreSeparate \
             CODE_SIGNING_ALLOWED=NO test
       - uses: actions/upload-artifact@v4
         if: failure()

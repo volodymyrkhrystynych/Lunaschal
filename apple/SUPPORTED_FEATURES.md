@@ -25,8 +25,13 @@ has been validated. Exact commits and CI results are recorded in the
 | Chat, Calendar, Food, Lifestyle, Learning | Use the existing web app                                                                    | Not exposed                                       | Existing web app requirements apply                      |
 | Practice and Notebook                     | Intentionally omitted from native navigation                                                | Not exposed                                       | Existing Linux/web app remains available                 |
 
-The iPhone tabs are Capture, Journal, Library, and Settings. iPad also has Draw;
+The iPhone tabs are Capture, Journal, Library, and Settings. iPad also has Study and Draw;
 native drawing creation/editing is iPad-only, while Paper previews work on both.
+On iPad, Study owns Documents and provides Pencil annotations for downloaded PDFs
+and images without a Notebook editor. Ink autosaves locally and can be exported
+per page as editable ink or a flattened PNG. It does not yet sync to the server;
+source versions have separate ink, and old-version browsing is not exposed.
+HTML/video sources remain read-only.
 Library download controls live under Settings → Library downloads. Bulk downloads
 stay on Wi-Fi and continue while switching tabs. Subsequent chapter/text updates
 follow the cellular preference; full resyncs and binary media remain Wi-Fi-only.

@@ -33,12 +33,21 @@ what each device can currently do and which work remains device-only.
   and link-attachment IDs. Entry creation precedes link import; retry validates
   both acknowledgements. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Library / Settings navigation on iPhone; iPad also has Draw.
+- Native Capture / Journal / Library / Settings navigation on iPhone; iPad also has Study and Draw.
   Library opens with five category links, each with its own search and list:
   Books and stories, Documents, Paper documents, Newspaper front pages, and
   Knowledge articles. Download selection, progress, storage budget, and cleanup
   live in Settings → Library downloads.
   Paper previews remain readable on iPhone, while native drawing editing is iPad-only.
+- On iPad, Documents moves from Library into Study. Downloaded PDFs and images
+  open with Pencil-only annotation, finger pan/zoom, undo, page navigation, and
+  per-page ink autosave. There is no Notebook/text editor. Originals remain
+  unchanged; ink lives outside download cleanup and is isolated by source ID,
+  file version, and page. Export an annotated page as PNG or its editable ink.
+  Study annotations currently stay on the iPad and do not sync to the server.
+  Replacing a source file preserves the old ink on disk but does not apply it
+  to the new document; browsing old-version ink is not yet exposed. Archived
+  HTML and video sources retain their readers without annotation.
 - Durable per-capture manifests in Application Support, replaced atomically;
   audio lives beside them. A separate SQLite replica stores server records,
   full-text search, sync cursors, and revision-checked journal edits.

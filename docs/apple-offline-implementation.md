@@ -2,6 +2,20 @@
 
 Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
 
+iPad Study follow-up:
+
+- Added an iPad-only Study tab and moved its Documents list out of Library.
+  iPhone retains Documents under Library.
+- Downloaded PDF/image pages support Pencil annotation, finger pan/zoom, undo,
+  autosave, previous-checkpoint recovery, and annotated PNG/editable-ink export.
+  There is no Notebook editor. Web pages/videos retain existing readers.
+- Study ink is local-only, separate from download cleanup and keyed by source
+  ID, file hash, and page. Source originals are untouched; a replaced source
+  cannot inherit old marks. Server sync and old-version ink browsing remain open.
+- 105 portable Swift tests passed. Three native annotation tests cover reopen,
+  page transitions, erasure, original-file preservation, export, and load failure.
+  Hosted Apple verification is pending.
+
 Library usability follow-up: replaced the combined scrolling list with five
 category destinations, each searchable with 50-item pages. Moved download
 selection, progress/pause, storage budget, and cleanup into Settings → Library

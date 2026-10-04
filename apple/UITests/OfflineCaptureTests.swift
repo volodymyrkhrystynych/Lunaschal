@@ -15,6 +15,10 @@ final class OfflineCaptureTests: XCTestCase {
             ("wiki_articles", "Knowledge articles"),
         ]
         for (collection, title) in categories {
+            if collection == "study_sources" && UIDevice.current.userInterfaceIdiom == .pad {
+                XCTAssertFalse(app.buttons["library-study_sources"].exists)
+                continue
+            }
             let link = app.buttons["library-\(collection)"]
             XCTAssertTrue(link.waitForExistence(timeout: 5))
             XCTAssertTrue(link.isHittable)
@@ -26,6 +30,13 @@ final class OfflineCaptureTests: XCTestCase {
         }
         XCTAssertFalse(app.buttons["Remove downloaded media"].exists)
         XCTAssertFalse(app.switches["PDF books"].exists)
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            app.tabBars.buttons["Study"].tap()
+            XCTAssertTrue(app.navigationBars["Study"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.searchFields.firstMatch.exists)
+        } else {
+            XCTAssertFalse(app.tabBars.buttons["Study"].exists)
+        }
         app.tabBars.buttons["Settings"].tap()
         app.buttons["Library downloads"].tap()
         XCTAssertTrue(app.buttons["Download library over Wi-Fi"].waitForExistence(timeout: 5))
