@@ -17,6 +17,7 @@ media dirs and rebuilds from scratch. Realistic-but-small — a handful of rows
 per feature, enough to click through every view, not exhaustive coverage
 (that's what backend/tests/ is for).
 """
+import hashlib
 import json
 import os
 import shutil
@@ -1433,6 +1434,18 @@ def seed_paper(db):
         'VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, 0, ?, ?)',
         (image_id, page_id, str(pasted_path), 120.0, 200.0, 320.0, 240.0, ts(3), ts(3)),
     )
+    # Native ink is opaque to Linux. Seed an explicitly unavailable original,
+    # not invented bytes that would masquerade as a valid PencilKit file.
+    native_id, native_page = new_id(), new_id()
+    native_preview = page_image_path(native_id, native_page)
+    placeholder_image(native_preview, 'Native drawing preview', size=(1240, 1754))
+    db.execute('INSERT INTO papers(id,title,created_at,updated_at) VALUES (?,?,?,?)',
+               (native_id, 'Apple drawing (preview demo)', ts(1), ts(1)))
+    db.execute('INSERT INTO paper_pages(id,paper_id,width,height,image_path,created_at,updated_at) VALUES (?,?,2100,2970,?,?,?)',
+               (native_page, native_id, str(native_preview), ts(1), ts(1)))
+    db.execute('INSERT INTO paper_native_ink(id,format,file_path,sha256,preview_sha256,created_at,updated_at) VALUES (?,?,?,?,?,?,?)',
+               (native_page, 'pencilkit-v1', str(native_preview.with_suffix('.drawing')),
+                '0' * 64, hashlib.sha256(native_preview.read_bytes()).hexdigest(), ts(1), ts(1)))
     return page_id
 
 
@@ -1918,6 +1931,14 @@ def seed_infra(db):
     a public repo, and a demo database is exactly the sort of file someone
     copies without reading.
     """
+    # init_db seeds the sync epoch. Feature seed inserts fire the capture
+    # triggers, so this also exercises the device feed on a realistic demo.
+    assert db.execute('SELECT COUNT(*) FROM mobile_sync_state').fetchone()[0] == 1
+    assert db.execute('SELECT COUNT(*) FROM mobile_sync_changes').fetchone()[0] > 0
+    db.execute(
+        'INSERT INTO mobile_sync_operations(id,request_hash,response,status,created_at) VALUES (?,?,?,?,?)',
+        (new_id(), 'demo-operation-not-a-credential', '{"demo":true}', 200, ts(1)),
+    )
     db.execute(
         'UPDATE settings SET ai_provider = ?, llama_url = ?, llama_model = ?, '
         'stt_backend = ?, tts_backend = ?, whisper_model = ?, stt_device = ?, '

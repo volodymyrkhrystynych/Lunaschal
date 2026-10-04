@@ -1,0 +1,66 @@
+name: Apple app
+on:
+  pull_request:
+    paths: ['apple/**', '.github/workflows/apple.yml']
+  push:
+    branches: ['main', 'feat/apple-offline-foundation']
+    paths: ['apple/**', '.github/workflows/apple.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: apple-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: swift:6.2-bookworm
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test --package-path apple/LunaschalCore
+  ios:
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Apple toolchain
+        run: xcodebuild -version
+      - name: Test release configuration validation
+        run: python3 -m unittest discover -s apple/tools -p 'test_*.py'
+      - name: Test capture persistence and synchronization
+        run: swift test --package-path apple/LunaschalCore
+      - name: Install project generator
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: |
+          swift apple/tools/make_icons.swift
+          xcodegen generate --spec apple/project.yml
+      - name: Verify unsigned device archive
+        run: |
+          xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath apple/Lunaschal.xcarchive CODE_SIGNING_ALLOWED=NO archive
+          python3 apple/tools/check_archive.py apple/Lunaschal.xcarchive
+      - name: Build Watch companion
+        run: |
+          xcodebuild -project apple/Lunaschal.xcodeproj -scheme LunaschalWatch \
+            -sdk watchsimulator -destination 'generic/platform=watchOS Simulator' \
+            -derivedDataPath apple/WatchDerivedData CODE_SIGNING_ALLOWED=NO build
+      - name: Build app and test offline capture on iPhone simulator
+        shell: bash
+        run: |
+          simulator_id=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; data=json.load(sys.stdin); print(next(d["udid"] for runtime,devices in data["devices"].items() if "iOS" in runtime for d in devices if "iPhone" in d["name"]))')
+          xcodebuild -project apple/Lunaschal.xcodeproj -scheme Lunaschal \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -parallel-testing-enabled NO -destination-timeout 120 \
+            -derivedDataPath apple/DerivedData -resultBundlePath apple/TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: apple-test-results
+          path: apple/TestResults.xcresult
+          if-no-files-found: ignore

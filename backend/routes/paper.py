@@ -21,6 +21,14 @@ def page_image_url(page) -> str | None:
     return f"/api/paper/pages/{page['id']}/image?v={page['updated_at']}"
 
 
+def _native_page(db, page_id):
+    return db.execute('SELECT 1 FROM paper_native_ink WHERE id=?', (page_id,)).fetchone() is not None
+
+
+def _native_read_only():
+    return jsonify(error='This page contains native ink. Edit it in the Apple app; this editor shows its saved preview.'), 409
+
+
 # A paper flagged for the journal stays in the explorer until the next 4am
 # boundary passes, then moves — computed lazily off backend.day_boundary so
 # no scheduler is needed and it survives restarts.
@@ -251,7 +259,7 @@ def add_page(paper_id):
 def get_page(page_id):
     db = get_db()
     row = db.execute(
-        'SELECT strokes, width, height FROM paper_pages WHERE id=?', (page_id,)
+        'SELECT id, strokes, width, height, image_path, updated_at FROM paper_pages WHERE id=?', (page_id,)
     ).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
@@ -260,12 +268,16 @@ def get_page(page_id):
         'width': row['width'],
         'height': row['height'],
         'images': page_images(db, page_id),
+        'nativeInk': _native_page(db, page_id),
+        'imageUrl': page_image_url(row),
     })
 
 
 @bp.put('/pages/<page_id>')
 def save_page(page_id):
     db = get_db()
+    if _native_page(db, page_id):
+        return _native_read_only()
     page = db.execute('SELECT paper_id FROM paper_pages WHERE id=?', (page_id,)).fetchone()
     if not page:
         return jsonify({'error': 'Not found'}), 404
@@ -364,6 +376,8 @@ def page_images(db, page_id: str) -> list[dict]:
 @bp.post('/pages/<page_id>/images')
 def add_page_image(page_id):
     db = get_db()
+    if _native_page(db, page_id):
+        return _native_read_only()
     page = db.execute('SELECT paper_id FROM paper_pages WHERE id=?', (page_id,)).fetchone()
     if not page:
         return jsonify({'error': 'Not found'}), 404
@@ -444,6 +458,8 @@ def update_page_image(image_id):
     ).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
+    if _native_page(db, row['page_id']):
+        return _native_read_only()
     body = request.json or {}
 
     updates: dict = {}
@@ -490,6 +506,8 @@ def delete_page_image(image_id):
     ).fetchone()
     if not row:
         return jsonify({'error': 'Not found'}), 404
+    if _native_page(db, row['page_id']):
+        return _native_read_only()
     db.execute('DELETE FROM paper_page_images WHERE id=?', (image_id,))
     _touch_page_content(db, row['page_id'], int(time.time()))
     db.commit()

@@ -1,3 +1,29 @@
+-- Device sync revisions are monotonic sequence positions, not entity IDs.
+-- Source entities keep their ULIDs. NULL payloads are deletion tombstones.
+CREATE TABLE IF NOT EXISTS mobile_sync_state (
+    id TEXT PRIMARY KEY,
+    schema_hash TEXT NOT NULL,
+    history_floor INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS mobile_sync_changes (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    collection TEXT NOT NULL,
+    record_id TEXT NOT NULL,
+    payload TEXT,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+CREATE INDEX IF NOT EXISTS idx_mobile_sync_record
+    ON mobile_sync_changes(collection, record_id, sequence);
+-- Operation identity and acknowledgement are committed with the domain write.
+CREATE TABLE IF NOT EXISTS mobile_sync_operations (
+    id TEXT PRIMARY KEY,
+    request_hash TEXT NOT NULL,
+    response TEXT NOT NULL,
+    status INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS journal_entries (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,
@@ -1057,6 +1083,18 @@ CREATE TABLE IF NOT EXISTS paper_pages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_paper_pages_paper ON paper_pages(paper_id, position);
+
+-- Opaque PencilKit originals are separate from web strokes. Native pages are
+-- preview-only in the web editor; neither representation overwrites the other.
+CREATE TABLE IF NOT EXISTS paper_native_ink (
+    id TEXT PRIMARY KEY REFERENCES paper_pages(id) ON DELETE CASCADE,
+    format TEXT NOT NULL CHECK (format = 'pencilkit-v1'),
+    file_path TEXT NOT NULL,
+    sha256 TEXT NOT NULL,
+    preview_sha256 TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 
 -- A picture pasted onto a page. The file lives on disk beside the page's
 -- snapshot (never as a blob); this row is only its placement. Geometry is in

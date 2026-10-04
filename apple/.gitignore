@@ -1,0 +1,14 @@
+.build/
+.swiftpm/
+*.xcodeproj/
+Generated/
+DerivedData/
+WatchDerivedData/
+*.xcarchive/
+*.ipa
+*.p12
+*.mobileprovision
+*.xcresult/
+*.p8
+__pycache__/
+**/AppIcon.appiconset/Icon.png
