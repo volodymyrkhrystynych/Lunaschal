@@ -16,6 +16,8 @@ def check_archive(root):
         if info["CFBundleIdentifier"] != identifier or info["CFBundleSupportedPlatforms"] != [platform]:
             raise ValueError("Unexpected archive bundle identity or platform")
         versions.append((info["CFBundleShortVersionString"], info["CFBundleVersion"]))
+        if info.get("ITSAppUsesNonExemptEncryption") is not False:
+            raise ValueError("Archive is missing its exempt-encryption declaration")
         if not info.get("NSMicrophoneUsageDescription") or not (bundle / "Assets.car").is_file():
             raise ValueError("Archive is missing permission text or app assets")
         privacy = plistlib.loads((bundle / "PrivacyInfo.xcprivacy").read_bytes())

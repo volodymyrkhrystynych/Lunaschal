@@ -38,6 +38,7 @@ targets:
       path: Generated/Info.plist
       properties:
         CFBundleDisplayName: Lunaschal
+        ITSAppUsesNonExemptEncryption: false
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
@@ -79,6 +80,7 @@ targets:
       path: Generated/Watch-Info.plist
       properties:
         CFBundleDisplayName: Lunaschal
+        ITSAppUsesNonExemptEncryption: false
         WKApplication: true
         WKCompanionAppBundleIdentifier: com.lunaschal.mobile
         WKRunsIndependentlyOfCompanionApp: false
