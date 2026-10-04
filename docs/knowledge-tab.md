@@ -352,6 +352,62 @@ undated slug and the filename carries the date, so the comparison is already
 possible from stored data; it wants a decision about what happens to the
 superseded file, and that is a separate change.
 
+## Library docs packages (a local Context7)
+
+Alongside the ZIMs, the library holds **docs packages**: up-to-date,
+versioned documentation for one library each (`flask 3.1.3`, `npm/zod`, …),
+the kind of thing Context7 serves from its cloud API. Here it is served
+offline: `backend/offline_knowledge/docpacks.py`, the `knowledge_docpacks`
+table, files under `./data/docpacks/` (`DOCPACKS_ROOT`).
+
+**The format is neuledge/context's, read directly.** Each package is one
+SQLite file: a `meta` key/value table (`name`, `version`, optional
+`description`/`source_url`), a `chunks` table with one row per doc section, and
+a `chunks_fts` FTS5 index (porter tokenizer). Their community registry builds
+a hundred-odd libraries daily from each project's own docs, one package per
+release, and serves them over plain HTTP: `GET /search?registry=pip&name=flask`
+lists versions, `GET /packages/<registry>/<name>/<version>/download` is the
+file. Adopting the format rather than writing an ingester means the scraping,
+chunking and per-release versioning are a maintained pipeline that isn't ours.
+And anything their CLI builds from an arbitrary git repo or docs site
+(`npx @neuledge/context add <url>`) can be uploaded unchanged.
+
+Alternatives considered: `sm18lr88/context7-local` (a Node fork of Context7
+that builds indexes on demand; a whole MCP server, heavier than a file format)
+and `arabold/docs-mcp-server` (scrape + embeddings; its strength is semantic
+search, which this deliberately does without). The rest of the field
+(Docfork, Nia, Ref, GitMCP, DeepWiki) is cloud-hosted.
+
+How it fits the federated search:
+
+- **Its own quota class.** Docpack hits display as kind `docs`, but quotas use
+  a separate `docpacks` class (`CLASS_SHARE['docpacks']`), so a few
+  deliberately installed packages don't fight several hundred DevDocs archives
+  over the `docs` 20%.
+- **No ZIM folder required.** Packages live on the data disk, so
+  `search_many` searches them even with no `knowledge_root` set. (The
+  Knowledge _tab_ still shows its unconfigured state without one, and the
+  nightly Ideas research pass still gates on the root.)
+- **Selection is cheap.** Up to `MAX_PACKS_PER_SEARCH` (12) packages are all
+  searched. Past that, only those whose name the query mentions, topped up by
+  the most recently installed. SQLite releases the GIL, and a two-query search
+  over Flask's 374 sections took 7 ms.
+- **Ids are `docpack:<ulid>`, paths are chunk ids.** The hits fit the existing
+  `(archiveId, path)` shape, so `local_knowledge_read`, the reader's content
+  route and the stored chat evidence needed no new fields. A read returns the
+  hit's section plus its neighbours from the same document, up to the same
+  12K a ZIM article read gets.
+- **Keyword only.** `fts_match_query` (prefix-OR) and
+  `bm25(chunks_fts, 5, 10, 1)` (title and section weighted over body, as
+  neuledge's own search does). No embeddings, so a docs lookup never waits on
+  the model service.
+
+A downloaded or uploaded file is untrusted. `validate` opens it read-only with
+`trusted_schema=OFF`, checks the three objects and the two meta keys, and runs
+one FTS query before any row is written. A failed install leaves neither a row
+nor a `.part`. Installing is synchronous, since packages are megabytes rather
+than the gigabytes the resumable ZIM downloader exists for.
+
 ## Known limitations
 
 These are known gaps, not promises already provided by the UI:

@@ -42,6 +42,8 @@ export TORRENT_ROOT="$SCRATCH/torrents"
 # only, so it is one of the views a demo instance can most easily be judged on.
 export STUDY_ROOT="$SCRATCH/study"
 export STUDY_ARCHIVE_ROOT="$SCRATCH/study-archive"
+# Library docs packages (Knowledge). The seeder writes a tiny real one here.
+export DOCPACKS_ROOT="$SCRATCH/docpacks"
 # A journal entry's YouTube attachment keeps its video here — the same archive
 # drive Study and Piano use in production, a scratch directory here. Without it
 # the seeded video would resolve through settings.backup_path

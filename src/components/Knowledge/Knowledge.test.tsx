@@ -20,6 +20,7 @@ vi.mock('@/hooks/api', () => ({
       pauseDownload: vi.fn(),
       resumeDownload: vi.fn(),
       deleteDownload: vi.fn(),
+      docPacks: vi.fn().mockResolvedValue([]),
       contentUrl: (id: string, path: string) =>
         `/api/knowledge/archives/${id}/content/${path}`,
     },

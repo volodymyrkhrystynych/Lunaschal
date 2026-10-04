@@ -1054,6 +1054,37 @@ export interface KnowledgeDownload {
   finishedAt: number | null;
 }
 
+/**
+ * An installed library-documentation package: one library version in
+ * neuledge/context's SQLite format, searched alongside the ZIM archives.
+ * `id` carries the `docpack:` prefix, so it is also a search result's
+ * `archiveId`.
+ */
+export interface KnowledgeDocPack {
+  id: string;
+  /** Package manager it came from (`npm`, `pip`, …), or `local` for an upload. */
+  registry: string;
+  name: string;
+  version: string;
+  description: string;
+  sourceUrl: string;
+  size: number;
+  chunkCount: number;
+  enabled: boolean;
+  /** False when the row survives but its file is gone from disk. */
+  available: boolean;
+  createdAt: number;
+}
+
+export interface KnowledgeDocPackVersion {
+  registry: string;
+  name: string;
+  version: string;
+  description: string;
+  size: number | null;
+  installed: boolean;
+}
+
 export interface WhisperModel {
   name: string;
   vramMb: number;
@@ -4220,6 +4251,32 @@ export const api = {
     deleteDownload: (id: string) =>
       del<{ deleted: boolean }>(
         `/api/knowledge/downloads/${encodeURIComponent(id)}`
+      ),
+    docPacks: () => get<KnowledgeDocPack[]>('/api/knowledge/docpacks'),
+    docPackVersions: (registry: string, name: string) =>
+      get<KnowledgeDocPackVersion[]>(
+        `/api/knowledge/docpacks/registry?registry=${encodeURIComponent(registry)}` +
+          `&name=${encodeURIComponent(name)}`
+      ),
+    installDocPack: (registry: string, name: string, version: string) =>
+      post<KnowledgeDocPack>('/api/knowledge/docpacks/install', {
+        registry,
+        name,
+        version,
+      }),
+    uploadDocPack: (file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return upload<KnowledgeDocPack>('/api/knowledge/docpacks/upload', form);
+    },
+    updateDocPack: (id: string, changes: { enabled: boolean }) =>
+      patch<KnowledgeDocPack>(
+        `/api/knowledge/docpacks/${encodeURIComponent(id)}`,
+        changes
+      ),
+    deleteDocPack: (id: string) =>
+      del<{ deleted: boolean }>(
+        `/api/knowledge/docpacks/${encodeURIComponent(id)}`
       ),
   },
 

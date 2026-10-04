@@ -32,7 +32,7 @@ REQUIRED_ENV_VARS = [
     'CHAT_ROOT', 'PAPER_ROOT', 'JOBS_ROOT', 'NEWSPAPERS_ROOT', 'NEWSPAPERS_ARCHIVE_ROOT',
     'NOTEBOOK_ROOT', 'EMAIL_MEDIA_ROOT', 'PIANO_ROOT', 'PIANO_ARCHIVE_ROOT',
     'FILES_ROOT', 'TORRENT_ROOT', 'STUDY_ROOT', 'STUDY_ARCHIVE_ROOT',
-    'SHORTCUTS_PATH',
+    'DOCPACKS_ROOT', 'SHORTCUTS_PATH',
 ]
 
 
@@ -1924,6 +1924,54 @@ def seed_knowledge(db):
     )
 
 
+
+def seed_docpacks(db):
+    """One installed library-docs package, as a real file under DOCPACKS_ROOT.
+
+    Unlike a ZIM, a docs package *can* be manufactured here: it is a plain
+    SQLite file in neuledge/context's format, so the demo's Knowledge search
+    and the chat's `local_knowledge_search` both have docs to find. Written
+    through `docpacks.import_file`, the same validation an upload goes through.
+    """
+    import io
+    import sqlite3
+    import tempfile
+
+    from backend.offline_knowledge import docpacks
+
+    chunks = [
+        ('docs/blueprints.md', 'Modular Applications with Blueprints', 'Why Blueprints?',
+         'A blueprint records operations to run when it is registered on an application. '
+         'Factor a large application into a set of blueprints.'),
+        ('docs/blueprints.md', 'Modular Applications with Blueprints', 'Registering Blueprints',
+         'Register a blueprint with `app.register_blueprint(bp, url_prefix="/pages")`.'),
+        ('docs/config.md', 'Configuration Handling', 'Configuration Basics',
+         'The config is a subclass of a dictionary: `app.config["TESTING"] = True`.'),
+    ]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / 'flask.db'
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            'CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);'
+            'CREATE TABLE chunks (id INTEGER PRIMARY KEY, doc_path TEXT NOT NULL,'
+            ' doc_title TEXT NOT NULL, section_title TEXT NOT NULL, content TEXT NOT NULL,'
+            ' tokens INTEGER NOT NULL, has_code INTEGER DEFAULT 0);'
+            "CREATE VIRTUAL TABLE chunks_fts USING fts5(doc_title, section_title, content,"
+            " content='chunks', content_rowid='id', tokenize='porter unicode61');"
+        )
+        conn.executemany('INSERT INTO meta VALUES (?, ?)', [
+            ('name', 'flask'), ('version', '3.1.3'),
+            ('description', 'Lightweight WSGI web application framework for Python'),
+            ('source_url', 'https://github.com/pallets/flask'),
+        ])
+        conn.executemany(
+            'INSERT INTO chunks (doc_path, doc_title, section_title, content, tokens, has_code)'
+            ' VALUES (?, ?, ?, ?, ?, 1)', [(*c, len(c[3]) // 4) for c in chunks])
+        conn.execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')")
+        conn.commit()
+        conn.close()
+        docpacks.import_file(io.BytesIO(path.read_bytes()))
+
 def seed_infra(db):
     """Settings, MCP servers, the transcription log and the task-event feed.
 
@@ -2052,6 +2100,7 @@ def main() -> None:
     seed_files()
     seed_memory(db)
     seed_knowledge(db)
+    seed_docpacks(db)
     seed_infra(db)
 
     db.commit()

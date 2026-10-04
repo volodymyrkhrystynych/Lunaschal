@@ -2358,3 +2358,27 @@ CREATE TABLE IF NOT EXISTS knowledge_downloads (
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_downloads_status
     ON knowledge_downloads(status, created_at DESC);
+
+-- Library documentation packages (backend/offline_knowledge/docpacks.py): one
+-- neuledge/context-format SQLite file per library version, under
+-- DOCPACKS_ROOT. The file carries its own FTS5 index; this row is only what
+-- the file cannot say -- where it came from and whether to search it.
+-- `registry` is the package manager it was installed from ('npm', 'pip', ...)
+-- or 'local' for an uploaded file.
+CREATE TABLE IF NOT EXISTS knowledge_docpacks (
+    id TEXT PRIMARY KEY,
+    registry TEXT NOT NULL,
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    source_url TEXT NOT NULL DEFAULT '',
+    filename TEXT NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_docpacks_spec
+    ON knowledge_docpacks(registry, name, version);
