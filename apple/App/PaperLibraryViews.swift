@@ -3,60 +3,7 @@ import LunaschalCore
 import PencilKit
 
 /// Local replica browsing only: opening a row never fetches a server file.
-struct PaperLibrarySections: View {
-    @ObservedObject var model: CaptureModel
-    let query: String
-    @State private var papers: [SyncChange] = []
-    @State private var covers: [SyncChange] = []
-    @State private var paperLimit = 200
-    @State private var coverLimit = 200
-    @State private var paperCount = 0
-    @State private var coverCount = 0
-
-    var body: some View {
-        Group {
-            Section("Paper documents") {
-                ForEach(papers) { paper in
-                    NavigationLink(paper.title) { PaperPreviewView(model: model, paper: paper) }
-                }
-                if papers.count < paperCount {
-                    Button("Load more papers (\(papers.count) of \(paperCount))") {
-                        paperLimit += 200; refresh()
-                    }
-                }
-            }
-            Section("Newspaper front pages") {
-                ForEach(covers) { cover in
-                    NavigationLink(cover.title) {
-                        DownloadedMediaView(model: model, collection: "newspaper_frontpages",
-                                            id: cover.id, mime: "image/jpeg", title: cover.title)
-                    }
-                }
-                if covers.count < coverCount {
-                    Button("Load more front pages (\(covers.count) of \(coverCount))") {
-                        coverLimit += 200; refresh()
-                    }
-                }
-                Text("Front-page images only. Complete newspaper PDFs and annotations are not available here yet.")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-        }
-        .task(id: model.downloadingLibrary) { refresh() }
-        .onChange(of: model.syncing) { _, syncing in if !syncing { refresh() } }
-        .onChange(of: query) { _, _ in paperLimit = 200; coverLimit = 200; refresh() }
-    }
-
-    private func refresh() {
-        do {
-            papers = try model.replica.records(collection: "papers", query: query, limit: paperLimit)
-            paperCount = try model.replica.count(collection: "papers", query: query)
-            covers = try model.replica.records(collection: "newspaper_frontpages", query: query, limit: coverLimit)
-            coverCount = try model.replica.count(collection: "newspaper_frontpages", query: query)
-        } catch { model.message = error.localizedDescription }
-    }
-}
-
-private struct PaperPreviewView: View {
+struct PaperPreviewView: View {
     @ObservedObject var model: CaptureModel
     let paper: SyncChange
     @State private var pages: [SyncChange] = []

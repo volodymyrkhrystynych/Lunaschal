@@ -34,6 +34,10 @@ what each device can currently do and which work remains device-only.
   both acknowledgements. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Library / Draw / Settings navigation for iPhone and iPad.
+  Library opens with five category links, each with its own search and list:
+  Books and stories, Documents, Paper documents, Newspaper front pages, and
+  Knowledge articles. Download selection, progress, storage budget, and cleanup
+  live in Settings → Library downloads.
 - Durable per-capture manifests in Application Support, replaced atomically;
   audio lives beside them. A separate SQLite replica stores server records,
   full-text search, sync cursors, and revision-checked journal edits.
@@ -163,9 +167,9 @@ publicly to make CI work: simulator capture tests never contact it.
   termination, the manifest is marked interrupted; the audio is retained for
   playback/export and explicit recovery. An AAC container killed before
   finalization may not be playable. We do not claim crash-proof in-flight audio.
-- Journal, book, document, and Knowledge lists initially show 200 records, with Load more
+- Journal initially shows 200 records; each Library category starts with 50, with Load more
   controls to reveal further records already stored on the device. Library search
-  filters books, documents, and Knowledge articles and can expand beyond 200 matches. Counts and
+  filters the selected category and can expand beyond 50 matches. Counts and
   results share the same filter and stable revision/ID ordering. Loading more
   does not contact the server. Attachment imports remain outstanding.
 - Downloads currently require the app to remain active. Partial files resume
@@ -176,7 +180,7 @@ publicly to make CI work: simulator capture tests never contact it.
   downloaded record references them; unreadable manifests block removal safely.
   Partial downloads and old content versions remain until whole-media cleanup.
   Future bulk downloads can restore a removed item. Pinning is not implemented.
-  The Library shows current media-directory usage, including partial downloads.
+  Settings → Library downloads shows current media-directory usage, including partial downloads.
   File readers distinguish metadata-only, pending, partial, downloaded, and
   server-unavailable states. Server observations persist across relaunch and are
   labelled as the last check; they never hide an existing verified local copy.

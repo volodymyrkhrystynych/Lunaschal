@@ -1,6 +1,36 @@
 import XCTest
 
 final class OfflineCaptureTests: XCTestCase {
+    func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
+        let app = XCUIApplication()
+        app.launch()
+        app.tabBars.buttons["Library"].tap()
+        let categories = [
+            ("fics", "Books and stories"),
+            ("study_sources", "Documents"),
+            ("papers", "Paper documents"),
+            ("newspaper_frontpages", "Newspaper front pages"),
+            ("wiki_articles", "Knowledge articles"),
+        ]
+        for (collection, title) in categories {
+            let link = app.buttons["library-\(collection)"]
+            XCTAssertTrue(link.waitForExistence(timeout: 5))
+            XCTAssertTrue(link.isHittable)
+            link.tap()
+            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.searchFields.firstMatch.exists)
+            XCTAssertFalse(app.buttons["Download library over Wi-Fi"].exists)
+            app.navigationBars.buttons["Library"].tap()
+        }
+        XCTAssertFalse(app.buttons["Remove downloaded media"].exists)
+        XCTAssertFalse(app.switches["PDF books"].exists)
+        app.tabBars.buttons["Settings"].tap()
+        app.buttons["Library downloads"].tap()
+        XCTAssertTrue(app.buttons["Download library over Wi-Fi"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Remove downloaded media"].exists)
+        XCTAssertTrue(app.switches["PDF books"].exists)
+    }
+
     func testDrawingWorkspaceReopensWithoutAServer() {
         let app = XCUIApplication()
         app.launch()

@@ -248,6 +248,9 @@ private struct ConnectionSettings: View {
 
     var body: some View {
         Form {
+            Section {
+                NavigationLink("Library downloads") { LibraryDownloadSettings(model: model) }
+            }
             Section("Server") {
                 if let message = model.syncMessage { Text(message).foregroundStyle(.secondary) }
                 TextField("https://server.tailnet.ts.net", text: $address)

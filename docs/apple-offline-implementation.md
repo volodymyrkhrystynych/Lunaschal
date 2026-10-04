@@ -1,6 +1,13 @@
 # Apple apps and offline experience — implementation tracker
 
-Last updated: 2026-10-03. Working branch: `feat/apple-offline-foundation`.
+Last updated: 2026-10-04. Working branch: `fix/apple-library-navigation`.
+
+Library usability follow-up: replaced the combined scrolling list with five
+category destinations, each searchable with 50-item pages. Moved download
+selection, progress/pause, storage budget, and cleanup into Settings → Library
+downloads, retaining existing preferences. Added a simulator regression test
+for reaching every category and finding download controls under Settings.
+Hosted Apple build and simulator verification are pending for this follow-up.
 
 This is the implementation plan and progress tracker for Lunaschal on iPhone,
 iPad, and Apple Watch. It records the agreed product direction, the first
