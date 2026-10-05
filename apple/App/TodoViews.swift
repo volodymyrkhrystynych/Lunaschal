@@ -4,6 +4,7 @@ import SwiftUI
 /// The Todo tab, as the desktop's TasksSection lays it out: up to four daily
 /// tasks above the To-Do and Archive lists. Edit reorders and deletes the
 /// daily tasks; a to-do opens in a form, and swipes to archive or delete.
+/// Changes show at once and reach the server through the sync outbox.
 struct TodoView: View {
     @ObservedObject var todo: TodoModel
     @State private var list = "todo"
@@ -24,27 +25,32 @@ struct TodoView: View {
             }
             dailySection
             todoSection
-            if let notice = todo.notice {
+            if !todo.refusals.isEmpty {
                 Section {
-                    Text(notice).foregroundStyle(.red).accessibilityIdentifier("todo-notice")
+                    ForEach(todo.refusals, id: \.self) { Text($0).foregroundStyle(.red) }
+                    Button("Dismiss") { todo.clearRefusals() }
                 }
+                .accessibilityIdentifier("todo-refusals")
             }
         }
         .navigationTitle("Todo")
         .toolbar { EditButton() }
-        .refreshable { await todo.refresh() }
+        .refreshable {
+            todo.capture.requestSync(manual: true)
+            await todo.refresh()
+        }
         .task { await todo.refresh() }
         .sheet(isPresented: $creating) {
-            TodoEditor(model: todo, heading: "New to-do", draft: TodoDraft()) { await todo.create($0) }
+            TodoEditor(heading: "New to-do", draft: TodoDraft()) { todo.create($0) }
         }
         .sheet(item: $editing) { item in
-            TodoEditor(model: todo, heading: "To-do", draft: TodoDraft(item), onSave: { await todo.edit(item, $0) },
-                       onDelete: { await todo.delete(item) })
+            TodoEditor(heading: "To-do", draft: TodoDraft(item), onSave: { todo.edit(item, $0) },
+                       onDelete: { todo.delete(item) })
         }
         .alert("Rename daily task", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } }),
                presenting: renaming) { task in
             TextField("Title", text: $renameText)
-            Button("Save") { Task { await todo.rename(task, to: renameText) } }
+            Button("Save") { todo.rename(task, to: renameText) }
             Button("Cancel", role: .cancel) {}
         }
     }
@@ -52,16 +58,15 @@ struct TodoView: View {
     private var dailySection: some View {
         Section {
             ForEach(todo.tasks) { task in
-                DailyTaskRow(task: task) { Task { await todo.toggle(task) } }
+                DailyTaskRow(task: task) { todo.toggle(task) }
                     .contextMenu {
                         Button("Rename", systemImage: "pencil") { renameText = task.title; renaming = task }
-                        Button("Delete", systemImage: "trash", role: .destructive) { Task { await todo.delete(task) } }
+                        Button("Delete", systemImage: "trash", role: .destructive) { todo.delete(task) }
                     }
             }
-            .onMove { source, destination in Task { await todo.moveTasks(from: source, to: destination) } }
+            .onMove { source, destination in todo.moveTasks(from: source, to: destination) }
             .onDelete { offsets in
-                let doomed = offsets.map { todo.tasks[$0] }
-                Task { for task in doomed { await todo.delete(task) } }
+                offsets.map { todo.tasks[$0] }.forEach(todo.delete)
             }
             if todo.tasks.count < DailyTask.limit {
                 HStack {
@@ -95,12 +100,12 @@ struct TodoView: View {
                     .accessibilityIdentifier("todo-add")
             }
             ForEach(items) { item in
-                TodoRow(todo: item, toggle: { Task { await todo.toggle(item) } }, open: { editing = item })
+                TodoRow(todo: item, toggle: { todo.toggle(item) }, open: { editing = item })
                     .swipeActions(edge: .trailing) {
-                        Button("Delete", systemImage: "trash", role: .destructive) { Task { await todo.delete(item) } }
+                        Button("Delete", systemImage: "trash", role: .destructive) { todo.delete(item) }
                         Button(item.isArchived ? "To-Do" : "Archive",
                                systemImage: item.isArchived ? "tray.and.arrow.up" : "archivebox") {
-                            Task { await todo.move(item) }
+                            todo.move(item)
                         }.tint(.indigo)
                     }
             }
@@ -109,6 +114,11 @@ struct TodoView: View {
             }
         } header: {
             Text("To-Do")
+        } footer: {
+            if todo.waiting > 0 {
+                Text(todo.waiting == 1 ? "1 change waiting to sync." : "\(todo.waiting) changes waiting to sync.")
+                    .accessibilityIdentifier("todo-waiting")
+            }
         }
     }
 
@@ -116,7 +126,7 @@ struct TodoView: View {
 
     private func addTask() {
         let title = newTask
-        Task { if await todo.addTask(title) { newTask = "" } }
+        if todo.addTask(title) { newTask = "" }
     }
 }
 
@@ -126,7 +136,7 @@ private struct DailyTaskRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            CheckButton(done: task.done, action: toggle)
+            CheckButton(done: task.done, id: "todo-daily-check", action: toggle)
             Text(task.title)
                 .strikethrough(task.done)
                 .foregroundStyle(task.done ? .secondary : .primary)
@@ -145,7 +155,7 @@ private struct TodoRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            CheckButton(done: todo.done, action: toggle)
+            CheckButton(done: todo.done, id: "todo-check", action: toggle)
             Button(action: open) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(todo.title).foregroundStyle(.primary)
@@ -203,6 +213,7 @@ private struct CompactLabel: LabelStyle {
 
 private struct CheckButton: View {
     let done: Bool
+    let id: String
     let action: () -> Void
 
     var body: some View {
@@ -213,19 +224,17 @@ private struct CheckButton: View {
         }
         .buttonStyle(.borderless)
         .accessibilityLabel(done ? "Done" : "Not done")
-        .accessibilityIdentifier("todo-check")
+        .accessibilityIdentifier(id)
     }
 }
 
 /// The desktop's TodoForm, plus the list it's on when editing.
 private struct TodoEditor: View {
-    @ObservedObject var model: TodoModel
     let heading: String
     @State var draft: TodoDraft
-    let onSave: (TodoDraft) async -> Bool
-    var onDelete: (() async -> Void)?
+    let onSave: (TodoDraft) -> Void
+    var onDelete: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
-    @State private var saving = false
 
     var body: some View {
         NavigationStack {
@@ -263,31 +272,21 @@ private struct TodoEditor: View {
                         }
                     }
                 }
-                if let notice = model.notice {
-                    Section { Text(notice).foregroundStyle(.red) }
-                }
                 if let onDelete {
                     Section {
                         Button("Delete to-do", role: .destructive) {
-                            Task { await onDelete(); dismiss() }
+                            onDelete(); dismiss()
                         }
                     }
                 }
             }
             .navigationTitle(heading)
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear { model.notice = nil }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        saving = true
-                        Task {
-                            if await onSave(draft) { dismiss() }
-                            saving = false
-                        }
-                    }
-                    .disabled(saving || draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button("Save") { onSave(draft); dismiss() }
+                    .disabled(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .accessibilityIdentifier("todo-editor-save")
                 }
             }

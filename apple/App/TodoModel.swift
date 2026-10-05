@@ -1,145 +1,124 @@
+import Combine
 import Foundation
 import LunaschalCore
 import SwiftUI
 
 /// The Todo tab: the desktop Lifestyle tab's daily tasks and to-do lists.
-/// Changes need the server, since a daily task is ticked off for the
-/// server's day and replaying that later could land it on the wrong one. The
-/// last lists seen are kept on disk, so the tab and its badge still show
-/// what's due while offline.
+/// Every change goes into the sync outbox and shows at once; the lists on
+/// screen are the server's last copy with the queued changes laid over it,
+/// so the tab and its badge work the same offline.
 @MainActor
 final class TodoModel: ObservableObject {
-    @Published private(set) var tasks: [DailyTask] = []
-    @Published private(set) var todos: [TodoItem] = []
+    /// The server's lists as last fetched, kept on disk.
+    @Published private(set) var server = TodoLists()
     /// Why the lists couldn't be fetched, while offline or signed out.
     @Published private(set) var loadProblem: String?
-    /// A refused change, said under the lists.
-    @Published var notice: String?
 
     let capture: CaptureModel
     private let cacheURL: URL
-
-    private struct Cache: Codable { var tasks: [DailyTask]; var todos: [TodoItem] }
+    /// Changes the server has taken since the copy above was fetched,
+    /// with when they left the queue: still laid over it until a fetch
+    /// started after they were sent comes back.
+    private var sent: [(op: TodoOp, at: Date)] = []
+    private var lastQueue: [TodoOp] = []
+    private var watching: AnyCancellable?
+    private var refusalWatch: AnyCancellable?
 
     init(capture: CaptureModel) {
         self.capture = capture
         cacheURL = capture.store.root.appendingPathComponent("todos.cache")
-        if let cache = try? JSONDecoder().decode(Cache.self, from: Data(contentsOf: cacheURL)) {
-            tasks = cache.tasks; todos = cache.todos
-        }
+        server = (try? JSONDecoder().decode(TodoLists.self, from: Data(contentsOf: cacheURL))) ?? TodoLists()
+        lastQueue = capture.todoQueue
+        watching = capture.$todoQueue.sink { [weak self] queue in self?.queueChanged(queue) }
+        refusalWatch = capture.$todoRefusals.sink { [weak self] _ in self?.objectWillChange.send() }
     }
+
+    /// What the tab shows.
+    var lists: TodoLists { server.applying(sent.map(\.op) + capture.todoQueue, today: DayKey.of(Date())) }
+    var tasks: [DailyTask] { lists.tasks }
+    var todos: [TodoItem] { lists.todos }
+    var waiting: Int { capture.todoQueue.count }
+    var refusals: [String] { capture.todoRefusals }
 
     /// The tab's badge: to-dos due today or overdue.
     var dueCount: Int { TodoRules.dueCount(todos) }
 
     func active(on list: String) -> [TodoItem] { TodoRules.active(TodoRules.on(list, todos)) }
 
+    func clearRefusals() { capture.todoRefusals = [] }
+
+    private func queueChanged(_ queue: [TodoOp]) {
+        let now = Date()
+        let left = Set(queue.map(\.id))
+        sent += lastQueue.filter { !left.contains($0.id) }.map { ($0, now) }
+        lastQueue = queue
+        objectWillChange.send()
+    }
+
     func refresh() async {
         guard let api = capture.chatAPI() else {
-            loadProblem = capture.server == nil ? "Connect to your server in Settings to see your to-dos."
-                                                : "Sign in again in Settings to see your to-dos."
+            loadProblem = capture.server == nil
+                ? "Not connected to a server. Changes stay on this phone until you connect in Settings."
+                : "Signed out. Changes stay on this phone until you sign in again in Settings."
             return
         }
+        let started = Date()
         do {
             async let fetchedTasks = api.dailyTasks()
             async let fetchedTodos = api.todos()
-            let (newTasks, newTodos) = try await (fetchedTasks, fetchedTodos)
-            tasks = newTasks.sorted { $0.position < $1.position }
-            todos = newTodos
+            let (tasks, todos) = try await (fetchedTasks, fetchedTodos)
+            server = TodoLists(tasks: tasks, todos: todos)
+            sent.removeAll { $0.at < started }
             loadProblem = nil
-            if let data = try? JSONEncoder().encode(Cache(tasks: tasks, todos: todos)) {
-                try? data.write(to: cacheURL, options: .atomic)
-            }
+            if let data = try? JSONEncoder().encode(server) { try? data.write(to: cacheURL, options: .atomic) }
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
-            loadProblem = "Offline — showing your lists as last seen."
+            loadProblem = "Offline. Changes are saved on this phone and sent when your server is back."
         }
     }
+
+    private func queue(_ change: TodoChange) { capture.queueTodo(change) }
 
     // MARK: Daily tasks
 
-    func toggle(_ task: DailyTask) async {
-        await call({ self.update(task.id) { $0.done.toggle() } }) { try await $0.setDailyTask(task.id, done: !task.done) }
+    func toggle(_ task: DailyTask) {
+        queue(.tickTask(id: task.id, day: DayKey.of(Date()), done: !task.done))
     }
 
-    func addTask(_ title: String) async -> Bool {
+    func addTask(_ title: String) -> Bool {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        return await call { try await $0.addDailyTask(trimmed) }
+        guard !trimmed.isEmpty, tasks.count < DailyTask.limit else { return false }
+        queue(.addTask(id: ULID.make(), title: trimmed))
+        return true
     }
 
-    func rename(_ task: DailyTask, to title: String) async {
+    func rename(_ task: DailyTask, to title: String) {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed != task.title else { return }
-        await call({ self.update(task.id) { $0.title = trimmed } }) { try await $0.renameDailyTask(task.id, to: trimmed) }
+        queue(.renameTask(id: task.id, title: trimmed))
     }
 
-    func moveTasks(from source: IndexSet, to destination: Int) async {
+    func moveTasks(from source: IndexSet, to destination: Int) {
         var order = tasks
         order.move(fromOffsets: source, toOffset: destination)
-        await call({ self.tasks = order.enumerated().map { var task = $0.element; task.position = $0.offset + 1; return task } }) {
-            try await $0.reorderDailyTasks(order.map(\.id))
-        }
+        queue(.reorderTasks(order.map(\.id)))
     }
 
-    func delete(_ task: DailyTask) async {
-        await call({ self.tasks.removeAll { $0.id == task.id } }) { try await $0.deleteDailyTask(task.id) }
-    }
-
-    private func update(_ id: String, _ change: (inout DailyTask) -> Void) {
-        guard let index = tasks.firstIndex(where: { $0.id == id }) else { return }
-        change(&tasks[index])
-    }
+    func delete(_ task: DailyTask) { queue(.deleteTask(id: task.id)) }
 
     // MARK: To-dos
 
-    func toggle(_ todo: TodoItem) async {
-        // A repeating one comes back with its next due date, so only a
-        // one-off is ticked off here; the refetch shows the rest.
-        await call({ if todo.repeatInterval == nil { self.updateTodo(todo.id) { $0.done.toggle() } } }) {
-            try await $0.setTodo(todo.id, done: !todo.done)
-        }
-    }
+    func toggle(_ todo: TodoItem) { queue(.setTodo(id: todo.id, done: !todo.done)) }
 
-    func create(_ draft: TodoDraft) async -> Bool {
+    func create(_ draft: TodoDraft) {
         var draft = draft
         draft.id = ULID.make()
-        return await call { try await $0.createTodo(draft) }
+        queue(.createTodo(draft))
     }
 
-    func edit(_ todo: TodoItem, _ draft: TodoDraft) async -> Bool {
-        await call { try await $0.editTodo(todo.id, draft) }
-    }
+    func edit(_ todo: TodoItem, _ draft: TodoDraft) { queue(.editTodo(id: todo.id, draft)) }
 
-    func move(_ todo: TodoItem) async {
-        let list = todo.isArchived ? "todo" : "archive"
-        await call({ self.updateTodo(todo.id) { $0.list = list } }) { try await $0.moveTodo(todo.id, to: list) }
-    }
+    func move(_ todo: TodoItem) { queue(.moveTodo(id: todo.id, list: todo.isArchived ? "todo" : "archive")) }
 
-    func delete(_ todo: TodoItem) async {
-        await call({ self.todos.removeAll { $0.id == todo.id } }) { try await $0.deleteTodo(todo.id) }
-    }
-
-    private func updateTodo(_ id: String, _ change: (inout TodoItem) -> Void) {
-        guard let index = todos.firstIndex(where: { $0.id == id }) else { return }
-        change(&todos[index])
-    }
-
-    /// Shows `local` at once, makes the change, then shows the server's
-    /// lists. When the server can't be reached, the lists go back to how
-    /// they were, since nothing was changed.
-    @discardableResult
-    private func call(_ local: () -> Void = {}, _ change: (JournalAPI) async throws -> Void) async -> Bool {
-        guard let api = capture.chatAPI() else {
-            notice = "Connect to your server to change your to-dos."
-            return false
-        }
-        let before = (tasks, todos)
-        local()
-        var ok = true
-        do { try await change(api); notice = nil } catch { notice = error.localizedDescription; ok = false }
-        await refresh()
-        if !ok, loadProblem != nil { (tasks, todos) = before }
-        return ok
-    }
+    func delete(_ todo: TodoItem) { queue(.deleteTodo(id: todo.id)) }
 }

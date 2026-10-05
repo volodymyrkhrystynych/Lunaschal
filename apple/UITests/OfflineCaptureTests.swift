@@ -428,38 +428,58 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Transcription"].exists)
     }
 
-    func testTodoShowsDailyTasksAndToDosAndSaysWhyItCantSave() {
+    func testTodoWorksWithoutAServerAndBadgesWhatsDue() {
         let app = XCUIApplication()
         app.launch()
         selectTab(app, "Todo")
-        // No server: it says so, and nothing is due, so the tab has no badge.
         XCTAssertTrue(app.staticTexts["todo-problem"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["Daily tasks"].exists || app.staticTexts["DAILY TASKS"].exists)
-        XCTAssertTrue(app.staticTexts["Nothing on the list."].exists)
-        if UIDevice.current.userInterfaceIdiom == .phone {
-            XCTAssertTrue((tab(app, "Todo").value as? String ?? "").isEmpty, "No badge with nothing due")
-        }
+        let todoTab = tab(app, "Todo")
+        let phone = UIDevice.current.userInterfaceIdiom == .phone
+        if phone { XCTAssertEqual(todoTab.value as? String ?? "", "", "No badge with nothing due") }
 
-        // A daily task needs the server, and keeps the words until it's back.
+        // A daily task goes on the list at once and waits for the server.
         let daily = app.textFields["todo-daily-input"]
         daily.tap()
-        daily.typeText("Stretch")
+        daily.typeText("Stretch \(Int.random(in: 1000...9999))")
         app.buttons["todo-daily-add"].tap()
-        XCTAssertTrue(app.staticTexts["todo-notice"].waitForExistence(timeout: 5))
-        XCTAssertEqual(daily.value as? String, "Stretch")
+        XCTAssertTrue(app.otherElements.matching(identifier: "todo-daily-row").firstMatch.waitForExistence(timeout: 5)
+                      || app.cells.containing(.any, identifier: "todo-daily-row").firstMatch.exists
+                      || app.descendants(matching: .any).matching(identifier: "todo-daily-row").firstMatch.exists)
+        XCTAssertEqual(daily.value as? String ?? "", "Add a daily task", "The field clears")
 
-        // So does a to-do: the form stays open and says why.
+        // So does a to-do due today, and the tab badges it.
         app.buttons["todo-add"].tap()
         let title = app.textFields["todo-editor-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
         title.tap()
         title.typeText("Call the dentist")
-        app.switches["Due date"].tap()
+        // A tap on the switch's middle lands on its label; flip the toggle itself.
+        app.switches["Due date"].coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+        XCTAssertTrue(app.datePickers.firstMatch.waitForExistence(timeout: 3), "Due today")
         app.buttons["todo-editor-save"].tap()
-        XCTAssertTrue(app.staticTexts["Connect to your server to change your to-dos."].waitForExistence(timeout: 5))
-        XCTAssertTrue(title.exists, "The form stays open")
-        app.buttons["Cancel"].tap()
-        XCTAssertFalse(app.buttons["todo-row"].exists)
+        let row = app.buttons["todo-row"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["todo-waiting"].exists)
+        if phone { XCTAssertEqual(todoTab.value as? String, "1", "Badged as due today") }
+
+        // Both survive a relaunch, still waiting.
+        app.terminate()
+        app.launch()
+        selectTab(app, "Todo")
+        XCTAssertTrue(app.buttons["todo-row"].firstMatch.waitForExistence(timeout: 10))
+        if phone { XCTAssertEqual(tab(app, "Todo").value as? String, "1") }
+
+        // Ticking it off clears the badge.
+        app.buttons["todo-check"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Nothing on the list."].waitForExistence(timeout: 5))
+        if phone { XCTAssertEqual(tab(app, "Todo").value as? String ?? "", "") }
+
+        // Swipe to delete leaves room for the next run under the four-task cap.
+        let dailyRows = app.buttons.matching(identifier: "todo-daily-row")
+        let before = dailyRows.count
+        dailyRows.firstMatch.swipeLeft()
+        app.buttons["Delete"].tap()
+        XCTAssertEqual(app.buttons.matching(identifier: "todo-daily-row").count, before - 1)
     }
 
     func testChatKeepsAVoiceMessageForTheServerWithoutOne() {

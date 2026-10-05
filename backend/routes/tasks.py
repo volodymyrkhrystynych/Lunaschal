@@ -1,4 +1,6 @@
+import re
 import time
+from datetime import date
 
 from flask import Blueprint, jsonify, request
 from ulid import ULID
@@ -19,6 +21,27 @@ def _today() -> str:
     return day_key_for()
 
 
+_DAY_KEY = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def _requested_day() -> tuple[str | None, str | None]:
+    """The day a completion is for: `?date=` when given, else today.
+
+    A client that ticked a task off while offline sends the day it was ticked
+    on, so a tick replayed after the 4am rollover still lands on its own day
+    instead of on the next one. Returns (day_key, error_or_None)."""
+    value = request.args.get('date')
+    if value is None:
+        return _today(), None
+    if not _DAY_KEY.match(value):
+        return None, 'date must be YYYY-MM-DD'
+    try:
+        date.fromisoformat(value)
+    except ValueError:
+        return None, 'date must be a real date'
+    return value, None
+
+
 def _log_event(
     db,
     kind: str,
@@ -26,6 +49,7 @@ def _log_event(
     ref_id: str | None = None,
     task_list: str | None = None,
     detail: str | None = None,
+    created_at: int | None = None,
 ) -> None:
     """Append a task lifecycle event (surfaced in the Journal feed).
 
@@ -37,7 +61,8 @@ def _log_event(
     db.execute(
         'INSERT INTO task_events(id, kind, title, ref_id, task_list, detail, created_at)'
         ' VALUES (?,?,?,?,?,?,?)',
-        (str(ULID()), kind, title, ref_id, task_list, detail or None, int(time.time())),
+        (str(ULID()), kind, title, ref_id, task_list, detail or None,
+         created_at if created_at is not None else int(time.time())),
     )
 
 
@@ -66,13 +91,20 @@ def create_task():
         return jsonify({'error': 'title required'}), 400
 
     db = get_db()
+    # Accept a client-supplied ULID so an offline-queued create replays
+    # idempotently: a repeat answers as the first one did, before the cap is
+    # checked, since the first one may be what filled it.
+    task_id = body.get('id') or str(ULID())
+    if not isinstance(task_id, str) or not re.fullmatch(r'[0-9A-Za-z]{1,64}', task_id):
+        return jsonify({'error': 'id must be a ULID'}), 400
+    if db.execute('SELECT 1 FROM daily_tasks WHERE id=?', (task_id,)).fetchone():
+        return jsonify({'id': task_id}), 201
     count = db.execute('SELECT COUNT(*) FROM daily_tasks').fetchone()[0]
     if count >= MAX_TASKS:
         return jsonify({'error': f'max {MAX_TASKS} tasks allowed'}), 400
 
     position = count + 1
     now = int(time.time())
-    task_id = str(ULID())
     db.execute(
         'INSERT INTO daily_tasks(id, title, position, created_at, updated_at) VALUES (?,?,?,?,?)',
         (task_id, title, position, now, now),
@@ -151,31 +183,43 @@ def complete_daily_task(db, task_id: str, today: str, now: int) -> bool:
         'SELECT title FROM daily_tasks WHERE id=?', (task_id,)
     ).fetchone()
     if task:
-        _log_event(db, 'daily_completed', task['title'], task_id, 'daily')
+        _log_event(db, 'daily_completed', task['title'], task_id, 'daily',
+                   created_at=now)
     return True
 
 
 @bp.post('/<task_id>/complete')
 def complete_task(task_id):
+    day, err = _requested_day()
+    if err:
+        return jsonify({'error': err}), 400
     db = get_db()
-    complete_daily_task(db, task_id, _today(), int(time.time()))
+    # A tick replayed from a past day is filed in that day's last second, so
+    # its Journal notification lands on the day it was made.
+    now = min(int(time.time()), day_bounds(day)[1] - 1)
+    complete_daily_task(db, task_id, day, now)
     db.commit()
     return jsonify({'success': True})
 
 
 @bp.delete('/<task_id>/complete')
 def uncomplete_task(task_id):
-    today = _today()
+    day, err = _requested_day()
+    if err:
+        return jsonify({'error': err}), 400
     db = get_db()
     db.execute(
         'DELETE FROM daily_task_completions WHERE task_id=? AND date=?',
-        (task_id, today),
+        (task_id, day),
     )
-    # Retract today's completion notification so toggling off leaves no phantom.
+    # Retract that day's completion notification so toggling off leaves no
+    # phantom, and only that day's: complete_task files a replayed tick inside
+    # its own day, so another day's notification is never in this window.
+    start, end = day_bounds(day)
     db.execute(
         "DELETE FROM task_events WHERE kind='daily_completed' AND ref_id=?"
-        " AND created_at >= ?",
-        (task_id, day_bounds(today)[0]),
+        " AND created_at >= ? AND created_at < ?",
+        (task_id, start, end),
     )
     db.commit()
     return jsonify({'success': True})

@@ -59,7 +59,8 @@ public struct TodoItem: Codable, Equatable, Identifiable {
 
 /// Everything the to-do form sets. Encoded whole, with nulls, so the same
 /// body creates a to-do and, sent as a PATCH, clears a due date or a repeat.
-public struct TodoDraft: Encodable, Equatable {
+/// The outbox stores it in that same form.
+public struct TodoDraft: Codable, Equatable {
     public var id: String?
     public var title: String
     public var notes: String
@@ -82,12 +83,26 @@ public struct TodoDraft: Encodable, Equatable {
                   repeatUnit: todo.repeatUnit ?? "week", priority: todo.priority ?? 3, list: todo.isArchived ? "archive" : "todo")
     }
 
+    var trimmedTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+
     enum CodingKeys: String, CodingKey { case id, title, notes, due, repeatInterval, repeatUnit, priority, list }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try c.decodeIfPresent(String.self, forKey: .id),
+                  title: try c.decode(String.self, forKey: .title),
+                  notes: try c.decodeIfPresent(String.self, forKey: .notes) ?? "",
+                  due: try c.decodeIfPresent(Int.self, forKey: .due).map { Date(timeIntervalSince1970: TimeInterval($0)) },
+                  repeatInterval: try c.decodeIfPresent(Int.self, forKey: .repeatInterval),
+                  repeatUnit: try c.decodeIfPresent(String.self, forKey: .repeatUnit) ?? "week",
+                  priority: try c.decodeIfPresent(Int.self, forKey: .priority) ?? 3,
+                  list: try c.decodeIfPresent(String.self, forKey: .list) ?? "todo")
+    }
 
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encodeIfPresent(id, forKey: .id)
-        try c.encode(title.trimmingCharacters(in: .whitespacesAndNewlines), forKey: .title)
+        try c.encode(trimmedTitle, forKey: .title)
         let notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         if notes.isEmpty { try c.encodeNil(forKey: .notes) } else { try c.encode(notes, forKey: .notes) }
         if let due { try c.encode(TodoPromotion.dueSeconds(due), forKey: .due) } else { try c.encodeNil(forKey: .due) }
@@ -114,6 +129,27 @@ public enum TodoRules {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return fractional.date(from: iso)
+    }
+
+    /// How the server writes a time.
+    public static func iso(_ date: Date) -> String { ISO8601DateFormatter().string(from: date) }
+
+    /// `next_due` in backend/todo_recurrence.py: the next occurrence after
+    /// completing a repeating to-do, anchored on its due date but always
+    /// after `now`. Months clamp the day and are counted in UTC, as there.
+    public static func nextDue(_ due: Date?, interval: Int, unit: String, now: Date) -> Date {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        func step(_ date: Date) -> Date {
+            switch unit {
+            case "day": return date.addingTimeInterval(Double(interval) * 86400)
+            case "week": return date.addingTimeInterval(Double(interval) * 7 * 86400)
+            default: return utc.date(byAdding: .month, value: interval, to: date) ?? date.addingTimeInterval(Double(interval) * 30 * 86400)
+            }
+        }
+        var candidate = step(due ?? now)
+        while candidate <= now { candidate = step(candidate) }
+        return candidate
     }
 
     /// Local midnight of `now`'s 4am day.

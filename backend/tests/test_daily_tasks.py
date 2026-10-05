@@ -96,3 +96,61 @@ def test_uncomplete_leaves_a_prior_days_notification_alone(client, monkeypatch):
         (task_id,),
     ).fetchall()
     assert [r['id'] for r in remaining] == ['old_evt']
+
+
+def test_a_tick_replayed_after_the_rollover_lands_on_its_own_day(client, monkeypatch):
+    """The phone queues a tick offline with the day it was made; sent after
+    4am, it still counts for that day, and its notification is filed in it."""
+    from backend.day_boundary import day_bounds
+    monkeypatch.setattr(
+        'backend.routes.tasks.day_key_for', lambda ts=None: '2026-07-25'
+    )
+    task_id = _create_task(client)
+    assert client.post(f'/api/tasks/{task_id}/complete?date=2026-07-24').status_code == 200
+
+    db = connection.get_db()
+    row = db.execute(
+        'SELECT date FROM daily_task_completions WHERE task_id=?', (task_id,)
+    ).fetchone()
+    assert row['date'] == '2026-07-24'
+    assert client.get('/api/tasks').get_json()[0]['done'] == 0, 'Not done today'
+    stamped = db.execute(
+        "SELECT created_at FROM task_events WHERE kind='daily_completed' AND ref_id=?",
+        (task_id,),
+    ).fetchone()['created_at']
+    start, end = day_bounds('2026-07-24')
+    assert start <= stamped < end
+
+    # Today's tick, then clearing yesterday's: today's notification stays.
+    client.post(f'/api/tasks/{task_id}/complete')
+    assert client.delete(f'/api/tasks/{task_id}/complete?date=2026-07-24').status_code == 200
+    days = [r['date'] for r in db.execute(
+        'SELECT date FROM daily_task_completions WHERE task_id=?', (task_id,)
+    )]
+    assert days == ['2026-07-25']
+    events = db.execute(
+        "SELECT COUNT(*) FROM task_events WHERE kind='daily_completed' AND ref_id=?",
+        (task_id,),
+    ).fetchone()[0]
+    assert events == 1
+
+
+def test_a_bad_date_is_refused(client):
+    task_id = _create_task(client)
+    assert client.post(f'/api/tasks/{task_id}/complete?date=yesterday').status_code == 400
+    assert client.delete(f'/api/tasks/{task_id}/complete?date=2026-02-30').status_code == 400
+
+
+def test_a_client_id_makes_a_repeated_create_a_no_op(client):
+    """An offline-created task carries its own id, so a replay of a create the
+    server already took answers 201 again, even once the list is full."""
+    ids = [f'01JTASK{n}AAAAAAAAAAAAAAAAAA'[:26] for n in range(4)]
+    for n, task_id in enumerate(ids):
+        r = client.post('/api/tasks', json={'id': task_id, 'title': f'Task {n}'})
+        assert r.status_code == 201
+        assert r.get_json()['id'] == task_id
+    again = client.post('/api/tasks', json={'id': ids[3], 'title': 'Task 3'})
+    assert again.status_code == 201
+    assert len(client.get('/api/tasks').get_json()) == 4
+    assert client.post('/api/tasks', json={'title': 'Fifth'}).status_code == 400
+    assert client.post('/api/tasks', json={'id': '../x', 'title': 'Bad'}).status_code == 400

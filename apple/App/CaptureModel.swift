@@ -44,6 +44,11 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var chatRecordingQueue: [ChatRecording] = []
     let chatRecordings: ChatRecordingStore
     private let chatRecordingSyncer: ChatRecordingSync
+    /// Todo tab changes the server hasn't had yet, and what it last turned down.
+    @Published private(set) var todoQueue: [TodoOp] = []
+    @Published var todoRefusals: [String] = []
+    let todoOutbox: TodoOutbox
+    private let todoSyncer: TodoSync
     /// Bumped after each sync pass, so Chat can look for what it uploaded.
     @Published private(set) var syncPasses = 0
     /// A fix the server hasn't been told about yet.
@@ -82,6 +87,8 @@ final class CaptureModel: ObservableObject {
         workoutSyncer = WorkoutSync(store: workouts)
         chatRecordings = try ChatRecordingStore(root: store.root.appendingPathComponent("chat-recordings", isDirectory: true))
         chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
+        todoOutbox = try TodoOutbox(root: store.root.appendingPathComponent("todo-outbox", isDirectory: true))
+        todoSyncer = TodoSync(outbox: todoOutbox)
         try chatRecordings.recoverInterrupted()
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store)
@@ -98,6 +105,7 @@ final class CaptureModel: ObservableObject {
         dailyLogs = try daily.list()
         workoutLogs = try workouts.list()
         chatRecordingQueue = try chatRecordings.list()
+        todoQueue = try todoOutbox.list()
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
@@ -135,6 +143,7 @@ final class CaptureModel: ObservableObject {
             dailyLogs = try daily.list()
             workoutLogs = try workouts.list()
             chatRecordingQueue = try chatRecordings.list()
+            todoQueue = try todoOutbox.list()
             journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
             journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
             pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
@@ -211,6 +220,28 @@ final class CaptureModel: ObservableObject {
     func chatAPI() -> JournalAPI? {
         guard signedIn, let server, let token else { return nil }
         return try? JournalAPI(server: server, token: token, allowCellular: allowCellular)
+    }
+
+    /// Queues a Todo tab change and starts sending it.
+    func queueTodo(_ change: TodoChange) {
+        do {
+            try todoOutbox.append(change)
+            todoQueue = try todoOutbox.list()
+        } catch { message = error.localizedDescription; return }
+        requestSync()
+    }
+
+    /// A to-do change the server can't take right now waits for the next
+    /// pass without holding up the uploads after it.
+    private func sendTodoChanges(using api: JournalAPI) async throws {
+        guard !todoQueue.isEmpty || !((try? todoOutbox.list()) ?? []).isEmpty else { return }
+        do {
+            todoRefusals += try await todoSyncer.run(using: api)
+        } catch {
+            if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { throw error }
+            if (error as? URLError) != nil { throw error }
+        }
+        todoQueue = (try? todoOutbox.list()) ?? todoQueue
     }
 
     func discard(_ item: ChatRecording) {
@@ -358,7 +389,8 @@ final class CaptureModel: ObservableObject {
             hasEdits: replica.edits().contains { $0.state == "pending" }
                 || daily.list().contains { $0.state == .pending }
                 || workouts.list().contains { $0.state == .pending }
-                || drawingPublications.all().contains { $0.state == "pending" }, signedIn: signedIn,
+                || drawingPublications.all().contains { $0.state == "pending" }
+                || !todoOutbox.list().isEmpty, signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
 
@@ -393,6 +425,7 @@ final class CaptureModel: ObservableObject {
             activeAPI = api
             // First: a voice message is a question someone is waiting on.
             try await chatRecordingSyncer.run(using: api)
+            try await sendTodoChanges(using: api)
             try await syncer.run(using: api)
             try await dailySyncer.run(using: api)
             try await workoutSyncer.run(using: api)
@@ -412,6 +445,8 @@ final class CaptureModel: ObservableObject {
                 try await libraryWorker.updateText(using: api, collections: LibraryDownload.collections(
                     knowledge: UserDefaults.standard.bool(forKey: "downloadKnowledge")))
             }
+            // Anything ticked off while this pass was busy uploading.
+            try await sendTodoChanges(using: api)
             let retry = try transfers.all().compactMap(\.retryAt).min()
             syncMessage = retry.map { "Uploads will retry after \($0.formatted(date: .omitted, time: .shortened))." }
             return true

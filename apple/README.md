@@ -93,11 +93,14 @@ what each device can currently do and which work remains device-only.
   then priority; a repeating to-do hides until it's near due). A to-do opens
   in a form for title, notes, due date, repeat, priority and list; swipe to
   archive or delete. The tab's red badge counts open To-Do items due today or
-  overdue (4am day; archived ones and daily tasks don't count). Changes need
-  the server, since a daily task is ticked for the server's day; the last
-  lists seen are kept on the phone, so the lists and badge still show offline.
-  Passed in simulator offline (badge and layout checked from a seeded cache);
-  not yet run against a server or verified on device.
+  overdue (4am day; archived ones and daily tasks don't count). Every change
+  works offline: it shows at once and waits in a sync outbox, sent in order on
+  the next pass. A daily-task tick carries the 4am day it was made on, so one
+  sent after the rollover still counts for that day, and a daily task created
+  offline carries its own id, so a resend can't add it twice. A change the
+  server turns down (a fifth daily task, say) is dropped and said in the tab.
+  Passed in simulator offline (including the badge and a relaunch with
+  changes waiting); not yet run against a server or verified on device.
 - Offline YouTube links attached to a typed entry (any number per entry), with
   preserved drafts and stable entry and per-link attachment IDs. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
