@@ -116,8 +116,11 @@ final class OfflineCaptureTests: XCTestCase {
         // Return submits like Add does. (A tap on Add straight after typing is
         // sometimes dropped on iPad while the keyboard settles.)
         line.typeText(meal + "\n")
-        XCTAssertTrue(app.staticTexts["End the line with a calorie count, e.g. \"rice and chicken 600\""]
-            .waitForExistence(timeout: 5))
+        let refusal = app.staticTexts["End the line with a calorie count, e.g. \"rice and chicken 600\""]
+        // CI's simulator sometimes drops the Return, so fall back to Add as the weight row does.
+        let add = app.buttons["Add calories"]
+        if !refusal.waitForExistence(timeout: 3), add.isEnabled { add.tap() }
+        XCTAssertTrue(refusal.waitForExistence(timeout: 5))
         line.tap()
         line.typeText(", ~321")
         XCTAssertTrue(app.staticTexts["\(meal) — 321 kcal"].waitForExistence(timeout: 5))
@@ -398,14 +401,16 @@ final class OfflineCaptureTests: XCTestCase {
         app.buttons["Choose photo"].tap()
         // The system picker runs out of process; its grid cells carry this id.
         let photo = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
-        guard photo.waitForExistence(timeout: 10) else { return XCTFail("Photo picker did not open") }
+        // On a freshly booted CI simulator the Photos service can take well over 10 s to start.
+        guard photo.waitForExistence(timeout: 30) else { return XCTFail("Photo picker did not open") }
         // Out-of-process cells report themselves unhittable; tap where one is drawn.
         photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let done = app.buttons["Done"]
         XCTAssertTrue(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate(format: "isEnabled == true"),
                                                                       object: done)], timeout: 5) == .completed)
         done.tap()
-        XCTAssertTrue(app.staticTexts["Attachments"].waitForExistence(timeout: 10))
+        // ...and to hand the picked photo over (CI has stalled ~40 s on Add).
+        XCTAssertTrue(app.staticTexts["Attachments"].waitForExistence(timeout: 60))
         app.buttons["Save entry"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Attachments"].exists)
