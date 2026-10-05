@@ -27,7 +27,10 @@ has been validated. Exact commits and CI results are recorded in the
 | Chat, Calendar, Food, Lifestyle, Learning | Use the existing web app; native Food is Save food entry only | Not exposed                                       | Existing web app requirements apply                      |
 | Practice and Notebook                     | Intentionally omitted from native navigation                                                | Not exposed                                       | Existing Linux/web app remains available                 |
 
-The iPhone tabs are Capture, Journal, Library, and Settings. iPad also has Study and Draw;
+The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library,
+Workout log, and Settings. Chat, Todo, and Workout log are placeholders that point
+to the web app. iPad also has Study and Draw, and hides the tab bar while a drawing
+or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.
 Library is books-only: title/tag search, source/folder/tag filters, Unsorted,
 recent/latest/title sorting, and synced Favorite/Continue chapter bookmarks.
@@ -37,7 +40,7 @@ and images without a Notebook editor. Ink autosaves locally and can be exported
 per page as editable ink or a flattened PNG. It does not yet sync to the server;
 source versions have separate ink, and old-version browsing is not exposed.
 HTML/video sources remain read-only.
-Library download controls live under Settings → Library downloads. Bulk downloads
+Library download controls live under More → Settings → Library downloads. Bulk downloads
 stay on Wi-Fi and continue while switching tabs. Subsequent chapter/text updates
 follow the cellular preference; full resyncs and binary media remain Wi-Fi-only.
 There is

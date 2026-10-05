@@ -50,11 +50,12 @@ what each device can currently do and which work remains device-only.
   preserved drafts and stable entry and per-link attachment IDs. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Library / Settings navigation on iPhone;
-  iPad also has Study and Draw. Library opens directly to books, with title/tag search,
+- Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
+  Study and Draw. Chat and Todo are placeholders that point to the web app. More
+  holds Library, Workout log (also a placeholder) and Settings. Library opens directly to books, with title/tag search,
   source/folder/tag filters, Unsorted, latest-chapter/recent/title sorting, and
   Favorite/Continue-reading bookmark filters. Other saved material is grouped
-  under Study. Download controls remain in Settings → Library downloads.
+  under Study. Download controls remain in More → Settings → Library downloads.
   Chapter readers create Favorite or Continue-reading bookmarks offline, and
   saved bookmarks can be reopened or removed from a book. Bookmark changes sync
   with the desktop, using replay receipts and conflict checks. One pending

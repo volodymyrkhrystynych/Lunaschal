@@ -165,6 +165,8 @@ struct StudyAnnotationView: View {
             }
             StudyPencilSurface(model: model)
         }
+        // As in DrawingEditor: the tab bar would push these into an overflow menu.
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button("Undo", systemImage: "arrow.uturn.backward") { model.canvas.undoManager?.undo() }

@@ -14,16 +14,18 @@ struct CaptureRoot: View {
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }
             NavigationStack { CaptureList(model: model) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }
-            NavigationStack { LibraryView(model: model) }
-                .tabItem { Label("Library", systemImage: "books.vertical") }
+            NavigationStack { WebOnlyPlaceholder(model: model, title: "Chat", systemImage: "bubble.left.and.bubble.right") }
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+            NavigationStack { WebOnlyPlaceholder(model: model, title: "Todo", systemImage: "checklist") }
+                .tabItem { Label("Todo", systemImage: "checklist") }
             if UIDevice.current.userInterfaceIdiom == .pad {
                 NavigationStack { StudyLibraryView(model: model) }
                     .tabItem { Label("Study", systemImage: "doc.text") }
                 NavigationStack { DrawingLibraryView(model: model) }
                     .tabItem { Label("Draw", systemImage: "pencil.tip") }
             }
-            NavigationStack { ConnectionSettings(model: model) }
-                .tabItem { Label("Settings", systemImage: "gear") }
+            NavigationStack { MoreMenu(model: model) }
+                .tabItem { Label("More", systemImage: "line.3.horizontal") }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
@@ -465,6 +467,47 @@ private struct AudioPreview: View {
         Button("Stop playback") { player?.stop(); player = nil }
         if let error { Text(error).foregroundStyle(.orange) }
         Color.clear.frame(height: 0).onDisappear { player?.stop() }
+    }
+}
+
+// The last tab: everything that doesn't earn a slot of its own. The iPhone
+// shows five tabs before iOS adds its own More overflow, so this owns that slot.
+private struct MoreMenu: View {
+    @ObservedObject var model: CaptureModel
+
+    var body: some View {
+        List {
+            NavigationLink { LibraryView(model: model) } label: {
+                Label("Library", systemImage: "books.vertical")
+            }.accessibilityIdentifier("more-Library")
+            NavigationLink {
+                WebOnlyPlaceholder(model: model, title: "Workout log", systemImage: "dumbbell")
+            } label: {
+                Label("Workout log", systemImage: "dumbbell")
+            }.accessibilityIdentifier("more-Workout log")
+            NavigationLink { ConnectionSettings(model: model) } label: {
+                Label("Settings", systemImage: "gear")
+            }.accessibilityIdentifier("more-Settings")
+        }
+        .navigationTitle("More")
+    }
+}
+
+// Stands in for a screen the native app doesn't have yet.
+private struct WebOnlyPlaceholder: View {
+    @ObservedObject var model: CaptureModel
+    let title: String
+    let systemImage: String
+
+    var body: some View {
+        ContentUnavailableView {
+            Label("\(title) isn't in the app yet", systemImage: systemImage)
+        } description: {
+            Text("Use Lunaschal in the browser for now.")
+        } actions: {
+            if let server = model.server { Link("Open in browser", destination: server) }
+        }
+        .navigationTitle(title)
     }
 }
 

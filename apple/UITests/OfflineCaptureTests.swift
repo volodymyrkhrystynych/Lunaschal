@@ -28,13 +28,56 @@ final class OfflineCaptureTests: XCTestCase {
         XCTFail("Tab \(name) did not open", file: file, line: line)
     }
 
+    // Library, Workout log and Settings live behind the More tab. Re-selecting
+    // More keeps whatever was pushed, so step back to the menu before choosing.
+    private func openMore(_ app: XCUIApplication, _ name: String,
+                          file: StaticString = #filePath, line: UInt = #line) {
+        let more = tab(app, "More")
+        let hittable = NSPredicate(format: "exists == true AND hittable == true")
+        guard XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: hittable, object: more)],
+                            timeout: 10) == .completed else {
+            XCTFail("More did not become tappable", file: file, line: line)
+            return
+        }
+        let row = app.buttons["more-\(name)"]
+        // As in selectTab, a tap during the previous animation can be dropped.
+        for _ in 0..<2 where !row.exists {
+            more.tap()
+            let back = app.navigationBars.buttons["More"]
+            if back.waitForExistence(timeout: 2) { back.tap() }
+            _ = row.waitForExistence(timeout: 3)
+        }
+        XCTAssertTrue(row.exists, "No \(name) in More", file: file, line: line)
+        row.tap()
+        XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5), file: file, line: line)
+    }
+
+    func testBottomBarIsCaptureJournalChatTodoMore() {
+        let app = XCUIApplication()
+        app.launch()
+        for name in ["Capture", "Journal", "Chat", "Todo", "More"] {
+            XCTAssertTrue(tab(app, name).waitForExistence(timeout: 10), "Missing tab \(name)")
+        }
+        XCTAssertFalse(tab(app, "Library").exists)
+        XCTAssertFalse(tab(app, "Settings").exists)
+        selectTab(app, "Chat")
+        XCTAssertTrue(app.staticTexts["Chat isn't in the app yet"].exists)
+        selectTab(app, "Todo")
+        XCTAssertTrue(app.staticTexts["Todo isn't in the app yet"].exists)
+        openMore(app, "Workout log")
+        XCTAssertTrue(app.staticTexts["Workout log isn't in the app yet"].exists)
+        openMore(app, "Library")
+        openMore(app, "Settings")
+        XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
+    }
+
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
         let app = XCUIApplication()
         app.launch()
         let isPad = UIDevice.current.userInterfaceIdiom == .pad
         XCTAssertEqual(tab(app, "Draw").exists, isPad)
         XCTAssertEqual(tab(app, "Study").exists, isPad)
-        selectTab(app, "Library")
+        openMore(app, "Library")
         XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Filter books"].exists)
         XCTAssertFalse(app.buttons["library-study_sources"].exists)
@@ -58,7 +101,7 @@ final class OfflineCaptureTests: XCTestCase {
                 XCTAssertTrue(app.buttons["library-study_sources"].waitForExistence(timeout: 5))
             }
         }
-        selectTab(app, "Settings")
+        openMore(app, "Settings")
         let downloads = app.buttons["Library downloads"]
         XCTAssertTrue(downloads.waitForExistence(timeout: 5))
         downloads.tap()
