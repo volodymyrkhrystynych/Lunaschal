@@ -65,6 +65,13 @@ public final class CaptureSync {
         // captures. This is deliberately not historical library replication.
         // A meal is not a journal entry, and asking the journal for it would
         // read as "deleted on the server".
+        // A meal's weather arrives a moment after it is saved; ask until it has some.
+        for var capture in try store.list().filter({ $0.state == .synced && $0.kind == .food && $0.weather == nil }).prefix(30) {
+            try Task.checkCancellation()
+            guard let weather = try? await transport.foodWeather(capture.id) else { continue }
+            capture.weather = weather
+            try store.save(capture)
+        }
         for var capture in try store.list().filter({ $0.state == .synced && $0.kind == .journal }).prefix(30) {
             try Task.checkCancellation()
             do {

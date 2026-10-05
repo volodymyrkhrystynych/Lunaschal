@@ -26,6 +26,29 @@ what each device can currently do and which work remains device-only.
   drawings. Stale saves retain a conflict copy; they never overwrite newer ink.
   Cross-platform ink conversion and PDF annotation remain outstanding.
 
+- The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
+  default) is the composer below; **Daily** logs the day's selfie (front camera),
+  body weight and calorie entries. Each is saved on the device first, keyed by the
+  4am day it was logged on, and uploads to the Lifestyle routes on the next sync.
+  A newer selfie or weight replaces an unsent one for the same day; calorie entries
+  carry a device-minted id so a replay is not counted twice. Once reachable, the
+  page shows the server's record of today with unsent logs marked waiting.
+  Calories take one line, split as the desktop card does it (`CalorieLine`, a port
+  of `parseCalorieEntry`): "chicken and rice, ~600" becomes the food and its count.
+- Weather. The Entry page shows the conditions now at its top left; tapping them
+  shows feels-like (Open-Meteo's apparent temperature: wind chill and humidity),
+  wind and gusts ("windy" from 30 km/h sustained or 50 km/h gusts), and whether
+  the sun is up. Daily has the full card: now, sun times, hour by hour. The last
+  forecast is cached so it shows offline. With location permission, the Capture
+  tab takes a fix when shown and sends it to `POST /api/lifestyle/weather/location`,
+  so the forecast is for where the phone is.
+- Weather on entries. Save entry and Save food entry attach the fix if it is under
+  15 minutes old; Save never waits for GPS. The server's entry-weather sweep
+  (`backend/weather/entry.py`, woken by each save) looks the weather up for the
+  entry's own place and capture hour, so an entry saved offline still gets the
+  weather from when it was written. The Journal list shows it on server entries
+  (from the replica) and on this device's captures (read back after upload; meals
+  through `GET /api/food/<id>`).
 - Offline typed journal entries. On the phone, **Transcribe** and **Record**
   add clips to the Capture tab's draft; stopping keeps the clip there, and
   only **Save entry** turns the draft into one entry. Clips upload through the

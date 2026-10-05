@@ -10,7 +10,7 @@ struct CaptureRoot: View {
 
     var body: some View {
         TabView {
-            NavigationStack { CaptureComposer(model: model, recorder: model.recorder) }
+            NavigationStack { CaptureTab(model: model) }
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }
             NavigationStack { CaptureList(model: model) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }
@@ -35,6 +35,43 @@ struct CaptureRoot: View {
             while !Task.isCancelled {
                 model.requestSync()
                 do { try await Task.sleep(for: .seconds(30)) } catch { return }
+            }
+        }
+    }
+}
+
+/// The Capture tab: a switch in place of its title between the entry
+/// composer, which it opens on, and the Daily log.
+private struct CaptureTab: View {
+    enum Page: String, CaseIterable, Identifiable {
+        case entry = "Entry", daily = "Daily"
+        var id: Self { self }
+    }
+
+    @ObservedObject var model: CaptureModel
+    @State private var page = Page.entry
+
+    var body: some View {
+        Group {
+            switch page {
+            case .entry: CaptureComposer(model: model, recorder: model.recorder)
+            case .daily: DailyView(model: model)
+            }
+        }
+        // Still titled for VoiceOver and the back button; the switch is what shows.
+        .navigationTitle("Capture")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.location.refresh() }
+        .toolbar {
+            if page == .entry {
+                ToolbarItem(placement: .topBarLeading) { CurrentWeatherButton(weather: model.weather) }
+            }
+            ToolbarItem(placement: .principal) {
+                Picker("Capture page", selection: $page) {
+                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
             }
         }
     }
@@ -123,7 +160,6 @@ private struct CaptureComposer: View {
             .controlSize(.large)
             .padding()
         }
-        .navigationTitle("Capture")
         .onChange(of: text) { _, value in if !value.isEmpty { saved = false } }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker { image in
@@ -273,13 +309,15 @@ private struct StagedFileRow: View {
 }
 
 /// The system camera. iOS has no SwiftUI camera, so this wraps UIKit's.
-private struct CameraPicker: UIViewControllerRepresentable {
+struct CameraPicker: UIViewControllerRepresentable {
+    var front = false
     let onImage: (UIImage) -> Void
     @Environment(\.dismiss) private var dismiss
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
+        if front && UIImagePickerController.isCameraDeviceAvailable(.front) { picker.cameraDevice = .front }
         picker.delegate = context.coordinator
         return picker
     }
@@ -335,6 +373,7 @@ private struct CaptureList: View {
                             }
                             Text(capture.createdAt, format: .dateTime.month().day().hour().minute())
                                 .font(.caption).foregroundStyle(.secondary)
+                            EntryWeatherText(weather: capture.entryWeather)
                             Text(status(capture)).font(.caption)
                         }
                     }
@@ -346,6 +385,7 @@ private struct CaptureList: View {
                         VStack(alignment: .leading) {
                             Text(record.title).lineLimit(2)
                             Text(record.data?["createdAt"]?.string ?? "").font(.caption).foregroundStyle(.secondary)
+                            EntryWeatherText(weather: EntryWeather.parse(record.data?["weather"]?.string))
                         }
                     }
                 }

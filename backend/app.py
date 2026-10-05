@@ -175,4 +175,8 @@ def create_app():
         # stack isn't running, which is a normal state.
         from backend.torrent.scheduler import start_torrent_scheduler
         start_torrent_scheduler()
+        # Weather onto new journal and food entries: a network call per entry,
+        # no model, woken by each save (backend/weather/entry.py).
+        from backend.weather.entry import start_entry_weather_scheduler
+        start_entry_weather_scheduler()
     return app

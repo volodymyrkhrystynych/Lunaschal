@@ -74,6 +74,70 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
     }
 
+    func testDailyLogsWeightAndCaloriesWithoutAServer() {
+        let app = XCUIApplication()
+        app.launch()
+        // Entry is the page the tab opens on.
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        let daily = app.segmentedControls.buttons["Daily"]
+        XCTAssertTrue(daily.exists)
+        daily.tap()
+        // With no server there is no forecast yet, and Entry shows no weather line.
+        XCTAssertTrue(app.staticTexts["No forecast yet. It appears after the next sync."].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["weather-line"].exists)
+        XCTAssertTrue(app.buttons["Take selfie"].waitForExistence(timeout: 5)
+                      || app.buttons["Retake selfie"].exists)
+
+        // The simulator keeps earlier runs' logs, so use values only this run wrote.
+        // A non-zero tenth: the app shows 70.0 as "70".
+        let weight = "\(Int.random(in: 50..<99)).\(Int.random(in: 1...9))"
+        // Letters only: a name ending in digits would rightly parse as its count.
+        let meal = "Oats " + String((0..<6).map { _ in "ABCDEFGHJKMNPQRSTVWXYZ".randomElement()! })
+        let field = app.textFields["Body weight"]
+        field.tap()
+        field.typeText(weight)
+        // A tap while the number pad is still rising can be dropped; retry once.
+        let log = app.buttons["Log weight"]
+        log.tap()
+        if !app.staticTexts[weight].waitForExistence(timeout: 3), log.isEnabled { log.tap() }
+        XCTAssertTrue(app.staticTexts[weight].waitForExistence(timeout: 5))
+
+        // One line, as on the desktop: no count at the end is refused, and a
+        // trailing count becomes the calories.
+        // Below the fold under the weather card, and a lazy Form leaves
+        // off-screen rows out of the tree until they are scrolled to.
+        let line = app.textFields["Calories"]
+        for _ in 0..<5 where !line.exists { app.swipeUp() }
+        line.tap()
+        // The line is kept as a draft, so an earlier run may have left text in it.
+        let leftover = (line.value as? String) ?? ""
+        if leftover != line.placeholderValue, !leftover.isEmpty {
+            line.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: leftover.count))
+        }
+        // Return submits like Add does. (A tap on Add straight after typing is
+        // sometimes dropped on iPad while the keyboard settles.)
+        line.typeText(meal + "\n")
+        XCTAssertTrue(app.staticTexts["End the line with a calorie count, e.g. \"rice and chicken 600\""]
+            .waitForExistence(timeout: 5))
+        line.tap()
+        line.typeText(", ~321")
+        XCTAssertTrue(app.staticTexts["\(meal) — 321 kcal"].waitForExistence(timeout: 5))
+        app.buttons["Add calories"].tap()
+        XCTAssertTrue(app.staticTexts[meal].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["321 kcal"].exists)
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        app.segmentedControls.buttons["Daily"].tap()
+        XCTAssertTrue(app.staticTexts[weight].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Saved on this device · Waiting to sync"].exists)
+        for _ in 0..<5 where !app.staticTexts[meal].exists { app.swipeUp() }
+        XCTAssertTrue(app.staticTexts[meal].exists)
+        app.segmentedControls.buttons["Entry"].tap()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+    }
+
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
         let app = XCUIApplication()
         app.launch()

@@ -232,6 +232,7 @@ def init_db() -> None:
     _ensure_food_descriptions(db)
     _ensure_hf_token(db)
     _ensure_weather_settings(db)
+    _ensure_weather_detail(db)
     _ensure_meeting_speaker_names(db)
     _ensure_meeting_echo_cancel(db)
     _ensure_meeting_source(db)
@@ -1085,6 +1086,22 @@ def _ensure_weather_settings(db: sqlite3.Connection) -> None:
         db.execute('ALTER TABLE settings ADD COLUMN weather_default_lon REAL')
     if 'weather_default_label' not in cols:
         db.execute('ALTER TABLE settings ADD COLUMN weather_default_label TEXT')
+    db.commit()
+
+
+def _ensure_weather_detail(db: sqlite3.Connection) -> None:
+    """Feels-like, wind and day/night on the hourly rows, and the per-entry
+    weather snapshot on journal and food entries (backend/weather/entry.py)."""
+    hours = {r[1] for r in db.execute('PRAGMA table_info(lifestyle_weather_hours)')}
+    for column, kind in (('apparent_c', 'REAL'), ('wind_kmh', 'REAL'), ('gust_kmh', 'REAL'), ('is_day', 'INTEGER')):
+        if column not in hours:
+            db.execute(f'ALTER TABLE lifestyle_weather_hours ADD COLUMN {column} {kind}')
+    for table in ('journal_entries', 'food_entries'):
+        cols = {r[1] for r in db.execute(f'PRAGMA table_info({table})')}
+        if 'weather' not in cols:
+            db.execute(f'ALTER TABLE {table} ADD COLUMN weather TEXT')
+        if 'weather_checked_at' not in cols:
+            db.execute(f'ALTER TABLE {table} ADD COLUMN weather_checked_at INTEGER')
     db.commit()
 
 

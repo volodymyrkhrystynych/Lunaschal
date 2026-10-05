@@ -163,14 +163,19 @@ public final class CaptureStore {
     /// not moved — the capture refers to them where they already are.
     /// A food entry takes no links; the caller keeps them for the next entry.
     @discardableResult
+    /// `location` is the device's fix at Save, if it had a recent one; the
+    /// server uses it for the entry's place and the weather it looks up.
     public func commitDraft(text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
+                            location: (latitude: Double, longitude: Double)? = nil,
                             now: Date = Date()) throws -> Capture {
         let staged = try draft()
         let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // With nothing written, links are the entry's words; a file or clip needs none.
-        let capture = Capture(text: body.isEmpty ? links.joined(separator: "\n") : body, kind: kind, now: now,
+        var capture = Capture(text: body.isEmpty ? links.joined(separator: "\n") : body, kind: kind, now: now,
                               youtubeURLs: links, files: staged.files, clips: staged.clips)
+        capture.latitude = location?.latitude
+        capture.longitude = location?.longitude
         try save(capture)
         try updateDraft { $0 = CaptureDraft() }
         return capture

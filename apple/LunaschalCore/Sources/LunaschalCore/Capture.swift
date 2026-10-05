@@ -20,6 +20,8 @@ public struct JournalSnapshot: Codable, Equatable {
     public let rawContent: String?
     public let title: String?
     public let attachments: [Attachment]?
+    /// The server's weather snapshot for the entry, as stored (JSON text).
+    public var weather: String? = nil
 
     public struct Attachment: Codable, Equatable {
         public let id: String
@@ -104,6 +106,15 @@ public struct Capture: Codable, Identifiable, Equatable {
     public var state: CaptureState
     public var lastError: String?
     public var snapshot: JournalSnapshot?
+    /// Where the device was when Save was pressed, if it knew.
+    public var latitude: Double?
+    public var longitude: Double?
+    /// The weather the server looked up for this capture's time and place,
+    /// read back after upload (JSON text, as `journal_entries.weather`).
+    public var weather: String?
+
+    /// The weather to show, once the server has looked it up.
+    public var entryWeather: EntryWeather? { EntryWeather.parse(weather ?? snapshot?.weather) }
 
     public var recordingTranscript: JournalSnapshot.Attachment? {
         guard let attachmentID else { return nil }
@@ -138,6 +149,7 @@ public struct Capture: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
+        case latitude, longitude, weather
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -156,6 +168,9 @@ public struct Capture: Codable, Identifiable, Equatable {
         state = try c.decode(CaptureState.self, forKey: .state)
         lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
         snapshot = try c.decodeIfPresent(JournalSnapshot.self, forKey: .snapshot)
+        latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
+        longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
+        weather = try c.decodeIfPresent(String.self, forKey: .weather)
         files = try c.decodeIfPresent([CaptureFile].self, forKey: .files) ?? []
         clips = try c.decodeIfPresent([CaptureClip].self, forKey: .clips) ?? []
         if let links = try c.decodeIfPresent([CaptureLink].self, forKey: .links) {

@@ -5,6 +5,7 @@ import threading
 from flask import Blueprint, jsonify, request, Response, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict
+from backend.weather import entry as entry_weather
 from backend.chat import storage as chat_storage
 from backend.chat import compaction as chat_compaction
 from backend.chat import autoreply
@@ -1028,6 +1029,7 @@ def _accept_food(db, data: dict, ctx: dict) -> dict:
 
     if overrides:
         build_update(db, 'food_entries', overrides, 'id=?', (entry_id,))
+    entry_weather.nudge()
 
     result = {'id': entry_id, 'photos': len(photos)}
     if calories is not None:

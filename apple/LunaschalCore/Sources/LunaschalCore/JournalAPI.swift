@@ -21,9 +21,13 @@ public protocol JournalTransport {
     /// `capture.clips`, in the same order.
     func send(_ capture: Capture, audioURL: URL?, files: [URL], clips: [URL]) async throws
     func fetch(_ id: String) async throws -> JournalSnapshot
+    /// The weather the server stored on a meal, or nil before it has any.
+    func foodWeather(_ id: String) async throws -> String?
 }
 
 public extension JournalTransport {
+    func foodWeather(_ id: String) async throws -> String? { nil }
+
     func send(_ capture: Capture, audioURL: URL?, files: [URL], clips: [URL]) async throws {
         try await send(capture, audioURL: audioURL)
     }
@@ -42,7 +46,7 @@ private final class NoRedirects: NSObject, URLSessionTaskDelegate {
 public final class JournalAPI: JournalTransport, ReplicaTransport {
     public let server: URL
     private let token: String?
-    private let session: URLSession
+    let session: URLSession
     private let uploads: RecordingUploadStore?
 
     public init(server: URL, token: String?, allowCellular: Bool, uploads: RecordingUploadStore? = nil) throws {
@@ -94,11 +98,16 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         if capture.mode == .text {
             var req = request("api/journal", method: "POST")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.httpBody = try JSONEncoder().encode([
+            var body = [
                 "id": capture.id, "content": capture.text,
                 "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
                 "pendingAttachments": String(capture.links.count + capture.files.count + capture.clips.count)
-            ])
+            ]
+            if let latitude = capture.latitude, let longitude = capture.longitude {
+                body["latitude"] = String(latitude)
+                body["longitude"] = String(longitude)
+            }
+            req.httpBody = try JSONEncoder().encode(body)
             (data, response) = try await session.data(for: req)
         } else {
             guard let audioURL else { throw CaptureError.missingAudio }
@@ -237,6 +246,16 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         }
     }
 
+    public func foodWeather(_ id: String) async throws -> String? {
+        guard ULID.isValid(id) else { throw CaptureError.invalidID }
+        struct Meal: Decodable { let id: String; let weather: String? }
+        let (data, response) = try await session.data(for: request("api/food/\(id)"))
+        try check(data, response)
+        let meal = try JSONDecoder().decode(Meal.self, from: data)
+        guard meal.id == id else { throw CaptureError.invalidResponse }
+        return meal.weather
+    }
+
     public func fetch(_ id: String) async throws -> JournalSnapshot {
         guard ULID.isValid(id) else { throw CaptureError.invalidID }
         let (data, response) = try await session.data(for: request("api/journal/\(id)"))
@@ -317,7 +336,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return try Data(contentsOf: file)
     }
 
-    private func request(_ path: String, method: String = "GET") -> URLRequest {
+    func request(_ path: String, method: String = "GET") -> URLRequest {
         var req = URLRequest(url: server.appendingPathComponent(path))
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -325,9 +344,120 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         return req
     }
 
-    private func check(_ data: Data, _ response: URLResponse) throws {
+    func check(_ data: Data, _ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { throw CaptureError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else { throw HTTPFailure(status: http.statusCode) }
+    }
+}
+
+// MARK: Daily (the Lifestyle routes)
+
+extension JournalAPI: DailyTransport {
+    public func sendDaily(_ log: DailyLog, image: URL?) async throws {
+        guard ULID.isValid(log.id) else { throw CaptureError.invalidID }
+        let data: Data
+        switch log.kind {
+        case .weight:
+            guard let weight = log.weight else { throw DailyError.invalidWeight }
+            struct Body: Encodable { let weight: Double; let date: String }
+            data = try await postJSON("api/lifestyle/weight", Body(weight: weight, date: log.day))
+        case .calories:
+            guard let calories = log.calories, let text = log.description else { throw DailyError.invalidCalories }
+            // An Int field, so the count goes over the wire as 600 and never 600.0.
+            struct Body: Encodable { let id: String; let description: String; let calories: Int; let date: String }
+            data = try await postJSON("api/lifestyle/calories",
+                                      Body(id: log.id, description: text, calories: calories, date: log.day))
+        case .selfie:
+            guard let image else { throw DailyError.missingImage }
+            let body = try SelfieMultipart(log: log, image: image)
+            defer { try? FileManager.default.removeItem(at: body.url) }
+            var req = request("api/lifestyle/selfies", method: "POST")
+            req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+            let (reply, response) = try await session.upload(for: req, fromFile: body.url)
+            try check(reply, response)
+            data = reply
+        }
+        try Self.validateDailyAcknowledgement(data, for: log)
+    }
+
+    /// Weight and selfie answer with the day they were filed under, a calorie
+    /// entry with the id it was sent with. Either must match before it counts.
+    public static func validateDailyAcknowledgement(_ data: Data, for log: DailyLog) throws {
+        struct Ack: Decodable { let id: String; let date: String }
+        let ack = try JSONDecoder().decode(Ack.self, from: data)
+        let matches = log.kind == .calories ? ack.id == log.id && ack.date == log.day : ack.date == log.day
+        guard matches else { throw CaptureError.invalidResponse }
+    }
+
+    public func dailyStatus(day: String) async throws -> DailyStatus {
+        struct Weight: Decodable { let date: String; let weight: Double }
+        struct Selfie: Decodable { let id: String; let date: String }
+        struct Calories: Decodable {
+            let date: String
+            let entries: [Entry]
+            struct Entry: Decodable { let id: String; let description: String; let calories: Int }
+        }
+        let weights = try JSONDecoder().decode([Weight].self, from: await get("api/lifestyle/weight", ["start": day, "end": day]))
+        let selfies = try JSONDecoder().decode([Selfie].self, from: await get("api/lifestyle/selfies", ["limit": "1"]))
+        let calories = try JSONDecoder().decode(Calories.self, from: await get("api/lifestyle/calories", ["date": day]))
+        guard calories.date == day else { throw CaptureError.invalidResponse }
+        return DailyStatus(
+            day: day,
+            weight: weights.last { $0.date == day }?.weight,
+            selfie: selfies.first { $0.date == day }.map { DailyStatus.Selfie(id: $0.id) },
+            entries: calories.entries.map { DailyStatus.Entry(id: $0.id, description: $0.description, calories: $0.calories) })
+    }
+
+    /// Today's weather where the server last knew the user to be.
+    public func weatherToday() async throws -> WeatherDay {
+        try WeatherDay.decode(await get("api/lifestyle/weather/today", [:]))
+    }
+
+    /// Tells the server where the phone is, which also resyncs today's weather
+    /// for that place; answers like `weatherToday`.
+    public func updateWeatherLocation(latitude: Double, longitude: Double) async throws -> WeatherDay {
+        struct Body: Encodable { let latitude: Double; let longitude: Double }
+        return try WeatherDay.decode(await postJSON("api/lifestyle/weather/location",
+                                                    Body(latitude: latitude, longitude: longitude)))
+    }
+
+    /// The server's small, orientation-corrected copy of a selfie.
+    public func selfieThumbnail(_ id: String) async throws -> Data {
+        guard ULID.isValid(id) else { throw CaptureError.invalidID }
+        return try await get("api/lifestyle/selfies/\(id)/image", ["thumbnail": "1"])
+    }
+
+    private func get(_ path: String, _ query: [String: String]) async throws -> Data {
+        var req = request(path)
+        var parts = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
+        parts.queryItems = query.isEmpty ? nil : query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        req.url = parts.url
+        let (data, response) = try await session.data(for: req)
+        try check(data, response)
+        return data
+    }
+
+    private func postJSON<Body: Encodable>(_ path: String, _ body: Body) async throws -> Data {
+        var req = request(path, method: "POST")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try await session.data(for: req)
+        try check(data, response)
+        return data
+    }
+}
+
+/// `POST /api/lifestyle/selfies`: the photo and the 4am day it was taken on.
+public struct SelfieMultipart {
+    public let url: URL
+    public let boundary: String
+
+    public init(log: DailyLog, image: URL) throws {
+        guard log.kind == .selfie, ULID.isValid(log.id) else { throw CaptureError.invalidID }
+        guard (try image.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else { throw DailyError.missingImage }
+        (url, boundary) = try writeMultipart(fields: [("date", log.day)], files: [
+            MultipartFile(field: "image", filename: "selfie.jpg", contentType: "image/jpeg", source: image)
+        ])
     }
 }
 
@@ -390,11 +520,15 @@ public struct FoodMultipart {
             parts.append(MultipartFile(field: "media", filename: file.name, contentType: type, source: source))
         }
         let ids = String(decoding: try JSONEncoder().encode(capture.files.map(\.attachmentID)), as: UTF8.self)
-        (url, boundary) = try writeMultipart(fields: [
+        var fields = [
             ("id", capture.id), ("text", capture.text),
             ("capturedAt", ISO8601DateFormatter().string(from: capture.createdAt)),
             ("pendingClips", String(capture.clips.count)), ("mediaIds", ids)
-        ], files: parts)
+        ]
+        if let latitude = capture.latitude, let longitude = capture.longitude {
+            fields += [("latitude", String(latitude)), ("longitude", String(longitude))]
+        }
+        (url, boundary) = try writeMultipart(fields: fields, files: parts)
     }
 }
 

@@ -26,6 +26,16 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var downloadingLibrary = false
     @Published private(set) var libraryMessage: String?
     @Published private(set) var libraryBytes: Int64 = 0
+    /// The Daily tab: what this device has logged, and the server's record of today.
+    @Published private(set) var dailyLogs: [DailyLog] = []
+    @Published private(set) var dailyStatus: DailyStatus?
+    @Published private(set) var selfieThumbnail: (id: String, data: Data)?
+    /// The last weather the server sent, kept on disk so it shows offline.
+    @Published private(set) var weather: WeatherDay?
+    private var weatherFetchedAt: Date?
+    let location = LocationProvider()
+    /// A fix the server hasn't been told about yet.
+    private var unsentFix: (latitude: Double, longitude: Double)?
     let store: CaptureStore
     let replica: ReplicaStore
     let drawings: DrawingStore
@@ -33,9 +43,11 @@ final class CaptureModel: ObservableObject {
     let uploads: RecordingUploadStore
     let transfers: TransferStore
     let media: MediaStore
+    let daily: DailyStore
     let recorder: Recorder
     private let watchReceiver: WatchReceiver
     private let syncer: CaptureSync
+    private let dailySyncer: DailySync
     private let replicaSyncer: ReplicaSync
     private let libraryWorker: LibraryDownload
     private var activeAPI: JournalAPI?
@@ -52,6 +64,8 @@ final class CaptureModel: ObservableObject {
         drawingPublications = try DrawingPublicationStore(root: store.root.appendingPathComponent("drawing-publications", isDirectory: true))
         replica = try ReplicaStore(url: store.root.appendingPathComponent("replica.sqlite"))
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
+        daily = try DailyStore(root: store.root.appendingPathComponent("daily", isDirectory: true))
+        dailySyncer = DailySync(store: daily)
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
@@ -64,6 +78,8 @@ final class CaptureModel: ObservableObject {
         signedIn = token != nil
         captures = try store.list()
         draft = try store.draft()
+        dailyLogs = try daily.list()
+        weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
         journalRecords = try replica.records(collection: "journal_entries")
         journalCount = try replica.count(collection: "journal_entries")
         pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
@@ -76,6 +92,10 @@ final class CaptureModel: ObservableObject {
         watchReceiver.onChange = { [weak self] in self?.reload(); self?.requestSync() }
         watchReceiver.onError = { [weak self] in self?.message = $0.localizedDescription }
         watchReceiver.activate()
+        location.onFix = { [weak self] fix in
+            self?.unsentFix = (fix.coordinate.latitude, fix.coordinate.longitude)
+            self?.requestSync()
+        }
     }
 
     var allowCellular: Bool {
@@ -91,6 +111,7 @@ final class CaptureModel: ObservableObject {
         do {
             captures = try store.list()
             draft = try store.draft()
+            dailyLogs = try daily.list()
             journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
             journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
             pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
@@ -129,9 +150,70 @@ final class CaptureModel: ObservableObject {
     func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
         do {
-            try store.commitDraft(text: text, youtubeURLs: youtubeURLs, kind: kind)
+            try store.commitDraft(text: text, youtubeURLs: youtubeURLs, kind: kind, location: location.recent)
             reload(); requestSync(); return true
         } catch { message = error.localizedDescription; reload(); return false }
+    }
+
+    // MARK: Daily
+
+    func logWeight(_ weight: Double) -> Bool { logDaily { try $0.logWeight(weight) } }
+
+    func logCalories(_ calories: Int, description: String) -> Bool {
+        logDaily { try $0.logCalories(calories, description: description) }
+    }
+
+    func logSelfie(_ image: UIImage) -> Bool {
+        logDaily { store in
+            guard let jpeg = image.jpegData(compressionQuality: 0.85) else { throw DailyError.missingImage }
+            return try store.logSelfie(jpeg: jpeg)
+        }
+    }
+
+    /// Drops a log the server refused; nothing else can make it succeed.
+    func discard(_ log: DailyLog) {
+        do { try daily.remove(log) } catch { message = error.localizedDescription }
+        reload()
+    }
+
+    private func logDaily(_ make: (DailyStore) throws -> DailyLog) -> Bool {
+        do { _ = try make(daily); reload(); requestSync(); return true }
+        catch { message = error.localizedDescription; return false }
+    }
+
+    /// Reads the server's record of today, and the selfie's thumbnail when this
+    /// device doesn't already hold the picture. Failing here fails nothing else.
+    private func refreshDaily(using api: JournalAPI) async {
+        let day = DayKey.of(Date())
+        guard let status = try? await api.dailyStatus(day: day) else { return }
+        dailyStatus = status
+        if let selfie = status.selfie, selfieThumbnail?.id != selfie.id,
+           let data = try? await api.selfieThumbnail(selfie.id) {
+            selfieThumbnail = (selfie.id, data)
+        }
+    }
+
+    // Not `.json`: the capture store reads every .json in its root as a capture.
+    private var weatherCache: URL { store.root.appendingPathComponent("weather-today.cache") }
+
+    /// The forecast changes hourly at most, and every sync would otherwise ask.
+    private func refreshWeather(using api: JournalAPI) async {
+        // A new fix moves the forecast to where the phone is now.
+        if let fix = unsentFix,
+           let fresh = try? await api.updateWeatherLocation(latitude: fix.latitude, longitude: fix.longitude) {
+            unsentFix = nil
+            return keepWeather(fresh)
+        }
+        if let weatherFetchedAt, Date().timeIntervalSince(weatherFetchedAt) < 10 * 60,
+           weather?.isFor(day: DayKey.of(Date())) == true { return }
+        guard let fresh = try? await api.weatherToday() else { return }
+        keepWeather(fresh)
+    }
+
+    private func keepWeather(_ fresh: WeatherDay) {
+        weather = fresh
+        weatherFetchedAt = Date()
+        try? JSONEncoder().encode(fresh).write(to: weatherCache, options: .atomic)
     }
 
     /// Copies something just picked into the draft.
@@ -198,6 +280,7 @@ final class CaptureModel: ObservableObject {
     func nextBackgroundSync() throws -> Date? {
         try BackgroundSyncPlan.next(captures: store.list(), attempts: transfers.all(),
             hasEdits: replica.edits().contains { $0.state == "pending" }
+                || daily.list().contains { $0.state == .pending }
                 || drawingPublications.all().contains { $0.state == "pending" }, signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
@@ -232,6 +315,9 @@ final class CaptureModel: ObservableObject {
             let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular, uploads: uploads)
             activeAPI = api
             try await syncer.run(using: api)
+            try await dailySyncer.run(using: api)
+            await refreshDaily(using: api)
+            await refreshWeather(using: api)
             try await replicaSyncer.run(using: api, collections: [
                 "journal_entries", "journal_attachments", "fics", "study_sources",
                 "papers", "conversations", "knowledge_archives", "fic_folders", "fic_bookmarks",

@@ -13,6 +13,7 @@ from backend.food import storage
 from backend.food.exif import extract_photo_meta
 from backend.food.recipe_match import check_homemade_recipe_match
 from backend.geo import parse_coord
+from backend.weather import entry as entry_weather
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.routes.cookbook import _insert_recipe
 from backend.tags import tag_counts, tags_json
@@ -483,6 +484,8 @@ def create_recording():
     )
     db.execute('UPDATE food_entries SET updated_at=? WHERE id=?', (now, entry_id))
     db.commit()
+    # A clip can open the meal before its create lands; either way it needs weather.
+    entry_weather.nudge()
     _transcribe_media_bg(media_id, entry_id, str(res[1]))
 
     row = db.execute(
@@ -532,6 +535,7 @@ def journal_entries():
             'notes': r['notes'],
             'latitude': r['latitude'],
             'longitude': r['longitude'],
+            'weather': r['weather'],
             'createdAt': _iso(r['created_at']),
             'recipe': _linked_recipe(db, r['recipe_id']),
             'media': _entry_media(db, r['id']),
@@ -642,6 +646,7 @@ def create_entry():
         build_update(db, 'food_entries', overrides, 'id=?', (entry_id,))
 
     db.commit()
+    entry_weather.nudge()
 
     # Structure the raw note in the background (fills empty fields, extracts a
     # recipe, and checks for a homemade/existing-recipe match). No-op when AI

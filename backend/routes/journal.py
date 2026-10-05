@@ -10,6 +10,7 @@ from backend.db.connection import build_update, get_db, row_to_dict, search_jour
 from backend.capture_time import optional_capture_time as _optional_capture_time
 from backend.capture_time import parse_capture_time as _parse_capture_time
 from backend.day_boundary import day_bounds, day_key_for
+from backend.weather import entry as entry_weather
 from backend.geo import coord_pair
 from backend.ai.journal import (
     PolishUnavailable,
@@ -274,12 +275,14 @@ def create_journal_entry(
         # with, so it still needs its polish and its title. Its clips' own
         # transcripts append after this, and their passes re-run over the lot.
         _notify_subscribers(id)
+        entry_weather.nudge()
         if polish and raw_content:
             _polish_bg(id, raw_content)
         if not title or not tags:
             _generate_metadata_bg(id, content, expect_attachments=pending_attachments)
         return id
     _notify_subscribers(id)
+    entry_weather.nudge()
     if polish and raw_content:
         _polish_bg(id, raw_content)
     if not title or not tags:
@@ -1288,6 +1291,8 @@ def create_recording_entry():
     # Only an entry this request created may be cleaned up below: a replay whose
     # file is rejected must not delete the entry an earlier call got right.
     created_entry = cur.rowcount > 0
+    if created_entry:
+        entry_weather.nudge()
 
     def _rollback_entry():
         if not created_entry:

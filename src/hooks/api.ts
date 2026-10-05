@@ -88,6 +88,8 @@ export interface JournalEntry {
    */
   latitude?: number | null;
   longitude?: number | null;
+  /** JSON snapshot of the weather where and when it was written; see src/lib/entryWeather.ts. */
+  weather?: string | null;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -2468,6 +2470,8 @@ export interface FoodEntry {
   media: FoodMedia[];
   latitude: number | null;
   longitude: number | null;
+  /** JSON snapshot of the weather when it was eaten; see src/lib/entryWeather.ts. */
+  weather?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -2481,6 +2485,7 @@ export interface FoodJournalItem {
   notes: string | null;
   latitude: number | null;
   longitude: number | null;
+  weather?: string | null;
   createdAt: string;
   recipe: { id: string; title: string } | null;
   media: FoodMedia[];

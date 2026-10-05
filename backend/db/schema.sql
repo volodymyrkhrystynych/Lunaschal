@@ -39,6 +39,13 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     -- this (backend/routes/journal.py's _entry_coords fallback).
     latitude REAL,
     longitude REAL,
+    -- The weather where and when the entry was written, as JSON
+    -- (backend/weather/entry.py). Filled in by a sweep after the entry lands,
+    -- so an offline capture uploaded hours later still gets the weather of its
+    -- own capture hour. NULL until then, or if it never could be;
+    -- weather_checked_at is the last attempt, so a failure retries later.
+    weather TEXT,
+    weather_checked_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -675,6 +682,8 @@ CREATE TABLE IF NOT EXISTS food_entries (
     recipe_id TEXT REFERENCES recipes(id) ON DELETE SET NULL,
     latitude REAL,                        -- device GPS captured at log time
     longitude REAL,
+    weather TEXT,                         -- JSON snapshot, as journal_entries.weather
+    weather_checked_at INTEGER,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -1227,6 +1236,10 @@ CREATE TABLE IF NOT EXISTS lifestyle_weather_hours (
     temperature_c REAL NOT NULL,
     wet_bulb_c REAL,
     humidity_pct REAL,
+    apparent_c REAL,                      -- Open-Meteo's feels-like: wind chill / humidity
+    wind_kmh REAL,
+    gust_kmh REAL,
+    is_day INTEGER,                       -- 1 while the sun is up
     is_actual INTEGER NOT NULL DEFAULT 0,
     latitude REAL NOT NULL,
     longitude REAL NOT NULL,

@@ -48,6 +48,7 @@ import { ChatClips, clipAttachments, photoAttachments } from './Chat/ChatClips';
 import { ImageLightbox, useLightbox } from './ImageLightbox';
 import { ItemCard } from './ItemCard';
 import { JournalAttachments } from './JournalAttachments';
+import { EntryWeatherLine } from './EntryWeatherLine';
 import { MessageMarkdown } from './MessageMarkdown';
 import type {
   DatedConversation,
@@ -801,9 +802,12 @@ export function Journal({
         }`}
       >
         <div className="flex items-start justify-between mb-2">
-          <span className="text-sm text-[var(--color-text-muted)]">
-            {formatDate(entry.createdAt)}
-          </span>
+          <div className="flex flex-col min-w-0">
+            <span className="text-sm text-[var(--color-text-muted)]">
+              {formatDate(entry.createdAt)}
+            </span>
+            <EntryWeatherLine weather={entry.weather} />
+          </div>
           <div className="flex gap-2">
             {entry.rawContent && (
               <button
@@ -2068,6 +2072,7 @@ const JournalFoodItem = memo(function JournalFoodItem({
       }
       body={
         <>
+          <EntryWeatherLine weather={food.weather} className="block mb-2" />
           {food.notes && (
             <div className="text-sm text-[var(--color-text)] whitespace-pre-wrap mb-2">
               {food.notes}
