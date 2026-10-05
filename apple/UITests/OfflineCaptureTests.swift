@@ -6,8 +6,16 @@ final class OfflineCaptureTests: XCTestCase {
         if UIDevice.current.userInterfaceIdiom == .phone {
             return app.tabBars.buttons[name]
         }
-        // iPad's floating tabs are exposed as cells/other elements, not a TabBar.
-        return app.descendants(matching: .any).matching(identifier: name).firstMatch
+        // iPad's floating tabs are exposed as cells/other elements, not a TabBar,
+        // and each tab appears twice: firstMatch can be the copy that is never
+        // hittable. Prefer the one that is, once it shows up.
+        let matches = app.descendants(matching: .any).matching(identifier: name)
+        let deadline = Date().addingTimeInterval(10)
+        repeat {
+            if let visible = matches.allElementsBoundByIndex.first(where: { $0.isHittable }) { return visible }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+        } while Date() < deadline && matches.count > 0
+        return matches.firstMatch
     }
 
     private func selectTab(_ app: XCUIApplication, _ name: String,
