@@ -36,6 +36,11 @@ struct CurrentWeatherButton: View {
                 .padding()
                 .presentationCompactAdaptation(.popover)
             }
+        } else {
+            // Holds the place so the page switch beside it doesn't move when a forecast arrives.
+            Text("— °").monospacedDigit().foregroundStyle(.secondary)
+                .accessibilityLabel("No forecast yet")
+                .accessibilityIdentifier("current-weather")
         }
     }
 }

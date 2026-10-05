@@ -52,21 +52,23 @@ private struct CaptureTab: View {
     @State private var page = Page.entry
 
     var body: some View {
-        Group {
-            switch page {
-            case .entry: CaptureComposer(model: model, recorder: model.recorder)
-            case .daily: DailyView(model: model)
-            case .workout: WorkoutView(model: model)
-            }
+        // All three stay built and only the chosen one shows: building a page
+        // at the moment of the tap stalled the switch's slide into a snap.
+        ZStack {
+            KeptPage(shown: page == .entry) { CaptureComposer(model: model, recorder: model.recorder) }
+            KeptPage(shown: page == .daily) { DailyView(model: model) }
+            KeptPage(shown: page == .workout) { WorkoutView(model: model) }
         }
+        .ignoresSafeArea()
+        // The pages stay built, so their own onAppear no longer marks opening one.
+        .onChange(of: page) { _, page in if page != .entry { model.requestSync() } }
         // Still titled for VoiceOver and the back button; the switch is what shows.
         .navigationTitle("Capture")
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { model.location.refresh() }
         .toolbar {
-            if page == .entry {
-                ToolbarItem(placement: .topBarLeading) { CurrentWeatherButton(weather: model.weather) }
-            }
+            // On every page, so the switch beside it never shifts.
+            ToolbarItem(placement: .topBarLeading) { CurrentWeatherButton(weather: model.weather) }
             ToolbarItem(placement: .principal) {
                 Picker("Capture page", selection: $page) {
                     ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
@@ -75,6 +77,49 @@ private struct CaptureTab: View {
                 .fixedSize()
             }
         }
+    }
+}
+
+/// A page that stays built while another is showing. A hidden page is taken
+/// out of the window rather than made transparent: SwiftUI's opacity, and even
+/// UIKit's `isHidden`, leave its rows readable to VoiceOver. Its controller,
+/// and so its state, lives on, and putting it back is cheap.
+private struct KeptPage<Content: View>: UIViewControllerRepresentable {
+    let shown: Bool
+    @ViewBuilder let content: Content
+
+    final class Container: UIViewController {
+        let host: UIHostingController<Content>
+        init(_ content: Content) {
+            host = UIHostingController(rootView: content)
+            super.init(nibName: nil, bundle: nil)
+            addChild(host)
+            host.didMove(toParent: self)
+        }
+        required init?(coder: NSCoder) { fatalError("not used") }
+
+        func show(_ shown: Bool) {
+            view.isUserInteractionEnabled = shown
+            if shown, host.view.superview == nil {
+                host.view.frame = view.bounds
+                host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                host.view.backgroundColor = .clear
+                view.addSubview(host.view)
+            } else if !shown, host.view.superview != nil {
+                host.view.removeFromSuperview()
+            }
+        }
+    }
+
+    func makeUIViewController(context: Context) -> Container {
+        let container = Container(content)
+        container.view.backgroundColor = .clear
+        return container
+    }
+
+    func updateUIViewController(_ container: Container, context: Context) {
+        container.host.rootView = content
+        container.show(shown)
     }
 }
 
@@ -521,11 +566,6 @@ private struct MoreMenu: View {
             NavigationLink { LibraryView(model: model) } label: {
                 Label("Library", systemImage: "books.vertical")
             }.accessibilityIdentifier("more-Library")
-            NavigationLink {
-                WorkoutView(model: model).navigationTitle("Workout log")
-            } label: {
-                Label("Workout log", systemImage: "dumbbell")
-            }.accessibilityIdentifier("more-Workout log")
             NavigationLink { ConnectionSettings(model: model) } label: {
                 Label("Settings", systemImage: "gear")
             }.accessibilityIdentifier("more-Settings")

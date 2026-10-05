@@ -101,6 +101,25 @@ final class WorkoutTests: XCTestCase {
         XCTAssertEqual(WorkoutLabels.pills(recent).map(\.name), ["squat", "walking", "cycling"])
     }
 
+    func testTheExerciseJustLoggedLeadsThePills() throws {
+        let recent = [RecentExercise(name: "squat", displayName: "Squat"),
+                      RecentExercise(name: "bicep curl", displayName: "Bicep Curl")]
+        _ = try store.log("lunge a 10", selected: nil, now: Date(timeIntervalSince1970: 100))
+        _ = try store.log("lunge b 10", selected: nil, now: Date(timeIntervalSince1970: 200))
+        XCTAssertEqual(WorkoutLabels.pills(recent, queued: try store.list()).map(\.name),
+                       ["lunge b", "lunge a", "squat", "bicep curl", "walking", "cycling"])
+        // Another set of the older one, bare, brings it back to the front.
+        _ = try store.log("12", selected: "lunge a", now: Date(timeIntervalSince1970: 300))
+        XCTAssertEqual(WorkoutLabels.pills(recent, queued: try store.list()).prefix(3).map(\.name),
+                       ["lunge a", "lunge b", "squat"])
+        // A queued set of a known exercise moves it up without a second pill.
+        _ = try store.log("bicep curl 20, 10", selected: nil, now: Date(timeIntervalSince1970: 400))
+        let pills = WorkoutLabels.pills(recent, queued: try store.list())
+        XCTAssertEqual(pills.prefix(2).map(\.name), ["bicep curl", "lunge a"])
+        XCTAssertEqual(pills.first?.displayName, "Bicep Curl")
+        XCTAssertEqual(pills.filter { $0.name == "bicep curl" }.count, 1)
+    }
+
     func testTheServersSessionShapeDecodes() throws {
         let json = #"[{"id": "S", "date": "2026-10-05", "locationType": "unassigned", "captureKind": "strength","#
             + #" "durationMinutes": 30, "intensityRating": null, "rawText": "squats 10", "parseStatus": "done","#

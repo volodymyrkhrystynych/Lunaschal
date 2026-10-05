@@ -83,7 +83,7 @@ what each device can currently do and which work remains device-only.
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
   Study and Draw. Chat and Todo are placeholders that point to the web app. More
-  holds Library, Workout log (the Workout page) and Settings. Library opens directly to books, with title/tag search,
+  holds Library and Settings; the workout log is Capture → Workout. Library opens directly to books, with title/tag search,
   source/folder/tag filters, Unsorted, latest-chapter/recent/title sorting, and
   Favorite/Continue-reading bookmark filters. Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.

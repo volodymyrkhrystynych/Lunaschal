@@ -16,15 +16,8 @@ struct WorkoutView: View {
     @State private var rating: WorkoutSession?
     @FocusState private var typing: Bool
 
-    /// Recent exercises, with anything queued here but not yet on the server first.
     private var pills: [RecentExercise] {
-        var recent = model.recentExercises
-        for item in model.workoutLogs.reversed() {
-            guard let name = try? WorkoutEntry.parse(item.text, selected: item.exercise).name,
-                  !recent.contains(where: { $0.name == name }) else { continue }
-            recent.insert(RecentExercise(name: name, displayName: name.capitalized), at: 0)
-        }
-        return WorkoutLabels.pills(recent)
+        WorkoutLabels.pills(model.recentExercises, queued: model.workoutLogs.filter { $0.state != .failed })
     }
     private var active: String? { selected.isEmpty ? pills.first?.name : selected }
     private var waiting: [WorkoutLog] { model.workoutLogs }
@@ -83,7 +76,6 @@ struct WorkoutView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .refreshable { model.requestSync(manual: true) }
-        .onAppear { model.requestSync() }
         .sheet(item: $rating) { session in
             RateWorkout(model: model, session: session)
         }

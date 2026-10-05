@@ -167,9 +167,18 @@ public enum WorkoutLabels {
     public static let intensity = [1: "Not intense whatsoever", 2: "Just a smidge", 3: "I'm sweating",
                                    4: "I'm really trying hard", 5: "I am going ham"]
 
-    /// The pills: recent exercises, then walking and cycling if they aren't among them.
-    public static func pills(_ recent: [RecentExercise]) -> [RecentExercise] {
-        var pills = recent
+    /// The pills, most recently used first, as the desktop orders them: what is
+    /// queued on this phone (newest first), then the server's recent exercises,
+    /// then walking and cycling if they aren't among them. Logging a set moves
+    /// its exercise to the front, exactly as it does on the desktop.
+    public static func pills(_ recent: [RecentExercise], queued: [WorkoutLog] = []) -> [RecentExercise] {
+        var pills: [RecentExercise] = []
+        for item in queued.sorted(by: { $0.createdAt > $1.createdAt }) {
+            guard let name = try? WorkoutEntry.parse(item.text, selected: item.exercise).name,
+                  !pills.contains(where: { $0.name == name }) else { continue }
+            pills.append(recent.first { $0.name == name } ?? RecentExercise(name: name, displayName: name.capitalized))
+        }
+        pills += recent.filter { pill in !pills.contains { $0.name == pill.name } }
         for (name, label) in [("walking", "Walking"), ("cycling", "Cycling")] where !pills.contains(where: { $0.name == name }) {
             pills.append(RecentExercise(name: name, displayName: label))
         }

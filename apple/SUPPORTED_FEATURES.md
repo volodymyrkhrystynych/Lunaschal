@@ -30,8 +30,8 @@ has been validated. Exact commits and CI results are recorded in the
 | Chat, Calendar, Food, Lifestyle, Learning | Use the existing web app; native Food is Save food entry only, native Lifestyle is Capture → Daily only              | Not exposed                                       | Existing web app requirements apply                      |
 | Practice and Notebook                     | Intentionally omitted from native navigation                                                                         | Not exposed                                       | Existing Linux/web app remains available                 |
 
-The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library,
-Workout log, and Settings. Chat and Todo are placeholders that point
+The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library
+and Settings; the workout log is Capture → Workout. Chat and Todo are placeholders that point
 to the web app. iPad also has Study and Draw, and hides the tab bar while a drawing
 or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.

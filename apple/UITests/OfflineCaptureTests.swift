@@ -28,7 +28,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTFail("Tab \(name) did not open", file: file, line: line)
     }
 
-    // Library, Workout log and Settings live behind the More tab. Re-selecting
+    // Library and Settings live behind the More tab. Re-selecting
     // More keeps whatever was pushed, so step back to the menu before choosing.
     private func openMore(_ app: XCUIApplication, _ name: String,
                           file: StaticString = #filePath, line: UInt = #line) {
@@ -67,9 +67,9 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Chat isn't in the app yet"].exists)
         selectTab(app, "Todo")
         XCTAssertTrue(app.staticTexts["Todo isn't in the app yet"].exists)
-        openMore(app, "Workout log")
-        XCTAssertTrue(app.textFields["Exercise entry"].waitForExistence(timeout: 5))
         openMore(app, "Library")
+        // The workout log is Capture's Workout page, not a More row.
+        XCTAssertFalse(app.buttons["more-Workout log"].exists)
         openMore(app, "Settings")
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
     }
@@ -135,6 +135,22 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts[meal].exists)
         app.segmentedControls.buttons["Entry"].tap()
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+    }
+
+    func testThePageSwitchStaysPutWithTheWeatherOnEveryPage() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        let pages = app.segmentedControls.firstMatch
+        let frame = pages.frame
+        for page in ["Daily", "Workout", "Daily", "Entry"] {
+            pages.buttons[page].tap()
+            XCTAssertTrue(app.descendants(matching: .any)["current-weather"].waitForExistence(timeout: 5), page)
+            XCTAssertEqual(pages.frame, frame, page)
+        }
+        // Only the chosen page is on screen.
+        XCTAssertFalse(app.textFields["Exercise entry"].exists)
+        XCTAssertFalse(app.staticTexts["Body weight"].exists)
     }
 
     func testWorkoutLogsSetsLikeTheDesktopWithoutAServer() {

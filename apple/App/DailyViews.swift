@@ -100,7 +100,6 @@ struct DailyView: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .refreshable { model.requestSync(manual: true) }
-        .onAppear { model.requestSync() }
         .fullScreenCover(isPresented: $showCamera) {
             CameraPicker(front: true) { _ = model.logSelfie($0) }.ignoresSafeArea()
         }
