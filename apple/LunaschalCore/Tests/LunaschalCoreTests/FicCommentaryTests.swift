@@ -51,7 +51,8 @@ final class FicCommentaryTests: XCTestCase {
     }
 
     func testAStagedUploadKeepsTheLink() throws {
-        let uploads = try RecordingUploadStore(root: root.appendingPathComponent("uploads"))
+        let uploads = try RecordingUploadStore(root: root.appendingPathComponent("uploads"),
+                                               hash: { try Data(contentsOf: $0).base64EncodedString() })
         var capture = Capture(mode: .record, ficID: ULID.make(), chapterID: ULID.make())
         capture.state = .pending
         try Data([1, 2, 3]).write(to: store.audioURL(capture))
