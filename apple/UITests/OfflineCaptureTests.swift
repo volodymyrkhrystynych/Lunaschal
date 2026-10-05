@@ -28,6 +28,18 @@ final class OfflineCaptureTests: XCTestCase {
         XCTFail("Tab \(name) did not open", file: file, line: line)
     }
 
+    // A tap while a list is still settling can leave the field unfocused, and
+    // typeText then fails outright. Retry the tap until the keyboard is there.
+    private func focus(_ field: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
+        let focused = NSPredicate(format: "hasKeyboardFocus == true")
+        for _ in 0..<3 {
+            field.tap()
+            if XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: focused, object: field)],
+                              timeout: 3) == .completed { return }
+        }
+        XCTFail("\(field) did not take keyboard focus", file: file, line: line)
+    }
+
     // Library and Settings live behind the More tab. Re-selecting
     // More keeps whatever was pushed, so step back to the menu before choosing.
     private func openMore(_ app: XCUIApplication, _ name: String,
@@ -485,7 +497,7 @@ final class OfflineCaptureTests: XCTestCase {
         // A daily task goes on the list at once and waits for the server.
         let daily = app.textFields["todo-daily-input"]
         let task = "Stretch \(Int.random(in: 1000...9999))"
-        daily.tap()
+        focus(daily)
         daily.typeText(task)
         app.buttons["todo-daily-add"].tap()
         XCTAssertTrue(app.buttons[task].waitForExistence(timeout: 5))
@@ -496,7 +508,7 @@ final class OfflineCaptureTests: XCTestCase {
         app.buttons["todo-add"].tap()
         let title = app.textFields["todo-editor-title"]
         XCTAssertTrue(title.waitForExistence(timeout: 5))
-        title.tap()
+        focus(title)
         title.typeText(name)
         // A tap on the switch's middle lands on its label; flip the toggle itself.
         app.switches["Due date"].coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
