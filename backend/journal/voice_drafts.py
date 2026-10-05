@@ -30,6 +30,7 @@ from backend.storage import IdScopedStorage
 from backend.journal import storage as attachment_storage
 from backend.ai.journal import merge_voice_draft, generate_journal_metadata, PolishUnavailable
 from backend.tags import tags_json
+from backend.weather import entry as entry_weather
 
 logger = logging.getLogger(__name__)
 
@@ -285,6 +286,7 @@ def _create_entry(content: str, raw_content: str) -> str:
         (entry_id, content, raw_content, None, None, now, now),
     )
     db.commit()
+    entry_weather.nudge()
     return entry_id
 
 

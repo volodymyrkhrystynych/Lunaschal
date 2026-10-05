@@ -26,24 +26,108 @@ what each device can currently do and which work remains device-only.
   drawings. Stale saves retain a conflict copy; they never overwrite newer ink.
   Cross-platform ink conversion and PDF annotation remain outstanding.
 
-- Offline typed journal entries, plus separate **Transcribe** and **Record**
-  captures. Stopping records a journal entry; both modes retain the original
-  mono AAC file, and only Transcribe requests server transcription.
-- Offline YouTube links and commentary, with preserved drafts and stable entry
-  and link-attachment IDs. Entry creation precedes link import; retry validates
-  both acknowledgements. The server keeps the original capture timestamp and
+- The Capture tab has an **Entry | Daily** switch where its title was. Entry (the
+  default) is the composer below; **Daily** logs the day's selfie (front camera),
+  body weight and calorie entries. Each is saved on the device first, keyed by the
+  4am day it was logged on, and uploads to the Lifestyle routes on the next sync.
+  A newer selfie or weight replaces an unsent one for the same day; calorie entries
+  carry a device-minted id so a replay is not counted twice. Once reachable, the
+  page shows the server's record of today with unsent logs marked waiting.
+  Calories take one line, split as the desktop card does it (`CalorieLine`, a port
+  of `parseCalorieEntry`): "chicken and rice, ~600" becomes the food and its count.
+- **Workout** (the third Capture page) is the desktop's workout log: one set or
+  activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
+  "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
+  and the last four workouts with Rate / location. Lines are checked on the phone
+  with the server's rules (`WorkoutEntry`, a port of `quick_entry.parse_entry`),
+  saved on the device, and uploaded in order with a device-minted id and the time
+  they were logged, so a replay is a no-op and sets done offline still group into
+  the workout they belong to. Rating and location need the server.
+- Weather. The Entry page shows the conditions now at its top left; tapping them
+  shows feels-like (Open-Meteo's apparent temperature: wind chill and humidity),
+  wind and gusts ("windy" from 30 km/h sustained or 50 km/h gusts), and whether
+  the sun is up. Daily has the full card: now, sun times, hour by hour. The last
+  forecast is cached so it shows offline. With location permission, the Capture
+  tab takes a fix when shown and sends it to `POST /api/lifestyle/weather/location`,
+  so the forecast is for where the phone is.
+- Weather on entries. Save entry and Save food entry attach the fix if it is under
+  15 minutes old; Save never waits for GPS. The server's entry-weather sweep
+  (`backend/weather/entry.py`, woken by each save) looks the weather up for the
+  entry's own place and capture hour, so an entry saved offline still gets the
+  weather from when it was written. The Journal list shows it on server entries
+  (from the replica) and on this device's captures (read back after upload; meals
+  through `GET /api/food/<id>`).
+- Offline typed journal entries. On the phone, **Transcribe** and **Record**
+  add clips to the Capture tab's draft; stopping keeps the clip there, and
+  only **Save entry** turns the draft into one entry. Clips upload through the
+  recordings route under that entry's id, in recorded order, so the server
+  appends Transcribe clips' words after the typed text. Both modes retain the
+  original mono AAC file. The draft (text, links, clips, photos, files)
+  survives relaunch; a clip cut off by a kill is kept and marked interrupted.
+  The Watch still saves each recording as its own entry. Clip uploads use the
+  foreground session, not the background recording uploader.
+- Photos (camera or library) and arbitrary files attached to an entry,
+  staged into the same draft and uploaded after the entry is
+  created, each under its own client-minted attachment ID. Passed in
+  simulator for the library picker; the camera needs a device.
+- **Save food entry** (bottom left, beside **Save entry** on the right) files
+  the same draft in the food log instead: text, photos/videos and clips, under
+  client-minted meal and media IDs, with the capture time the server now keeps.
+  YouTube links stay in the composer for the next journal entry, and the
+  button is disabled while a non-media file is attached. Clips go through the
+  food recordings route, which transcribes each one into the meal's note.
+  Passed in simulator offline; uploading to a real server is untested.
+- Chat works like the desktop's: today's one conversation, the streamed reply
+  with its steps and reasoning, sources, Markdown, New chat / Clean slate, the
+  delegate's editable confirm cards (calendar, calories, food, recipe, recipe
+  link, flashcards), "flashcard this" drafts, the day's to-do bar (tick, rename,
+  dismiss, send to the permanent list), and photos. Typing and photos need the
+  server; a voice message doesn't: stopping the recording queues the clip
+  (with any typed words and staged photos) in the sync outbox, and the server
+  transcribes and answers it when it lands. A reply that outlives its stream is
+  picked up by polling, as on the desktop. Passed in simulator, offline and
+  against a local test server with a stand-in model; not yet verified on device.
+- Todo is the desktop Lifestyle tab's tasks card: up to four daily tasks (tick
+  for today, add, rename, reorder and delete under Edit) above the To-Do and
+  Archive lists, ordered and filtered as on the desktop (soonest due first,
+  then priority; a repeating to-do hides until it's near due). A to-do opens
+  in a form for title, notes, due date, repeat, priority and list; swipe to
+  archive or delete. The tab's red badge counts open To-Do items due today or
+  overdue (4am day; archived ones and daily tasks don't count). Every change
+  works offline: it shows at once and waits in a sync outbox, sent in order on
+  the next pass. A daily-task tick carries the 4am day it was made on, so one
+  sent after the rollover still counts for that day, and a daily task created
+  offline carries its own id, so a resend can't add it twice. A change the
+  server turns down (a fifth daily task, say) is dropped and said in the tab.
+  Passed in simulator offline (including the badge and a relaunch with
+  changes waiting); not yet run against a server or verified on device.
+- Offline YouTube links attached to a typed entry (any number per entry), with
+  preserved drafts and stable entry and per-link attachment IDs. Entry creation
+  precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Library / Study / Settings navigation on iPhone;
-  iPad also has Draw. Library opens directly to books, with title/tag search,
-  source/folder/tag filters, Unsorted, latest-chapter/recent/title sorting, and
-  Favorite/Continue-reading bookmark filters. Other saved material is grouped
-  under Study. Download controls remain in Settings → Library downloads.
-  Chapter readers create Favorite or Continue-reading bookmarks offline, and
+- Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
+  Study and Draw. More
+  holds Library and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
+  Library/Folders switch. Library mode has provider pills and sorts by the site's latest
+  chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,
+  and each pushes its books with a Back button. Both have title/tag search, tag and
+  Favorite/Continue-reading filters, and recent/title sorting. Other saved material is grouped
+  under Study. Download controls remain in More → Settings → Library downloads.
+  Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
+  continue bookmark, then this device's last read, then the server's, then chapter 1),
+  and the reader moves between chapters with Previous/Next. The reader's bottom-left menu has Text and
+  Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
+  is posted as `raw_content` and then linked, a recording links in its upload),
+  and Continue and Bookmark. User scrolling is logged as reading spans
+  (`ReadingSpans.swift`, a port of `src/lib/readingSpans.ts`), and opening a
+  chapter queues it as last read. Both go through `FicActivityStore`. Chapter
+  readers create Favorite or Continue-reading bookmarks offline, and
   saved bookmarks can be reopened or removed from a book. Bookmark changes sync
   with the desktop, using replay receipts and conflict checks. One pending
   Continue change per book is retained until it syncs or is resolved.
-  Paper previews remain readable on iPhone, while native drawing editing is iPad-only.
-- Study contains Documents, Paper previews, newspapers, and Knowledge.
+  Native drawing editing is iPad-only.
+- Study (iPad-only) contains Documents, Paper previews, newspapers, and Knowledge.
+  The iPhone has no Study tab, so none of these are reachable there.
   On iPad, downloaded PDFs and images
   open with Pencil-only annotation, finger pan/zoom, undo, page navigation, and
   per-page ink autosave. There is no Notebook/text editor. Originals remain

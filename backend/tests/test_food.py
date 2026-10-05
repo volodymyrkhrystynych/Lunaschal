@@ -373,3 +373,32 @@ def test_a_replayed_photo_upload_does_not_duplicate_the_media(client):
     entries = client.get('/api/food').get_json()
     assert len(entries) == 1
     assert [m['id'] for m in entries[0]['media']] == ['01ARZ3NDEKTSV4RRFFQ69G5FB2']
+
+
+def test_an_offline_meal_keeps_the_time_it_was_captured(client, monkeypatch):
+    """The phone may upload a meal hours after it was saved; the capture time it
+    sends, not the upload, says when it was eaten — and a replay keeps it."""
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
+    body = {'id': '01ARZ3NDEKTSV4RRFFQ69G5FB3', 'text': 'porridge',
+            'capturedAt': '2026-03-14T08:15:00-04:00'}
+    expected = datetime.fromisoformat(body['capturedAt']).timestamp()
+    for _ in range(2):
+        entry = client.post('/api/food', json=body).get_json()
+        assert datetime.fromisoformat(entry['createdAt']).timestamp() == expected
+
+
+@pytest.mark.parametrize('value', ['yesterday', '2026-03-14T08:15:00', 12345])
+def test_a_malformed_capture_time_is_refused_without_saving(client, value):
+    response = client.post('/api/food', json={'text': 'toast', 'capturedAt': value})
+    assert response.status_code == 400
+    assert client.get('/api/food').get_json() == []
+
+
+def test_photos_survive_a_capture_time_and_a_photo_still_wins(client, monkeypatch):
+    """A photo's own EXIF date still beats the device's capture time: the user
+    may attach a picture taken earlier than the moment they saved the meal."""
+    monkeypatch.setattr(food, 'parse_food_entry', lambda text, **kwargs: None)
+    body = _create(client, text='lunch', media=[(io.BytesIO(_exif_jpeg(gps=None)), 'meal.jpg')],
+                   capturedAt='2026-04-01T12:00:00+00:00').get_json()
+    expected = int(datetime(2026, 3, 14, 9, 30, 0).timestamp())
+    assert abs(datetime.fromisoformat(body['createdAt']).timestamp() - expected) < 2

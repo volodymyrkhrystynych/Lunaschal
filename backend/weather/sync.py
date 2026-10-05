@@ -74,14 +74,19 @@ def sync_day(db, day_key: str, lat: float, lon: float, source: str) -> list[dict
             """
             INSERT INTO lifestyle_weather_hours
                 (id, day_key, hour_ts, weather_code, temperature_c, wet_bulb_c,
-                 humidity_pct, is_actual, latitude, longitude, location_source,
+                 humidity_pct, apparent_c, wind_kmh, gust_kmh, is_day,
+                 is_actual, latitude, longitude, location_source,
                  created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(day_key, hour_ts) DO UPDATE SET
                 weather_code=excluded.weather_code,
                 temperature_c=excluded.temperature_c,
                 wet_bulb_c=excluded.wet_bulb_c,
                 humidity_pct=excluded.humidity_pct,
+                apparent_c=excluded.apparent_c,
+                wind_kmh=excluded.wind_kmh,
+                gust_kmh=excluded.gust_kmh,
+                is_day=excluded.is_day,
                 is_actual=excluded.is_actual,
                 latitude=excluded.latitude,
                 longitude=excluded.longitude,
@@ -90,7 +95,8 @@ def sync_day(db, day_key: str, lat: float, lon: float, source: str) -> list[dict
             """,
             (
                 str(ULID()), day_key, h['hour_ts'], h['weather_code'], h['temperature_c'],
-                h['wet_bulb_c'], h['humidity_pct'], is_actual, lat, lon, source,
+                h['wet_bulb_c'], h['humidity_pct'], h.get('apparent_c'), h.get('wind_kmh'),
+                h.get('gust_kmh'), h.get('is_day'), is_actual, lat, lon, source,
                 int(now), int(now),
             ),
         )

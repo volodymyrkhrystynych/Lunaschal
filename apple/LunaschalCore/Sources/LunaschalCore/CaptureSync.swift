@@ -34,7 +34,9 @@ public final class CaptureSync {
             let attempt = try transfers?.begin(capture.id, now: now())
             if transfers != nil && attempt == nil { continue }
             do {
-                try await transport.send(capture, audioURL: capture.attachmentID == nil ? nil : store.audioURL(capture))
+                try await transport.send(capture, audioURL: capture.attachmentID == nil ? nil : store.audioURL(capture),
+                                         files: capture.files.map(store.fileURL),
+                                         clips: capture.clips.map(store.clipURL))
                 if let attempt, try transfers?.isCurrent(attempt) != true { throw CancellationError() }
                 capture.state = .synced
                 capture.lastError = nil
@@ -61,7 +63,16 @@ public final class CaptureSync {
         }
         // Read back server titles and transcripts for this device's recent
         // captures. This is deliberately not historical library replication.
-        for var capture in try store.list().filter({ $0.state == .synced }).prefix(30) {
+        // A meal is not a journal entry, and asking the journal for it would
+        // read as "deleted on the server".
+        // A meal's weather arrives a moment after it is saved; ask until it has some.
+        for var capture in try store.list().filter({ $0.state == .synced && $0.kind == .food && $0.weather == nil }).prefix(30) {
+            try Task.checkCancellation()
+            guard let weather = try? await transport.foodWeather(capture.id) else { continue }
+            capture.weather = weather
+            try store.save(capture)
+        }
+        for var capture in try store.list().filter({ $0.state == .synced && $0.kind == .journal }).prefix(30) {
             try Task.checkCancellation()
             do {
                 capture.snapshot = try await transport.fetch(capture.id)

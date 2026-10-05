@@ -7,11 +7,13 @@ from ulid import ULID
 
 from backend.ai import jobs
 from backend.ai.food import parse_food_entry
+from backend.capture_time import optional_capture_time
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.food import storage
 from backend.food.exif import extract_photo_meta
 from backend.food.recipe_match import check_homemade_recipe_match
 from backend.geo import parse_coord
+from backend.weather import entry as entry_weather
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
 from backend.routes.cookbook import _insert_recipe
 from backend.tags import tag_counts, tags_json
@@ -482,6 +484,8 @@ def create_recording():
     )
     db.execute('UPDATE food_entries SET updated_at=? WHERE id=?', (now, entry_id))
     db.commit()
+    # A clip can open the meal before its create lands; either way it needs weather.
+    entry_weather.nudge()
     _transcribe_media_bg(media_id, entry_id, str(res[1]))
 
     row = db.execute(
@@ -531,6 +535,7 @@ def journal_entries():
             'notes': r['notes'],
             'latitude': r['latitude'],
             'longitude': r['longitude'],
+            'weather': r['weather'],
             'createdAt': _iso(r['created_at']),
             'recipe': _linked_recipe(db, r['recipe_id']),
             'media': _entry_media(db, r['id']),
@@ -585,6 +590,13 @@ def create_entry():
     if not text and not files and not dish and not notes and pending_clips <= 0:
         return jsonify({'error': 'provide text, media, or details'}), 400
 
+    # A meal saved offline on the phone is uploaded whenever it next can be,
+    # so its own capture time — not this request's — says when it was eaten.
+    try:
+        captured_at = optional_capture_time(form)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
     now = int(time.time())
     # Client-supplied ULID so a meal captured offline replays idempotently —
     # and, unlike the text-only features, so its photos can be uploaded under
@@ -595,7 +607,7 @@ def create_entry():
         'INSERT OR IGNORE INTO food_entries(id, raw_content, dish, place, notes, rating, tags, '
         'latitude, longitude, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         (entry_id, text or None, dish, place, notes, rating, tags_json(tags) if tags else None,
-         latitude, longitude, now, now),
+         latitude, longitude, captured_at if captured_at is not None else now, now),
     )
     if cur.rowcount == 0 and text:
         # A clip from the same capture can get here first — the meal's id is
@@ -634,6 +646,7 @@ def create_entry():
         build_update(db, 'food_entries', overrides, 'id=?', (entry_id,))
 
     db.commit()
+    entry_weather.nudge()
 
     # Structure the raw note in the background (fills empty fields, extracts a
     # recipe, and checks for a homemade/existing-recipe match). No-op when AI

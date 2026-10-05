@@ -1,31 +1,46 @@
 import SwiftUI
 import AVFoundation
+import PhotosUI
+import UniformTypeIdentifiers
 import LunaschalCore
 
 struct CaptureRoot: View {
     @ObservedObject var model: CaptureModel
+    @StateObject private var chat: ChatModel
+    @StateObject private var todo: TodoModel
     @Environment(\.scenePhase) private var scenePhase
+
+    init(model: CaptureModel) {
+        self.model = model
+        _chat = StateObject(wrappedValue: ChatModel(capture: model))
+        _todo = StateObject(wrappedValue: TodoModel(capture: model))
+    }
 
     var body: some View {
         TabView {
-            NavigationStack { CaptureComposer(model: model, recorder: model.recorder) }
+            NavigationStack { CaptureTab(model: model) }
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }
             NavigationStack { CaptureList(model: model) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }
-            NavigationStack { LibraryView(model: model) }
-                .tabItem { Label("Library", systemImage: "books.vertical") }
-            NavigationStack { StudyLibraryView(model: model) }
-                .tabItem { Label("Study", systemImage: "doc.text") }
+            NavigationStack { ChatView(chat: chat, capture: model) }
+                .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
+            NavigationStack { TodoView(todo: todo) }
+                .tabItem { Label("Todo", systemImage: "checklist") }
+                // Red, like a notification: to-dos due today or overdue.
+                .badge(todo.dueCount)
             if UIDevice.current.userInterfaceIdiom == .pad {
+                NavigationStack { StudyLibraryView(model: model) }
+                    .tabItem { Label("Study", systemImage: "doc.text") }
                 NavigationStack { DrawingLibraryView(model: model) }
                     .tabItem { Label("Draw", systemImage: "pencil.tip") }
             }
-            NavigationStack { ConnectionSettings(model: model) }
-                .tabItem { Label("Settings", systemImage: "gear") }
+            NavigationStack { MoreMenu(model: model) }
+                .tabItem { Label("More", systemImage: "line.3.horizontal") }
         }
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
+        .onChange(of: model.syncPasses) { _, _ in Task { await todo.refresh() } }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
             while !Task.isCancelled {
@@ -36,60 +51,348 @@ struct CaptureRoot: View {
     }
 }
 
+/// The Capture tab: a switch in place of its title between the entry
+/// composer, which it opens on, and the Daily log.
+private struct CaptureTab: View {
+    enum Page: String, CaseIterable, Identifiable {
+        case entry = "Entry", daily = "Daily", workout = "Workout"
+        var id: Self { self }
+    }
+
+    @ObservedObject var model: CaptureModel
+    @State private var page = Page.entry
+
+    var body: some View {
+        // All three stay built and only the chosen one shows: building a page
+        // at the moment of the tap stalled the switch's slide into a snap.
+        ZStack {
+            KeptPage(shown: page == .entry) { CaptureComposer(model: model, recorder: model.recorder) }
+            KeptPage(shown: page == .daily) { DailyView(model: model) }
+            KeptPage(shown: page == .workout) { WorkoutView(model: model) }
+        }
+        .ignoresSafeArea()
+        // The pages stay built, so their own onAppear no longer marks opening one.
+        .onChange(of: page) { _, page in if page != .entry { model.requestSync() } }
+        // Still titled for VoiceOver and the back button; the switch is what shows.
+        .navigationTitle("Capture")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.location.refresh() }
+        .toolbar {
+            // On every page, so the switch beside it never shifts.
+            ToolbarItem(placement: .topBarLeading) { CurrentWeatherButton(weather: model.weather) }
+            ToolbarItem(placement: .principal) {
+                Picker("Capture page", selection: $page) {
+                    ForEach(Page.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .fixedSize()
+            }
+        }
+    }
+}
+
+/// A page that stays built while another is showing. A hidden page is taken
+/// out of the window rather than made transparent: SwiftUI's opacity, and even
+/// UIKit's `isHidden`, leave its rows readable to VoiceOver. Its controller,
+/// and so its state, lives on, and putting it back is cheap.
+private struct KeptPage<Content: View>: UIViewControllerRepresentable {
+    let shown: Bool
+    @ViewBuilder let content: Content
+
+    final class Container: UIViewController {
+        let host: UIHostingController<Content>
+        init(_ content: Content) {
+            host = UIHostingController(rootView: content)
+            super.init(nibName: nil, bundle: nil)
+            addChild(host)
+            host.didMove(toParent: self)
+        }
+        required init?(coder: NSCoder) { fatalError("not used") }
+
+        func show(_ shown: Bool) {
+            view.isUserInteractionEnabled = shown
+            if shown, host.view.superview == nil {
+                host.view.frame = view.bounds
+                host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                host.view.backgroundColor = .clear
+                view.addSubview(host.view)
+            } else if !shown, host.view.superview != nil {
+                host.view.removeFromSuperview()
+            }
+        }
+    }
+
+    func makeUIViewController(context: Context) -> Container {
+        let container = Container(content)
+        container.view.backgroundColor = .clear
+        return container
+    }
+
+    func updateUIViewController(_ container: Container, context: Context) {
+        container.host.rootView = content
+        container.show(shown)
+    }
+}
+
 private struct CaptureComposer: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var recorder: Recorder
-    // Preserve an unfinished typed draft across app termination as well.
+    // Preserve an unfinished draft across app termination: text and links
+    // here, recordings, photos and files in the capture store's draft.
     @AppStorage("journalDraft") private var text = ""
+    @AppStorage("youtubeDraftLinks") private var draftLinks = ""
     @AppStorage("youtubeDraftURL") private var youtubeURL = ""
-    @AppStorage("youtubeDraftCommentary") private var commentary = ""
     @State private var saved = false
+    @State private var showCamera = false
+    @State private var showFiles = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @FocusState private var typing: Bool
+
+    private var links: [String] { draftLinks.split(separator: "\n").map(String.init) }
+    private var typedURL: String { youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var canSave: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !links.isEmpty || !model.draft.isEmpty || !typedURL.isEmpty
+    }
+    /// A meal needs words, a photo or a clip; YouTube links stay behind for
+    /// the next journal entry, and a non-media file cannot go to the food log.
+    private var canSaveFood: Bool {
+        (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.draft.isEmpty)
+            && model.draft.files.allSatisfy(\.isFoodMedia)
+    }
 
     var body: some View {
         Form {
-            Section("Write") {
+            Section {
                 TextEditor(text: $text).frame(minHeight: 160).accessibilityLabel("Journal text")
-                Button("Save entry") {
-                    if model.saveText(text) { text = ""; saved = true }
-                }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .focused($typing)
+                actions
                 if saved { Text("Saved on this device").foregroundStyle(.secondary) }
             }
-            Section {
-                if recorder.activeID != nil {
-                    Label("Recording…", systemImage: "waveform").foregroundStyle(.red)
-                    Button("Stop and save", role: .destructive) { recorder.stop() }
-                } else {
-                    Button { Task { await recorder.start(mode: .transcribe) } } label: {
-                        Label("Transcribe", systemImage: "mic")
-                    }.disabled(recorder.isStarting)
-                    Button { Task { await recorder.start(mode: .record) } } label: {
-                        Label("Record", systemImage: "record.circle")
-                    }.disabled(recorder.isStarting)
-                    if recorder.isStarting { ProgressView("Starting microphone…") }
+            if !model.draft.isEmpty {
+                Section("Attachments") {
+                    ForEach(model.draft.clips) { clip in
+                        ClipRow(clip: clip, url: try? model.store.clipURL(clip),
+                                recording: recorder.activeID == clip.attachmentID)
+                    }
+                    .onDelete { offsets in offsets.map { model.draft.clips[$0] }.forEach(model.discard) }
+                    ForEach(model.draft.files) { file in StagedFileRow(model: model, file: file) }
+                        .onDelete { offsets in offsets.map { model.draft.files[$0] }.forEach(model.discard) }
                 }
-            } header: { Text("Speak") } footer: {
-                Text("Stopping saves a separate journal entry with the original audio. Transcribe also asks the server to add the words when connected.")
             }
-            Section {
-                Text(model.signedIn
-                     ? (model.backgroundSyncEnabled ? "Captures sync while open and when iOS grants background time." : "Captures sync while the app is open.")
-                     : "Capture works offline. Sign in under Settings to sync.")
-                    .foregroundStyle(.secondary)
-                if let message = model.syncMessage { Text(message).font(.footnote).foregroundStyle(.secondary) }
-            }
-            Section {
-                TextField("YouTube video URL", text: $youtubeURL)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                TextField("Your thoughts (optional)", text: $commentary, axis: .vertical)
-                Button("Save link and thoughts") {
-                    if model.saveLink(youtubeURL, commentary: commentary) { youtubeURL = ""; commentary = ""; saved = true }
-                }.disabled(youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            } header: { Text("YouTube") } footer: {
-                Text("The link and your thoughts are saved offline. The server imports the video when connected; archive playback stays on the server.")
+            Section("YouTube") {
+                ForEach(links, id: \.self) { link in
+                    Label(link, systemImage: "play.rectangle").lineLimit(1).truncationMode(.middle)
+                }
+                .onDelete { offsets in
+                    var kept = links
+                    kept.remove(atOffsets: offsets)
+                    draftLinks = kept.joined(separator: "\n")
+                }
+                HStack {
+                    TextField("YouTube video URL", text: $youtubeURL)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        .focused($typing)
+                        .onSubmit { _ = addTypedLink() }
+                    Button("Add link") { _ = addTypedLink() }.disabled(typedURL.isEmpty)
+                }
             }
         }
-        .navigationTitle("Capture")
+        // Pinned rather than inside a section, so it stays in the same place
+        // however far the form has scrolled.
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                // Glass rather than a plain tint: the form scrolls under this
+                // bar, and an unblurred button prints the rows through itself.
+                Button { saveFood() } label: { Label("Save food entry", systemImage: "fork.knife") }
+                    .buttonStyle(.glass)
+                    .disabled(!canSaveFood)
+                    .accessibilityHint(model.draft.files.allSatisfy(\.isFoodMedia) ? ""
+                        : "Food entries hold photos, videos and recordings only.")
+                Spacer()
+                Button { save() } label: { Label("Save entry", systemImage: "checkmark") }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave)
+            }
+            .controlSize(.large)
+            .padding()
+        }
         .onChange(of: text) { _, value in if !value.isEmpty { saved = false } }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { image in
+                guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg") }
+                saved = false
+            }.ignoresSafeArea()
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            for url in urls {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                model.stage { try $0.stageFile(from: url, name: url.lastPathComponent, contentType: type) }
+                saved = false
+            }
+        }
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            Task { for item in items { await stagePhoto(item) } }
+        }
+    }
+
+    /// One line of icon buttons: the two microphone modes, then the three ways
+    /// to attach something. While recording, the line becomes the Stop button,
+    /// which keeps the clip in the draft rather than saving an entry.
+    @ViewBuilder private var actions: some View {
+        if recorder.activeID != nil {
+            Button(role: .destructive) { recorder.stop() } label: {
+                Label("Stop recording", systemImage: "stop.circle.fill")
+            }
+        } else {
+            HStack {
+                Button { saved = false; Task { await recorder.startClip(transcribe: true) } } label: {
+                    Label("Transcribe", systemImage: "mic")
+                }.disabled(recorder.isStarting)
+                Spacer()
+                Button { saved = false; Task { await recorder.startClip(transcribe: false) } } label: {
+                    Label("Record", systemImage: "record.circle")
+                }.disabled(recorder.isStarting)
+                Spacer()
+                Button { typing = false; showCamera = true } label: {
+                    Label("Take photo", systemImage: "camera")
+                }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                Spacer()
+                PhotosPicker(selection: $photoItems, matching: .images) {
+                    Label("Choose photo", systemImage: "photo.on.rectangle")
+                }
+                Spacer()
+                Button { typing = false; showFiles = true } label: {
+                    Label("Attach file", systemImage: "paperclip")
+                }
+            }
+            .labelStyle(.iconOnly).font(.title2)
+            // Without this a tap anywhere on the row fires every button in it.
+            .buttonStyle(.borderless)
+            .overlay { if recorder.isStarting { ProgressView() } }
+        }
+    }
+
+    private func stagePhoto(_ item: PhotosPickerItem) async {
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else { return }
+            let type = item.supportedContentTypes.first { $0.conforms(to: .image) }
+            model.stage { try $0.stageFile(data: data, name: photoName(type?.preferredFilenameExtension ?? "jpg"),
+                                           contentType: type?.preferredMIMEType) }
+            saved = false
+        } catch { model.message = error.localizedDescription }
+    }
+
+    private func photoName(_ ext: String) -> String {
+        "Photo \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext)"
+    }
+
+    /// Validates the typed URL and moves it into the entry's link list.
+    private func addTypedLink() -> Bool {
+        guard !typedURL.isEmpty else { return true }
+        do {
+            let link = try YouTubeLink.canonical(typedURL)
+            if !links.contains(link) { draftLinks = (links + [link]).joined(separator: "\n") }
+            youtubeURL = ""
+            saved = false
+            return true
+        } catch { model.message = error.localizedDescription; return false }
+    }
+
+    private func save() {
+        // A URL typed but not yet added still belongs to this entry.
+        guard addTypedLink() else { return }
+        if model.saveEntry(text, youtubeURLs: links) {
+            text = ""; draftLinks = ""; saved = true; typing = false
+        }
+    }
+
+    private func saveFood() {
+        // Links and a half-typed URL are left where they are, for the next entry.
+        if model.saveEntry(text, youtubeURLs: [], kind: .food) {
+            text = ""; saved = true; typing = false
+        }
+    }
+}
+
+private struct ClipRow: View {
+    let clip: CaptureClip
+    let url: URL?
+    let recording: Bool
+
+    var body: some View {
+        HStack {
+            Image(systemName: clip.transcribe ? "mic" : "record.circle").frame(width: 44, height: 44)
+            VStack(alignment: .leading) {
+                Text(clip.transcribe ? "Transcription" : "Recording")
+                Text(detail).font(.caption).foregroundStyle(clip.state == .interrupted ? .orange : .secondary)
+            }
+        }
+        .foregroundStyle(recording ? .red : .primary)
+    }
+
+    private var detail: String {
+        if recording { return "Recording…" }
+        let time = clip.createdAt.formatted(date: .omitted, time: .shortened)
+        let length = url.flatMap { try? AVAudioPlayer(contentsOf: $0).duration }.flatMap { seconds in
+            seconds > 0 ? Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond)) : nil
+        }
+        let base = [time, length].compactMap { $0 }.joined(separator: " · ")
+        return clip.state == .interrupted ? base + " · Interrupted — check before saving" : base
+    }
+}
+
+private struct StagedFileRow: View {
+    @ObservedObject var model: CaptureModel
+    let file: CaptureFile
+
+    var body: some View {
+        HStack {
+            if file.isImage, let url = try? model.store.fileURL(file), let image = UIImage(contentsOfFile: url.path) {
+                Image(uiImage: image).resizable().scaledToFill()
+                    .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Image(systemName: "doc").frame(width: 44, height: 44)
+            }
+            Text(file.name).lineLimit(1).truncationMode(.middle)
+        }
+    }
+}
+
+/// The system camera. iOS has no SwiftUI camera, so this wraps UIKit's.
+struct CameraPicker: UIViewControllerRepresentable {
+    var front = false
+    let onImage: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        if front && UIImagePickerController.isCameraDeviceAvailable(.front) { picker.cameraDevice = .front }
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraPicker
+        init(_ parent: CameraPicker) { self.parent = parent }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage { parent.onImage(image) }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
     }
 }
 
@@ -120,10 +423,14 @@ private struct CaptureList: View {
                         CaptureDetail(model: model, id: capture.id)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(capture.snapshot?.title ?? (capture.text.isEmpty ? "Recording" : capture.text))
+                            Text(capture.snapshot?.title ?? (capture.text.isEmpty ? (capture.files.first?.name ?? "Recording") : capture.text))
                                 .lineLimit(2)
+                            if capture.kind == .food {
+                                Label("Food log", systemImage: "fork.knife").font(.caption)
+                            }
                             Text(capture.createdAt, format: .dateTime.month().day().hour().minute())
                                 .font(.caption).foregroundStyle(.secondary)
+                            EntryWeatherText(weather: capture.entryWeather)
                             Text(status(capture)).font(.caption)
                         }
                     }
@@ -135,6 +442,7 @@ private struct CaptureList: View {
                         VStack(alignment: .leading) {
                             Text(record.title).lineLimit(2)
                             Text(record.data?["createdAt"]?.string ?? "").font(.caption).foregroundStyle(.secondary)
+                            EntryWeatherText(weather: EntryWeather.parse(record.data?["weather"]?.string))
                         }
                     }
                 }
@@ -177,6 +485,7 @@ private struct CaptureDetail: View {
         if let capture = model.captures.first(where: { $0.id == id }) {
             List {
                 Section {
+                    if capture.kind == .food { Label("Food log entry", systemImage: "fork.knife") }
                     Text(capture.createdAt, format: .dateTime)
                     Text(status(capture))
                     if let error = capture.lastError { Text(error).foregroundStyle(.orange) }
@@ -193,8 +502,24 @@ private struct CaptureDetail: View {
                 if let transcript = capture.recordingTranscript?.transcript, !transcript.isEmpty {
                     Section("Recording transcript") { Text(transcript).textSelection(.enabled) }
                 }
-                if let link = capture.youtubeURL, let url = URL(string: link) {
-                    Section("Saved YouTube link") { Link(link, destination: url) }
+                ForEach(capture.clips) { clip in
+                    if let url = try? model.store.clipURL(clip) {
+                        Section(clip.transcribe ? "Transcription audio" : "Recording") {
+                            AudioPreview(url: url, recordingActive: model.recorder.activeID != nil)
+                        }
+                    }
+                }
+                if !capture.files.isEmpty {
+                    Section("Attachments") {
+                        ForEach(capture.files) { file in StagedFileRow(model: model, file: file) }
+                    }
+                }
+                if !capture.links.isEmpty {
+                    Section(capture.links.count == 1 ? "Saved YouTube link" : "Saved YouTube links") {
+                        ForEach(capture.links, id: \.attachmentID) { link in
+                            if let url = URL(string: link.url) { Link(link.url, destination: url) }
+                        }
+                    }
                 }
                 if capture.attachmentID != nil, capture.state != .recording,
                    let url = try? model.store.audioURL(capture) {
@@ -213,7 +538,7 @@ private struct CaptureDetail: View {
                     }
                 }
             }
-            .navigationTitle(capture.snapshot?.title ?? "Capture")
+            .navigationTitle(capture.snapshot?.title ?? (capture.kind == .food ? "Meal" : "Capture"))
             .navigationBarTitleDisplayMode(.inline)
         }
     }
@@ -239,6 +564,24 @@ private struct AudioPreview: View {
         Button("Stop playback") { player?.stop(); player = nil }
         if let error { Text(error).foregroundStyle(.orange) }
         Color.clear.frame(height: 0).onDisappear { player?.stop() }
+    }
+}
+
+// The last tab: everything that doesn't earn a slot of its own. The iPhone
+// shows five tabs before iOS adds its own More overflow, so this owns that slot.
+private struct MoreMenu: View {
+    @ObservedObject var model: CaptureModel
+
+    var body: some View {
+        List {
+            NavigationLink { LibraryView(model: model) } label: {
+                Label("Library", systemImage: "books.vertical")
+            }.accessibilityIdentifier("more-Library")
+            NavigationLink { ConnectionSettings(model: model) } label: {
+                Label("Settings", systemImage: "gear")
+            }.accessibilityIdentifier("more-Settings")
+        }
+        .navigationTitle("More")
     }
 }
 

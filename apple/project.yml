@@ -43,6 +43,8 @@ targets:
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         NSMicrophoneUsageDescription: Record thoughts and save the original audio in your journal.
+        NSCameraUsageDescription: Take photos to attach to your journal entries.
+        NSLocationWhenInUseUsageDescription: Record where a journal or food entry was written, and show the weather there.
         NSLocalNetworkUsageDescription: Connect to your personal Lunaschal server.
         UIBackgroundModes: [audio, processing]
         BGTaskSchedulerPermittedIdentifiers: [com.lunaschal.mobile.sync]

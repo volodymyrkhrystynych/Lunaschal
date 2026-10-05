@@ -20,13 +20,22 @@ FETCH_TIMEOUT = 15
 # hours from Open-Meteo's *previous* calendar date, and at 23:59 it still
 # needs hours from the *next* one. sync.py filters this down to the requested
 # day_key's own [start, end) window.
-HOURLY_VARS = 'temperature_2m,relative_humidity_2m,weather_code,wet_bulb_temperature_2m'
+HOURLY_VARS = ('temperature_2m,relative_humidity_2m,weather_code,wet_bulb_temperature_2m,'
+               'apparent_temperature,wind_speed_10m,wind_gusts_10m,is_day')
+
+# Open-Meteo's forecast endpoint serves at most this many past days; an entry
+# captured earlier than that would need the separate archive API.
+MAX_PAST_DAYS = 92
 
 
-def fetch_hourly(lat: float, lon: float) -> list[dict]:
+def fetch_hourly(lat: float, lon: float, past_days: int = 1) -> list[dict]:
     """Hourly readings around today, oldest first.
 
-    Each item: {hour_ts, weather_code, temperature_c, wet_bulb_c, humidity_pct}.
+    Each item: {hour_ts, weather_code, temperature_c, wet_bulb_c, humidity_pct,
+    apparent_c, wind_kmh, gust_kmh, is_day}. `apparent_c` is Open-Meteo's
+    feels-like temperature, which folds in wind chill and humidity. `past_days`
+    reaches further back for a capture that was uploaded late.
+
     `hour_ts` is a unix second timestamp for the start of that local hour —
     Open-Meteo returns naive local time strings (`timezone=auto` resolves the
     offset from the coordinates), parsed with the same "one user, one
@@ -42,8 +51,9 @@ def fetch_hourly(lat: float, lon: float) -> list[dict]:
             'longitude': lon,
             'hourly': HOURLY_VARS,
             'temperature_unit': 'celsius',
+            'wind_speed_unit': 'kmh',
             'timezone': 'auto',
-            'past_days': 1,
+            'past_days': max(1, min(past_days, MAX_PAST_DAYS)),
             'forecast_days': 2,
         },
         timeout=FETCH_TIMEOUT,
@@ -56,7 +66,14 @@ def fetch_hourly(lat: float, lon: float) -> list[dict]:
     temps = hourly['temperature_2m']
     humidity = hourly['relative_humidity_2m']
     codes = hourly['weather_code']
-    wet_bulb = hourly.get('wet_bulb_temperature_2m') or [None] * len(times)
+    def optional(name):
+        return hourly.get(name) or [None] * len(times)
+
+    wet_bulb = optional('wet_bulb_temperature_2m')
+    apparent = optional('apparent_temperature')
+    wind = optional('wind_speed_10m')
+    gusts = optional('wind_gusts_10m')
+    is_day = optional('is_day')
 
     out = []
     for i, t in enumerate(times):
@@ -66,6 +83,10 @@ def fetch_hourly(lat: float, lon: float) -> list[dict]:
             'temperature_c': temps[i],
             'wet_bulb_c': wet_bulb[i],
             'humidity_pct': humidity[i],
+            'apparent_c': apparent[i],
+            'wind_kmh': wind[i],
+            'gust_kmh': gusts[i],
+            'is_day': is_day[i],
         })
     return out
 

@@ -26,6 +26,64 @@ final class BookLibraryTests: XCTestCase {
             data: ["id": .string(id), "ficId": .string(book.id), "title": .string("Chapter")])
     }
 
+    private func chapter(_ book: SyncChange, position: Int) -> SyncChange {
+        let id = ULID.make()
+        return SyncChange(revision: 100 + Int64(position), collection: "fic_chapters", id: id, deleted: false,
+            data: ["id": .string(id), "ficId": .string(book.id), "title": .string("Chapter \(position)"),
+                   "position": .number(Double(position))])
+    }
+
+    private func revised(_ record: SyncChange, _ changes: [String: JSONValue]) -> SyncChange {
+        SyncChange(revision: record.revision + 1000, collection: record.collection, id: record.id, deleted: false,
+                   data: (record.data ?? [:]).merging(changes) { $1 })
+    }
+
+    func testResumePointFollowsTheDesktopsOrder() throws {
+        let (store, _) = try store()
+        let book = book(1)
+        let first = chapter(book, position: 0), second = chapter(book, position: 1), third = chapter(book, position: 2)
+        try apply([book, third, second, first], to: store)
+        // Nothing read anywhere: the first chapter, by position not arrival.
+        XCTAssertEqual(try store.resumePoint(bookID: book.id)?.chapter.id, first.id)
+        // The server's last-read chapter beats the first.
+        try apply([revised(book, ["lastReadChapterId": .string(second.id)])], to: store, bootstrap: false)
+        XCTAssertEqual(try store.resumePoint(bookID: book.id)?.chapter.id, second.id)
+        // This device's own reading beats the server's.
+        try store.saveReadingPosition(collection: "fic_chapters", id: third.id, version: "v", offset: 2, bookID: book.id)
+        XCTAssertEqual(try store.resumePoint(bookID: book.id)?.chapter.id, third.id)
+        XCTAssertNil(try store.resumePoint(bookID: book.id)?.fraction)
+        // A continue bookmark beats both, at its position, while still pending.
+        try store.queueBookmark(chapter: first, type: "continue", fraction: 0.4)
+        let resume = try XCTUnwrap(store.resumePoint(bookID: book.id))
+        XCTAssertEqual(resume.chapter.id, first.id)
+        XCTAssertEqual(resume.fraction, 0.4)
+    }
+
+    func testResumePointIsNilWithoutChapterText() throws {
+        let (store, _) = try store()
+        let pdf = book(1)
+        try apply([pdf], to: store)
+        XCTAssertNil(try store.resumePoint(bookID: pdf.id))
+    }
+
+    func testFolderCountsIncludeUnsorted() throws {
+        let (store, _) = try store()
+        try apply([book(1), book(2), book(3, filed: false)], to: store)
+        XCTAssertEqual(try store.folderCounts(), [folder: 2, "unsorted": 1])
+    }
+
+    func testAProviderShowsItsBooksByLatestSiteActivity() throws {
+        let (store, _) = try store()
+        let older = book(1), newer = book(9)
+        let ao3 = revised(book(5), ["site": .string("ao3")])
+        try apply([older, ao3, newer], to: store)
+        var filter = BookFilter()
+        filter.source = "forums.spacebattles.com"
+        XCTAssertEqual(try store.books(filter: filter).records.map(\.id), [newer.id, older.id])
+        filter.source = "ao3"
+        XCTAssertEqual(try store.books(filter: filter).records.map(\.id), [ao3.id])
+    }
+
     private func apply(_ changes: [SyncChange], to store: ReplicaStore, bootstrap: Bool = true) throws {
         try store.apply(SyncPage(protocolVersion: 1, epoch: epoch, mode: bootstrap ? "bootstrap" : "delta",
             changes: changes, hasMore: false, cursor: ULID.make(),

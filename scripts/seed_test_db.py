@@ -165,6 +165,18 @@ def wipe_scratch() -> None:
         shortcuts_path.unlink()
 
 
+def entry_weather(when: int, lat: float, lon: float, *, temperature: float, code: int,
+                  apparent: float, wind: float, gust: float) -> str:
+    """The snapshot backend/weather/entry.py stores on an entry, as JSON."""
+    from backend.weather.entry import is_windy
+    hour = when - when % 3600
+    return json.dumps({
+        'hourTs': hour, 'weatherCode': code, 'temperatureC': temperature, 'apparentC': apparent,
+        'humidityPct': 70.0, 'windKmh': wind, 'gustKmh': gust, 'windy': is_windy(wind, gust),
+        'isDay': 7 <= time.localtime(hour).tm_hour < 19, 'latitude': lat, 'longitude': lon,
+    })
+
+
 def seed_journal(db):
     from backend.journal.storage import attachment_dir, attachment_path
 
@@ -176,14 +188,22 @@ def seed_journal(db):
         (new_id(), 'Long walk', 'Took the long way home along the river. Cold enough to see my breath, which always makes a walk feel like an event rather than a chore.', ['journal', 'outside'], 3, (43.6512, -79.3670)),
         (new_id(), '', 'Quick note: need to call the dentist back about rescheduling. Also finally fixed the squeaky drawer in the kitchen.', ['journal'], 1, (43.6629, -79.3957)),
     ]
-    for entry_id, title, content, tags, days_ago, coords in entries:
+    # Every entry has weather: an unlocated one gets the weather card's location.
+    # The walk is the windy, feels-colder-than-it-is one.
+    weathers = [
+        dict(temperature=11.0, code=1, apparent=9.5, wind=8.0, gust=15.0),
+        dict(temperature=3.0, code=3, apparent=-2.5, wind=34.0, gust=58.0),
+        dict(temperature=17.0, code=61, apparent=16.0, wind=12.0, gust=20.0),
+    ]
+    for (entry_id, title, content, tags, days_ago, coords), weather in zip(entries, weathers):
         latitude, longitude = coords if coords else (None, None)
         db.execute(
             'INSERT INTO journal_entries (id, content, raw_content, title, tags,'
-            ' latitude, longitude, created_at, updated_at) '
-            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (entry_id, content, content, title, tags_json(tags),
-             latitude, longitude, ts(days_ago), ts(days_ago)),
+            ' latitude, longitude, weather, created_at, updated_at) '
+            'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (entry_id, content, content, title, tags_json(tags), latitude, longitude,
+             entry_weather(ts(days_ago), *(coords or (43.6532, -79.3832)), **weather),
+             ts(days_ago), ts(days_ago)),
         )
 
     # One image attachment on the oldest entry.
@@ -493,8 +513,11 @@ def seed_food(db, recipe_id):
         entry_ids.append(entry_id)
         db.execute(
             'INSERT INTO food_entries (id, dish, place, rating, recipe_id, latitude, longitude, '
-            'created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            (entry_id, dish, place, rating, rid, 43.6532, -79.3832, when, when),
+            'weather, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (entry_id, dish, place, rating, rid, 43.6532, -79.3832,
+             entry_weather(when, 43.6532, -79.3832, temperature=14.0, code=2, apparent=13.0,
+                           wind=10.0, gust=18.0),
+             when, when),
         )
 
     media_id = new_id()
@@ -1375,11 +1398,15 @@ def _seed_weather(db):
             temperature = 12.0 + 6.0 * (1 - abs(hour - 14) / 14)
             db.execute(
                 'INSERT INTO lifestyle_weather_hours (id, day_key, hour_ts, weather_code, '
-                'temperature_c, wet_bulb_c, humidity_pct, is_actual, latitude, longitude, '
-                'location_source, created_at, updated_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'temperature_c, wet_bulb_c, humidity_pct, apparent_c, wind_kmh, gust_kmh, is_day, '
+                'is_actual, latitude, longitude, location_source, created_at, updated_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (new_id(), day_key, midnight + hour * 3600, 1 if hour < 15 else 3,
                  round(temperature, 1), round(temperature - 3.5, 1), 62.0,
+                 # Windy through the afternoon, so the card shows what wind looks like.
+                 round(temperature - (4.0 if 12 <= hour < 18 else 1.0), 1),
+                 32.0 if 12 <= hour < 18 else 9.0, 55.0 if 12 <= hour < 18 else 16.0,
+                 1 if 7 <= hour < 20 else 0,
                  1 if days_ago else 0, lat, lon, 'settings', ts(days_ago), ts(days_ago)),
             )
 

@@ -5,7 +5,7 @@ import CSQLite
 
 final class JournalSearchTests: XCTestCase {
     func testCaptureSearchIncludesOriginalsLinksAndTranscriptsWithoutChangingCapture() throws {
-        var capture = Capture(text: "Kyiv river walk", youtubeURL: "https://www.youtube.com/watch?v=aircAruvnKk")
+        var capture = Capture(text: "Kyiv river walk", youtubeURLs: ["https://www.youtube.com/watch?v=aircAruvnKk"])
         let payload: [String: Any] = ["id": capture.id, "content": "Polished prose", "title": "Evening",
                                     "rawContent": "Unpolished dictation", "attachments": [["id": ULID.make(), "transcript": "Київ recording"]]]
         capture.snapshot = try JSONDecoder().decode(JournalSnapshot.self, from: JSONSerialization.data(withJSONObject: payload))

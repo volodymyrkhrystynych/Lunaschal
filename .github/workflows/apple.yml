@@ -21,7 +21,8 @@ jobs:
       - run: swift test --package-path apple/LunaschalCore
   ios:
     runs-on: macos-26
-    timeout-minutes: 25
+    # Setup ~4 min, iPhone UI tests 6-16 min, iPad 5-8 min: 25 cut the iPad step off.
+    timeout-minutes: 40
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:

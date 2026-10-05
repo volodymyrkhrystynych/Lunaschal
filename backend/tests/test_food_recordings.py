@@ -11,6 +11,7 @@ the meal's raw note in the order the clips were spoken, once per clip, with the
 structuring pass reading the whole thing.
 """
 import io
+from datetime import datetime
 
 import pytest
 from ulid import ULID
@@ -326,3 +327,43 @@ def test_a_replayed_create_still_leaves_a_real_meal_alone(client):
 
     entry = client.get(f'/api/food/{entry_id}').get_json()
     assert entry['rawContent'] == 'The real one'
+
+
+def test_the_phones_save_food_entry_lands_once_with_its_time_photos_and_clip(client, monkeypatch):
+    """The native app's Save food entry, request for request: one multipart
+    create carrying the meal, its capture time, its photos under their own ids
+    and the number of clips to come, then each clip under the meal's id — and
+    then all of it again, as a retry after a lost response sends it."""
+    _run_pending_bg(monkeypatch)
+    entry_id, photo_ids, clip_id = str(ULID()), [str(ULID()), str(ULID())], str(ULID())
+
+    def create():
+        return client.post('/api/food', data={
+            'id': entry_id, 'text': 'Ramen',
+            'capturedAt': '2026-09-21T18:30:00Z',
+            'pendingClips': '1', 'mediaIds': '["%s","%s"]' % tuple(photo_ids),
+            'media': [(io.BytesIO(b'\xff\xd8\xffone'), 'Bowl.jpg', 'image/jpeg'),
+                      (io.BytesIO(b'\xff\xd8\xfftwo'), 'Side.jpg', 'image/jpeg')],
+        }, content_type='multipart/form-data')
+
+    def clip():
+        return _clip(client, entry_id, clip_id, position=2,
+                     filename='recording.m4a', mime='audio/mp4')
+
+    for _ in range(2):
+        meal = create()
+        assert meal.status_code == 201
+        body = meal.get_json()
+        assert body['id'] == entry_id
+        assert {m['id'] for m in body['media']} >= set(photo_ids)
+        spoken = clip()
+        assert spoken.status_code == 201
+        assert spoken.get_json()['id'] == entry_id
+        assert spoken.get_json()['media']['id'] == clip_id
+
+    entries = client.get('/api/food').get_json()
+    assert [e['id'] for e in entries] == [entry_id]
+    assert [(m['id'], m['kind']) for m in entries[0]['media']] == [
+        (photo_ids[0], 'image'), (photo_ids[1], 'image'), (clip_id, 'audio')]
+    captured = datetime.fromisoformat('2026-09-21T18:30:00+00:00').timestamp()
+    assert datetime.fromisoformat(entries[0]['createdAt']).timestamp() == captured

@@ -204,6 +204,9 @@ struct DrawingEditor: View {
             PencilSurface(model: model)
         }
         .navigationTitle(model.page.title).navigationBarTitleDisplayMode(.inline)
+        // iPad's floating tab bar shares this row; with it shown, everything
+        // after Undo collapses into an overflow menu.
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 Button("Undo", systemImage: "arrow.uturn.backward") { model.canvas.undoManager?.undo() }

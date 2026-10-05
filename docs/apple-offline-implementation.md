@@ -13,7 +13,8 @@ Books-library follow-up:
 - Chapter bookmarks queue offline and sync to the desktop table through durable
   receipts and revision checks. Pending/conflicting changes are visible in the
   book; a pending Continue change must finish before another replaces it.
-- Study now holds non-book material on both devices; annotation remains iPad-only.
+- Study holds non-book material. The tab is iPad-only; the iPhone no longer shows it
+  (UI test asserts its absence on iPhone).
 - Local verification: 110 Swift core tests and 54 backend bookmark/sync/seeding
   tests passed. Hosted Apple validation is pending.
   The earlier Study run passed native annotation/iPhone tests but failed iPad
@@ -179,7 +180,8 @@ and any remaining limits. Do not promote “source written” to “device verif
 | Knowledge         | Optional on each device; Wikipedia is a candidate collection, not a mandatory download                                                         |
 | Mobile exclusions | Practice and Notebook do not need native mobile tabs                                                                                           |
 | Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                            |
-| Chat              | Server-backed initially; local chat is optional and requires evaluation                                                                        |
+| Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                  |
+| Todo              | Native tab (passed in simulator offline): daily tasks and to-dos, changes queued in an outbox, and a due-today/overdue badge                 |
 | Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                             |
 
 “Transcribe” means record and retain audio, create a journal entry, and request
@@ -639,6 +641,8 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
 - [ ] Reuse web readers/screens where appropriate with local content access and one
       shared data source; avoid embedding a server-dependent page as “offline.”
 - [ ] Preserve useful keyboard access, accessibility labels, Dynamic Type, and rotation.
+- [x] Capture a food log entry from the Capture draft (Save food entry); the server's
+      `POST /api/food` now keeps the device's `capturedAt`. Browsing meals stays on the web.
 - [ ] Review Calendar, Lifestyle, Food, Learning, and other existing views before
       claiming mobile feature parity; full desktop parity is not a requirement.
 

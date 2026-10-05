@@ -21,19 +21,31 @@ final class CaptureTests: XCTestCase {
         XCTAssertTrue(ULID.isValid(capture.id))
     }
 
-    func testYouTubeLinkRetainsCommentaryAndAttachmentIdentityAcrossRestart() throws {
+    func testYouTubeLinksRetainTextAndAttachmentIdentityAcrossRestart() throws {
         let url = try YouTubeLink.canonical("https://youtu.be/aircAruvnKk?list=ignored")
         XCTAssertEqual(url, "https://www.youtube.com/watch?v=aircAruvnKk")
-        let capture = Capture(text: "My thoughts", youtubeURL: url)
+        let other = try YouTubeLink.canonical("https://youtube.com/shorts/dQw4w9WgXcQ")
+        let capture = Capture(text: "My thoughts", youtubeURLs: [url, other])
         try store.save(capture)
         let restored = try CaptureStore(root: root).load(capture.id)
         XCTAssertEqual(restored, capture)
         XCTAssertNil(restored.attachmentID)
-        XCTAssertNotNil(restored.linkAttachmentID)
-        let ack = try JSONEncoder().encode(["id": restored.linkAttachmentID!, "entryId": restored.id])
-        XCTAssertNoThrow(try JournalAPI.validateLinkAcknowledgement(ack, for: restored))
-        let wrong = try JSONEncoder().encode(["id": restored.linkAttachmentID!, "entryId": ULID.make()])
-        XCTAssertThrowsError(try JournalAPI.validateLinkAcknowledgement(wrong, for: restored))
+        XCTAssertEqual(restored.links.map(\.url), [url, other])
+        XCTAssertNotEqual(restored.links[0].attachmentID, restored.links[1].attachmentID)
+        XCTAssertTrue(restored.links.allSatisfy { ULID.isValid($0.attachmentID) })
+        for link in restored.links {
+            let ack = try JSONEncoder().encode(["id": link.attachmentID, "entryId": restored.id])
+            XCTAssertNoThrow(try JournalAPI.validateLinkAcknowledgement(ack, for: restored, link: link))
+            let wrong = try JSONEncoder().encode(["id": link.attachmentID, "entryId": ULID.make()])
+            XCTAssertThrowsError(try JournalAPI.validateLinkAcknowledgement(wrong, for: restored, link: link))
+        }
+        let swapped = try JSONEncoder().encode(["id": restored.links[1].attachmentID, "entryId": restored.id])
+        XCTAssertThrowsError(try JournalAPI.validateLinkAcknowledgement(swapped, for: restored, link: restored.links[0]))
+    }
+
+    func testNonCanonicalLinkIsRejectedOnSave() {
+        let capture = Capture(text: "Thoughts", youtubeURLs: ["https://youtu.be/aircAruvnKk"])
+        XCTAssertThrowsError(try store.save(capture))
     }
 
     func testYouTubeURLValidationAndOldManifestCompatibility() throws {
@@ -43,11 +55,21 @@ final class CaptureTests: XCTestCase {
         for url in ["https://youtube.com.evil/watch?v=aircAruvnKk", "https://youtube.com/playlist?list=123", "file:///aircAruvnKk", "https://user@youtube.com/watch?v=aircAruvnKk"] {
             XCTAssertThrowsError(try YouTubeLink.canonical(url))
         }
+        // A manifest from before link support has no link keys at all.
         let capture = Capture(text: "Before link support")
         var old = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(capture)) as? [String: Any])
-        old.removeValue(forKey: "youtubeURL"); old.removeValue(forKey: "linkAttachmentID")
+        old.removeValue(forKey: "links")
         let restored = try JSONDecoder().decode(Capture.self, from: JSONSerialization.data(withJSONObject: old))
         XCTAssertEqual(restored, capture)
+
+        // One from the single-link era keeps its attachment id, so a pending
+        // send still replays against the row the server may already have.
+        let url = "https://www.youtube.com/watch?v=aircAruvnKk", linkID = ULID.make()
+        old["youtubeURL"] = url; old["linkAttachmentID"] = linkID
+        let migrated = try JSONDecoder().decode(Capture.self, from: JSONSerialization.data(withJSONObject: old))
+        XCTAssertEqual(migrated.links, [CaptureLink(url: url, attachmentID: linkID)])
+        try store.save(migrated)
+        XCTAssertEqual(try store.load(migrated.id), migrated)
     }
 
     func testInterruptedRecordingIsKeptButNotAutomaticallyUploaded() throws {

@@ -15,6 +15,7 @@ import { groupByFoodDay } from '../../lib/foodDay';
 import { FoodCapture } from './FoodCapture';
 import { TagPill } from '../TagPill';
 import { FoodDescriptions } from './FoodDescriptions';
+import { EntryWeatherLine } from '../EntryWeatherLine';
 import { LoadingState } from '../LoadStates';
 import { ImageLightbox } from '../ImageLightbox';
 
@@ -159,6 +160,7 @@ function FoodEntryCard({
           </div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-[var(--color-text-muted)] mt-0.5">
             <span>{formatDate(entry.createdAt)}</span>
+            <EntryWeatherLine weather={entry.weather} />
             {entry.place && <span>📍 {entry.place}</span>}
             {geoLink && (
               <a

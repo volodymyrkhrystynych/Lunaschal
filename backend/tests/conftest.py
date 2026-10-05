@@ -41,6 +41,29 @@ def _schema_template(tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
+def no_open_meteo():
+    """Weather is fetched from Open-Meteo, and now also as a background job
+    after every journal or food save. Under `run_jobs_sync` that job runs
+    inline, so without this a food test would quietly make a real network call
+    (and wait out its timeout offline). Tests that want weather patch the fetch
+    themselves; their patch is applied after this one and wins."""
+    def offline(*args, **kwargs):
+        raise RuntimeError('Open-Meteo is not reachable from tests')
+
+    # The HTTP call rather than fetch_hourly, so the parsing tests that mock
+    # requests.get still exercise the real parser.
+    #
+    # Its own MonkeyPatch, not the `monkeypatch` fixture: an autouse fixture
+    # that requests `monkeypatch` sets it up before `client`, so it would be
+    # undone only *after* client's teardown — leaving a test's patched clock or
+    # sleep in place while that teardown waits for background work to drain.
+    patch = pytest.MonkeyPatch()
+    patch.setattr('backend.weather.fetch.requests.get', offline)
+    yield
+    patch.undo()
+
+
+@pytest.fixture(autouse=True)
 def isolated_db(tmp_path, _schema_template):
     """No test touches ./data/lunaschal.db, whether it asks for a DB or not.
 
