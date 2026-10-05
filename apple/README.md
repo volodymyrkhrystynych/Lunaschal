@@ -26,12 +26,22 @@ what each device can currently do and which work remains device-only.
   drawings. Stale saves retain a conflict copy; they never overwrite newer ink.
   Cross-platform ink conversion and PDF annotation remain outstanding.
 
-- Offline typed journal entries, plus separate **Transcribe** and **Record**
-  captures. Stopping records a journal entry; both modes retain the original
-  mono AAC file, and only Transcribe requests server transcription.
-- Offline YouTube links and commentary, with preserved drafts and stable entry
-  and link-attachment IDs. Entry creation precedes link import; retry validates
-  both acknowledgements. The server keeps the original capture timestamp and
+- Offline typed journal entries. On the phone, **Transcribe** and **Record**
+  add clips to the Capture tab's draft; stopping keeps the clip there, and
+  only **Save entry** turns the draft into one entry. Clips upload through the
+  recordings route under that entry's id, in recorded order, so the server
+  appends Transcribe clips' words after the typed text. Both modes retain the
+  original mono AAC file. The draft (text, links, clips, photos, files)
+  survives relaunch; a clip cut off by a kill is kept and marked interrupted.
+  The Watch still saves each recording as its own entry. Clip uploads use the
+  foreground session, not the background recording uploader.
+- Photos (camera or library) and arbitrary files attached to an entry,
+  staged into the same draft and uploaded after the entry is
+  created, each under its own client-minted attachment ID. Passed in
+  simulator for the library picker; the camera needs a device.
+- Offline YouTube links attached to a typed entry (any number per entry), with
+  preserved drafts and stable entry and per-link attachment IDs. Entry creation
+  precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Library / Settings navigation on iPhone;
   iPad also has Study and Draw. Library opens directly to books, with title/tag search,

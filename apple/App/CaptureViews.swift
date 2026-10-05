@@ -1,5 +1,7 @@
 import SwiftUI
 import AVFoundation
+import PhotosUI
+import UniformTypeIdentifiers
 import LunaschalCore
 
 struct CaptureRoot: View {
@@ -39,57 +41,237 @@ struct CaptureRoot: View {
 private struct CaptureComposer: View {
     @ObservedObject var model: CaptureModel
     @ObservedObject var recorder: Recorder
-    // Preserve an unfinished typed draft across app termination as well.
+    // Preserve an unfinished draft across app termination: text and links
+    // here, recordings, photos and files in the capture store's draft.
     @AppStorage("journalDraft") private var text = ""
+    @AppStorage("youtubeDraftLinks") private var draftLinks = ""
     @AppStorage("youtubeDraftURL") private var youtubeURL = ""
-    @AppStorage("youtubeDraftCommentary") private var commentary = ""
     @State private var saved = false
+    @State private var showCamera = false
+    @State private var showFiles = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @FocusState private var typing: Bool
+
+    private var links: [String] { draftLinks.split(separator: "\n").map(String.init) }
+    private var typedURL: String { youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var canSave: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !links.isEmpty || !model.draft.isEmpty || !typedURL.isEmpty
+    }
 
     var body: some View {
         Form {
-            Section("Write") {
+            Section {
                 TextEditor(text: $text).frame(minHeight: 160).accessibilityLabel("Journal text")
-                Button("Save entry") {
-                    if model.saveText(text) { text = ""; saved = true }
-                }.disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .focused($typing)
+                actions
                 if saved { Text("Saved on this device").foregroundStyle(.secondary) }
             }
-            Section {
-                if recorder.activeID != nil {
-                    Label("Recording…", systemImage: "waveform").foregroundStyle(.red)
-                    Button("Stop and save", role: .destructive) { recorder.stop() }
-                } else {
-                    Button { Task { await recorder.start(mode: .transcribe) } } label: {
-                        Label("Transcribe", systemImage: "mic")
-                    }.disabled(recorder.isStarting)
-                    Button { Task { await recorder.start(mode: .record) } } label: {
-                        Label("Record", systemImage: "record.circle")
-                    }.disabled(recorder.isStarting)
-                    if recorder.isStarting { ProgressView("Starting microphone…") }
+            if !model.draft.isEmpty {
+                Section("Attachments") {
+                    ForEach(model.draft.clips) { clip in
+                        ClipRow(clip: clip, url: try? model.store.clipURL(clip),
+                                recording: recorder.activeID == clip.attachmentID)
+                    }
+                    .onDelete { offsets in offsets.map { model.draft.clips[$0] }.forEach(model.discard) }
+                    ForEach(model.draft.files) { file in StagedFileRow(model: model, file: file) }
+                        .onDelete { offsets in offsets.map { model.draft.files[$0] }.forEach(model.discard) }
                 }
-            } header: { Text("Speak") } footer: {
-                Text("Stopping saves a separate journal entry with the original audio. Transcribe also asks the server to add the words when connected.")
             }
-            Section {
-                Text(model.signedIn
-                     ? (model.backgroundSyncEnabled ? "Captures sync while open and when iOS grants background time." : "Captures sync while the app is open.")
-                     : "Capture works offline. Sign in under Settings to sync.")
-                    .foregroundStyle(.secondary)
-                if let message = model.syncMessage { Text(message).font(.footnote).foregroundStyle(.secondary) }
+            Section("YouTube") {
+                ForEach(links, id: \.self) { link in
+                    Label(link, systemImage: "play.rectangle").lineLimit(1).truncationMode(.middle)
+                }
+                .onDelete { offsets in
+                    var kept = links
+                    kept.remove(atOffsets: offsets)
+                    draftLinks = kept.joined(separator: "\n")
+                }
+                HStack {
+                    TextField("YouTube video URL", text: $youtubeURL)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                        .focused($typing)
+                        .onSubmit { _ = addTypedLink() }
+                    Button("Add link") { _ = addTypedLink() }.disabled(typedURL.isEmpty)
+                }
             }
-            Section {
-                TextField("YouTube video URL", text: $youtubeURL)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
-                TextField("Your thoughts (optional)", text: $commentary, axis: .vertical)
-                Button("Save link and thoughts") {
-                    if model.saveLink(youtubeURL, commentary: commentary) { youtubeURL = ""; commentary = ""; saved = true }
-                }.disabled(youtubeURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            } header: { Text("YouTube") } footer: {
-                Text("The link and your thoughts are saved offline. The server imports the video when connected; archive playback stays on the server.")
-            }
+        }
+        // Pinned rather than inside a section, so it stays in the same place
+        // however far the form has scrolled.
+        .safeAreaInset(edge: .bottom, alignment: .trailing) {
+            Button { save() } label: { Label("Save entry", systemImage: "checkmark") }
+                .buttonStyle(.borderedProminent).controlSize(.large)
+                .disabled(!canSave)
+                .padding()
         }
         .navigationTitle("Capture")
         .onChange(of: text) { _, value in if !value.isEmpty { saved = false } }
+        .fullScreenCover(isPresented: $showCamera) {
+            CameraPicker { image in
+                guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+                model.stage { try $0.stageFile(data: data, name: photoName("jpg"), contentType: "image/jpeg") }
+                saved = false
+            }.ignoresSafeArea()
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.item], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            for url in urls {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                let type = UTType(filenameExtension: url.pathExtension)?.preferredMIMEType
+                model.stage { try $0.stageFile(from: url, name: url.lastPathComponent, contentType: type) }
+                saved = false
+            }
+        }
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            photoItems = []
+            Task { for item in items { await stagePhoto(item) } }
+        }
+    }
+
+    /// One line of icon buttons: the two microphone modes, then the three ways
+    /// to attach something. While recording, the line becomes the Stop button,
+    /// which keeps the clip in the draft rather than saving an entry.
+    @ViewBuilder private var actions: some View {
+        if recorder.activeID != nil {
+            Button(role: .destructive) { recorder.stop() } label: {
+                Label("Stop recording", systemImage: "stop.circle.fill")
+            }
+        } else {
+            HStack {
+                Button { saved = false; Task { await recorder.startClip(transcribe: true) } } label: {
+                    Label("Transcribe", systemImage: "mic")
+                }.disabled(recorder.isStarting)
+                Spacer()
+                Button { saved = false; Task { await recorder.startClip(transcribe: false) } } label: {
+                    Label("Record", systemImage: "record.circle")
+                }.disabled(recorder.isStarting)
+                Spacer()
+                Button { typing = false; showCamera = true } label: {
+                    Label("Take photo", systemImage: "camera")
+                }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                Spacer()
+                PhotosPicker(selection: $photoItems, matching: .images) {
+                    Label("Choose photo", systemImage: "photo.on.rectangle")
+                }
+                Spacer()
+                Button { typing = false; showFiles = true } label: {
+                    Label("Attach file", systemImage: "paperclip")
+                }
+            }
+            .labelStyle(.iconOnly).font(.title2)
+            // Without this a tap anywhere on the row fires every button in it.
+            .buttonStyle(.borderless)
+            .overlay { if recorder.isStarting { ProgressView() } }
+        }
+    }
+
+    private func stagePhoto(_ item: PhotosPickerItem) async {
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else { return }
+            let type = item.supportedContentTypes.first { $0.conforms(to: .image) }
+            model.stage { try $0.stageFile(data: data, name: photoName(type?.preferredFilenameExtension ?? "jpg"),
+                                           contentType: type?.preferredMIMEType) }
+            saved = false
+        } catch { model.message = error.localizedDescription }
+    }
+
+    private func photoName(_ ext: String) -> String {
+        "Photo \(Date().formatted(.iso8601.year().month().day().time(includingFractionalSeconds: false))).\(ext)"
+    }
+
+    /// Validates the typed URL and moves it into the entry's link list.
+    private func addTypedLink() -> Bool {
+        guard !typedURL.isEmpty else { return true }
+        do {
+            let link = try YouTubeLink.canonical(typedURL)
+            if !links.contains(link) { draftLinks = (links + [link]).joined(separator: "\n") }
+            youtubeURL = ""
+            saved = false
+            return true
+        } catch { model.message = error.localizedDescription; return false }
+    }
+
+    private func save() {
+        // A URL typed but not yet added still belongs to this entry.
+        guard addTypedLink() else { return }
+        if model.saveEntry(text, youtubeURLs: links) {
+            text = ""; draftLinks = ""; saved = true; typing = false
+        }
+    }
+}
+
+private struct ClipRow: View {
+    let clip: CaptureClip
+    let url: URL?
+    let recording: Bool
+
+    var body: some View {
+        HStack {
+            Image(systemName: clip.transcribe ? "mic" : "record.circle").frame(width: 44, height: 44)
+            VStack(alignment: .leading) {
+                Text(clip.transcribe ? "Transcription" : "Recording")
+                Text(detail).font(.caption).foregroundStyle(clip.state == .interrupted ? .orange : .secondary)
+            }
+        }
+        .foregroundStyle(recording ? .red : .primary)
+    }
+
+    private var detail: String {
+        if recording { return "Recording…" }
+        let time = clip.createdAt.formatted(date: .omitted, time: .shortened)
+        let length = url.flatMap { try? AVAudioPlayer(contentsOf: $0).duration }.flatMap { seconds in
+            seconds > 0 ? Duration.seconds(seconds).formatted(.time(pattern: .minuteSecond)) : nil
+        }
+        let base = [time, length].compactMap { $0 }.joined(separator: " · ")
+        return clip.state == .interrupted ? base + " · Interrupted — check before saving" : base
+    }
+}
+
+private struct StagedFileRow: View {
+    @ObservedObject var model: CaptureModel
+    let file: CaptureFile
+
+    var body: some View {
+        HStack {
+            if file.isImage, let url = try? model.store.fileURL(file), let image = UIImage(contentsOfFile: url.path) {
+                Image(uiImage: image).resizable().scaledToFill()
+                    .frame(width: 44, height: 44).clipShape(RoundedRectangle(cornerRadius: 6))
+            } else {
+                Image(systemName: "doc").frame(width: 44, height: 44)
+            }
+            Text(file.name).lineLimit(1).truncationMode(.middle)
+        }
+    }
+}
+
+/// The system camera. iOS has no SwiftUI camera, so this wraps UIKit's.
+private struct CameraPicker: UIViewControllerRepresentable {
+    let onImage: (UIImage) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        let parent: CameraPicker
+        init(_ parent: CameraPicker) { self.parent = parent }
+
+        func imagePickerController(_ picker: UIImagePickerController,
+                                   didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage { parent.onImage(image) }
+            parent.dismiss()
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { parent.dismiss() }
     }
 }
 
@@ -120,7 +302,7 @@ private struct CaptureList: View {
                         CaptureDetail(model: model, id: capture.id)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(capture.snapshot?.title ?? (capture.text.isEmpty ? "Recording" : capture.text))
+                            Text(capture.snapshot?.title ?? (capture.text.isEmpty ? (capture.files.first?.name ?? "Recording") : capture.text))
                                 .lineLimit(2)
                             Text(capture.createdAt, format: .dateTime.month().day().hour().minute())
                                 .font(.caption).foregroundStyle(.secondary)
@@ -193,8 +375,24 @@ private struct CaptureDetail: View {
                 if let transcript = capture.recordingTranscript?.transcript, !transcript.isEmpty {
                     Section("Recording transcript") { Text(transcript).textSelection(.enabled) }
                 }
-                if let link = capture.youtubeURL, let url = URL(string: link) {
-                    Section("Saved YouTube link") { Link(link, destination: url) }
+                ForEach(capture.clips) { clip in
+                    if let url = try? model.store.clipURL(clip) {
+                        Section(clip.transcribe ? "Transcription audio" : "Recording") {
+                            AudioPreview(url: url, recordingActive: model.recorder.activeID != nil)
+                        }
+                    }
+                }
+                if !capture.files.isEmpty {
+                    Section("Attachments") {
+                        ForEach(capture.files) { file in StagedFileRow(model: model, file: file) }
+                    }
+                }
+                if !capture.links.isEmpty {
+                    Section(capture.links.count == 1 ? "Saved YouTube link" : "Saved YouTube links") {
+                        ForEach(capture.links, id: \.attachmentID) { link in
+                            if let url = URL(string: link.url) { Link(link.url, destination: url) }
+                        }
+                    }
                 }
                 if capture.attachmentID != nil, capture.state != .recording,
                    let url = try? model.store.audioURL(capture) {

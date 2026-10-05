@@ -10,6 +10,8 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
     var onError: ((Error) -> Void)?
     private let store: CaptureStore
     private var recorder: AVAudioRecorder?
+    /// The phone's composer records into its draft; the Watch records whole entries.
+    private var intoDraft = false
 
     init(store: CaptureStore) {
         self.store = store
@@ -20,11 +22,23 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
 
     deinit { NotificationCenter.default.removeObserver(self) }
 
+    /// Records a clip into the Capture tab's draft. Stopping keeps it there;
+    /// only Save entry sends it, as part of that entry.
+    func startClip(transcribe: Bool) async {
+        await begin(intoDraft: true, mode: transcribe ? .transcribe : .record)
+    }
+
+    /// Records a standalone entry: stopping saves it and queues it for sync.
     func start(mode: CaptureMode) async {
+        await begin(intoDraft: false, mode: mode)
+    }
+
+    private func begin(intoDraft draft: Bool, mode: CaptureMode) async {
         guard activeID == nil, !isStarting else { return }
         isStarting = true
         defer { isStarting = false }
         var capture: Capture?
+        var clip: CaptureClip?
         do {
             let available = (try FileManager.default.attributesOfFileSystem(forPath: store.root.path)[.systemFreeSize] as? NSNumber)?.int64Value ?? 0
             guard available > 32 * 1024 * 1024 else {
@@ -41,12 +55,20 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
             try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
             #endif
             try session.setActive(true)
-            let item = Capture(mode: mode)
             // Commit the identity before opening the audio file. After a crash,
-            // there is still a manifest explaining whose recording this is.
-            try store.save(item)
-            capture = item
-            let audio = try AVAudioRecorder(url: store.audioURL(item), settings: [
+            // there is still a manifest (or draft row) explaining whose recording this is.
+            let url: URL, id: String
+            if draft {
+                let item = try store.beginClip(transcribe: mode == .transcribe)
+                clip = item
+                url = try store.clipURL(item); id = item.attachmentID
+            } else {
+                let item = Capture(mode: mode)
+                try store.save(item)
+                capture = item
+                url = try store.audioURL(item); id = item.id
+            }
+            let audio = try AVAudioRecorder(url: url, settings: [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVSampleRateKey: 44100,
                 AVNumberOfChannelsKey: 1,
@@ -57,9 +79,11 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
                 throw RecorderError.message("Could not start the recorder.")
             }
             recorder = audio
-            activeID = item.id
+            intoDraft = draft
+            activeID = id
             onChange?()
         } catch {
+            if let clip { do { try store.discard(clip) } catch { onError?(error) } }
             if var item = capture {
                 item.state = .interrupted
                 item.lastError = error.localizedDescription
@@ -76,7 +100,9 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         activeID = nil
         recorder?.stop()
         recorder = nil
-        do { try store.finishRecording(id) } catch { onError?(error) }
+        do {
+            if intoDraft { try store.finishClip(id) } else { try store.finishRecording(id) }
+        } catch { onError?(error) }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         onChange?()
     }
@@ -109,10 +135,14 @@ final class Recorder: NSObject, ObservableObject, AVAudioRecorderDelegate {
         recorder?.stop()
         recorder = nil
         do {
-            var item = try store.load(id)
-            item.state = .interrupted
-            item.lastError = message
-            try store.save(item)
+            if intoDraft {
+                try store.interruptClip(id)
+            } else {
+                var item = try store.load(id)
+                item.state = .interrupted
+                item.lastError = message
+                try store.save(item)
+            }
         } catch { onError?(error) }
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         onChange?()

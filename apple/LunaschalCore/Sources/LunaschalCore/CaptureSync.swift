@@ -34,7 +34,9 @@ public final class CaptureSync {
             let attempt = try transfers?.begin(capture.id, now: now())
             if transfers != nil && attempt == nil { continue }
             do {
-                try await transport.send(capture, audioURL: capture.attachmentID == nil ? nil : store.audioURL(capture))
+                try await transport.send(capture, audioURL: capture.attachmentID == nil ? nil : store.audioURL(capture),
+                                         files: capture.files.map(store.fileURL),
+                                         clips: capture.clips.map(store.clipURL))
                 if let attempt, try transfers?.isCurrent(attempt) != true { throw CancellationError() }
                 capture.state = .synced
                 capture.lastError = nil

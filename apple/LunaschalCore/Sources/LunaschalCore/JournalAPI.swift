@@ -17,7 +17,16 @@ public struct HTTPFailure: LocalizedError {
 
 public protocol JournalTransport {
     func send(_ capture: Capture, audioURL: URL?) async throws
+    /// `files` and `clips` hold the stored bytes of `capture.files` and
+    /// `capture.clips`, in the same order.
+    func send(_ capture: Capture, audioURL: URL?, files: [URL], clips: [URL]) async throws
     func fetch(_ id: String) async throws -> JournalSnapshot
+}
+
+public extension JournalTransport {
+    func send(_ capture: Capture, audioURL: URL?, files: [URL], clips: [URL]) async throws {
+        try await send(capture, audioURL: audioURL)
+    }
 }
 
 /// Refuse redirects rather than forwarding a session token or upload elsewhere.
@@ -73,6 +82,12 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     }
 
     public func send(_ capture: Capture, audioURL: URL?) async throws {
+        try await send(capture, audioURL: audioURL, files: [], clips: [])
+    }
+
+    public func send(_ capture: Capture, audioURL: URL?, files: [URL], clips: [URL]) async throws {
+        guard files.count == capture.files.count else { throw CaptureError.missingFile }
+        guard clips.count == capture.clips.count else { throw CaptureError.missingAudio }
         let data: Data
         let response: URLResponse
         if capture.mode == .text {
@@ -81,7 +96,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             req.httpBody = try JSONEncoder().encode([
                 "id": capture.id, "content": capture.text,
                 "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
-                "pendingAttachments": capture.youtubeURL == nil ? "0" : "1"
+                "pendingAttachments": String(capture.links.count + capture.files.count + capture.clips.count)
             ])
             (data, response) = try await session.data(for: req)
         } else {
@@ -100,23 +115,65 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         }
         try check(data, response)
         try Self.validateAcknowledgement(data, for: capture)
-        if let link = capture.youtubeURL, let attachmentID = capture.linkAttachmentID {
+        // Clips first, one at a time: the server appends each transcript to the
+        // entry as it lands, so upload order is the order the words appear in.
+        // The recordings route treats an existing entry id as "attach here".
+        for (clip, url) in zip(capture.clips, clips) {
+            let body = try RecordingMultipart(entryID: capture.id, attachmentID: clip.attachmentID,
+                                              capturedAt: clip.createdAt, transcribe: clip.transcribe, audioURL: url)
+            defer { try? FileManager.default.removeItem(at: body.url) }
+            var req = request("api/journal/recordings", method: "POST")
+            req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+            let (clipData, clipResponse) = try await session.upload(for: req, fromFile: body.url)
+            try check(clipData, clipResponse)
+            try Self.validateClipAcknowledgement(clipData, for: capture, clip: clip)
+        }
+        // Each link is replay-safe on its own attachment id, so a send that
+        // failed partway through simply re-posts the ones already attached.
+        for link in capture.links {
             var req = request("api/journal/\(capture.id)/attachments/link", method: "POST")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONEncoder().encode([
-                "url": link, "attachmentId": attachmentID,
+                "url": link.url, "attachmentId": link.attachmentID,
                 "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
             ])
             let (attachmentData, attachmentResponse) = try await session.data(for: req)
             try check(attachmentData, attachmentResponse)
-            try Self.validateLinkAcknowledgement(attachmentData, for: capture)
+            try Self.validateLinkAcknowledgement(attachmentData, for: capture, link: link)
+        }
+        // Same replay contract as links: the server recognises a re-POSTed
+        // attachment id and answers without storing it twice.
+        for (file, url) in zip(capture.files, files) {
+            let body = try AttachmentMultipart(capture: capture, file: file, fileURL: url)
+            defer { try? FileManager.default.removeItem(at: body.url) }
+            var req = request("api/journal/\(capture.id)/attachments", method: "POST")
+            req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+            let (fileData, fileResponse) = try await session.upload(for: req, fromFile: body.url)
+            try check(fileData, fileResponse)
+            try Self.validateFileAcknowledgement(fileData, for: capture, file: file)
         }
     }
 
-    public static func validateLinkAcknowledgement(_ data: Data, for capture: Capture) throws {
+    public static func validateClipAcknowledgement(_ data: Data, for capture: Capture, clip: CaptureClip) throws {
+        struct Ack: Decodable {
+            let id: String
+            let attachment: Attachment
+            struct Attachment: Decodable { let id: String }
+        }
+        let ack = try JSONDecoder().decode(Ack.self, from: data)
+        guard ack.id == capture.id, ack.attachment.id == clip.attachmentID else { throw CaptureError.invalidResponse }
+    }
+
+    public static func validateFileAcknowledgement(_ data: Data, for capture: Capture, file: CaptureFile) throws {
         struct Ack: Decodable { let id: String; let entryId: String }
         let ack = try JSONDecoder().decode(Ack.self, from: data)
-        guard ack.id == capture.linkAttachmentID, ack.entryId == capture.id else { throw CaptureError.invalidResponse }
+        guard ack.id == file.attachmentID, ack.entryId == capture.id else { throw CaptureError.invalidResponse }
+    }
+
+    public static func validateLinkAcknowledgement(_ data: Data, for capture: Capture, link: CaptureLink) throws {
+        struct Ack: Decodable { let id: String; let entryId: String }
+        let ack = try JSONDecoder().decode(Ack.self, from: data)
+        guard ack.id == link.attachmentID, ack.entryId == capture.id else { throw CaptureError.invalidResponse }
     }
 
     public static func validateAcknowledgement(_ data: Data, for capture: Capture) throws {
@@ -232,36 +289,66 @@ public struct RecordingMultipart {
     public let boundary: String
 
     public init(capture: Capture, audioURL: URL) throws {
-        guard let attachmentID = capture.attachmentID,
-              ULID.isValid(attachmentID), ULID.isValid(capture.id) else { throw CaptureError.invalidID }
+        guard let attachmentID = capture.attachmentID else { throw CaptureError.invalidID }
+        try self.init(entryID: capture.id, attachmentID: attachmentID, capturedAt: capture.createdAt,
+                      transcribe: capture.mode == .transcribe, audioURL: audioURL)
+    }
+
+    public init(entryID: String, attachmentID: String, capturedAt: Date, transcribe: Bool, audioURL: URL) throws {
+        guard ULID.isValid(entryID), ULID.isValid(attachmentID) else { throw CaptureError.invalidID }
         guard (try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
             throw CaptureError.missingAudio
         }
-        boundary = "Lunaschal-\(UUID().uuidString)"
-        url = FileManager.default.temporaryDirectory.appendingPathComponent(boundary).appendingPathExtension("multipart")
-        try Data().write(to: url)
-        do {
-            let output = try FileHandle(forWritingTo: url)
-            defer { try? output.close() }
-            let fields = [
-                ("id", capture.id), ("attachmentId", attachmentID),
-                ("capturedAt", ISO8601DateFormatter().string(from: capture.createdAt)),
-                ("transcribe", capture.mode == .transcribe ? "true" : "false"),
-                ("name", "Recording")
-            ]
-            for (name, value) in fields {
-                try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
-            }
-            try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"recording.m4a\"\r\nContent-Type: audio/mp4\r\n\r\n".utf8))
-            let input = try FileHandle(forReadingFrom: audioURL)
-            defer { try? input.close() }
-            while let chunk = try input.read(upToCount: 64 * 1024), !chunk.isEmpty {
-                try output.write(contentsOf: chunk)
-            }
-            try output.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
-        } catch {
-            try? FileManager.default.removeItem(at: url)
-            throw error
-        }
+        (url, boundary) = try writeMultipart(fields: [
+            ("id", entryID), ("attachmentId", attachmentID),
+            ("capturedAt", ISO8601DateFormatter().string(from: capturedAt)),
+            ("transcribe", transcribe ? "true" : "false"),
+            ("name", "Recording")
+        ], filename: "recording.m4a", contentType: "audio/mp4", source: audioURL)
     }
+}
+
+/// A photo or file for `POST /api/journal/<id>/attachments`, streamed the same way.
+public struct AttachmentMultipart {
+    public let url: URL
+    public let boundary: String
+
+    public init(capture: Capture, file: CaptureFile, fileURL: URL) throws {
+        guard ULID.isValid(capture.id), ULID.isValid(file.attachmentID) else { throw CaptureError.invalidID }
+        guard (try fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
+            throw CaptureError.missingFile
+        }
+        (url, boundary) = try writeMultipart(fields: [
+            ("attachmentId", file.attachmentID), ("name", file.name)
+        ], filename: file.name, contentType: file.contentType ?? "application/octet-stream", source: fileURL)
+    }
+}
+
+private func writeMultipart(fields: [(String, String)], filename: String, contentType: String,
+                            source: URL) throws -> (URL, String) {
+    // A quote or line break in a picked file's name would end the header early.
+    func header(_ value: String) -> String {
+        String(value.unicodeScalars.filter { $0 != "\"" && $0 != "\r" && $0 != "\n" })
+    }
+    let boundary = "Lunaschal-\(UUID().uuidString)"
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(boundary).appendingPathExtension("multipart")
+    try Data().write(to: url)
+    do {
+        let output = try FileHandle(forWritingTo: url)
+        defer { try? output.close() }
+        for (name, value) in fields {
+            try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
+        }
+        try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(header(filename))\"\r\nContent-Type: \(header(contentType))\r\n\r\n".utf8))
+        let input = try FileHandle(forReadingFrom: source)
+        defer { try? input.close() }
+        while let chunk = try input.read(upToCount: 64 * 1024), !chunk.isEmpty {
+            try output.write(contentsOf: chunk)
+        }
+        try output.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
+    } catch {
+        try? FileManager.default.removeItem(at: url)
+        throw error
+    }
+    return (url, boundary)
 }

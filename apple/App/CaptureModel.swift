@@ -7,6 +7,8 @@ import UIKit
 @MainActor
 final class CaptureModel: ObservableObject {
     @Published private(set) var captures: [Capture] = []
+    /// What the Capture tab has staged (clips, photos, files) and not yet saved.
+    @Published private(set) var draft = CaptureDraft()
     @Published private(set) var server: URL?
     @Published private(set) var signedIn = false
     @Published private(set) var syncing = false
@@ -61,6 +63,7 @@ final class CaptureModel: ObservableObject {
         if let server { token = try SessionToken.read(server: server) }
         signedIn = token != nil
         captures = try store.list()
+        draft = try store.draft()
         journalRecords = try replica.records(collection: "journal_entries")
         journalCount = try replica.count(collection: "journal_entries")
         pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
@@ -87,6 +90,7 @@ final class CaptureModel: ObservableObject {
     func reload() {
         do {
             captures = try store.list()
+            draft = try store.draft()
             journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
             journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
             pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
@@ -120,13 +124,31 @@ final class CaptureModel: ObservableObject {
         reload()
     }
 
-    func saveLink(_ link: String, commentary: String) -> Bool {
+    /// Save entry: the typed text, its links and everything staged become one
+    /// capture. A recording still running is stopped into the draft first.
+    func saveEntry(_ text: String, youtubeURLs: [String]) -> Bool {
+        if recorder.activeID != nil { recorder.stop() }
         do {
-            let url = try YouTubeLink.canonical(link)
-            let text = commentary.trimmingCharacters(in: .whitespacesAndNewlines)
-            try store.save(Capture(text: text.isEmpty ? url : text, youtubeURL: url))
+            try store.commitDraft(text: text, youtubeURLs: youtubeURLs)
             reload(); requestSync(); return true
-        } catch { message = error.localizedDescription; return false }
+        } catch { message = error.localizedDescription; reload(); return false }
+    }
+
+    /// Copies something just picked into the draft.
+    func stage(_ make: (CaptureStore) throws -> CaptureFile) {
+        do { _ = try make(store) } catch { message = error.localizedDescription }
+        reload()
+    }
+
+    func discard(_ file: CaptureFile) {
+        do { try store.discardStaged(file) } catch { message = error.localizedDescription }
+        reload()
+    }
+
+    func discard(_ clip: CaptureClip) {
+        if recorder.activeID == clip.attachmentID { recorder.stop() }
+        do { try store.discard(clip) } catch { message = error.localizedDescription }
+        reload()
     }
 
     func login(address: String, password: String, code: String) async -> Bool {
