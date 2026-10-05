@@ -39,6 +39,13 @@ what each device can currently do and which work remains device-only.
   staged into the same draft and uploaded after the entry is
   created, each under its own client-minted attachment ID. Passed in
   simulator for the library picker; the camera needs a device.
+- **Save food entry** (bottom left, beside **Save entry** on the right) files
+  the same draft in the food log instead: text, photos/videos and clips, under
+  client-minted meal and media IDs, with the capture time the server now keeps.
+  YouTube links stay in the composer for the next journal entry, and the
+  button is disabled while a non-media file is attached. Clips go through the
+  food recordings route, which transcribes each one into the meal's note.
+  Passed in simulator offline; uploading to a real server is untested.
 - Offline YouTube links attached to a typed entry (any number per entry), with
   preserved drafts and stable entry and per-link attachment IDs. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and

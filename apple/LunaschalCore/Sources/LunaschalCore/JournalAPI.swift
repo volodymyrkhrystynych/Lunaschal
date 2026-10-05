@@ -88,6 +88,7 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
     public func send(_ capture: Capture, audioURL: URL?, files: [URL], clips: [URL]) async throws {
         guard files.count == capture.files.count else { throw CaptureError.missingFile }
         guard clips.count == capture.clips.count else { throw CaptureError.missingAudio }
+        if capture.kind == .food { return try await sendFood(capture, files: files, clips: clips) }
         let data: Data
         let response: URLResponse
         if capture.mode == .text {
@@ -152,6 +153,53 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
             try check(fileData, fileResponse)
             try Self.validateFileAcknowledgement(fileData, for: capture, file: file)
         }
+    }
+
+    /// The meal and its photos go up in one request, each photo under the id
+    /// minted for it here, so a replay re-sends them and the server skips the
+    /// ones it already holds. Clips follow one at a time, like the journal's.
+    private func sendFood(_ capture: Capture, files: [URL], clips: [URL]) async throws {
+        let body = try FoodMultipart(capture: capture, files: files)
+        defer { try? FileManager.default.removeItem(at: body.url) }
+        var req = request("api/food", method: "POST")
+        req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await session.upload(for: req, fromFile: body.url)
+        try check(data, response)
+        try Self.validateFoodAcknowledgement(data, for: capture)
+        for (index, (clip, url)) in zip(capture.clips, clips).enumerated() {
+            let body = try FoodRecordingMultipart(capture: capture, clip: clip, position: files.count + index, audioURL: url)
+            defer { try? FileManager.default.removeItem(at: body.url) }
+            var req = request("api/food/recordings", method: "POST")
+            req.setValue("multipart/form-data; boundary=\(body.boundary)", forHTTPHeaderField: "Content-Type")
+            let (clipData, clipResponse) = try await session.upload(for: req, fromFile: body.url)
+            try check(clipData, clipResponse)
+            try Self.validateFoodClipAcknowledgement(clipData, for: capture, clip: clip)
+        }
+    }
+
+    /// The food log drops a file it cannot store without failing the request,
+    /// so every photo sent must come back by id before the meal counts as saved.
+    public static func validateFoodAcknowledgement(_ data: Data, for capture: Capture) throws {
+        struct Ack: Decodable {
+            let id: String
+            let media: [Media]
+            struct Media: Decodable { let id: String }
+        }
+        let ack = try JSONDecoder().decode(Ack.self, from: data)
+        let stored = Set(ack.media.map(\.id))
+        guard ack.id == capture.id, capture.files.allSatisfy({ stored.contains($0.attachmentID) }) else {
+            throw CaptureError.invalidResponse
+        }
+    }
+
+    public static func validateFoodClipAcknowledgement(_ data: Data, for capture: Capture, clip: CaptureClip) throws {
+        struct Ack: Decodable {
+            let id: String
+            let media: Media
+            struct Media: Decodable { let id: String }
+        }
+        let ack = try JSONDecoder().decode(Ack.self, from: data)
+        guard ack.id == capture.id, ack.media.id == clip.attachmentID else { throw CaptureError.invalidResponse }
     }
 
     public static func validateClipAcknowledgement(_ data: Data, for capture: Capture, clip: CaptureClip) throws {
@@ -324,8 +372,63 @@ public struct AttachmentMultipart {
     }
 }
 
+/// `POST /api/food`: the meal's text and capture time, how many clips will
+/// follow, and every photo with the id it was given on this device.
+public struct FoodMultipart {
+    public let url: URL
+    public let boundary: String
+
+    public init(capture: Capture, files: [URL]) throws {
+        guard capture.kind == .food, ULID.isValid(capture.id), files.count == capture.files.count,
+              capture.files.allSatisfy({ ULID.isValid($0.attachmentID) }) else { throw CaptureError.invalidID }
+        var parts: [MultipartFile] = []
+        for (file, source) in zip(capture.files, files) {
+            guard (try source.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
+                throw CaptureError.missingFile
+            }
+            guard file.isFoodMedia, let type = file.contentType else { throw CaptureError.notFoodMedia }
+            parts.append(MultipartFile(field: "media", filename: file.name, contentType: type, source: source))
+        }
+        let ids = String(decoding: try JSONEncoder().encode(capture.files.map(\.attachmentID)), as: UTF8.self)
+        (url, boundary) = try writeMultipart(fields: [
+            ("id", capture.id), ("text", capture.text),
+            ("capturedAt", ISO8601DateFormatter().string(from: capture.createdAt)),
+            ("pendingClips", String(capture.clips.count)), ("mediaIds", ids)
+        ], files: parts)
+    }
+}
+
+/// `POST /api/food/recordings`: one clip, under the meal and the id it was
+/// recorded with. The food log transcribes every clip it is given.
+public struct FoodRecordingMultipart {
+    public let url: URL
+    public let boundary: String
+
+    public init(capture: Capture, clip: CaptureClip, position: Int, audioURL: URL) throws {
+        guard ULID.isValid(capture.id), ULID.isValid(clip.attachmentID) else { throw CaptureError.invalidID }
+        guard (try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
+            throw CaptureError.missingAudio
+        }
+        (url, boundary) = try writeMultipart(fields: [
+            ("id", capture.id), ("mediaId", clip.attachmentID), ("position", String(position))
+        ], files: [MultipartFile(field: "audio", filename: "recording.m4a", contentType: "audio/mp4", source: audioURL)])
+    }
+}
+
+private struct MultipartFile {
+    let field: String
+    let filename: String
+    let contentType: String
+    let source: URL
+}
+
 private func writeMultipart(fields: [(String, String)], filename: String, contentType: String,
                             source: URL) throws -> (URL, String) {
+    try writeMultipart(fields: fields, files: [MultipartFile(field: "file", filename: filename,
+                                                             contentType: contentType, source: source)])
+}
+
+private func writeMultipart(fields: [(String, String)], files: [MultipartFile]) throws -> (URL, String) {
     // A quote or line break in a picked file's name would end the header early.
     func header(_ value: String) -> String {
         String(value.unicodeScalars.filter { $0 != "\"" && $0 != "\r" && $0 != "\n" })
@@ -339,13 +442,16 @@ private func writeMultipart(fields: [(String, String)], filename: String, conten
         for (name, value) in fields {
             try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
         }
-        try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(header(filename))\"\r\nContent-Type: \(header(contentType))\r\n\r\n".utf8))
-        let input = try FileHandle(forReadingFrom: source)
-        defer { try? input.close() }
-        while let chunk = try input.read(upToCount: 64 * 1024), !chunk.isEmpty {
-            try output.write(contentsOf: chunk)
+        for file in files {
+            try output.write(contentsOf: Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(file.field)\"; filename=\"\(header(file.filename))\"\r\nContent-Type: \(header(file.contentType))\r\n\r\n".utf8))
+            let input = try FileHandle(forReadingFrom: file.source)
+            defer { try? input.close() }
+            while let chunk = try input.read(upToCount: 64 * 1024), !chunk.isEmpty {
+                try output.write(contentsOf: chunk)
+            }
+            try output.write(contentsOf: Data("\r\n".utf8))
         }
-        try output.write(contentsOf: Data("\r\n--\(boundary)--\r\n".utf8))
+        try output.write(contentsOf: Data("--\(boundary)--\r\n".utf8))
     } catch {
         try? FileManager.default.removeItem(at: url)
         throw error

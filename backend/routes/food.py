@@ -7,6 +7,7 @@ from ulid import ULID
 
 from backend.ai import jobs
 from backend.ai.food import parse_food_entry
+from backend.capture_time import optional_capture_time
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.food import storage
 from backend.food.exif import extract_photo_meta
@@ -585,6 +586,13 @@ def create_entry():
     if not text and not files and not dish and not notes and pending_clips <= 0:
         return jsonify({'error': 'provide text, media, or details'}), 400
 
+    # A meal saved offline on the phone is uploaded whenever it next can be,
+    # so its own capture time — not this request's — says when it was eaten.
+    try:
+        captured_at = optional_capture_time(form)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
     now = int(time.time())
     # Client-supplied ULID so a meal captured offline replays idempotently —
     # and, unlike the text-only features, so its photos can be uploaded under
@@ -595,7 +603,7 @@ def create_entry():
         'INSERT OR IGNORE INTO food_entries(id, raw_content, dish, place, notes, rating, tags, '
         'latitude, longitude, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         (entry_id, text or None, dish, place, notes, rating, tags_json(tags) if tags else None,
-         latitude, longitude, now, now),
+         latitude, longitude, captured_at if captured_at is not None else now, now),
     )
     if cur.rowcount == 0 and text:
         # A clip from the same capture can get here first — the meal's id is

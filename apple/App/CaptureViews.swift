@@ -58,6 +58,12 @@ private struct CaptureComposer: View {
         !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !links.isEmpty || !model.draft.isEmpty || !typedURL.isEmpty
     }
+    /// A meal needs words, a photo or a clip; YouTube links stay behind for
+    /// the next journal entry, and a non-media file cannot go to the food log.
+    private var canSaveFood: Bool {
+        (!text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.draft.isEmpty)
+            && model.draft.files.allSatisfy(\.isFoodMedia)
+    }
 
     var body: some View {
         Form {
@@ -98,11 +104,22 @@ private struct CaptureComposer: View {
         }
         // Pinned rather than inside a section, so it stays in the same place
         // however far the form has scrolled.
-        .safeAreaInset(edge: .bottom, alignment: .trailing) {
-            Button { save() } label: { Label("Save entry", systemImage: "checkmark") }
-                .buttonStyle(.borderedProminent).controlSize(.large)
-                .disabled(!canSave)
-                .padding()
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                // Glass rather than a plain tint: the form scrolls under this
+                // bar, and an unblurred button prints the rows through itself.
+                Button { saveFood() } label: { Label("Save food entry", systemImage: "fork.knife") }
+                    .buttonStyle(.glass)
+                    .disabled(!canSaveFood)
+                    .accessibilityHint(model.draft.files.allSatisfy(\.isFoodMedia) ? ""
+                        : "Food entries hold photos, videos and recordings only.")
+                Spacer()
+                Button { save() } label: { Label("Save entry", systemImage: "checkmark") }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave)
+            }
+            .controlSize(.large)
+            .padding()
         }
         .navigationTitle("Capture")
         .onChange(of: text) { _, value in if !value.isEmpty { saved = false } }
@@ -198,6 +215,13 @@ private struct CaptureComposer: View {
         guard addTypedLink() else { return }
         if model.saveEntry(text, youtubeURLs: links) {
             text = ""; draftLinks = ""; saved = true; typing = false
+        }
+    }
+
+    private func saveFood() {
+        // Links and a half-typed URL are left where they are, for the next entry.
+        if model.saveEntry(text, youtubeURLs: [], kind: .food) {
+            text = ""; saved = true; typing = false
         }
     }
 }
@@ -304,6 +328,9 @@ private struct CaptureList: View {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(capture.snapshot?.title ?? (capture.text.isEmpty ? (capture.files.first?.name ?? "Recording") : capture.text))
                                 .lineLimit(2)
+                            if capture.kind == .food {
+                                Label("Food log", systemImage: "fork.knife").font(.caption)
+                            }
                             Text(capture.createdAt, format: .dateTime.month().day().hour().minute())
                                 .font(.caption).foregroundStyle(.secondary)
                             Text(status(capture)).font(.caption)
@@ -359,6 +386,7 @@ private struct CaptureDetail: View {
         if let capture = model.captures.first(where: { $0.id == id }) {
             List {
                 Section {
+                    if capture.kind == .food { Label("Food log entry", systemImage: "fork.knife") }
                     Text(capture.createdAt, format: .dateTime)
                     Text(status(capture))
                     if let error = capture.lastError { Text(error).foregroundStyle(.orange) }
@@ -411,7 +439,7 @@ private struct CaptureDetail: View {
                     }
                 }
             }
-            .navigationTitle(capture.snapshot?.title ?? "Capture")
+            .navigationTitle(capture.snapshot?.title ?? (capture.kind == .food ? "Meal" : "Capture"))
             .navigationBarTitleDisplayMode(.inline)
         }
     }

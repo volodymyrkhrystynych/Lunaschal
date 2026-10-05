@@ -640,6 +640,8 @@ Physical Pencil, multi-device delivery and signed upgrade checks remain open.
 - [ ] Reuse web readers/screens where appropriate with local content access and one
       shared data source; avoid embedding a server-dependent page as “offline.”
 - [ ] Preserve useful keyboard access, accessibility labels, Dynamic Type, and rotation.
+- [x] Capture a food log entry from the Capture draft (Save food entry); the server's
+      `POST /api/food` now keeps the device's `capturedAt`. Browsing meals stays on the web.
 - [ ] Review Calendar, Lifestyle, Food, Learning, and other existing views before
       claiming mobile feature parity; full desktop parity is not a requirement.
 

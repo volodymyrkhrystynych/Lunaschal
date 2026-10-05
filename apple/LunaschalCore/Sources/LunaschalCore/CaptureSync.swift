@@ -63,7 +63,9 @@ public final class CaptureSync {
         }
         // Read back server titles and transcripts for this device's recent
         // captures. This is deliberately not historical library replication.
-        for var capture in try store.list().filter({ $0.state == .synced }).prefix(30) {
+        // A meal is not a journal entry, and asking the journal for it would
+        // read as "deleted on the server".
+        for var capture in try store.list().filter({ $0.state == .synced && $0.kind == .journal }).prefix(30) {
             try Task.checkCancellation()
             do {
                 capture.snapshot = try await transport.fetch(capture.id)

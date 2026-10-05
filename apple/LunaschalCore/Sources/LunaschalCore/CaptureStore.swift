@@ -23,6 +23,11 @@ public final class CaptureStore {
         guard ULID.isValid(capture.id), capture.attachmentID.map(ULID.isValid) ?? true else {
             throw CaptureError.invalidID
         }
+        if capture.kind == .food {
+            // The food log has no YouTube links and keeps media only.
+            guard capture.mode == .text, capture.links.isEmpty else { throw CaptureError.invalidID }
+            guard capture.files.allSatisfy(\.isFoodMedia) else { throw CaptureError.notFoodMedia }
+        }
         for link in capture.links {
             guard capture.mode == .text, ULID.isValid(link.attachmentID),
                   try YouTubeLink.canonical(link.url) == link.url else { throw LinkError.invalidURL }
@@ -153,17 +158,19 @@ public final class CaptureStore {
         try updateDraft { $0.clips.removeAll { $0.attachmentID == clip.attachmentID } }
     }
 
-    /// Save entry: turns the typed text plus everything staged into one
-    /// capture, then empties the draft. The staged bytes are not moved —
-    /// the capture refers to them where they already are.
+    /// Save entry (or Save food entry): turns the typed text plus everything
+    /// staged into one capture, then empties the draft. The staged bytes are
+    /// not moved — the capture refers to them where they already are.
+    /// A food entry takes no links; the caller keeps them for the next entry.
     @discardableResult
-    public func commitDraft(text: String, youtubeURLs: [String], now: Date = Date()) throws -> Capture {
+    public func commitDraft(text: String, youtubeURLs: [String], kind: CaptureKind = .journal,
+                            now: Date = Date()) throws -> Capture {
         let staged = try draft()
-        let links = try youtubeURLs.map(YouTubeLink.canonical)
+        let links = kind == .food ? [] : try youtubeURLs.map(YouTubeLink.canonical)
         let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // With nothing written, links are the entry's words; a file or clip needs none.
-        let capture = Capture(text: body.isEmpty ? links.joined(separator: "\n") : body, now: now, youtubeURLs: links,
-                              files: staged.files, clips: staged.clips)
+        let capture = Capture(text: body.isEmpty ? links.joined(separator: "\n") : body, kind: kind, now: now,
+                              youtubeURLs: links, files: staged.files, clips: staged.clips)
         try save(capture)
         try updateDraft { $0 = CaptureDraft() }
         return capture

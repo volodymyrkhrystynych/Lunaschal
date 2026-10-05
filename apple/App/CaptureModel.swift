@@ -126,10 +126,10 @@ final class CaptureModel: ObservableObject {
 
     /// Save entry: the typed text, its links and everything staged become one
     /// capture. A recording still running is stopped into the draft first.
-    func saveEntry(_ text: String, youtubeURLs: [String]) -> Bool {
+    func saveEntry(_ text: String, youtubeURLs: [String], kind: CaptureKind = .journal) -> Bool {
         if recorder.activeID != nil { recorder.stop() }
         do {
-            try store.commitDraft(text: text, youtubeURLs: youtubeURLs)
+            try store.commitDraft(text: text, youtubeURLs: youtubeURLs, kind: kind)
             reload(); requestSync(); return true
         } catch { message = error.localizedDescription; reload(); return false }
     }

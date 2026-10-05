@@ -152,6 +152,51 @@ final class OfflineCaptureTests: XCTestCase {
                       || app.buttons["https://www.youtube.com/watch?v=dQw4w9WgXcQ"].exists)
     }
 
+    func testSaveFoodEntrySitsLeftOfSaveEntryAndLeavesTheLinks() {
+        let app = XCUIApplication()
+        app.launch()
+        let food = app.buttons["Save food entry"]
+        let save = app.buttons["Save entry"]
+        XCTAssertTrue(food.waitForExistence(timeout: 10))
+        let window = app.windows.firstMatch.frame
+        XCTAssertLessThan(food.frame.midX, window.midX, "Save food entry sits on the left")
+        XCTAssertGreaterThan(save.frame.midX, window.midX, "Save entry sits on the right")
+        XCTAssertEqual(food.frame.midY, save.frame.midY, accuracy: 4)
+        XCTAssertGreaterThan(food.frame.midY, window.midY, "Both sit at the bottom")
+        XCTAssertFalse(food.isEnabled)
+
+        let link = "https://www.youtube.com/watch?v=aircAruvnKk"
+        let field = app.textFields["YouTube video URL"]
+        field.tap()
+        field.typeText("https://youtu.be/aircAruvnKk")
+        app.buttons["Add link"].tap()
+        XCTAssertTrue(app.staticTexts[link].waitForExistence(timeout: 5))
+        XCTAssertFalse(food.isEnabled, "A link alone is not a meal")
+
+        let meal = "Ramen \(UUID().uuidString.prefix(8))"
+        // Typing the link scrolled the form; bring the editor back into view.
+        app.swipeDown()
+        let editor = app.textViews["Journal text"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        editor.tap()
+        editor.typeText(meal)
+        food.tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[link].exists, "The link waits for the next journal entry")
+
+        selectTab(app, "Journal")
+        XCTAssertTrue(app.staticTexts[meal].waitForExistence(timeout: 10))
+        app.staticTexts[meal].tap()
+        XCTAssertTrue(app.staticTexts["Food log entry"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Saved YouTube link"].exists)
+
+        // Leave the draft empty for the next test: the link goes in a journal entry.
+        selectTab(app, "Capture")
+        app.buttons["Save entry"].tap()
+        XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts[link].exists)
+    }
+
     func testCaptureActionsShareOneLineAndAPhotoAttachesToTheEntry() {
         let app = XCUIApplication()
         app.launch()

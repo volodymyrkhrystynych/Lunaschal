@@ -7,6 +7,8 @@ from datetime import datetime
 from flask import Blueprint, Response, jsonify, request, send_file, stream_with_context
 from ulid import ULID
 from backend.db.connection import build_update, get_db, row_to_dict, search_journal_fts
+from backend.capture_time import optional_capture_time as _optional_capture_time
+from backend.capture_time import parse_capture_time as _parse_capture_time
 from backend.day_boundary import day_bounds, day_key_for
 from backend.geo import coord_pair
 from backend.ai.journal import (
@@ -947,33 +949,6 @@ def upload_attachment(id):
     _close_screenshot_session(db, id)
     db.commit()
     return jsonify(attachment), 201
-
-
-def _parse_capture_time(value: str | None) -> datetime:
-    """Parse an ISO timestamp carrying the capture device's UTC offset."""
-    if not isinstance(value, str):
-        raise ValueError('capturedAt must be an ISO timestamp')
-    try:
-        captured = datetime.fromisoformat((value or '').strip())
-    except ValueError as exc:
-        raise ValueError('capturedAt must be an ISO timestamp') from exc
-    if captured.tzinfo is None or captured.utcoffset() is None:
-        raise ValueError('capturedAt must include a UTC offset')
-    return captured
-
-
-def _optional_capture_time(values) -> int | None:
-    """Offline capture keeps its original journal day, including on replay.
-
-    Omission preserves the existing browser contract. An explicit malformed
-    value must not silently file a capture under the day it was uploaded.
-    """
-    if 'capturedAt' not in values:
-        return None
-    try:
-        return int(_parse_capture_time(values['capturedAt']).timestamp())
-    except (OverflowError, OSError) as exc:
-        raise ValueError('capturedAt is outside the supported range') from exc
 
 
 def _capture_local_parts(attachment) -> tuple[str, str]:

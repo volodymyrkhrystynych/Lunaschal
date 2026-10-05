@@ -4,6 +4,12 @@ public enum CaptureMode: String, Codable, CaseIterable {
     case text, record, transcribe
 }
 
+/// Where a typed capture is filed: the journal, or the food log. Recordings
+/// made on their own (the Watch) are always journal entries.
+public enum CaptureKind: String, Codable {
+    case journal, food
+}
+
 public enum CaptureState: String, Codable {
     case recording, interrupted, pending, failed, synced
 }
@@ -43,6 +49,10 @@ public struct CaptureFile: Codable, Equatable, Identifiable {
 
     public var id: String { attachmentID }
     public var isImage: Bool { contentType?.hasPrefix("image/") == true }
+    /// The food log keeps pictures, videos and voice memos, nothing else.
+    public var isFoodMedia: Bool {
+        ["image/", "video/", "audio/"].contains { contentType?.hasPrefix($0) == true }
+    }
 
     public init(name: String, contentType: String?, now: Date = Date()) {
         attachmentID = ULID.make(now: now)
@@ -86,6 +96,7 @@ public struct Capture: Codable, Identifiable, Equatable {
     public let attachmentID: String?
     public let createdAt: Date
     public let mode: CaptureMode
+    public let kind: CaptureKind
     public let text: String
     public let links: [CaptureLink]
     public let files: [CaptureFile]
@@ -111,12 +122,13 @@ public struct Capture: Codable, Identifiable, Equatable {
         }
     }
 
-    public init(text: String = "", mode: CaptureMode = .text, now: Date = Date(), youtubeURLs: [String] = [],
-                files: [CaptureFile] = [], clips: [CaptureClip] = []) {
+    public init(text: String = "", mode: CaptureMode = .text, kind: CaptureKind = .journal, now: Date = Date(),
+                youtubeURLs: [String] = [], files: [CaptureFile] = [], clips: [CaptureClip] = []) {
         id = ULID.make(now: now)
         attachmentID = mode == .text ? nil : ULID.make(now: now)
         createdAt = now
         self.mode = mode
+        self.kind = kind
         self.text = text
         links = youtubeURLs.map { CaptureLink(url: $0, now: now) }
         self.files = files
@@ -125,7 +137,7 @@ public struct Capture: Codable, Identifiable, Equatable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, attachmentID, createdAt, mode, text, links, files, clips, state, lastError, snapshot
+        case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -138,6 +150,8 @@ public struct Capture: Codable, Identifiable, Equatable {
         attachmentID = try c.decodeIfPresent(String.self, forKey: .attachmentID)
         createdAt = try c.decode(Date.self, forKey: .createdAt)
         mode = try c.decode(CaptureMode.self, forKey: .mode)
+        // Everything saved before the food log existed was a journal entry.
+        kind = try c.decodeIfPresent(CaptureKind.self, forKey: .kind) ?? .journal
         text = try c.decode(String.self, forKey: .text)
         state = try c.decode(CaptureState.self, forKey: .state)
         lastError = try c.decodeIfPresent(String.self, forKey: .lastError)
@@ -213,7 +227,7 @@ public enum ULID {
 }
 
 public enum CaptureError: LocalizedError {
-    case invalidID, emptyText, missingAudio, missingFile, stillRecording, invalidServer, differentServer, invalidResponse
+    case invalidID, emptyText, missingAudio, missingFile, notFoodMedia, stillRecording, invalidServer, differentServer, invalidResponse
 
     public var errorDescription: String? {
         switch self {
@@ -221,6 +235,7 @@ public enum CaptureError: LocalizedError {
         case .emptyText: return "Write something before saving."
         case .missingAudio: return "The recording is missing or empty. Its saved entry has been kept."
         case .missingFile: return "The attached file is missing or empty."
+        case .notFoodMedia: return "A food entry can hold photos, videos and recordings only. Remove other files first."
         case .stillRecording: return "Stop the recording before saving."
         case .invalidServer: return "Enter an HTTPS server address without a path, credentials, or query."
         case .differentServer: return "This device's captures are bound to a different server."
