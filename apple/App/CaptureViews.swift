@@ -7,11 +7,13 @@ import LunaschalCore
 struct CaptureRoot: View {
     @ObservedObject var model: CaptureModel
     @StateObject private var chat: ChatModel
+    @StateObject private var todo: TodoModel
     @Environment(\.scenePhase) private var scenePhase
 
     init(model: CaptureModel) {
         self.model = model
         _chat = StateObject(wrappedValue: ChatModel(capture: model))
+        _todo = StateObject(wrappedValue: TodoModel(capture: model))
     }
 
     var body: some View {
@@ -22,8 +24,10 @@ struct CaptureRoot: View {
                 .tabItem { Label("Journal", systemImage: "book.closed") }
             NavigationStack { ChatView(chat: chat, capture: model) }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
-            NavigationStack { WebOnlyPlaceholder(model: model, title: "Todo", systemImage: "checklist") }
+            NavigationStack { TodoView(todo: todo) }
                 .tabItem { Label("Todo", systemImage: "checklist") }
+                // Red, like a notification: to-dos due today or overdue.
+                .badge(todo.dueCount)
             if UIDevice.current.userInterfaceIdiom == .pad {
                 NavigationStack { StudyLibraryView(model: model) }
                     .tabItem { Label("Study", systemImage: "doc.text") }
@@ -36,6 +40,7 @@ struct CaptureRoot: View {
         .alert("Lunaschal", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
+        .onChange(of: model.syncPasses) { _, _ in Task { await todo.refresh() } }
         .task(id: scenePhase) {
             guard scenePhase == .active else { model.leaveForeground(); return }
             while !Task.isCancelled {
@@ -577,24 +582,6 @@ private struct MoreMenu: View {
             }.accessibilityIdentifier("more-Settings")
         }
         .navigationTitle("More")
-    }
-}
-
-// Stands in for a screen the native app doesn't have yet.
-private struct WebOnlyPlaceholder: View {
-    @ObservedObject var model: CaptureModel
-    let title: String
-    let systemImage: String
-
-    var body: some View {
-        ContentUnavailableView {
-            Label("\(title) isn't in the app yet", systemImage: systemImage)
-        } description: {
-            Text("Use Lunaschal in the browser for now.")
-        } actions: {
-            if let server = model.server { Link("Open in browser", destination: server) }
-        }
-        .navigationTitle(title)
     }
 }
 

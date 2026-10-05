@@ -87,12 +87,23 @@ what each device can currently do and which work remains device-only.
   transcribes and answers it when it lands. A reply that outlives its stream is
   picked up by polling, as on the desktop. Passed in simulator, offline and
   against a local test server with a stand-in model; not yet verified on device.
+- Todo is the desktop Lifestyle tab's tasks card: up to four daily tasks (tick
+  for today, add, rename, reorder and delete under Edit) above the To-Do and
+  Archive lists, ordered and filtered as on the desktop (soonest due first,
+  then priority; a repeating to-do hides until it's near due). A to-do opens
+  in a form for title, notes, due date, repeat, priority and list; swipe to
+  archive or delete. The tab's red badge counts open To-Do items due today or
+  overdue (4am day; archived ones and daily tasks don't count). Changes need
+  the server, since a daily task is ticked for the server's day; the last
+  lists seen are kept on the phone, so the lists and badge still show offline.
+  Passed in simulator offline (badge and layout checked from a seeded cache);
+  not yet run against a server or verified on device.
 - Offline YouTube links attached to a typed entry (any number per entry), with
   preserved drafts and stable entry and per-link attachment IDs. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
-  Study and Draw. Todo is a placeholder that points to the web app. More
+  Study and Draw. More
   holds Library and Settings; the workout log is Capture → Workout. Library opens directly to books, with title/tag search,
   source/folder/tag filters, Unsorted, latest-chapter/recent/title sorting, and
   Favorite/Continue-reading bookmark filters. Other saved material is grouped

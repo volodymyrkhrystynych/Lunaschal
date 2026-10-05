@@ -193,7 +193,7 @@ extension JournalAPI: ChatRecordingTransport {
 
     // MARK: Helpers
 
-    private func chatJSON<Body: Encodable>(_ path: String, _ body: Body) async throws -> Data {
+    func chatJSON<Body: Encodable>(_ path: String, _ body: Body) async throws -> Data {
         var req = request(path, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONEncoder().encode(body)
@@ -202,14 +202,14 @@ extension JournalAPI: ChatRecordingTransport {
         return data
     }
 
-    private func send(_ path: String, method: String) async throws {
+    func send(_ path: String, method: String) async throws {
         let (data, response) = try await session.data(for: request(path, method: method))
         try checkChat(data, response)
     }
 
     /// Like `check`, but says what the server said: these are answered in
     /// front of the user, and "fill in the date" beats "HTTP 400".
-    private func checkChat(_ data: Data, _ response: URLResponse) throws {
+    func checkChat(_ data: Data, _ response: URLResponse) throws {
         guard let http = response as? HTTPURLResponse else { throw CaptureError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             if let message = Self.errorMessage(data) { throw ChatError.server(message) }

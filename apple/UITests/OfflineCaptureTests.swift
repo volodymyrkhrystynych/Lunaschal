@@ -66,7 +66,7 @@ final class OfflineCaptureTests: XCTestCase {
         selectTab(app, "Chat")
         XCTAssertTrue(app.textFields["chat-input"].waitForExistence(timeout: 5))
         selectTab(app, "Todo")
-        XCTAssertTrue(app.staticTexts["Todo isn't in the app yet"].exists)
+        XCTAssertTrue(app.buttons["todo-add"].waitForExistence(timeout: 5))
         openMore(app, "Library")
         // The workout log is Capture's Workout page, not a More row.
         XCTAssertFalse(app.buttons["more-Workout log"].exists)
@@ -426,6 +426,40 @@ final class OfflineCaptureTests: XCTestCase {
         app.buttons["Save entry"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Transcription"].exists)
+    }
+
+    func testTodoShowsDailyTasksAndToDosAndSaysWhyItCantSave() {
+        let app = XCUIApplication()
+        app.launch()
+        selectTab(app, "Todo")
+        // No server: it says so, and nothing is due, so the tab has no badge.
+        XCTAssertTrue(app.staticTexts["todo-problem"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Daily tasks"].exists || app.staticTexts["DAILY TASKS"].exists)
+        XCTAssertTrue(app.staticTexts["Nothing on the list."].exists)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            XCTAssertTrue((tab(app, "Todo").value as? String ?? "").isEmpty, "No badge with nothing due")
+        }
+
+        // A daily task needs the server, and keeps the words until it's back.
+        let daily = app.textFields["todo-daily-input"]
+        daily.tap()
+        daily.typeText("Stretch")
+        app.buttons["todo-daily-add"].tap()
+        XCTAssertTrue(app.staticTexts["todo-notice"].waitForExistence(timeout: 5))
+        XCTAssertEqual(daily.value as? String, "Stretch")
+
+        // So does a to-do: the form stays open and says why.
+        app.buttons["todo-add"].tap()
+        let title = app.textFields["todo-editor-title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 5))
+        title.tap()
+        title.typeText("Call the dentist")
+        app.switches["Due date"].tap()
+        app.buttons["todo-editor-save"].tap()
+        XCTAssertTrue(app.staticTexts["Connect to your server to change your to-dos."].waitForExistence(timeout: 5))
+        XCTAssertTrue(title.exists, "The form stays open")
+        app.buttons["Cancel"].tap()
+        XCTAssertFalse(app.buttons["todo-row"].exists)
     }
 
     func testChatKeepsAVoiceMessageForTheServerWithoutOne() {

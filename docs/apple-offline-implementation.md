@@ -181,6 +181,7 @@ and any remaining limits. Do not promote “source written” to “device verif
 | Mobile exclusions | Practice and Notebook do not need native mobile tabs                                                                                           |
 | Drawing           | Native-quality Pencil drawing is a central reason for the Apple app                                                                            |
 | Chat              | Server-backed native tab (passed in simulator); voice messages queue offline. Local chat is optional and requires evaluation                  |
+| Todo              | Server-backed native tab (passed in simulator offline): daily tasks and to-dos, with a due-today/overdue badge from the last lists seen      |
 | Watch controls    | Transcribe and Record; both preserve the original audio and create journal entries                                                             |
 
 “Transcribe” means record and retain audio, create a journal entry, and request
