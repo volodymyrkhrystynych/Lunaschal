@@ -22,6 +22,7 @@ from ulid import ULID
 
 from backend.ai import jobs
 from backend.ai.workouts import parse_workout
+from backend.capture_time import optional_capture_time
 from backend.db.connection import build_update, get_db, row_to_dict
 from backend.day_boundary import DAY_ROLLOVER_HOUR, day_bounds, day_key_for
 from backend.imaging import HEIC_EXTS, transcode_to_jpeg
@@ -114,12 +115,42 @@ def recent_workout_exercises():
     return jsonify([{'name': r['name_canonical'], 'displayName': display_name(r['name_canonical'])} for r in rows])
 
 
+_CLIENT_ID = re.compile(r'[0-9A-HJKMNP-TV-Z]{26}')
+
+
+def _replayed_entry(db, entry_id: str):
+    """The session an already-stored entry went into: a strength set is stored
+    under the client's id, an outdoor activity is its own session."""
+    hit = db.execute(
+        'SELECT e.session_id, e.name_canonical FROM workout_sets s'
+        ' JOIN workout_exercises e ON e.id=s.exercise_id WHERE s.id=?', (entry_id,)
+    ).fetchone()
+    if hit:
+        return hit['session_id'], hit['name_canonical']
+    hit = db.execute(
+        'SELECT s.id, e.name_canonical FROM workout_sessions s'
+        ' LEFT JOIN workout_exercises e ON e.session_id=s.id WHERE s.id=?', (entry_id,)
+    ).fetchone()
+    return (hit['id'], hit['name_canonical']) if hit else None
+
+
 @bp.post('/workouts/entries')
 def capture_workout_entry():
+    """One set or activity. The phone queues these offline, so it may send an
+    `id` (replaying it is a no-op) and the `capturedAt` it was logged at, which
+    then stands in for "now" everywhere — grouping included, so sets uploaded in
+    a burst hours later still fall into the workouts they were done in."""
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return jsonify({'error': 'Expected an entry object'}), 400
     db = get_db()
+    entry_id = body.get('id')
+    if entry_id is not None and not (isinstance(entry_id, str) and _CLIENT_ID.fullmatch(entry_id)):
+        return jsonify({'error': 'id must be a ULID'}), 400
+    try:
+        captured_at = optional_capture_time(body)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     try:
         entry = parse_entry(body.get('text'), body.get('exercise'), _known_exercise_names(db))
     except ValueError as exc:
@@ -128,9 +159,15 @@ def capture_workout_entry():
     if raw_text[0].isdigit():
         # Keep the selected name alongside shorthand in the readable raw log.
         raw_text = entry['raw_name'] + ' ' + raw_text
-    now = int(time.time())
+    clock = int(time.time())
+    # A capture time from the future is a wrong clock, not a plan.
+    now = min(captured_at, clock) if captured_at is not None else clock
     # Separate capture time from updated_at: rating a workout never extends it.
     with _capture_lock:
+        replay = _replayed_entry(db, entry_id) if entry_id else None
+        if replay:
+            row = db.execute(f'SELECT {_SESSION_COLS} FROM workout_sessions WHERE id=?', (replay[0],)).fetchone()
+            return jsonify({'session': _sessions_with_exercises(db, [row])[0], 'exercise': replay[1] or entry['name']}), 201
         session = None
         if entry['kind'] == 'strength':
             session = db.execute(
@@ -144,10 +181,10 @@ def capture_workout_entry():
                 db.execute(
                     'UPDATE workout_sessions SET ended_at=?, updated_at=?, duration_minutes=?, '
                     "raw_text=COALESCE(raw_text, '') || char(10) || ? WHERE id=?",
-                    (now, now, (now - session['started_at']) // 60, raw_text, sid),
+                    (now, clock, (now - session['started_at']) // 60, raw_text, sid),
                 )
             else:
-                sid = str(ULID())
+                sid = entry_id if entry_id and entry['kind'] == 'outdoor' else str(ULID())
                 start = now - (entry['duration'] or 0) * 60
                 db.execute(
                     'INSERT INTO workout_sessions '
@@ -155,7 +192,7 @@ def capture_workout_entry():
                     "VALUES (?,?,?,?, 'done',?,?,?,?,?,?)",
                     (sid, day_key_for(start), 'outside' if entry['kind'] == 'outdoor' else 'unassigned',
                      raw_text,
-                     now, now, entry['kind'], start, now, entry['duration']),
+                     now, clock, entry['kind'], start, now, entry['duration']),
                 )
             ex = db.execute('SELECT id FROM workout_exercises WHERE session_id=? AND name_canonical=?',
                             (sid, entry['name'])).fetchone()
@@ -170,7 +207,7 @@ def capture_workout_entry():
             if entry['kind'] == 'strength':
                 db.execute('INSERT INTO workout_sets (id,exercise_id,weight,reps,set_order) '
                            'VALUES (?,?,?,?,(SELECT COUNT(*) FROM workout_sets WHERE exercise_id=?))',
-                           (str(ULID()), eid, entry['weight'], entry['reps'], eid))
+                           (entry_id or str(ULID()), eid, entry['weight'], entry['reps'], eid))
             db.execute('UPDATE workout_exercises SET logged_order=(SELECT COALESCE(MAX(logged_order),0)+1 FROM workout_exercises) WHERE id=?', (eid,))
             db.commit()
         except Exception:

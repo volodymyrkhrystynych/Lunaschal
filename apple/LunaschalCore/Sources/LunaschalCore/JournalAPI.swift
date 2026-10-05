@@ -447,6 +447,53 @@ extension JournalAPI: DailyTransport {
     }
 }
 
+// MARK: Workouts (the desktop's quick-entry route)
+
+extension JournalAPI: WorkoutTransport {
+    public func sendWorkout(_ item: WorkoutLog) async throws {
+        guard ULID.isValid(item.id) else { throw CaptureError.invalidID }
+        struct Body: Encodable { let id: String; let text: String; let exercise: String?; let capturedAt: String }
+        let data = try await postJSON("api/lifestyle/workouts/entries", Body(
+            id: item.id, text: item.text, exercise: item.exercise,
+            capturedAt: ISO8601DateFormatter().string(from: item.createdAt)))
+        try Self.validateWorkoutAcknowledgement(data, for: item)
+    }
+
+    /// The reply is the workout the entry went into. A set is stored under the
+    /// id the phone gave it, an outdoor activity is its own session; one of the
+    /// two must be there before the entry counts as uploaded.
+    public static func validateWorkoutAcknowledgement(_ data: Data, for item: WorkoutLog) throws {
+        struct Reply: Decodable {
+            let session: Session
+            struct Session: Decodable { let id: String; let exercises: [Exercise] }
+            struct Exercise: Decodable { let sets: [Set] }
+            struct Set: Decodable { let id: String }
+        }
+        let session = try JSONDecoder().decode(Reply.self, from: data).session
+        let stored = session.id == item.id || session.exercises.contains { $0.sets.contains { $0.id == item.id } }
+        guard stored else { throw CaptureError.invalidResponse }
+    }
+
+    public func recentExercises() async throws -> [RecentExercise] {
+        try JSONDecoder().decode([RecentExercise].self, from: await get("api/lifestyle/workouts/recent-exercises", [:]))
+    }
+
+    public func recentWorkouts(limit: Int = 4) async throws -> [WorkoutSession] {
+        try JSONDecoder().decode([WorkoutSession].self, from: await get("api/lifestyle/workouts", ["limit": String(limit)]))
+    }
+
+    /// The desktop's "Rate / location". Either may be left out.
+    public func updateWorkout(_ id: String, location: String?, intensity: Int?) async throws {
+        guard ULID.isValid(id) else { throw CaptureError.invalidID }
+        struct Body: Encodable { let locationType: String?; let intensityRating: Int? }
+        var req = request("api/lifestyle/workouts/\(id)", method: "PATCH")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONEncoder().encode(Body(locationType: location, intensityRating: intensity))
+        let (data, response) = try await session.data(for: req)
+        try check(data, response)
+    }
+}
+
 /// `POST /api/lifestyle/selfies`: the photo and the 4am day it was taken on.
 public struct SelfieMultipart {
     public let url: URL

@@ -34,6 +34,12 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var weather: WeatherDay?
     private var weatherFetchedAt: Date?
     let location = LocationProvider()
+    /// The Workout page: queued sets, and the server's recent exercises and workouts.
+    @Published private(set) var workoutLogs: [WorkoutLog] = []
+    @Published private(set) var recentExercises: [RecentExercise] = []
+    @Published private(set) var recentWorkouts: [WorkoutSession] = []
+    let workouts: WorkoutStore
+    private let workoutSyncer: WorkoutSync
     /// A fix the server hasn't been told about yet.
     private var unsentFix: (latitude: Double, longitude: Double)?
     let store: CaptureStore
@@ -66,6 +72,8 @@ final class CaptureModel: ObservableObject {
         media = try MediaStore(root: store.root.appendingPathComponent("downloaded-media", isDirectory: true))
         daily = try DailyStore(root: store.root.appendingPathComponent("daily", isDirectory: true))
         dailySyncer = DailySync(store: daily)
+        workouts = try WorkoutStore(root: store.root.appendingPathComponent("workouts", isDirectory: true))
+        workoutSyncer = WorkoutSync(store: workouts)
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
@@ -79,6 +87,9 @@ final class CaptureModel: ObservableObject {
         captures = try store.list()
         draft = try store.draft()
         dailyLogs = try daily.list()
+        workoutLogs = try workouts.list()
+        recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
+        recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
         journalRecords = try replica.records(collection: "journal_entries")
         journalCount = try replica.count(collection: "journal_entries")
@@ -112,6 +123,7 @@ final class CaptureModel: ObservableObject {
             captures = try store.list()
             draft = try store.draft()
             dailyLogs = try daily.list()
+            workoutLogs = try workouts.list()
             journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
             journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
             pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
@@ -153,6 +165,46 @@ final class CaptureModel: ObservableObject {
             try store.commitDraft(text: text, youtubeURLs: youtubeURLs, kind: kind, location: location.recent)
             reload(); requestSync(); return true
         } catch { message = error.localizedDescription; reload(); return false }
+    }
+
+    // MARK: Workout
+
+    /// Checks and queues one line. Returns the exercise it was read as, which
+    /// becomes the selection for the next bare "20, 10", or nil if refused.
+    func logWorkout(_ text: String, selected: String?) -> WorkoutEntry? {
+        do {
+            let (_, entry) = try workouts.log(text, selected: selected)
+            reload(); requestSync(); return entry
+        } catch { message = error.localizedDescription; return nil }
+    }
+
+    func discard(_ item: WorkoutLog) {
+        do { try workouts.remove(item) } catch { message = error.localizedDescription }
+        reload()
+    }
+
+    /// "Rate / location" needs the server; it is not queued.
+    func updateWorkout(_ id: String, location: String?, intensity: Int?) async -> Bool {
+        guard signedIn, let server, let token else { message = "Connect to your server to rate a workout."; return false }
+        do {
+            let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular)
+            try await api.updateWorkout(id, location: location, intensity: intensity)
+            await refreshWorkouts(using: api)
+            return true
+        } catch { message = error.localizedDescription; return false }
+    }
+
+    private func workoutCache(_ name: String) -> URL { workouts.root.appendingPathComponent("\(name).cache") }
+
+    private func refreshWorkouts(using api: JournalAPI) async {
+        if let recent = try? await api.recentExercises() {
+            recentExercises = recent
+            try? JSONEncoder().encode(recent).write(to: workoutCache("recent"), options: .atomic)
+        }
+        if let sessions = try? await api.recentWorkouts(limit: 4) {
+            recentWorkouts = sessions
+            try? JSONEncoder().encode(sessions).write(to: workoutCache("sessions"), options: .atomic)
+        }
     }
 
     // MARK: Daily
@@ -281,6 +333,7 @@ final class CaptureModel: ObservableObject {
         try BackgroundSyncPlan.next(captures: store.list(), attempts: transfers.all(),
             hasEdits: replica.edits().contains { $0.state == "pending" }
                 || daily.list().contains { $0.state == .pending }
+                || workouts.list().contains { $0.state == .pending }
                 || drawingPublications.all().contains { $0.state == "pending" }, signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
@@ -316,6 +369,8 @@ final class CaptureModel: ObservableObject {
             activeAPI = api
             try await syncer.run(using: api)
             try await dailySyncer.run(using: api)
+            try await workoutSyncer.run(using: api)
+            await refreshWorkouts(using: api)
             await refreshDaily(using: api)
             await refreshWeather(using: api)
             try await replicaSyncer.run(using: api, collections: [

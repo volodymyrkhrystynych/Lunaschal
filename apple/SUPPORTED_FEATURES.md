@@ -10,6 +10,7 @@ has been validated. Exact commits and CI results are recorded in the
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- | -------------------------------------------------------- |
 | Typed journal capture                     | Saved locally with unfinished draft                                                                                  | Not exposed                                       | Upload later                                             |
 | Weather                                   | Current conditions on Entry and Daily; each entry's weather in Journal; location fix attached on Save                | Not exposed                                       | Server for the forecast and the per-entry lookup         |
+| Workout log                               | Capture → Workout; sets saved locally and grouped by when they were logged; Rate / location online                   | Not exposed                                       | Upload later; rating needs the server                    |
 | Daily selfie, body weight, calories       | Capture → Daily; saved locally, filed under the 4am day it was logged on; today's server record shown when reachable | Not exposed                                       | Upload later                                             |
 | Record / Transcribe                       | Clips staged in the entry draft until Save; original audio retained; server transcribes                              | Durable recording and queued phone handoff        | Phone for handoff; server for upload/transcription       |
 | Food log entry                            | Save food entry: text, photos/videos, clips; staged offline, uploaded later                                          | Not exposed                                       | Server for structuring/transcription                     |
@@ -30,7 +31,7 @@ has been validated. Exact commits and CI results are recorded in the
 | Practice and Notebook                     | Intentionally omitted from native navigation                                                                         | Not exposed                                       | Existing Linux/web app remains available                 |
 
 The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library,
-Workout log, and Settings. Chat, Todo, and Workout log are placeholders that point
+Workout log, and Settings. Chat and Todo are placeholders that point
 to the web app. iPad also has Study and Draw, and hides the tab bar while a drawing
 or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.

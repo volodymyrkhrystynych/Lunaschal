@@ -35,6 +35,14 @@ what each device can currently do and which work remains device-only.
   page shows the server's record of today with unsent logs marked waiting.
   Calories take one line, split as the desktop card does it (`CalorieLine`, a port
   of `parseCalorieEntry`): "chicken and rice, ~600" becomes the food and its count.
+- **Workout** (the third Capture page) is the desktop's workout log: one set or
+  activity per line ("bicep curls 20, 10" in lb, "squats 10" bodyweight, bare
+  "20, 10" for the selected pill, "walking 30" minutes), recent-exercise pills,
+  and the last four workouts with Rate / location. Lines are checked on the phone
+  with the server's rules (`WorkoutEntry`, a port of `quick_entry.parse_entry`),
+  saved on the device, and uploaded in order with a device-minted id and the time
+  they were logged, so a replay is a no-op and sets done offline still group into
+  the workout they belong to. Rating and location need the server.
 - Weather. The Entry page shows the conditions now at its top left; tapping them
   shows feels-like (Open-Meteo's apparent temperature: wind chill and humidity),
   wind and gusts ("windy" from 30 km/h sustained or 50 km/h gusts), and whether
@@ -75,7 +83,7 @@ what each device can currently do and which work remains device-only.
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
   Study and Draw. Chat and Todo are placeholders that point to the web app. More
-  holds Library, Workout log (also a placeholder) and Settings. Library opens directly to books, with title/tag search,
+  holds Library, Workout log (the Workout page) and Settings. Library opens directly to books, with title/tag search,
   source/folder/tag filters, Unsorted, latest-chapter/recent/title sorting, and
   Favorite/Continue-reading bookmark filters. Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.

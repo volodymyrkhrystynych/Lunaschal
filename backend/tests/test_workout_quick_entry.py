@@ -96,3 +96,43 @@ def test_migration_is_idempotent_and_preserves_legacy(client):
     row = db.execute("SELECT * FROM workout_sessions WHERE id='legacy'").fetchone()
     assert row['raw_text'] == 'squats 10'
     assert row['capture_kind'] is None and row['ended_at'] is None
+
+
+def _iso(ts):
+    from datetime import datetime, timezone
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
+
+def test_a_queued_set_replays_once(client):
+    body = {'text': 'bicep curls 20, 10', 'id': '01J0000000000000000000000A'}
+    first = client.post('/api/lifestyle/workouts/entries', json=body).get_json()
+    again = client.post('/api/lifestyle/workouts/entries', json=body).get_json()
+    assert again['session']['id'] == first['session']['id']
+    assert len(again['session']['exercises'][0]['sets']) == 1
+    walk = {'text': 'walking 30', 'id': '01J0000000000000000000000B'}
+    one = client.post('/api/lifestyle/workouts/entries', json=walk).get_json()['session']['id']
+    two = client.post('/api/lifestyle/workouts/entries', json=walk).get_json()['session']['id']
+    assert one == two == walk['id']
+    assert get_db().execute("SELECT COUNT(*) FROM workout_sessions WHERE capture_kind='outdoor'").fetchone()[0] == 1
+
+
+def test_sets_uploaded_later_group_by_when_they_were_done(client, monkeypatch):
+    gym = 1800000000
+    # Everything arrives in one burst, three hours after the first set.
+    monkeypatch.setattr('backend.routes.lifestyle.time.time', lambda: gym + 3 * 3600)
+    first = client.post('/api/lifestyle/workouts/entries', json={
+        'text': 'squats 10', 'capturedAt': _iso(gym)}).get_json()['session']
+    second = client.post('/api/lifestyle/workouts/entries', json={
+        'text': 'squats 12', 'capturedAt': _iso(gym + 1800)}).get_json()['session']
+    assert second['id'] == first['id'] and second['durationMinutes'] == 30
+    later = client.post('/api/lifestyle/workouts/entries', json={
+        'text': 'squats 8', 'capturedAt': _iso(gym + 1800 + 3601)}).get_json()['session']
+    assert later['id'] != first['id']
+    row = get_db().execute('SELECT started_at, ended_at FROM workout_sessions WHERE id=?', (first['id'],)).fetchone()
+    assert (row['started_at'], row['ended_at']) == (gym, gym + 1800)
+
+
+def test_a_bad_id_or_capture_time_is_refused(client):
+    assert client.post('/api/lifestyle/workouts/entries', json={'text': 'squats 10', 'id': 'nope'}).status_code == 400
+    assert client.post('/api/lifestyle/workouts/entries', json={'text': 'squats 10', 'capturedAt': 'yesterday'}).status_code == 400
+    assert get_db().execute('SELECT COUNT(*) FROM workout_sessions').fetchone()[0] == 0

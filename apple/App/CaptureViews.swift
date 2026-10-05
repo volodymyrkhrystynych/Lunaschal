@@ -44,7 +44,7 @@ struct CaptureRoot: View {
 /// composer, which it opens on, and the Daily log.
 private struct CaptureTab: View {
     enum Page: String, CaseIterable, Identifiable {
-        case entry = "Entry", daily = "Daily"
+        case entry = "Entry", daily = "Daily", workout = "Workout"
         var id: Self { self }
     }
 
@@ -56,6 +56,7 @@ private struct CaptureTab: View {
             switch page {
             case .entry: CaptureComposer(model: model, recorder: model.recorder)
             case .daily: DailyView(model: model)
+            case .workout: WorkoutView(model: model)
             }
         }
         // Still titled for VoiceOver and the back button; the switch is what shows.
@@ -521,7 +522,7 @@ private struct MoreMenu: View {
                 Label("Library", systemImage: "books.vertical")
             }.accessibilityIdentifier("more-Library")
             NavigationLink {
-                WebOnlyPlaceholder(model: model, title: "Workout log", systemImage: "dumbbell")
+                WorkoutView(model: model).navigationTitle("Workout log")
             } label: {
                 Label("Workout log", systemImage: "dumbbell")
             }.accessibilityIdentifier("more-Workout log")

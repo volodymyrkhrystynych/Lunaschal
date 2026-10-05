@@ -68,7 +68,7 @@ final class OfflineCaptureTests: XCTestCase {
         selectTab(app, "Todo")
         XCTAssertTrue(app.staticTexts["Todo isn't in the app yet"].exists)
         openMore(app, "Workout log")
-        XCTAssertTrue(app.staticTexts["Workout log isn't in the app yet"].exists)
+        XCTAssertTrue(app.textFields["Exercise entry"].waitForExistence(timeout: 5))
         openMore(app, "Library")
         openMore(app, "Settings")
         XCTAssertTrue(app.buttons["Library downloads"].waitForExistence(timeout: 5))
@@ -82,9 +82,8 @@ final class OfflineCaptureTests: XCTestCase {
         let daily = app.segmentedControls.buttons["Daily"]
         XCTAssertTrue(daily.exists)
         daily.tap()
-        // With no server there is no forecast yet, and Entry shows no weather line.
-        XCTAssertTrue(app.staticTexts["No forecast yet. It appears after the next sync."].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.staticTexts["weather-line"].exists)
+        // Weather heads the page, whether or not this simulator has a forecast cached.
+        XCTAssertTrue(app.staticTexts["Weather"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Take selfie"].waitForExistence(timeout: 5)
                       || app.buttons["Retake selfie"].exists)
 
@@ -136,6 +135,41 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.staticTexts[meal].exists)
         app.segmentedControls.buttons["Entry"].tap()
         XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 5))
+    }
+
+    func testWorkoutLogsSetsLikeTheDesktopWithoutAServer() {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        app.segmentedControls.buttons["Workout"].tap()
+        let line = app.textFields["Exercise entry"]
+        XCTAssertTrue(line.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Walking"].exists && app.buttons["Cycling"].exists)
+
+        // The server's own refusal, before anything is queued.
+        line.tap()
+        line.typeText("curls 20 kg, 10\n")
+        XCTAssertTrue(app.staticTexts["Use weight, reps (20, 10) or bodyweight reps (10)."].waitForExistence(timeout: 5))
+        line.tap()
+        line.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 20))
+
+        // A named set, then a bare count that means the same exercise.
+        let name = "lunge " + String((0..<5).map { _ in "abcdefghjkmnpqrstvwxyz".randomElement()! })
+        line.typeText(name + " 10\n")
+        XCTAssertTrue(app.buttons[name.capitalized].waitForExistence(timeout: 5))
+        line.tap()
+        line.typeText("12\n")
+        for _ in 0..<5 where !app.staticTexts["\(name) · 12"].exists { app.swipeUp() }
+        XCTAssertTrue(app.staticTexts["\(name) · 12"].exists)
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.textViews["Journal text"].waitForExistence(timeout: 10))
+        app.segmentedControls.buttons["Workout"].tap()
+        for _ in 0..<5 where !app.staticTexts["\(name) 10"].exists { app.swipeUp() }
+        XCTAssertTrue(app.staticTexts["\(name) 10"].exists)
+        XCTAssertTrue(app.staticTexts["\(name) · 12"].exists)
+        XCTAssertTrue(app.staticTexts["Waiting to sync"].exists)
     }
 
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
