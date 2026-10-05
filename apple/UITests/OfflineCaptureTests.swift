@@ -31,28 +31,32 @@ final class OfflineCaptureTests: XCTestCase {
     func testLibraryCategoriesAndDownloadSettingsAreSeparate() {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertEqual(tab(app, "Draw").exists, UIDevice.current.userInterfaceIdiom == .pad)
+        let isPad = UIDevice.current.userInterfaceIdiom == .pad
+        XCTAssertEqual(tab(app, "Draw").exists, isPad)
+        XCTAssertEqual(tab(app, "Study").exists, isPad)
         selectTab(app, "Library")
         XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["Filter books"].exists)
         XCTAssertFalse(app.buttons["library-study_sources"].exists)
         XCTAssertFalse(app.buttons["library-papers"].exists)
         XCTAssertFalse(app.buttons["Download library over Wi-Fi"].exists)
-        selectTab(app, "Study")
-        let categories = [
-            ("study_sources", "Documents"),
-            ("papers", "Paper documents"),
-            ("newspaper_frontpages", "Newspaper front pages"),
-            ("wiki_articles", "Knowledge articles"),
-        ]
-        for (collection, title) in categories {
-            let link = app.buttons["library-\(collection)"]
-            XCTAssertTrue(link.waitForExistence(timeout: 5))
-            link.tap()
-            XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
-            XCTAssertTrue(app.searchFields.firstMatch.exists)
-            app.navigationBars.buttons["Study"].tap()
-            XCTAssertTrue(app.buttons["library-study_sources"].waitForExistence(timeout: 5))
+        if isPad {
+            selectTab(app, "Study")
+            let categories = [
+                ("study_sources", "Documents"),
+                ("papers", "Paper documents"),
+                ("newspaper_frontpages", "Newspaper front pages"),
+                ("wiki_articles", "Knowledge articles"),
+            ]
+            for (collection, title) in categories {
+                let link = app.buttons["library-\(collection)"]
+                XCTAssertTrue(link.waitForExistence(timeout: 5))
+                link.tap()
+                XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.searchFields.firstMatch.exists)
+                app.navigationBars.buttons["Study"].tap()
+                XCTAssertTrue(app.buttons["library-study_sources"].waitForExistence(timeout: 5))
+            }
         }
         selectTab(app, "Settings")
         let downloads = app.buttons["Library downloads"]

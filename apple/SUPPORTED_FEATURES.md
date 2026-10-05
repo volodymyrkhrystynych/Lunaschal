@@ -25,11 +25,11 @@ has been validated. Exact commits and CI results are recorded in the
 | Chat, Calendar, Food, Lifestyle, Learning | Use the existing web app                                                                    | Not exposed                                       | Existing web app requirements apply                      |
 | Practice and Notebook                     | Intentionally omitted from native navigation                                                | Not exposed                                       | Existing Linux/web app remains available                 |
 
-The iPhone tabs are Capture, Journal, Library, Study, and Settings. iPad also has Draw;
-native drawing creation/editing is iPad-only, while Paper previews work on both.
+The iPhone tabs are Capture, Journal, Library, and Settings. iPad also has Study and Draw;
+native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.
 Library is books-only: title/tag search, source/folder/tag filters, Unsorted,
 recent/latest/title sorting, and synced Favorite/Continue chapter bookmarks.
-Study owns Documents and other saved reference material on both devices.
+Study owns Documents and other saved reference material, and is iPad-only.
 On iPad it provides Pencil annotations for downloaded PDFs
 and images without a Notebook editor. Ink autosaves locally and can be exported
 per page as editable ink or a flattened PNG. It does not yet sync to the server;

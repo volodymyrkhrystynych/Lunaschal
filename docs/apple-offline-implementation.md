@@ -13,7 +13,8 @@ Books-library follow-up:
 - Chapter bookmarks queue offline and sync to the desktop table through durable
   receipts and revision checks. Pending/conflicting changes are visible in the
   book; a pending Continue change must finish before another replaces it.
-- Study now holds non-book material on both devices; annotation remains iPad-only.
+- Study holds non-book material. The tab is iPad-only; the iPhone no longer shows it
+  (UI test asserts its absence on iPhone).
 - Local verification: 110 Swift core tests and 54 backend bookmark/sync/seeding
   tests passed. Hosted Apple validation is pending.
   The earlier Study run passed native annotation/iPhone tests but failed iPad

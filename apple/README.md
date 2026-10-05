@@ -33,8 +33,8 @@ what each device can currently do and which work remains device-only.
   and link-attachment IDs. Entry creation precedes link import; retry validates
   both acknowledgements. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
-- Native Capture / Journal / Library / Study / Settings navigation on iPhone;
-  iPad also has Draw. Library opens directly to books, with title/tag search,
+- Native Capture / Journal / Library / Settings navigation on iPhone;
+  iPad also has Study and Draw. Library opens directly to books, with title/tag search,
   source/folder/tag filters, Unsorted, latest-chapter/recent/title sorting, and
   Favorite/Continue-reading bookmark filters. Other saved material is grouped
   under Study. Download controls remain in Settings → Library downloads.
@@ -42,8 +42,9 @@ what each device can currently do and which work remains device-only.
   saved bookmarks can be reopened or removed from a book. Bookmark changes sync
   with the desktop, using replay receipts and conflict checks. One pending
   Continue change per book is retained until it syncs or is resolved.
-  Paper previews remain readable on iPhone, while native drawing editing is iPad-only.
-- Study contains Documents, Paper previews, newspapers, and Knowledge.
+  Native drawing editing is iPad-only.
+- Study (iPad-only) contains Documents, Paper previews, newspapers, and Knowledge.
+  The iPhone has no Study tab, so none of these are reachable there.
   On iPad, downloaded PDFs and images
   open with Pencil-only annotation, finger pan/zoom, undo, page navigation, and
   per-page ink autosave. There is no Notebook/text editor. Originals remain
