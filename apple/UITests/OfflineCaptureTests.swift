@@ -40,14 +40,17 @@ final class OfflineCaptureTests: XCTestCase {
             return
         }
         let row = app.buttons["more-\(name)"]
-        // As in selectTab, a tap during the previous animation can be dropped.
-        for _ in 0..<2 where !row.exists {
+        // The menu stays in the tree under a pushed screen, so wait for the row
+        // to be tappable, not merely present. As in selectTab, retry a tap that
+        // the previous animation swallowed.
+        let reachable = XCTNSPredicateExpectation(predicate: hittable, object: row)
+        for _ in 0..<2 where !row.isHittable {
             more.tap()
             let back = app.navigationBars.buttons["More"]
             if back.waitForExistence(timeout: 2) { back.tap() }
-            _ = row.waitForExistence(timeout: 3)
+            _ = XCTWaiter.wait(for: [reachable], timeout: 3)
         }
-        XCTAssertTrue(row.exists, "No \(name) in More", file: file, line: line)
+        XCTAssertTrue(row.isHittable, "No \(name) in More", file: file, line: line)
         row.tap()
         XCTAssertTrue(app.navigationBars[name].waitForExistence(timeout: 5), file: file, line: line)
     }
