@@ -13,16 +13,10 @@ struct TodoView: View {
     @State private var editing: TodoItem?
     @State private var renaming: DailyTask?
     @State private var renameText = ""
+    @State private var explaining = false
 
     var body: some View {
         List {
-            if let problem = todo.loadProblem {
-                Section {
-                    Label(problem, systemImage: "wifi.slash")
-                        .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("todo-problem")
-                }
-            }
             dailySection
             todoSection
             if !todo.refusals.isEmpty {
@@ -34,7 +28,16 @@ struct TodoView: View {
             }
         }
         .navigationTitle("Todo")
-        .toolbar { EditButton() }
+        // The connection, the title and Edit share one line, leaving the
+        // screen to the lists.
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) { status }
+            ToolbarItem(placement: .topBarTrailing) { EditButton() }
+        }
+        .alert(statusTitle, isPresented: $explaining) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(statusDetail) }
         .refreshable {
             todo.capture.requestSync(manual: true)
             await todo.refresh()
@@ -53,6 +56,35 @@ struct TodoView: View {
             Button("Save") { todo.rename(task, to: renameText) }
             Button("Cancel", role: .cancel) {}
         }
+    }
+
+    /// Whether the lists are the server's, and what's waiting to reach it.
+    private var status: some View {
+        // An HStack rather than a Label: the toolbar shows a Label's icon alone.
+        Button { explaining = true } label: {
+            HStack(spacing: 5) {
+                Image(systemName: todo.loadProblem != nil ? "wifi.slash"
+                      : todo.waiting > 0 ? "arrow.triangle.2.circlepath" : "checkmark.icloud")
+                Text(statusTitle).lineLimit(1)
+            }
+            .font(.subheadline)
+            .foregroundStyle(todo.loadProblem != nil ? .orange : .secondary)
+            .fixedSize()
+        }
+        .accessibilityIdentifier("todo-status")
+    }
+
+    private var statusTitle: String {
+        let waiting = todo.waiting > 0 ? "\(todo.waiting) waiting" : nil
+        if let problem = todo.loadProblem { return [problem.short, waiting].compactMap { $0 }.joined(separator: " · ") }
+        return waiting ?? "Synced"
+    }
+
+    private var statusDetail: String {
+        let waiting = todo.waiting == 0 ? nil
+            : todo.waiting == 1 ? "1 change is waiting to sync." : "\(todo.waiting) changes are waiting to sync."
+        let state = todo.loadProblem?.detail ?? (waiting == nil ? "Your lists match your server." : nil)
+        return [state, waiting].compactMap { $0 }.joined(separator: "\n\n")
     }
 
     private var dailySection: some View {
@@ -114,11 +146,6 @@ struct TodoView: View {
             }
         } header: {
             Text("To-Do")
-        } footer: {
-            if todo.waiting > 0 {
-                Text(todo.waiting == 1 ? "1 change waiting to sync." : "\(todo.waiting) changes waiting to sync.")
-                    .accessibilityIdentifier("todo-waiting")
-            }
         }
     }
 

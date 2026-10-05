@@ -11,8 +11,9 @@ import SwiftUI
 final class TodoModel: ObservableObject {
     /// The server's lists as last fetched, kept on disk.
     @Published private(set) var server = TodoLists()
-    /// Why the lists couldn't be fetched, while offline or signed out.
-    @Published private(set) var loadProblem: String?
+    /// Why the lists couldn't be fetched, while offline or signed out: a
+    /// word or two for the title bar, and what it means.
+    @Published private(set) var loadProblem: (short: String, detail: String)?
 
     let capture: CaptureModel
     private let cacheURL: URL
@@ -58,8 +59,8 @@ final class TodoModel: ObservableObject {
     func refresh() async {
         guard let api = capture.chatAPI() else {
             loadProblem = capture.server == nil
-                ? "Not connected to a server. Changes stay on this phone until you connect in Settings."
-                : "Signed out. Changes stay on this phone until you sign in again in Settings."
+                ? ("No server", "Not connected to a server. Changes stay on this phone until you connect in Settings.")
+                : ("Signed out", "Signed out. Changes stay on this phone until you sign in again in Settings.")
             return
         }
         let started = Date()
@@ -73,7 +74,7 @@ final class TodoModel: ObservableObject {
             if let data = try? JSONEncoder().encode(server) { try? data.write(to: cacheURL, options: .atomic) }
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { return }
-            loadProblem = "Offline. Changes are saved on this phone and sent when your server is back."
+            loadProblem = ("Offline", "Can't reach your server. Changes are saved on this phone and sent when it's back.")
         }
     }
 
