@@ -37,8 +37,15 @@ and Settings; the workout log is Capture → Workout. Chat is the desktop's Chat
 tab, and Todo is the tasks card from the desktop's Lifestyle tab (see README.md). iPad also has Study and Draw, and hides the tab bar while a drawing
 or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.
-Library is books-only: title/tag search, source/folder/tag filters, Unsorted,
-recent/latest/title sorting, and synced Favorite/Continue chapter bookmarks.
+Library is books-only and switches between two views. Library picks a provider
+(site or file type) and sorts by the site's latest chapter date. Folders lists
+the desktop's folders plus Unsorted, and each opens with a Back button. Both have
+title/tag search, tag/bookmark filters and recent/title sorting. Opening a book
+resumes it the way the desktop does (continue bookmark, then last read, then the
+first chapter). The reader's bottom-left menu takes typed or spoken commentary
+(a journal entry linked to the chapter) and Continue/Favorite bookmarks. Scrolling
+is logged as reading spans, and the chapter is reported as last read; both are
+queued offline.
 Study owns Documents and other saved reference material, and is iPad-only.
 On iPad it provides Pencil annotations for downloaded PDFs
 and images without a Notebook editor. Ink autosaves locally and can be exported

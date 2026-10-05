@@ -49,6 +49,9 @@ final class CaptureModel: ObservableObject {
     @Published var todoRefusals: [String] = []
     let todoOutbox: TodoOutbox
     private let todoSyncer: TodoSync
+    /// The fic reader's reading spans and last-read chapters, until uploaded.
+    let ficActivity: FicActivityStore
+    private let ficActivitySyncer: FicActivitySync
     /// Bumped after each sync pass, so Chat can look for what it uploaded.
     @Published private(set) var syncPasses = 0
     /// A fix the server hasn't been told about yet.
@@ -89,6 +92,8 @@ final class CaptureModel: ObservableObject {
         chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
         todoOutbox = try TodoOutbox(root: store.root.appendingPathComponent("todo-outbox", isDirectory: true))
         todoSyncer = TodoSync(outbox: todoOutbox)
+        ficActivity = try FicActivityStore(root: store.root.appendingPathComponent("fic-activity", isDirectory: true))
+        ficActivitySyncer = FicActivitySync(store: ficActivity)
         try chatRecordings.recoverInterrupted()
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store)
@@ -164,6 +169,32 @@ final class CaptureModel: ObservableObject {
             requestSync()
             return true
         } catch { message = error.localizedDescription; return false }
+    }
+
+    /// Typed reading commentary: a journal entry linked to the chapter, as
+    /// the desktop reader's Commentary panel saves it.
+    func saveCommentary(_ text: String, ficID: String, chapterID: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        do {
+            try store.save(Capture(text: trimmed, ficID: ficID, chapterID: chapterID))
+            reload()
+            requestSync()
+            return true
+        } catch { message = error.localizedDescription; return false }
+    }
+
+    /// Spoken commentary: stopping the recording is the save, as with the
+    /// desktop reader's microphone; the transcript arrives on the entry later.
+    func startCommentaryRecording(ficID: String, chapterID: String) async {
+        await recorder.start(mode: .transcribe, ficID: ficID, chapterID: chapterID)
+    }
+
+    /// Queue reading activity. Nothing here is worth an alert: losing a
+    /// heartbeat costs a minute of reading time, never what was read.
+    func queueReading(_ item: FicActivity, sync: Bool = false) {
+        do { try ficActivity.enqueue(item) } catch { return }
+        if sync { requestSync() }
     }
 
     func searchJournal(_ query: String) {
@@ -390,6 +421,7 @@ final class CaptureModel: ObservableObject {
                 || daily.list().contains { $0.state == .pending }
                 || workouts.list().contains { $0.state == .pending }
                 || drawingPublications.all().contains { $0.state == "pending" }
+                || !ficActivity.list().isEmpty
                 || !todoOutbox.list().isEmpty, signedIn: signedIn,
             enabled: backgroundSyncEnabled, now: Date())
     }
@@ -429,6 +461,7 @@ final class CaptureModel: ObservableObject {
             try await syncer.run(using: api)
             try await dailySyncer.run(using: api)
             try await workoutSyncer.run(using: api)
+            try await ficActivitySyncer.run(using: api)
             await refreshWorkouts(using: api)
             await refreshDaily(using: api)
             await refreshWeather(using: api)

@@ -112,6 +112,11 @@ public struct Capture: Codable, Identifiable, Equatable {
     /// The weather the server looked up for this capture's time and place,
     /// read back after upload (JSON text, as `journal_entries.weather`).
     public var weather: String?
+    /// Set when this is reading commentary: the entry is linked to this fic
+    /// (and chapter) as the desktop reader's Commentary panel links it. The
+    /// chapter is fixed when the capture starts, not when it uploads.
+    public let ficID: String?
+    public let chapterID: String?
 
     /// The weather to show, once the server has looked it up.
     public var entryWeather: EntryWeather? { EntryWeather.parse(weather ?? snapshot?.weather) }
@@ -134,8 +139,11 @@ public struct Capture: Codable, Identifiable, Equatable {
     }
 
     public init(text: String = "", mode: CaptureMode = .text, kind: CaptureKind = .journal, now: Date = Date(),
-                youtubeURLs: [String] = [], files: [CaptureFile] = [], clips: [CaptureClip] = []) {
+                youtubeURLs: [String] = [], files: [CaptureFile] = [], clips: [CaptureClip] = [],
+                ficID: String? = nil, chapterID: String? = nil) {
         id = ULID.make(now: now)
+        self.ficID = ficID
+        self.chapterID = ficID == nil ? nil : chapterID
         attachmentID = mode == .text ? nil : ULID.make(now: now)
         createdAt = now
         self.mode = mode
@@ -149,7 +157,7 @@ public struct Capture: Codable, Identifiable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case id, attachmentID, createdAt, mode, kind, text, links, files, clips, state, lastError, snapshot
-        case latitude, longitude, weather
+        case latitude, longitude, weather, ficID, chapterID
     }
 
     // Manifests written before an entry could hold several links stored one
@@ -171,6 +179,8 @@ public struct Capture: Codable, Identifiable, Equatable {
         latitude = try c.decodeIfPresent(Double.self, forKey: .latitude)
         longitude = try c.decodeIfPresent(Double.self, forKey: .longitude)
         weather = try c.decodeIfPresent(String.self, forKey: .weather)
+        ficID = try c.decodeIfPresent(String.self, forKey: .ficID)
+        chapterID = try c.decodeIfPresent(String.self, forKey: .chapterID)
         files = try c.decodeIfPresent([CaptureFile].self, forKey: .files) ?? []
         clips = try c.decodeIfPresent([CaptureClip].self, forKey: .clips) ?? []
         if let links = try c.decodeIfPresent([CaptureLink].self, forKey: .links) {

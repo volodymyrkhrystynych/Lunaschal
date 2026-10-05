@@ -98,8 +98,11 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         if capture.mode == .text {
             var req = request("api/journal", method: "POST")
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            // Fic commentary goes up as raw_content, as the desktop reader's
+            // does: that is what queues the journal's polish pass, so a
+            // misheard character name is fixed like any other entry's.
             var body = [
-                "id": capture.id, "content": capture.text,
+                "id": capture.id, capture.ficID == nil ? "content" : "raw_content": capture.text,
                 "capturedAt": ISO8601DateFormatter().string(from: capture.createdAt),
                 "pendingAttachments": String(capture.links.count + capture.files.count + capture.clips.count)
             ]
@@ -125,6 +128,16 @@ public final class JournalAPI: JournalTransport, ReplicaTransport {
         }
         try check(data, response)
         try Self.validateAcknowledgement(data, for: capture)
+        // A recording carries its fic in the upload and the server links it
+        // there; typed commentary needs the link as a second, idempotent call.
+        if capture.mode == .text, let ficID = capture.ficID {
+            var link = ["journalEntryId": capture.id]
+            if let chapterID = capture.chapterID { link["chapterId"] = chapterID }
+            do { _ = try await postJSON("api/fanfic/\(ficID)/journal-link", link) }
+            // The fic or chapter was deleted since: the entry itself landed,
+            // and failing the capture over its link would only strand it.
+            catch let failure as HTTPFailure where failure.status == 404 {}
+        }
         // Clips first, one at a time: the server appends each transcript to the
         // entry as it lands, so upload order is the order the words appear in.
         // The recordings route treats an existing entry id as "attach here".
@@ -494,6 +507,25 @@ extension JournalAPI: WorkoutTransport {
     }
 }
 
+// MARK: Reading activity (the fanfic reader's spans and last-read chapter)
+
+extension JournalAPI: FicActivityTransport {
+    public func sendFicActivity(_ item: FicActivity) async throws {
+        switch item {
+        case .span(let span):
+            guard ULID.isValid(span.ficId), ULID.isValid(span.id) else { throw CaptureError.invalidID }
+            var req = request("api/fanfic/\(span.ficId)/reading-spans/\(span.id)", method: "PUT")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.httpBody = try JSONEncoder().encode(span)
+            let (data, response) = try await session.data(for: req)
+            try check(data, response)
+        case .progress(let ficId, let chapterId):
+            guard ULID.isValid(ficId) else { throw CaptureError.invalidID }
+            _ = try await postJSON("api/fanfic/\(ficId)/progress", ["chapterId": chapterId])
+        }
+    }
+}
+
 /// `POST /api/lifestyle/selfies`: the photo and the 4am day it was taken on.
 public struct SelfieMultipart {
     public let url: URL
@@ -516,20 +548,31 @@ public struct RecordingMultipart {
     public init(capture: Capture, audioURL: URL) throws {
         guard let attachmentID = capture.attachmentID else { throw CaptureError.invalidID }
         try self.init(entryID: capture.id, attachmentID: attachmentID, capturedAt: capture.createdAt,
-                      transcribe: capture.mode == .transcribe, audioURL: audioURL)
+                      transcribe: capture.mode == .transcribe, audioURL: audioURL,
+                      ficID: capture.ficID, chapterID: capture.chapterID)
     }
 
-    public init(entryID: String, attachmentID: String, capturedAt: Date, transcribe: Bool, audioURL: URL) throws {
-        guard ULID.isValid(entryID), ULID.isValid(attachmentID) else { throw CaptureError.invalidID }
+    /// `ficId`/`chapterId` make the recording the reader's commentary: the
+    /// server links the entry to that chapter, and re-links it on a replay.
+    public init(entryID: String, attachmentID: String, capturedAt: Date, transcribe: Bool, audioURL: URL,
+                ficID: String? = nil, chapterID: String? = nil) throws {
+        guard ULID.isValid(entryID), ULID.isValid(attachmentID),
+              ficID.map(ULID.isValid) ?? true, chapterID.map(ULID.isValid) ?? true else { throw CaptureError.invalidID }
         guard (try audioURL.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) > 0 else {
             throw CaptureError.missingAudio
         }
-        (url, boundary) = try writeMultipart(fields: [
+        var fields = [
             ("id", entryID), ("attachmentId", attachmentID),
             ("capturedAt", ISO8601DateFormatter().string(from: capturedAt)),
             ("transcribe", transcribe ? "true" : "false"),
             ("name", "Recording")
-        ], filename: "recording.m4a", contentType: "audio/mp4", source: audioURL)
+        ]
+        if let ficID {
+            fields.append(("ficId", ficID))
+            if let chapterID { fields.append(("chapterId", chapterID)) }
+        }
+        (url, boundary) = try writeMultipart(fields: fields, filename: "recording.m4a",
+                                             contentType: "audio/mp4", source: audioURL)
     }
 }
 

@@ -227,6 +227,30 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertTrue(app.switches["PDF books"].exists)
     }
 
+    func testLibrarySwitchesToFoldersAndBackOutOfAFolder() {
+        let app = XCUIApplication()
+        app.launch()
+        openMore(app, "Library")
+        // Library mode: the providers, filtered by site.
+        XCTAssertTrue(app.buttons["SpaceBattles"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["AO3"].exists)
+        let mode = app.segmentedControls["library-mode"]
+        XCTAssertTrue(mode.exists)
+        mode.buttons["Folders"].tap()
+        // Folders mode is a list of folders, with no provider pills.
+        let unsorted = app.buttons["folder-unsorted"]
+        XCTAssertTrue(unsorted.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["SpaceBattles"].exists)
+        unsorted.tap()
+        XCTAssertTrue(app.navigationBars["Unsorted"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.searchFields.firstMatch.exists)
+        app.navigationBars["Unsorted"].buttons.firstMatch.tap()
+        XCTAssertTrue(unsorted.waitForExistence(timeout: 5))
+        // The choice is remembered: back to Library mode for the next test.
+        app.segmentedControls["library-mode"].buttons["Library"].tap()
+        XCTAssertTrue(app.buttons["SpaceBattles"].waitForExistence(timeout: 5))
+    }
+
     func testDrawingWorkspaceReopensWithoutAServer() {
         let app = XCUIApplication()
         app.launch()

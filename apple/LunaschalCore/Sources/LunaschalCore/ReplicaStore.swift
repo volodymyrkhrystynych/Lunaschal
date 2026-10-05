@@ -244,6 +244,41 @@ public final class ReplicaStore {
         return (books, count)
     }
 
+    /// Where opening a book lands, in the desktop reader's order
+    /// (`resolveInitialChapter`): the continue bookmark — a pending one
+    /// included — at its scroll position, then the chapter this device last
+    /// read, then the server's last-read chapter, then the first chapter. A
+    /// chapter whose text isn't downloaded is skipped. Nil means no chapter text.
+    public func resumePoint(bookID: String) throws -> (chapter: SyncChange, fraction: Double?)? {
+        guard ULID.isValid(bookID) else { throw ReplicaError.invalidEdit }
+        let chapters = try relatedRecords(collection: "fic_chapters", field: "ficId", value: bookID)
+        func chapter(_ id: String?) -> SyncChange? { id.flatMap { id in chapters.first { $0.id == id } } }
+        if let mark = try bookmarks(bookID: bookID).first(where: { $0.data?["type"]?.string == "continue" }),
+           let target = chapter(mark.data?["chapterId"]?.string) {
+            return (target, mark.data?["scrollPosition"]?.number)
+        }
+        if let local = try lastReadChapter(bookID: bookID) { return (local, nil) }
+        if let server = chapter(try record(collection: "fics", id: bookID)?.data?["lastReadChapterId"]?.string) {
+            return (server, nil)
+        }
+        return chapters.min { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }.map { ($0, nil) }
+    }
+
+    /// How many books each folder holds, keyed by folder id, with books in no
+    /// folder at all under `"unsorted"`.
+    public func folderCounts() throws -> [String: Int] {
+        var counts: [String: Int] = [:]
+        for row in try rows("""
+            SELECT j.value, COUNT(*) FROM replica_records r, json_each(r.payload,'$.folderIds') j
+            WHERE r.collection='fics' AND r.deleted=0 GROUP BY j.value
+            """) { counts[row[0]] = Int(row[1]) ?? 0 }
+        counts["unsorted"] = Int(try rows("""
+            SELECT COUNT(*) FROM replica_records WHERE collection='fics' AND deleted=0
+            AND NOT EXISTS (SELECT 1 FROM json_each(payload,'$.folderIds'))
+            """).first?[0] ?? "0") ?? 0
+        return counts
+    }
+
     public func bookTags() throws -> [String] {
         try rows("SELECT DISTINCT j.value FROM replica_records r,json_each(r.payload,'$.tags') j WHERE r.collection='fics' AND r.deleted=0 ORDER BY j.value COLLATE NOCASE").map { $0[0] }
     }

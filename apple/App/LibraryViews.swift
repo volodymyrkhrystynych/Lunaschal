@@ -211,7 +211,7 @@ struct BookView: View {
     @ObservedObject var model: CaptureModel
     let book: SyncChange
     @State private var chapters: [SyncChange] = []
-    @State private var resume: SyncChange?
+    @State private var resume: (chapter: SyncChange, fraction: Double?)?
     @State private var bookmarks: [SyncChange] = []
     @State private var bookmarkEdits: [PendingEdit] = []
 
@@ -229,8 +229,8 @@ struct BookView: View {
                 Text("No chapter text downloaded. Use Settings → Library downloads on Wi-Fi.")
             }
             if let resume {
-                NavigationLink("Continue: \(resume.title)") {
-                    TextChapterReader(owner: model, chapter: resume)
+                NavigationLink("Continue: \(resume.chapter.title)") {
+                    TextChapterReader(owner: model, chapter: resume.chapter, initialFraction: resume.fraction, book: book)
                 }
             }
             if !bookmarks.isEmpty {
@@ -293,7 +293,7 @@ struct BookView: View {
         do {
             chapters = try model.replica.relatedRecords(collection: "fic_chapters", field: "ficId", value: book.id)
                 .sorted { ($0.data?["position"]?.number ?? 0) < ($1.data?["position"]?.number ?? 0) }
-            resume = try model.replica.lastReadChapter(bookID: book.id)
+            resume = try model.replica.resumePoint(bookID: book.id)
             bookmarks = try model.replica.bookmarks(bookID: book.id)
             bookmarkEdits = try model.replica.bookmarkEdits(bookID: book.id)
         } catch { model.message = error.localizedDescription }

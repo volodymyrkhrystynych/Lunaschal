@@ -107,11 +107,21 @@ what each device can currently do and which work remains device-only.
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
   Study and Draw. More
-  holds Library and Settings; the workout log is Capture → Workout. Library opens directly to books, with title/tag search,
-  source/folder/tag filters, Unsorted, latest-chapter/recent/title sorting, and
-  Favorite/Continue-reading bookmark filters. Other saved material is grouped
+  holds Library and Settings; the workout log is Capture → Workout. Library opens directly to books and has a
+  Library/Folders switch. Library mode has provider pills and sorts by the site's latest
+  chapter date (`latest_activity`), not the download time. Folders mode lists folders and Unsorted,
+  and each pushes its books with a Back button. Both have title/tag search, tag and
+  Favorite/Continue-reading filters, and recent/title sorting. Other saved material is grouped
   under Study. Download controls remain in More → Settings → Library downloads.
-  Chapter readers create Favorite or Continue-reading bookmarks offline, and
+  Tapping a book opens the reader at its resume point (`ReplicaStore.resumePoint`:
+  continue bookmark, then this device's last read, then the server's, then chapter 1),
+  and the reader moves between chapters with Previous/Next. The reader's bottom-left menu has Text and
+  Transcribe commentary (a journal capture carrying `ficID`/`chapterID`: typed text
+  is posted as `raw_content` and then linked, a recording links in its upload),
+  and Continue and Bookmark. User scrolling is logged as reading spans
+  (`ReadingSpans.swift`, a port of `src/lib/readingSpans.ts`), and opening a
+  chapter queues it as last read. Both go through `FicActivityStore`. Chapter
+  readers create Favorite or Continue-reading bookmarks offline, and
   saved bookmarks can be reopened or removed from a book. Bookmark changes sync
   with the desktop, using replay receipts and conflict checks. One pending
   Continue change per book is retained until it syncs or is resolved.
