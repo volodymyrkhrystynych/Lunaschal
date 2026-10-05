@@ -427,7 +427,7 @@ extension JournalAPI: DailyTransport {
         return try await get("api/lifestyle/selfies/\(id)/image", ["thumbnail": "1"])
     }
 
-    private func get(_ path: String, _ query: [String: String]) async throws -> Data {
+    func get(_ path: String, _ query: [String: String]) async throws -> Data {
         var req = request(path)
         var parts = URLComponents(url: req.url!, resolvingAgainstBaseURL: false)!
         parts.queryItems = query.isEmpty ? nil : query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -437,7 +437,7 @@ extension JournalAPI: DailyTransport {
         return data
     }
 
-    private func postJSON<Body: Encodable>(_ path: String, _ body: Body) async throws -> Data {
+    func postJSON<Body: Encodable>(_ path: String, _ body: Body) async throws -> Data {
         var req = request(path, method: "POST")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONEncoder().encode(body)
@@ -596,7 +596,7 @@ public struct FoodRecordingMultipart {
     }
 }
 
-private struct MultipartFile {
+struct MultipartFile {
     let field: String
     let filename: String
     let contentType: String
@@ -609,7 +609,7 @@ private func writeMultipart(fields: [(String, String)], filename: String, conten
                                                              contentType: contentType, source: source)])
 }
 
-private func writeMultipart(fields: [(String, String)], files: [MultipartFile]) throws -> (URL, String) {
+func writeMultipart(fields: [(String, String)], files: [MultipartFile]) throws -> (URL, String) {
     // A quote or line break in a picked file's name would end the header early.
     func header(_ value: String) -> String {
         String(value.unicodeScalars.filter { $0 != "\"" && $0 != "\r" && $0 != "\n" })

@@ -27,12 +27,13 @@ has been validated. Exact commits and CI results are recorded in the
 | Storage cleanup                           | Confirmed removal of downloaded copies; originals retained                                                           | Confirmed Watch-copy removal after server receipt | Receipt must arrive before Watch removal                 |
 | Apple Intelligence                        | Runtime text-model/locale availability check                                                                         | Not exposed                                       | No generation or local transcription implemented         |
 | Share extension                           | Not implemented                                                                                                      | Not applicable                                    | —                                                        |
-| Chat, Calendar, Food, Lifestyle, Learning | Use the existing web app; native Food is Save food entry only, native Lifestyle is Capture → Daily only              | Not exposed                                       | Existing web app requirements apply                      |
+| Chat                                      | Today's conversation, streamed replies, confirm cards, to-do bar, photos, voice messages                             | Not exposed                                       | Server for typing/photos/cards; voice messages queue offline |
+| Calendar, Food, Lifestyle, Learning       | Use the existing web app; native Food is Save food entry only, native Lifestyle is Capture → Daily only              | Not exposed                                       | Existing web app requirements apply                      |
 | Practice and Notebook                     | Intentionally omitted from native navigation                                                                         | Not exposed                                       | Existing Linux/web app remains available                 |
 
 The iPhone tabs are Capture, Journal, Chat, Todo, and More. More holds Library
-and Settings; the workout log is Capture → Workout. Chat and Todo are placeholders that point
-to the web app. iPad also has Study and Draw, and hides the tab bar while a drawing
+and Settings; the workout log is Capture → Workout. Chat is the desktop's Chat
+tab (see README.md); Todo is a placeholder that points to the web app. iPad also has Study and Draw, and hides the tab bar while a drawing
 or a Study annotation is open, so its toolbar doesn't overflow;
 native drawing creation/editing is iPad-only, and so are Paper previews, since they live under Study.
 Library is books-only: title/tag search, source/folder/tag filters, Unsorted,

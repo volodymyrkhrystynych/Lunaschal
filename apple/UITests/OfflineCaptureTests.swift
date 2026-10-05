@@ -64,7 +64,7 @@ final class OfflineCaptureTests: XCTestCase {
         XCTAssertFalse(tab(app, "Library").exists)
         XCTAssertFalse(tab(app, "Settings").exists)
         selectTab(app, "Chat")
-        XCTAssertTrue(app.staticTexts["Chat isn't in the app yet"].exists)
+        XCTAssertTrue(app.textFields["chat-input"].waitForExistence(timeout: 5))
         selectTab(app, "Todo")
         XCTAssertTrue(app.staticTexts["Todo isn't in the app yet"].exists)
         openMore(app, "Library")
@@ -426,5 +426,43 @@ final class OfflineCaptureTests: XCTestCase {
         app.buttons["Save entry"].tap()
         XCTAssertTrue(app.staticTexts["Saved on this device"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["Transcription"].exists)
+    }
+
+    func testChatKeepsAVoiceMessageForTheServerWithoutOne() {
+        let app = XCUIApplication()
+        addUIInterruptionMonitor(withDescription: "Microphone") { alert in
+            let allow = alert.buttons["Allow"]
+            guard allow.exists else { return false }
+            allow.tap()
+            return true
+        }
+        app.launch()
+        selectTab(app, "Chat")
+        // No server: it says so, and a typed message has nowhere to go yet.
+        XCTAssertTrue(app.staticTexts["chat-problem"].waitForExistence(timeout: 10))
+        let input = app.textFields["chat-input"]
+        input.tap()
+        input.typeText("what did I eat")
+        app.buttons["chat-send"].tap()
+        XCTAssertTrue(app.staticTexts["Connect to your server to send a typed message."].waitForExistence(timeout: 5))
+        XCTAssertEqual(input.value as? String, "what did I eat", "The words stay in the box")
+
+        // A voice message records anyway and waits on the phone.
+        let record = app.buttons["chat-record"]
+        record.tap()
+        let stop = app.buttons["Stop and send"]
+        if !stop.waitForExistence(timeout: 3) { app.tap() }
+        XCTAssertTrue(stop.waitForExistence(timeout: 10))
+        Thread.sleep(forTimeInterval: 1.5)
+        stop.tap()
+        let pending = app.staticTexts["chat-recording-pending"]
+        XCTAssertTrue(pending.waitForExistence(timeout: 5))
+        // The typed words went with the clip.
+        XCTAssertNotEqual(input.value as? String, "what did I eat")
+
+        app.terminate()
+        app.launch()
+        selectTab(app, "Chat")
+        XCTAssertTrue(app.staticTexts["chat-recording-pending"].waitForExistence(timeout: 10), "The clip survives a relaunch")
     }
 }

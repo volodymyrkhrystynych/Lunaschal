@@ -6,7 +6,13 @@ import LunaschalCore
 
 struct CaptureRoot: View {
     @ObservedObject var model: CaptureModel
+    @StateObject private var chat: ChatModel
     @Environment(\.scenePhase) private var scenePhase
+
+    init(model: CaptureModel) {
+        self.model = model
+        _chat = StateObject(wrappedValue: ChatModel(capture: model))
+    }
 
     var body: some View {
         TabView {
@@ -14,7 +20,7 @@ struct CaptureRoot: View {
                 .tabItem { Label("Capture", systemImage: "square.and.pencil") }
             NavigationStack { CaptureList(model: model) }
                 .tabItem { Label("Journal", systemImage: "book.closed") }
-            NavigationStack { WebOnlyPlaceholder(model: model, title: "Chat", systemImage: "bubble.left.and.bubble.right") }
+            NavigationStack { ChatView(chat: chat, capture: model) }
                 .tabItem { Label("Chat", systemImage: "bubble.left.and.bubble.right") }
             NavigationStack { WebOnlyPlaceholder(model: model, title: "Todo", systemImage: "checklist") }
                 .tabItem { Label("Todo", systemImage: "checklist") }

@@ -77,12 +77,22 @@ what each device can currently do and which work remains device-only.
   button is disabled while a non-media file is attached. Clips go through the
   food recordings route, which transcribes each one into the meal's note.
   Passed in simulator offline; uploading to a real server is untested.
+- Chat works like the desktop's: today's one conversation, the streamed reply
+  with its steps and reasoning, sources, Markdown, New chat / Clean slate, the
+  delegate's editable confirm cards (calendar, calories, food, recipe, recipe
+  link, flashcards), "flashcard this" drafts, the day's to-do bar (tick, rename,
+  dismiss, send to the permanent list), and photos. Typing and photos need the
+  server; a voice message doesn't: stopping the recording queues the clip
+  (with any typed words and staged photos) in the sync outbox, and the server
+  transcribes and answers it when it lands. A reply that outlives its stream is
+  picked up by polling, as on the desktop. Passed in simulator, offline and
+  against a local test server with a stand-in model; not yet verified on device.
 - Offline YouTube links attached to a typed entry (any number per entry), with
   preserved drafts and stable entry and per-link attachment IDs. Entry creation
   precedes link import; retry validates every acknowledgement. The server keeps the original capture timestamp and
   reuses its existing YouTube import pipeline.
 - Native Capture / Journal / Chat / Todo / More tabs on iPhone; iPad also has
-  Study and Draw. Chat and Todo are placeholders that point to the web app. More
+  Study and Draw. Todo is a placeholder that points to the web app. More
   holds Library and Settings; the workout log is Capture → Workout. Library opens directly to books, with title/tag search,
   source/folder/tag filters, Unsorted, latest-chapter/recent/title sorting, and
   Favorite/Continue-reading bookmark filters. Other saved material is grouped

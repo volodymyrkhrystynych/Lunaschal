@@ -40,6 +40,12 @@ final class CaptureModel: ObservableObject {
     @Published private(set) var recentWorkouts: [WorkoutSession] = []
     let workouts: WorkoutStore
     private let workoutSyncer: WorkoutSync
+    /// Chat voice messages not yet on the server, and whatever the last pass said about them.
+    @Published private(set) var chatRecordingQueue: [ChatRecording] = []
+    let chatRecordings: ChatRecordingStore
+    private let chatRecordingSyncer: ChatRecordingSync
+    /// Bumped after each sync pass, so Chat can look for what it uploaded.
+    @Published private(set) var syncPasses = 0
     /// A fix the server hasn't been told about yet.
     private var unsentFix: (latitude: Double, longitude: Double)?
     let store: CaptureStore
@@ -74,6 +80,9 @@ final class CaptureModel: ObservableObject {
         dailySyncer = DailySync(store: daily)
         workouts = try WorkoutStore(root: store.root.appendingPathComponent("workouts", isDirectory: true))
         workoutSyncer = WorkoutSync(store: workouts)
+        chatRecordings = try ChatRecordingStore(root: store.root.appendingPathComponent("chat-recordings", isDirectory: true))
+        chatRecordingSyncer = ChatRecordingSync(store: chatRecordings)
+        try chatRecordings.recoverInterrupted()
         recorder = Recorder(store: store)
         watchReceiver = try WatchReceiver(store: store)
         syncer = CaptureSync(store: store, uploads: uploads, transfers: transfers)
@@ -88,6 +97,7 @@ final class CaptureModel: ObservableObject {
         draft = try store.draft()
         dailyLogs = try daily.list()
         workoutLogs = try workouts.list()
+        chatRecordingQueue = try chatRecordings.list()
         recentExercises = (try? JSONDecoder().decode([RecentExercise].self, from: Data(contentsOf: workoutCache("recent")))) ?? []
         recentWorkouts = (try? JSONDecoder().decode([WorkoutSession].self, from: Data(contentsOf: workoutCache("sessions")))) ?? []
         weather = try? JSONDecoder().decode(WeatherDay.self, from: Data(contentsOf: weatherCache))
@@ -124,6 +134,7 @@ final class CaptureModel: ObservableObject {
             draft = try store.draft()
             dailyLogs = try daily.list()
             workoutLogs = try workouts.list()
+            chatRecordingQueue = try chatRecordings.list()
             journalRecords = try replica.records(collection: "journal_entries", query: journalQuery, limit: journalLimit)
             journalCount = try replica.count(collection: "journal_entries", query: journalQuery)
             pendingEdits = try replica.edits().filter { $0.operation.collection == "journal_entries" }
@@ -192,6 +203,19 @@ final class CaptureModel: ObservableObject {
             await refreshWorkouts(using: api)
             return true
         } catch { message = error.localizedDescription; return false }
+    }
+
+    // MARK: Chat
+
+    /// A client for the Chat tab's calls, which all need the server.
+    func chatAPI() -> JournalAPI? {
+        guard signedIn, let server, let token else { return nil }
+        return try? JournalAPI(server: server, token: token, allowCellular: allowCellular)
+    }
+
+    func discard(_ item: ChatRecording) {
+        do { try chatRecordings.remove(item) } catch { message = error.localizedDescription }
+        reload()
     }
 
     private func workoutCache(_ name: String) -> URL { workouts.root.appendingPathComponent("\(name).cache") }
@@ -359,7 +383,7 @@ final class CaptureModel: ObservableObject {
 
     private func performSync(server: URL, token: String) async -> Bool {
         defer {
-            syncing = false; activeAPI = nil; reload()
+            syncing = false; activeAPI = nil; reload(); syncPasses += 1
             watchReceiver.sendServerReceipts()
             onBackgroundSyncNeeded?()
         }
@@ -367,6 +391,8 @@ final class CaptureModel: ObservableObject {
             try Task.checkCancellation()
             let api = try JournalAPI(server: server, token: token, allowCellular: allowCellular, uploads: uploads)
             activeAPI = api
+            // First: a voice message is a question someone is waiting on.
+            try await chatRecordingSyncer.run(using: api)
             try await syncer.run(using: api)
             try await dailySyncer.run(using: api)
             try await workoutSyncer.run(using: api)
